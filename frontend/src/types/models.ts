@@ -33,10 +33,8 @@ export interface Patient {
   unitAcronym?: string;
 
   isDeceased?: boolean;
-  representativeName?: string;
-  representativeEmail?: string;
-  representativeIdentityDocument?: string;
-  representativePhone?: string;
+  // #1168: the legal representative is ParticipantIdentity data (dict-02
+  // P1X-0357..0360) and is never returned on Patient.
   
   // 8. SEXO - Caractere - Sexo do paciente (Masculino/Feminino)
   sex: string; // 'Masculino' | 'Feminino'

@@ -226,6 +226,36 @@ describe('PatientService.createPatient additional branches', () => {
     expect(identityRow.phoneEncrypted).toBeTruthy();
     expect(identityRow.phoneHash).toBeTruthy();
   });
+
+  // #1168: a deceased participant's legal representative is identity data,
+  // written to ParticipantIdentity only and ciphertext-only there.
+  it('#1168: writes the representative to the identity row only, never to patients', async () => {
+    const consentTemplatesCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({ _id: '507f1f77bcf86cd799439011' })
+    });
+    const patientsCollection = makeFakeCollection();
+    const identitiesCollection = makeFakeCollection();
+    const db = makeFakeDb({
+      patients: patientsCollection,
+      participantIdentities: identitiesCollection,
+      consent_templates: consentTemplatesCollection
+    });
+
+    await patientService.createPatient(db, validPatientData({ isDeceased: true, ...{ representativeName: 'Rep Legal', representativeEmail: 'rep@example.com', representativeIdentityDocument: '98765432100', representativePhone: '11955554444' } }), {
+      skipConsentNotification: true,
+      skipBiomarkerArtifacts: true
+    });
+
+    const patientRow = patientsCollection.insertOne.mock.calls[0][0];
+    for (const field of ['representativeName', 'representativeEmail', 'representativeIdentityDocument', 'representativePhone', 'representativeIdentityDocumentEncrypted']) {
+      expect(patientRow).not.toHaveProperty(field);
+    }
+    expect(patientRow.isDeceased).toBe(true);
+    const identityRow = identitiesCollection.insertOne.mock.calls[0][0];
+    expect(identityRow.representativeNameEncrypted).toBeTruthy();
+    expect(identityRow.representativeIdentityDocumentEncrypted).toBeTruthy();
+    expect(identityRow.representativeIdentityDocument).toBeNull();
+  });
 });
 
 describe('PatientService.updatePatient additional branches', () => {
@@ -305,25 +335,32 @@ describe('PatientService.updatePatient additional branches', () => {
     tsSpy.mockRestore();
   });
 
-  it('merges representativeEmail from the existing patient record when re-affirming isDeceased (issue #90)', async () => {
+  // #1168: the stored representative now lives on the identity record, so
+  // that is where #90's merge reads it from and writes it back to.
+  it('merges representativeEmail from the stored identity record when re-affirming isDeceased (issue #90, #1168)', async () => {
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
     const patientsCollection = makeFakeCollection({
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
-      findOne: vi.fn().mockResolvedValue({
-        patientID: '12345678',
-        isDeceased: true,
+      findOne: vi.fn().mockResolvedValue({ participantId: '12345678', isDeceased: true })
+    });
+    const identitiesCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue(participantIdentityService.encryptIdentityFields({
+        participantId: '12345678',
         representativeName: 'João Representante',
         representativeEmail: 'joao@example.com',
         representativeIdentityDocument: '52998224725',
         representativePhone: '11988887777'
-      })
+      }))
     });
-    const db = makeFakeDb({ patients: patientsCollection });
+    const db = makeFakeDb({ patients: patientsCollection, participantIdentities: identitiesCollection });
     const tsSpy = vi.spyOn(patientBiomarkerTimeseriesService, 'writePatientBiomarkers').mockResolvedValue(undefined);
 
     await patientService.updatePatient(db, '12345678', { isDeceased: true });
 
     const setPayload = patientsCollection.updateOne.mock.calls[0][1].$set;
-    expect(setPayload.representativeEmail).toBe('joao@example.com');
+    expect(setPayload).not.toHaveProperty('representativeEmail');
+    const identitySet = identitiesCollection.updateOne.mock.calls[0][1].$set;
+    expect(participantIdentityService.decryptIdentity(identitySet).representativeEmail).toBe('joao@example.com');
 
     tsSpy.mockRestore();
   });

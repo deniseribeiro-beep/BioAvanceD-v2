@@ -10,7 +10,11 @@ const TemperatureModel = require('../models/Temperature');
 const fhirValidator = require('./fhir-validator.service');
 const notificationService = require('./notification.service');
 const { getCollection } = require('../utils/collectionResolver');
-const { omitLegacyIdentityFields, PARTICIPANT_CONTACT_FIELDS, omitParticipantContactFields } = require('../utils/legacyPatientIdentityFields');
+const {
+  omitLegacyIdentityFields,
+  PARTICIPANT_IDENTITY_ONLY_FIELDS,
+  omitParticipantIdentityOnlyFields
+} = require('../utils/legacyPatientIdentityFields');
 const ParticipantIdentityModel = require('../models/ParticipantIdentity');
 const participantIdentityService = require('./participantIdentity.service');
 const SampleGraphValidator = require('./SampleGraphValidator');
@@ -393,11 +397,11 @@ class ImportService {
           // never land on Patient — `merged` (used below, un-stripped, for
           // the ParticipantIdentity sync) may still carry them from
           // `existing` (pre-#575 data) even when `patientData` doesn't.
-          // #1166 slice 4: likewise the contact, which goes to the identity
-          // sync below and nowhere else.
+          // #1166 slice 4 / #1168: likewise the contact and the
+          // representative, which go to the identity sync below and nowhere else.
           await patientsCollection.updateOne(
             { _id: existing._id },
-            { $set: omitParticipantContactFields(omitLegacyIdentityFields(merged)) }
+            { $set: omitParticipantIdentityOnlyFields(omitLegacyIdentityFields(merged)) }
           );
 
           // RF005/RNF007 (#561/#563): keep ParticipantIdentity in sync on
@@ -408,13 +412,13 @@ class ImportService {
             Object.prototype.hasOwnProperty.call(merged, 'patientName') ||
             Object.prototype.hasOwnProperty.call(merged, 'birthDate') ||
             Object.prototype.hasOwnProperty.call(merged, 'identityDocument') ||
-            PARTICIPANT_CONTACT_FIELDS.some((field) => merged[field])
+            PARTICIPANT_IDENTITY_ONLY_FIELDS.some((field) => merged[field])
           )) {
             const identityUpdate = { updatedAt: merged.updatedAt };
-            for (const field of PARTICIPANT_CONTACT_FIELDS) {
+            for (const field of PARTICIPANT_IDENTITY_ONLY_FIELDS) {
               if (merged[field]) {
-                identityUpdate[field] = field === 'email'
-                  ? String(merged.email).trim().toLowerCase()
+                identityUpdate[field] = field === 'email' || field === 'representativeEmail'
+                  ? String(merged[field]).trim().toLowerCase()
                   : merged[field];
               }
             }

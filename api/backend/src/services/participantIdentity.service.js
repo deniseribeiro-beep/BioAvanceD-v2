@@ -34,7 +34,12 @@ class ParticipantIdentityService {
       birthDate: 'birthDateEncrypted',
       identityDocument: 'identityDocumentEncrypted',
       email: 'emailEncrypted',
-      phone: 'phoneEncrypted'
+      phone: 'phoneEncrypted',
+      // #1168: the legal representative, dict-02 P1X-0357..0360.
+      representativeName: 'representativeNameEncrypted',
+      representativeEmail: 'representativeEmailEncrypted',
+      representativeIdentityDocument: 'representativeIdentityDocumentEncrypted',
+      representativePhone: 'representativePhoneEncrypted'
     };
   }
 
@@ -130,9 +135,18 @@ class ParticipantIdentityService {
   // index cannot serve) and identityDocument still has plaintext query arms,
   // so both keep dual-writing until those are resolved.
   // #1166 slice 4: email and phone have no plaintext query anywhere (phone
-  // uniqueness is phoneHash), and every reader decrypts.
+  // uniqueness is phoneHash), and every reader decrypts. #1168: nor do the
+  // representative fields, whose one reader (updatePatient) decrypts.
   getCiphertextOnlyFields() {
-    return ['birthDate', 'email', 'phone'];
+    return [
+      'birthDate',
+      'email',
+      'phone',
+      'representativeName',
+      'representativeEmail',
+      'representativeIdentityDocument',
+      'representativePhone'
+    ];
   }
 
   // #1166: phoneHash is what lets phone uniqueness (#1165) move off the

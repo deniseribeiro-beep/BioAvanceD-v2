@@ -165,10 +165,11 @@ describe('PatientService.createPatient', () => {
 
   it('creates a patient with a generated 8-digit patientID and PENDING_CONSENT status', async () => {
     const patientsCollection = makeFakeCollection();
+    const identitiesCollection = makeFakeCollection();
     const consentTemplatesCollection = makeFakeCollection({
       findOne: vi.fn().mockResolvedValue({ _id: '507f1f77bcf86cd799439011', name: 'Template' })
     });
-    const db = makeFakeDb({ patients: patientsCollection, consent_templates: consentTemplatesCollection });
+    const db = makeFakeDb({ patients: patientsCollection, participantIdentities: identitiesCollection, consent_templates: consentTemplatesCollection });
 
     const encryptSpy = vi.spyOn(patientService, 'encryptSensitivePatientFields');
 
@@ -189,9 +190,13 @@ describe('PatientService.createPatient', () => {
     expect(encryptSpy).toHaveBeenCalled();
 
     const insertedDoc = patientsCollection.insertOne.mock.calls[0][0];
-    // Sensitive field must be encrypted (nulled out in plain form) before insert.
-    expect(insertedDoc.representativeIdentityDocument).toBeNull();
-    expect(insertedDoc.representativeIdentityDocumentEncrypted).toBeDefined();
+    // #1168: the representative lives on ParticipantIdentity only, where the
+    // sensitive document is encrypted (plaintext nulled) before insert.
+    expect(insertedDoc).not.toHaveProperty('representativeIdentityDocument');
+    expect(insertedDoc).not.toHaveProperty('representativeIdentityDocumentEncrypted');
+    const identityDoc = identitiesCollection.insertOne.mock.calls[0][0];
+    expect(identityDoc.representativeIdentityDocument).toBeNull();
+    expect(identityDoc.representativeIdentityDocumentEncrypted).toBeDefined();
 
     encryptSpy.mockRestore();
   });
@@ -400,10 +405,10 @@ describe('PatientService.updatePatient', () => {
     const result = await patientService.updatePatient(db, '12345678', { representativeIdentityDocument: '529.982.247-25' });
 
     expect(result).toEqual({ success: true });
-    // First updateOne call is the actual patient update; its $set must have the sensitive field encrypted.
+    // #1168: the representative is never written to patients, in either form.
     const firstUpdateCall = patientsCollection.updateOne.mock.calls[0];
-    expect(firstUpdateCall[1].$set.representativeIdentityDocument).toBeNull();
-    expect(firstUpdateCall[1].$set.representativeIdentityDocumentEncrypted).toBeDefined();
+    expect(firstUpdateCall[1].$set).not.toHaveProperty('representativeIdentityDocument');
+    expect(firstUpdateCall[1].$set).not.toHaveProperty('representativeIdentityDocumentEncrypted');
 
     tsSpy.mockRestore();
   });

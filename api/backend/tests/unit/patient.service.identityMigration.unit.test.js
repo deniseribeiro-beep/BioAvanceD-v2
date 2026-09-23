@@ -420,6 +420,73 @@ describe('patient.service.js identity resolution migrated to ParticipantIdentity
     expect(identity.phoneHash).toBe(participantIdentityService.computeBlindIndex('phone', '11987654321'));
   });
 
+  // #1168: the deceased-representative merge reads the stored representative
+  // from the identity record -- the only place it lives -- and writes the
+  // edit back there, never to patients.
+  it('#1168: updatePatient merges a representative edit against the identity record', async () => {
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
+    const patients = makeInMemoryCollection([{ participantId: '46464646', isDeceased: true }]);
+    const participantIdentities = makeInMemoryCollection([
+      participantIdentityService.encryptIdentityFields({ participantId: '46464646', ...{ representativeName: 'Rep Legal', representativeEmail: 'rep@example.com', representativeIdentityDocument: '98765432100', representativePhone: '11955554444' } }),
+    ]);
+    const db = makeDb({ patients, participantIdentities });
+
+    await patientService.updatePatient(db, '46464646', { representativePhone: '(11) 93333-2222' });
+
+    const patientSet = patients.updateOne.mock.calls[0][1].$set;
+    for (const field of ['representativeName', 'representativeEmail', 'representativeIdentityDocument', 'representativePhone', 'representativeIdentityDocumentEncrypted']) {
+      expect(patientSet).not.toHaveProperty(field);
+    }
+    const identity = participantIdentityService.decryptIdentity(await participantIdentities.findOne({ participantId: '46464646' }));
+    expect(identity.representativePhone).toBe('11933332222');
+    expect(identity.representativeIdentityDocument).toBe('98765432100');
+  });
+
+  // #1168: the patients-side encryption loop used to run BEFORE the merge and
+  // null the plaintext it was about to validate, so this edit threw
+  // "... obrigatórios" whenever an ENCRYPTION_KEY was configured.
+  it('#1168: updatePatient accepts an edited representativeIdentityDocument', async () => {
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
+    const patients = makeInMemoryCollection([{ participantId: '47474747', isDeceased: true }]);
+    const participantIdentities = makeInMemoryCollection([
+      participantIdentityService.encryptIdentityFields({ participantId: '47474747', ...{ representativeName: 'Rep Legal', representativeEmail: 'rep@example.com', representativeIdentityDocument: '98765432100', representativePhone: '11955554444' } }),
+    ]);
+    const db = makeDb({ patients, participantIdentities });
+
+    await expect(
+      patientService.updatePatient(db, '47474747', { representativeIdentityDocument: '111.444.777-35' })
+    ).resolves.toEqual({ success: true });
+
+    const identity = participantIdentityService.decryptIdentity(await participantIdentities.findOne({ participantId: '47474747' }));
+    expect(identity.representativeIdentityDocument).toBe('11144477735');
+  });
+
+  it('#1168: marking a participant not deceased clears the representative on the identity record', async () => {
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
+    const patients = makeInMemoryCollection([{ participantId: '48484848', isDeceased: true }]);
+    const participantIdentities = makeInMemoryCollection([
+      participantIdentityService.encryptIdentityFields({ participantId: '48484848', ...{ representativeName: 'Rep Legal', representativeEmail: 'rep@example.com', representativeIdentityDocument: '98765432100', representativePhone: '11955554444' } }),
+    ]);
+    const db = makeDb({ patients, participantIdentities });
+
+    await patientService.updatePatient(db, '48484848', { isDeceased: false });
+
+    const identity = participantIdentityService.decryptIdentity(await participantIdentities.findOne({ participantId: '48484848' }));
+    expect(identity.representativeName ?? null).toBeNull();
+    expect(identity.representativeIdentityDocument ?? null).toBeNull();
+    expect(patients._docs[0].isDeceased).toBe(false);
+  });
+
+  it('#1168: a deceased participant with no stored representative is still refused (control)', async () => {
+    const patients = makeInMemoryCollection([{ participantId: '49494949', isDeceased: false }]);
+    const participantIdentities = makeInMemoryCollection([{ participantId: '49494949' }]);
+    const db = makeDb({ patients, participantIdentities });
+
+    await expect(
+      patientService.updatePatient(db, '49494949', { isDeceased: true, representativeName: 'Só o nome' })
+    ).rejects.toThrow('representante legal são obrigatórios');
+  });
+
   // #1166 slice 4: the edit goes to the identity record only.
   it('#1166: updatePatient does not write an edited contact to patients', async () => {
     const participantIdentityService = require('../../src/services/participantIdentity.service');

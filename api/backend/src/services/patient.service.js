@@ -7,7 +7,12 @@ const { generateUniqueParticipantId, sanitizePatientForLogs } = require('../util
 const { encryptValue, decryptValue, assertFieldEncryptionConfigured } = require('../utils/fieldEncryption');
 const notificationService = require('./notification.service');
 const { getCollection } = require('../utils/collectionResolver');
-const { omitLegacyIdentityFields, PARTICIPANT_CONTACT_FIELDS, omitParticipantContactFields } = require('../utils/legacyPatientIdentityFields');
+const {
+  omitLegacyIdentityFields,
+  PARTICIPANT_REPRESENTATIVE_FIELDS,
+  PARTICIPANT_IDENTITY_ONLY_FIELDS,
+  omitParticipantIdentityOnlyFields
+} = require('../utils/legacyPatientIdentityFields');
 const { applyOrganizationScopeFilter } = require('./rbac-assignment.service');
 
 const indexedPatientCollections = new Set();
@@ -567,6 +572,11 @@ class PatientService {
       }
 
       this.applyDeceasedRepresentativeRules(patientData);
+      // #1083, kept by #1168: the representative's document used to be
+      // encrypted on the Patient row, where a keyless stack REFUSES the write.
+      // It moved to ParticipantIdentity, whose encryption degrades to
+      // plaintext by design, so the refusal is asserted here instead.
+      assertFieldEncryptionConfigured(patientData.representativeIdentityDocument);
 
       if (!patientData.consentTemplateId || typeof patientData.consentTemplateId !== 'string') {
         throw new Error('Template de consentimento (consentTemplateId) é obrigatório');
@@ -932,6 +942,12 @@ class PatientService {
         }
       }
 
+      // #1083, kept by #1168: see createPatient -- refused on the raw input,
+      // exactly where the Patient-side encryption loop used to refuse it.
+      if (updateData.representativeIdentityDocument !== undefined) {
+        assertFieldEncryptionConfigured(updateData.representativeIdentityDocument);
+      }
+
       if (updateData.phone !== undefined) {
         const normalizedPhone = this.normalizePhone(updateData.phone);
         if (updateData.phone !== null && updateData.phone !== '' && (!normalizedPhone || normalizedPhone.length < 10 || normalizedPhone.length > 15)) {
@@ -940,6 +956,38 @@ class PatientService {
         updateData.phone = normalizedPhone;
         submittedPhone = normalizedPhone;
       }
+
+      // #1168: the stored representative lives on ParticipantIdentity only, so
+      // the merge reads it from there, decrypted. isDeceased stays a Patient
+      // field. This runs BEFORE the encryption loop below: that loop used to
+      // null the plaintext representativeIdentityDocument first, so the rules
+      // saw it as missing and refused every such edit on a keyed stack.
+      if (updateData.isDeceased !== undefined ||
+        PARTICIPANT_REPRESENTATIVE_FIELDS.some((field) => updateData[field] !== undefined)) {
+        const existingPatient = await this.getPatient(db, participantId);
+        const storedIdentity = existingPatient?.participantId
+          ? participantIdentityService.decryptIdentity(
+            await (await this.getIdentityCollection(db)).findOne({ participantId: existingPatient.participantId })
+          ) || {}
+          : {};
+        const mergedPayload = { isDeceased: existingPatient?.isDeceased };
+        for (const field of PARTICIPANT_REPRESENTATIVE_FIELDS) mergedPayload[field] = storedIdentity[field];
+        Object.assign(mergedPayload, updateData);
+        this.applyDeceasedRepresentativeRules(mergedPayload);
+        updateData.isDeceased = mergedPayload.isDeceased;
+        for (const field of PARTICIPANT_REPRESENTATIVE_FIELDS) updateData[field] = mergedPayload[field];
+      }
+
+      // #1166/#1168: the contact and the representative are mirrored too, and
+      // stripped BEFORE the patients-side encryption loop below, which would
+      // otherwise null representativeIdentityDocument's plaintext first -- ParticipantIdentity is their only home.
+      const identityOnlyFieldsFromUpdate = {};
+      for (const field of PARTICIPANT_IDENTITY_ONLY_FIELDS) {
+        if (Object.prototype.hasOwnProperty.call(updateData, field)) {
+          identityOnlyFieldsFromUpdate[field] = updateData[field];
+        }
+      }
+      updateData = omitParticipantIdentityOnlyFields(updateData);
 
       const encryptedFieldMap = this.getEncryptedFieldMap();
       for (const [plainField, encryptedField] of Object.entries(encryptedFieldMap)) {
@@ -964,27 +1012,6 @@ class PatientService {
         }
       }
 
-      if (updateData.isDeceased !== undefined ||
-        updateData.representativeName !== undefined ||
-        updateData.representativeEmail !== undefined ||
-        updateData.representativeIdentityDocument !== undefined ||
-        updateData.representativePhone !== undefined) {
-        const existingPatient = await this.getPatient(db, participantId);
-        const mergedPayload = {
-          isDeceased: existingPatient?.isDeceased,
-          representativeName: existingPatient?.representativeName,
-          representativeEmail: existingPatient?.representativeEmail,
-          representativeIdentityDocument: existingPatient?.representativeIdentityDocument,
-          representativePhone: existingPatient?.representativePhone,
-          ...updateData
-        };
-        this.applyDeceasedRepresentativeRules(mergedPayload);
-        updateData.isDeceased = mergedPayload.isDeceased;
-        updateData.representativeName = mergedPayload.representativeName;
-        updateData.representativeEmail = mergedPayload.representativeEmail;
-        updateData.representativeIdentityDocument = mergedPayload.representativeIdentityDocument;
-        updateData.representativePhone = mergedPayload.representativePhone;
-      }
       
       // Validação antes de atualizar
       if (updateData.participantId) {
@@ -1019,15 +1046,6 @@ class PatientService {
         }
       }
       updateData = omitLegacyIdentityFields(updateData);
-      // #1166: the contact is mirrored too, and since slice 4 stripped as
-      // well -- ParticipantIdentity is its only home.
-      const contactFieldsFromUpdate = {};
-      for (const field of PARTICIPANT_CONTACT_FIELDS) {
-        if (Object.prototype.hasOwnProperty.call(updateData, field)) {
-          contactFieldsFromUpdate[field] = updateData[field];
-        }
-      }
-      updateData = omitParticipantContactFields(updateData);
 
       // Busca por participantId (string de 8 dígitos), _id (ObjectId de 24
       // caracteres hex) ou participantId de formato livre (#604 -- mesmo
@@ -1045,8 +1063,8 @@ class PatientService {
         query = { participantId };
       }
 
-      if (contactFieldsFromUpdate.phone) {
-        await this.assertPhoneAvailable(db, patientsCollection, query, contactFieldsFromUpdate.phone);
+      if (identityOnlyFieldsFromUpdate.phone) {
+        await this.assertPhoneAvailable(db, patientsCollection, query, identityOnlyFieldsFromUpdate.phone);
       }
 
       const result = await patientsCollection.updateOne(
@@ -1073,9 +1091,9 @@ class PatientService {
         Object.prototype.hasOwnProperty.call(identityFieldsFromUpdate, 'patientName') ||
         Object.prototype.hasOwnProperty.call(identityFieldsFromUpdate, 'birthDate') ||
         Object.prototype.hasOwnProperty.call(identityFieldsFromUpdate, 'identityDocument') ||
-        Object.keys(contactFieldsFromUpdate).length > 0
+        Object.keys(identityOnlyFieldsFromUpdate).length > 0
       )) {
-        const identityUpdate = { ...contactFieldsFromUpdate, updatedAt: updateData.updatedAt };
+        const identityUpdate = { ...identityOnlyFieldsFromUpdate, updatedAt: updateData.updatedAt };
         if (Object.prototype.hasOwnProperty.call(identityFieldsFromUpdate, 'patientName')) {
           identityUpdate.patientName = identityFieldsFromUpdate.patientName;
         }

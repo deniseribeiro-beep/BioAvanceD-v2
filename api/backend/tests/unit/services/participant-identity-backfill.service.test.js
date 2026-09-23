@@ -392,6 +392,46 @@ describe('participant-identity-backfill.service#moveParticipantContactToIdentity
   });
 });
 
+describe('participant-identity-backfill.service#moveParticipantContactToIdentity representative fields (#1168)', () => {
+  const participantIdentityService = require('../../../src/services/participantIdentity.service');
+  const { encryptValue } = require('../../../src/utils/fieldEncryption');
+
+  it('moves the representative, including a Patient-side ciphertext document, and removes it from the Patient', async () => {
+    const db = createFakeDb({
+      patients: [{
+        _id: 'p1', participantId: '71717171', isDeceased: true,
+        representativeName: 'Rep Legal', representativeEmail: 'rep@example.com', representativePhone: '11955554444',
+        representativeIdentityDocument: null, representativeIdentityDocumentEncrypted: encryptValue('98765432100')
+      }],
+      participantIdentities: [{ _id: 'i1', participantId: '71717171', patientName: 'Paciente' }]
+    });
+
+    await moveParticipantContactToIdentity(db);
+
+    const patient = db.collections.patients.docs[0];
+    for (const field of ['representativeName', 'representativeEmail', 'representativePhone', 'representativeIdentityDocument', 'representativeIdentityDocumentEncrypted']) {
+      expect(patient).not.toHaveProperty(field);
+    }
+    expect(patient.isDeceased).toBe(true);
+    const identity = db.collections.participantIdentities.docs[0];
+    expect(identity.representativeName).toBeNull();
+    const decrypted = participantIdentityService.decryptIdentity(identity);
+    expect(decrypted.representativeName).toBe('Rep Legal');
+    expect(decrypted.representativeIdentityDocument).toBe('98765432100');
+  });
+
+  it('flags a Patient whose representative differs from the identity record', async () => {
+    const db = createFakeDb({
+      patients: [{ _id: 'p1', participantId: '72727272', representativeName: 'Rep Novo' }],
+      participantIdentities: [{ _id: 'i1', participantId: '72727272', patientName: 'Paciente', representativeName: 'Rep Antigo' }]
+    });
+
+    const parity = await checkParticipantIdentityParity(db);
+
+    expect(parity.drifted).toEqual(['72727272']);
+  });
+});
+
 describe('participant-identity-backfill.service#checkParticipantIdentityParity contact fields (#1166 slice 4)', () => {
   it('flags a Patient whose email differs from the identity record', async () => {
     const db = createFakeDb({

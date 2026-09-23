@@ -20,14 +20,18 @@ function makeFakeDb(collectionsByName = {}) {
 }
 
 describe('ParticipantIdentityService.getEncryptedFieldMap', () => {
-  it('returns map for the three civil-identity fields plus the contact (RF005/RNF007, dict-07 row 1, #566, #1166)', () => {
+  it('returns map for the three civil-identity fields plus the contact and the representative (RF005/RNF007, dict-07 row 1, #566, #1166, #1168)', () => {
     const map = participantIdentityService.getEncryptedFieldMap();
     expect(map).toEqual({
       patientName: 'patientNameEncrypted',
       birthDate: 'birthDateEncrypted',
       identityDocument: 'identityDocumentEncrypted',
       email: 'emailEncrypted',
-      phone: 'phoneEncrypted'
+      phone: 'phoneEncrypted',
+      representativeName: 'representativeNameEncrypted',
+      representativeEmail: 'representativeEmailEncrypted',
+      representativeIdentityDocument: 'representativeIdentityDocumentEncrypted',
+      representativePhone: 'representativePhoneEncrypted'
     });
   });
 });
@@ -332,6 +336,20 @@ describe('ParticipantIdentityService -- contact fields encrypted at rest (#1166)
     expect(JSON.stringify(result.emailEncrypted)).not.toContain('maria@example.com');
     expect(result.email).toBeNull();
     expect(result.phone).toBeNull();
+  });
+
+  // #1168: the representative's four fields (dict-02 P1X-0357..0360) are
+  // enciphered and ciphertext-only too. Nothing queries them, so no hash.
+  it('#1168: encrypts the representative fields ciphertext-only, and they round-trip', () => {
+    const result = participantIdentityService.encryptIdentityFields({ participantId: '12345678', ...{ representativeName: 'Rep Legal', representativeEmail: 'rep@example.com', representativeIdentityDocument: '98765432100', representativePhone: '11955554444' } });
+
+    for (const field of ['representativeName', 'representativeEmail', 'representativeIdentityDocument', 'representativePhone']) {
+      expect(result[`${field}Encrypted`]).toBeTruthy();
+      expect(result[field]).toBeNull();
+    }
+    const decrypted = participantIdentityService.decryptIdentity(result);
+    expect(decrypted.representativeIdentityDocument).toBe('98765432100');
+    expect(decrypted.representativeEmail).toBe('rep@example.com');
   });
 
   // #1166 slice 4: the Patient copy is no longer written, so it is no longer

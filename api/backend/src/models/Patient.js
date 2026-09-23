@@ -6,7 +6,8 @@
 // that now builds its own allow-list off this same list).
 // #1166 slice 4: 'email' and 'phone' stay on this list as accepted, validated
 // INPUT only. create() no longer emits them: the contact is written to
-// ParticipantIdentity alone (dict-02 P1X-0352/P1X-0353).
+// ParticipantIdentity alone (dict-02 P1X-0352/P1X-0353). #1168: likewise the
+// four representative* fields (dict-02 P1X-0357..0360).
 const CANONICAL_FIELDS = [
   'participantId','sex','email','phone','recordNumber','clinicalUnitId','clinicalUnit','unitAcronym','isDeceased','representativeName','representativeEmail','representativeIdentityDocument','representativePhone','consentTemplateId','status','consentToken','consentTokenCreatedAt','consentTokenExpiresAt','consentNotifiedAt','consentAcceptedAt','createdAt','updatedAt','anamneseGeral','dadosEspecificos','studyId'
 ];
@@ -58,6 +59,11 @@ class ParticipantModel {
     if (email && !this.isValidEmail(email)) {
       throw new Error('email inválido');
     }
+    // #1168: same for the representative's address.
+    const representativeEmail = data.representativeEmail ? String(data.representativeEmail).trim().toLowerCase() : null;
+    if (representativeEmail && !this.isValidEmail(representativeEmail)) {
+      throw new Error('representativeEmail inválido');
+    }
 
     const normalized = {
       participantId: String(data.participantId || '').trim(),
@@ -67,10 +73,6 @@ class ParticipantModel {
       clinicalUnit: data.clinicalUnit || null,
       unitAcronym: data.unitAcronym || null,
       isDeceased: Boolean(data.isDeceased),
-      representativeName: data.representativeName || null,
-      representativeEmail: data.representativeEmail ? String(data.representativeEmail).trim().toLowerCase() : null,
-      representativeIdentityDocument: data.representativeIdentityDocument || null,
-      representativePhone: this.normalizePhone(data.representativePhone),
       consentTemplateId: data.consentTemplateId || null,
       status: data.status || 'PENDING_CONSENT',
       consentToken: data.consentToken || null,

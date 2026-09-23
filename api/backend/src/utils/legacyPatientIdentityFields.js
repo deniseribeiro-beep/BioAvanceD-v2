@@ -17,9 +17,22 @@ function omitLegacyIdentityFields(data = {}) {
 // Patient write that does not go through PatientModel.create.
 const PARTICIPANT_CONTACT_FIELDS = ['email', 'phone'];
 
-function omitParticipantContactFields(data = {}) {
+// #1168: the same holds for the deceased participant's legal representative
+// (dict-02 P1X-0357..0360, ParticipantIdentity only).
+const PARTICIPANT_REPRESENTATIVE_FIELDS = [
+  'representativeName',
+  'representativeEmail',
+  'representativeIdentityDocument',
+  'representativePhone',
+];
+
+// Every field PatientModel accepts as input but that lives on
+// ParticipantIdentity alone.
+const PARTICIPANT_IDENTITY_ONLY_FIELDS = [...PARTICIPANT_CONTACT_FIELDS, ...PARTICIPANT_REPRESENTATIVE_FIELDS];
+
+function omitParticipantIdentityOnlyFields(data = {}) {
   const result = { ...data };
-  for (const field of PARTICIPANT_CONTACT_FIELDS) delete result[field];
+  for (const field of PARTICIPANT_IDENTITY_ONLY_FIELDS) delete result[field];
   return result;
 }
 
@@ -27,5 +40,7 @@ module.exports = {
   LEGACY_PATIENT_IDENTITY_FIELDS,
   omitLegacyIdentityFields,
   PARTICIPANT_CONTACT_FIELDS,
-  omitParticipantContactFields,
+  PARTICIPANT_REPRESENTATIVE_FIELDS,
+  PARTICIPANT_IDENTITY_ONLY_FIELDS,
+  omitParticipantIdentityOnlyFields,
 };

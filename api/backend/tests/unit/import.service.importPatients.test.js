@@ -150,6 +150,26 @@ describe('ImportService.importPatients (JSON)', () => {
     expect(identitySet.phoneHash).toBeTruthy();
   });
 
+  // #1168: same for the legal representative.
+  it('#1168: a merge writes the representative to the identity record, not to patients', async () => {
+    const filePath = writeTmpFile('merge-rep.json', JSON.stringify(validPatient({ representativeName: 'Rep Legal', representativeEmail: 'rep@example.com' })));
+    const patients = makeCollection({
+      existing: { _id: 'existing-1', participantId: '10203040', birthDate: '1985-05-20' },
+    });
+    const participantIdentities = makeCollection({
+      existing: { participantId: '10203040', identityDocument: '12345678900' },
+    });
+
+    const result = await importService.importPatients(makeDb({ patients, participantIdentities }), { path: filePath, originalname: 'merge-rep.json' });
+
+    expect(result.success).toBe(1);
+    expect(patients.updates[0].update.$set).not.toHaveProperty('representativeName');
+    expect(patients.updates[0].update.$set).not.toHaveProperty('representativeEmail');
+    const identitySet = participantIdentities.updates[0].update.$set;
+    expect(identitySet.representativeNameEncrypted).toBeTruthy();
+    expect(identitySet.representativeEmailEncrypted).toBeTruthy();
+  });
+
   it('swallows notification errors and still counts the patient as successfully imported', async () => {
     vi.spyOn(notificationService, 'enqueueConsentNotification').mockRejectedValue(new Error('queue down'));
     const filePath = writeTmpFile('notify-fails.json', JSON.stringify(validPatient()));

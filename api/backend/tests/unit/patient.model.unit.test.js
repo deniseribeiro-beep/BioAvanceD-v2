@@ -254,6 +254,20 @@ describe('PatientModel.create', () => {
     expect(() => PatientModel.create({ ...baseData, email: 'not-an-email' })).toThrow('email inválido');
   });
 
+  // #1168: the legal representative's fields are identity data too (dict-02
+  // P1X-0357..0360, ParticipantIdentity only).
+  it('#1168: does not emit the four representative fields', () => {
+    const result = PatientModel.create({ ...baseData, isDeceased: true, ...{ representativeName: 'Rep Legal', representativeEmail: 'rep@example.com', representativeIdentityDocument: '98765432100', representativePhone: '11955554444' } });
+    for (const field of ['representativeName', 'representativeEmail', 'representativeIdentityDocument', 'representativePhone']) {
+      expect(result).not.toHaveProperty(field);
+    }
+    expect(result.isDeceased).toBe(true);
+  });
+
+  it('#1168: still rejects an invalid representativeEmail it no longer persists', () => {
+    expect(() => PatientModel.create({ ...baseData, representativeEmail: 'bad-email' })).toThrow('representativeEmail inválido');
+  });
+
   it('defaults status to PENDING_CONSENT', () => {
     const result = PatientModel.create(baseData);
     expect(result.status).toBe('PENDING_CONSENT');
@@ -267,11 +281,6 @@ describe('PatientModel.create', () => {
   it('sets isDeceased boolean from truthy/falsy input', () => {
     expect(PatientModel.create({ ...baseData, isDeceased: true }).isDeceased).toBe(true);
     expect(PatientModel.create(baseData).isDeceased).toBe(false);
-  });
-
-  it('normalizes representativePhone', () => {
-    const result = PatientModel.create({ ...baseData, representativePhone: '(21) 91234-5678' });
-    expect(result.representativePhone).toBe('21912345678');
   });
 
   it('sets consentToken date fields when provided', () => {
@@ -294,9 +303,6 @@ describe('PatientModel.create', () => {
     expect(result.clinicalUnitId).toBeNull();
     expect(result.clinicalUnit).toBeNull();
     expect(result.unitAcronym).toBeNull();
-    expect(result.representativeName).toBeNull();
-    expect(result.representativeEmail).toBeNull();
-    expect(result.representativeIdentityDocument).toBeNull();
     expect(result.consentToken).toBeNull();
     expect(result.consentTokenCreatedAt).toBeNull();
     expect(result.consentTokenExpiresAt).toBeNull();

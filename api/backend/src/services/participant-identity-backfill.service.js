@@ -1,6 +1,7 @@
 const { getCollection } = require('../utils/collectionResolver');
 const ParticipantIdentityModel = require('../models/ParticipantIdentity');
 const participantIdentityService = require('./participantIdentity.service');
+const { decryptValue } = require('../utils/fieldEncryption');
 
 /**
  * #565 — one-time backfill: create a ParticipantIdentity record for any
@@ -60,8 +61,11 @@ function normalizeForCompare(field, value) {
   if (value === undefined || value === null || value === '') return null;
   // #1166 slice 4: the contact is compared in its stored spelling -- email
   // lowercased by both models, phone digits-only as normalizeForHash hashes it.
-  if (field === 'email') return String(value).trim().toLowerCase() || null;
-  if (field === 'phone') return String(value).replace(/\D/g, '') || null;
+  if (field === 'email' || field === 'representativeEmail') return String(value).trim().toLowerCase() || null;
+  if (field === 'phone' || field === 'representativePhone' || field === 'representativeIdentityDocument') {
+    return String(value).replace(/\D/g, '') || null;
+  }
+  if (field === 'representativeName') return String(value).trim() || null;
   // #1111 (and #1109): identityDocument is canonicalized to digits-only at
   // rest for every writer, while a pre-#363 Patient document keeps whatever
   // spelling was typed. Comparing the two verbatim reported drift for every
@@ -80,7 +84,30 @@ const IDENTITY_FIELDS = ['patientName', 'birthDate', 'identityDocument'];
 // #1166: the participant's contact is identity data too (dict-02
 // P1X-0352/P1X-0353). Compared separately from the civil fields, because a
 // Patient still carrying a contact says nothing about its civil identity.
-const CONTACT_FIELDS = ['email', 'phone'];
+// #1168: the legal representative's four fields move the same way (dict-02
+// P1X-0357..0360).
+const CONTACT_FIELDS = [
+  'email',
+  'phone',
+  'representativeName',
+  'representativeEmail',
+  'representativeIdentityDocument',
+  'representativePhone'
+];
+
+// #1168: patient.service.js encrypted representativeIdentityDocument on the
+// Patient document itself (plaintext nulled), so that one is read back from
+// its ciphertext sibling there.
+const PATIENT_SIDE_CIPHERTEXT = { representativeIdentityDocument: 'representativeIdentityDocumentEncrypted' };
+
+function patientValue(patient, field) {
+  const plain = patient[field];
+  if (plain !== undefined && plain !== null && plain !== '') return plain;
+  const encryptedField = PATIENT_SIDE_CIPHERTEXT[field];
+  if (!encryptedField || !patient[encryptedField]) return null;
+  const decrypted = decryptValue(patient[encryptedField]);
+  return decrypted === undefined ? null : decrypted;
+}
 
 /**
  * #1166 slice 4: move the participant's contact off `patients` and onto its
@@ -109,7 +136,7 @@ async function moveParticipantContactToIdentity(db) {
 
   const patients = await patientsCollection.find({}).toArray();
   for (const patient of patients) {
-    const carried = CONTACT_FIELDS.filter((field) => normalizeForCompare(field, patient[field]) !== null);
+    const carried = CONTACT_FIELDS.filter((field) => normalizeForCompare(field, patientValue(patient, field)) !== null);
     if (!patient.participantId || carried.length === 0) continue;
 
     const identity = await identityCollection.findOne({ participantId: patient.participantId });
@@ -121,10 +148,11 @@ async function moveParticipantContactToIdentity(db) {
     const decrypted = participantIdentityService.decryptIdentity(identity);
     const contactUpdate = {};
     for (const field of carried) {
-      if (normalizeForCompare(field, patient[field]) !== normalizeForCompare(field, decrypted[field])) {
-        contactUpdate[field] = field === 'email'
-          ? normalizeForCompare('email', patient.email)
-          : patient[field];
+      const value = patientValue(patient, field);
+      if (normalizeForCompare(field, value) !== normalizeForCompare(field, decrypted[field])) {
+        contactUpdate[field] = field === 'email' || field === 'representativeEmail'
+          ? normalizeForCompare(field, value)
+          : value;
       }
     }
 
@@ -142,7 +170,7 @@ async function moveParticipantContactToIdentity(db) {
     }
 
     const unset = {};
-    for (const field of CONTACT_FIELDS) {
+    for (const field of [...CONTACT_FIELDS, ...Object.values(PATIENT_SIDE_CIPHERTEXT)]) {
       if (Object.prototype.hasOwnProperty.call(patient, field)) unset[field] = '';
     }
     await patientsCollection.updateOne({ _id: patient._id }, { $unset: unset });
@@ -187,7 +215,7 @@ async function moveParticipantContactToIdentity(db) {
 // identity record, or removing the Patient copy loses it.
 function contactDrifted(patient, decryptedIdentity) {
   return CONTACT_FIELDS.some((field) => {
-    const onPatient = normalizeForCompare(field, patient[field]);
+    const onPatient = normalizeForCompare(field, patientValue(patient, field));
     return onPatient !== null && onPatient !== normalizeForCompare(field, decryptedIdentity[field]);
   });
 }
