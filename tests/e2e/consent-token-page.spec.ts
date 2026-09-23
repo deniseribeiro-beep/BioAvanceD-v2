@@ -104,6 +104,40 @@ test.describe('RF010 bulk consent-token page (/patients/:id/consent?token=) -- r
     expect(stored?.consentToken).toBeNull();
   });
 
+  // #1172 (#1152): in a real outage the request gets no response at all --
+  // api.ts aborts at its own 10s timeout before the backend's 503 arrives. The
+  // mapper copy is unit-tested; these prove the rendered page shows it through
+  // the real api.ts client and its interceptors, in a real browser.
+  test('a load that gets no response tells the participant the link still works', async ({ page }) => {
+    const { participantId, token } = await seedPendingParticipant();
+    await page.route('**/api/e-consent/consent-tokens/validate**', (route) => route.abort('timedout'));
+
+    await page.goto(`/patients/${participantId}/consent?token=${token}`);
+
+    await expect(page.getByTestId('consent-token-error')).toContainText(/link continua válido/i, {
+      timeout: 15_000,
+    });
+    await expect(page).toHaveURL(new RegExp(`/patients/${participantId}/consent`));
+  });
+
+  test('an accept that gets no response tells the participant the link still works', async ({ page }) => {
+    const { participantId, token } = await seedPendingParticipant();
+    await page.route('**/api/e-consent/consent-tokens/accept**', (route) => route.abort('timedout'));
+
+    await page.goto(`/patients/${participantId}/consent?token=${token}`);
+    await expect(page.getByTestId('consent-token-content')).toContainText(TERM_CONTENT, {
+      timeout: 15_000,
+    });
+    await page.getByTestId('consent-token-accept').click();
+
+    const error = page.getByTestId('consent-token-error');
+    await expect(error).toContainText(/link continua válido/i);
+    await expect(error).not.toContainText(/novo convite/i);
+    // Nothing reached the backend, so the participant is still pending.
+    const stored = await db.collection('patients').findOne({ participantId });
+    expect(stored?.status).toBe('PENDING_CONSENT');
+  });
+
   test('a wrong token is rejected and leaves the participant pending', async ({ page }) => {
     const { participantId } = await seedPendingParticipant();
 

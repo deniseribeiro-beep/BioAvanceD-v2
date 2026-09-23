@@ -144,6 +144,37 @@ test.describe('RF010 participant e-consent page (/patient/e-consent/:token) -- r
     await expect(page.getByTestId('e-consent-error')).toHaveCount(0);
   });
 
+  // #1172 (#1158): in a real outage the request gets no response at all --
+  // api.ts aborts at its own 10s timeout before the backend's 503 arrives. The
+  // mapper copy is unit-tested; these prove the rendered page shows it through
+  // the real api.ts client and its interceptors, in a real browser.
+  test('a load that gets no response tells the participant the link still works', async ({ page }) => {
+    const { participantId } = await seedParticipant();
+    await page.route('**/api/e-consent/validate/**', (route) => route.abort('timedout'));
+
+    await page.goto(consentLinkPath(participantId));
+
+    await expect(page.getByTestId('e-consent-error')).toContainText(/link continua válido/i, {
+      timeout: 15_000,
+    });
+    await expect(page).toHaveURL(/\/patient\/e-consent\//);
+  });
+
+  test('a submit that gets no response tells the participant the link still works', async ({ page }) => {
+    const { participantId } = await seedParticipant();
+    await page.route('**/api/e-consent/update', (route) => route.abort('timedout'));
+
+    await page.goto(consentLinkPath(participantId));
+    await expect(page.getByTestId('e-consent-permissions')).toContainText(RESEARCH_LABEL, {
+      timeout: 15_000,
+    });
+    await page.getByTestId('e-consent-submit').click();
+
+    const error = page.getByTestId('e-consent-error');
+    await expect(error).toContainText(/link continua válido/i);
+    await expect(error).not.toContainText(/inválido ou expirado/i);
+  });
+
   test('the page renders backend-resolved participant identity, not a hardcoded fallback', async ({
     page,
   }) => {
