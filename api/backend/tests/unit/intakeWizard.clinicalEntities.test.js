@@ -165,6 +165,8 @@ describe('intakeWizard clinical-entity recording (#693)', () => {
     consentRecord = null,
     matchOutcome = null,
     assessmentFailure = null,
+    storedSampleFields = {},
+    qualityAssessment = null,
   } = {}) {
     clearCache();
 
@@ -190,7 +192,7 @@ describe('intakeWizard clinical-entity recording (#693)', () => {
     auditLoggerModule.log = vi.fn().mockResolvedValue(undefined);
 
     const qualityDomainModule = require(qualityDomainPath);
-    qualityDomainModule.resolveMethodologicalQuality = vi.fn(() => ({
+    qualityDomainModule.resolveMethodologicalQuality = vi.fn(() => qualityAssessment || ({
       score: 80, category: 'B', label: 'Boa qualidade', forcedQuarantine: false, penaltyLog: [], reasons: [],
       matrixType: 'fluid', source: 'RCS-GOV', version: '1.0', quarantineReason: null,
     }));
@@ -206,7 +208,7 @@ describe('intakeWizard clinical-entity recording (#693)', () => {
     const collections = {
       samples: {
         insertOne: vi.fn().mockResolvedValue({ insertedId: 'sample-1' }),
-        findOne: vi.fn().mockResolvedValue({ _id: 'sample-1', specimenId: 'spec-1', participantId: '12345678' }),
+        findOne: vi.fn().mockResolvedValue({ _id: 'sample-1', specimenId: 'spec-1', participantId: '12345678', ...storedSampleFields }),
         updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
       },
       patients: { updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) },
@@ -930,6 +932,63 @@ describe('intakeWizard clinical-entity recording (#693)', () => {
 
 
   describe('item 8 governance and response alternates', () => {
+    it('keeps intake quarantined when the optional consent section is omitted', async () => {
+      const payload = { ...VALID_PAYLOAD };
+      delete payload.consent;
+      const { res } = await runIntake(payload);
+      expect(res.status).toBe(200);
+      expect(res.body.consent).toMatchObject({ active: false, status: 'PENDING' });
+      expect(require(sampleServicePath).createSample.mock.calls[0][1]).toMatchObject({
+        consentTemplateId: null, specimenStatus: 'quarantined', quarantineReason: 'CONSENT_PENDING',
+      });
+    });
+
+    it('records an ORPHA-coded family condition without an optional display', async () => {
+      const { res, collections } = await runIntake({
+        ...VALID_PAYLOAD,
+        clinical: {
+          ...VALID_PAYLOAD.clinical,
+          familyHistories: [{ relationship: 'mother', orphaCode: 'ORPHA:558' }],
+        },
+      });
+
+      expect(res.status).toBe(200);
+      expect(collections.familyHistories.docs).toHaveLength(1);
+      expect(collections.familyHistories.docs[0].familyCondition[0].condition)
+        .toMatchObject({ systemUri: ORPHA_SYSTEM_URI, code: 'ORPHA:558' });
+      expect(collections.familyHistories.docs[0].familyCondition[0].condition.display).toBeUndefined();
+    });
+
+    it('returns Data Matrix asset and print links for a persisted canonical physical identifier', async () => {
+      const { res } = await runIntake(VALID_PAYLOAD, {
+        storedSampleFields: { barcode: 'SPEC/2026 001' },
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body.label).toEqual({
+        specimenId: 'spec-1',
+        symbologyAssetsUrl: '/api/samples/by-barcode/SPEC%2F2026%20001/symbology-assets',
+        printJobUrl: '/api/samples/spec-1/label/print-job',
+      });
+    });
+
+    it('keeps active-consent intake blocked when the real RCS evaluator finds insufficient input', async () => {
+      const qualityAssessment = require(qualityDomainPath).resolveMethodologicalQuality(VALID_PAYLOAD.specimen);
+      expect(qualityAssessment.governance_status).toBeNull();
+
+      const { res } = await runIntake(VALID_PAYLOAD, {
+        consentRecord: { consentId: 'CONSENT-ACTIVE', status: 'ACTIVE' },
+        qualityAssessment,
+      });
+
+      expect(res.status).toBe(200);
+      const createSample = require(sampleServicePath).createSample;
+      expect(createSample.mock.calls[0][1]).toMatchObject({
+        consentStatus: 'SIGNED', specimenStatus: 'quarantined',
+        quarantineReason: 'QUALITY_GOVERNANCE_FAILURE',
+      });
+    });
+
     it('releases the specimen when consent is ACTIVE and returns a consent identifier from _id fallback', async () => {
       const { res } = await runIntake(VALID_PAYLOAD, {
         consentRecord: { _id: 'consent-object-id', status: 'ACTIVE' },

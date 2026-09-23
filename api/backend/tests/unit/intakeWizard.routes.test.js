@@ -133,6 +133,18 @@ describe('intakeWizard routes', () => {
   });
 
   describe('POST / (handleIntakeWizard)', () => {
+    it.each([
+      ['identity store unavailable', 'identity store unavailable'],
+      ['', 'Erro desconhecido ao finalizar o Intake Wizard.'],
+    ])('reports identity-store rejection with message %j', async (message, expected) => {
+      const { router } = loadRoute({
+        matchOrUpsertParticipant: vi.fn().mockRejectedValue(new Error(message)),
+      });
+      const res = await request(buildApp(router, {})).post('/api/intake-wizard').send(VALID_PAYLOAD);
+      expect(res.status).toBe(500);
+      expect(res.body).toEqual({ success: false, error: expected });
+    });
+
     it('returns 400 when the body is missing/invalid', async () => {
       const { router } = loadRoute();
       const app = buildApp(router, {});
@@ -1083,6 +1095,15 @@ function defaultStorageContainersFindOne({ _id }) {
       const res = await request(app).get('/api/intake-wizard/patient-match').query({ participantId: '12345678' });
 
       expect(res.status).toBe(500);
+      expect(res.body).toEqual({ success: false, error: 'db down' });
+    });
+
+    it('returns the query failure fallback when the rejected Error has no message', async () => {
+      const { router } = loadRoute({ getCollectionImpl: vi.fn().mockRejectedValue(new Error()) });
+      const res = await request(buildApp(router, {}))
+        .get('/api/intake-wizard/patient-match').query({ participantId: '12345678' });
+      expect(res.status).toBe(500);
+      expect(res.body).toEqual({ success: false, error: 'Falha ao consultar paciente.' });
     });
 
     it('matches by participantId first, falling back to name+birthDate only when the ID lookup misses', async () => {
