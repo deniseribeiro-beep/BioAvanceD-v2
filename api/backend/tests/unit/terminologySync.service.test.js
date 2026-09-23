@@ -195,6 +195,23 @@ describe('terminologySync.service', () => {
   });
 
   describe('#941 ensureTerminologyIndexes', () => {
+    // #941's measured DELETEs. Terminology.js declared `index: true` on both,
+    // inert under autoIndex:false. explain() on mongo:7: { ativo: 1 } is
+    // picked for dictionary.js's `ativo: { $ne: false }` and walks ~98% of
+    // the collection through the index -- slower than the COLLSCAN it
+    // replaces. { codigo: 1 } wins only the sync upsert, and only because
+    // the compound unique index is ineligible for that filter; that is
+    // fixed at the compound, not by adding a second index.
+    it.each([[{ ativo: 1 }], [{ codigo: 1 }]])('does NOT build %o', async (keys) => {
+      const createIndex = vi.fn(async () => {});
+
+      await svc.ensureTerminologyIndexes({ createIndex }, `941-not-built-${Object.keys(keys)[0]}`);
+
+      expect(createIndex).toHaveBeenCalled();
+      const built = createIndex.mock.calls.map(([k]) => JSON.stringify(k));
+      expect(built).not.toContain(JSON.stringify(keys));
+    });
+
     it('creates a unique index on { sistema: 1, codigo: 1 }, pinned by value', async () => {
       const createIndex = vi.fn(async () => {});
       const collection = { createIndex };

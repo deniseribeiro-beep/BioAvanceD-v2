@@ -38,6 +38,20 @@ describe('#941 ensureStagingImportIndexes', () => {
     vi.restoreAllMocks();
   });
 
+  // #941: StagingImport.js declared `status: { index: true }`, inert under
+  // autoIndex:false, and no query in src/ filters stagingImports on status --
+  // every reader keys on jobId. Deleted rather than built; pinned here.
+  it('does NOT build a { status: 1 } index', async () => {
+    const { ensureStagingImportIndexes } = freshStagingImportIndexes();
+    const collection = makeCollection('stagingImports-941-status');
+
+    await ensureStagingImportIndexes(collection);
+
+    expect(collection.createIndex).toHaveBeenCalled();
+    const built = collection.createIndex.mock.calls.map(([keys]) => Object.keys(keys));
+    expect(built.some((k) => k.includes('status'))).toBe(false);
+  });
+
   it('creates a UNIQUE index on jobId', async () => {
     const { ensureStagingImportIndexes } = freshStagingImportIndexes();
     const collection = makeCollection('stagingImports');

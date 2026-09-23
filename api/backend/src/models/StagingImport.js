@@ -36,7 +36,9 @@ const stagingImportSchema = new Schema(
       type: String,
       enum: ['staged', 'queued', 'processing', 'completed', 'failed'],
       default: 'staged',
-      index: true,
+      // #941: no `index: true` -- it was inert (autoIndex:false), and no
+      // query in src/ filters stagingImports on status; every reader keys
+      // on jobId, which utils/stagingImportIndexes.js does build.
     },
     totalRows: {
       type: Number,

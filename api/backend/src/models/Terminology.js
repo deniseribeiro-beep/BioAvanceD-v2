@@ -5,7 +5,12 @@ const mongoose = require('mongoose');
 const TerminologySchema = new mongoose.Schema(
   {
     // Código/ID da terminologia (ex: "E75.2", "HP:0001014", "OMIM:301500", "ORPHA:324")
-    codigo: { type: String, required: true, trim: true, index: true },
+    // #941: no field-level `index: true` here -- it was inert (autoIndex:false)
+    // and explain() showed a standalone { codigo: 1 } wins only the sync
+    // upsert's { sistema, codigo } lookup, and only because the native
+    // compound index (terminologySync.service.js) is ineligible for it. That
+    // is fixed at the compound index, not by a second index.
+    codigo: { type: String, required: true, trim: true },
 
     // Sistema/Origem (CID10, CID11, HPO, OMIM, ORPHA, BIOMARCADOR, etc.)
     sistema: { type: String, required: true, trim: true, index: true, enum: ['CID10', 'CID11', 'HPO', 'OMIM', 'ORPHA', 'BIOMARCADOR', 'OUTRO'] },
@@ -27,7 +32,10 @@ const TerminologySchema = new mongoose.Schema(
     },
 
     // Status
-    ativo: { type: Boolean, default: true, index: true },
+    // #941: no `index: true` -- inert, and HARMFUL if built: explain() showed
+    // the planner picks { ativo: 1 } for dictionary.js's `ativo: { $ne: false }`
+    // and walks ~98% of the collection through it, slower than a COLLSCAN.
+    ativo: { type: Boolean, default: true },
 
     // Metadados de sincronização
     sincronizadoEm: { type: Date, default: Date.now },
