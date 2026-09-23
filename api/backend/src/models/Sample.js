@@ -27,6 +27,11 @@ const SPECIMEN_STATUS_VALUES = [
 const BLOCKED_SPECIMEN_STATUSES = ['unavailable', 'destroyed', 'disposed', 'quarantined'];
 
 const SampleSchema = new Schema({
+  // #941: `index: true` on specimenId/participantId is INERT on its own --
+  // mongoose connects with autoIndex:false and nothing calls syncIndexes().
+  // Both are BUILT natively by utils/sampleIndexes.js, reached through
+  // collectionResolver.getCollection('samples'). Kept because they are
+  // accurate; what they are not is self-executing.
   specimenId: { type: String, required: true, index: true },
   participantId: { type: String, required: true, index: true },
   sampleType: { type: String, required: true },

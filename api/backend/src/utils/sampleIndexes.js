@@ -1,4 +1,5 @@
 const logger = require('./logger');
+const { buildLookupIndex } = require('./lookupIndex');
 
 /**
  * #936 item 1: a unique index on `samples.barcode`.
@@ -65,6 +66,17 @@ async function ensureSampleIndexes(collection) {
         + (error?.message || error)
     );
   }
+
+  // #941: the two lookup indexes `Sample.js` declares with `index: true` and
+  // that, for the same autoIndex:false reason as barcode above, were never
+  // built. explain('executionStats') on mongo:7 over 20k samples:
+  // `findOne({ specimenId })` -- the lookup behind ~20 call sites -- examined
+  // 12,346 docs as a COLLSCAN and 1 with the index; `listSamples`'
+  // `{ participantId }` filter examined 20,000 and 5. Non-unique, because the
+  // declaration never said unique. Own catch each, after barcode, so an
+  // E11000 there cannot cost them (#1027).
+  await buildLookupIndex(collection, { specimenId: 1 }, 'samples_specimenid_idx_v1', 'SAMPLES');
+  await buildLookupIndex(collection, { participantId: 1 }, 'samples_participantid_idx_v1', 'SAMPLES');
 }
 
 module.exports = { ensureSampleIndexes };
