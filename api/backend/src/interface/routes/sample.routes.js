@@ -5,7 +5,7 @@ const { validateMiabisCompliance } = require('../../services/miabisValidator.ser
 const SampleGraphValidator = require('../../services/SampleGraphValidator');
 const { authenticate } = require('../../infrastructure/middleware/auth');
 const { requireOrganizationScope } = require('../../infrastructure/middleware/rbac');
-const { isRecordInOrganizationScope, assertOrganizationFieldNotReparented } = require('../../services/rbac-assignment.service');
+const { isRecordInOrganizationScope, assertOrganizationFieldNotReparented, resolveOrganizationIdForCreate } = require('../../services/rbac-assignment.service');
 // const { authenticate } = require('../../infrastructure/middleware/auth');
 const sampleService = require('../../services/sample.service');
 
@@ -329,6 +329,7 @@ async function recordLabelGeneration(db, { sample, formats, req }) {
 router.post('/',
   authenticate,
   requirePermission('createSample'),
+  requireOrganizationScope,
   validateCreateSamplePayload,
   async (req, res) => {
     try {
@@ -360,8 +361,15 @@ router.post('/',
         quarantineService: req.app.locals.neo4jQuarantineService || req.app.locals.topologicalQuarantine || null
       });
 
+      // #1185: #1071's create rule -- an organization-scoped caller registers
+      // into its own organization whatever collectionSite the body names. A
+      // global caller keeps the body's value.
+      const sampleData = req.organizationScope?.scope === 'global'
+        ? req.body
+        : { ...req.body, collectionSite: resolveOrganizationIdForCreate(req.organizationScope, req.body?.collectionSite) };
+
       const result = await registerSampleUseCase.execute({
-        sampleData: req.body,
+        sampleData,
         actor: {
           userId: req.user?.id || req.user?._id?.toString() || req.user?.userID || null,
           userName: req.user?.name || req.user?.username || null,

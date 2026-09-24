@@ -258,9 +258,11 @@ const RETIRED_KEY_EXEMPT = new Set([
   // are unchanged -- same reason the result.routes.js entry above moved
   // under #875. Line-keyed exemptions are load-bearing bookkeeping: this
   // guard went red on the shift alone, which is the intended behaviour.
-  'interface/routes/sample.routes.js:683',
-  'interface/routes/sample.routes.js:760',
-  'interface/routes/sample.routes.js:853',
+  // :683/:760/:853 -> :691/:768/:861, a uniform +8, when #1185 added
+  // requireOrganizationScope and the collectionSite stamp to POST /.
+  'interface/routes/sample.routes.js:691',
+  'interface/routes/sample.routes.js:768',
+  'interface/routes/sample.routes.js:861',
   'services/analysisValidation.service.js:29'
 ]);
 

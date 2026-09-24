@@ -406,6 +406,61 @@ describe('sample.routes', () => {
       expect(res.status).toBe(201);
     });
 
+    // #1185: the create side of #1053's sample slice. POST / carried no
+    // organization scope and passed the body's collectionSite straight
+    // through, so a scoped caller could register a sample into another
+    // organization. #1071's rule: an organization scope stamps its own id.
+    describe('#1185: a scoped create stamps the caller organization as collectionSite', () => {
+      const created = () => vi.fn().mockResolvedValue({
+        sample: { _id: { toString: () => 's1' }, participantId: '12345678' },
+        strictMode: true,
+        topology: {},
+      });
+      const orgScoped = (req, res, next) => {
+        req.organizationScope = { scope: 'organization', organizationIds: ['org-mine'] };
+        next();
+      };
+
+      it('replaces a body collectionSite naming another organization', async () => {
+        const executeMock = created();
+        const { router } = loadRoute({ registerSampleUseCaseExecute: executeMock, requireOrganizationScopeImpl: orgScoped });
+        const app = buildApp(router, {});
+
+        const res = await request(app).post('/api/samples').send({ ...VALID_PAYLOAD, collectionSite: 'org-other' });
+
+        expect(res.status).toBe(201);
+        expect(executeMock).toHaveBeenCalledWith(expect.objectContaining({
+          sampleData: expect.objectContaining({ collectionSite: 'org-mine' }),
+        }));
+      });
+
+      it('stamps the caller organization when the body names no collectionSite', async () => {
+        const executeMock = created();
+        const { router } = loadRoute({ registerSampleUseCaseExecute: executeMock, requireOrganizationScopeImpl: orgScoped });
+        const app = buildApp(router, {});
+
+        const res = await request(app).post('/api/samples').send(VALID_PAYLOAD);
+
+        expect(res.status).toBe(201);
+        expect(executeMock).toHaveBeenCalledWith(expect.objectContaining({
+          sampleData: expect.objectContaining({ collectionSite: 'org-mine' }),
+        }));
+      });
+
+      it('CONTROL: a global scope keeps the body collectionSite', async () => {
+        const executeMock = created();
+        const { router } = loadRoute({ registerSampleUseCaseExecute: executeMock });
+        const app = buildApp(router, {});
+
+        const res = await request(app).post('/api/samples').send({ ...VALID_PAYLOAD, collectionSite: 'org-other' });
+
+        expect(res.status).toBe(201);
+        expect(executeMock).toHaveBeenCalledWith(expect.objectContaining({
+          sampleData: expect.objectContaining({ collectionSite: 'org-other' }),
+        }));
+      });
+    });
+
     it('rejects a boxId that is not a valid ObjectId, per issue #462', async () => {
       const { router } = loadRoute({ registerSampleUseCaseExecute: vi.fn() });
       const app = buildApp(router, {});
@@ -2774,6 +2829,8 @@ describe('sample.routes authorization gates (issue #921)', () => {
   describe('requireOrganizationScope presence pinning', () => {
     // 25 of the file's 27 routes wire in requireOrganizationScope.
     const GATED_CASES = [
+      // #1185: the create stamps the caller's organization, so it needs the scope.
+      { label: 'POST /', method: 'post', path: '/' },
       { label: 'GET /:id/miabis-compliance', method: 'get', path: '/s1/miabis-compliance' },
       { label: 'GET /:id/compliance-graph', method: 'get', path: '/s1/compliance-graph' },
       { label: 'GET /', method: 'get', path: '/' },
