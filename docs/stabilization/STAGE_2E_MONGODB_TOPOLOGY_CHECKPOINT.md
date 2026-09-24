@@ -51,4 +51,4 @@ Antes de `runFoundationV2` apply em um DB com `users`/`patients`/etc.:
 
 Este documento encerra a **Stage 2E (topologia Mongo)**. Não encerra a Wave 2 / issue #1132 nem o marco Item 8 de coverage 95%.
 
-HEAD deste checkpoint: o commit que introduz este arquivo (`feat(v2): complete Stage 2E MongoDB topology migration`).
+HEAD deste checkpoint: `e66e2a56de21ad2291c090e76dd45fc3af2209fe` (`feat(v2): complete Stage 2E MongoDB topology migration`).
