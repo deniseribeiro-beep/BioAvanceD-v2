@@ -34,9 +34,11 @@ is `336fcf7f` (#1125's guard).
 
 - **#1200**, open, labels `bug` and `question`: `disease_dictionary` is read
   on the request path but written by no stack. The seed's placement needs a
-  decision; the issue recommends (a), boot-seeding only the explicit rules.
-  Switching the rules on changes which samples pass validation, so this is
-  Dennis's or Denise's call.
+  decision. The body recommends (a), boot-seeding only the explicit rules. Its
+  docs-check comment adds (d): the canonical model for this is dict-02's
+  `BiomarkerAssociation`, so `disease_dictionary` may be legacy. Switching
+  the rules on changes which samples pass validation, so this is Dennis's
+  or Denise's call.
 - One finding about the tooling itself, recorded in Dennis's private tracker
   for tooling, not here.
 
