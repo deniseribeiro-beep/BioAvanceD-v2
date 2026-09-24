@@ -1,76 +1,77 @@
 # HANDOFF
 
-**Written 2026-09-24, forty-seventh queue sitting. INTERIM: Dennis gave no end
+**Written 2026-09-24, forty-eighth queue sitting. INTERIM: Dennis gave no end
 signal, so treat the session as CONTINUING.** The instruction was "read handoff,
-pick next group of issues, Docker is on". The sitting took the three bugs the
-last note had parked "for direction" (#1163, #1149, #1145). It settled each
-direction from the repo's own evidence, then fixed the two defects that work
-turned up (#1178, #1179).
+pick next group of issues, Docker is on". A parallel session is running too;
+this is the main one. The sitting took the RF010 consent cluster, #827 → #821 →
+#824, and closed all three.
 
 ## Repo state
 
 `feature/docker-e2e-backend-integration`, pushed. The last substantive commit is
-`723039b1`.
+`ad543841`.
 
 ## What shipped (all CLOSED, each with a close comment)
 
-- **#1163, `ec732d53`.** Convention adopted: a lookup index is ensured at its
-  READ path and a unique index at its write path. The rule lives in
-  `utils/lookupIndex.js`.
-  - The storage lookups are now ensured in `MongoStorageTopologyReadRepository`,
-    `TelemetryMonitor` and `equipment-sensor-quarantine`.
-  - `GET /api/terminologies` builds `terminologies_sistema_codigo_idx_v1`.
-- **#1149, `95e0d31a` + `777846b7`.** `PUT /api/security/permissions` is
-  removed. The Permissões tab is read-only, and `getPermissions` no longer
-  echoes the `security_permissions` overlay. The old rows are kept, not
-  deleted.
-- **#1145 + #1178, `711d48e3`**, one commit because they share hunks.
-  - #1145: the Novo Sensor dropdown now binds `SensorMetadata.temperaturePolicy`
-    by `_id`. A policy or freezer without a MAC is refused.
-  - #1178, filed this sitting: the Policies tab keyed on `policyID`, which the
-    API never returns. It now keys on `_id`, active-limit is unwrapped, and
-    `/:id` no longer runs `parseInt` on an ObjectId.
-- **#1179, `0043cbc1` + `723039b1`, filed this sitting.** Sensor edit now
-  rebinds freezer, policy and MAC on `SensorMetadata`, pre-filled from the
-  list. A dangling policy is refused on create and edit.
+- **#827, `4341761b`.** Every Consent now records `consentVersion` and the
+  dict-02 evidence trio. The evidence is an encrypted JSON document stored
+  through RF007's `objstore://` path by the new `consentEvidence.service.js`.
+  It fails closed without `ENCRYPTION_KEY`.
+- **#821, `e6511d7c`.** The bulk-token accept now records a Consent through
+  `createPatientConsent`.
+  - The request carries `consentTemplateId` + `responses`. A manifestation that
+    cannot be recorded as sent gets its own 422 marker.
+  - `ConsentTokenPage` has one checkbox per purpose.
+  - The convergence question was settled from dict-07, not left to the owner.
+- **#824, `ad543841`.**
+  - The sweep is extracted into `notifyPendingConsentCohort`, and all three
+    publish paths call it. The builder's toast shows the count.
+  - Fixed inline on the same path: `ConsentTemplateModel.create` dropped
+    `validFrom`/`validTo`, and a term created without a CAAE could never be
+    revised.
 
-New real-backend specs: `security-permissions-readonly`,
-`temperature-policies-ui`, and two cases in `sensor-registration`. The last run
-was 6 of 6 green with 0 skipped.
+New real-backend spec: `tcle-publication-sweep.spec.ts`.
+`consent-token-page.spec.ts` now asserts the stored Consent. The last run of the
+four consent specs was 18 of 18 green, with 0 skipped.
 
-## Open, and left in a known state
+## Filed this sitting, and left open
 
-Query the backlog with `gh issue list --state open --json number,title,labels`,
-redirected to a file.
-
-- **#1174** is still awaiting Dennis's (a)/(b) call.
-- **#1123**, RBAC authority, is untouched. #1149's close comment notes the tab
-  still shows `getPermissions`' hardcoded map, which is one of #1123's
-  sources.
-- The pack tracker got **#1133–#1136**, all hook or skill gaps, fixable only
-  from a pack session. It also got a second specimen commented on #1133.
+- **#1181**, the #824 remainder: collapse `createPolicy` into `createTemplate`.
+  One real defect sits inside it: a builder revision deactivates only its own
+  lineage, so another lineage's term stays `active` and `getActiveTemplate`
+  serves the newest. The design fork to settle first is a single active term
+  against one active term per lineage. `[read it]`
+- **#1180** is a security decision record for #821's widening of the
+  unauthenticated accept route. It records why the 422 arm is not a #823
+  oracle.
+- The pack tracker got **#1139** (running `gh` with the cwd inside a skill
+  junction answers for the pack repo), **#1140** (a Rule 0 guard false
+  positive) and **#1144** (red-first skipped for a new helper module).
+- Unchanged: **#1174** still awaits Dennis's (a)/(b) call, and **#1123** is
+  untouched.
 
 ## Docker and the machine
 
-**The test stack is DOWN** (`compose down`), and the build cache is pruned.
-Images (about 4.6 GB) and named volumes are kept, so the next bring-up is
-cheap, but it must use `--build`. Free RAM was 2.6 of 15.8 GB before the
-bring-up, and the 12-service stack still came up healthy.
+**The test stack is UP.** All 12 services are healthy and `admin-bootstrap-test`
+has run (Exited 0). `backend-app-test` and `frontend-app-test` were last rebuilt
+from the `ad543841` tree. The reference-data bootstrap chain has NOT been run,
+so this stack is not ready for a full-suite gate. Evidence files accumulate
+under `/app/storage/consents/` in the backend container.
 
 ## Things a next session must not undo
 
 Earlier notes' items still hold. Plus:
 - **Run multi-file e2e locally with `--workers=1` until #1174 is decided.**
-- **In a heredoc fed to scratch Python, read stdin as UTF-8**, with
-  `sys.stdin.buffer.read().decode('utf-8')`. Otherwise accented replacement
-  text arrives as cp1252 mojibake. `[ran it]` this sitting; pack #1135.
-- **`sensors` and `SensorMetadata` must stay in sync.** Freezer, policy and
-  MAC live on `SensorMetadata`, and `buildSensorLookup` matches MAC on both
-  collections. Any new sensor write path must touch both. `[read it]`
-- CRLF files: `server.js`, `import.service.js`, `result-worker.js`,
-  `sensor.service.js`, `security.service.js`, `FacilityManagementPage.tsx` and
-  most of `api/backend/src`. A scripted edit must detect endings per file.
+- **Consent e2e seeds need an 8-digit `participantId`.** Acceptance now goes
+  through `validateParticipantId` (`/^\d{8}$/`). `[ran it]`
+- **Run `gh` from the repo root, or pass `--repo`.** A `cd` into
+  `.claude/skills/*` makes `gh` read the PACK's issues. `[ran it]` It returned
+  CLOSED for two OPEN product issues (pack #1139).
+- **Every `createPatientConsent` writes an evidence file**, so a unit test
+  reaching it must stub `consentEvidence.storeConsentEvidence`. The unit env has
+  no key. See the `beforeEach` in `consent.service.unit.test.js`.
 
 ## Recommended next
 
-**None queued by name.** The parked bug trio is done. #1174 needs Dennis's call.
+**None queued by name.** #1181 is the natural follow-on to this group, but
+Dennis has not asked for it.
