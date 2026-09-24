@@ -5,13 +5,11 @@ const influxTelemetryWriteRepository = require('../infrastructure/persistence/in
 const notificationServiceV2 = require('./NotificationService');
 const notificationDispatchService = require('./notificationDispatch.service');
 const { applyOrganizationScopeFilter } = require('./rbac-assignment.service');
-
-// #1079: scheduler.service.js's resolveActiveAlert/ensureActiveAlert both
-// filter on { sensorId, type, status }, so every alert writer has to emit a
-// `type` for those two lifecycle helpers to reach it. The scheduler owns
-// 'missing_reading' and 'stale_reading'; this module owns the threshold
+// #1079/#1142: the alert-episode helpers filter on { sensorId, type, status },
+// so every alert writer has to emit a `type` for them to reach it. The
+// scheduler owns missing/stale readings; this module owns the threshold
 // breach.
-const THRESHOLD_BREACH_ALERT_TYPE = 'threshold_breach';
+const { ALERT_TYPES, resolveActiveAlert, ensureActiveAlert } = require('./alertLifecycle.service');
 
 function createTemperatureValidationError(message, statusCode = 422) {
   const error = new Error(message);
@@ -117,11 +115,8 @@ class TemperatureService {
         // excursion can fill the entire default page and push every other
         // sensor's alert off it.
         //
-        // The filter is scheduler.service.js#ensureActiveAlert's own, rather
-        // than a second predicate for the same question. It is duplicated
-        // rather than imported for the reason the resolve half below already
-        // records: importing that module would pull node-cron and three
-        // unrelated services into every caller of this one.
+        // ensureActiveAlert is the scheduler's own episode check, shared
+        // through alertLifecycle.service since #1142 rather than copied here.
         //
         // Shape 1 of the three the issue lists: the ROW is deduped, the
         // operator is NOT. Both notifications still fire on every breaching
@@ -131,12 +126,6 @@ class TemperatureService {
         // sibling (iot.controller#upsertEnvironmentalExcursion) is
         // episode-shaped, which is evidence for deduping the row and says
         // nothing about notification cadence.
-        const existingAlert = await alertsCollection.findOne({
-          sensorId: temperature.sensorId || temperature.sensorID,
-          type: THRESHOLD_BREACH_ALERT_TYPE,
-          status: 'active'
-        });
-
         const alertPayload = {
           sensorId: temperature.sensorId || temperature.sensorID,
           // #1062: an alert carried no organizationId at all, so
@@ -152,7 +141,7 @@ class TemperatureService {
           // breach stayed `active` forever -- one permanent document per
           // out-of-range reading, with nothing in the repo setting
           // status: 'resolved' on it.
-          type: THRESHOLD_BREACH_ALERT_TYPE,
+          type: ALERT_TYPES.THRESHOLD_BREACH,
           policyId: policyId,
           temperatureValue: temperature.temperatureValue,
           threshold: {
@@ -171,9 +160,7 @@ class TemperatureService {
         // none -- so reusing it breaks no consumer, and RF015 AC#6 ("vincular
         // a notificação ao evento que a originou") still holds because the
         // episode's alert IS the originating event.
-        const activeAlertId = existingAlert
-          ? existingAlert._id
-          : (await alertsCollection.insertOne(alertPayload)).insertedId;
+        const { alertId: activeAlertId } = await ensureActiveAlert(alertsCollection, alertPayload);
 
         logger.warn('Alerta de temperatura gerado:', {
           sensorId: temperature.sensorId || temperature.sensorID,
@@ -210,17 +197,11 @@ class TemperatureService {
         // resolves its own two types the moment the good condition holds
         // (checkStaleTemperatureReadings, the `else` beside its isStale
         // branch), with no debounce or hysteresis; this matches that
-        // semantics deliberately rather than inventing a second one.
-        // Kept inline rather than importing scheduler.service, which would
-        // pull node-cron and three unrelated services into every caller of
-        // this module for one updateMany.
+        // semantics deliberately rather than inventing a second one -- and
+        // since #1142 it is the same function.
         const sensorId = temperature.sensorId || temperature.sensorID;
         if (sensorId) {
-          const alertsCollection = db.collection('alerts');
-          await alertsCollection.updateMany(
-            { sensorId, type: THRESHOLD_BREACH_ALERT_TYPE, status: 'active' },
-            { $set: { status: 'resolved', resolvedAt: new Date() } }
-          );
+          await resolveActiveAlert(db.collection('alerts'), sensorId, ALERT_TYPES.THRESHOLD_BREACH);
         }
       }
     } catch (error) {

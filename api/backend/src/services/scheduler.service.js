@@ -4,6 +4,7 @@ const env = require('../config/env');
 const backupService = require('./backup.service');
 const retentionSweepService = require('./retentionSweep.service');
 const backupPolicyService = require('./backup-policy.service');
+const { ALERT_TYPES, resolveActiveAlert, ensureActiveAlert } = require('./alertLifecycle.service');
 
 const DEFAULT_STALE_MINUTES = 20;
 
@@ -18,28 +19,6 @@ function normalizeDate(value) {
   if (value instanceof Date) return value;
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
-
-async function resolveActiveAlert(alertsCollection, sensorId, type) {
-  await alertsCollection.updateMany(
-    { sensorId, type, status: 'active' },
-    { $set: { status: 'resolved', resolvedAt: new Date() } }
-  );
-}
-
-async function ensureActiveAlert(alertsCollection, payload) {
-  const existing = await alertsCollection.findOne({
-    sensorId: payload.sensorId,
-    type: payload.type,
-    status: 'active'
-  });
-
-  if (!existing) {
-    await alertsCollection.insertOne(payload);
-    return true;
-  }
-
-  return false;
 }
 
 async function checkStaleTemperatureReadings(db) {
@@ -74,14 +53,14 @@ async function checkStaleTemperatureReadings(db) {
       .next();
 
     if (!lastReading) {
-      const created = await ensureActiveAlert(alertsCollection, {
+      const { created } = await ensureActiveAlert(alertsCollection, {
         sensorId,
         // #1062: the second alert writer. This one iterates full sensor
         // documents, so the organization comes from the sensor itself --
         // an admin-created record rather than per-request input, which is
         // the more trustworthy of the two provenances.
         organizationId: sensor.organizationId || null,
-        type: 'missing_reading',
+        type: ALERT_TYPES.MISSING_READING,
         message: 'Nenhuma leitura registrada para o sensor',
         severity: 'critical',
         status: 'active',
@@ -99,10 +78,10 @@ async function checkStaleTemperatureReadings(db) {
     const isStale = now - lastTimestamp.getTime() > staleMs;
 
     if (isStale) {
-      const created = await ensureActiveAlert(alertsCollection, {
+      const { created } = await ensureActiveAlert(alertsCollection, {
         sensorId,
         organizationId: sensor.organizationId || null,
-        type: 'stale_reading',
+        type: ALERT_TYPES.STALE_READING,
         message: `Última leitura há mais de ${staleMinutes} minutos`,
         severity: 'warning',
         status: 'active',
@@ -113,8 +92,8 @@ async function checkStaleTemperatureReadings(db) {
 
       if (created) alertsCreated += 1;
     } else {
-      await resolveActiveAlert(alertsCollection, sensorId, 'stale_reading');
-      await resolveActiveAlert(alertsCollection, sensorId, 'missing_reading');
+      await resolveActiveAlert(alertsCollection, sensorId, ALERT_TYPES.STALE_READING);
+      await resolveActiveAlert(alertsCollection, sensorId, ALERT_TYPES.MISSING_READING);
     }
   }
 
