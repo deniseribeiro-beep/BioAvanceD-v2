@@ -1381,11 +1381,23 @@ class AuthService {
       const hashedPassword = await bcrypt.hash(newPassword, 10);
 
       // Atualiza senha e remove token de recuperação
+      //
+      // #1002: the reset also ENDS a password lockout. This route never
+      // consulted isAccountLocked, which is right -- OWASP's Authentication
+      // Cheat Sheet ("Account Lockout") recommends letting the forgotten-
+      // password flow work while an account is locked, so a lockout cannot be
+      // turned into a denial of service against its owner. But it did not
+      // clear the lock either, so a user who proved control of their mailbox
+      // and set a new password was still refused at login until
+      // accountLockedUntil passed. The counter guarded the OLD password, which
+      // no longer exists after this write, so there is nothing left for it to
+      // protect.
       await usersCollection.updateOne(
         { _id: user._id },
         {
           $set: {
             password: hashedPassword,
+            ...clearedLockoutFields(),
             updatedAt: new Date()
           },
           $unset: {

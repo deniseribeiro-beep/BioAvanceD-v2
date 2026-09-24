@@ -1056,6 +1056,37 @@ describe('AuthService.resetPassword', () => {
     expect(collectionApi.updateOne).toHaveBeenCalled();
   });
 
+  // #1002: the forgotten-password flow is the recovery path for a LOCKED
+  // account (OWASP Authentication Cheat Sheet, "Account Lockout"), so it must
+  // neither refuse a locked user nor leave the lock standing once the password
+  // it guarded has been replaced.
+  it('#1002: a locked account can reset, and the reset clears the lockout', async () => {
+    vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'password-reset', userID: '507f1f77bcf86cd799439011' });
+    const collectionApi = {
+      findOne: vi.fn().mockResolvedValue({
+        ...BASE_USER,
+        failedLoginAttempts: 5,
+        accountLockedUntil: new Date(Date.now() + 30 * 60 * 1000),
+        passwordResetTokenHash: hashToken('tok'),
+        passwordResetExpires: new Date(Date.now() + 100000),
+      }),
+      updateOne: vi.fn().mockResolvedValue({}),
+      find: vi.fn(),
+      insertOne: vi.fn(),
+    };
+    const db = makeDb(collectionApi);
+
+    const result = await authService.resetPassword(db, 'tok', 'NewPass123!@#', {});
+
+    expect(result.success).toBe(true);
+    expect(collectionApi.updateOne).toHaveBeenCalledWith(
+      { _id: BASE_USER._id },
+      expect.objectContaining({
+        $set: expect.objectContaining({ failedLoginAttempts: 0, accountLockedUntil: null }),
+      })
+    );
+  });
+
   // #1078: dict-02 P1X-0207 names the field passwordResetTokenHash, type
   // secret/hash, and RNF020 AC#3's FIRST clause is "Tokens de recuperação e
   // códigos sensíveis são armazenados por hash". The code stored the raw
