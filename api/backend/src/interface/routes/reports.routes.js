@@ -1178,18 +1178,36 @@ router.delete('/:id', authenticate, requirePermission('viewReports'), async (req
       return res.status(503).json({ error: 'Banco de dados não disponível' });
     }
 
+    // #1185: GET /:id's scope resolution and record check, which this route
+    // lacked -- any viewReports holder could delete any organization's report.
+    const organizationScope = await resolveUserOrganizationScope(db, req.user?.userID || req.user?._id);
+    if (!isOrganizationScopeUsable(organizationScope)) {
+      return res.status(403).json({ error: 'Sem organização atribuída', message: 'Seu usuário não possui organização atribuída para acessar este recurso' });
+    }
+
     const reportsCollection = db.collection('reports');
     const { id } = req.params;
 
-    let deleteResult = null;
+    // Resolve the one report first, by the same reportID-then-_id order,
+    // and delete by its _id, so the record checked is the record removed.
+    let report = null;
     if (/^\d+$/.test(id)) {
-      deleteResult = await reportsCollection.deleteOne({ reportID: Number(id) });
+      report = await reportsCollection.findOne({ reportID: Number(id) });
     }
 
-    if ((!deleteResult || deleteResult.deletedCount === 0) && ObjectId.isValid(id)) {
-      deleteResult = await reportsCollection.deleteOne({ _id: new ObjectId(id) });
+    if (!report && ObjectId.isValid(id)) {
+      report = await reportsCollection.findOne({ _id: new ObjectId(id) });
     }
 
+    if (!report) {
+      return res.status(404).json({ error: 'Relatório não encontrado' });
+    }
+
+    if (!isRecordInOrganizationScope(report, organizationScope, 'organizationIds')) {
+      return res.status(403).json({ error: 'Acesso negado', message: 'Este relatório pertence a outra organização' });
+    }
+
+    const deleteResult = await reportsCollection.deleteOne({ _id: report._id });
     if (!deleteResult || deleteResult.deletedCount === 0) {
       return res.status(404).json({ error: 'Relatório não encontrado' });
     }

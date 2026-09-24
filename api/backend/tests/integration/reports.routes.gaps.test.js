@@ -87,6 +87,14 @@ function buildCollectionDb(collections = {}) {
           capturedQueries[`${name}.findOne`] = query;
           return docs.find((doc) => Object.entries(query).every(([key, value]) => doc[key] === value)) || null;
         },
+        // #1185: DELETE /api/reports/:id -- same equality semantics as findOne.
+        async deleteOne(query = {}) {
+          capturedQueries[`${name}.deleteOne`] = query;
+          const index = docs.findIndex((doc) => Object.entries(query).every(([key, value]) => doc[key] === value));
+          if (index === -1) return { deletedCount: 0 };
+          docs.splice(index, 1);
+          return { deletedCount: 1 };
+        },
       };
     },
   };
@@ -1377,6 +1385,43 @@ describe('reports.routes.js gaps', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.reportID).toBe(1);
+    });
+
+    // #1185: DELETE had neither the scope resolution nor the record check
+    // its GET sibling above runs, so any viewReports holder could delete
+    // any organization's report.
+    it('DELETE /api/reports/:id: 403 quando o relatório pertence a outra organização, e nada é removido', async () => {
+      const reports = [{ reportID: 1, reportType: 'audit', organizationIds: ['org-9'] }];
+      const { db, capturedQueries } = buildCollectionDb({ ...ORG_SCOPED_RBAC, reports });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).delete('/api/reports/1');
+
+      expect(response.status).toBe(403);
+      expect(capturedQueries['reports.deleteOne']).toBeUndefined();
+      expect(reports).toHaveLength(1);
+    });
+
+    it('DELETE /api/reports/:id: 403 quando o usuário não tem nenhuma organização atribuída', async () => {
+      const reports = [{ reportID: 1, reportType: 'audit', organizationIds: ['org-1'] }];
+      const { db } = buildCollectionDb({ ...NO_ASSIGNMENT_RBAC, reports });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).delete('/api/reports/1');
+
+      expect(response.status).toBe(403);
+      expect(reports).toHaveLength(1);
+    });
+
+    it('CONTROL: DELETE /api/reports/:id remove um relatório no escopo do usuário', async () => {
+      const reports = [{ reportID: 1, reportType: 'audit', organizationIds: ['org-1'] }];
+      const { db } = buildCollectionDb({ ...ORG_SCOPED_RBAC, reports });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).delete('/api/reports/1');
+
+      expect(response.status).toBe(200);
+      expect(reports).toHaveLength(0);
     });
   });
 
