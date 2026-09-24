@@ -2118,6 +2118,84 @@ describe('sample.routes', () => {
       expect(res.status).toBe(403);
       expect(updateSample).not.toHaveBeenCalled();
     });
+
+    // #1053: the #623 check above is the SOURCE -- is this sample mine now.
+    // updateSample's allowlist contains collectionSite, the field this module
+    // scopes on, so an in-scope caller could still push their own sample into
+    // another organization with that check passing on the way through.
+    describe('#1053: a PUT cannot re-parent the sample to another collectionSite', () => {
+      const orgScoped = (req, res, next) => {
+        req.organizationScope = { scope: 'organization', organizationIds: ['org-mine'] };
+        next();
+      };
+
+      it('refuses a PUT that moves an in-scope sample to another organization', async () => {
+        const updateSample = vi.fn();
+        const getSample = vi.fn().mockResolvedValue({ _id: '1', collectionSite: 'org-mine' });
+        const { router } = loadRoute({
+          sampleServiceOverrides: { updateSample, getSample },
+          requireOrganizationScopeImpl: orgScoped,
+        });
+        const app = buildApp(router, {});
+
+        const res = await request(app).put('/api/samples/000000000000000000000000').send({ collectionSite: 'org-other' });
+
+        expect(res.status).toBe(403);
+        expect(updateSample).not.toHaveBeenCalled();
+      });
+
+      it('CONTROL: an update that does not name collectionSite still succeeds', async () => {
+        const updateSample = vi.fn().mockResolvedValue({ _id: '1', quantity: 1 });
+        const getSample = vi.fn().mockResolvedValue({ _id: '1', collectionSite: 'org-mine' });
+        const { router } = loadRoute({
+          sampleServiceOverrides: { updateSample, getSample },
+          requireOrganizationScopeImpl: orgScoped,
+        });
+        const app = buildApp(router, {});
+
+        const res = await request(app).put('/api/samples/000000000000000000000000').send({ quantity: 1 });
+
+        expect(res.status).toBe(200);
+        expect(updateSample).toHaveBeenCalled();
+      });
+
+      // The operator UI spreads the fetched record, so re-sending the
+      // sample's own collectionSite is what a normal edit sends.
+      it('CONTROL: re-sending the sample own collectionSite is allowed', async () => {
+        const updateSample = vi.fn().mockResolvedValue({ _id: '1', quantity: 1 });
+        const getSample = vi.fn().mockResolvedValue({ _id: '1', collectionSite: 'org-mine' });
+        const { router } = loadRoute({
+          sampleServiceOverrides: { updateSample, getSample },
+          requireOrganizationScopeImpl: orgScoped,
+        });
+        const app = buildApp(router, {});
+
+        const res = await request(app)
+          .put('/api/samples/000000000000000000000000')
+          .send({ collectionSite: 'org-mine', quantity: 1 });
+
+        expect(res.status).toBe(200);
+        expect(updateSample).toHaveBeenCalled();
+      });
+
+      it('CONTROL: a global scope may still move a sample between organizations', async () => {
+        const updateSample = vi.fn().mockResolvedValue({ _id: '1', collectionSite: 'org-other' });
+        const getSample = vi.fn().mockResolvedValue({ _id: '1', collectionSite: 'org-mine' });
+        const { router } = loadRoute({
+          sampleServiceOverrides: { updateSample, getSample },
+          requireOrganizationScopeImpl: (req, res, next) => {
+            req.organizationScope = { scope: 'global' };
+            next();
+          },
+        });
+        const app = buildApp(router, {});
+
+        const res = await request(app).put('/api/samples/000000000000000000000000').send({ collectionSite: 'org-other' });
+
+        expect(res.status).toBe(200);
+        expect(updateSample).toHaveBeenCalled();
+      });
+    });
   });
 
   describe('DELETE /:id', () => {

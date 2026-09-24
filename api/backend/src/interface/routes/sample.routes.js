@@ -5,7 +5,7 @@ const { validateMiabisCompliance } = require('../../services/miabisValidator.ser
 const SampleGraphValidator = require('../../services/SampleGraphValidator');
 const { authenticate } = require('../../infrastructure/middleware/auth');
 const { requireOrganizationScope } = require('../../infrastructure/middleware/rbac');
-const { isRecordInOrganizationScope } = require('../../services/rbac-assignment.service');
+const { isRecordInOrganizationScope, assertOrganizationFieldNotReparented } = require('../../services/rbac-assignment.service');
 // const { authenticate } = require('../../infrastructure/middleware/auth');
 const sampleService = require('../../services/sample.service');
 
@@ -1094,6 +1094,14 @@ router.put('/:id', authenticate, requirePermission('editSample'), requireOrganiz
       });
     }
 
+    // #1053: the check above proves the sample is CURRENTLY the caller's.
+    // updateSample's allowlist contains collectionSite -- the field this
+    // module scopes on -- so without a destination check an in-scope caller
+    // could push their own sample into another organization.
+    if (sampleForScope) {
+      assertOrganizationFieldNotReparented(req.organizationScope, sampleForScope.collectionSite, req.body?.collectionSite, 'collectionSite');
+    }
+
     const { ObjectId } = require('mongodb');
     const result = await sampleService.updateSample(db, new ObjectId(req.params.id), req.body);
 
@@ -1147,6 +1155,16 @@ router.put('/:id', authenticate, requirePermission('editSample'), requireOrganiz
     });
   } catch (error) {
     logger.error('Erro ao atualizar amostra:', error.message);
+    // #1053: a refused re-parent throws statusCode:403. Mapped explicitly
+    // rather than honouring any error.statusCode, which would change the
+    // status of updateSample's own validation errors.
+    if (error.statusCode === 403) {
+      return res.status(403).json({
+        success: false,
+        error: 'Acesso negado',
+        message: error.message
+      });
+    }
     return res.status(400).json({
       success: false,
       error: 'Erro ao atualizar amostra',
