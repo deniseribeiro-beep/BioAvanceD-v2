@@ -232,11 +232,11 @@ export function validateTemperatureUnit(unit: string): boolean {
  */
 export function generateAlert(temperature: Temperature, policy: Policy): void {
   if (
-    temperature.temperatureValue < policy.minThreshold ||
-    temperature.temperatureValue > policy.maxThreshold
+    temperature.temperatureValue < policy.minTemp ||
+    temperature.temperatureValue > policy.maxTemp
   ) {
     console.warn(
-      `ALERTA: Temperatura ${temperature.temperatureValue}${temperature.temperatureUnit} fora dos limites (${policy.minThreshold} - ${policy.maxThreshold})`
+      `ALERTA: Temperatura ${temperature.temperatureValue}${temperature.temperatureUnit} fora dos limites (${policy.minTemp} - ${policy.maxTemp})`
     );
     // Em produção, isso enviaria notificação/email
   }
@@ -250,11 +250,11 @@ export function generateAlert(temperature: Temperature, policy: Policy): void {
  */
 export function validateThresholds(policy: Policy): boolean {
   return (
-    policy.minThreshold < policy.targetTemperature &&
-    policy.targetTemperature < policy.maxThreshold &&
-    policy.minThreshold < policy.maxThreshold &&
+    policy.minTemp < policy.targetTemp &&
+    policy.targetTemp < policy.maxTemp &&
+    policy.minTemp < policy.maxTemp &&
     (policy.hysteresis ?? 0) >= 0 &&
-    (policy.alertDelayMin ?? 0) >= 0
+    (policy.minimumDuration ?? 0) >= 0
   );
 }
 
@@ -264,9 +264,9 @@ export function validateThresholds(policy: Policy): boolean {
  */
 export function getActiveLimit(policy: Policy, isMax: boolean = true): number {
   if (isMax) {
-    return policy.maxThreshold + (policy.hysteresis ?? 0);
+    return policy.maxTemp + (policy.hysteresis ?? 0);
   }
-  return policy.minThreshold - (policy.hysteresis ?? 0);
+  return policy.minTemp - (policy.hysteresis ?? 0);
 }
 
 // ========== LOG VALIDATIONS ==========

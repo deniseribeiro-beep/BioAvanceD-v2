@@ -734,15 +734,20 @@ export interface Policy {
   // #1178: legacy numeric id. The API returns it as `policyId` (lowercase d)
   // and it is null for any policy created since #1089, so nothing keys on it.
   policyId?: number | null;
-  policyName?: string;
-  minThreshold: number;
-  maxThreshold: number;
-  targetTemperature: number;
+  // #1139: the API's field names are the stored temperaturePolicies document's
+  // (dict-02 ThresholdProfile), with no translation in between.
+  name?: string; // dict-02 P1X-0106 profileName
+  minTemp: number; // P1X-0108 lowerLimit
+  maxTemp: number; // P1X-0109 upperLimit
+  targetTemp: number;
   hysteresis?: number;
-  alertDelayMin?: number;
+  minimumDuration?: number | null; // P1X-0110, minutes before an excursion opens
   temperatureUnit?: string;
-  validFrom: Date | string;
-  validTo: Date | string;
+  effectivePeriod: {
+    // P1X-0111
+    start: Date | string;
+    end?: Date | string | null;
+  };
   createdAt?: Date | string;
   updatedAt?: Date | string;
 }

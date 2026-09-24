@@ -295,6 +295,12 @@ export async function findTemperaturePolicy(policyId: string): Promise<any | nul
   return db.collection('temperaturePolicies').findOne({ _id: new ObjectId(policyId) });
 }
 
+/** Same as findTemperaturePolicy, keyed by the unique name a UI-created policy was given. */
+export async function findTemperaturePolicyByName(name: string): Promise<any | null> {
+  const db = await getDb();
+  return db.collection('temperaturePolicies').findOne({ name });
+}
+
 /** Deletes a seeded freezer container and its linked sensorMetadata/sensors docs. */
 export async function removeSensorRegistration(sensorId: string, freezerId: string): Promise<void> {
   const db = await getDb();

@@ -139,12 +139,14 @@ test.describe('Sensor registration links SensorMetadata (#311)', () => {
       const policyResponse = await request.post(`${apiBaseURL}/api/policies`, {
         headers: { Authorization: `Bearer ${session.token}` },
         data: {
-          policyName: `e2e-1145-${suffix}`,
-          minThreshold: 2,
-          maxThreshold: 8,
-          targetTemperature: 5,
-          validFrom: new Date().toISOString(),
-          validTo: new Date(Date.now() + 86_400_000).toISOString(),
+          name: `e2e-1145-${suffix}`,
+          minTemp: 2,
+          maxTemp: 8,
+          targetTemp: 5,
+          effectivePeriod: {
+            start: new Date().toISOString(),
+            end: new Date(Date.now() + 86_400_000).toISOString(),
+          },
         },
       });
       expect(policyResponse.status()).toBe(201);
@@ -205,12 +207,14 @@ test.describe('Sensor registration links SensorMetadata (#311)', () => {
         const res = await request.post(`${apiBaseURL}/api/policies`, {
           headers,
           data: {
-            policyName: `e2e-1179-${tag}-${suffix}`,
-            minThreshold: 2,
-            maxThreshold: 8,
-            targetTemperature: 5,
-            validFrom: new Date().toISOString(),
-            validTo: new Date(Date.now() + 86_400_000).toISOString(),
+            name: `e2e-1179-${tag}-${suffix}`,
+            minTemp: 2,
+            maxTemp: 8,
+            targetTemp: 5,
+            effectivePeriod: {
+              start: new Date().toISOString(),
+              end: new Date(Date.now() + 86_400_000).toISOString(),
+            },
           },
         });
         expect(res.status()).toBe(201);

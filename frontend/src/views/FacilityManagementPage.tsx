@@ -1206,7 +1206,7 @@ function SensorForm({
             </option>
             {policies.filter((policy) => policy && policy._id).map((policy) => (
               <option key={policy._id} value={policy._id}>
-                {policy.policyName || 'Política'} - {policy.targetTemperature}{policy.temperatureUnit} (Limites: {policy.minThreshold} - {policy.maxThreshold})
+                {policy.name || 'Política'} - {policy.targetTemp}{policy.temperatureUnit} (Limites: {policy.minTemp} - {policy.maxTemp})
               </option>
             ))}
           </select>
@@ -1347,23 +1347,23 @@ function PoliciesSection() {
               .filter((policy) => policy && policy._id)
               .map((policy) => (
               <tr key={`policy-${policy._id}`} data-testid={`policy-row-${policy._id}`}>
-                <td>{policy.policyName}</td>
+                <td>{policy.name}</td>
                 <td>
-                  {policy.targetTemperature}°C
+                  {policy.targetTemp}°C
                 </td>
                 <td>
-                  {policy.minThreshold}°C
+                  {policy.minTemp}°C
                 </td>
                 <td>
-                  {policy.maxThreshold}°C
+                  {policy.maxTemp}°C
                   <br />
                   <small style={{ color: 'var(--text-light)' }}>
                     Limite ativo: {activeLimits[String(policy._id)]?.toFixed(1) || 'N/A'}°C
                   </small>
                 </td>
                 <td>{policy.hysteresis}°C</td>
-                <td>{new Date(policy.validFrom).toLocaleDateString('pt-BR')}</td>
-                <td>{new Date(policy.validTo).toLocaleDateString('pt-BR')}</td>
+                <td>{new Date(policy.effectivePeriod?.start).toLocaleDateString('pt-BR')}</td>
+                <td>{policy.effectivePeriod?.end ? new Date(policy.effectivePeriod.end).toLocaleDateString('pt-BR') : '—'}</td>
                 <td>
                   <div className="table-actions">
                     <button
@@ -1453,17 +1453,27 @@ function PolicyForm({
   const [formData, setFormData] = useState<Partial<Policy>>(
     policy || {
       // #1089: required by the API as of the temperaturePolicies cutover.
-      policyName: '',
-      minThreshold: -85,
-      maxThreshold: -75,
-      targetTemperature: -80,
+      name: '',
+      minTemp: -85,
+      maxTemp: -75,
+      targetTemp: -80,
       hysteresis: 2,
-      alertDelayMin: 5,
+      minimumDuration: 5,
       temperatureUnit: '°C',
-      validFrom: new Date(),
-      validTo: new Date(),
+      effectivePeriod: { start: new Date(), end: new Date() },
     }
   );
+  // #1139: the API takes effectivePeriod whole, so each date input edits
+  // one bound and keeps the other.
+  const setPeriodBound = (bound: 'start' | 'end', value: string) =>
+    setFormData({
+      ...formData,
+      effectivePeriod: {
+        start: formData.effectivePeriod?.start ?? new Date(),
+        end: formData.effectivePeriod?.end ?? null,
+        [bound]: new Date(value),
+      },
+    });
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1479,11 +1489,11 @@ function PolicyForm({
         <Input
           label="Nome da Política"
           type="text"
-          value={formData.policyName || ''}
+          value={formData.name || ''}
           onChange={(e) =>
             setFormData({
               ...formData,
-              policyName: e.target.value,
+              name: e.target.value,
             })
           }
           helperText="Identifica a política na listagem e nos alertas. Ex.: Freezer -80."
@@ -1493,11 +1503,11 @@ function PolicyForm({
           label="Temperatura Alvo"
           type="number"
           step="0.1"
-          value={formData.targetTemperature || ''}
+          value={formData.targetTemp || ''}
           onChange={(e) =>
             setFormData({
               ...formData,
-              targetTemperature: parseFloat(e.target.value),
+              targetTemp: parseFloat(e.target.value),
             })
           }
           helperText="Temperatura ideal que deve ser mantida. Deve estar entre o limite mínimo e máximo."
@@ -1507,11 +1517,11 @@ function PolicyForm({
           label="Limite Mínimo"
           type="number"
           step="0.1"
-          value={formData.minThreshold || ''}
+          value={formData.minTemp || ''}
           onChange={(e) =>
             setFormData({
               ...formData,
-              minThreshold: parseFloat(e.target.value),
+              minTemp: parseFloat(e.target.value),
             })
           }
           helperText="Temperatura mínima permitida. Deve ser menor que a temperatura alvo."
@@ -1521,11 +1531,11 @@ function PolicyForm({
           label="Limite Máximo"
           type="number"
           step="0.1"
-          value={formData.maxThreshold || ''}
+          value={formData.maxTemp || ''}
           onChange={(e) =>
             setFormData({
               ...formData,
-              maxThreshold: parseFloat(e.target.value),
+              maxTemp: parseFloat(e.target.value),
             })
           }
           helperText="Temperatura máxima permitida. Deve ser maior que a temperatura alvo."
@@ -1544,11 +1554,11 @@ function PolicyForm({
         <Input
           label="Atraso de Alerta (minutos)"
           type="number"
-          value={formData.alertDelayMin || ''}
+          value={formData.minimumDuration || ''}
           onChange={(e) =>
             setFormData({
               ...formData,
-              alertDelayMin: parseInt(e.target.value),
+              minimumDuration: parseInt(e.target.value),
             })
           }
           helperText="Tempo em minutos que a temperatura deve estar fora dos limites antes de gerar um alerta."
@@ -1575,16 +1585,11 @@ function PolicyForm({
           label="Válido De"
           type="date"
           value={
-            formData.validFrom
-              ? new Date(formData.validFrom).toISOString().split('T')[0]
+            formData.effectivePeriod?.start
+              ? new Date(formData.effectivePeriod.start).toISOString().split('T')[0]
               : ''
           }
-          onChange={(e) =>
-            setFormData({
-              ...formData,
-              validFrom: new Date(e.target.value),
-            })
-          }
+          onChange={(e) => setPeriodBound('start', e.target.value)}
           helperText="Data de início da vigência desta política. Deve ser anterior à data de término."
           required
         />
@@ -1592,16 +1597,11 @@ function PolicyForm({
           label="Válido Até"
           type="date"
           value={
-            formData.validTo
-              ? new Date(formData.validTo).toISOString().split('T')[0]
+            formData.effectivePeriod?.end
+              ? new Date(formData.effectivePeriod.end).toISOString().split('T')[0]
               : ''
           }
-          onChange={(e) =>
-            setFormData({
-              ...formData,
-              validTo: new Date(e.target.value),
-            })
-          }
+          onChange={(e) => setPeriodBound('end', e.target.value)}
           helperText="Data de término da vigência desta política. Deve ser posterior à data de início."
           required
         />

@@ -3,82 +3,71 @@ const router = express.Router();
 const { authenticate } = require('../../infrastructure/middleware/auth');
 const { requirePermission } = require('../../infrastructure/middleware/rbac');
 const logger = require('../../utils/logger');
-const PolicyModel = require('../../models/Policy');
 
-// #1089: the six CRUD routes here wrote db.collection('policies') while the
-// telemetry ingestion path -- iot.controller#resolveTemperaturePolicy, via
-// SensorMetadata.temperaturePolicy, down into TelemetryMonitor.js:233 --
-// resolves a sensor's thresholds out of 'temperaturePolicies'. Nothing
-// joined the two stores, so a policy created through this API governed no
-// sensor, and checkPolicyAndAlert's `if (!policy) return` failed open
-// rather than erroring. contracts/canonical/v1/index.js:232 maps
-// temperaturePolicies to dict-02's ThresholdProfile, and models/Policy.js
-// calls itself a "Politica de Temperatura" in its own first line, so the
-// two were never different concepts -- temperaturePolicies survives.
+// #1089 unified the temperature-policy store on 'temperaturePolicies', the
+// collection contracts/canonical/v1 maps to dict-02's ThresholdProfile, and
+// kept the HTTP contract on its legacy names behind a translation layer: a
+// request mapper, a response mapper and a key->path allowlist map, the same
+// mapping stated three times. #1139 retired that layer. The request and the
+// response ARE the stored document, so a caller's key is the path it lands on.
 //
-// Dennis's calls 2026-09-22, recorded on the issue:
-//   Q4 -- the stored document takes the canonical shape; the HTTP contract
-//         keeps its existing field names, translated here at the boundary.
-//         That is what these two functions are, and the whole of it.
-//   Q1 -- dict-02 P1X-0106 profileName is 1..1 Core and the API had no
-//         source for it, so callers now supply policyName. That is a new
-//         REQUIRED request field (PolicyModel.validate enforces it).
-//
-// Q2/Q3 were not put to him, because Q4 answers them: temperatureUnit has
-// no dict-02 counterpart, but a GET still returns it, so it must round-trip
-// and is persisted as a non-canonical extension alongside policyId.
-// Retiring this translation -- and with it the legacy names in the
-// frontend's Policy type -- is the follow-up issue's job.
-//
-// #1195: alertDelayMin is NOT such an extension. The form defines it as the
-// minutes out of range before an alert, which is dict-02 P1X-0110
-// minimumDuration ("tempo fora de limite necessario para abrir excursao"),
-// the field TelemetryMonitor enforces, in the same unit. It was stored
-// under its HTTP name, where nothing read it, beside a hard-coded null
-// minimumDuration, so no operator's value ever took effect.
+// The names are TemperaturePolicy.schema.js's, whose header maps them onto
+// dict-02: name = profileName (P1X-0106), minTemp/maxTemp = lowerLimit/
+// upperLimit, effectivePeriod (P1X-0111), minimumDuration (P1X-0110, minutes,
+// #1195). Two non-dictionary fields remain: targetTemp, which the schema
+// requires and the operator UI shows, and temperatureUnit, which dict-02
+// carries inside lowerLimit/upperLimit as Quantities -- a storage migration,
+// not a boundary one.
 const CANONICAL_METRIC_TYPE = 'temperature';
 const CANONICAL_RULE_VERSION = '1.0.0';
+const TEMPERATURE_UNITS = ['\u00b0C', '\u00b0F'];
 
-function toCanonical(body) {
+function validatePolicy(body) {
+  const errors = [];
+  // dict-02 P1X-0106 profileName is 1..1 Core, and the schema requires it.
+  if (typeof body.name !== 'string' || body.name.trim() === '') {
+    errors.push('name \u00e9 obrigat\u00f3rio e deve ser string n\u00e3o vazia');
+  }
+  for (const field of ['minTemp', 'maxTemp', 'targetTemp']) {
+    if (typeof body[field] !== 'number') {
+      errors.push(`${field} \u00e9 obrigat\u00f3rio e deve ser number`);
+    }
+  }
+  if (body.minTemp >= body.maxTemp) {
+    errors.push('minTemp deve ser menor que maxTemp');
+  }
+  if (body.temperatureUnit && !TEMPERATURE_UNITS.includes(body.temperatureUnit)) {
+    errors.push('temperatureUnit deve ser \u00b0C ou \u00b0F');
+  }
+  return { isValid: errors.length === 0, errors };
+}
+
+function toDate(value) {
+  return value ? new Date(value) : null;
+}
+
+function buildPolicy(body) {
+  const period = body.effectivePeriod || {};
+  const now = new Date();
   return {
-    name: body.policyName,
-    minTemp: body.minThreshold,
-    maxTemp: body.maxThreshold,
-    targetTemp: body.targetTemperature,
+    name: body.name,
+    minTemp: body.minTemp,
+    maxTemp: body.maxTemp,
+    targetTemp: body.targetTemp,
     hysteresis: body.hysteresis === undefined ? 0.5 : body.hysteresis,
     metricType: CANONICAL_METRIC_TYPE,
     ruleVersion: CANONICAL_RULE_VERSION,
     effectivePeriod: {
-      start: body.validFrom ? new Date(body.validFrom) : new Date(),
-      end: body.validTo ? new Date(body.validTo) : null
+      start: toDate(period.start) || now,
+      end: toDate(period.end)
     },
-    // P1X-0110, sent as alertDelayMin (#1195). Set explicitly because these
-    // routes use the native driver, so TemperaturePolicySchema's own default
-    // never runs. Omitted stays null, which TelemetryMonitor treats as "fall
-    // back to the global threshold", as does any non-positive value.
-    minimumDuration: body.alertDelayMin === undefined ? null : body.alertDelayMin,
-    // Non-canonical, kept because the HTTP contract above still exposes them.
-    policyId: body.policyId || body.policyID || null,
+    // Set explicitly because these routes use the native driver, so the
+    // schema's own default never runs. Null (or any non-positive value) is
+    // TelemetryMonitor's "fall back to the global threshold" (#1195).
+    minimumDuration: body.minimumDuration === undefined ? null : body.minimumDuration,
     temperatureUnit: body.temperatureUnit || '\u00b0C',
-    createdAt: new Date(),
-    updatedAt: new Date()
-  };
-}
-
-function toApiShape(doc) {
-  if (!doc) return doc;
-  // #1195: alertDelayMin is read from minimumDuration, the value enforced. A
-  // legacy stored alertDelayMin was never enforced, so it is not reported.
-  const { name, minTemp, maxTemp, targetTemp, effectivePeriod, minimumDuration, alertDelayMin, ...rest } = doc;
-  return {
-    ...rest,
-    policyName: name,
-    alertDelayMin: minimumDuration,
-    minThreshold: minTemp,
-    maxThreshold: maxTemp,
-    targetTemperature: targetTemp,
-    validFrom: effectivePeriod ? effectivePeriod.start : undefined,
-    validTo: effectivePeriod ? effectivePeriod.end : undefined
+    createdAt: now,
+    updatedAt: now
   };
 }
 
@@ -117,7 +106,7 @@ router.get('/', authenticate, requirePermission('viewTemperature'), async (req, 
 
     return res.status(200).json({
       success: true,
-      data: policies.map(toApiShape)
+      data: policies
     });
   } catch (error) {
     logger.error('Erro ao listar políticas:', error.message);
@@ -169,7 +158,7 @@ router.get('/:id', authenticate, requirePermission('viewTemperature'), async (re
 
     return res.status(200).json({
       success: true,
-      data: toApiShape(policy)
+      data: policy
     });
   } catch (error) {
     logger.error('Erro ao buscar política:', error.message);
@@ -250,7 +239,7 @@ router.post('/', authenticate, requirePermission('manageTemperaturePolicy'), asy
       });
     }
 
-    const validation = PolicyModel.validate(req.body);
+    const validation = validatePolicy(req.body);
     if (!validation.isValid) {
       return res.status(422).json({
         success: false,
@@ -260,14 +249,14 @@ router.post('/', authenticate, requirePermission('manageTemperaturePolicy'), asy
     }
 
     const policiesCollection = db.collection('temperaturePolicies');
-    const policy = toCanonical(req.body);
+    const policy = buildPolicy(req.body);
 
     const result = await policiesCollection.insertOne(policy);
 
     return res.status(201).json({
       success: true,
       message: 'Política criada com sucesso',
-      data: toApiShape({ _id: result.insertedId, ...policy })
+      data: { _id: result.insertedId, ...policy }
     });
   } catch (error) {
     logger.error('Erro ao criar política:', error.message);
@@ -298,28 +287,33 @@ router.put('/:id', authenticate, requirePermission('manageTemperaturePolicy'), a
     // identity and is excluded, updatedAt is server-set here (never
     // caller-supplied).
     //
-    // #1089: the allowlist is now a MAP rather than a list, because the
-    // request's names and the stored document's names diverge here. The
-    // key is what a caller may send; the value is the canonical path it
-    // lands on. An unlisted key still reaches nothing, which is #875's
-    // whole invariant and is unchanged.
-    const ALLOWED_POLICY_UPDATE_FIELDS = {
-      policyName: 'name',
-      minThreshold: 'minTemp',
-      maxThreshold: 'maxTemp',
-      targetTemperature: 'targetTemp',
-      hysteresis: 'hysteresis',
-      alertDelayMin: 'minimumDuration', // #1195
-      temperatureUnit: 'temperatureUnit',
-      validFrom: 'effectivePeriod.start',
-      validTo: 'effectivePeriod.end'
-    };
+    // #1139: a list again. #1089 had made it a key->path map while the
+    // request's names diverged from the stored ones, and a typo in a map
+    // value $set a field nothing reads. Now the caller's key is the stored
+    // path, so the only way to get an entry wrong is to omit it, which fails
+    // safe. effectivePeriod is set per bound, so a PUT carrying only `end`
+    // keeps the stored `start`.
+    const ALLOWED_POLICY_UPDATE_FIELDS = [
+      'name',
+      'minTemp',
+      'maxTemp',
+      'targetTemp',
+      'hysteresis',
+      'minimumDuration',
+      'temperatureUnit'
+    ];
     const updateFields = {};
-    for (const [field, canonicalPath] of Object.entries(ALLOWED_POLICY_UPDATE_FIELDS)) {
+    for (const field of ALLOWED_POLICY_UPDATE_FIELDS) {
       if (Object.prototype.hasOwnProperty.call(req.body, field)) {
-        const value = req.body[field];
-        updateFields[canonicalPath] =
-          canonicalPath.startsWith('effectivePeriod.') && value ? new Date(value) : value;
+        updateFields[field] = req.body[field];
+      }
+    }
+    const period = req.body.effectivePeriod;
+    if (period && typeof period === 'object') {
+      for (const bound of ['start', 'end']) {
+        if (Object.prototype.hasOwnProperty.call(period, bound)) {
+          updateFields[`effectivePeriod.${bound}`] = toDate(period[bound]);
+        }
       }
     }
     updateFields.updatedAt = new Date();

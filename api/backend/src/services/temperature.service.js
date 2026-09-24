@@ -1,5 +1,4 @@
 const TemperatureModel = require('../models/Temperature');
-const PolicyModel = require('../models/Policy');
 const logger = require('../utils/logger');
 const influxTelemetryWriteRepository = require('../infrastructure/persistence/influxdb/InfluxTelemetryWriteRepository');
 const notificationServiceV2 = require('./NotificationService');

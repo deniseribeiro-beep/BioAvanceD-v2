@@ -99,7 +99,7 @@ describe('GET /api/policies/:id', () => {
 // was EVERY authenticated user, UsuarioExterno included.
 //
 // It is not cosmetic: temperature.service.js#checkPolicyAndAlert resolves a
-// policy and reads minThreshold/maxThreshold off it to decide whether a
+// policy and reads minTemp/maxTemp off it to decide whether a
 // reading is an excursion, so these rows are the thresholds that decide
 // whether the cold chain reports failures at all (RF009 AC#4/AC#6).
 //
@@ -352,13 +352,13 @@ describe('#1074: policy writes are gated on a write permission, not viewTemperat
     });
   }
 
-  // #1089 made policyName required, so a body that omits it 422s before
+  // #1089 made the name required, so a body that omits it 422s before
   // the gate is even reached -- which would make a 403 assertion vacuous.
   const VALID_BODY = {
-    policyName: 'Freezer -80',
-    minThreshold: -85,
-    maxThreshold: -75,
-    targetTemperature: -80,
+    name: 'Freezer -80',
+    minTemp: -85,
+    maxTemp: -75,
+    targetTemp: -80,
   };
 
   beforeEach(() => {
@@ -380,7 +380,7 @@ describe('#1074: policy writes are gated on a write permission, not viewTemperat
     const res = await request(app)
       .put('/api/policies/507f1f77bcf86cd799439011')
       .set('Authorization', `Bearer ${tokenFor(VIEW_ONLY_USER)}`)
-      .send({ minThreshold: -90 });
+      .send({ minTemp: -90 });
 
     expect(res.status).toBe(403);
   });

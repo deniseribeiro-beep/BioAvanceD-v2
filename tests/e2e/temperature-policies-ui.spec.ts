@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { realLogin, seedRealAuth } from './helpers/realAuth';
-import { removeTemperaturePolicy, findTemperaturePolicy, closeSeedSensorDb } from './helpers/seedSensor';
+import { removeTemperaturePolicy, findTemperaturePolicy, findTemperaturePolicyByName, closeSeedSensorDb } from './helpers/seedSensor';
 
 // Real-backend proof for #1178: the Políticas de Temperatura tab keyed every
 // row on `policyID`, which GET /api/policies never returns (it returns _id,
@@ -30,13 +30,15 @@ test.describe('Temperature policies tab (#1178) — real backend', () => {
     const createResponse = await request.post(`${apiBaseURL}/api/policies`, {
       headers: { Authorization: `Bearer ${session.token}` },
       data: {
-        policyName,
-        minThreshold: 2,
-        maxThreshold: 8,
-        targetTemperature: 5,
-        alertDelayMin: 30,
-        validFrom: new Date().toISOString(),
-        validTo: new Date(Date.now() + 86_400_000).toISOString(),
+        name: policyName,
+        minTemp: 2,
+        maxTemp: 8,
+        targetTemp: 5,
+        minimumDuration: 30,
+        effectivePeriod: {
+          start: new Date().toISOString(),
+          end: new Date(Date.now() + 86_400_000).toISOString(),
+        },
       },
     });
     expect(createResponse.status()).toBe(201);
@@ -59,7 +61,7 @@ test.describe('Temperature policies tab (#1178) — real backend', () => {
         headers: { Authorization: `Bearer ${session.token}` },
       });
       expect(fetched.status()).toBe(200);
-      expect((await fetched.json())?.data?.alertDelayMin).toBe(30);
+      expect((await fetched.json())?.data?.minimumDuration).toBe(30);
 
       await seedRealAuth(page, session);
       await page.goto('/facility-management?tab=policies');
@@ -81,6 +83,46 @@ test.describe('Temperature policies tab (#1178) — real backend', () => {
       deleted = true;
     } finally {
       if (!deleted) await removeTemperaturePolicy(policyId);
+    }
+  });
+
+  // #1139: the API no longer translates legacy names, so the form has to send
+  // the stored names itself. Anything it still sent under an old name would
+  // 422 (a required field) or be dropped, so the stored document is the proof.
+  test('a policy created through the form is stored under the canonical names (#1139)', async ({ page, request }) => {
+    let session;
+    try {
+      session = await realLogin(request);
+    } catch (err: any) {
+      console.warn(`realLogin failed — DB may not be seeded with an admin user yet: ${err.message}`);
+      return;
+    }
+
+    const policyName = `e2e-1139-${Date.now()}`;
+    let stored: any = null;
+    try {
+      await seedRealAuth(page, session);
+      await page.goto('/facility-management?tab=policies');
+      await page.getByRole('button', { name: 'Nova Política' }).click();
+      await page.getByLabel('Nome da Política').fill(policyName);
+      await page.getByLabel('Atraso de Alerta (minutos)').fill('15');
+      await page.getByRole('button', { name: 'Salvar' }).click();
+
+      await expect(page.getByRole('row', { name: new RegExp(policyName) })).toBeVisible();
+
+      stored = await findTemperaturePolicyByName(policyName);
+      expect(stored).not.toBeNull();
+      // The form's defaults, landing on the fields TelemetryMonitor reads.
+      expect(stored.minTemp).toBe(-85);
+      expect(stored.maxTemp).toBe(-75);
+      expect(stored.targetTemp).toBe(-80);
+      expect(stored.minimumDuration).toBe(15);
+      expect(stored.effectivePeriod.start).toBeInstanceOf(Date);
+      for (const legacy of ['policyName', 'minThreshold', 'maxThreshold', 'targetTemperature', 'alertDelayMin', 'validFrom', 'validTo']) {
+        expect(stored).not.toHaveProperty(legacy);
+      }
+    } finally {
+      if (stored?._id) await removeTemperaturePolicy(String(stored._id));
     }
   });
 });

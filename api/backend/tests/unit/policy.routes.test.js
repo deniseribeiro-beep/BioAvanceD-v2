@@ -244,10 +244,10 @@ describe('policy.routes', () => {
       const app = buildApp(router, db);
 
       const res = await request(app).post('/api/policies').send({
-        policyName: 'Freezer -20',
-        minThreshold: -20,
-        maxThreshold: -10,
-        targetTemperature: -15,
+        name: 'Freezer -20',
+        minTemp: -20,
+        maxTemp: -10,
+        targetTemp: -15,
         temperatureUnit: '°C',
       });
 
@@ -263,10 +263,10 @@ describe('policy.routes', () => {
       const app = buildApp(router, db);
 
       const res = await request(app).post('/api/policies').send({
-        policyName: 'Freezer -20',
-        minThreshold: -20,
-        maxThreshold: -10,
-        targetTemperature: -15,
+        name: 'Freezer -20',
+        minTemp: -20,
+        maxTemp: -10,
+        targetTemp: -15,
         temperatureUnit: '°C',
       });
 
@@ -280,23 +280,16 @@ describe('policy.routes', () => {
   // 'temperaturePolicies'. No code path joined the two, so a policy
   // created through this API was invisible to the sensors it was meant to
   // govern, and checkPolicyAndAlert's `if (!policy) return` made that
-  // silent rather than an error.
-  //
-  // Direction 1 (the issue's own): temperaturePolicies survives, because
-  // contracts/canonical/v1/index.js:232 maps it to dict-02 ThresholdProfile
-  // and models/Policy.js is a temperature policy by its own docblock.
-  // Dennis's calls 2026-09-22 -- Q4: the stored document takes the
-  // canonical shape while the HTTP contract keeps its existing field
-  // names, translated at the route boundary. Q1: the mandatory
-  // profileName/name is sourced from a new caller-supplied policyName.
+  // silent rather than an error. temperaturePolicies survives, because
+  // contracts/canonical/v1/index.js:232 maps it to dict-02 ThresholdProfile.
   describe("#1089: temperaturePolicies is the single store", () => {
     const validBody = {
-      policyName: 'Freezer -80',
-      minThreshold: -85,
-      maxThreshold: -75,
-      targetTemperature: -80,
-      temperatureUnit: '\u00b0C',
-      alertDelayMin: 5,
+      name: 'Freezer -80',
+      minTemp: -85,
+      maxTemp: -75,
+      targetTemp: -80,
+      temperatureUnit: '°C',
+      minimumDuration: 5,
     };
 
     it('POST writes to temperaturePolicies, not policies', async () => {
@@ -325,57 +318,25 @@ describe('policy.routes', () => {
       expect(stored.minTemp).toBe(-85);
       expect(stored.maxTemp).toBe(-75);
       expect(stored.targetTemp).toBe(-80);
+      expect(stored.temperatureUnit).toBe('°C');
       expect(stored.metricType).toBe('temperature');
       expect(stored.ruleVersion).toBe('1.0.0');
       expect(stored.effectivePeriod.start).toBeInstanceOf(Date);
-      // The legacy names must NOT survive into the canonical store --
-      // that is what made the two collections diverge in the first place.
-      expect(stored.minThreshold).toBeUndefined();
-      expect(stored.maxThreshold).toBeUndefined();
-      expect(stored.targetTemperature).toBeUndefined();
+      expect(stored.effectivePeriod.end).toBeNull();
     });
 
-    it('POST retains the non-canonical fields the HTTP contract still exposes', async () => {
-      const insertOne = vi.fn().mockResolvedValue({ insertedId: 'new-id' });
-      const db = { collection: vi.fn().mockReturnValue({ insertOne }) };
-      const { router } = loadRoute();
-      const app = buildApp(router, db);
-
-      await request(app).post('/api/policies').send(validBody);
-
-      // Q2/Q3 follow from Q4 rather than being separate calls: a GET still
-      // returns these, so they have to round-trip through storage.
-      // #1195: alertDelayMin is not one of them any more -- it is dict-02's
-      // minimumDuration under its HTTP name (see the #1195 block below).
-      const stored = insertOne.mock.calls[0][0];
-      expect(stored.temperatureUnit).toBe('\u00b0C');
-    });
-
-    it('POST answers the caller in the legacy HTTP shape', async () => {
-      const insertOne = vi.fn().mockResolvedValue({ insertedId: 'new-id' });
-      const db = { collection: vi.fn().mockReturnValue({ insertOne }) };
-      const { router } = loadRoute();
-      const app = buildApp(router, db);
-
-      const res = await request(app).post('/api/policies').send(validBody);
-
-      expect(res.body.data.minThreshold).toBe(-85);
-      expect(res.body.data.maxThreshold).toBe(-75);
-      expect(res.body.data.targetTemperature).toBe(-80);
-      expect(res.body.data.policyName).toBe('Freezer -80');
-    });
-
-    it('POST 422s without policyName, which the canonical shape requires', async () => {
+    it('POST 422s without name, which the canonical shape requires', async () => {
       const { router } = loadRoute();
       const app = buildApp(router, {});
 
-      const { policyName, ...withoutName } = validBody;
+      const { name, ...withoutName } = validBody;
       const res = await request(app).post('/api/policies').send(withoutName);
 
       expect(res.status).toBe(422);
+      expect(res.body.message).toContain('name é obrigatório e deve ser string não vazia');
     });
 
-    it('GET / reads temperaturePolicies and answers in the legacy shape', async () => {
+    it('GET / reads temperaturePolicies', async () => {
       const toArray = vi.fn().mockResolvedValue([
         { _id: 'p1', name: 'Freezer -80', minTemp: -85, maxTemp: -75, targetTemp: -80 },
       ]);
@@ -388,38 +349,26 @@ describe('policy.routes', () => {
 
       expect(res.status).toBe(200);
       expect(db.collection).toHaveBeenCalledWith('temperaturePolicies');
-      expect(res.body.data[0].minThreshold).toBe(-85);
-      expect(res.body.data[0].maxThreshold).toBe(-75);
-      expect(res.body.data[0].policyName).toBe('Freezer -80');
     });
   });
 
-  // #1195: the form's "Atraso de Alerta" was stored as alertDelayMin, which
-  // nothing reads, while TelemetryMonitor reads minimumDuration (dict-02
-  // P1X-0110, minutes), which POST hard-coded to null. The operator's value
-  // was never enforced. The HTTP name now lands on the canonical field.
-  describe('#1195: alertDelayMin is minimumDuration at the boundary', () => {
+  // #1139: #1089 kept the HTTP contract on legacy names (minThreshold,
+  // policyName, validFrom, alertDelayMin, ...) behind a request mapper, a
+  // response mapper and a key->path allowlist map. That layer is gone: the
+  // request and the response ARE the stored document.
+  describe('#1139: the HTTP contract is the stored shape, untranslated', () => {
     const body = {
-      policyName: 'Freezer -80',
-      minThreshold: -85,
-      maxThreshold: -75,
-      targetTemperature: -80,
+      name: 'Freezer -80',
+      minTemp: -85,
+      maxTemp: -75,
+      targetTemp: -80,
+      hysteresis: 1,
+      minimumDuration: 30,
+      temperatureUnit: '°C',
+      effectivePeriod: { start: '2026-01-01T00:00:00.000Z', end: '2026-12-31T00:00:00.000Z' },
     };
 
-    it('POST stores alertDelayMin as minimumDuration, not as an extension', async () => {
-      const insertOne = vi.fn().mockResolvedValue({ insertedId: 'new-id' });
-      const db = { collection: vi.fn().mockReturnValue({ insertOne }) };
-      const { router } = loadRoute();
-      const app = buildApp(router, db);
-
-      await request(app).post('/api/policies').send({ ...body, alertDelayMin: 30 });
-
-      const stored = insertOne.mock.calls[0][0];
-      expect(stored.minimumDuration).toBe(30);
-      expect(stored).not.toHaveProperty('alertDelayMin');
-    });
-
-    it('POST without alertDelayMin keeps minimumDuration null, the global fallback', async () => {
+    it('POST stores every request field under its own name', async () => {
       const insertOne = vi.fn().mockResolvedValue({ insertedId: 'new-id' });
       const db = { collection: vi.fn().mockReturnValue({ insertOne }) };
       const { router } = loadRoute();
@@ -428,32 +377,28 @@ describe('policy.routes', () => {
       await request(app).post('/api/policies').send(body);
 
       const stored = insertOne.mock.calls[0][0];
-      expect(stored.minimumDuration).toBeNull();
-      expect(stored).not.toHaveProperty('alertDelayMin');
+      for (const field of ['name', 'minTemp', 'maxTemp', 'targetTemp', 'hysteresis', 'minimumDuration', 'temperatureUnit']) {
+        expect(stored[field]).toBe(body[field]);
+      }
+      expect(stored.effectivePeriod.start.toISOString()).toBe(body.effectivePeriod.start);
+      expect(stored.effectivePeriod.end.toISOString()).toBe(body.effectivePeriod.end);
     });
 
-    it('PUT sets alertDelayMin on minimumDuration', async () => {
-      const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
-      const db = { collection: vi.fn().mockReturnValue({ updateOne }) };
+    it('POST answers with the stored document', async () => {
+      const insertOne = vi.fn().mockResolvedValue({ insertedId: 'new-id' });
+      const db = { collection: vi.fn().mockReturnValue({ insertOne }) };
       const { router } = loadRoute();
       const app = buildApp(router, db);
 
-      const res = await request(app)
-        .put('/api/policies/507f1f77bcf86cd799439011')
-        .send({ alertDelayMin: 45 });
+      const res = await request(app).post('/api/policies').send(body);
 
-      expect(res.status).toBe(200);
-      const setArg = updateOne.mock.calls[0][1].$set;
-      expect(Object.keys(setArg).sort()).toEqual(['minimumDuration', 'updatedAt']);
-      expect(setArg.minimumDuration).toBe(45);
+      const stored = insertOne.mock.calls[0][0];
+      expect(res.body.data).toEqual(JSON.parse(JSON.stringify({ _id: 'new-id', ...stored })));
     });
 
-    it('GET reports alertDelayMin from minimumDuration, the value actually enforced', async () => {
-      const toArray = vi.fn().mockResolvedValue([
-        { _id: 'p1', name: 'A', minTemp: -85, maxTemp: -75, targetTemp: -80, minimumDuration: 30 },
-        // Written before #1195: the stored extension was never enforced.
-        { _id: 'p2', name: 'B', minTemp: -85, maxTemp: -75, targetTemp: -80, minimumDuration: null, alertDelayMin: 5 },
-      ]);
+    it('GET returns stored documents as they are', async () => {
+      const doc = { _id: 'p1', name: 'A', minTemp: -85, maxTemp: -75, targetTemp: -80, minimumDuration: 30 };
+      const toArray = vi.fn().mockResolvedValue([doc]);
       const find = vi.fn().mockReturnValue({ toArray });
       const db = { collection: vi.fn().mockReturnValue({ find }) };
       const { router } = loadRoute();
@@ -461,10 +406,95 @@ describe('policy.routes', () => {
 
       const res = await request(app).get('/api/policies');
 
+      expect(res.body.data).toEqual([doc]);
+    });
+
+    it('POST ignores the retired legacy names rather than translating them', async () => {
+      const { router } = loadRoute();
+      const app = buildApp(router, {});
+
+      const res = await request(app).post('/api/policies').send({
+        policyName: 'Freezer -80',
+        minThreshold: -85,
+        maxThreshold: -75,
+        targetTemperature: -80,
+      });
+
+      expect(res.status).toBe(422);
+    });
+
+    // Ported from the deleted models/Policy.js test block: the checks it
+    // made on the request shape now live in the route's own validator.
+    it('POST 422s on inverted limits, a non-number target and an unknown unit', async () => {
+      const { router } = loadRoute();
+      const app = buildApp(router, {});
+
+      const res = await request(app).post('/api/policies').send({
+        name: 'Geladeira 2-8',
+        minTemp: 8,
+        maxTemp: 2,
+        targetTemp: '5',
+        temperatureUnit: 'K',
+      });
+
+      expect(res.status).toBe(422);
+      expect(res.body.message).toContain('minTemp deve ser menor que maxTemp');
+      expect(res.body.message).toContain('targetTemp é obrigatório e deve ser number');
+      expect(res.body.message).toContain('temperatureUnit deve ser °C ou °F');
+    });
+
+    // #1195: omitted stays null, which TelemetryMonitor reads as "fall back
+    // to the global threshold".
+    it('POST without minimumDuration stores null, the global fallback', async () => {
+      const insertOne = vi.fn().mockResolvedValue({ insertedId: 'new-id' });
+      const db = { collection: vi.fn().mockReturnValue({ insertOne }) };
+      const { router } = loadRoute();
+      const app = buildApp(router, db);
+
+      const { minimumDuration, ...withoutDuration } = body;
+      await request(app).post('/api/policies').send(withoutDuration);
+
+      expect(insertOne.mock.calls[0][0].minimumDuration).toBeNull();
+    });
+
+    it('PUT sets each allowlisted field on its own path', async () => {
+      const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+      const db = { collection: vi.fn().mockReturnValue({ updateOne }) };
+      const { router } = loadRoute();
+      const app = buildApp(router, db);
+
+      const res = await request(app).put('/api/policies/507f1f77bcf86cd799439011').send(body);
+
       expect(res.status).toBe(200);
-      expect(res.body.data[0].alertDelayMin).toBe(30);
-      expect(res.body.data[1].alertDelayMin).toBeNull();
-      expect(res.body.data[0]).not.toHaveProperty('minimumDuration');
+      const setArg = updateOne.mock.calls[0][1].$set;
+      expect(Object.keys(setArg).sort()).toEqual([
+        'effectivePeriod.end',
+        'effectivePeriod.start',
+        'hysteresis',
+        'maxTemp',
+        'minTemp',
+        'minimumDuration',
+        'name',
+        'targetTemp',
+        'temperatureUnit',
+        'updatedAt',
+      ]);
+      expect(setArg['effectivePeriod.start']).toBeInstanceOf(Date);
+    });
+
+    it('PUT with only effectivePeriod.end leaves the stored start alone', async () => {
+      const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+      const db = { collection: vi.fn().mockReturnValue({ updateOne }) };
+      const { router } = loadRoute();
+      const app = buildApp(router, db);
+
+      await request(app)
+        .put('/api/policies/507f1f77bcf86cd799439011')
+        .send({ effectivePeriod: { end: null } });
+
+      const setArg = updateOne.mock.calls[0][1].$set;
+      expect(Object.keys(setArg).sort()).toEqual(['effectivePeriod.end', 'updatedAt']);
+      expect(setArg['effectivePeriod.end']).toBeNull();
     });
   });
 
@@ -484,7 +514,7 @@ describe('policy.routes', () => {
       const { router } = loadRoute();
       const app = buildApp(router, db);
 
-      const res = await request(app).put('/api/policies/507f1f77bcf86cd799439011').send({ minThreshold: 1 });
+      const res = await request(app).put('/api/policies/507f1f77bcf86cd799439011').send({ minTemp: 1 });
 
       expect(res.status).toBe(404);
     });
@@ -495,7 +525,7 @@ describe('policy.routes', () => {
       const { router } = loadRoute();
       const app = buildApp(router, db);
 
-      const res = await request(app).put('/api/policies/507f1f77bcf86cd799439011').send({ minThreshold: 1 });
+      const res = await request(app).put('/api/policies/507f1f77bcf86cd799439011').send({ minTemp: 1 });
 
       expect(res.status).toBe(200);
     });
@@ -505,19 +535,15 @@ describe('policy.routes', () => {
       const { router } = loadRoute();
       const app = buildApp(router, db);
 
-      const res = await request(app).put('/api/policies/not-an-id').send({ minThreshold: 1 });
+      const res = await request(app).put('/api/policies/not-an-id').send({ minTemp: 1 });
 
       expect(res.status).toBe(400);
     });
 
     // #875: PUT /:id used to $set req.body verbatim -- an unfiltered or
     // under-filtered body could inject arbitrary keys or overwrite identity
-    // fields. Only the request's allowlisted fields (minus policyId/policyID,
-    // which are business identity) may reach $set.
-    //
-    // #1089: the allowlist became a map, so the KEY a caller sends and the
-    // PATH it lands on differ. #875's invariant is unchanged and is what
-    // the last three assertions still check -- only the landing names move.
+    // fields. Only the allowlisted fields may reach $set; policyId/policyID
+    // are business identity and never do.
     it('#875: filters $set to the allowlist, dropping injected/identity keys', async () => {
       const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
       const db = { collection: vi.fn().mockReturnValue({ updateOne }) };
@@ -526,16 +552,11 @@ describe('policy.routes', () => {
 
       const res = await request(app)
         .put('/api/policies/507f1f77bcf86cd799439011')
-        .send({ minThreshold: 1, injected: 'x', policyId: 999 });
+        .send({ minTemp: 1, minThreshold: 2, injected: 'x', policyId: 999 });
 
       expect(res.status).toBe(200);
       const setArg = updateOne.mock.calls[0][1].$set;
       expect(setArg).toHaveProperty('minTemp', 1);
-      expect(setArg).toHaveProperty('updatedAt');
-      expect(setArg).not.toHaveProperty('injected');
-      expect(setArg).not.toHaveProperty('policyId');
-      // Still absent under its own name, not merely renamed past the check.
-      expect(setArg).not.toHaveProperty('minThreshold');
       expect(Object.keys(setArg).sort()).toEqual(['minTemp', 'updatedAt']);
     });
   });
