@@ -52,3 +52,37 @@ Antes de `runFoundationV2` apply em um DB com `users`/`patients`/etc.:
 Este documento encerra a **Stage 2E (topologia Mongo)**. Não encerra a Wave 2 / issue #1132 nem o marco Item 8 de coverage 95%.
 
 HEAD deste checkpoint: `e66e2a56de21ad2291c090e76dd45fc3af2209fe` (`feat(v2): complete Stage 2E MongoDB topology migration`).
+
+## Pós–Stage 2E: drift de testes fechado
+
+Após o cutover canônico (`samples`→`specimens`, `patients`→`participants`, `users`→`userAccounts`) e JWT UUID+`actorId`, a suíte Vitest ficou vermelha por fixtures legadas — **não** por regressão de topologia de produção.
+
+Correção (somente testes / factories):
+
+- `tests/factories/db.factory.js`: aliases Stage 2E bidirecionais (+ synonym groups).
+- `tests/factories/auth.factory.js` / `rbac.factory.js`: UUID `userAccountId`/`actorId` + seeds `userAccounts`/`actors`.
+- Fakes estritas e suítes densas alinhadas aos nomes canônicos; fixtures de anonimização com UUID (sem relaxar `isUuid` / `userAnonymization`).
+
+### Evidência local (host)
+
+| Gate | Resultado |
+| --- | --- |
+| Vitest full | **563** files / **10062** tests, exit 0 (`logs/item8-stage2/full-vitest-pass6.dot.log`) |
+| `npm run lint` | exit 0 |
+| `npm run test:architecture` | 172/172 |
+| `npm run current-state:ci` | exit 0 |
+
+### Evidência local (Docker = gate Actions)
+
+Espelho de `ci-pipeline.yml` com `.env.test.example` + `compose.test.yml` + `compose.test.foundation.yml`:
+
+1. `down --volumes --remove-orphans`
+2. `build`
+3. `up -d --wait` deps (mongodb/neo4j/redis/mqtt/influxdb/smtp/tsa/witness)
+4. `mongo-rs-init-test` exit 0
+5. `foundation-bootstrap-test` exit 0
+6. `run --rm --no-deps backend-unit-runner` → `current-state:ci` exit 0
+
+Log: `logs/item8-stage2/docker-ci-mirror.log` (`ALL GREEN`).
+
+Produção intocada neste fechamento: `collectionResolver`, `userAnonymization`, `mongoTopologyV2`.
