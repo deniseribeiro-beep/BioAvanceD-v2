@@ -24,6 +24,11 @@ class SensorModel {
     if (data.temperaturePolicy && !data.macAddress) {
       errors.push('temperaturePolicy exige macAddress: a política é vinculada ao SensorMetadata do sensor');
     }
+    // #1179: the freezer binding lives on the same row and was dropped the
+    // same silent way.
+    if (data.storageContainer && !data.macAddress) {
+      errors.push('storageContainer exige macAddress: o freezer é vinculado ao SensorMetadata do sensor');
+    }
 
     return {
       isValid: errors.length === 0,

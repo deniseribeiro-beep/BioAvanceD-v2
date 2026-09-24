@@ -947,6 +947,7 @@ function SensorsSection() {
                   </button>
                   <button
                     className="action-button"
+                    data-testid={`sensor-edit-${sensor.sensorId}`}
                     onClick={() => {
                       setEditingSensor(sensor);
                       setIsModalOpen(true);
@@ -1184,15 +1185,15 @@ function SensorForm({
               telemetry path resolves thresholds from, by the policy's _id.
               It used to send a numeric policyID onto Sensor.policyId, which
               nothing read. The binding lives on SensorMetadata, which only
-              exists when a MAC address is given, so it needs one. Editing
-              cannot change it yet (#1179), so it is disabled there rather
-              than offered as a choice that saves nothing. */}
+              exists when a MAC address is given, so it needs one. On edit it
+              rebinds that row (#1179), pre-filled from the list. The freezer
+              select below lives on the same row and has the same rule. */}
           <select
             id="sensorPolicySelect"
             data-testid="sensor-policy-select"
             className="input"
             value={formData.temperaturePolicy || ''}
-            disabled={Boolean(sensor) || !formData.macAddress}
+            disabled={!formData.macAddress}
             onChange={(e) =>
               setFormData({
                 ...formData,
@@ -1201,11 +1202,7 @@ function SensorForm({
             }
           >
             <option value="">
-              {sensor
-                ? 'Política definida no cadastro (não editável aqui)'
-                : formData.macAddress
-                  ? 'Selecione uma política'
-                  : 'Informe o MAC Address para vincular uma política'}
+              {formData.macAddress ? 'Selecione uma política' : 'Informe o MAC Address para vincular uma política'}
             </option>
             {policies.filter((policy) => policy && policy._id).map((policy) => (
               <option key={policy._id} value={policy._id}>
@@ -1226,7 +1223,7 @@ function SensorForm({
             setFormData({
               ...formData,
               macAddress: e.target.value,
-              ...(e.target.value ? {} : { temperaturePolicy: undefined }),
+              ...(e.target.value ? {} : { temperaturePolicy: undefined, storageContainer: undefined }),
             })
           }
         />
@@ -1237,6 +1234,7 @@ function SensorForm({
             data-testid="sensor-storage-container-select"
             className="input"
             value={formData.storageContainer || ''}
+            disabled={!formData.macAddress}
             onChange={(e) =>
               setFormData({
                 ...formData,
@@ -1244,7 +1242,7 @@ function SensorForm({
               })
             }
           >
-            <option value="">Selecione um freezer</option>
+            <option value="">{formData.macAddress ? 'Selecione um freezer' : 'Informe o MAC Address para vincular um freezer'}</option>
             {freezers.map((freezer) => (
               <option key={freezer._id} value={freezer._id}>
                 {freezer.name}

@@ -177,4 +177,79 @@ test.describe('Sensor registration links SensorMetadata (#311)', () => {
       if (policyId) await removeTemperaturePolicy(policyId);
     }
   });
+
+  // Real-backend proof for #1179: the edit modal offered the freezer (and,
+  // before #1145, the policy) select, but updateSensor wrote only the
+  // `sensors` document while both bindings live on SensorMetadata -- so a
+  // changed freezer saved nothing, and the select opened blank because the
+  // list never returned the current binding.
+  test('editing a sensor pre-fills and rebinds its freezer and policy on SensorMetadata (#1179)', async ({ page, request }) => {
+    const freezerA = await seedFreezerContainer();
+    const freezerB = await seedFreezerContainer();
+    const suffix = Date.now();
+    const sensorId = `rf009-ui-edit-e2e-${suffix}`;
+    const macSuffix = suffix.toString(16).padStart(4, '0').slice(-4);
+    const policyIds: string[] = [];
+
+    try {
+      let session;
+      try {
+        session = await realLogin(request);
+      } catch (err: any) {
+        console.warn(`realLogin failed -- DB may not be seeded with an admin user yet: ${err.message}`);
+        return;
+      }
+      const headers = { Authorization: `Bearer ${session.token}` };
+
+      for (const tag of ['a', 'b']) {
+        const res = await request.post(`${apiBaseURL}/api/policies`, {
+          headers,
+          data: {
+            policyName: `e2e-1179-${tag}-${suffix}`,
+            minThreshold: 2,
+            maxThreshold: 8,
+            targetTemperature: 5,
+            validFrom: new Date().toISOString(),
+            validTo: new Date(Date.now() + 86_400_000).toISOString(),
+          },
+        });
+        expect(res.status()).toBe(201);
+        policyIds.push((await res.json())?.data?._id);
+      }
+      const [policyA, policyB] = policyIds;
+
+      const createResponse = await request.post(`${apiBaseURL}/api/sensors`, {
+        headers,
+        data: {
+          sensorId,
+          sensorType: 'temperature',
+          macAddress: `AA:BB:CC:44:${macSuffix.slice(0, 2)}:${macSuffix.slice(2, 4)}`,
+          storageContainer: freezerA,
+          temperaturePolicy: policyA,
+        },
+      });
+      expect(createResponse.status()).toBe(201);
+
+      await seedRealAuth(page, session);
+      await page.goto('/facility-management?tab=sensors');
+      await page.getByTestId(`sensor-edit-${sensorId}`).click();
+
+      // Pre-filled from the list, which now carries the SensorMetadata bindings.
+      await expect(page.getByTestId('sensor-storage-container-select')).toHaveValue(freezerA);
+      await expect(page.getByTestId('sensor-policy-select')).toHaveValue(policyA);
+
+      await page.getByTestId('sensor-storage-container-select').selectOption(freezerB);
+      await page.getByTestId('sensor-policy-select').selectOption(policyB);
+      await page.getByTestId('sensor-form-submit').click();
+      await expect(page.getByTestId('sensor-form-submit')).not.toBeVisible();
+
+      const metadata = await findSensorMetadata(sensorId);
+      expect(metadata.storageContainer?.toString()).toBe(freezerB);
+      expect(metadata.temperaturePolicy?.toString()).toBe(policyB);
+    } finally {
+      await removeSensorRegistration(sensorId, freezerA);
+      await removeSensorRegistration(sensorId, freezerB);
+      for (const id of policyIds) if (id) await removeTemperaturePolicy(id);
+    }
+  });
 });
