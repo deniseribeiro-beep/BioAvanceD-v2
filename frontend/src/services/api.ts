@@ -937,8 +937,8 @@ export const importLGPDService = {
 export const securityService = {
   getConfig: () => api.get('/security/config'),
   updateConfig: (data: any) => api.put('/security/config', data),
+  // #1149: read-only. The PUT it paired with wrote a store nothing enforced.
   getPermissions: () => api.get('/security/permissions'),
-  updatePermissions: (data: any) => api.put('/security/permissions', data),
   getSessions: () => api.get('/auth/sessions'),
   getConsentQueueStatus: () => api.get('/security/consent-queue'),
   exportLogs: (filters?: any, format: 'csv' | 'json' = 'csv') => {

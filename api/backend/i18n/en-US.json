@@ -117,9 +117,7 @@
     "getPermissionsError": "Error fetching permissions",
     "logsExportMessage": "Logs export completed (format: {format})",
     "updateConfigError": "Error updating security configurations",
-    "updateConfigSuccess": "Security configurations updated successfully",
-    "updatePermissionsError": "Error updating permissions",
-    "updatePermissionsSuccess": "Permissions updated successfully"
+    "updateConfigSuccess": "Security configurations updated successfully"
   },
   "users": {
     "deleteError": "Error deleting user",

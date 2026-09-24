@@ -12,7 +12,7 @@ export default function SecurityPage() {
   const { user, isLoading: authLoading, hasRole } = useAuth();
   const { t } = useLanguage();
   const { showToast } = useToast();
-  const { config, permissions, loading, error, saving, updateConfig, updatePermissions, exportLogs } = useSecurity();
+  const { config, permissions, loading, error, saving, updateConfig, exportLogs } = useSecurity();
   const [localConfig, setLocalConfig] = useState<SecurityConfig | null>(null);
   const [localPermissions, setLocalPermissions] = useState<ProfilePermissions | null>(null);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'success' | 'error'>('idle');
@@ -97,17 +97,6 @@ export default function SecurityPage() {
     setLocalConfig(newConfig);
   };
 
-  const handlePermissionChange = (profile: string, permission: string, value: boolean) => {
-    if (!localPermissions) return;
-
-    const newPermissions = { ...localPermissions };
-    if (!newPermissions[profile]) {
-      newPermissions[profile] = {};
-    }
-    newPermissions[profile][permission] = value;
-    setLocalPermissions(newPermissions);
-  };
-
   const handleSaveConfig = async () => {
     if (!localConfig) return;
 
@@ -119,21 +108,6 @@ export default function SecurityPage() {
     } catch (err: unknown) {
       setSaveStatus('error');
       showToast(getErrorMessage(err, t('security.saveError')), 'error');
-      setTimeout(() => setSaveStatus('idle'), 3000);
-    }
-  };
-
-  const handleSavePermissions = async () => {
-    if (!localPermissions) return;
-
-    try {
-      await updatePermissions(localPermissions);
-      setSaveStatus('success');
-      showToast(t('security.permissions.saveSuccess'), 'success');
-      setTimeout(() => setSaveStatus('idle'), 3000);
-    } catch (err: unknown) {
-      setSaveStatus('error');
-      showToast(getErrorMessage(err, t('security.permissions.saveError')), 'error');
       setTimeout(() => setSaveStatus('idle'), 3000);
     }
   };
@@ -699,6 +673,9 @@ export default function SecurityPage() {
           {activeSection === 'permissions' && (
             <Card className="security-section">
               <h2>{t('security.permissions.title')}</h2>
+              {/* #1149: read-only. The save this tab had wrote a store no
+                  authorization path reads, so it is gone rather than kept. */}
+              <p data-testid="security-permissions-readonly-note">{t('security.permissions.readOnlyNote')}</p>
               <div className="permissions-grid">
                 {Object.keys(localPermissions).map((profile) => (
                   <div key={profile} className="permission-profile">
@@ -709,19 +686,14 @@ export default function SecurityPage() {
                           data-testid={`security-permission-toggle-${profile}-${permission}`}
                           type="checkbox"
                           checked={localPermissions[profile][permission] || false}
-                          onChange={(e) => handlePermissionChange(profile, permission, e.target.checked)}
+                          disabled
+                          readOnly
                         />
                         <span>{permission}</span>
                       </label>
                     ))}
                   </div>
                 ))}
-              </div>
-              <div className="config-actions">
-                <Button data-testid="security-save-permissions-button" onClick={handleSavePermissions} disabled={saving}>
-                  <Save size={18} />
-                  {saving ? t('users.saving') : t('security.permissions.savePermissions')}
-                </Button>
               </div>
             </Card>
           )}

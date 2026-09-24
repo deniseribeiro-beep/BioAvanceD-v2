@@ -459,191 +459,55 @@ class SecurityService {
   /**
    * Retorna permissões por perfil
    */
-  async getPermissions(db) {
-    try {
-      // Permissões padrão baseadas em accessType
-      const defaultPermissions = {
-        '1': { // Usuário Externo
-          viewReports: true
-        },
-        '2': { // Técnico
-          createSample: true,
-          withdrawSample: true,
-          viewTemperature: true,
-          uploadFiles: true,
-          viewReports: true
-        },
-        '3': { // Coordenador
-          createUser: true,
-          createPatient: true,
-          createSample: true,
-          withdrawSample: true,
-          viewTemperature: true,
-          uploadFiles: true,
-          viewReports: true
-        },
-        '4': { // Administrador
-          createUser: true,
-          createPatient: true,
-          createSample: true,
-          withdrawSample: true,
-          viewTemperature: true,
-          uploadFiles: true,
-          viewReports: true,
-          manageSystem: true,
-          manageBackup: true,
-          manageSecurity: true,
-          resetMFA: true
-        }
-      };
-
-      // Busca permissões customizadas do banco
-      const permissionsCollection = db.collection('security_permissions');
-      const customPermissions = await permissionsCollection.findOne({ _id: 'main' });
-
-      if (customPermissions && customPermissions.permissions) {
-        // Mescla com padrões (mantém padrões se não existir customização)
-        const merged = { ...defaultPermissions };
-        for (const profile in customPermissions.permissions) {
-          merged[profile] = {
-            ...defaultPermissions[profile],
-            ...customPermissions.permissions[profile]
-          };
-        }
-        return merged;
+  async getPermissions(_db) {
+    // Permissões padrão baseadas em accessType
+    const defaultPermissions = {
+      '1': { // Usuário Externo
+        viewReports: true
+      },
+      '2': { // Técnico
+        createSample: true,
+        withdrawSample: true,
+        viewTemperature: true,
+        uploadFiles: true,
+        viewReports: true
+      },
+      '3': { // Coordenador
+        createUser: true,
+        createPatient: true,
+        createSample: true,
+        withdrawSample: true,
+        viewTemperature: true,
+        uploadFiles: true,
+        viewReports: true
+      },
+      '4': { // Administrador
+        createUser: true,
+        createPatient: true,
+        createSample: true,
+        withdrawSample: true,
+        viewTemperature: true,
+        uploadFiles: true,
+        viewReports: true,
+        manageSystem: true,
+        manageBackup: true,
+        manageSecurity: true,
+        resetMFA: true
       }
+    };
 
-      return defaultPermissions;
-    } catch (error) {
-      logger.error('Erro ao buscar permissões:', error.message);
-      throw error;
-    }
+    // #1149: this map is returned as-is. It used to be merged with a
+    // `security_permissions` overlay that PUT /api/security/permissions
+    // wrote. No enforcement path ever read that collection: requirePermission
+    // reads the in-process catalog and userHasPermission reads the seeded
+    // roles/permissions (see #1123). So an edit changed nothing, yet it was
+    // shown back as the profile's permissions and audited as a critical
+    // change. The write surface is gone, and this read no longer echoes
+    // rows it left behind. Those rows are kept, not deleted, as part of the
+    // record of what was once saved.
+    return defaultPermissions;
   }
 
-  /**
-   * Atualiza permissões por perfil
-   */
-  async updatePermissions(db, newPermissions, currentPermissions, req) {
-    try {
-      const permissionsCollection = db.collection('security_permissions');
-      
-      // Converte chaves numéricas para strings se necessário
-      const normalizedPermissions = {};
-      for (const profile in newPermissions) {
-        const profileKey = String(profile);
-        normalizedPermissions[profileKey] = newPermissions[profile];
-      }
-      
-      // Detecta mudanças
-      const changes = this.detectPermissionChanges(currentPermissions, normalizedPermissions);
-      
-      // Valida permissões
-      this.validatePermissions(normalizedPermissions);
-      
-      // Atualiza no banco
-      await permissionsCollection.updateOne(
-        { _id: 'main' },
-        {
-          $set: {
-            permissions: normalizedPermissions,
-            updatedAt: new Date(),
-            lastUpdatedBy: req.user?.userID || 'SYSTEM'
-          }
-        },
-        { upsert: true }
-      );
-
-      // Registra auditoria
-      auditLogger.init(db);
-      for (const change of changes) {
-        await auditLogger.log({
-          action: 'UPDATE',
-          resourceType: 'Permissions',
-          resourceId: change.profile,
-          status: 'success',
-          severity: 'critical',
-          message: `Permissões alteradas para perfil: ${change.profile}`,
-          payload: {
-            profile: change.profile,
-            permission: change.permission,
-            oldValue: change.oldValue,
-            newValue: change.newValue
-          },
-          req: req,
-          module: 'Segurança'
-        });
-      }
-
-      return normalizedPermissions;
-    } catch (error) {
-      logger.error('Erro ao atualizar permissões:', error.message);
-      throw error;
-    }
-  }
-
-  /**
-   * Detecta mudanças em permissões
-   */
-  detectPermissionChanges(oldPermissions, newPermissions) {
-    const changes = [];
-
-    for (const profile in newPermissions) {
-      if (!oldPermissions[profile]) {
-        // Novo perfil
-        for (const permission in newPermissions[profile]) {
-          changes.push({
-            profile,
-            permission,
-            oldValue: false,
-            newValue: newPermissions[profile][permission]
-          });
-        }
-      } else {
-        // Perfil existente - compara permissões
-        for (const permission in newPermissions[profile]) {
-          const oldValue = oldPermissions[profile][permission] || false;
-          const newValue = newPermissions[profile][permission];
-          if (oldValue !== newValue) {
-            changes.push({
-              profile,
-              permission,
-              oldValue,
-              newValue
-            });
-          }
-        }
-      }
-    }
-
-    return changes;
-  }
-
-  /**
-   * Valida permissões
-   */
-  validatePermissions(permissions) {
-    const validProfiles = ['1', '2', '3', '4'];
-    const validPermissionKeys = [
-      'createUser', 'createPatient', 'createSample', 'withdrawSample',
-      'viewTemperature', 'uploadFiles', 'viewReports',
-      'manageSystem', 'manageBackup', 'manageSecurity', 'resetMFA'
-    ];
-
-    for (const profile in permissions) {
-      if (!validProfiles.includes(profile)) {
-        throw new Error(`Perfil inválido: ${profile}`);
-      }
-
-      for (const permission in permissions[profile]) {
-        if (!validPermissionKeys.includes(permission)) {
-          throw new Error(`Permissão inválida: ${permission}`);
-        }
-        if (typeof permissions[profile][permission] !== 'boolean') {
-          throw new Error(`Valor de permissão deve ser booleano: ${permission}`);
-        }
-      }
-    }
-  }
 }
 
 module.exports = new SecurityService();

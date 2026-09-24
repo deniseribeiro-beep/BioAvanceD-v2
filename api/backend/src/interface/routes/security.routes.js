@@ -188,40 +188,13 @@ router.get('/consent-queue', async (_req, res) => {
   }
 });
 
-/**
- * PUT /api/security/permissions
- * Atualiza permissões por perfil
- */
-router.put('/permissions', async (req, res) => {
-  try {
-    const db = req.app.locals.db;
-    if (!db) {
-      return res.status(503).json({
-        success: false,
-        error: (req.t && req.t('errors.databaseUnavailable')) || 'Banco de dados não disponível'
-      });
-    }
-
-    // Busca permissões atuais para comparar mudanças
-    const currentPermissions = await securityService.getPermissions(db);
-    
-    // Valida e atualiza permissões
-    const updatedPermissions = await securityService.updatePermissions(db, req.body, currentPermissions, req);
-
-    return res.status(200).json({
-      success: true,
-      message: (req.t && req.t('security.updatePermissionsSuccess')) || 'Permissões atualizadas com sucesso',
-      data: updatedPermissions
-    });
-  } catch (error) {
-    logger.error('Erro ao atualizar permissões:', error.message);
-    return res.status(400).json({
-      success: false,
-      error: (req.t && req.t('security.updatePermissionsError')) || 'Erro ao atualizar permissões',
-      message: error.message
-    });
-  }
-});
+// #1149: there is deliberately no PUT /permissions. It wrote a
+// `security_permissions` store that no authorization path reads, answered
+// 'Permissões atualizadas com sucesso', and wrote a critical-severity audit
+// row for a change that never took effect. Pointing it at the real roles
+// would not help either: the RBAC seed re-unions each role's permissionIds
+// on every boot, so a revoke would silently revert at the next restart
+// (#1123). GET /permissions stays, read-only.
 
 module.exports = router;
 

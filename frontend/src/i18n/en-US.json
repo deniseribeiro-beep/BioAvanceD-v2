@@ -1670,9 +1670,7 @@
     "passwordChange": "Change Password",
     "permissions": {
       "profile": "Profile {id}",
-      "saveError": "Error saving permissions",
-      "savePermissions": "Save Permissions",
-      "saveSuccess": "Permissions saved successfully!",
+      "readOnlyNote": "Read-only. These permissions are defined by the system's role catalog and cannot be changed on this screen.",
       "title": "Permissions by Profile"
     },
     "privacy": {

@@ -451,22 +451,20 @@ describe('SecurityService.getPermissions', () => {
     expect(result['1'].createUser).toBeUndefined();
   });
 
-  // #1110: was profile 1, which had exactly two defaults -- viewReports and
-  // useAssistant. With useAssistant removed as assistant scaffolding, profile
-  // 1 has one default and this test overrides it, leaving no witness for the
-  // 'untouched default retained' assertion. Profile 2 has five defaults, so
-  // the case keeps all four of its original intents: override wins, added key
-  // appears, untouched default survives, unrelated profile is not merged into.
-  it('merges custom permissions over defaults for the matching profile only', async () => {
+  // #1149: this used to merge a `security_permissions` overlay over the
+  // defaults. That overlay was written by the removed PUT and read by no
+  // enforcement path, so echoing it showed a permission change that had not
+  // happened. A stored overlay is now ignored, and the collection is not read.
+  it('#1149: ignores a stored security_permissions overlay and never reads the collection', async () => {
     const findOne = vi.fn().mockResolvedValue({ permissions: { '2': { viewReports: false, createUser: true } } });
     const db = { collection: vi.fn(() => ({ findOne })) };
 
     const result = await securityService.getPermissions(db);
 
-    expect(result['2'].viewReports).toBe(false);
-    expect(result['2'].createUser).toBe(true);
-    expect(result['2'].uploadFiles).toBe(true); // untouched default retained
-    expect(result['4'].manageSystem).toBe(true); // unrelated profile untouched
+    expect(db.collection).not.toHaveBeenCalled();
+    expect(findOne).not.toHaveBeenCalled();
+    expect(result['2'].viewReports).toBe(true); // the default, not the overlay's false
+    expect(result['2']).not.toHaveProperty('createUser');
   });
 
   // #1110: Usuario Externo was granted useAssistant: true by default. It
@@ -485,136 +483,14 @@ describe('SecurityService.getPermissions', () => {
     // control: profile 1 still carries its one real grant
     expect(result['1'].viewReports).toBe(true);
   });
-
-  it('logs and rethrows when db access fails', async () => {
-    const error = new Error('db unreachable');
-    const findOne = vi.fn().mockRejectedValue(error);
-    const db = { collection: vi.fn(() => ({ findOne })) };
-    const errSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
-
-    await expect(securityService.getPermissions(db)).rejects.toThrow('db unreachable');
-    expect(errSpy).toHaveBeenCalled();
-  });
 });
 
-describe('SecurityService.updatePermissions', () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it('normalizes numeric profile keys to strings, persists and logs audit per changed permission', async () => {
-    const updateOne = vi.fn().mockResolvedValue({});
-    const db = { collection: vi.fn(() => ({ updateOne })) };
-    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
-    const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue({});
-
-    const newPermissions = { 2: { createSample: false } };
-    const currentPermissions = { '2': { createSample: true } };
-
-    const result = await securityService.updatePermissions(db, newPermissions, currentPermissions, { user: { userID: 'admin1' } });
-
-    expect(Object.keys(result)).toEqual(['2']);
-    expect(updateOne).toHaveBeenCalledTimes(1);
-    expect(logSpy).toHaveBeenCalledTimes(1);
-    expect(logSpy.mock.calls[0][0].severity).toBe('critical');
-  });
-
-  it('uses SYSTEM as lastUpdatedBy when req has no user', async () => {
-    const updateOne = vi.fn().mockResolvedValue({});
-    const db = { collection: vi.fn(() => ({ updateOne })) };
-    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
-    vi.spyOn(auditLogger, 'log').mockResolvedValue({});
-
-    await securityService.updatePermissions(db, { '2': { createSample: true } }, {}, {});
-
-    const setArg = updateOne.mock.calls[0][1].$set;
-    expect(setArg.lastUpdatedBy).toBe('SYSTEM');
-  });
-
-  it('rejects with invalid profile and does not write to db', async () => {
-    const updateOne = vi.fn().mockResolvedValue({});
-    const db = { collection: vi.fn(() => ({ updateOne })) };
-    const errSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
-
-    await expect(securityService.updatePermissions(db, { '9': { viewReports: true } }, {}, {}))
-      .rejects.toThrow('Perfil inválido');
-    expect(updateOne).not.toHaveBeenCalled();
-    expect(errSpy).toHaveBeenCalled();
-  });
-
-  it('rejects with invalid permission key even though profile is valid', async () => {
-    const updateOne = vi.fn().mockResolvedValue({});
-    const db = { collection: vi.fn(() => ({ updateOne })) };
-    vi.spyOn(logger, 'error').mockImplementation(() => {});
-
-    await expect(securityService.updatePermissions(db, { '1': { notARealPermission: true } }, {}, {}))
-      .rejects.toThrow('Permissão inválida');
-    expect(updateOne).not.toHaveBeenCalled();
-  });
-
-  it('rejects with non-boolean permission value', async () => {
-    const updateOne = vi.fn().mockResolvedValue({});
-    const db = { collection: vi.fn(() => ({ updateOne })) };
-    vi.spyOn(logger, 'error').mockImplementation(() => {});
-
-    await expect(securityService.updatePermissions(db, { '1': { viewReports: 'yes' } }, {}, {}))
-      .rejects.toThrow('deve ser booleano');
-    expect(updateOne).not.toHaveBeenCalled();
-  });
-});
-
-describe('SecurityService.detectPermissionChanges', () => {
-  it('reports every permission as changed (oldValue=false) for a brand new profile', () => {
-    const changes = securityService.detectPermissionChanges({}, { '1': { viewReports: true, uploadFiles: false } });
-
-    expect(changes).toHaveLength(2);
-    expect(changes.every(c => c.profile === '1')).toBe(true);
-    const viewReportsChange = changes.find(c => c.permission === 'viewReports');
-    expect(viewReportsChange.oldValue).toBe(false);
-    expect(viewReportsChange.newValue).toBe(true);
-  });
-
-  it('only reports permissions whose value actually changed for an existing profile', () => {
-    const oldPermissions = { '2': { createSample: true, viewReports: true } };
-    const newPermissions = { '2': { createSample: true, viewReports: false } };
-
-    const changes = securityService.detectPermissionChanges(oldPermissions, newPermissions);
-
-    expect(changes).toHaveLength(1);
-    expect(changes[0].permission).toBe('viewReports');
-    expect(changes[0].oldValue).toBe(true);
-    expect(changes[0].newValue).toBe(false);
-  });
-
-  it('treats a missing old permission as false when comparing', () => {
-    const changes = securityService.detectPermissionChanges({ '2': {} }, { '2': { createSample: true } });
-
-    expect(changes).toHaveLength(1);
-    expect(changes[0].oldValue).toBe(false);
-    expect(changes[0].newValue).toBe(true);
-  });
-});
-
-describe('SecurityService.validatePermissions', () => {
-  it('does not throw for valid profiles and boolean permission values', () => {
-    expect(() => securityService.validatePermissions({ '1': { viewReports: true }, '4': { manageSystem: false } })).not.toThrow();
-  });
-
-  it('throws for an invalid profile key', () => {
-    expect(() => securityService.validatePermissions({ '5': { viewReports: true } })).toThrow('Perfil inválido');
-  });
-
-  it('throws for an unknown permission key', () => {
-    expect(() => securityService.validatePermissions({ '1': { flyToTheMoon: true } })).toThrow('Permissão inválida');
-  });
-
-  it('throws when a permission value is not a boolean', () => {
-    expect(() => securityService.validatePermissions({ '1': { viewReports: 1 } })).toThrow('deve ser booleano');
-  });
-
-  it('does not throw for a profile with no permissions at all', () => {
-    expect(() => securityService.validatePermissions({ '1': {} })).not.toThrow();
-  });
+// #1149: updatePermissions, detectPermissionChanges and validatePermissions
+// were removed with PUT /api/security/permissions, their only caller.
+it('#1149: the permission write methods no longer exist', () => {
+  expect(securityService.updatePermissions).toBeUndefined();
+  expect(securityService.detectPermissionChanges).toBeUndefined();
+  expect(securityService.validatePermissions).toBeUndefined();
 });
 
 // #649 / RF014 AC#8: "Revogar sessoes quando a alteracao exigir." The predicate is

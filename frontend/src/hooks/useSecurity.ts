@@ -118,11 +118,11 @@ export function useSecurity() {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   // #901: one sequence per state pair -- loadConfig/updateConfig write
-  // `config`, loadPermissions/updatePermissions write `permissions`. Each
+  // `config`, loadPermissions writes `permissions` (read-only since #1149). Each
   // pair's own catch also guards its `error` write with its own sequence,
   // since `error` is shared: a stale config error shouldn't clobber a
   // fresher permissions error (or vice versa) that landed in between.
-  // `saving` is shared by both update* calls but is a plain in-flight flag,
+  // `saving` is updateConfig's plain in-flight flag,
   // not stale data, so its finally-clear stays unconditional.
   const configSeq = useRequestSequence();
   const permissionsSeq = useRequestSequence();
@@ -173,23 +173,6 @@ export function useSecurity() {
     }
   };
 
-  const updatePermissions = async (updates: ProfilePermissions) => {
-    const seq = permissionsSeq.next();
-    try {
-      setSaving(true);
-      setError(null);
-      const response = await securityService.updatePermissions(updates);
-      if (permissionsSeq.isCurrent(seq)) setPermissions(extractResponseData<ProfilePermissions>(response));
-      return response.data;
-    } catch (err: unknown) {
-      const errorMessage = extractErrorMessage(err, 'Erro ao salvar permissões');
-      if (permissionsSeq.isCurrent(seq)) setError(errorMessage);
-      throw new Error(errorMessage);
-    } finally {
-      setSaving(false);
-    }
-  };
-
   const exportLogs = async (filters?: Record<string, unknown>, format: 'csv' | 'json' = 'csv') => {
     try {
       setError(null);
@@ -217,7 +200,6 @@ export function useSecurity() {
     loadConfig,
     loadPermissions,
     updateConfig,
-    updatePermissions,
     exportLogs
   };
 }
