@@ -275,6 +275,8 @@ remaining_estimate=418
 
 ### Stage 2E-2 — rodada Full Vitest + Coverage consolidada
 
+> **SUPERSEDED / diagnostic-only.** Exit **1** com suíte vermelha por drift pós–Stage 2E topologia (fakes `samples` vs `specimens`). **Não é gate Item 8** e **não** deve ser usada para o déficit 95%. Substituída pela Stage 2E-3 abaixo (suíte verde). Drift de testes fechado em `005185cb` / docs Stage 2E checkpoint.
+
 Comando (backend): `node ./node_modules/vitest/vitest.mjs run --coverage --reporter=dot --testTimeout=15000`. Log local: `logs/item8-stage2/stage2e2-cov-run.log`. Duração: **770,19 s**. Exit **1**.
 
 | Métrica | Valor |
@@ -286,6 +288,30 @@ Comando (backend): `node ./node_modules/vitest/vitest.mjs run --coverage --repor
 | Functions | 91,93% (3.113 / 3.386) |
 | Lines | 88,72% (23.220 / 26.171) |
 
-Déficit bruto vs 95% deste total de branches (`ceil(0,95 × 23.943) = 22.746`): **2.196** braços. **Não é gate Item 8** — a suíte está vermelha por drift pós–Stage 2E topologia (`e66e2a56` / `76d6be6a`): fakes ainda montam coleções legadas (`samples` etc.) enquanto `getCollection(..., 'Specimen')` resolve para `specimens`; falhas correlatas em Actor/`USR-SYSTEM` (ex.: `auditLogger.test.js`). Exemplos: `accessRequest.service.test.js` → `unexpected collection: specimens`.
+Déficit bruto vs 95% deste total (`ceil(0,95 × 23.943) = 22.746`): **2.196** braços — **inválido como gate** (suíte vermelha).
 
-Última medição **verde** comparável continua o baseline Stage 2: **94,04%** (22.461 / 23.883), déficit **228** para 22.689. Esta rodada **não** afirma progresso nem 95%. Docker/CI oficiais não abertos. Próximo desbloqueio do gate numérico: alinhar fakes/suítes ao registry canônico (fora do escopo de classificação Item 8 Stage 2E-2).
+### Stage 2E-3 — rodada Full Vitest + Coverage consolidada (suíte verde)
+
+HEAD: `005185cb`. Comando (backend): `node ./node_modules/vitest/vitest.mjs run --coverage --reporter=dot --testTimeout=15000`. Log: `logs/item8-stage2/stage2e3-cov-run.log`. Artefatos: `coverage-final-stage2e3.json`, `coverage-summary-stage2e3.json`, inventário `stage2e3-inventory.tsv`. Duração: **785,31 s**. Exit **0**.
+
+| Métrica | Valor |
+| --- | --- |
+| Test Files | 563 passed (563) |
+| Tests | 10062 passed (10062) |
+| Statements | 97,23% (26.862 / 27.627) |
+| Branches | 94,01% (22.510 / 23.943) |
+| Functions | 95,89% (3.247 / 3.386) |
+| Lines | 97,40% (25.491 / 26.171) |
+
+Déficit branches vs 95% (`ceil(0,95 × 23.943) = 22.746`): **236** braços. Statements / Functions / Lines já ≥ 95%. Source-located zero-hit no inventário novo: **565** braços / **164** arquivos (768 locations V8 vazias excluídas). Lint + architecture + `current-state:ci` exit 0 no host.
+
+STAGE_2E_3_CURSOR
+
+last_file=(pending lote 1)
+last_branch=
+reviewed_this_session=0
+remaining_estimate=565
+
+### Stage 2E-3 — lote 1 (pós–daily-merkle)
+
+Fila: `intakeWizard.js` + `intakeWizard.routes.js`, `SampleGraphValidator.js`, `orphanet.js` (só source-located do TSV Stage 2E-3).
