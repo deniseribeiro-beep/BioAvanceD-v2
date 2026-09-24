@@ -240,12 +240,17 @@ test.describe('Sensor registration links SensorMetadata (#311)', () => {
 
       await page.getByTestId('sensor-storage-container-select').selectOption(freezerB);
       await page.getByTestId('sensor-policy-select').selectOption(policyB);
+      // A changed MAC must reach the SensorMetadata row too: the cold-chain
+      // lookup matches macAddress on both collections.
+      const newMac = `AA:BB:CC:55:${macSuffix.slice(0, 2)}:${macSuffix.slice(2, 4)}`;
+      await page.getByTestId('sensor-mac-address-input').fill(newMac);
       await page.getByTestId('sensor-form-submit').click();
       await expect(page.getByTestId('sensor-form-submit')).not.toBeVisible();
 
       const metadata = await findSensorMetadata(sensorId);
       expect(metadata.storageContainer?.toString()).toBe(freezerB);
       expect(metadata.temperaturePolicy?.toString()).toBe(policyB);
+      expect(metadata.macAddress).toBe(`AA:BB:CC:55:${macSuffix.slice(0, 2)}:${macSuffix.slice(2, 4)}`);
     } finally {
       await removeSensorRegistration(sensorId, freezerA);
       await removeSensorRegistration(sensorId, freezerB);

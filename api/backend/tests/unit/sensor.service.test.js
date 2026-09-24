@@ -638,6 +638,41 @@ describe('sensor.service (non-quarantine paths)', () => {
         expect(sensorMetadata.updateOne).not.toHaveBeenCalled();
       });
 
+      // The MAC is read off both collections (buildSensorLookup), so a MAC
+      // changed on `sensors` alone left the metadata row on the old one.
+      it('a changed macAddress is mirrored onto the SensorMetadata row', async () => {
+        const { db, sensorMetadata } = routedDb({ metadataRow: { _id: 'm1', macAddress: 'AA:00:00:00:00:01' } });
+        sensorMetadata.findOne
+          .mockResolvedValueOnce({ _id: 'm1', macAddress: 'AA:00:00:00:00:01' })
+          .mockResolvedValueOnce(null); // no other sensor holds the new MAC
+
+        await sensorService.updateSensor(db, 'S-1', { macAddress: 'AA:00:00:00:00:02' });
+
+        const [, update] = sensorMetadata.updateOne.mock.calls[0];
+        expect(update.$set.macAddress).toBe('AA:00:00:00:00:02');
+      });
+
+      it('refuses a macAddress another sensor holds, before writing either collection', async () => {
+        const { db, sensors, sensorMetadata } = routedDb();
+        sensorMetadata.findOne
+          .mockResolvedValueOnce({ _id: 'm1', macAddress: 'AA:00:00:00:00:01' })
+          .mockResolvedValueOnce({ _id: 'other' });
+
+        await expect(sensorService.updateSensor(db, 'S-1', { macAddress: 'AA:00:00:00:00:09' }))
+          .rejects.toThrow(/macAddress já vinculado/);
+        expect(sensors.updateOne).not.toHaveBeenCalled();
+        expect(sensorMetadata.updateOne).not.toHaveBeenCalled();
+      });
+
+      it('a MAC-only edit on a sensor with no SensorMetadata row stays a sensors-only change', async () => {
+        const { db, sensors, sensorMetadata } = routedDb({ metadataRow: null });
+
+        await sensorService.updateSensor(db, 'S-1', { macAddress: 'AA:00:00:00:00:03' });
+
+        expect(sensors.updateOne).toHaveBeenCalledTimes(1);
+        expect(sensorMetadata.updateOne).not.toHaveBeenCalled();
+      });
+
       it('refuses a policy that does not exist, before writing either collection', async () => {
         const { db, sensors, sensorMetadata } = routedDb({ policy: null });
 

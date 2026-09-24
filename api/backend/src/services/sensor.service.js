@@ -164,10 +164,14 @@ class SensorService {
    */
   async prepareMetadataRebind(db, sensorKey, updateData) {
     const has = (field) => Object.prototype.hasOwnProperty.call(updateData || {}, field);
-    if (!has('storageContainer') && !has('temperaturePolicy')) return null;
+    const bindsSomething = has('storageContainer') || has('temperaturePolicy');
+    const changesMac = has('macAddress') && Boolean(updateData.macAddress);
+    if (!bindsSomething && !changesMac) return null;
 
-    const existing = await db.collection('sensorMetadata').findOne({ sensorId: sensorKey }, { projection: { _id: 1 } });
+    const metadataCollection = db.collection('sensorMetadata');
+    const existing = await metadataCollection.findOne({ sensorId: sensorKey }, { projection: { _id: 1, macAddress: 1 } });
     if (!existing) {
+      if (!bindsSomething) return null; // a MAC-only edit on a sensor with no row stays a sensors-only change
       throw new Error('Sensor sem SensorMetadata (cadastrado sem macAddress): freezer e política não podem ser vinculados');
     }
 
@@ -176,6 +180,22 @@ class SensorService {
       return ObjectId.isValid(value) ? new ObjectId(value) : value;
     };
     const set = { updatedAt: new Date() };
+    // #1179: the MAC is read off BOTH collections (equipment-sensor-quarantine's
+    // buildSensorLookup), so a MAC changed on `sensors` alone left the
+    // metadata row answering to the old one. The row carries a unique index
+    // (sensor_metadata_macaddress_unique_v2); a collision is refused here,
+    // before any write, rather than surfacing as an E11000 after the sensors
+    // document has already changed.
+    if (changesMac && updateData.macAddress !== existing.macAddress) {
+      const clash = await metadataCollection.findOne(
+        { macAddress: updateData.macAddress, sensorId: { $ne: sensorKey } },
+        { projection: { _id: 1 } }
+      );
+      if (clash) {
+        throw new Error(`macAddress já vinculado a outro sensor: ${updateData.macAddress}`);
+      }
+      set.macAddress = updateData.macAddress;
+    }
     if (has('storageContainer')) set.storageContainer = toRef(updateData.storageContainer);
     if (has('temperaturePolicy')) {
       await this.assertTemperaturePolicyExists(db, updateData.temperaturePolicy);
