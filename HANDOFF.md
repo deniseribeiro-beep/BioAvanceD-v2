@@ -42,8 +42,10 @@ is `2ebe0f3a` (#1191).
   plaintext until retention removes them. No backfill exists.
 - **#1192** (filed): splitting `collectionSite` into site and owner needs a
   custodian chain the code lacks (see #1124). A build, not a gate change.
-- **#1193** (filed): whether both row importers should exist. The docs rung
-  is **not walked yet**; the body names the next check.
+- **#1193** (filed): whether both row importers should exist. Docs walked
+  (comment there). RF029 is channel-agnostic and holds each importer to the
+  same criteria, so the only open question is whether to retire an
+  operator-facing page, which is Denise's product call.
 - **#941**: unchanged from the last note. Denise says it is resolved on her
   branches. Not ours to close without Dennis.
 
