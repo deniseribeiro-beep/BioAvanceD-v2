@@ -685,8 +685,17 @@ class UserSecurityService {
         }
       );
 
-      // Aqui você pode enviar o email com o link de reset
-      // Por enquanto, apenas retorna o token (em produção, enviar por email)
+      // #1203: the second instance of that issue's bug. The route answers
+      // "Link de reset de senha enviado com sucesso" and nothing was sent;
+      // the controller strips resetToken from the response, so the link
+      // reached nobody. AWAITED here, unlike auth.service's unauthenticated
+      // sibling: the caller is the authenticated account owner, so there is
+      // no existence to hide, and a failed send must surface as the route's
+      // 400 rather than as a success toast.
+      const resetLink = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/reset-password?token=${resetToken}`;
+      const notificationService = require('./NotificationService');
+      await notificationService.sendPasswordReset(user.email, resetLink, { expiresInMinutes: Math.round(expirationHours * 60) });
+
       logger.info(`Token de reset de senha gerado para usuário ${userID}, expira em ${expirationHours} horas`);
 
       return {

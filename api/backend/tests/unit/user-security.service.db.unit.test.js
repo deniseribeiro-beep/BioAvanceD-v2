@@ -489,7 +489,10 @@ describe('UserSecurityService DB-backed methods', () => {
   });
 
   describe('requestPasswordReset', () => {
+    const notificationService = require('../../src/services/NotificationService');
+
     it('generates and persists a reset token with the requested expiration', async () => {
+      vi.spyOn(notificationService, 'sendPasswordReset').mockResolvedValue({ success: true });
       const users = buildCollection({
         findOne: vi.fn().mockResolvedValue({ _id: USER_ID, email: 'user@example.com' })
       });
@@ -501,6 +504,34 @@ describe('UserSecurityService DB-backed methods', () => {
       expect(typeof result.resetToken).toBe('string');
       expect(result.expiresAt).toBeInstanceOf(Date);
       expect(users.updateOne).toHaveBeenCalledTimes(1);
+    });
+
+    // #1203: the route reported "Link ... enviado" while nothing was sent.
+    it('#1203: emails the link for the stored token, with the requested lifetime', async () => {
+      const sendSpy = vi.spyOn(notificationService, 'sendPasswordReset').mockResolvedValue({ success: true });
+      const users = buildCollection({
+        findOne: vi.fn().mockResolvedValue({ _id: USER_ID, email: 'user@example.com' })
+      });
+      const db = buildDb({ users });
+
+      const result = await userSecurityService.requestPasswordReset(db, USER_ID, 2);
+
+      expect(sendSpy).toHaveBeenCalledTimes(1);
+      const [to, link, opts] = sendSpy.mock.calls[0];
+      expect(to).toBe('user@example.com');
+      expect(opts).toEqual({ expiresInMinutes: 120 });
+      expect(new URL(link).pathname).toBe('/reset-password');
+      expect(new URL(link).searchParams.get('token')).toBe(result.resetToken);
+    });
+
+    it('#1203: a failed send rejects, so the route cannot report success', async () => {
+      vi.spyOn(notificationService, 'sendPasswordReset').mockRejectedValue(new Error('smtp down'));
+      const users = buildCollection({
+        findOne: vi.fn().mockResolvedValue({ _id: USER_ID, email: 'user@example.com' })
+      });
+      const db = buildDb({ users });
+
+      await expect(userSecurityService.requestPasswordReset(db, USER_ID, 1)).rejects.toThrow('smtp down');
     });
 
     it('throws when user not found', async () => {
