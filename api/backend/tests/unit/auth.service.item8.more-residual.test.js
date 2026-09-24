@@ -11,11 +11,15 @@ const { hashToken } = require('../../src/utils/tokenHash');
 
 const ORIGINAL_ENV = { ...process.env };
 const USER_ID = '507f1f77bcf86cd799439011';
+const ACCOUNT_ID = '550e8400-e29b-41d4-a716-4466554400d2';
+const ACTOR_ID = '550e8400-e29b-41d4-a716-4466554400e2';
 const STRONG_PASSWORD = 'ValidPassword!123';
 
 function makeUser(overrides = {}) {
   return {
     _id: { toString: () => USER_ID },
+    userAccountId: ACCOUNT_ID,
+    actorId: ACTOR_ID,
     email: 'user@example.test',
     username: 'user1',
     name: 'Synthetic User',
@@ -65,14 +69,14 @@ describe('AuthService additional item 8 residual branches', () => {
 
     expect(authService.issueRefreshToken(user)).toBe('signed-refresh');
     expect(signSpy.mock.calls[0][0]).toMatchObject({
-      userID: USER_ID,
+      userID: ACCOUNT_ID,
       type: 'refresh',
     });
     expect(signSpy.mock.calls[0][0].sessionID).toBeUndefined();
 
     expect(authService.issueRefreshToken(user, 'session-1')).toBe('signed-refresh');
     expect(signSpy.mock.calls[1][0]).toMatchObject({
-      userID: USER_ID,
+      userID: ACCOUNT_ID,
       type: 'refresh',
       sessionID: 'session-1',
     });
@@ -186,21 +190,21 @@ describe('AuthService additional item 8 residual branches', () => {
     const { db, users } = makeDb(null);
     const verify = vi.spyOn(jwt, 'verify');
 
-    verify.mockReturnValueOnce({ userID: USER_ID, type: 'access' });
+    verify.mockReturnValueOnce({ userID: ACCOUNT_ID, type: 'access' });
     await expect(authService.resetPassword(db, 'token', STRONG_PASSWORD, {}))
       .rejects.toThrow('Token inválido');
 
-    verify.mockReturnValueOnce({ userID: USER_ID, type: 'password-reset' });
+    verify.mockReturnValueOnce({ userID: ACCOUNT_ID, type: 'password-reset' });
     await expect(authService.resetPassword(db, 'token', STRONG_PASSWORD, {}))
       .rejects.toThrow('Usuário não encontrado');
 
     users.findOne.mockResolvedValueOnce(makeUser({ passwordResetTokenHash: null }));
-    verify.mockReturnValueOnce({ userID: USER_ID, type: 'password-reset' });
+    verify.mockReturnValueOnce({ userID: ACCOUNT_ID, type: 'password-reset' });
     await expect(authService.resetPassword(db, 'token', STRONG_PASSWORD, {}))
       .rejects.toThrow('Token inválido ou já utilizado');
 
     users.findOne.mockResolvedValueOnce(makeUser({ passwordResetTokenHash: 'wrong-hash' }));
-    verify.mockReturnValueOnce({ userID: USER_ID, type: 'password-reset' });
+    verify.mockReturnValueOnce({ userID: ACCOUNT_ID, type: 'password-reset' });
     await expect(authService.resetPassword(db, 'token', STRONG_PASSWORD, {}))
       .rejects.toThrow('Token inválido ou já utilizado');
 
@@ -208,7 +212,7 @@ describe('AuthService additional item 8 residual branches', () => {
       passwordResetTokenHash: hashToken('token'),
       passwordResetExpires: null,
     }));
-    verify.mockReturnValueOnce({ userID: USER_ID, type: 'password-reset' });
+    verify.mockReturnValueOnce({ userID: ACCOUNT_ID, type: 'password-reset' });
     await expect(authService.resetPassword(db, 'token', STRONG_PASSWORD, {}))
       .rejects.toThrow('Token de recuperação expirado');
 
@@ -216,7 +220,7 @@ describe('AuthService additional item 8 residual branches', () => {
       passwordResetTokenHash: hashToken('token'),
       passwordResetExpires: new Date(Date.now() - 1000),
     }));
-    verify.mockReturnValueOnce({ userID: USER_ID, type: 'password-reset' });
+    verify.mockReturnValueOnce({ userID: ACCOUNT_ID, type: 'password-reset' });
     await expect(authService.resetPassword(db, 'token', STRONG_PASSWORD, {}))
       .rejects.toThrow('Token de recuperação expirado');
   });
@@ -228,7 +232,7 @@ describe('AuthService additional item 8 residual branches', () => {
     });
     const { db, users } = makeDb(user);
 
-    vi.spyOn(jwt, 'verify').mockReturnValue({ userID: USER_ID, type: 'password-reset' });
+    vi.spyOn(jwt, 'verify').mockReturnValue({ userID: ACCOUNT_ID, type: 'password-reset' });
     vi.spyOn(bcrypt, 'hash').mockResolvedValue('new-hash');
     const invalidate = vi.spyOn(sessionService, 'invalidateUserSessions').mockResolvedValue(undefined);
     vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
@@ -250,7 +254,7 @@ describe('AuthService additional item 8 residual branches', () => {
         },
       }
     );
-    expect(invalidate).toHaveBeenCalledWith(db, USER_ID, 'password_change', 'system');
+    expect(invalidate).toHaveBeenCalledWith(db, ACCOUNT_ID, 'password_change', require('../../src/foundation/systemActorSeedV2').BIOAVANCED_SYSTEM_ACTOR_ID);
   });
 
   it('covers setupMFAFirstLogin credential-type, enrolled-user and lockout guards', async () => {

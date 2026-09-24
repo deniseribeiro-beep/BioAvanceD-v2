@@ -2,12 +2,28 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const { buildRbacCollections, buildMutableRbacCollections } = require('../factories/rbac.factory');
+const { createCollectionMock } = require('../factories/db.factory');
+const { BIOAVANCED_SYSTEM_ACTOR_ID } = require('../../src/foundation/systemActorSeedV2');
+const { TEST_ACTOR_IDS } = require('../factories/auth.factory');
 
 const authService = require('../../src/services/auth.service');
 
 afterEach(() => { vi.restoreAllMocks(); });
 
 describe('AuthService.registerUser', () => {
+  const NEW_USER_ACTOR = '550e8400-e29b-41d4-a716-4466554400c1';
+
+  function makeActorsCollection() {
+    const docs = [
+      { actorId: BIOAVANCED_SYSTEM_ACTOR_ID, actorType: 'service', actorStatus: 'active' },
+      { actorId: NEW_USER_ACTOR, actorType: 'user', actorStatus: 'active' },
+      { actorId: TEST_ACTOR_IDS[4], actorType: 'user', actorStatus: 'active' },
+    ];
+    return createCollectionMock({
+      findOne: vi.fn(async ({ actorId } = {}) => docs.find((d) => d.actorId === actorId) || null),
+    });
+  }
+
   function makeDb(overrides = {}) {
     // #421: registerUser grants a UserRoleAssignment atomically via
     // grantRoleForAccessType, which needs the Role catalog to already
@@ -20,8 +36,13 @@ describe('AuthService.registerUser', () => {
       find: vi.fn().mockReturnValue({ limit: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }) }),
       ...overrides,
     };
+    const actors = makeActorsCollection();
     return {
-      collection: vi.fn((name) => rbacCollections[name] || usersCollection),
+      collection: vi.fn((name) => {
+        if (name === 'actors') return actors;
+        if (name === 'userAccounts') return usersCollection;
+        return rbacCollections[name] || usersCollection;
+      }),
     };
   }
 
@@ -31,23 +52,24 @@ describe('AuthService.registerUser', () => {
     username: 'testuser',
     password: 'SecurePass123!',
     accessType: 2,
+    actorId: NEW_USER_ACTOR,
   };
 
   it('throws when required fields are missing', async () => {
     const db = makeDb();
-    await expect(authService.registerUser(db, {})).rejects.toThrow();
+    await expect(authService.registerUser(db, {}, BIOAVANCED_SYSTEM_ACTOR_ID)).rejects.toThrow();
   });
 
   it('throws when user already exists', async () => {
     const db = makeDb({
       findOne: vi.fn().mockResolvedValue({ _id: 'existing', email: 'test@example.com' }),
     });
-    await expect(authService.registerUser(db, VALID_USER)).rejects.toThrow('cadastrado');
+    await expect(authService.registerUser(db, VALID_USER, BIOAVANCED_SYSTEM_ACTOR_ID)).rejects.toThrow('cadastrado');
   });
 
   it('creates a new user and returns anonId', async () => {
     const db = makeDb();
-    const result = await authService.registerUser(db, VALID_USER);
+    const result = await authService.registerUser(db, VALID_USER, BIOAVANCED_SYSTEM_ACTOR_ID);
     expect(result).toBeDefined();
     expect(result.anonId).toBeTruthy();
     expect(result.password).toBeUndefined();
@@ -57,19 +79,19 @@ describe('AuthService.registerUser', () => {
     const db = makeDb();
     const userData = { ...VALID_USER, roleName: 'Coordenador' };
     delete userData.accessType;
-    const result = await authService.registerUser(db, userData);
+    const result = await authService.registerUser(db, userData, BIOAVANCED_SYSTEM_ACTOR_ID);
     expect(result).toBeDefined();
   });
 
   it('sets mfaEnabled false for Administrador by default', async () => {
     const db = makeDb();
-    const result = await authService.registerUser(db, { ...VALID_USER, accessType: 4, roleName: 'Administrador' });
+    const result = await authService.registerUser(db, { ...VALID_USER, accessType: 4, roleName: 'Administrador' }, BIOAVANCED_SYSTEM_ACTOR_ID);
     expect(result.mfaEnabled).toBe(false);
   });
 
   it('adds roleName to user when not provided', async () => {
     const db = makeDb();
-    const result = await authService.registerUser(db, { ...VALID_USER, accessType: 3 });
+    const result = await authService.registerUser(db, { ...VALID_USER, accessType: 3 }, BIOAVANCED_SYSTEM_ACTOR_ID);
     expect(result.roleName).toBeTruthy();
   });
 
@@ -79,7 +101,7 @@ describe('AuthService.registerUser', () => {
     const insertOne = vi.fn().mockResolvedValue({ insertedId: { toString: () => 'new-user-id' } });
     const db = makeDb({ insertOne });
 
-    await authService.registerUser(db, { ...VALID_USER, accessType: 4, roleName: 'Administrador' });
+    await authService.registerUser(db, { ...VALID_USER, accessType: 4, roleName: 'Administrador' }, BIOAVANCED_SYSTEM_ACTOR_ID);
 
     expect(insertOne).toHaveBeenCalledTimes(1);
     const inserted = insertOne.mock.calls[0][0];
@@ -97,7 +119,7 @@ describe('AuthService.registerUser', () => {
     const db = makeDb({ insertOne });
 
     await expect(
-      authService.registerUser(db, { ...VALID_USER, accessType: 99 })
+      authService.registerUser(db, { ...VALID_USER, accessType: 99 }, BIOAVANCED_SYSTEM_ACTOR_ID)
     ).rejects.toThrow();
 
     expect(insertOne).not.toHaveBeenCalled();
@@ -128,7 +150,7 @@ describe('AuthService.registerUser', () => {
     const db = makeDb({ insertOne });
 
     await expect(
-      authService.registerUser(db, { ...VALID_USER, organizationId: 'org-inexistente' })
+      authService.registerUser(db, { ...VALID_USER, organizationId: 'org-inexistente' }, BIOAVANCED_SYSTEM_ACTOR_ID)
     ).rejects.toThrow(/organizationId/);
 
     expect(insertOne).not.toHaveBeenCalled();
@@ -147,10 +169,17 @@ describe('AuthService.registerUser', () => {
       updateOne: vi.fn().mockResolvedValue({ modifiedCount: 1 }),
       find: vi.fn().mockReturnValue({ limit: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }) }),
     };
-    const db = { collection: vi.fn((name) => emptyRbac[name] || usersCollection) };
+    const actors = makeActorsCollection();
+    const db = {
+      collection: vi.fn((name) => {
+        if (name === 'actors') return actors;
+        if (name === 'userAccounts') return usersCollection;
+        return emptyRbac[name] || usersCollection;
+      }),
+    };
 
     await expect(
-      authService.registerUser(db, { ...VALID_USER })
+      authService.registerUser(db, { ...VALID_USER }, BIOAVANCED_SYSTEM_ACTOR_ID)
     ).rejects.toThrow(/Role não encontrado/);
 
     expect(insertOne).not.toHaveBeenCalled();
@@ -163,7 +192,7 @@ describe('AuthService.registerUser', () => {
     const insertOne = vi.fn().mockResolvedValue({ insertedId: { toString: () => 'new-user-id' } });
     const db = makeDb({ insertOne });
 
-    const result = await authService.registerUser(db, VALID_USER);
+    const result = await authService.registerUser(db, VALID_USER, BIOAVANCED_SYSTEM_ACTOR_ID);
 
     expect(result.anonId).toBeTruthy();
     expect(insertOne).toHaveBeenCalled();

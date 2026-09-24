@@ -6,8 +6,12 @@ const QRCode = require('qrcode');
 const authService = require('../../src/services/auth.service');
 
 const HASHED = 'a'.repeat(60);
+const ACCOUNT_ID = '550e8400-e29b-41d4-a716-4466554400d1';
+const ACTOR_ID = '550e8400-e29b-41d4-a716-4466554400e1';
 const BASE_USER = {
   _id: { toString: () => 'user-1' },
+  userAccountId: ACCOUNT_ID,
+  actorId: ACTOR_ID,
   email: 'user@test.com',
   username: 'user1',
   name: 'Synthetic User',
@@ -452,11 +456,11 @@ describe('AuthService item 8 safe success-side branches', () => {
   it('includes sessionID only when explicitly supplied in refresh-token payload', () => {
     const jwt = require('jsonwebtoken');
     const sign = vi.spyOn(jwt, 'sign').mockReturnValue('refresh-token');
-    const user = { _id: { toString: () => 'user-1' } };
+    const user = { _id: { toString: () => 'user-1' }, userAccountId: ACCOUNT_ID, actorId: ACTOR_ID };
 
     expect(authService.issueRefreshToken(user, 'session-1')).toBe('refresh-token');
     expect(sign).toHaveBeenCalledWith(
-      expect.objectContaining({ userID: 'user-1', type: 'refresh', sessionID: 'session-1' }),
+      expect.objectContaining({ userID: ACCOUNT_ID, type: 'refresh', sessionID: 'session-1' }),
       expect.any(String),
       expect.objectContaining({ expiresIn: '7d' })
     );
