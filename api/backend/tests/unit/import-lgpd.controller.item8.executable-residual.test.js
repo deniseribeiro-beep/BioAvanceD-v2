@@ -74,7 +74,7 @@ describe('import-lgpd.controller item 8 executable residual branches', () => {
     });
   });
 
-  it('uses the legacy _id actor fallback consistently for patient import', async () => {
+  it('ignores legacy _id for actor; only userID is used (Stage 2E)', async () => {
     vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
     const run = vi.spyOn(importLGPDService, 'importPatients').mockResolvedValue({
       total: 1,
@@ -96,8 +96,8 @@ describe('import-lgpd.controller item 8 executable residual branches', () => {
     }), res);
 
     expect(run.mock.calls[0][2].actor).toMatchObject({
-      userID: 'legacy-object-id-item8',
-      userId: 'legacy-object-id-item8',
+      userID: null,
+      userId: null,
     });
     expect(res.status).toHaveBeenCalledWith(200);
   });

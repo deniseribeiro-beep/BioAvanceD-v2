@@ -272,7 +272,7 @@ describe('import-lgpd.controller item8 residual branches', () => {
     expect(res.json.mock.calls[0][0].message).toContain('não realizada');
   });
 
-  it('passes actor fallback fields for patient imports and writes audit only when user exists', async () => {
+  it('ignores legacy id/_id actor fields; only userID populates actor (Stage 2E)', async () => {
     vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
     vi.spyOn(importLGPDService, 'cleanupFile').mockImplementation(() => {});
     const run = vi.spyOn(importLGPDService, 'importPatients').mockResolvedValue({
@@ -289,8 +289,8 @@ describe('import-lgpd.controller item8 residual branches', () => {
     }), resMock());
 
     expect(run.mock.calls[0][2].actor).toMatchObject({
-      userID: 'legacy-id',
-      userId: 'legacy-id',
+      userID: null,
+      userId: null,
       userName: 'u@example.test',
       userRole: 'coordinator',
     });
@@ -348,8 +348,8 @@ describe('import-lgpd.controller item8 residual branches', () => {
       autoIncrement: true,
       neo4jDriver,
       actor: {
-        userID: 'legacy-object-id',
-        userId: 'legacy-object-id',
+        userID: null,
+        userId: null,
         userName: 'Synthetic User',
       },
     });

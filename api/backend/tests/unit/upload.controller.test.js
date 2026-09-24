@@ -170,7 +170,7 @@ describe('upload.controller - uploadAnalysisFile', () => {
     expect(unlinkSpy).not.toHaveBeenCalled();
   });
 
-  it('happy path: inserts payload, returns 201 with expected data, uploadedBy from req.user.id', async () => {
+  it('happy path: inserts payload, returns 201 with expected data, uploadedBy from req.user.userID', async () => {
     vi.spyOn(analysisValidationService, 'validateUploadEligibility').mockResolvedValue({
       success: true,
       sample: {
@@ -187,7 +187,7 @@ describe('upload.controller - uploadAnalysisFile', () => {
     const req = {
       app: { locals: { db: { collection } } },
       body: { specimenId: 'SMP-001' },
-      user: { id: 'user-123' },
+      user: { userID: '550e8400-e29b-41d4-a716-446655440001' },
       file: {
         path: '/whatever/uploads/2026/07/file.txt',
         originalname: 'analysis.pdf',
@@ -208,7 +208,7 @@ describe('upload.controller - uploadAnalysisFile', () => {
         specimenId: 'SMP-001',
         specimenIdentifier: 'SMP-001',
         participantId: 'PAT-001',
-        uploadedBy: 'user-123'
+        uploadedBy: '550e8400-e29b-41d4-a716-446655440001'
       })
     );
     expect(res.status).toHaveBeenCalledWith(201);
@@ -227,7 +227,7 @@ describe('upload.controller - uploadAnalysisFile', () => {
     );
   });
 
-  it('happy path: uploadedBy falls back to req.user._id.toString() when req.user.id is absent', async () => {
+  it('happy path: uploadedBy is null when only legacy id/_id is present (Stage 2E requires userID)', async () => {
     vi.spyOn(analysisValidationService, 'validateUploadEligibility').mockResolvedValue({
       success: true,
       sample: {
@@ -244,7 +244,7 @@ describe('upload.controller - uploadAnalysisFile', () => {
     const req = {
       app: { locals: { db: { collection } } },
       body: { specimenId: 'SMP-002' },
-      user: { _id: { toString: () => 'mongo-object-id-string' } },
+      user: { id: 'legacy-id', _id: { toString: () => 'mongo-object-id-string' } },
       file: {
         path: '/whatever/uploads/2026/07/file2.txt',
         originalname: 'analysis2.pdf',
@@ -257,7 +257,7 @@ describe('upload.controller - uploadAnalysisFile', () => {
     await uploadController.uploadAnalysisFile(req, res);
 
     expect(insertOne).toHaveBeenCalledWith(
-      expect.objectContaining({ uploadedBy: 'mongo-object-id-string' })
+      expect.objectContaining({ uploadedBy: null })
     );
   });
 

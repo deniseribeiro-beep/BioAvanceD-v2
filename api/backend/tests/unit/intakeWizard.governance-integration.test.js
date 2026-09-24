@@ -110,10 +110,17 @@ function loadApp({ consentActive, samplesCollection, quarantineActionsCollection
 
   const collectionResolverModule = require(collectionResolverPath);
   collectionResolverModule.getCollection = vi.fn(async (_db, key) => {
-    if (key === 'samples') return samplesCollection;
-    if (key === 'patients') return patientsCollection;
+    if (key === 'Specimen' || key === 'samples' || key === 'specimens') return samplesCollection;
+    if (key === 'Participant' || key === 'patients' || key === 'participants') return patientsCollection;
     if (key === 'consents') return consentsCollection;
     if (key === 'quarantineActions') return quarantineActionsCollection;
+    if (key === 'participantIdentities') {
+      return {
+        findOne: vi.fn().mockResolvedValue(null),
+        find: vi.fn(() => ({ toArray: async () => [] })),
+        updateOne: vi.fn(),
+      };
+    }
     throw new Error(`unexpected key ${key}`);
   });
 
@@ -159,6 +166,7 @@ function loadApp({ consentActive, samplesCollection, quarantineActionsCollection
   app.locals.db = {
     collection: (name) => {
       if (name === 'sensors') return { find: () => makeCursor([{ locationId: 'EQ-1', status: 'ok' }]) };
+      if (name === 'devices') return { findOne: vi.fn().mockResolvedValue({ deviceId: 'EQ-1', qualificationStatus: 'qualified' }) };
       if (name === 'equipment') return { findOne: vi.fn().mockResolvedValue({ equipmentID: 'EQ-1', status: 'active' }) };
       if (name === 'storageBoxes') {
         return {

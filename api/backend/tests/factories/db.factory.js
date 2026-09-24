@@ -160,6 +160,7 @@ function createDbMock(collections = {}) {
     consenttemplates: 'consentTemplates',
     patientconsents: 'consents',
     patient_consents: 'consents',
+    consents: 'patient_consents',
     sample_movements: 'sampleMovements',
     samplemovements: 'sampleMovements',
     clinical_units: 'clinicalUnits',
@@ -172,6 +173,15 @@ function createDbMock(collections = {}) {
     medicationdictionary: 'medicationDictionary',
     observations: 'observations',
   };
+
+  // Synonym groups so a seed keyed as samples/amostras/specimens (or
+  // patients/participants) resolves whichever canonical name production asks for.
+  const synonymGroups = [
+    ['specimens', 'samples', 'amostras'],
+    ['participants', 'patients', 'pacientes'],
+    ['useraccounts', 'users'],
+    ['consents', 'patientconsents', 'patient_consents'],
+  ];
 
   const { client, session } = createMongoClientMock();
 
@@ -192,6 +202,12 @@ function createDbMock(collections = {}) {
       if (normalizedMap[n]) return normalizedMap[n];
       const alias = aliasFallback[n];
       if (alias && normalizedMap[normalize(alias)]) return normalizedMap[normalize(alias)];
+      const group = synonymGroups.find((g) => g.includes(n));
+      if (group) {
+        for (const syn of group) {
+          if (normalizedMap[syn]) return normalizedMap[syn];
+        }
+      }
       // try to find by substring match
       const foundKey = Object.keys(normalizedMap).find((k) => k === n || k.includes(n) || n.includes(k));
       if (foundKey) return normalizedMap[foundKey];

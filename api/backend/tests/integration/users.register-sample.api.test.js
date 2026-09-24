@@ -15,10 +15,8 @@ const { buildSamplePayload } = require('../factories/sample.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
 const {
   makeAuthToken,
-  makeLegacyClaimsToken,
-  buildAuthenticatedCollections,
-  userForAccessType,
   TEST_USER_ACCOUNT_IDS,
+  TEST_ACTOR_IDS,
 } = require('../factories/auth.factory');
 
 
@@ -33,24 +31,33 @@ describe('POST /api/users/register-sample - paridade de contrato com /api/sample
 
   function givenAppDbCollections() {
     patientsCollectionMock = createCollectionMock();
+    const rbac = buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[2], accessType: 2 }]);
+    const usersOverride = createCollectionMock({
+      findOne: vi.fn(async (query = {}) => {
+        if (query.userAccountId === TEST_USER_ACCOUNT_IDS[2]) {
+          return {
+            userAccountId: TEST_USER_ACCOUNT_IDS[2],
+            actorId: TEST_ACTOR_IDS[2],
+            accessType: 2,
+            userStatus: 'active',
+            anonId: 'anon-user-qa',
+          };
+        }
+        return { anonId: 'anon-user-qa' };
+      }),
+      insertOne: vi.fn().mockResolvedValue({ insertedId: 'user-1' }),
+    });
     app.locals.db = createDbMock({
       specimens: createCollectionMock({
         deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }),
         insertOne: vi.fn().mockResolvedValue({ insertedId: 'sample-inserted' }),
       }),
-      amostras: createCollectionMock({
-        deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }),
-        insertOne: vi.fn().mockResolvedValue({ insertedId: 'sample-inserted' }),
-      }),
-      userAccounts: createCollectionMock({
-        findOne: vi.fn().mockResolvedValue({ anonId: 'anon-user-qa' }),
-        insertOne: vi.fn().mockResolvedValue({ insertedId: 'user-1' }),
-      }),
       logs: createCollectionMock({
         insertOne: vi.fn().mockResolvedValue({ insertedId: 'log-qa' }),
       }),
       participants: patientsCollectionMock,
-      ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[2], accessType: 2 }]),
+      ...rbac,
+      userAccounts: usersOverride,
     });
   }
 

@@ -233,14 +233,14 @@ describe('reportTemplates.routes simple branch coverage for item 8', () => {
         handlerOptions: { enabled: true },
         templateStatus: 'inactive',
       },
-      user: { _id: 'u-2' },
+      user: { userID: '550e8400-e29b-41d4-a716-446655440002' },
     }), res);
     expect(lastStatus(res)).toBe(200);
     expect(collection.findOneAndUpdate.mock.calls.at(-1)[1].$set).toEqual(expect.objectContaining({
       description: 'desc',
       handlerOptions: { enabled: true },
       templateStatus: 'inactive',
-      updatedBy: 'User/u-2',
+      updatedBy: 'User/550e8400-e29b-41d4-a716-446655440002',
     }));
 
     collection.findOne.mockRejectedValueOnce(new Error('update failed'));

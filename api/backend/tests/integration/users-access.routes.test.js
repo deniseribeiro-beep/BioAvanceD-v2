@@ -522,7 +522,7 @@ describe('Users and Access routes', () => {
     // user._id.toString()), so revoking with a non-string id matches
     // nothing, throws nothing and still returns 200 -- a silent no-op.
     expect(sessionsCollection.updateMany).toHaveBeenCalledWith(
-      { userID: '550e8400-e29b-41d4-a716-446655441101', isActive: true },
+      { userAccountId: '550e8400-e29b-41d4-a716-446655441101', isActive: true },
       expect.objectContaining({
         $set: expect.objectContaining({ isActive: false, isRevoked: true }),
       })
@@ -1022,13 +1022,13 @@ describe('Users and Access routes', () => {
     // their owner as a string, so revoking with a non-string id matches
     // nothing, throws nothing and still returns 200.
     expect(sessionsCollection.updateMany).toHaveBeenCalledWith(
-      { userID: '550e8400-e29b-41d4-a716-446655441109', isActive: true },
+      { userAccountId: '550e8400-e29b-41d4-a716-446655441109', isActive: true },
       expect.objectContaining({
         $set: expect.objectContaining({
           isActive: false,
           isRevoked: true,
           revocationReason: 'admin_action',
-          revokedBy: '550e8400-e29b-41d4-a716-446655440004',
+          revokedBy: TEST_ACTOR_IDS[4],
         }),
       })
     );
@@ -1384,7 +1384,12 @@ describe('Users and Access routes', () => {
   // already uses, rather than a new permission code.
   describe('#998: only an Administrador may assign a role', () => {
     function callerCoordenador() {
-      return { userID: '507f1f77bcf86cd799439013', accessType: 3, roleName: 'Coordenador' };
+      return {
+        userID: TEST_USER_ACCOUNT_IDS[3],
+        actorId: TEST_ACTOR_IDS[3],
+        accessType: 3,
+        roleName: 'Coordenador',
+      };
     }
 
     // Arrange block lifted from the #982 PUT test above rather than written
@@ -1394,6 +1399,7 @@ describe('Users and Access routes', () => {
     function seedTarget(id) {
       const targetUser = {
         _id: id,
+        userAccountId: id,
         name: 'Alvo 998',
         email: 'alvo-998@bioavanced.com.br',
         username: 'alvo998',
@@ -1429,7 +1435,7 @@ describe('Users and Access routes', () => {
         user: callerCoordenador(),
       });
       req.app.locals.db = dbWith([
-        { userAccountId: '507f1f77bcf86cd799439013', accessType: 3 },
+        { userAccountId: TEST_USER_ACCOUNT_IDS[3], accessType: 3 },
         { userAccountId: '550e8400-e29b-41d4-a716-44665544110998', accessType: 2 },
       ]);
       const res = createResponse();
@@ -1448,7 +1454,7 @@ describe('Users and Access routes', () => {
         body: { name: 'Novo', email: 'novo@b.c', username: 'novo', password: 'Str0ng!Pass', roleName: 'Administrador' },
         user: callerCoordenador(),
       });
-      req.app.locals.db = dbWith([{ userAccountId: '507f1f77bcf86cd799439013', accessType: 3 }]);
+      req.app.locals.db = dbWith([{ userAccountId: TEST_USER_ACCOUNT_IDS[3], accessType: 3 }]);
       const res = createResponse();
 
       await handler(req, res);
@@ -1497,7 +1503,7 @@ describe('Users and Access routes', () => {
         user: callerCoordenador(),
       });
       req.app.locals.db = dbWith([
-        { userAccountId: '507f1f77bcf86cd799439013', accessType: 3 },
+        { userAccountId: TEST_USER_ACCOUNT_IDS[3], accessType: 3 },
         { userAccountId: '550e8400-e29b-41d4-a716-44665544110998d', accessType: 2 },
       ]);
       const res = createResponse();
@@ -1517,7 +1523,7 @@ describe('Users and Access routes', () => {
         user: callerCoordenador(),
       });
       req.app.locals.db = dbWith([
-        { userAccountId: '507f1f77bcf86cd799439013', accessType: 3 },
+        { userAccountId: TEST_USER_ACCOUNT_IDS[3], accessType: 3 },
         { userAccountId: '550e8400-e29b-41d4-a716-44665544110998c', accessType: 2 },
       ]);
       const res = createResponse();
@@ -1550,6 +1556,7 @@ describe('Users and Access routes', () => {
       // minus the one field under test.
       const targetUser = {
         _id: id,
+        userAccountId: id,
         name: 'Alvo 1009',
         email: 'alvo-1009@bioavanced.com.br',
         username: 'alvo1009',
@@ -1618,6 +1625,7 @@ describe('Users and Access routes', () => {
       const handler = getHandler(userRoutes, 'put', '/:id');
       const targetUser = {
         _id: '550e8400-e29b-41d4-a716-44665544111009d',
+        userAccountId: '550e8400-e29b-41d4-a716-44665544111009d',
         name: 'Alvo 1009 Org',
         email: 'alvo-1009d@bioavanced.com.br',
         username: 'alvo1009d',

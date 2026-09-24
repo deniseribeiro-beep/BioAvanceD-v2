@@ -1791,7 +1791,13 @@ describe('sample.routes', () => {
       const samplesCollection = { findOne: vi.fn(async (query) => samples.find((s) => query.$or.some((cond) => Object.entries(cond).every(([k, v]) => String(s[k]) === String(v)))) || null) };
 
       return {
-        db: { collection: (name) => (name === 'labelGenerations' ? labelGenerations : samplesCollection) },
+        db: {
+          collection: (name) => {
+            if (name === 'labelGenerations') return labelGenerations;
+            if (name === 'specimens' || name === 'samples') return samplesCollection;
+            throw new Error(`unexpected collection ${name}`);
+          },
+        },
         labelGenerations,
       };
     }

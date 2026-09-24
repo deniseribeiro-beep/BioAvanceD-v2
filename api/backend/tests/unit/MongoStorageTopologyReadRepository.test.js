@@ -253,8 +253,8 @@ describe('MongoStorageTopologyReadRepository', () => {
     it('returns BOX_NOT_FOUND when the box does not exist', async () => {
       const storageBoxes = makeCollection();
       storageBoxes.findOne.mockResolvedValue(null);
-      const samples = makeCollection();
-      const db = makeDb({ storageBoxes, samples });
+      const specimens = makeCollection();
+      const db = makeDb({ storageBoxes, specimens });
 
       const repo = new MongoStorageTopologyReadRepository(db);
       const result = await repo.checkBoxIntegrity({ boxId: new ObjectId().toString() });
@@ -280,10 +280,10 @@ describe('MongoStorageTopologyReadRepository', () => {
 
       const storageBoxes = makeCollection();
       storageBoxes.findOne.mockResolvedValue(box);
-      const samples = makeCollection();
-      samples.findOne.mockResolvedValue(sample);
+      const specimens = makeCollection();
+      specimens.findOne.mockResolvedValue(sample);
 
-      const db = makeDb({ storageBoxes, samples });
+      const db = makeDb({ storageBoxes, specimens });
       const repo = new MongoStorageTopologyReadRepository(db);
       const result = await repo.checkBoxIntegrity({ boxId: boxId.toString() });
 
@@ -310,10 +310,10 @@ describe('MongoStorageTopologyReadRepository', () => {
 
       const storageBoxes = makeCollection();
       storageBoxes.findOne.mockResolvedValue(box);
-      const samples = makeCollection();
-      samples.findOne.mockResolvedValue(null);
+      const specimens = makeCollection();
+      specimens.findOne.mockResolvedValue(null);
 
-      const db = makeDb({ storageBoxes, samples });
+      const db = makeDb({ storageBoxes, specimens });
       const repo = new MongoStorageTopologyReadRepository(db);
       const result = await repo.checkBoxIntegrity({ boxId: boxId.toString() });
 
@@ -343,10 +343,10 @@ describe('MongoStorageTopologyReadRepository', () => {
 
       const storageBoxes = makeCollection();
       storageBoxes.findOne.mockResolvedValue(box);
-      const samples = makeCollection();
-      samples.findOne.mockResolvedValue(sample);
+      const specimens = makeCollection();
+      specimens.findOne.mockResolvedValue(sample);
 
-      const db = makeDb({ storageBoxes, samples });
+      const db = makeDb({ storageBoxes, specimens });
       const repo = new MongoStorageTopologyReadRepository(db);
       const result = await repo.checkBoxIntegrity({ boxId: boxId.toString() });
 
@@ -368,9 +368,9 @@ describe('MongoStorageTopologyReadRepository', () => {
 
       const storageBoxes = makeCollection();
       storageBoxes.findOne.mockResolvedValue(box);
-      const samples = makeCollection();
+      const specimens = makeCollection();
 
-      const db = makeDb({ storageBoxes, samples });
+      const db = makeDb({ storageBoxes, specimens });
       const repo = new MongoStorageTopologyReadRepository(db);
       const result = await repo.checkBoxIntegrity({ boxId: boxId.toString() });
 
@@ -394,13 +394,13 @@ describe('MongoStorageTopologyReadRepository', () => {
 
       const storageBoxes = makeCollection();
       storageBoxes.findOne.mockResolvedValue(box);
-      const samples = makeCollection();
+      const specimens = makeCollection();
 
-      const db = makeDb({ storageBoxes, samples });
+      const db = makeDb({ storageBoxes, specimens });
       const repo = new MongoStorageTopologyReadRepository(db);
       const result = await repo.checkBoxIntegrity({ boxId: boxId.toString() });
 
-      expect(samples.findOne).not.toHaveBeenCalled();
+      expect(specimens.findOne).not.toHaveBeenCalled();
       expect(result.valid).toBe(true);
     });
   });

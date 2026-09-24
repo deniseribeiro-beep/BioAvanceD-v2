@@ -132,7 +132,10 @@ describe('result.routes item 8 more residual canonical branches', () => {
       db: {
         collection: vi.fn((name) => {
           if (name === 'results') return resultsCollection;
-          if (name === 'amostras') return samplesCollection;
+          // Stage 2E: production uses specimens (legacy amostras/samples alias only in db.factory)
+          if (name === 'specimens' || name === 'amostras' || name === 'samples') {
+            return samplesCollection;
+          }
           throw new Error(`unexpected collection: ${name}`);
         }),
       },
@@ -438,7 +441,9 @@ describe('result.routes item 8 more residual canonical branches', () => {
       const db = {
         collection: vi.fn((name) => {
           if (name === 'results') return { find };
-          if (name === 'amostras') return { distinct };
+          if (name === 'specimens' || name === 'amostras' || name === 'samples') {
+            return { distinct };
+          }
           throw new Error('unexpected');
         }),
       };

@@ -119,10 +119,10 @@ describe('sample.routes item 8 safe residual branches without barcode compatibil
 
   it('print-job refuses an out-of-scope sample', async () => {
     scopeAllowed = false;
-    const samples = collection({ findOne: vi.fn().mockResolvedValue({
+    const specimens = collection({ findOne: vi.fn().mockResolvedValue({
       _id: 's1', specimenId: 'SPEC-1', barcode: 'DM-001', collectionSite: 'org-2',
     }) });
-    const db = dbWith({ samples });
+    const db = dbWith({ specimens });
     expect((await request(buildApp(db)).get('/api/samples/SPEC-1/label/print-job')).status).toBe(403);
   });
 

@@ -241,6 +241,15 @@ describe('intakeWizard clinical-entity recording (#693)', () => {
     const collectionResolverModule = require(collectionResolverPath);
     collectionResolverModule.getCollection = vi.fn(async (_db, key) => {
       if (collections[key]) return collections[key];
+      if ((key === 'samples' || key === 'specimens') && collections.Specimen) return collections.Specimen;
+      if ((key === 'patients' || key === 'participants') && collections.Participant) return collections.Participant;
+      if (key === 'participantIdentities') {
+        return {
+          findOne: vi.fn().mockResolvedValue(null),
+          find: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([]) })),
+          updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
+        };
+      }
       throw new Error(`unexpected key ${key}`);
     });
 
@@ -262,6 +271,7 @@ describe('intakeWizard clinical-entity recording (#693)', () => {
       collection: (name) => {
         if (collections[name]) return collections[name];
         if (name === 'sensors') return { find: () => makeCursor([{ locationId: 'EQ-1', status: 'ok' }]) };
+        if (name === 'devices') return { findOne: vi.fn().mockResolvedValue({ deviceId: 'EQ-1', qualificationStatus: 'qualified' }) };
         if (name === 'equipment') return { findOne: vi.fn().mockResolvedValue({ equipmentID: 'EQ-1', status: 'active' }) };
         if (name === 'storageBoxes') {
           return {

@@ -23,7 +23,14 @@ const authController = require('../../src/controllers/auth.controller');
 const sessionService = require('../../src/services/session.service');
 const auditLogger = require('../../src/utils/auditLogger');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'test-jwt-secret';
+const JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
+process.env.JWT_SECRET = JWT_SECRET;
+const {
+  TEST_USER_ACCOUNT_IDS,
+  TEST_ACTOR_IDS,
+} = require('../factories/auth.factory');
+
+const ACTOR_ID = TEST_ACTOR_IDS[2];
 
 function loadAuthRoutes() {
   delete require.cache[authRoutesPath];
@@ -45,19 +52,35 @@ function buildApp(authRoutes, db, { withT = false } = {}) {
 }
 
 function makeUserId() {
-  return new ObjectId().toHexString();
+  return TEST_USER_ACCOUNT_IDS[2];
 }
 
 function signAccessToken(overrides = {}) {
+  const userID = overrides.userID ?? makeUserId();
+  const actorId = overrides.actorId ?? ACTOR_ID;
+  const { userID: _u, actorId: _a, ...rest } = overrides;
   return jwt.sign(
-    { userID: makeUserId(), email: 'user@example.com', accessType: 2, mfaVerified: true, ...overrides },
+    { userID, actorId, email: 'user@example.com', accessType: 2, mfaVerified: true, ...rest },
     JWT_SECRET,
     { expiresIn: '15m' }
   );
 }
 
 function makeDb(userDoc) {
-  const findOne = vi.fn(async () => userDoc);
+  // authenticate() always does a UserAccount lookup before the route runs.
+  // makeDb(null) means "route should see not-found": first findOne succeeds for
+  // auth, later ones return null for the handler.
+  let authServed = false;
+  const findOne = vi.fn(async () => {
+    if (userDoc === null) {
+      if (!authServed) {
+        authServed = true;
+        return { actorId: ACTOR_ID, userAccountId: makeUserId(), userStatus: 'active' };
+      }
+      return null;
+    }
+    return { actorId: ACTOR_ID, userAccountId: makeUserId(), userStatus: 'active', ...userDoc };
+  });
   return { collection: vi.fn(() => ({ findOne })) };
 }
 
@@ -66,16 +89,11 @@ function makeDb(userDoc) {
 // makeDbWithRbac for the full rationale.
 function makeDbWithRbac(userDoc, rbacUsers = []) {
   const { buildRbacCollections } = require('../factories/rbac.factory');
-const {
-  makeAuthToken,
-  makeLegacyClaimsToken,
-  buildAuthenticatedCollections,
-  userForAccessType,
-  TEST_USER_ACCOUNT_IDS,
-} = require('../factories/auth.factory');
 
-  const rbac = buildRbacCollections(rbacUsers);
-  const findOne = vi.fn(async () => userDoc);
+  const rbac = buildRbacCollections(rbacUsers.length
+    ? rbacUsers
+    : [{ userAccountId: TEST_USER_ACCOUNT_IDS[2], accessType: 2 }]);
+  const findOne = vi.fn(async () => (userDoc == null ? null : { actorId: ACTOR_ID, userAccountId: makeUserId(), ...userDoc }));
   return { collection: vi.fn((name) => rbac[name] || { findOne }) };
 }
 
@@ -114,7 +132,7 @@ describe('auth.routes.js branch coverage - req.t translation truthy branches', (
       collection: () => ({
         findOne: vi.fn(async () => {
           statusCalls += 1;
-          if (statusCalls === 1) return {};
+          if (statusCalls === 1) return { actorId: ACTOR_ID, userAccountId: makeUserId(), userStatus: 'active' };
           throw new Error('mfa-status-boom');
         })
       })
@@ -190,7 +208,7 @@ describe('auth.routes.js branch coverage - req.t translation truthy branches', (
       collection: () => ({
         findOne: vi.fn(async () => {
           throwingCalls += 1;
-          if (throwingCalls === 1) return {};
+          if (throwingCalls === 1) return { actorId: ACTOR_ID, userAccountId: makeUserId(), userStatus: 'active' };
           throw new Error('verify-boom');
         })
       })
@@ -211,7 +229,7 @@ describe('auth.routes.js branch coverage - req.t translation truthy branches', (
 
     // No active RBAC assignment for this user — resolves to the same
     // 'Técnico' default resolveRoleDisplayName falls back to.
-    const defaultRoleRes = await request(buildApp(loadAuthRoutes(), makeDbWithRbac({ email: 'a@b.com' }, []), { withT: true }))
+    const defaultRoleRes = await request(buildApp(loadAuthRoutes(), makeDbWithRbac({ email: 'a@b.com' }, [{ userAccountId: decoded.userID }]), { withT: true }))
       .get('/api/auth/verify').set('Authorization', `Bearer ${token}`);
     expect(defaultRoleRes.status).toBe(200);
     expect(defaultRoleRes.body.data.user.roleName).toBe('Técnico');

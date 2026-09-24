@@ -336,7 +336,7 @@ describe('import-async.controller', () => {
       );
     });
 
-    it('derives userID from req.user._id.toString() when userID absent', async () => {
+    it('uses null userID when only legacy _id is present (Stage 2E requires userID)', async () => {
       const file = { path: '/tmp/f.csv', originalname: 'f.csv' };
       const db = {};
       const req = {
@@ -356,7 +356,7 @@ describe('import-async.controller', () => {
 
       expect(createSpy).toHaveBeenCalledWith(
         db,
-        'objid-str',
+        null,
         file,
         'patients',
         expect.any(Object)
@@ -678,7 +678,7 @@ describe('import-async.controller', () => {
       });
     });
 
-    it('falls back to req.user._id.toString() when userID absent', async () => {
+    it('omits legacy _id; userID is undefined without req.user.userID (Stage 2E)', async () => {
       const db = {};
       const req = {
         app: { locals: { db } },
@@ -692,8 +692,9 @@ describe('import-async.controller', () => {
 
       expect(spy).toHaveBeenCalledWith(
         db,
-        expect.objectContaining({ userID: 'idstr' })
+        expect.objectContaining({ userID: undefined })
       );
+      expect(spy.mock.calls[0][1].userID).toBeUndefined();
     });
 
     it('returns 500 when service throws', async () => {

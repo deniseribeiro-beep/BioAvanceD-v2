@@ -1,3 +1,7 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
 const {
   makeAuthToken,
   makeLegacyClaimsToken,
@@ -5,10 +9,6 @@ const {
   userForAccessType,
   TEST_USER_ACCOUNT_IDS,
 } = require('../factories/auth.factory');
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { createRequire } from 'module';
-
-const require = createRequire(import.meta.url);
 const jwt = require('jsonwebtoken');
 const { ObjectId } = require('mongodb');
 const fhirImportStagingService = require('../../src/services/fhir-import-staging.service');

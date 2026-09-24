@@ -31,10 +31,7 @@ function buildAppWithDb(db) {
 }
 
 function buildAdminToken() {
-  return jwt.sign(
-    { userID: 'admin-test', accessType: 4, roleName: 'Administrador' },
-    process.env.JWT_SECRET
-  );
+  return makeAuthToken(4);
 }
 
 describe('equipment.routes quarantine flow', () => {
@@ -69,17 +66,16 @@ describe('equipment.routes quarantine flow', () => {
       })),
       updateOne: vi.fn(async () => ({ matchedCount: 1 }))
     };
-    const usersCollection = {
-      findOne: vi.fn(async () => ({ _id: 'admin-test', anonId: 'anon-admin-test' }))
-    };
-
+    const authCols = buildAuthenticatedCollections([4]);
+    const admin = userForAccessType(4);
     const startSession = vi.fn();
-    const rbacCollections = buildRbacCollections([{ userAccountId: 'admin-test', accessType: 4 }]);
+    const rbacCollections = buildRbacCollections([{ userAccountId: admin.userAccountId, accessType: 4 }]);
     const db = {
       collection: vi.fn((name) => {
         if (name === 'equipment') return equipmentCollection;
         if (name === 'sessions') return sessionsCollection;
-        if (name === 'userAccounts') return usersCollection;
+        if (name === 'userAccounts') return authCols.userAccounts;
+        if (name === 'actors') return authCols.actors;
         if (name === 'logs') return logsCollection;
         if (rbacCollections[name]) return rbacCollections[name];
         return logsCollection;
@@ -140,9 +136,8 @@ describe('equipment.routes quarantine flow', () => {
       })),
       updateOne: vi.fn(async () => ({ matchedCount: 1 }))
     };
-    const usersCollection = {
-      findOne: vi.fn(async () => ({ _id: 'admin-test', anonId: 'anon-admin-test' }))
-    };
+    const authCols = buildAuthenticatedCollections([4]);
+    const admin = userForAccessType(4);
 
     const withTransaction = vi.fn(async (cb) => cb());
     const endSession = vi.fn(async () => undefined);
@@ -154,12 +149,13 @@ describe('equipment.routes quarantine flow', () => {
     // what makes this client transaction-capable.
     const helloCommand = vi.fn(async () => ({ setName: 'rs0' }));
 
-    const rbacCollections = buildRbacCollections([{ userAccountId: 'admin-test', accessType: 4 }]);
+    const rbacCollections = buildRbacCollections([{ userAccountId: admin.userAccountId, accessType: 4 }]);
     const db = {
       collection: vi.fn((name) => {
         if (name === 'equipment') return equipmentCollection;
         if (name === 'sessions') return sessionsCollection;
-        if (name === 'userAccounts') return usersCollection;
+        if (name === 'userAccounts') return authCols.userAccounts;
+        if (name === 'actors') return authCols.actors;
         if (name === 'logs') return logsCollection;
         if (rbacCollections[name]) return rbacCollections[name];
         return logsCollection;
@@ -246,19 +242,18 @@ describe('equipment.routes quarantine flow', () => {
       })),
       updateOne: vi.fn(async () => ({ matchedCount: 1 }))
     };
-    const usersCollection = {
-      findOne: vi.fn(async () => ({ _id: 'admin-test', anonId: 'anon-admin-test' }))
-    };
-
+    const authCols = buildAuthenticatedCollections([4]);
+    const admin = userForAccessType(4);
     const startSession = vi.fn();
     const helloCommand = vi.fn(async () => ({}));
 
-    const rbacCollections = buildRbacCollections([{ userAccountId: 'admin-test', accessType: 4 }]);
+    const rbacCollections = buildRbacCollections([{ userAccountId: admin.userAccountId, accessType: 4 }]);
     const db = {
       collection: vi.fn((name) => {
         if (name === 'equipment') return equipmentCollection;
         if (name === 'sessions') return sessionsCollection;
-        if (name === 'userAccounts') return usersCollection;
+        if (name === 'userAccounts') return authCols.userAccounts;
+        if (name === 'actors') return authCols.actors;
         if (name === 'logs') return logsCollection;
         if (rbacCollections[name]) return rbacCollections[name];
         return logsCollection;

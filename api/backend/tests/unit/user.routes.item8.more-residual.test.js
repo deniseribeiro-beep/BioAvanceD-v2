@@ -4,6 +4,14 @@ import express from 'express';
 import request from 'supertest';
 
 const require = createRequire(import.meta.url);
+const { TEST_ACTOR_IDS, TEST_USER_ACCOUNT_IDS } = require('../factories/auth.factory');
+
+const CALLER_ACCOUNT_ID = TEST_USER_ACCOUNT_IDS[4];
+const CALLER_ACTOR_ID = TEST_ACTOR_IDS[4];
+const NEW_USER_ACCOUNT_ID = TEST_USER_ACCOUNT_IDS[1];
+const MFA_TARGET_ACCOUNT_ID = TEST_USER_ACCOUNT_IDS[2];
+const FORCE_RESET_ACCOUNT_ID = TEST_USER_ACCOUNT_IDS[3];
+
 const authPath = require.resolve('../../src/infrastructure/middleware/auth');
 const rbacPath = require.resolve('../../src/infrastructure/middleware/rbac');
 const routePath = require.resolve('../../src/interface/routes/user.routes.js');
@@ -12,7 +20,11 @@ let currentAuth = defaultAuth;
 let currentRequirePermission = () => (req, res, next) => next();
 
 function defaultAuth(req, res, next) {
-  req.user = { userID: 'caller-1', roleName: 'Administrador' };
+  req.user = {
+    userID: CALLER_ACCOUNT_ID,
+    actorId: CALLER_ACTOR_ID,
+    roleName: 'Administrador',
+  };
   req.t = (key) => key;
   next();
 }
@@ -83,7 +95,11 @@ describe('user.routes item 8 legitimate residual branches', () => {
     const rbacAssignment = require('../../src/services/rbac-assignment.service');
     const auditLogger = require('../../src/utils/auditLogger');
 
-    vi.spyOn(authService, 'registerUser').mockResolvedValue({ _id: 'new-user', username: 'synthetic' });
+    vi.spyOn(authService, 'registerUser').mockResolvedValue({
+      _id: 'mongo-new-user',
+      userAccountId: NEW_USER_ACCOUNT_ID,
+      username: 'synthetic',
+    });
     vi.spyOn(rbacAssignment, 'resolveUserHierarchyLevel').mockResolvedValue(5);
     vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
     const log = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
@@ -106,7 +122,7 @@ describe('user.routes item 8 legitimate residual branches', () => {
     expect(log).toHaveBeenCalledWith(expect.objectContaining({
       action: 'CREATE',
       resourceType: 'User',
-      resourceId: 'new-user',
+      resourceId: NEW_USER_ACCOUNT_ID,
     }));
   });
 
@@ -122,13 +138,13 @@ describe('user.routes item 8 legitimate residual branches', () => {
     const db = { collection: () => ({ deleteOne }) };
     const app = buildApp(db);
 
-    const missing = await request(app).delete('/api/users/missing');
-    const ok = await request(app).delete('/api/users/u1');
-    const failed = await request(app).delete('/api/users/u2');
+    const missing = await request(app).delete(`/api/users/${TEST_USER_ACCOUNT_IDS.legacy}`);
+    const ok = await request(app).delete(`/api/users/${MFA_TARGET_ACCOUNT_ID}`);
+    const failed = await request(app).delete(`/api/users/${FORCE_RESET_ACCOUNT_ID}`);
 
     expect(missing.status).toBe(404);
     expect(ok.status).toBe(200);
-    expect(logDelete).toHaveBeenCalledWith(expect.anything(), 'User', 'u1');
+    expect(logDelete).toHaveBeenCalledWith(expect.anything(), 'User', MFA_TARGET_ACCOUNT_ID);
     expect(failed.status).toBe(400);
     expect(failed.body.message).toBe('delete-boom');
   });
@@ -136,15 +152,15 @@ describe('user.routes item 8 legitimate residual branches', () => {
   it('covers validate-status not-found, default status, explicit status and failure', async () => {
     const findOne = vi.fn()
       .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce({ _id: 'u1' })
-      .mockResolvedValueOnce({ _id: 'u2', status: 'active' })
+      .mockResolvedValueOnce({ userAccountId: MFA_TARGET_ACCOUNT_ID })
+      .mockResolvedValueOnce({ userAccountId: FORCE_RESET_ACCOUNT_ID, status: 'active' })
       .mockRejectedValueOnce(new Error('status-boom'));
     const app = buildApp({ collection: () => ({ findOne }) });
 
-    const missing = await request(app).get('/api/users/missing/validate-status');
-    const fallback = await request(app).get('/api/users/u1/validate-status');
-    const active = await request(app).get('/api/users/u2/validate-status');
-    const failed = await request(app).get('/api/users/u3/validate-status');
+    const missing = await request(app).get(`/api/users/${TEST_USER_ACCOUNT_IDS.legacy}/validate-status`);
+    const fallback = await request(app).get(`/api/users/${MFA_TARGET_ACCOUNT_ID}/validate-status`);
+    const active = await request(app).get(`/api/users/${FORCE_RESET_ACCOUNT_ID}/validate-status`);
+    const failed = await request(app).get(`/api/users/${NEW_USER_ACCOUNT_ID}/validate-status`);
 
     expect(missing.status).toBe(404);
     expect(fallback.body.data.status).toBe('inactive');
@@ -247,10 +263,16 @@ describe('user.routes item 8 MFA administrative success branches', () => {
     const log = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
 
     const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
-    const user = { _id: 'admin-1', mfaEnabled: true, mfaLocked: true, mfaFailedAttempts: 5 };
+    const user = {
+      _id: 'mongo-admin-1',
+      userAccountId: NEW_USER_ACCOUNT_ID,
+      mfaEnabled: true,
+      mfaLocked: true,
+      mfaFailedAttempts: 5,
+    };
     const app = buildApp({ collection: () => ({ findOne: vi.fn().mockResolvedValue(user), updateOne }) });
 
-    const res = await request(app).post('/api/users/admin-1/reset-mfa');
+    const res = await request(app).post(`/api/users/${NEW_USER_ACCOUNT_ID}/reset-mfa`);
 
     expect(res.status).toBe(200);
     expect(res.body.unlockedOnly).toBe(true);
@@ -276,10 +298,15 @@ describe('user.routes item 8 MFA administrative success branches', () => {
     const log = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
 
     const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
-    const user = { _id: 'user-2', mfaEnabled: true, mfaSecretCiphertext: 'cipher' };
+    const user = {
+      _id: 'mongo-user-2',
+      userAccountId: MFA_TARGET_ACCOUNT_ID,
+      mfaEnabled: true,
+      mfaSecretCiphertext: 'cipher',
+    };
     const app = buildApp({ collection: () => ({ findOne: vi.fn().mockResolvedValue(user), updateOne }) });
 
-    const res = await request(app).post('/api/users/user-2/reset-mfa');
+    const res = await request(app).post(`/api/users/${MFA_TARGET_ACCOUNT_ID}/reset-mfa`);
 
     expect(res.status).toBe(200);
     expect(updateOne.mock.calls[0][1].$set).toEqual(expect.objectContaining({
@@ -290,7 +317,12 @@ describe('user.routes item 8 MFA administrative success branches', () => {
       mfaLocked: false,
       lastLogin: null,
     }));
-    expect(invalidate).toHaveBeenCalledWith(expect.anything(), 'user-2', 'admin_action', 'caller-1');
+    expect(invalidate).toHaveBeenCalledWith(
+      expect.anything(),
+      MFA_TARGET_ACCOUNT_ID,
+      'admin_action',
+      CALLER_ACTOR_ID,
+    );
     expect(log).toHaveBeenCalledWith(expect.objectContaining({
       severity: 'critical',
       payload: expect.objectContaining({ operation: 'reset', sessionsRevoked: true }),
@@ -304,19 +336,22 @@ describe('user.routes item 8 MFA administrative success branches', () => {
     const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
     const app = buildApp({
       collection: () => ({
-        findOne: vi.fn().mockResolvedValue({ _id: 'user-3' }),
+        findOne: vi.fn().mockResolvedValue({
+          _id: 'mongo-user-3',
+          userAccountId: FORCE_RESET_ACCOUNT_ID,
+        }),
         updateOne,
       }),
     });
 
-    const res = await request(app).post('/api/users/user-3/force-password-reset');
+    const res = await request(app).post(`/api/users/${FORCE_RESET_ACCOUNT_ID}/force-password-reset`);
 
     expect(res.status).toBe(200);
     expect(updateOne.mock.calls[0][1].$set.forceReset).toBe(true);
     expect(log).toHaveBeenCalledWith(expect.objectContaining({
       action: 'UPDATE',
       resourceType: 'User',
-      resourceId: 'user-3',
+      resourceId: FORCE_RESET_ACCOUNT_ID,
       payload: { operation: 'forcePasswordReset', fieldsSet: ['forceReset'] },
     }));
   });
@@ -333,12 +368,16 @@ describe('user.routes item 8 MFA administrative success branches', () => {
     const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
     const app = buildApp({
       collection: () => ({
-        findOne: vi.fn().mockResolvedValue({ _id: 'admin-2', mfaSecretCiphertext: 'preserve-me' }),
+        findOne: vi.fn().mockResolvedValue({
+          _id: 'mongo-admin-2',
+          userAccountId: TEST_USER_ACCOUNT_IDS.legacy,
+          mfaSecretCiphertext: 'preserve-me',
+        }),
         updateOne,
       }),
     });
 
-    const res = await request(app).post('/api/users/admin-2/disable-mfa');
+    const res = await request(app).post(`/api/users/${TEST_USER_ACCOUNT_IDS.legacy}/disable-mfa`);
 
     expect(res.status).toBe(200);
     expect(updateOne.mock.calls[0][1].$set).toEqual(expect.objectContaining({

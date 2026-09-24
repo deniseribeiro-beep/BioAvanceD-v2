@@ -31,7 +31,7 @@ function mockDb({ orphanetRows = [], bulkWriteImpl, createIndexImpl } = {}) {
 
   const collection = vi.fn((name) => {
     if (name === 'orphanet_diseases') return orphanetCollection;
-    if (name === 'disease_dictionary') return diseaseCollection;
+    if (name === 'diseaseDictionary') return diseaseCollection;
     throw new Error(`unexpected collection: ${name}`);
   });
 

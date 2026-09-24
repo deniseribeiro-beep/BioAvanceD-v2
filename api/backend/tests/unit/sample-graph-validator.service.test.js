@@ -1,5 +1,5 @@
-const { makeAuthToken, makeLegacyClaimsToken, buildAuthenticatedCollections, userForAccessType, TEST_USER_ACCOUNT_IDS } = require('../../factories/auth.factory');
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+const { TEST_USER_ACCOUNT_IDS } = require('../factories/auth.factory');
 const { ObjectId } = require('mongodb');
 const SampleGraphValidator = require('../../src/services/SampleGraphValidator');
 const { generateSampleHash } = require('../../src/services/MerkleService');

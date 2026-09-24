@@ -220,6 +220,7 @@ describe('POST /api/storage/allocate/auto (#1006)', () => {
       .set('Authorization', `Bearer ${makeToken(2)}`)
       .send({ specimenId: canonicalSpecimenId, boxId: String(boxId) });
 
+    // TEMP debug removed
     expect(res.status).toBe(201);
     expect(res.body.success).toBe(true);
     expect(res.body.currentStoragePlacement).toEqual(expect.objectContaining({
@@ -247,7 +248,7 @@ describe('POST /api/storage/allocate/auto (#1006)', () => {
     expect(collections.rackLocationAssignments.insertOne).toHaveBeenCalledWith(
       expect.anything(), expect.objectContaining({ session })
     );
-    expect(collections.sample_movements.insertOne).toHaveBeenCalledWith(
+    expect(collections.sampleMovements.insertOne).toHaveBeenCalledWith(
       expect.anything(), expect.objectContaining({ session })
     );
     expect(collections.graph_projection_outbox.updateOne).toHaveBeenCalledWith(

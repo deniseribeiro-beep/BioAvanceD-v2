@@ -14,6 +14,7 @@ const dictionaryRoutePath = require.resolve('../../src/routes/dictionary');
 // mocked before a fresh require() of the route module.
 function loadRouteWithMocks({ session, createClientImpl } = {}) {
   delete require.cache[neo4jModulePath];
+  delete require.cache[redisModulePath];
   delete require.cache[dictionaryRoutePath];
 
   const neo4jModule = require(neo4jModulePath);
@@ -21,16 +22,23 @@ function loadRouteWithMocks({ session, createClientImpl } = {}) {
     session: () => session,
   });
 
-  const redisModule = require(redisModulePath);
-  vi.spyOn(redisModule, 'createClient').mockImplementation(
-    createClientImpl || (() => ({
-      isOpen: false,
-      on: vi.fn(),
-      connect: vi.fn().mockResolvedValue(undefined),
-      get: vi.fn().mockResolvedValue(null),
-      setEx: vi.fn().mockResolvedValue('OK'),
-    }))
-  );
+  // Stage 2E flake fix: spyOn alone can miss CJS redis under parallel suites and
+  // leave getRedisClient awaiting a real localhost connect until testTimeout.
+  require.cache[redisModulePath] = {
+    id: redisModulePath,
+    filename: redisModulePath,
+    loaded: true,
+    exports: {
+      createClient: createClientImpl
+        || vi.fn(() => ({
+          isOpen: true,
+          on: vi.fn(),
+          connect: vi.fn().mockResolvedValue(undefined),
+          get: vi.fn().mockResolvedValue(null),
+          setEx: vi.fn().mockResolvedValue('OK'),
+        })),
+    },
+  };
 
   const router = require(dictionaryRoutePath);
   const app = express();
@@ -66,7 +74,7 @@ function throwingSession() {
 function buildFallbackDb({ disease = null, terminologyRows = [] } = {}) {
   return {
     collection: vi.fn((name) => {
-      if (name === 'disease_dictionary') {
+      if (name === 'diseaseDictionary') {
         return { findOne: vi.fn().mockResolvedValue(disease) };
       }
       if (name === 'terminologies') {
@@ -81,6 +89,7 @@ describe('dictionary.js branch coverage - Neo4j success-path display fallbacks',
   afterEach(() => {
     vi.restoreAllMocks();
     delete require.cache[neo4jModulePath];
+    delete require.cache[redisModulePath];
     delete require.cache[dictionaryRoutePath];
   });
 
@@ -126,6 +135,7 @@ describe('dictionary.js branch coverage - /suggest local fallback (buildLocalSem
   afterEach(() => {
     vi.restoreAllMocks();
     delete require.cache[neo4jModulePath];
+    delete require.cache[redisModulePath];
     delete require.cache[dictionaryRoutePath];
   });
 

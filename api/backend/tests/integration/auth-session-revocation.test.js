@@ -68,7 +68,7 @@ describe('Session Revocation (DELETE /api/auth/sessions/:sessionId)', () => {
       TEST_USER_ACCOUNT_IDS[4],
       'session-revoke-test-1',
       'user_request',
-      require('../factories/auth.factory').TEST_ACTOR_IDS[4],
+      TEST_ACTOR_IDS[4],
     );
   });
 

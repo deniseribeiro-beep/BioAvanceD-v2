@@ -69,7 +69,7 @@ describe('dictionary suggest fallback', () => {
   it('retorna HPO e biomarcadores do cache local quando Neo4j esta indisponivel', async () => {
     const db = {
       collection: vi.fn((name) => {
-        if (name === 'disease_dictionary') {
+        if (name === 'diseaseDictionary') {
           return {
             findOne: vi.fn().mockResolvedValue({
               orpha_code: '324',

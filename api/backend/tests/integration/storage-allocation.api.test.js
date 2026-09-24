@@ -282,7 +282,7 @@ describe('storage transactional routes canonical v2 (#1006)', () => {
     expect(db.session.endSession).toHaveBeenCalledTimes(1);
     expect(collections.specimenContainerAssignments.insertOne).toHaveBeenCalledWith(expect.anything(), { session: db.session });
     expect(collections.containerPositionAssignments.insertOne).toHaveBeenCalledWith(expect.anything(), { session: db.session });
-    expect(collections.sample_movements.insertOne).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ session: db.session }));
+    expect(collections.sampleMovements.insertOne).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ session: db.session }));
   });
 
   it('POST /allocate/auto is integrated and returns the same canonical placement contract', async () => {
@@ -298,7 +298,7 @@ describe('storage transactional routes canonical v2 (#1006)', () => {
     expect(res.body.projectionQueued).toBe(true);
     expect(db.client.startSession).toHaveBeenCalledTimes(1);
     expect(collections.specimenContainerAssignments.insertOne).toHaveBeenCalledWith(expect.anything(), { session: db.session });
-    expect(collections.sample_movements.insertOne).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ session: db.session }));
+    expect(collections.sampleMovements.insertOne).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ session: db.session }));
   });
 
   it('POST /move closes the old normalized placement and creates the new placement atomically', async () => {
@@ -318,7 +318,7 @@ describe('storage transactional routes canonical v2 (#1006)', () => {
       { session: db.session }
     );
     expect(collections.containerPositionAssignments.insertOne).toHaveBeenCalledWith(expect.anything(), { session: db.session });
-    expect(collections.sample_movements.insertOne).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ session: db.session }));
+    expect(collections.sampleMovements.insertOne).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ session: db.session }));
   });
 
   it('DELETE /release/:specimenId closes the normalized placement and writes immutable audit in the same session', async () => {
@@ -336,6 +336,6 @@ describe('storage transactional routes canonical v2 (#1006)', () => {
       expect.objectContaining({ $set: expect.objectContaining({ assignmentStatus: 'inactive' }) }),
       { session: db.session }
     );
-    expect(collections.sample_movements.insertOne).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ session: db.session }));
+    expect(collections.sampleMovements.insertOne).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ session: db.session }));
   });
 });

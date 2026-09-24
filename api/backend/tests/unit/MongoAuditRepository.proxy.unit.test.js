@@ -36,10 +36,10 @@ describe('MongoAuditRepository createIsolatedCollectionView (proxy traps)', () =
 
     try {
       const rawInsertOne = vi.fn().mockResolvedValue({ acknowledged: true });
-      const rawCollection = { collectionName: 'sample_movements', insertOne: rawInsertOne };
+      const rawCollection = { collectionName: 'sampleMovements', insertOne: rawInsertOne };
       const counters = makeCountersCollection(10);
       const db = {
-        collection: vi.fn((name) => (name === 'sample_movements' ? rawCollection : counters))
+        collection: vi.fn((name) => (name === 'sampleMovements' ? rawCollection : counters))
       };
       const repo = new MongoAuditRepository(db);
 
@@ -71,7 +71,7 @@ describe('MongoAuditRepository createIsolatedCollectionView (proxy traps)', () =
 
       // get() with a plain (non-function) target property, once no override
       // is set, is returned as-is rather than bound.
-      expect(capturedView.collectionName).toBe('sample_movements');
+      expect(capturedView.collectionName).toBe('sampleMovements');
     } finally {
       enforceSpy.mockRestore();
       ensureSpy.mockRestore();

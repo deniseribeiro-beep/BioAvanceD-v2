@@ -1,4 +1,4 @@
-const { makeAuthToken, makeLegacyClaimsToken, buildAuthenticatedCollections, userForAccessType, TEST_USER_ACCOUNT_IDS } = require('../../factories/auth.factory');
+const { TEST_USER_ACCOUNT_IDS } = require('../factories/auth.factory');
 const { Neo4jCanonicalProjectionService } = require('../../src/services/neo4jCanonicalProjection.service');
 
 describe('Neo4jCanonicalProjectionService', () => {

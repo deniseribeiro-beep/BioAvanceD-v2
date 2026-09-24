@@ -141,7 +141,7 @@ describe('integrationSecurityMiddleware', () => {
       const req = createReq({
         app: { locals: { db: fakeDb, blockedAttempts: new Map() } },
         body: { participantId: 'p1' },
-        user: { id: 'u1' }
+        user: { userID: 'u1' }
       });
       const originalJson = vi.fn().mockReturnValue('json-result');
       const res = createRes({ json: originalJson, statusCode: 403 });
@@ -259,7 +259,7 @@ describe('integrationSecurityMiddleware', () => {
       const req = createReq({
         app: { locals: { db: fakeDb, blockedAttempts: existingAttempts } },
         body: { participantId: 'p1' },
-        user: { id: 'u1' }
+        user: { userID: 'u1' }
       });
       const originalJson = vi.fn();
       const res = createRes({ json: originalJson, statusCode: 403 });
@@ -299,7 +299,7 @@ describe('integrationSecurityMiddleware', () => {
       const req = createReq({
         app: { locals: { db: fakeDb, blockedAttempts: existingAttempts } },
         body: { participantId: 'p1' },
-        user: { id: 'u1' }
+        user: { userID: 'u1' }
       });
       const originalJson = vi.fn();
       const res = createRes({ json: originalJson, statusCode: 403 });

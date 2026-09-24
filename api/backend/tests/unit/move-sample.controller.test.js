@@ -107,7 +107,11 @@ describe('move-sample.controller canonical v2', () => {
     const { controller, execute, constructed } = buildController({ executeImpl: async () => result });
     const req = buildReq({
       body: { specimenId: 'S1', targetBoxId: 'B1', targetPosition: 'A1', reason: 'relocation', notes: 'n/a' },
-      user: { id: 'u1', name: 'Alice', roleName: 'admin' },
+      user: {
+        userID: '550e8400-e29b-41d4-a716-446655440001',
+        name: 'Alice',
+        roleName: 'admin',
+      },
       ip: '10.0.0.1',
       headers: { 'user-agent': 'test-agent' }
     });
@@ -130,7 +134,7 @@ describe('move-sample.controller canonical v2', () => {
       reason: 'relocation',
       notes: 'n/a',
       actor: {
-        userId: 'u1',
+        userId: '550e8400-e29b-41d4-a716-446655440001',
         userName: 'Alice',
         userRole: 'admin',
         ipAddress: '10.0.0.1',
@@ -141,11 +145,17 @@ describe('move-sample.controller canonical v2', () => {
     expect(res.json).toHaveBeenCalledWith({ success: true, data: result, message: 'Amostra movida com sucesso' });
   });
 
-  it('uses alternate actor identity fields without changing the specimenId boundary', async () => {
+  it('ignores legacy id/_id actor fields; uses userID, username/role, and x-forwarded-for', async () => {
     const { controller, execute } = buildController();
     const req = buildReq({
       body: { specimenId: 'S1', targetBoxId: 'B1', targetPosition: 'A1' },
-      user: { _id: { toString: () => 'u2' }, username: 'bob', role: 'tech' },
+      user: {
+        _id: { toString: () => 'id-from-_id' },
+        id: 'legacy-id',
+        userID: '550e8400-e29b-41d4-a716-446655440002',
+        username: 'bob',
+        role: 'tech',
+      },
       headers: { 'x-forwarded-for': '1.2.3.4' },
       connection: { remoteAddress: '9.9.9.9' }
     });
@@ -156,7 +166,7 @@ describe('move-sample.controller canonical v2', () => {
     expect(execute).toHaveBeenCalledWith(expect.objectContaining({
       specimenId: 'S1',
       actor: {
-        userId: 'u2',
+        userId: '550e8400-e29b-41d4-a716-446655440002',
         userName: 'bob',
         userRole: 'tech',
         ipAddress: '1.2.3.4',

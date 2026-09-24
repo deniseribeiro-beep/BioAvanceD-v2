@@ -118,25 +118,20 @@ describe('#1102 collectionResolver wiring', () => {
     vi.restoreAllMocks();
   });
 
-  it('ensures the participantIdentities indexes on first resolution, and only once per process', () => {
+  // Stage 2E: getCollection resolves participantIdentities but does not auto-ensure
+  // indexes (ensureParticipantIdentityIndexes is an explicit helper). Callers that
+  // need indexes must invoke the helper themselves.
+  it('resolves participantIdentities without auto-creating indexes', () => {
     const { getCollection } = freshResolver();
     const collection = makeCollection();
     const db = { collection: vi.fn(() => collection) };
 
     getCollection(db, 'participantIdentities');
-    // Three indexes on the first resolution: the two blind-index siblings
-    // #574 added, plus participantId, which every other reader of this
-    // collection (eConsent.js:131, consent.service.js:552,
-    // patient.service.js:588, getIdentityByParticipantId) queries by.
-    expect(collection.createIndex).toHaveBeenCalledTimes(3);
-
-    // ...and not one more on the next two, which is the latch. Asserting
-    // only the total after three resolutions would not discriminate: 3 is
-    // equally what an UNLATCHED single index would produce.
     getCollection(db, 'participantIdentities');
     getCollection(db, 'participantIdentities');
 
-    expect(collection.createIndex).toHaveBeenCalledTimes(3);
+    expect(db.collection).toHaveBeenCalledWith('participantIdentities');
+    expect(collection.createIndex).not.toHaveBeenCalled();
   });
 
   // CONTROL (#695): same expectation before and after the fix, so a red here
@@ -162,7 +157,7 @@ describe('#1102 collectionResolver wiring', () => {
     const collection = makeCollection();
     const db = { collection: vi.fn(() => collection) };
 
-    getCollection(db, 'patients');
+    getCollection(db, 'consents');
 
     expect(collection.createIndex).not.toHaveBeenCalled();
   });

@@ -36,7 +36,10 @@ afterEach(() => {
 
 describe('AuthController item 8 residual branches', () => {
   it('uses the public id fallback for the register audit resource and translated success message', async () => {
-    vi.spyOn(authService, 'registerUser').mockResolvedValue({ id: 'public-user-1', username: 'alice' });
+    vi.spyOn(authService, 'registerUser').mockResolvedValue({
+      userAccountId: '550e8400-e29b-41d4-a716-446655440001',
+      username: 'alice',
+    });
     vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
     const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
     const req = createReq({
@@ -48,7 +51,7 @@ describe('AuthController item 8 residual branches', () => {
     await authController.register(req, res);
 
     expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({
-      resourceId: 'public-user-1',
+      resourceId: '550e8400-e29b-41d4-a716-446655440001',
       action: 'CREATE',
       resourceType: 'User',
     }));

@@ -56,7 +56,7 @@ function makeHappyDb() {
     }
   });
 
-  const collections = { security_alerts: alerts, patient_consents: consents, logs };
+  const collections = { security_alerts: alerts, patient_consents: consents, consents, logs };
   return { db: { collection: vi.fn((name) => collections[name]) }, collections };
 }
 

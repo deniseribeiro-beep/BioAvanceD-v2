@@ -68,7 +68,7 @@ describe('fhir-import-staging.controller', () => {
 
       expect(fhirImportStagingService.stageBundle).toHaveBeenCalledWith('the-db', payload, {
         fileName: undefined,
-        userID: 'u-2'
+        userID: null
       });
     });
 

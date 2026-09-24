@@ -273,7 +273,7 @@ describe('eConsent.routes GET /validate/:token', () => {
 
     const res = await request(app).get(`/e-consent/validate/${token}`);
 
-    expect(db.collection).toHaveBeenCalledWith('patients');
+    expect(db.collection).toHaveBeenCalledWith('participants');
     expect(db.collection).toHaveBeenCalledWith('participantIdentities');
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
