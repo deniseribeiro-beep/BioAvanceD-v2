@@ -2,6 +2,7 @@ const cron = require('node-cron');
 const { ObjectId } = require('mongodb');
 const logger = require('../../utils/logger');
 const { getCollection } = require('../../utils/collectionResolver');
+const { ensureStorageContainerIndexes, ensureStorageBoxIndexes } = require('../../utils/storageIndexes');
 const {
   connectInfluxDB,
   getInfluxQueryApi,
@@ -279,6 +280,10 @@ class TelemetryMonitor {
   // physically inside the given freezer container.
   async resolveBoxIdsUnderFreezer(freezerContainerId) {
     const containers = this.db.collection('storageContainers');
+    // #1163: this walk runs per reading, the hottest reader of the parent_id
+    // lookup indexes, so they are ensured here rather than only at the
+    // one-time backfill that used to be their sole call site.
+    ensureStorageContainerIndexes(containers);
 
     const shelves = await containers.find({ parent_id: freezerContainerId, containerType: 'SHELF' }).toArray();
     const shelfIds = shelves.map(s => s._id);
@@ -292,7 +297,9 @@ class TelemetryMonitor {
       return [];
     }
 
-    const boxes = await this.db.collection('storageBoxes').find({ parent_id: { $in: rackIds } }).toArray();
+    const boxesCollection = this.db.collection('storageBoxes');
+    ensureStorageBoxIndexes(boxesCollection);
+    const boxes = await boxesCollection.find({ parent_id: { $in: rackIds } }).toArray();
     return boxes.map(b => b._id);
   }
 

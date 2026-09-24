@@ -1,5 +1,6 @@
 const { ObjectId } = require('mongodb');
 const { getCollection } = require('../../../utils/collectionResolver');
+const { ensureStorageContainerIndexes, ensureStorageBoxIndexes } = require('../../../utils/storageIndexes');
 
 class MongoStorageTopologyReadRepository {
   /**
@@ -11,6 +12,9 @@ class MongoStorageTopologyReadRepository {
 
   async listOperationalFreezers() {
     const storageContainersCollection = this.db.collection('storageContainers');
+    // #1163: this query is what storage_containers_type_status_idx_v1 exists
+    // for, so it is ensured here, where the read runs (utils/lookupIndex.js).
+    ensureStorageContainerIndexes(storageContainersCollection);
     return storageContainersCollection
       .find({
         containerType: 'FREEZER',
@@ -92,6 +96,10 @@ class MongoStorageTopologyReadRepository {
   async getFreezerTree(input) {
     const storageContainersCollection = this.db.collection('storageContainers');
     const storageBoxesCollection = this.db.collection('storageBoxes');
+    // #1163: the shelf/rack/box walk below is what the two parent_id lookup
+    // indexes serve, so they are ensured on this read path.
+    ensureStorageContainerIndexes(storageContainersCollection);
+    ensureStorageBoxIndexes(storageBoxesCollection);
     const freezerObjId = this.toObjectId(input.freezerId);
 
     const freezer = await storageContainersCollection.findOne({

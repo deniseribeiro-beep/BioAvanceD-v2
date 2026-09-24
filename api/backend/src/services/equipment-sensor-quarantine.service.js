@@ -1,6 +1,7 @@
 const SampleMovementModel = require('../models/SampleMovement');
 const { appendMovementWithHashChain } = require('../utils/sampleMovementLedger');
 const { getCollection } = require('../utils/collectionResolver');
+const { ensureStorageContainerIndexes, ensureStorageBoxIndexes } = require('../utils/storageIndexes');
 const quarantineActionService = require('./quarantine-action.service');
 const logger = require('../utils/logger');
 
@@ -174,6 +175,9 @@ async function resolveFreezersByEquipmentIdentifiers(db, identifiers = [], optio
   }
 
   const storageContainersCollection = db.collection('storageContainers');
+  // #1163: the containerID lookup below is served by the unique index this
+  // helper builds, so it is ensured on the read path too.
+  ensureStorageContainerIndexes(storageContainersCollection);
   const sessionOptions = options.session ? { session: options.session } : undefined;
 
   return storageContainersCollection.find(
@@ -193,6 +197,9 @@ async function resolveFreezersByEquipmentIdentifiers(db, identifiers = [], optio
 async function findBoxIdsUnderFreezer(db, freezerId, options = {}) {
   const storageContainersCollection = db.collection('storageContainers');
   const storageBoxesCollection = db.collection('storageBoxes');
+  // #1163: the parent_id walk below is what the two lookup indexes serve.
+  ensureStorageContainerIndexes(storageContainersCollection);
+  ensureStorageBoxIndexes(storageBoxesCollection);
   const sessionOptions = options.session ? { session: options.session } : undefined;
 
   const shelves = await storageContainersCollection.find(
@@ -627,5 +634,8 @@ module.exports = {
   quarantineBySensorStatus,
   quarantineByColdChainIncident,
   markColdChainIncidentSamplesForReview,
-  findBoxIdsBySensorKey
+  findBoxIdsBySensorKey,
+  // #1163: exported so their index wiring can be pinned directly.
+  resolveFreezersByEquipmentIdentifiers,
+  findBoxIdsUnderFreezer
 };

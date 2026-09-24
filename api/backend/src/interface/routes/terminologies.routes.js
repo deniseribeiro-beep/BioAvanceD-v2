@@ -1,6 +1,11 @@
 const express = require('express');
 const Terminology = require('../../models/Terminology');
-const { syncFromOrphadata, isExternalTerminologySyncEnabled, ensureTerminologyIndexes } = require('../../services/terminologySync.service');
+const {
+  syncFromOrphadata,
+  isExternalTerminologySyncEnabled,
+  ensureTerminologyIndexes,
+  ensureTerminologyLookupIndexes,
+} = require('../../services/terminologySync.service');
 const logger = require('../../utils/logger');
 
 const router = express.Router();
@@ -487,6 +492,8 @@ router.get('/', async (req, res) => {
     }
 
     const terminologiesCollection = db.collection('terminologies');
+    // #1163: un-awaited and best-effort, like the facility/room list routes.
+    ensureTerminologyLookupIndexes(terminologiesCollection);
     let [items, total] = await Promise.all([
       terminologiesCollection.find(filter).sort({ sistema: 1, codigo: 1 }).limit(limit).toArray(),
       terminologiesCollection.countDocuments(filter),

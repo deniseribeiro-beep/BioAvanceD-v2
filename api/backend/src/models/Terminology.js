@@ -13,7 +13,10 @@ const TerminologySchema = new mongoose.Schema(
     codigo: { type: String, required: true, trim: true },
 
     // Sistema/Origem (CID10, CID11, HPO, OMIM, ORPHA, BIOMARCADOR, etc.)
-    sistema: { type: String, required: true, trim: true, index: true, enum: ['CID10', 'CID11', 'HPO', 'OMIM', 'ORPHA', 'BIOMARCADOR', 'OUTRO'] },
+    // #1163: no field-level `index: true` either. It was inert, and the
+    // listing it would have served is served by terminologies_sistema_codigo_idx_v1
+    // (terminologySync.service.js#ensureTerminologyLookupIndexes).
+    sistema: { type: String, required: true, trim: true, enum: ['CID10', 'CID11', 'HPO', 'OMIM', 'ORPHA', 'BIOMARCADOR', 'OUTRO'] },
 
     // Descrição principal
     descricao: { type: String, required: true, trim: true },

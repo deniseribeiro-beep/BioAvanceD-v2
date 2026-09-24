@@ -61,7 +61,14 @@ const { dropLegacyIndex } = require('./legacyIndex');
  * resolver -- see the module-level doc comment on this file's caller side),
  * each function here latches itself, keyed by `collection.collectionName`
  * (the resolved name, mirroring `collectionResolver.js`'s `samplesIndexed`
- * Set), so both call sites stay a single, un-awaited line.
+ * Set), so every call site stays a single, un-awaited line.
+ *
+ * ## Where each is wired (#1163)
+ *
+ * The storageContainers and storageBoxes helpers are called at the
+ * backfill's write path AND at every reader of the lookups they build
+ * (`MongoStorageTopologyReadRepository`, `TelemetryMonitor`,
+ * `equipment-sensor-quarantine.service`), per the rule in `lookupIndex.js`.
  */
 // #941: collection names whose indexes have already been ensured this
 // process, one Set per collection kind so a storageContainers name and a

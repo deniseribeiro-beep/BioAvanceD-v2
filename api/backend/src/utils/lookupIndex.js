@@ -16,6 +16,17 @@ const logger = require('./logger');
  * index. Those need different words, so they get different functions; a
  * lookup failure must never read as though data were corrupted.
  *
+ * ## Where a lookup index is ensured: at the READ path (#1163)
+ *
+ * A unique index is wired where its collection is WRITTEN, because that is
+ * where a violation happens. A lookup index exists to serve a read, so it is
+ * wired where that read runs. Wired only at a write path, a process that
+ * never writes never builds it: the storage parent_id indexes were once
+ * ensured only by a one-time backfill, so a fresh stack walked its freezer
+ * trees, per telemetry reading, from a collection scan. A reader that is also
+ * a writer can ensure both. Ensure un-awaited, behind the helper's own
+ * per-collection latch, so the call costs one `Set.has` after the first.
+ *
  * ## Why each build gets its own try/catch
  *
  * One shared catch around several `createIndex` calls reports the first
