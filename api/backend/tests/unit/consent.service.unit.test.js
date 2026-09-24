@@ -547,6 +547,31 @@ describe('ConsentService.updateTemplate', () => {
     await expect(consentService.updateTemplate(db, 'not-an-object-id', { title: 'x' })).rejects.toThrow('inválido');
   });
 
+  // #824 (found proving it on the real stack): the builder's CAAE field is
+  // optional, createTemplate stores an absent one as '' (ConsentTemplateModel
+  // .create), and this re-validated that stored '' against `caae: minLength 1`
+  // -- so a term created without a CAAE could never be revised in the builder.
+  it('revises a term that was created without a CAAE', async () => {
+    const existingId = new ObjectId();
+    const existing = {
+      _id: existingId,
+      title: 'No CAAE',
+      content: 'c',
+      htmlContent: 'c',
+      version: 'v1',
+      caae: '',
+      active: true,
+      permissions: [{ key: 'analytics', label: 'Analytics', required: false }],
+    };
+    const templates = makeCollection({ findOne: vi.fn(async () => existing) });
+    const db = makeDb({ consent_templates: templates });
+
+    const result = await consentService.updateTemplate(db, existingId.toString(), { title: 'No CAAE', content: 'c2' });
+
+    expect(result.version).toBe('v2');
+    expect(templates.insertOne).toHaveBeenCalled();
+  });
+
   it('reuses the existing permissions when the payload omits them', async () => {
     const existingId = new ObjectId();
     const existing = {
@@ -923,6 +948,62 @@ describe('ConsentService.createPolicy', () => {
       expect(
         notificationService.enqueueConsentNotification.mock.calls.map(([patient]) => patient.participantId)
       ).toEqual(['10203041', '10203042', '10203043']);
+    });
+
+    // #824: the TCLE builder -- the only UI that publishes a term -- revises
+    // through updateTemplate, which created the new version and invited
+    // nobody: the sweep lived only in createPolicy, whose frontend client is
+    // commented out. dict-07 row 39 makes the two one entity
+    // (ConsentTemplate), so both paths now share ONE sweep.
+    it('a builder revision (updateTemplate) invites the cohort pending on the term it revises (#824)', async () => {
+      const pending = THREE_PENDING();
+      const { db, templates } = setup(pending);
+      vi.spyOn(notificationService, 'enqueueConsentNotification').mockResolvedValue(undefined);
+
+      const result = await consentService.updateTemplate(db, PREVIOUS_POLICY_ID.toString(), {
+        title: 'Policy v2',
+        content: '<p>revised</p>',
+        permissions: [{ key: 'analytics', label: 'Analytics', required: false }],
+      });
+
+      expect(
+        notificationService.enqueueConsentNotification.mock.calls.map(([patient]) => patient.participantId)
+      ).toEqual(['10203041', '10203042', '10203043']);
+      expect(result.consentNotifications).toEqual({ total: 3, notified: 3, failed: 0 });
+      // The canonical lineage fields createPolicy writes and the sweep reads
+      // (RF010 AC#1), not only the builder's own previousTemplateId.
+      expect(templates.insertOne).toHaveBeenCalledWith(expect.objectContaining({
+        previousPolicyId: PREVIOUS_POLICY_ID.toString(),
+        versionGroupId: 'group-810',
+        revisionType: 'update',
+      }));
+    });
+
+    it('a builder create (createTemplate) starts a lineage and reports an empty sweep (#824)', async () => {
+      const pending = THREE_PENDING();
+      const { db, templates } = setup(pending);
+      db.collection('consent_templates').find = vi.fn((filter = {}) =>
+        filter.versionGroupId !== undefined ? makeCursor([]) : makeCursor([{ version: 'v1' }])
+      );
+      vi.spyOn(notificationService, 'enqueueConsentNotification').mockResolvedValue(undefined);
+
+      const result = await consentService.createTemplate(db, {
+        title: 'Brand new term',
+        content: '<p>new</p>',
+        validFrom: '2026-01-01T00:00:00.000Z',
+        validTo: '2026-12-31T23:59:59.000Z',
+        permissions: [{ key: 'analytics', label: 'Analytics', required: false }],
+      });
+
+      expect(notificationService.enqueueConsentNotification).not.toHaveBeenCalled();
+      expect(result.consentNotifications).toEqual({ total: 0, notified: 0, failed: 0 });
+      expect(templates.insertOne).toHaveBeenCalledWith(expect.objectContaining({
+        previousPolicyId: null,
+        revisionType: 'create',
+        // The validity period the builder sends is kept, not dropped.
+        validFrom: new Date('2026-01-01T00:00:00.000Z'),
+        validTo: new Date('2026-12-31T23:59:59.000Z'),
+      }));
     });
 
     it('sweeps the whole version lineage, so someone pending on an older version is still invited', async () => {

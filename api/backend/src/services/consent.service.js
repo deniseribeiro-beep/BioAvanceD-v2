@@ -279,7 +279,11 @@ class ConsentService {
           : crypto.randomUUID(),
         caae: typeof payload.caae === 'string' ? payload.caae.trim() : undefined,
         active: payload.active === undefined ? true : Boolean(payload.active),
-        permissions
+        permissions,
+        // #824: RF010 AC#1's lineage fields, as createPolicy writes them. A
+        // create starts a lineage; updateTemplate continues one.
+        previousPolicyId: null,
+        revisionType: 'create'
       };
 
       const validation = ConsentTemplateModel.validate(normalizedPayload);
@@ -294,9 +298,17 @@ class ConsentService {
       const template = ConsentTemplateModel.create(normalizedPayload);
 
       const result = await templatesCollection.insertOne(template);
+      // #824: a fresh lineage has no pending cohort unless the caller passed
+      // an existing versionGroupId; the sweep decides, and reports 0/0/0.
+      const consentNotifications = await this.notifyPendingConsentCohort(db, {
+        newTemplateId: result.insertedId,
+        previousPolicyId: null,
+        versionGroupId: template.versionGroupId
+      });
       return {
         _id: result.insertedId,
-        ...template
+        ...template,
+        consentNotifications
       };
     } catch (error) {
       logger.error('Erro ao criar template de consentimento:', error.message);
@@ -338,7 +350,10 @@ class ConsentService {
         ...existingTemplate,
         ...payload,
         version: existingTemplate.version,
-        caae: existingTemplate.caae,
+        // #824: createTemplate stores an absent CAAE as '' (the builder's field
+        // is optional), and '' fails the schema's minLength -- so a term
+        // created without one could never be revised. Absent, not empty.
+        caae: existingTemplate.caae || undefined,
       });
 
       const permissions = Array.isArray(payload.permissions)
@@ -374,6 +389,10 @@ class ConsentService {
         version: `v${nextVersionNumber}`,
         versionGroupId,
         previousTemplateId: String(objectId),
+        // #824: the canonical lineage fields createPolicy writes and the
+        // publication sweep reads (RF010 AC#1).
+        previousPolicyId: String(objectId),
+        revisionType: 'update',
         caae: typeof existingTemplate.caae === 'string' ? existingTemplate.caae.trim() : '',
         active,
         permissions
@@ -402,15 +421,159 @@ class ConsentService {
         updatedAt: new Date(),
       });
 
+      // #824: the builder's revision path. It created the new version and
+      // invited nobody -- the sweep lived only in createPolicy, which no UI
+      // reaches.
+      const consentNotifications = await this.notifyPendingConsentCohort(db, {
+        newTemplateId: result.insertedId,
+        previousPolicyId: String(objectId),
+        versionGroupId
+      });
+
       return {
         _id: result.insertedId,
         ...template,
         updatedAt: new Date(),
+        consentNotifications,
       };
     } catch (error) {
       logger.error('Erro ao atualizar template de consentimento:', error.message);
       throw error;
     }
+  }
+
+  /**
+   * #835/#810 publication sweep, extracted from createPolicy for #824 so the
+   * builder's createTemplate/updateTemplate run the same one. Invites every
+   * participant still PENDING_CONSENT on an earlier version of this term (the
+   * immediate predecessor plus the versionGroupId lineage). Never throws: a
+   * failed sweep must not undo a publication, and the counts say what reached
+   * whom.
+   */
+  async notifyPendingConsentCohort(db, { newTemplateId, previousPolicyId, versionGroupId }) {
+    const consentNotifications = { total: 0, notified: 0, failed: 0 };
+    try {
+      const patientsCollection = await getCollection(db, 'patients');
+      const templatesCollection = await getCollection(db, 'consentTemplates');
+
+      // #835: this used to filter on `result.insertedId` -- the id of the
+      // template inserted one line above -- so it could never match anyone.
+      // Patient.consentTemplateId is assigned at patient creation and is
+      // required (models/Patient.js:27), so a pending participant always
+      // points at a template that already existed. The two sets were
+      // disjoint by construction, and the sweep issued zero invitations on
+      // every publication. #810's hardening of this loop was correct and
+      // simply never had an iteration to run on.
+      //
+      // The cohort to invite is everyone still pending on an *earlier*
+      // version of this same term: the immediate predecessor, plus any other
+      // template sharing the version lineage, so someone enrolled on v1 who
+      // never answered is still invited when v3 publishes.
+      const lineageTemplateIds = new Set();
+      if (previousPolicyId) {
+        lineageTemplateIds.add(previousPolicyId);
+      }
+      // Guard: `find({ versionGroupId: undefined })` matches every document
+      // missing the field, which would sweep unrelated participants. Older
+      // templates predate versionGroupId, so this is reachable.
+      if (versionGroupId) {
+        const lineage = await templatesCollection
+          .find(
+            { versionGroupId, _id: { $ne: newTemplateId } },
+            { projection: { _id: 1 } }
+          )
+          .toArray();
+        for (const template of lineage) {
+          lineageTemplateIds.add(String(template._id));
+        }
+      }
+
+      // A brand-new term with no predecessor genuinely has no cohort --
+      // nobody can be pending on a term that did not exist. Skip explicitly
+      // rather than issuing a query that matches nothing by accident.
+      const pendingPatients = lineageTemplateIds.size === 0
+        ? []
+        : await patientsCollection.find({
+          status: 'PENDING_CONSENT',
+          consentTemplateId: { $in: [...lineageTemplateIds] }
+        }).toArray();
+      const notificationService = require('./notification.service');
+      const identityCollection = await getCollection(db, 'participantIdentities');
+      consentNotifications.total = pendingPatients.length;
+      for (const patient of pendingPatients) {
+        // #810: this try is per patient, deliberately. It used to wrap the
+        // whole loop, so the first participant who threw ended the entire
+        // sweep -- everyone after them got no invitation and no
+        // consentToken, while the publication still reported success. The
+        // loop body has several reachable throws: enqueueConsentNotification
+        // (queue unavailable, or sendConsentEmail's own
+        // CONSENT_RECIPIENT_REQUIRED for a participant with no e-mail, which
+        // in a bulk import cohort is not exotic), the identity lookup,
+        // decryptIdentity on a malformed record, and the writes themselves.
+        try {
+          // RF005/RNF007 (#561/#564/#574): patientName resolved via
+          // ParticipantIdentity instead of read directly off the Patient
+          // document. decryptIdentity falls back to the ciphertext sibling
+          // once the plaintext field is dropped (#566).
+          const rawIdentity = await identityCollection.findOne({ participantId: patient.participantId });
+          const identity = rawIdentity ? participantIdentityService.decryptIdentity(rawIdentity) : null;
+          // #1166 slice 2: the contact comes from the same decrypted record.
+          const patientWithIdentity = identity
+            ? { ...participantIdentityService.withIdentityContact(patient, identity), patientName: identity.patientName }
+            : patient;
+
+          // Generate new consent token for each patient
+          const consentMetadata = notificationService.buildConsentMetadata();
+          const consentLink = notificationService.buildConsentLink(patientWithIdentity, consentMetadata.token);
+
+          // #810: persist the token *before* attempting delivery. The link
+          // being emailed is only usable if the database already holds the
+          // token it carries, so this ordering makes the failure mode
+          // "invitation not sent" rather than "invitation sent, token
+          // missing" -- the latter is unrecoverable for the participant,
+          // who holds a link that can never validate.
+          await patientsCollection.updateOne(
+            { _id: patient._id },
+            {
+              $set: {
+                consentToken: consentMetadata.token,
+                consentTokenCreatedAt: consentMetadata.createdAt,
+                consentTokenExpiresAt: consentMetadata.expiresAt,
+                updatedAt: new Date()
+              }
+            }
+          );
+
+          await notificationService.enqueueConsentNotification(patientWithIdentity, consentLink);
+
+          // Only now is the participant actually notified.
+          await patientsCollection.updateOne(
+            { _id: patient._id },
+            { $set: { consentNotifiedAt: new Date(), updatedAt: new Date() } }
+          );
+          consentNotifications.notified += 1;
+        } catch (patientError) {
+          consentNotifications.failed += 1;
+          logger.error(
+            `Falha ao notificar o participante ${patient.participantId} sobre o novo TCLE:`,
+            patientError.message
+          );
+        }
+      }
+
+      if (consentNotifications.failed > 0) {
+        // #810: a partial sweep used to be silent. Whoever published the
+        // term needs to know it did not reach everyone.
+        logger.error(
+          `Notificacao do novo TCLE parcial: ${consentNotifications.notified}/${consentNotifications.total} participantes notificados, ${consentNotifications.failed} falha(s).`
+        );
+      }
+    } catch (notifyError) {
+      // Still needed for a failure of the sweep's own setup (resolving the
+      // collections, the find itself) -- not for a single patient.
+      logger.error('Erro ao notificar pacientes do novo TCLE:', notifyError.message);
+    }
+    return consentNotifications;
   }
 
   async createPolicy(db, payload, options = {}) {
@@ -503,129 +666,14 @@ class ConsentService {
       };
 
       const result = await templatesCollection.insertOne(document);
-      // --- Notify all patients with PENDING_CONSENT for this TCLE ---
-      const consentNotifications = { total: 0, notified: 0, failed: 0 };
-      try {
-        const patientsCollection = await getCollection(db, 'patients');
-
-        // #835: this used to filter on `result.insertedId` -- the id of the
-        // template inserted one line above -- so it could never match anyone.
-        // Patient.consentTemplateId is assigned at patient creation and is
-        // required (models/Patient.js:27), so a pending participant always
-        // points at a template that already existed. The two sets were
-        // disjoint by construction, and the sweep issued zero invitations on
-        // every publication. #810's hardening of this loop was correct and
-        // simply never had an iteration to run on.
-        //
-        // The cohort to invite is everyone still pending on an *earlier*
-        // version of this same term: the immediate predecessor, plus any other
-        // template sharing the version lineage, so someone enrolled on v1 who
-        // never answered is still invited when v3 publishes.
-        const lineageTemplateIds = new Set();
-        if (previousPolicyId) {
-          lineageTemplateIds.add(previousPolicyId);
-        }
-        // Guard: `find({ versionGroupId: undefined })` matches every document
-        // missing the field, which would sweep unrelated participants. Older
-        // templates predate versionGroupId, so this is reachable.
-        if (versionGroupId) {
-          const lineage = await templatesCollection
-            .find(
-              { versionGroupId, _id: { $ne: result.insertedId } },
-              { projection: { _id: 1 } }
-            )
-            .toArray();
-          for (const template of lineage) {
-            lineageTemplateIds.add(String(template._id));
-          }
-        }
-
-        // A brand-new term with no predecessor genuinely has no cohort --
-        // nobody can be pending on a term that did not exist. Skip explicitly
-        // rather than issuing a query that matches nothing by accident.
-        const pendingPatients = lineageTemplateIds.size === 0
-          ? []
-          : await patientsCollection.find({
-            status: 'PENDING_CONSENT',
-            consentTemplateId: { $in: [...lineageTemplateIds] }
-          }).toArray();
-        const notificationService = require('./notification.service');
-        const identityCollection = await getCollection(db, 'participantIdentities');
-        consentNotifications.total = pendingPatients.length;
-        for (const patient of pendingPatients) {
-          // #810: this try is per patient, deliberately. It used to wrap the
-          // whole loop, so the first participant who threw ended the entire
-          // sweep -- everyone after them got no invitation and no
-          // consentToken, while the publication still reported success. The
-          // loop body has several reachable throws: enqueueConsentNotification
-          // (queue unavailable, or sendConsentEmail's own
-          // CONSENT_RECIPIENT_REQUIRED for a participant with no e-mail, which
-          // in a bulk import cohort is not exotic), the identity lookup,
-          // decryptIdentity on a malformed record, and the writes themselves.
-          try {
-            // RF005/RNF007 (#561/#564/#574): patientName resolved via
-            // ParticipantIdentity instead of read directly off the Patient
-            // document. decryptIdentity falls back to the ciphertext sibling
-            // once the plaintext field is dropped (#566).
-            const rawIdentity = await identityCollection.findOne({ participantId: patient.participantId });
-            const identity = rawIdentity ? participantIdentityService.decryptIdentity(rawIdentity) : null;
-            // #1166 slice 2: the contact comes from the same decrypted record.
-            const patientWithIdentity = identity
-              ? { ...participantIdentityService.withIdentityContact(patient, identity), patientName: identity.patientName }
-              : patient;
-
-            // Generate new consent token for each patient
-            const consentMetadata = notificationService.buildConsentMetadata();
-            const consentLink = notificationService.buildConsentLink(patientWithIdentity, consentMetadata.token);
-
-            // #810: persist the token *before* attempting delivery. The link
-            // being emailed is only usable if the database already holds the
-            // token it carries, so this ordering makes the failure mode
-            // "invitation not sent" rather than "invitation sent, token
-            // missing" -- the latter is unrecoverable for the participant,
-            // who holds a link that can never validate.
-            await patientsCollection.updateOne(
-              { _id: patient._id },
-              {
-                $set: {
-                  consentToken: consentMetadata.token,
-                  consentTokenCreatedAt: consentMetadata.createdAt,
-                  consentTokenExpiresAt: consentMetadata.expiresAt,
-                  updatedAt: new Date()
-                }
-              }
-            );
-
-            await notificationService.enqueueConsentNotification(patientWithIdentity, consentLink);
-
-            // Only now is the participant actually notified.
-            await patientsCollection.updateOne(
-              { _id: patient._id },
-              { $set: { consentNotifiedAt: new Date(), updatedAt: new Date() } }
-            );
-            consentNotifications.notified += 1;
-          } catch (patientError) {
-            consentNotifications.failed += 1;
-            logger.error(
-              `Falha ao notificar o participante ${patient.participantId} sobre o novo TCLE:`,
-              patientError.message
-            );
-          }
-        }
-
-        if (consentNotifications.failed > 0) {
-          // #810: a partial sweep used to be silent. Whoever published the
-          // term needs to know it did not reach everyone.
-          logger.error(
-            `Notificacao do novo TCLE parcial: ${consentNotifications.notified}/${consentNotifications.total} participantes notificados, ${consentNotifications.failed} falha(s).`
-          );
-        }
-      } catch (notifyError) {
-        // Still needed for a failure of the sweep's own setup (resolving the
-        // collections, the find itself) -- not for a single patient.
-        logger.error('Erro ao notificar pacientes do novo TCLE:', notifyError.message);
-      }
-      // --- End notification logic ---
+      // #824: the sweep is shared with the builder's paths (createTemplate,
+      // updateTemplate) -- dict-07 row 39 makes ConsentPolicy/ConsentTemplate
+      // one entity, so publication behaviour has one implementation.
+      const consentNotifications = await this.notifyPendingConsentCohort(db, {
+        newTemplateId: result.insertedId,
+        previousPolicyId,
+        versionGroupId
+      });
       return {
         _id: result.insertedId,
         ...document,

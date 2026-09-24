@@ -22,6 +22,7 @@ import Spinner from '../components/UI/Spinner';
 import { useToast } from '../components/UI/ToastContainer';
 import { consentService } from '../services/api';
 import type { ConsentTemplate, ConsentPolicy } from '../types/models';
+import { describeConsentPublication, type ConsentNotificationCounts } from './tclePublication';
 import './TcleBuilderPage.css';
 
 type PreviewValueMap = Record<string, string>;
@@ -762,10 +763,12 @@ export default function TcleBuilderPage() {
         editorRef.current.innerHTML = String(savedTemplate.htmlContent || savedTemplate.content || DEFAULT_BODY_HTML.trim());
       }
 
-      showToast(
-        isEditing ? 'Nova versão criada e a anterior foi desativada.' : 'TCLE criado com sucesso.',
-        'success'
+      // #824: publishing now runs the consent-invitation sweep; say what it did.
+      const publication = describeConsentPublication(
+        Boolean(isEditing),
+        (savedTemplate as ConsentTemplate & { consentNotifications?: ConsentNotificationCounts }).consentNotifications
       );
+      showToast(publication.message, publication.level);
 
       navigate(`/admin/tcle/edit/${savedTemplate._id}`, { replace: true });
     } catch (error: any) {
