@@ -134,7 +134,15 @@ class UserModel {
       lastPasswordChange: data.lastPasswordChange || new Date(),
       forceReset: data.forceReset || false,
       failedLoginAttempts: data.failedLoginAttempts || 0,
-      accountLockedUntil: data.accountLockedUntil ? new Date(data.accountLockedUntil) : null, // #952
+      // #952 / #985: a LOCAL EXTENSION of UserAccount, not a dictionary
+      // element. The v2.0.0 dictionary (approved 2026-09-12) still declares
+      // no password-side lock expiry, while P1X-0282
+      // authentication.lockoutDurationMinutes is 1..1 Core and RF001 AC#2
+      // (requisitos v4.0.0) locks the account "temporariamente" -- so the
+      // duration needs somewhere to end. Shaped after P1X-0201 mfaLockedUntil
+      // (dateTime, 0..1), classed like the dictionary's own "Extensão local"
+      // rows (P1X-0188, P1X-0191).
+      accountLockedUntil: data.accountLockedUntil ? new Date(data.accountLockedUntil) : null,
       roleValidFrom: data.roleValidFrom ? new Date(data.roleValidFrom) : null,
       roleValidUntil: data.roleValidUntil ? new Date(data.roleValidUntil) : null,
       organizationIds: Array.isArray(data.organizationIds) ? data.organizationIds : []
