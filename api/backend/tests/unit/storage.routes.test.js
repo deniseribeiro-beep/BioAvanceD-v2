@@ -215,7 +215,7 @@ describe('storage.routes item 8 topology authoring and freezer-room residuals', 
 
   it('creates a governed container layout using the resolved actor identity and audits the configuration write', async () => {
     currentAuth = (req, _res, next) => {
-      req.user = { userId: 'author-1' };
+      req.user = { userID: 'author-1' };
       next();
     };
     const created = {
@@ -308,6 +308,17 @@ describe('storage.routes item 8 topology authoring and freezer-room residuals', 
       error: 'INTERNAL_ERROR',
       message: 'unexpected',
     });
+
+    // Thrown value without message exercises sendTopologyError's 'Erro interno' fallback
+    vi.spyOn(StorageTopologyAuthoringService.prototype, 'createBox').mockRejectedValueOnce({
+      statusCode: 500,
+      code: 'INTERNAL_ERROR',
+    });
+    const noMessage = await request(buildApp({}))
+      .post('/api/storage/topology/boxes')
+      .send({ name: 'Box' });
+    expect(noMessage.status).toBe(500);
+    expect(noMessage.body.message).toBe('Erro interno');
   });
 
   it('validates freezer and room identifiers before writing any room assignment', async () => {

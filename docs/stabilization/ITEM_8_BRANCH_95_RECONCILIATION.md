@@ -244,3 +244,48 @@ last_file=src/services/terminologySync.service.js
 last_branch=55:2
 reviewed_this_session=6
 remaining_estimate=488
+
+### Stage 2E-2 — lotes após terminologySync
+
+Inventário base: `logs/item8-stage2/stage2b-inventory.tsv` (HEAD de fechamento Stage 2E topologia `76d6be6a`). Sem regenerar coverage-final nesta sessão antes dos lotes; ids `id:braço` do TSV Stage 2B.
+
+| Arquivo / linhas | id:braço (qtd) | Classificação | Evidência / resultado |
+| --- | --- | --- | --- |
+| `terminologies.routes.js:30` | `2:1` (1) | TEST_V2 | `q=ORPHA:` → `buildDelimitedCodeRegex` retorna null; asserção sem cláusula delimitada em `terminologies.routes.item8.residual.test.js`. |
+| `terminologies.routes.js:187,216,220` | `44:*;50:1;52:0` (subset) | TEST_V2 | Live Orphadata com `ORPHAcode:'ORPHA:'` → `getOrphaNumeric` vazio; `bulkUpsertOrphanetRedundancy` não chama `bulkWrite`. |
+| `terminologies.routes.js` restante (16−TEST_V2) | ver TSV | DEFENSIVE_OR_INSTRUMENTATION | Callers sempre passam arrays; `updatedAt`/`fonte` setados pelos normalizadores; `hydrateFromOrphadata` só com `search` truthy. Suítes residual+main cobrem aliases/limites/ORPHA. |
+| `backup.service.js` (9) | TSV | DEFENSIVE_OR_INSTRUMENTATION | `!encryption` após assert de chave; skip `manifest.json`; `err.error` nesting; fallbacks mongodump/mongorestore já em `backup.service.item8.executable-residual.test.js` e jsonFallback. Não fabricar chave ausente entre checks. |
+| `equipment-sensor-quarantine.service.js` (9) | TSV | DEFENSIVE_OR_INSTRUMENTATION | Ternário sensor/equipamento e opcionais de incidente/location cobertos por residual existente; guards de ids vazios preemptados. |
+| `database/mongo.js` (8) | TSV | DEFENSIVE_OR_INSTRUMENTATION | `ensureMongoUri`/`getMongoUriLogDetails` com uri vazia; ramos tls/srv e cloud gate já exercitados nas suítes de conexão. |
+| `user.routes.js` (7 source-located) | TSV | DEFENSIVE_OR_INSTRUMENTATION | `registerSample` actor/topology/`202` já em `user.routes.coverage.test.js`; audit `userAccountId` pós Stage 2E. |
+| `createLinkedFileController.js` (7) | TSV | DEFENSIVE_OR_INSTRUMENTATION | Extensão rejeitada e ObjectId já em `createLinkedFileController.test.js`; ternários de encryption. |
+| `storage.routes.js:53` | `4:1` (1) | TEST_V2 | Fallback `message: 'Erro interno'` quando o erro não tem `message`; teste em `storage.routes.test.js`. |
+| `storage.routes.js` actor | — | TEST_V2 | Fixture usava `userId`; produção lê `userID` (`actorId()`). Corrigido o teste. |
+| `storage.routes.js` restante | TSV | DEFENSIVE_OR_INSTRUMENTATION | `req.body \|\| {}`, opcionais de parent/room/equipment já cobertos nas suítes de topologia. |
+| `daily-merkle.job.js` (7) | TSV | DEFENSIVE_OR_INSTRUMENTATION | `isSigningConfigError` (markers, ENOENT do key file, path alheio) já em `daily-merkle.job.test.js`; `!error` defensivo. |
+
+**Resultado do lote Stage 2E-2:** TEST_V2 **4** (terminologies delimited + empty numeric; storage Erro interno + actor userID); DEFENSIVE_OR_INSTRUMENTATION nos demais braços dos oito arquivos da fila. Produção inalterada. Suítes direcionadas: `terminologies.routes.item8.residual.test.js` 6/6; `storage.routes.test.js` 18/18.
+
+STAGE_2E_2_CURSOR
+
+last_file=src/workers/jobs/daily-merkle.job.js
+last_branch=18:0
+reviewed_this_session=70
+remaining_estimate=418
+
+### Stage 2E-2 — rodada Full Vitest + Coverage consolidada
+
+Comando (backend): `node ./node_modules/vitest/vitest.mjs run --coverage --reporter=dot --testTimeout=15000`. Log local: `logs/item8-stage2/stage2e2-cov-run.log`. Duração: **770,19 s**. Exit **1**.
+
+| Métrica | Valor |
+| --- | --- |
+| Test Files | 150 failed \| 413 passed (563) |
+| Tests | 1559 failed \| 8483 passed (10042) |
+| Statements | 88,68% (24.502 / 27.627) |
+| Branches | 85,82% (20.550 / 23.943) |
+| Functions | 91,93% (3.113 / 3.386) |
+| Lines | 88,72% (23.220 / 26.171) |
+
+Déficit bruto vs 95% deste total de branches (`ceil(0,95 × 23.943) = 22.746`): **2.196** braços. **Não é gate Item 8** — a suíte está vermelha por drift pós–Stage 2E topologia (`e66e2a56` / `76d6be6a`): fakes ainda montam coleções legadas (`samples` etc.) enquanto `getCollection(..., 'Specimen')` resolve para `specimens`; falhas correlatas em Actor/`USR-SYSTEM` (ex.: `auditLogger.test.js`). Exemplos: `accessRequest.service.test.js` → `unexpected collection: specimens`.
+
+Última medição **verde** comparável continua o baseline Stage 2: **94,04%** (22.461 / 23.883), déficit **228** para 22.689. Esta rodada **não** afirma progresso nem 95%. Docker/CI oficiais não abertos. Próximo desbloqueio do gate numérico: alinhar fakes/suítes ao registry canônico (fora do escopo de classificação Item 8 Stage 2E-2).

@@ -211,6 +211,89 @@ describe('terminologies.routes.js item 8 residual compatibility branches', () =>
     });
   });
 
+  it('treats bare ORPHA: as a search that hydrates locally without a delimited-code clause', async () => {
+    const terminology = sequentialTerminologiesCollection({
+      first: [],
+      second: [],
+      firstCount: 0,
+      secondCount: 0,
+    });
+    const cidsFind = vi.fn(() => cursor([]));
+    const orphanetFind = vi.fn(() => cursor([]));
+
+    const db = {
+      collection(name) {
+        if (name === 'terminologies') return terminology.collection;
+        if (name === 'cids') return { find: cidsFind };
+        if (name === 'orphanet_diseases') return { find: orphanetFind, bulkWrite: vi.fn() };
+        throw new Error(`unexpected collection: ${name}`);
+      },
+    };
+
+    const response = await request(buildApp(loadRouter(), db))
+      .get('/api/terminologies?q=ORPHA%3A');
+
+    expect(response.status).toBe(200);
+    expect(response.body.data).toEqual([]);
+    expect(cidsFind).toHaveBeenCalled();
+    const orClauses = cidsFind.mock.calls[0][0].$or;
+    // buildDelimitedCodeRegex('ORPHA:') returns null, so no extra delimited ORPHA clause is appended
+    const delimitedClauses = orClauses.filter((clause) => clause.ORPHA instanceof RegExp && clause.ORPHA.source.includes('|'));
+    expect(delimitedClauses).toHaveLength(0);
+  });
+
+  it('skips orphanet_diseases redundancy rows when a live ORPHA code has no numeric body', async () => {
+    process.env.ALLOW_EXTERNAL_TERMINOLOGY_SYNC = 'true';
+    process.env.ORPHADATA_BASE_URL = 'https://orphadata.test';
+
+    const terminology = sequentialTerminologiesCollection({
+      first: [],
+      second: [{
+        _id: 't-empty',
+        codigo: 'ORPHA:',
+        sistema: 'ORPHA',
+        descricao: 'Empty numeric',
+        ativo: true,
+      }],
+      firstCount: 0,
+      secondCount: 1,
+    });
+    const orphanetBulkWrite = vi.fn().mockResolvedValue({ ok: 1 });
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        results: [{
+          ORPHAcode: 'ORPHA:',
+          preferredTerm: 'Empty numeric',
+        }],
+      }),
+    });
+
+    const db = {
+      collection(name) {
+        if (name === 'terminologies') return terminology.collection;
+        if (name === 'cids') return { find: vi.fn(() => cursor([])) };
+        if (name === 'orphanet_diseases') {
+          return {
+            find: vi.fn(() => cursor([])),
+            bulkWrite: orphanetBulkWrite,
+          };
+        }
+        throw new Error(`unexpected collection: ${name}`);
+      },
+    };
+
+    const response = await request(buildApp(loadRouter(), db))
+      .get('/api/terminologies?q=Empty%20numeric');
+
+    expect(response.status).toBe(200);
+    expect(terminology.bulkWrite).toHaveBeenCalled();
+    // getOrphaNumeric('ORPHA:') is empty, so bulkUpsertOrphanetRedundancy filters to [] and never writes
+    expect(orphanetBulkWrite).not.toHaveBeenCalled();
+  });
+
   it('normalizes a single-object external reference from the live Orphadata fallback', async () => {
     process.env.ALLOW_EXTERNAL_TERMINOLOGY_SYNC = 'true';
     process.env.ORPHADATA_BASE_URL = 'https://orphadata.test';
