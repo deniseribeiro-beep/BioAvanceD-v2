@@ -1579,7 +1579,7 @@ export default function ClinicalIntakeWizard(props) {
     dictionariesLoading = true,
     dictionariesError = '',
   } = props;
-  const { loadCascadeByDisease, loadingSuggest } = useSemanticCascade();
+  const { loadCascadeByDisease, loadingSuggest, suggestError } = useSemanticCascade();
   const [activeStep, setActiveStep] = useState(0);
   const [formData, setFormData] = useState(initialState);
   const [touched, setTouched] = useState(false);
@@ -1618,6 +1618,7 @@ export default function ClinicalIntakeWizard(props) {
   const [sampleLabel, setSampleLabel] = useState(null);
   const [failedClinicalEntities, setFailedClinicalEntities] = useState([]);
   const preAnalyticalUnknownBackupRef = React.useRef(null);
+  const lastSuggestionArgsRef = React.useRef(null);
 
   const stepMeta = useMemo(() => ([
     {
@@ -2341,6 +2342,67 @@ export default function ClinicalIntakeWizard(props) {
     }));
   };
 
+  // Shared by handleDiagnosisSelect and the "suggest error" retry button so
+  // a retry re-runs the exact same cascade fetch + formData mapping instead
+  // of only the hook's retryLoadCascade (whose return value would otherwise
+  // be discarded here).
+  const loadDiseaseSuggestions = async ({ orphaNumeric, normalizedOrphaCode, displayLabel, shouldInjectFabryMock }) => {
+    if (orphaNumeric) {
+      try {
+        let cascade = await loadCascadeByDisease({
+          system: 'http://www.orpha.net',
+          code: orphaNumeric,
+          display: displayLabel,
+        }, { suppressErrorToast: true });
+
+        if ((!Array.isArray(cascade?.phenotypes) || cascade.phenotypes.length === 0) && (!Array.isArray(cascade?.biomarkers) || cascade.biomarkers.length === 0)) {
+          cascade = await loadCascadeByDisease({
+            system: 'http://www.orpha.net',
+            code: normalizedOrphaCode,
+            display: displayLabel,
+          }, { suppressErrorToast: true });
+        }
+
+        const cascadePhenotypes = Array.isArray(cascade?.phenotypes) ? cascade.phenotypes.map(normalizeDiseasePhenotype) : [];
+        const cascadeBiomarkers = Array.isArray(cascade?.biomarkers) ? cascade.biomarkers.map(normalizeDiseaseBiomarker) : [];
+        const nextPhenotypes = shouldInjectFabryMock ? mergeDiseasePhenotypesWithFabry(cascadePhenotypes) : cascadePhenotypes;
+        const nextBiomarkers = shouldInjectFabryMock ? mergeDiseaseBiomarkersWithFabry(cascadeBiomarkers) : cascadeBiomarkers;
+
+        setFormData((previous) => ({
+          ...previous,
+          diseasePhenotypes: nextPhenotypes,
+          diseaseBiomarkers: nextBiomarkers,
+          biomarkers_values: buildBiomarkerValuesMap(nextBiomarkers, previous.biomarkers_values),
+        }));
+      } catch (_) {
+        setFormData((previous) => ({
+          ...previous,
+          diseasePhenotypes: shouldInjectFabryMock ? mergeDiseasePhenotypesWithFabry([]) : [],
+          diseaseBiomarkers: shouldInjectFabryMock ? mergeDiseaseBiomarkersWithFabry([]) : [],
+          biomarkers_values: shouldInjectFabryMock
+            ? buildBiomarkerValuesMap(mergeDiseaseBiomarkersWithFabry([]), previous.biomarkers_values)
+            : {},
+        }));
+      }
+    } else if (shouldInjectFabryMock) {
+      const fabryPhenotypes = mergeDiseasePhenotypesWithFabry([]);
+      const fabryBiomarkers = mergeDiseaseBiomarkersWithFabry([]);
+      setFormData((previous) => ({
+        ...previous,
+        diagnosisOrphaCode: previous.diagnosisOrphaCode || 'ORPHA:324',
+        diseasePhenotypes: fabryPhenotypes,
+        diseaseBiomarkers: fabryBiomarkers,
+        biomarkers_values: buildBiomarkerValuesMap(fabryBiomarkers, previous.biomarkers_values),
+      }));
+    }
+  };
+
+  const handleRetrySuggest = () => {
+    const args = lastSuggestionArgsRef.current;
+    if (!args) return;
+    loadDiseaseSuggestions(args);
+  };
+
   const handleDiagnosisSelect = async (item) => {
     setTouched(true);
     const displayValue = item.displayName || item.description || item.definition || item.orphaCode || item.code || '';
@@ -2433,54 +2495,14 @@ export default function ClinicalIntakeWizard(props) {
       }
     }
 
-    if (orphaNumeric) {
-      try {
-        let cascade = await loadCascadeByDisease({
-          system: 'http://www.orpha.net',
-          code: orphaNumeric,
-          display: normalizedDefinition || displayValue,
-        }, { suppressErrorToast: true });
-
-        if ((!Array.isArray(cascade?.phenotypes) || cascade.phenotypes.length === 0) && (!Array.isArray(cascade?.biomarkers) || cascade.biomarkers.length === 0)) {
-          cascade = await loadCascadeByDisease({
-            system: 'http://www.orpha.net',
-            code: normalizedOrphaCode,
-            display: normalizedDefinition || displayValue,
-          }, { suppressErrorToast: true });
-        }
-
-        const cascadePhenotypes = Array.isArray(cascade?.phenotypes) ? cascade.phenotypes.map(normalizeDiseasePhenotype) : [];
-        const cascadeBiomarkers = Array.isArray(cascade?.biomarkers) ? cascade.biomarkers.map(normalizeDiseaseBiomarker) : [];
-        const nextPhenotypes = shouldInjectFabryMock ? mergeDiseasePhenotypesWithFabry(cascadePhenotypes) : cascadePhenotypes;
-        const nextBiomarkers = shouldInjectFabryMock ? mergeDiseaseBiomarkersWithFabry(cascadeBiomarkers) : cascadeBiomarkers;
-
-        setFormData((previous) => ({
-          ...previous,
-          diseasePhenotypes: nextPhenotypes,
-          diseaseBiomarkers: nextBiomarkers,
-          biomarkers_values: buildBiomarkerValuesMap(nextBiomarkers, previous.biomarkers_values),
-        }));
-      } catch (_) {
-        setFormData((previous) => ({
-          ...previous,
-          diseasePhenotypes: shouldInjectFabryMock ? mergeDiseasePhenotypesWithFabry([]) : [],
-          diseaseBiomarkers: shouldInjectFabryMock ? mergeDiseaseBiomarkersWithFabry([]) : [],
-          biomarkers_values: shouldInjectFabryMock
-            ? buildBiomarkerValuesMap(mergeDiseaseBiomarkersWithFabry([]), previous.biomarkers_values)
-            : {},
-        }));
-      }
-    } else if (shouldInjectFabryMock) {
-      const fabryPhenotypes = mergeDiseasePhenotypesWithFabry([]);
-      const fabryBiomarkers = mergeDiseaseBiomarkersWithFabry([]);
-      setFormData((previous) => ({
-        ...previous,
-        diagnosisOrphaCode: previous.diagnosisOrphaCode || 'ORPHA:324',
-        diseasePhenotypes: fabryPhenotypes,
-        diseaseBiomarkers: fabryBiomarkers,
-        biomarkers_values: buildBiomarkerValuesMap(fabryBiomarkers, previous.biomarkers_values),
-      }));
-    }
+    const suggestionArgs = {
+      orphaNumeric,
+      normalizedOrphaCode,
+      displayLabel: normalizedDefinition || displayValue,
+      shouldInjectFabryMock,
+    };
+    lastSuggestionArgsRef.current = suggestionArgs;
+    await loadDiseaseSuggestions(suggestionArgs);
   };
 
   const handleDiseasePhenotypeToggle = (phenotype) => {
@@ -3704,6 +3726,18 @@ export default function ClinicalIntakeWizard(props) {
                 <div className="text-sm text-slate-500 suggestion-empty">{t('wizard.labels.selectDiseaseForPhenotypes', 'Selecione uma doença para carregar fenótipos HPO sugeridos.')}</div>
               ) : loadingSuggest ? (
                 <div className="text-sm text-slate-500 suggestion-empty">{t('wizard.status.loadingPhenotypes', 'Buscando fenótipos...')}</div>
+              ) : suggestError ? (
+                <div className="text-sm text-rose-600 suggestion-empty" data-testid="wizard-suggest-error-phenotypes">
+                  <p>{t('wizard.labels.suggestError', 'Falha ao carregar sugestões semânticas. Você pode tentar novamente.')}</p>
+                  <button
+                    type="button"
+                    className="mt-2 font-semibold text-cyan-700 underline"
+                    data-testid="wizard-suggest-retry-phenotypes"
+                    onClick={handleRetrySuggest}
+                  >
+                    {t('wizard.labels.retrySuggest', 'Tentar novamente')}
+                  </button>
+                </div>
               ) : diseasePhenotypeSuggestions.length === 0 ? (
                 <div className="text-sm text-slate-500 suggestion-empty">{t('wizard.labels.noPhenotypes', 'Nenhum fenótipo sugerido para esta doença.')}</div>
               ) : (
@@ -3736,6 +3770,18 @@ export default function ClinicalIntakeWizard(props) {
                 <div className="text-sm text-slate-500 suggestion-empty">{t('wizard.labels.selectDiseaseForBiomarkers', 'Selecione uma doença para carregar biomarcadores sugeridos.')}</div>
               ) : loadingSuggest ? (
                 <div className="text-sm text-slate-500 suggestion-empty">{t('wizard.status.loadingBiomarkers', 'Buscando biomarcadores...')}</div>
+              ) : suggestError ? (
+                <div className="text-sm text-rose-600 suggestion-empty" data-testid="wizard-suggest-error-biomarkers">
+                  <p>{t('wizard.labels.suggestError', 'Falha ao carregar sugestões semânticas. Você pode tentar novamente.')}</p>
+                  <button
+                    type="button"
+                    className="mt-2 font-semibold text-cyan-700 underline"
+                    data-testid="wizard-suggest-retry-biomarkers"
+                    onClick={handleRetrySuggest}
+                  >
+                    {t('wizard.labels.retrySuggest', 'Tentar novamente')}
+                  </button>
+                </div>
               ) : diseaseBiomarkerSuggestions.length === 0 ? (
                 <div className="text-sm text-slate-500 suggestion-empty">{t('wizard.labels.noBiomarkers', 'Nenhum biomarcador sugerido para esta doença.')}</div>
               ) : (
