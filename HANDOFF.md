@@ -1,7 +1,8 @@
 # HANDOFF
 
-**Written 2026-09-24, fifty-sixth queue sitting. INTERIM: Dennis gave no end
-signal, so treat the session as CONTINUING.**
+**Written 2026-09-24, fifty-sixth queue sitting. FINAL: Dennis ended the
+sitting ("shut it all down so we start skills pack session clean"). The next
+session is a skills-pack session, not this repo.**
 
 The instruction was "Read handoff. Pick next group of issues. Docker is on.
 Check pc usage before big runs." The group picked was **#1125** (unwired
@@ -30,6 +31,14 @@ is `336fcf7f` (#1125's guard).
 - Verified natively only: the architecture suite at 151/151, plus targeted
   vitest. No Docker gate ran.
 
+- **Docs import**, on Dennis's instruction ("use this sitting to update the
+  docs too in our branch"): the owner's approved **Canonical Data Model
+  v2.0.0** release from `stabilize/v2.0.0-prototype` is now at the top of
+  `docs/`. It includes dictionary v2.0.0, requirements v4.0.0 and plan
+  v2.0.0, and moves the v1 docs to `docs/architecture/legacy/`. It is the
+  newest canon. There is no Markdown extraction yet.
+  `E2E_TRACEABILITY_PLAN.md` records this.
+
 ## Filed this sitting
 
 - **#1200**, open, labels `bug` and `question`: `disease_dictionary` is read
@@ -39,8 +48,10 @@ is `336fcf7f` (#1125's guard).
   `BiomarkerAssociation`, so `disease_dictionary` may be legacy. Switching
   the rules on changes which samples pass validation, so this is Dennis's
   or Denise's call.
-- One finding about the tooling itself, recorded in Dennis's private tracker
-  for tooling, not here.
+- Three findings about the tooling itself, recorded in Dennis's private
+  tracker, not here. Among them: how to settle questions nobody here is
+  expert enough to answer, and updating the docs authority order to v2.0.0.
+  Those two are what the next skills-pack session is for.
 
 ## Touched, not closed
 
@@ -50,7 +61,11 @@ nothing was posted to any of them.
 
 ## Still waiting on Dennis
 
-#1200's placement choice, #1196's default, and #1197 (for Denise). For the
+#1200's placement choice, #1196's default, and #1197 (for Denise).
+**Also: Denise's branch deletes `docs/mestrado/` (her research proposal) and
+`docs/planning/bioavanced-v3/`. The import did not mirror those deletions.
+Mirror them or not?** #1200 was re-checked against v2.0.0 (see its last
+comment). For the
 rest, query `gh issue list --state open --label question` (redirect it: it is
 long) and read each issue's last comment.
 
@@ -58,10 +73,10 @@ long) and read each issue's last comment.
 
 - **Gate:** Dennis, 2026-09-24: "Docker is on." It closes at the next
   `/clear`.
-- The test stack is still down, as the previous note left it. Its named
-  volumes survive, and its images were built from `85dcdd17`, so they
-  predate this sitting's `compose.test.yml` change (the `TEST_ENVIRONMENT`
-  line removed). Rebuild with `--build` before relying on it.
+- Docker Desktop and WSL were shut down at the end of the sitting, on
+  Dennis's instruction. No containers were running. The test stack's named
+  volumes survive, and its images predate this sitting's `compose.test.yml`
+  change, so rebuild with `--build`.
 
 ## Things a next session must not undo
 
@@ -75,7 +90,7 @@ Earlier notes' items still hold. Plus:
 
 - Denise's newest live branch, 2026-09-24: `stabilize/v2.0.0-prototype`
   (`git for-each-ref refs/remotes/origin --sort=-committerdate`).
-- Divergence, 2026-09-24: 904 commits on hers only, 128 on ours only
+- Divergence, 2026-09-24: 904 commits on hers only, 132 on ours only (counting this rotation)
   (`git rev-list --left-right --count origin/stabilize/v2.0.0-prototype...HEAD`).
 - Her tip's CI, 2026-09-24 18:52: current-state validation passed. Full
   Vitest diagnostic, Coverage diagnostic and release manifest integrity
@@ -83,5 +98,7 @@ Earlier notes' items still hold. Plus:
 
 ## Recommended next
 
-None queued: Dennis named no next item. The branch has not passed the full
-gate since `5fc5c843`. Dennis's go is still needed for a PR into `main`.
+Dennis named it: a **skills-pack session**. It works the settle-a-question
+source ladder and the v2.0.0 docs authority update, both in his private
+tracker. Back in this repo, the branch has not passed the full gate since
+`5fc5c843`, and Dennis's go is still needed for a PR into `main`.
