@@ -1,0 +1,24 @@
+{
+  "telemetryExposureSummaryId": "telemetry-summary-001",
+  "specimenId": "specimen-synthetic-001",
+  "specimenContainerAssignmentId": "specimen-container-001",
+  "containerPositionAssignmentId": "container-position-001",
+  "rackLocationAssignmentId": "rack-location-001",
+  "exposurePathHash": "sha256:synthetic-exposure-path",
+  "datastreamIds": [
+    "datastream-temperature-001"
+  ],
+  "windowStart": "2026-09-01T00:00:00Z",
+  "windowEnd": "2026-09-09T00:00:00Z",
+  "observationCount": 11520,
+  "minimumValue": -81.2,
+  "maximumValue": -77.5,
+  "meanValue": -79.8,
+  "timeOutsideThresholdSeconds": 120,
+  "excursionCount": 1,
+  "coverageRatio": 0.998,
+  "sourceQueryHash": "sha256:synthetic-query",
+  "sourceReadingSetHash": "sha256:synthetic-readings",
+  "calculationVersion": "1.0.0",
+  "calculatedAt": "2026-09-09T00:01:00Z"
+}

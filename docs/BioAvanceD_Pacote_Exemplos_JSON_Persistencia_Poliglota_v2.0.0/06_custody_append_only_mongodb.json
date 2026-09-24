@@ -1,0 +1,12 @@
+{
+  "custodyEventId": "custody-event-001",
+  "specimenId": "specimen-synthetic-001",
+  "eventType": "stored",
+  "occurredAt": "2026-09-07T00:00:00Z",
+  "fromCustodianId": "org-synthetic-001",
+  "toCustodianId": "org-synthetic-001",
+  "sourceEventId": "source-event-001",
+  "previousEventHash": "sha256:synthetic-previous",
+  "canonicalEventHash": "sha256:synthetic-custody",
+  "appendOnly": true
+}

@@ -1,0 +1,28 @@
+{
+  "specimenId": "specimen-synthetic-001",
+  "accessionIdentifier": {
+    "system": "https://bioadvanced.dev/fhir/NamingSystem/accession-identifier",
+    "value": "SYN-000001"
+  },
+  "participantId": "participant-synthetic-001",
+  "collectionId": "collection-biobank-synthetic-001",
+  "specimenRole": "primary",
+  "materialType": {
+    "code": "synthetic-plasma"
+  },
+  "specimenStatus": "available",
+  "initialQuantity": {
+    "value": 2.0,
+    "unit": "mL",
+    "system": "http://unitsofmeasure.org",
+    "code": "mL"
+  },
+  "currentQuantity": {
+    "value": 1.5,
+    "unit": "mL",
+    "system": "http://unitsofmeasure.org",
+    "code": "mL"
+  },
+  "quantityStatus": "partial",
+  "parentSpecimenIds": []
+}

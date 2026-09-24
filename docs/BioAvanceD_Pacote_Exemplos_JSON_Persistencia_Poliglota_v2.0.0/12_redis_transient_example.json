@@ -1,0 +1,10 @@
+{
+  "key": "lock:container-position:position-synthetic-A01",
+  "value": {
+    "ownerToken": "opaque-synthetic-token",
+    "correlationId": "corr-synthetic-001"
+  },
+  "ttlSeconds": 30,
+  "canonical": false,
+  "containsPII": false
+}

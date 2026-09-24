@@ -423,6 +423,16 @@ own:
   `BioAvanceD_Modelo_Unificado_Fase_{1,2,3}_v1.x.docx`) are now
   superseded by `docs/docs-7-27-2026/2 - Dicionario_Dados_Consolidado_v1.3.0.xlsx`
   and the new requirements/plan docs per those docs' own changelog
-  (`dict-09_CHANGELOG.md`). Left in place for history — not deleting
-  anything without Dennis's go — but any future read should prefer the
-  v1.3.0 set.
+  (`dict-09_CHANGELOG.md`). They now live in `docs/architecture/legacy/`,
+  moved there as Denise's `stabilize/v2.0.0-prototype` does.
+- **Newest canon (imported 2026-09-24 from `stabilize/v2.0.0-prototype`):**
+  the Canonical Data Model v2.0.0 release, approved 2026-09-12 per
+  `docs/RELEASE_MANIFEST.json`, at the top of `docs/`. It comprises
+  `BioAvanceD_Dicionario_Dados_Consolidado_v2.0.0.xlsx`,
+  `BioAvanceD_Requisitos_Funcionais_Nao_Funcionais_v4.0.0.docx`,
+  `BioAvanceD_Plano_Integrado_Foundation_Data_Pipeline_v2.0.0.docx`, the
+  consistency report, the traceability matrix and the polyglot-persistence
+  model with its examples. It supersedes the v1.3.0 set above. The
+  manifest also lists
+  `BioAvanceD_Protocolo_Avaliacao_Ex_Ante_Identificacao_Fisica_v1.0.0.docx`,
+  which is absent from her branch too.
