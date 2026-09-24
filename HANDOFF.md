@@ -1,82 +1,67 @@
 # HANDOFF
 
-**Written 2026-09-24, fiftieth queue sitting. INTERIM: Dennis gave no end
+**Written 2026-09-24, fifty-first queue sitting. INTERIM: Dennis gave no end
 signal, so treat the session as CONTINUING.**
 
 The instruction was "read handoff, pick next group of issues, Docker is
-on". Every bug-labelled issue left open was waiting on Dennis. So the
-sitting took the previous note's recommended gap instead: the org-scope
-class (#1053, #1182, #1183, #1185 to #1189) had never been through the
-Docker gate. It ran the full local ship pre-flight on HEAD.
+on". The previous note said every open bug was waiting on Dennis. That was
+wrong for two: #1076 had no comments, and #813's blocker (#828) had closed.
+Re-read the last comment on each bug before trusting that line again.
 
 ## Repo state
 
 `feature/docker-e2e-backend-integration`, pushed. The last substantive commit
-is `5b5860d7`.
-
-## Gate results, all `[ran it]` on this tree
-
-| Gate | Result |
-|---|---|
-| Backend `test:architecture` (native) | 148/148 |
-| Backend vitest, `tests/unit tests/integration tests/compliance` | 476 files, 9093 tests, 0 failures |
-| Frontend `typecheck:full` and root `typecheck:e2e` | clean |
-| Frontend vitest (the seven `src/` dirs) | 33 files, 289 tests |
-| Mocked Playwright | 11 passed, 227 skipped (the real-backend specs) |
-| **Real-backend Playwright, host-side, `--workers=1`, HEAD-built images, full bootstrap chain** | **238/238 passed, 0 skipped** |
-| CI's `backend-unit-runner` (`current-state:ci`), in-container | red before #1190, **green after**: arch 0 fail / 23 skip, seed OK, dictionary 929/929 v1.3.0, compliance evidence written |
-
-The org-scope narrowings broke no e2e spec. Most specs run as the global
-admin, and those narrowings don't apply to a global-scope caller.
+is `0056cb6b` (#1076).
 
 ## What shipped
 
-- **#1190**, filed and closed this sitting, `5b5860d7`. Three arch test
-  files read repo-root scripts that `backend-unit-runner`'s image lacks
-  (build context `./api/backend`, `node:22-alpine`, with no bash, openssl or
-  python3). As a result, CI's only job failed 9 tests and never reached the
-  seed, dictionary or compliance steps. They now skip when the repo tree is
-  absent, keyed on `REPO_ROOT/api/backend/package.json`, not on the script
-  under test.
+- **#1076**, closed, `0056cb6b`. The premise was half wrong.
+  `/api/logs/export` already emitted the `USR-` pseudonym, because
+  auditLogger writes it and `getLogs` anonymizes again on read. The reports
+  `accessLogs` handler returned raw documents, so it now runs the same
+  `anonymizeLogs`. `[ran it]` 351/351 across the seven reports-touching vitest
+  files, 20/20 in the two arch files that parse `reports.routes.js`, and a
+  probe with the fix stashed gave 2 red, 60 green. **Real-backend e2e was not
+  re-run.** No spec touches `access_logs` (`git grep` over `tests/e2e`).
 
-## Not shipped, and why
+## Touched, not closed
 
-- **No PR.** The local gates are green, and a PR into `main` is Dennis's
-  call.
-- Still waiting on Dennis: #1184 (the recorded-site vs owning-org split)
-  and #1174 (a) or (b). Unchanged: #1181, #1180, #1123. For the rest, query
-  `gh issue list --state open --label bug` and `--label question`.
+- **#813**: open on the patients half only. The samples proof has been
+  green since #828. The patients half is gated on **#807**, not #814: #814
+  staged LGPD patient rows in plaintext without deciding #807. See the
+  2026-09-24 comments on #813 and #807. Both of #807's endings are written
+  there, and either one makes #813 a small change.
+- **#941**: Denise commented "Resolved in the v2 Foundation Data Pipeline"
+  on 2026-09-23, and the issue is still open. That work lives on her branches,
+  not ours. Not touched, and not ours to close without Dennis.
+
+## Still waiting on Dennis
+
+#1184, #1174 (a) or (b), #807 (above), #1181's single-active-term call,
+and #1139's Q2/Q3. For the rest, query `gh issue list --state open --label
+bug` and `--label question`, and read each issue's last comment.
 
 ## Docker and the machine
 
-The test stack is **down** (`compose down`, volumes and images kept). The
-images are built from `5b5860d7`'s tree. `mongodb-test-data` holds this
-sitting's e2e fixtures and the full reference-data bootstrap.
-
-- **Bringing the reference-data chain up after the main stack recreated
-  mongo, neo4j, redis, influx and audit-keygen, and killed
-  `neo4j-projection-worker-test`** (`Replication is being shut down`).
-  `[ran it]` Recovery was `docker restart` on backend-app-test, worker-test
-  and neo4j-projection-worker-test, then checking all healthy. After that
-  came the 238/238 above. After the chain, check `docker ps -a` for the
-  projection worker being Up before trusting any projection spec.
-- Port 8086 was **not** reserved on this boot. There was no need for
-  `INFLUXDB_HOST_PORT`.
+The test stack is **down**, with volumes and images kept from `5b5860d7`'s
+build (per the previous note, not re-checked). This sitting did not start
+Docker. After bringing the reference-data chain up, check that
+neo4j-projection-worker-test shows as Up (`docker ps -a`) before trusting a
+projection spec. The last sitting's recovery for that was `docker restart`
+on the three app containers.
 
 ## Things a next session must not undo
 
 Earlier notes' items still hold: scoped creates stamp and scoped updates
-refuse; scoped handler unit tests pass `req.organizationScope`;
-`org-scope-routes.arch.test.js` gates new routes and allowlists;
-`RETIRED_KEY_EXEMPT` is line-keyed; `core.autocrlf` per-file endings.
-Plus:
-- **An arch test that reads a repo-root file needs the in-image skip
-  guard.** `[ran it]` CI runs `test:architecture` inside
-  `backend-unit-runner`, where `REPO_ROOT` is `/`. A native green does not
-  show a new arch test is CI-safe. Only
-  `docker compose ... run --build --rm --no-deps backend-unit-runner` does.
+refuse; `org-scope-routes.arch.test.js` gates new routes; an arch test that
+reads a repo-root file needs the in-image skip guard (a native green does
+not prove CI-safety). Plus:
+- **Read-time log anonymization is the contract for every export of
+  `logs`.** A new handler reading that collection for output runs
+  `anonymizeLogs`, like `getLogs` and `handleAccessLogs`.
 
 ## Recommended next
 
-**None queued by name.** The branch is gate-green locally. The next step
-toward shipping is Dennis's go on a PR into `main`.
+**None queued by name.** The branch is gate-green except for this sitting's
+one reports change, which is covered natively. The next step toward
+shipping is still Dennis's go on a PR into `main`.
