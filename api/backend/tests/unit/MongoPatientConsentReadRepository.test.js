@@ -10,10 +10,12 @@ const MongoPatientConsentReadRepository = require('../../src/infrastructure/pers
  * fake Mongo collection objects. This bypasses `getCollection` entirely
  * (see note in report about why spying on getCollection wouldn't work here).
  */
-function createDb({ patients = {}, consents = {} } = {}) {
+function createDb({ participants = {}, patients = {}, consents = {} } = {}) {
+  // Stage 2E: accept both `participants` (canonical seed key) and legacy `patients`.
+  const participantsOverrides = Object.keys(participants).length ? participants : patients;
   const patientsCollection = {
     findOne: vi.fn(),
-    ...patients
+    ...participantsOverrides
   };
   const consentsCollection = {
     findOne: vi.fn(),

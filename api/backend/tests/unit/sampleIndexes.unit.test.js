@@ -90,29 +90,29 @@ describe('#936 collectionResolver wiring', () => {
     vi.restoreAllMocks();
   });
 
-  it('ensures the samples indexes on first resolution, and only once per process', () => {
+  // Stage 2E: indexes are ensured via sampleIndexes callers, not inside
+  // collectionResolver. Resolver only maps Specimen→specimens synchronously.
+  it('resolves Specimen to specimens synchronously without auto-building indexes', () => {
     const { getCollection } = freshResolver();
     const collection = makeCollection();
     const db = { collection: vi.fn(() => collection) };
 
-    getCollection(db, 'samples');
-    getCollection(db, 'samples');
-    getCollection(db, 'samples');
+    const first = getCollection(db, 'Specimen');
+    getCollection(db, 'Specimen');
+    getCollection(db, 'Specimen');
 
-    expect(collection.createIndex).toHaveBeenCalledTimes(1);
+    expect(first).toBe(collection);
+    expect(typeof first.then).not.toBe('function');
+    expect(db.collection).toHaveBeenCalledWith('specimens');
+    expect(collection.createIndex).not.toHaveBeenCalled();
   });
 
-  // The resolver's own header explains why only sampleMovements returns a
-  // promise: a caller chaining `getCollection(db, key).find(...)` without
-  // `await` must fail loudly (#306). `samples` is the most-called key here,
-  // so it must stay synchronous — a thenable would silently change what
-  // every one of those call sites receives.
-  it('still returns the samples collection synchronously, not a promise', () => {
+  it('still returns the Specimen collection synchronously, not a promise', () => {
     const { getCollection } = freshResolver();
     const collection = makeCollection();
     const db = { collection: vi.fn(() => collection) };
 
-    const resolved = getCollection(db, 'samples');
+    const resolved = getCollection(db, 'Specimen');
 
     expect(resolved).toBe(collection);
     expect(typeof resolved.then).not.toBe('function');
@@ -123,8 +123,9 @@ describe('#936 collectionResolver wiring', () => {
     const collection = makeCollection();
     const db = { collection: vi.fn(() => collection) };
 
-    getCollection(db, 'patients');
+    getCollection(db, 'Participant');
 
+    expect(db.collection).toHaveBeenCalledWith('participants');
     expect(collection.createIndex).not.toHaveBeenCalled();
   });
 });

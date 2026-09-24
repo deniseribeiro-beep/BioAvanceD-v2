@@ -22,7 +22,10 @@ const {
 // shape (RF014, #440/#441) for the same versioned-admin-policy pattern.
 
 function rbacFor(accessType) {
-  return buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType }]);
+  return buildRbacCollections([{
+    userAccountId: TEST_USER_ACCOUNT_IDS[accessType] || TEST_USER_ACCOUNT_IDS[4],
+    accessType,
+  }]);
 }
 
 function makeToken(accessType = 4) {

@@ -66,7 +66,7 @@ function createFakeDb(seed = {}) {
 describe('sealed-snapshot-backfill.service', () => {
   it('pins the existing RcsAssessment/SpecimenPreanalytics snapshot for a pre-#502 sample with no sealed*Id own-property', async () => {
     const db = createFakeDb({
-      samples: [{ _id: 'sample-1', specimenId: 'SPEC-1' }],
+      specimens: [{ _id: 'sample-1', specimenId: 'SPEC-1' }],
       rcsAssessments: [{ _id: 'rcs-1', specimenId: 'SPEC-1', assessedAt: '2025-01-01T00:00:00Z' }],
       specimenPreanalytics: [{ _id: 'sprec-1', specimenId: 'SPEC-1', recordedAt: '2025-01-01T00:00:00Z' }],
     });
@@ -81,7 +81,7 @@ describe('sealed-snapshot-backfill.service', () => {
 
   it('picks the newest snapshot when a specimenId has more than one (pre-#502 samples predate the one-snapshot invariant)', async () => {
     const db = createFakeDb({
-      samples: [{ _id: 'sample-1', specimenId: 'SPEC-1' }],
+      specimens: [{ _id: 'sample-1', specimenId: 'SPEC-1' }],
       rcsAssessments: [
         { _id: 'rcs-old', specimenId: 'SPEC-1', assessedAt: '2024-01-01T00:00:00Z' },
         { _id: 'rcs-new', specimenId: 'SPEC-1', assessedAt: '2025-06-01T00:00:00Z' },
@@ -96,7 +96,7 @@ describe('sealed-snapshot-backfill.service', () => {
 
   it('is a no-op for a sample that already carries the sealed*Id own-property, even if the value is null', async () => {
     const db = createFakeDb({
-      samples: [{ _id: 'sample-1', specimenId: 'SPEC-1', sealedRcsAssessmentId: null, sealedSpecimenPreanalyticsId: null }],
+      specimens: [{ _id: 'sample-1', specimenId: 'SPEC-1', sealedRcsAssessmentId: null, sealedSpecimenPreanalyticsId: null }],
       rcsAssessments: [{ _id: 'rcs-1', specimenId: 'SPEC-1', assessedAt: '2025-01-01T00:00:00Z' }],
     });
 
@@ -108,7 +108,7 @@ describe('sealed-snapshot-backfill.service', () => {
 
   it('leaves a sample with no recorded snapshot untouched (no matching specimenId in either collection)', async () => {
     const db = createFakeDb({
-      samples: [{ _id: 'sample-1', specimenId: 'SPEC-NONE' }],
+      specimens: [{ _id: 'sample-1', specimenId: 'SPEC-NONE' }],
     });
 
     const { summary } = await backfillSealedSnapshotPins(db);

@@ -8,6 +8,7 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
 const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
+const { buildRbacCollections } = require('../factories/rbac.factory');
 const {
   makeAuthToken,
   makeLegacyClaimsToken,
@@ -20,6 +21,10 @@ const {
 function makeToken(accessType = 2) {
   return makeAuthToken(accessType);
 }
+
+const AUTH_COLLECTIONS = buildRbacCollections([
+  { userAccountId: TEST_USER_ACCOUNT_IDS[2], accessType: 2 },
+]);
 
 function givenSession() {
   vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 'sess-1' } });
@@ -46,7 +51,7 @@ describe('GET /api/phone-codes/search', () => {
       }),
       createIndex: vi.fn().mockResolvedValue('ok'),
     });
-    app.locals.db = createDbMock({ phoneCodes: coll });
+    app.locals.db = createDbMock({ phoneCodes: coll, ...AUTH_COLLECTIONS });
 
     const res = await request(app)
       .get('/api/phone-codes/search')
@@ -66,7 +71,7 @@ describe('GET /api/phone-codes/search', () => {
       }),
       createIndex: vi.fn().mockResolvedValue('ok'),
     });
-    app.locals.db = createDbMock({ phoneCodes: coll });
+    app.locals.db = createDbMock({ phoneCodes: coll, ...AUTH_COLLECTIONS });
 
     const res = await request(app)
       .get('/api/phone-codes/search?q=Bra')
@@ -84,7 +89,7 @@ describe('GET /api/phone-codes/search', () => {
       }),
       createIndex: vi.fn().mockResolvedValue('ok'),
     });
-    app.locals.db = createDbMock({ phoneCodes: coll });
+    app.locals.db = createDbMock({ phoneCodes: coll, ...AUTH_COLLECTIONS });
 
     const res = await request(app)
       .get('/api/phone-codes/search')
@@ -110,7 +115,7 @@ describe('GET /api/phone-codes/search', () => {
       }),
       createIndex: vi.fn().mockResolvedValue('ok'),
     });
-    app.locals.db = createDbMock({ phoneCodes: coll });
+    app.locals.db = createDbMock({ phoneCodes: coll, ...AUTH_COLLECTIONS });
 
     const res = await request(app)
       .get('/api/phone-codes/search')
@@ -131,7 +136,7 @@ describe('GET /api/phone-codes/search', () => {
       find: findSpy,
       createIndex: vi.fn().mockResolvedValue('ok'),
     });
-    app.locals.db = createDbMock({ phoneCodes: coll });
+    app.locals.db = createDbMock({ phoneCodes: coll, ...AUTH_COLLECTIONS });
 
     const res = await request(app)
       .get('/api/phone-codes/search?q=B')
@@ -154,7 +159,7 @@ describe('GET /api/phone-codes/search', () => {
       find: vi.fn().mockImplementation(() => cursor()),
       createIndex: vi.fn().mockResolvedValue('ok'),
     });
-    app.locals.db = createDbMock({ phoneCodes: coll });
+    app.locals.db = createDbMock({ phoneCodes: coll, ...AUTH_COLLECTIONS });
 
     const res = await request(app)
       .get('/api/phone-codes/search?q=Br&limit=1')
@@ -173,7 +178,7 @@ describe('GET /api/phone-codes/search', () => {
       }),
       createIndex: vi.fn().mockResolvedValue('ok'),
     });
-    app.locals.db = createDbMock({ phoneCodes: coll });
+    app.locals.db = createDbMock({ phoneCodes: coll, ...AUTH_COLLECTIONS });
 
     const res = await request(app)
       .get('/api/phone-codes/search')
@@ -192,7 +197,7 @@ describe('GET /api/phone-codes/search', () => {
       }),
       createIndex: vi.fn().mockResolvedValue('ok'),
     });
-    app.locals.db = createDbMock({ phoneCodes: coll });
+    app.locals.db = createDbMock({ phoneCodes: coll, ...AUTH_COLLECTIONS });
 
     const res = await request(app)
       .get('/api/phone-codes/search')
@@ -217,7 +222,7 @@ describe('GET /api/phone-codes/search', () => {
       }),
       createIndex: vi.fn().mockResolvedValue('ok'),
     });
-    app.locals.db = createDbMock({ phoneCodes: coll });
+    app.locals.db = createDbMock({ phoneCodes: coll, ...AUTH_COLLECTIONS });
 
     await request(app)
       .get('/api/phone-codes/search?limit=-5')

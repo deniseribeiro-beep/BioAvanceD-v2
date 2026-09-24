@@ -24,17 +24,7 @@ const {
 const consentTemplateId = new ObjectId().toString();
 
 function createCoordinatorToken() {
-  return jwt.sign(
-    {
-      userID: TEST_USER_ACCOUNT_IDS[3],
-      accessType: 3,
-      roleName: 'Coordenador',
-      name: 'QA Coordenador',
-      mfaVerified: true,
-    },
-    process.env.JWT_SECRET,
-    { expiresIn: '1h' }
-  );
+  return makeAuthToken(3);
 }
 
 function buildValidPatientPayload(overrides = {}) {
@@ -79,7 +69,7 @@ describe('RF005 - POST /api/v1/patients', () => {
         if (rbacCollections[name]) {
           return rbacCollections[name];
         }
-        if (name === 'consent_templates') {
+        if (name === 'consentTemplates' || name === 'consent_templates') {
           return {
             findOne: vi.fn().mockResolvedValue({ _id: new ObjectId(consentTemplateId), name: 'TCLE QA' }),
             insertOne: vi.fn().mockResolvedValue({ insertedId: 'ignored' }),

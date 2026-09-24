@@ -3,13 +3,12 @@ const { generateUniqueBarcode } = require('../../src/utils/barcodeGenerator');
 const { resolveCollectionName } = require('../../src/utils/collectionResolver');
 
 // #932: generateUniqueBarcode no longer takes a collectionName parameter — it
-// resolves the same 'samples' key every other service does via
-// collectionResolver. RESOLVED_SAMPLES_NAME is that resolved name, and every
-// fake below only serves real data under it. Any other name (e.g. the old
-// 'amostras' default) is wired to a decoy collection that throws, so a
-// regression that reintroduces a mismatched collection name fails loudly
-// instead of silently reading/writing the wrong place.
-const RESOLVED_SAMPLES_NAME = resolveCollectionName({}, 'samples');
+// resolves Specimen via collectionResolver (Stage 2E → specimens).
+// RESOLVED_SAMPLES_NAME is that resolved name, and every fake below only
+// serves real data under it. Any other name is wired to a decoy collection
+// that throws, so a regression that reintroduces a mismatched collection
+// name fails loudly instead of silently reading/writing the wrong place.
+const RESOLVED_SAMPLES_NAME = resolveCollectionName({}, 'Specimen');
 
 function makeDecoyCollection(collectionName) {
   const message = `unexpected db.collection() call for '${collectionName}' — generateUniqueBarcode must only scan the resolved samples collection ('${RESOLVED_SAMPLES_NAME}')`;

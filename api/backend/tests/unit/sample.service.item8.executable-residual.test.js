@@ -193,7 +193,7 @@ describe('sample.service item 8 executable residual branches', () => {
     await expect(sampleService.createSample(db, validSample(boxId)))
       .rejects.toThrow('Falha ao registrar cadeia de custódia no nascimento da amostra: ledger hash write failed');
 
-    expect(collections.samples.deleteOne).toHaveBeenCalledTimes(1);
+    expect(collections.specimens.deleteOne).toHaveBeenCalledTimes(1);
   });
 
   it('logs Error messages from best-effort RCS and SPREC snapshot persistence without rolling the created sample back', async () => {
@@ -230,7 +230,7 @@ describe('sample.service item 8 executable residual branches', () => {
     }));
 
     expect(result._id).toEqual(expect.anything());
-    expect(collections.samples.deleteOne).not.toHaveBeenCalled();
+    expect(collections.specimens.deleteOne).not.toHaveBeenCalled();
   });
 
   it('uses the canonical stored specimenId when reading quarantine-action history', async () => {

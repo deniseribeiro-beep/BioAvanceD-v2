@@ -21,17 +21,7 @@ const {
 
 
 function createAuthToken() {
-  return jwt.sign(
-    {
-      id: TEST_USER_ACCOUNT_IDS[4],
-      userID: TEST_USER_ACCOUNT_IDS[4],
-      accessType: 2,
-      roleName: 'Técnico',
-      name: 'QA User',
-    },
-    process.env.JWT_SECRET,
-    { expiresIn: '1h' }
-  );
+  return makeAuthToken(2);
 }
 
 describe('POST /api/samples - modo de risco e projeção assíncrona v2', () => {
@@ -43,7 +33,7 @@ describe('POST /api/samples - modo de risco e projeção assíncrona v2', () => 
       findOne: vi.fn().mockResolvedValue(null),
       find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
     };
-    const rbacCollections = buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 2 }]);
+    const rbacCollections = buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[2], accessType: 2 }]);
     app.locals.db = {
       collection: (name) => rbacCollections[name] || genericCollection,
     };

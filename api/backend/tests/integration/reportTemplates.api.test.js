@@ -26,7 +26,11 @@ function givenSession() {
 // accessType 2 (Tecnico) has viewReports but not manageReportTemplates;
 // accessType 3 (Coordenador) and 4 (Administrador) have both, per #726's
 // design call.
-const USER_BY_ACCESS_TYPE = { 2: 'qa-tech-1', 3: TEST_USER_ACCOUNT_IDS[3], 4: TEST_USER_ACCOUNT_IDS[4] };
+const USER_BY_ACCESS_TYPE = {
+  2: TEST_USER_ACCOUNT_IDS[2],
+  3: TEST_USER_ACCOUNT_IDS[3],
+  4: TEST_USER_ACCOUNT_IDS[4],
+};
 const ROLE_BY_ACCESS_TYPE = { 2: 'Tecnico', 3: 'Coordenador', 4: 'Administrador' };
 
 function makeToken(accessType = 4) {
@@ -36,7 +40,7 @@ function makeToken(accessType = 4) {
 function dbWithTemplates(overrides = {}) {
   return createDbMock({
     ...buildRbacCollections([
-      { userAccountId: 'qa-tech-1', accessType: 2 },
+      { userAccountId: TEST_USER_ACCOUNT_IDS[2], accessType: 2 },
       { userAccountId: TEST_USER_ACCOUNT_IDS[3], accessType: 3 },
       { userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 4 },
     ]),
@@ -154,7 +158,7 @@ describe('POST /api/report-templates', () => {
     expect(res.status).toBe(201);
     expect(res.body.data.code).toBe('custom_type');
     expect(res.body.data.isSystemDefined).toBe(false);
-    expect(res.body.data.createdBy).toBe('User/qa-coord-1');
+    expect(res.body.data.createdBy).toBe(`User/${TEST_USER_ACCOUNT_IDS[3]}`);
     expect(inserted).toHaveLength(1);
   });
 

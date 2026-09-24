@@ -8,15 +8,20 @@ const analysisValidationService = require('../../src/services/analysisValidation
 const logger = require('../../src/utils/logger');
 
 /**
- * Fake `db` exposing `.collection(name)` directly, bypassing getCollection's
- * internal destructured import (spying on collectionResolver's export after
- * the service already destructured it wouldn't work). listCollections is left
- * undefined so resolveCollectionName short-circuits straight to the preferred
- * canonical name ('samples' / 'patients').
+ * Fake `db` exposing `.collection(name)` directly. getCollection resolves
+ * Specimen→specimens and Participant→participants (Stage 2E).
+ * Accept both canonical seed keys and legacy aliases so call sites stay clear.
  */
-function createDb({ samples = {}, patients = {} } = {}) {
-  const samplesCollection = { findOne: vi.fn(), ...samples };
-  const patientsCollection = { findOne: vi.fn(), ...patients };
+function createDb({
+  specimens = {},
+  samples = {},
+  participants = {},
+  patients = {},
+} = {}) {
+  const specimensOverrides = Object.keys(specimens).length ? specimens : samples;
+  const participantsOverrides = Object.keys(participants).length ? participants : patients;
+  const samplesCollection = { findOne: vi.fn(), ...specimensOverrides };
+  const patientsCollection = { findOne: vi.fn(), ...participantsOverrides };
 
   const collection = vi.fn((name) => {
     if (name === 'specimens') return samplesCollection;

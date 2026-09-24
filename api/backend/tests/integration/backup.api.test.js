@@ -45,6 +45,9 @@ function queryableCollectionMock(docs) {
     })),
   });
 }
+const PARTIAL_ADMIN_ACCOUNT_ID = '550e8400-e29b-41d4-a716-4466554400aa';
+const PARTIAL_ADMIN_ACTOR_ID = '550e8400-e29b-41d4-a716-4466554400ab';
+
 function buildPartialAdminCollections() {
   const permissionDocs = Object.entries(PERMISSION_CATALOG).map(([permissionCode, entry]) => ({
     permissionId: `perm-${permissionCode}`,
@@ -60,13 +63,37 @@ function buildPartialAdminCollections() {
     ]),
     permissions: queryableCollectionMock(permissionDocs),
     userRoleAssignments: queryableCollectionMock([
-      { userAccountId: 'qa-partial-admin', roleId: 'role-partial-admin', assignmentStatus: 'active', validUntil: null },
+      { userAccountId: PARTIAL_ADMIN_ACCOUNT_ID, roleId: 'role-partial-admin', assignmentStatus: 'active', validUntil: null },
+    ]),
+    userAccounts: queryableCollectionMock([
+      {
+        userAccountId: PARTIAL_ADMIN_ACCOUNT_ID,
+        actorId: PARTIAL_ADMIN_ACTOR_ID,
+        accessType: 4,
+        email: 'partial-admin@example.test',
+        userStatus: 'active',
+      },
+    ]),
+    actors: queryableCollectionMock([
+      {
+        actorId: PARTIAL_ADMIN_ACTOR_ID,
+        actorType: 'user',
+        actorStatus: 'active',
+        displayName: 'QA Partial Admin',
+      },
     ]),
   };
 }
 function partialAdminToken() {
   return jwt.sign(
-    { userID: 'qa-partial-admin', accessType: 4, roleName: 'Administrador', name: 'QA Partial Admin', mfaVerified: true },
+    {
+      userID: PARTIAL_ADMIN_ACCOUNT_ID,
+      actorId: PARTIAL_ADMIN_ACTOR_ID,
+      accessType: 4,
+      roleName: 'Administrador',
+      name: 'QA Partial Admin',
+      mfaVerified: true,
+    },
     process.env.JWT_SECRET,
     { expiresIn: '1h' }
   );
@@ -89,7 +116,10 @@ function givenSession() {
 beforeEach(() => {
   givenSession();
   app.locals.db = createDbMock({
-    ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 4 }]),
+    ...buildRbacCollections([
+      { userAccountId: TEST_USER_ACCOUNT_IDS[2], accessType: 2 },
+      { userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 4 },
+    ]),
   });
 });
 afterEach(() => { vi.restoreAllMocks(); });

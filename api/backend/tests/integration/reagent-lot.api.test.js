@@ -29,7 +29,7 @@ const {
 // this file, /api/reagent-lots had zero integration coverage.
 
 const rbacCollectionsAdmin = buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 4 }]);
-const rbacCollectionsTechnician = buildRbacCollections([{ userAccountId: 'qa-2', accessType: 2 }]);
+const rbacCollectionsTechnician = buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[2], accessType: 2 }]);
 
 function makeToken(accessType = 4) {
   return makeAuthToken(accessType);
@@ -64,7 +64,7 @@ describe('GET /api/reagent-lots', () => {
     });
     app.locals.db = createDbMock({ reagentLots: coll, ...rbacCollectionsAdmin });
 
-    const res = await request(app).get('/api/reagent-lots').set('Authorization', `Bearer ${makeToken(TEST_USER_ACCOUNT_IDS[4], 4)}`);
+    const res = await request(app).get('/api/reagent-lots').set('Authorization', `Bearer ${makeToken(4)}`);
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
   });
@@ -76,7 +76,7 @@ describe('POST /api/reagent-lots', () => {
 
     const res = await request(app)
       .post('/api/reagent-lots')
-      .set('Authorization', `Bearer ${makeToken('qa-2', 2)}`)
+      .set('Authorization', `Bearer ${makeToken(2)}`)
       .send(VALID_REAGENT_LOT_PAYLOAD);
 
     expect(res.status).toBe(403);
@@ -88,7 +88,7 @@ describe('POST /api/reagent-lots', () => {
 
     const res = await request(app)
       .post('/api/reagent-lots')
-      .set('Authorization', `Bearer ${makeToken(TEST_USER_ACCOUNT_IDS[4], 4)}`)
+      .set('Authorization', `Bearer ${makeToken(4)}`)
       .send(invalidPayload);
 
     expect(res.status).toBe(422);
@@ -102,7 +102,7 @@ describe('POST /api/reagent-lots', () => {
 
     const res = await request(app)
       .post('/api/reagent-lots')
-      .set('Authorization', `Bearer ${makeToken(TEST_USER_ACCOUNT_IDS[4], 4)}`)
+      .set('Authorization', `Bearer ${makeToken(4)}`)
       .send(invalidPayload);
 
     expect(res.status).toBe(422);
@@ -115,7 +115,7 @@ describe('POST /api/reagent-lots', () => {
 
     const res = await request(app)
       .post('/api/reagent-lots')
-      .set('Authorization', `Bearer ${makeToken(TEST_USER_ACCOUNT_IDS[4], 4)}`)
+      .set('Authorization', `Bearer ${makeToken(4)}`)
       .send(VALID_REAGENT_LOT_PAYLOAD);
 
     expect(res.status).toBe(201);

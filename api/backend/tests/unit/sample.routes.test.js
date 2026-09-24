@@ -731,10 +731,14 @@ describe('sample.routes', () => {
       expect(res.body.message).toContain('integração topológica em quarentena');
     });
 
-    it('resolves the actor from req.user._id/userID and req.headers/connection when id/name/ip are absent', async () => {
+    it('resolves the actor from req.user.userID and req.headers/connection when id/name/ip are absent', async () => {
       const executeMock = vi.fn();
       const authImpl = (req, res, next) => {
-        req.user = { _id: { toString: () => 'u2' }, userID: 'u2-alt', username: 'alt-name', role: 'Coordenador' };
+        req.user = {
+          userID: '550e8400-e29b-41d4-a716-446655440002',
+          username: 'alt-name',
+          role: 'Coordenador',
+        };
         next();
       };
       const { router } = loadRoute({ registerSampleUseCaseExecute: executeMock, authImpl });
@@ -745,7 +749,7 @@ describe('sample.routes', () => {
       expect(executeMock).toHaveBeenCalledWith(
         expect.objectContaining({
           actor: expect.objectContaining({
-            userId: 'u2',
+            userId: '550e8400-e29b-41d4-a716-446655440002',
             userName: 'alt-name',
             userRole: 'Coordenador',
           }),
@@ -2285,11 +2289,15 @@ describe('sample.routes', () => {
       expect(res.status).toBe(400);
     });
 
-    it('resolves the audit actor from _id/username/role and the x-forwarded-for header, with a req.t fallback message', async () => {
+    it('resolves the audit actor from userID/username/role and the x-forwarded-for header, with a req.t fallback message', async () => {
       const withdrawSample = vi.fn().mockResolvedValue({ withdrawnQuantity: 1, remainingQuantity: 1, movementID: 'm3' });
       const getSample = vi.fn().mockResolvedValue(null);
       const authImpl = (req, res, next) => {
-        req.user = { _id: { toString: () => 'u9' }, username: 'alt-user', role: 'Coordenador' };
+        req.user = {
+          userID: '550e8400-e29b-41d4-a716-446655440009',
+          username: 'alt-user',
+          role: 'Coordenador',
+        };
         req.t = () => undefined;
         next();
       };
@@ -2307,7 +2315,12 @@ describe('sample.routes', () => {
         expect.anything(),
         expect.anything(),
         expect.anything(),
-        expect.objectContaining({ userId: 'u9', userName: 'alt-user', userRole: 'Coordenador', ipAddress: '198.51.100.7' })
+        expect.objectContaining({
+          userId: '550e8400-e29b-41d4-a716-446655440009',
+          userName: 'alt-user',
+          userRole: 'Coordenador',
+          ipAddress: '198.51.100.7',
+        })
       );
     });
 

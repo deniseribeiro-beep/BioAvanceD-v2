@@ -137,13 +137,12 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
       sensors: makeCollection([{ sensorId: 'sensor-cold-001', locationID: 9001 }]),
       sensorMetadata: makeCollection([]),
       sampleMovements: makeCollection([]),
-      sampleMovements: makeCollection([]),
       counters: makeCollection([]),
     };
     const { boxId } = seedStorageHierarchy(collections, 9001);
     const specimenId = 'BIO-SAMPLE-001';
     seedCanonicalPlacement(collections, boxId, specimenId);
-    collections.samples = makeCollection([{
+    collections.specimens = makeCollection([{
       _id: new ObjectId(),
       specimenId,
       barcode: 'BC-COLD-001',
@@ -168,8 +167,8 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
     expect(result.movements).toBe(1);
     expect(result.boxIds.map(String)).toContain(String(boxId));
 
-    expect(collections.samples.updateOne).toHaveBeenCalledTimes(1);
-    const update = collections.samples.updateOne.mock.calls[0][1].$set;
+    expect(collections.specimens.updateOne).toHaveBeenCalledTimes(1);
+    const update = collections.specimens.updateOne.mock.calls[0][1].$set;
     expect(update).toMatchObject({
       specimenStatus: 'quarantined',
       quarantineReasonCode: 'COLD_CHAIN_INCIDENT',
@@ -184,8 +183,8 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
     expect(update.status).toBeUndefined();
     expect(update.currentStatus).toBeUndefined();
 
-    expect(collections.sample_movements.insertOne).toHaveBeenCalledTimes(1);
-    const movement = collections.sample_movements.insertOne.mock.calls[0][0];
+    expect(collections.sampleMovements.insertOne).toHaveBeenCalledTimes(1);
+    const movement = collections.sampleMovements.insertOne.mock.calls[0][0];
     expect(movement).toMatchObject({
       purpose: 'cold_chain_incident_quarantine',
       destination: 'Quarentena',
@@ -200,13 +199,12 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
       sensorMetadata: makeCollection([{ sensorId: 'sensor-freezer-002', equipment: equipmentObjectId }]),
       equipment: makeCollection([{ _id: equipmentObjectId, equipmentID: 9100 }]),
       sampleMovements: makeCollection([]),
-      sampleMovements: makeCollection([]),
       counters: makeCollection([]),
     };
     const { boxId } = seedStorageHierarchy(collections, 9100);
     const specimenId = 'BIO-SAMPLE-002';
     seedCanonicalPlacement(collections, boxId, specimenId);
-    collections.samples = makeCollection([{
+    collections.specimens = makeCollection([{
       _id: new ObjectId(),
       specimenId,
       barcode: 'BC-COLD-002',
@@ -227,7 +225,7 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
     expect(result.boxIds.map(String)).toContain(String(boxId));
     expect(result.matched).toBe(1);
     expect(result.quarantined).toBe(1);
-    expect(collections.samples.updateOne).toHaveBeenCalledTimes(1);
+    expect(collections.specimens.updateOne).toHaveBeenCalledTimes(1);
   });
 
   it('incidente resolvido mantém amostras para revisão e não libera automaticamente', async () => {
@@ -254,8 +252,8 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
 
     expect(result.reviewRequired).toBe(true);
     expect(result.matched).toBe(1);
-    expect(collections.samples.updateMany).toHaveBeenCalledTimes(1);
-    const update = collections.samples.updateMany.mock.calls[0][1].$set;
+    expect(collections.specimens.updateMany).toHaveBeenCalledTimes(1);
+    const update = collections.specimens.updateMany.mock.calls[0][1].$set;
     expect(update).toMatchObject({
       coldChainStatus: 'INCIDENT_RESOLVED_REVIEW_REQUIRED',
       coldChainReviewRequired: true,
@@ -385,7 +383,7 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
     });
     expect(result.matched).toBe(0);
     expect(result.quarantined).toBe(0);
-    expect(collections.samples.updateOne).not.toHaveBeenCalled();
+    expect(collections.specimens.updateOne).not.toHaveBeenCalled();
   });
 
   it('falls back to incident.sensorID (third field) when sensorKey and sensorId are both absent', async () => {
@@ -450,20 +448,19 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
       sensors: makeCollection([{ sensorId: 'sensor-session-2', locationID: 66 }]),
       sensorMetadata: makeCollection([]),
       sampleMovements: makeCollection([]),
-      sampleMovements: makeCollection([]),
       counters: makeCollection([]),
     };
     const { boxId } = seedStorageHierarchy(collections, 66);
     const specimenId = 'BIO-SESSION-2';
     seedCanonicalPlacement(collections, boxId, specimenId);
-    collections.samples = makeCollection([{ _id: new ObjectId(), specimenId, specimenStatus: 'available', quantity: 2 }]);
+    collections.specimens = makeCollection([{ _id: new ObjectId(), specimenId, specimenStatus: 'available', quantity: 2 }]);
     const db = buildDb(collections);
     await quarantineService.quarantineByColdChainIncident(db, {
       sensorKey: 'sensor-session-2',
       status: 'open',
     }, { session });
-    expect(collections.samples.find).toHaveBeenCalledWith(expect.anything(), { session });
-    expect(collections.samples.updateOne).toHaveBeenCalledWith(expect.anything(), expect.anything(), { session });
+    expect(collections.specimens.find).toHaveBeenCalledWith(expect.anything(), { session });
+    expect(collections.specimens.updateOne).toHaveBeenCalledWith(expect.anything(), expect.anything(), { session });
   });
 
   it('resolves a valid ObjectId-string equipment reference on the sensorMetadata document', async () => {
@@ -484,7 +481,7 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
     const collections = { specimens: makeCollection([]) };
     const db = buildDb(collections);
     await quarantineService.markColdChainIncidentSamplesForReview(db, { _id: new ObjectId() }, { session });
-    expect(collections.samples.updateMany).toHaveBeenCalledWith(expect.anything(), expect.anything(), { session });
+    expect(collections.specimens.updateMany).toHaveBeenCalledWith(expect.anything(), expect.anything(), { session });
   });
 
   it('defaults quantitySnapshot to 0 when neither currentQuantity nor quantity is set on the sample', async () => {
@@ -492,20 +489,19 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
       sensors: makeCollection([{ sensorId: 'sensor-qty', locationID: 55 }]),
       sensorMetadata: makeCollection([]),
       sampleMovements: makeCollection([]),
-      sampleMovements: makeCollection([]),
       counters: makeCollection([]),
     };
     const { boxId } = seedStorageHierarchy(collections, 55);
     const specimenId = 'BIO-QTY-55';
     seedCanonicalPlacement(collections, boxId, specimenId);
-    collections.samples = makeCollection([{ _id: new ObjectId(), specimenId, specimenStatus: 'available' }]);
+    collections.specimens = makeCollection([{ _id: new ObjectId(), specimenId, specimenStatus: 'available' }]);
     const db = buildDb(collections);
     const result = await quarantineService.quarantineByColdChainIncident(db, {
       sensorKey: 'sensor-qty',
       status: 'open',
     });
     expect(result.quarantined).toBe(1);
-    const movement = collections.sample_movements.insertOne.mock.calls[0][0];
+    const movement = collections.sampleMovements.insertOne.mock.calls[0][0];
     expect(movement.quantity).toBe(0);
     // context.reason is always set by every caller (buildStatusChangeReason /
     // buildColdChainIncidentReason), so the `|| 'Quarentena automática por

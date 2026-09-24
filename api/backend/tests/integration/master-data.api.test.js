@@ -13,18 +13,19 @@ const {
   makeAuthToken,
   makeLegacyClaimsToken,
   buildAuthenticatedCollections,
+  buildAuthIdentityCollections,
   userForAccessType,
   TEST_USER_ACCOUNT_IDS,
 } = require('../factories/auth.factory');
 
 
-const rbacCollectionsAdmin = buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 4 }]);
+const RBAC_COLLECTIONS = buildAuthenticatedCollections([2, 3, 4]);
 // #913: real RBAC fixtures for the Técnico/Coordenador role-gate tests below --
 // without these, resolveUserHierarchyLevel finds no UserRoleAssignment and
 // returns null, and rbac.js:50's `userLevel === null || !allowedRoles.includes(userLevel)`
 // short-circuits on the null branch before the role list is ever consulted.
-const rbacCollectionsTechnician = buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 2 }]);
-const rbacCollectionsCoordenador = buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 3 }]);
+const rbacCollectionsTechnician = buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[2], accessType: 2 }]);
+const rbacCollectionsCoordenador = buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[3], accessType: 3 }]);
 
 // Tests for createMasterDataRouter — covers all 5 mounted instances via
 // /api/measurement-units (all branches of the factory router are shared code)
@@ -57,7 +58,7 @@ describe('GET /api/measurement-units', () => {
         toArray: vi.fn().mockResolvedValue([FAKE_ITEM]),
       }),
     });
-    app.locals.db = createDbMock({ measurementUnits: coll, ...rbacCollectionsAdmin });
+    app.locals.db = createDbMock({ measurementUnits: coll, ...RBAC_COLLECTIONS });
 
     const res = await request(app)
       .get('/api/measurement-units')
@@ -75,7 +76,7 @@ describe('GET /api/measurement-units/:id', () => {
 
   it('returns 404 when not found', async () => {
     const coll = createCollectionMock({ findOne: vi.fn().mockResolvedValue(null) });
-    app.locals.db = createDbMock({ measurementUnits: coll, ...rbacCollectionsAdmin });
+    app.locals.db = createDbMock({ measurementUnits: coll, ...RBAC_COLLECTIONS });
 
     const res = await request(app)
       .get('/api/measurement-units/507f1f77bcf86cd799439011')
@@ -85,7 +86,7 @@ describe('GET /api/measurement-units/:id', () => {
 
   it('returns item by id', async () => {
     const coll = createCollectionMock({ findOne: vi.fn().mockResolvedValue(FAKE_ITEM) });
-    app.locals.db = createDbMock({ measurementUnits: coll, ...rbacCollectionsAdmin });
+    app.locals.db = createDbMock({ measurementUnits: coll, ...RBAC_COLLECTIONS });
 
     const res = await request(app)
       .get('/api/measurement-units/507f1f77bcf86cd799439011')
@@ -96,7 +97,7 @@ describe('GET /api/measurement-units/:id', () => {
 
   it('returns item by numeric (non-ObjectId) id, matching on idField', async () => {
     const coll = createCollectionMock({ findOne: vi.fn().mockResolvedValue(FAKE_ITEM) });
-    app.locals.db = createDbMock({ measurementUnits: coll, ...rbacCollectionsAdmin });
+    app.locals.db = createDbMock({ measurementUnits: coll, ...RBAC_COLLECTIONS });
 
     const res = await request(app)
       .get('/api/measurement-units/42')
@@ -148,7 +149,9 @@ describe('POST /api/measurement-units', () => {
   // real fixtures. Kept as its own test so that branch stays covered now
   // that the others no longer exercise it.
   it('returns 403 when the caller has no resolvable role assignment at all (null hierarchy level)', async () => {
-    app.locals.db = createDbMock({});
+    // Stage 2E: authenticate() needs UserAccount+Actor UUIDs, but this case
+    // intentionally omits UserRoleAssignment so hierarchy resolves to null.
+    app.locals.db = createDbMock({ ...buildAuthIdentityCollections([4]) });
     const res = await request(app)
       .post('/api/measurement-units')
       .set('Authorization', `Bearer ${makeToken(4)}`)
@@ -160,7 +163,7 @@ describe('POST /api/measurement-units', () => {
     const coll = createCollectionMock({
       insertOne: vi.fn().mockResolvedValue({ insertedId: '507f1f77bcf86cd799439011' }),
     });
-    app.locals.db = createDbMock({ measurementUnits: coll, ...rbacCollectionsAdmin });
+    app.locals.db = createDbMock({ measurementUnits: coll, ...RBAC_COLLECTIONS });
 
     const res = await request(app)
       .post('/api/measurement-units')
@@ -170,7 +173,7 @@ describe('POST /api/measurement-units', () => {
   });
 
   it('returns 422 when payload fails model validation', async () => {
-    app.locals.db = createDbMock({ measurementUnits: createCollectionMock(), ...rbacCollectionsAdmin });
+    app.locals.db = createDbMock({ measurementUnits: createCollectionMock(), ...RBAC_COLLECTIONS });
 
     const res = await request(app)
       .post('/api/measurement-units')
@@ -199,7 +202,7 @@ describe('PUT /api/measurement-units/:id', () => {
 
   it('returns 404 when not found', async () => {
     const coll = createCollectionMock({ findOneAndUpdate: vi.fn().mockResolvedValue(null) });
-    app.locals.db = createDbMock({ measurementUnits: coll, ...rbacCollectionsAdmin });
+    app.locals.db = createDbMock({ measurementUnits: coll, ...RBAC_COLLECTIONS });
 
     const res = await request(app)
       .put('/api/measurement-units/507f1f77bcf86cd799439011')
@@ -210,7 +213,7 @@ describe('PUT /api/measurement-units/:id', () => {
 
   it('updates item for admin', async () => {
     const coll = createCollectionMock({ findOneAndUpdate: vi.fn().mockResolvedValue({ ...FAKE_ITEM, description: 'Updated' }) });
-    app.locals.db = createDbMock({ measurementUnits: coll, ...rbacCollectionsAdmin });
+    app.locals.db = createDbMock({ measurementUnits: coll, ...RBAC_COLLECTIONS });
 
     const res = await request(app)
       .put('/api/measurement-units/507f1f77bcf86cd799439011')
@@ -222,7 +225,7 @@ describe('PUT /api/measurement-units/:id', () => {
 
   it('updates item by numeric (non-ObjectId) id, matching on idField', async () => {
     const coll = createCollectionMock({ findOneAndUpdate: vi.fn().mockResolvedValue({ ...FAKE_ITEM, description: 'Updated' }) });
-    app.locals.db = createDbMock({ measurementUnits: coll, ...rbacCollectionsAdmin });
+    app.locals.db = createDbMock({ measurementUnits: coll, ...RBAC_COLLECTIONS });
 
     const res = await request(app)
       .put('/api/measurement-units/42')
@@ -251,7 +254,7 @@ describe('PUT /api/measurement-units/:id', () => {
     const coll = createCollectionMock({
       findOneAndUpdate: vi.fn().mockResolvedValue({ ...FAKE_ITEM, description: 'x' }),
     });
-    app.locals.db = createDbMock({ measurementUnits: coll, ...rbacCollectionsAdmin });
+    app.locals.db = createDbMock({ measurementUnits: coll, ...RBAC_COLLECTIONS });
 
     const res = await request(app)
       .put('/api/measurement-units/507f1f77bcf86cd799439011')
@@ -281,7 +284,7 @@ describe('DELETE /api/measurement-units/:id', () => {
 
   it('returns 404 when not found', async () => {
     const coll = createCollectionMock({ deleteOne: vi.fn().mockResolvedValue({ deletedCount: 0 }) });
-    app.locals.db = createDbMock({ measurementUnits: coll, ...rbacCollectionsAdmin });
+    app.locals.db = createDbMock({ measurementUnits: coll, ...RBAC_COLLECTIONS });
 
     const res = await request(app)
       .delete('/api/measurement-units/507f1f77bcf86cd799439011')
@@ -291,7 +294,7 @@ describe('DELETE /api/measurement-units/:id', () => {
 
   it('deletes item for admin', async () => {
     const coll = createCollectionMock({ deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }) });
-    app.locals.db = createDbMock({ measurementUnits: coll, ...rbacCollectionsAdmin });
+    app.locals.db = createDbMock({ measurementUnits: coll, ...RBAC_COLLECTIONS });
 
     const res = await request(app)
       .delete('/api/measurement-units/507f1f77bcf86cd799439011')
@@ -302,7 +305,7 @@ describe('DELETE /api/measurement-units/:id', () => {
 
   it('deletes item by numeric (non-ObjectId) id, matching on idField', async () => {
     const coll = createCollectionMock({ deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }) });
-    app.locals.db = createDbMock({ measurementUnits: coll, ...rbacCollectionsAdmin });
+    app.locals.db = createDbMock({ measurementUnits: coll, ...RBAC_COLLECTIONS });
 
     const res = await request(app)
       .delete('/api/measurement-units/42')
@@ -329,7 +332,7 @@ describe('GET /api/sample-types', () => {
     const coll = createCollectionMock({
       find: vi.fn().mockReturnValue({ sort: vi.fn().mockReturnThis(), toArray: vi.fn().mockResolvedValue([]) }),
     });
-    app.locals.db = createDbMock({ sampleTypes: coll, ...rbacCollectionsAdmin });
+    app.locals.db = createDbMock({ sampleTypes: coll, ...RBAC_COLLECTIONS });
 
     const res = await request(app)
       .get('/api/sample-types')
@@ -349,7 +352,7 @@ describe('GET /api/sample-types/:id (canonical string business key)', () => {
 
   it('finds a seeded row by its canonical string key ("PLASMA")', async () => {
     const coll = createCollectionMock({ findOne: vi.fn().mockResolvedValue(SEEDED_ITEM) });
-    app.locals.db = createDbMock({ sampleTypes: coll, ...rbacCollectionsAdmin });
+    app.locals.db = createDbMock({ sampleTypes: coll, ...RBAC_COLLECTIONS });
 
     const res = await request(app)
       .get('/api/sample-types/PLASMA')
@@ -365,7 +368,7 @@ describe('GET /api/sample-types/:id (canonical string business key)', () => {
 
   it('regression: still finds a row by its Mongo _id and numeric/string idField', async () => {
     const coll = createCollectionMock({ findOne: vi.fn().mockResolvedValue(SEEDED_ITEM) });
-    app.locals.db = createDbMock({ sampleTypes: coll, ...rbacCollectionsAdmin });
+    app.locals.db = createDbMock({ sampleTypes: coll, ...RBAC_COLLECTIONS });
 
     const res = await request(app)
       .get('/api/sample-types/507f1f77bcf86cd799439011')
@@ -396,7 +399,7 @@ describe('PUT /api/sample-types/:id (canonical string business key)', () => {
     const coll = createCollectionMock({
       findOneAndUpdate: vi.fn().mockResolvedValue({ id: 'PLASMA', description: 'Plasma Updated' }),
     });
-    app.locals.db = createDbMock({ sampleTypes: coll, ...rbacCollectionsAdmin });
+    app.locals.db = createDbMock({ sampleTypes: coll, ...RBAC_COLLECTIONS });
 
     const res = await request(app)
       .put('/api/sample-types/PLASMA')
@@ -417,7 +420,7 @@ describe('PUT /api/sample-types/:id (canonical string business key)', () => {
     const coll = createCollectionMock({
       findOneAndUpdate: vi.fn().mockResolvedValue({ id: 'PLASMA', description: 'Updated' }),
     });
-    app.locals.db = createDbMock({ sampleTypes: coll, ...rbacCollectionsAdmin });
+    app.locals.db = createDbMock({ sampleTypes: coll, ...RBAC_COLLECTIONS });
 
     const res = await request(app)
       .put('/api/sample-types/507f1f77bcf86cd799439011')
@@ -437,7 +440,7 @@ describe('PUT /api/sample-types/:id (canonical string business key)', () => {
 describe('DELETE /api/sample-types/:id (canonical string business key)', () => {
   it('deletes a seeded row found by its canonical string key ("PLASMA")', async () => {
     const coll = createCollectionMock({ deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }) });
-    app.locals.db = createDbMock({ sampleTypes: coll, ...rbacCollectionsAdmin });
+    app.locals.db = createDbMock({ sampleTypes: coll, ...RBAC_COLLECTIONS });
 
     const res = await request(app)
       .delete('/api/sample-types/PLASMA')
@@ -453,7 +456,7 @@ describe('DELETE /api/sample-types/:id (canonical string business key)', () => {
 
   it('regression: still deletes a row found by its Mongo _id', async () => {
     const coll = createCollectionMock({ deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }) });
-    app.locals.db = createDbMock({ sampleTypes: coll, ...rbacCollectionsAdmin });
+    app.locals.db = createDbMock({ sampleTypes: coll, ...RBAC_COLLECTIONS });
 
     const res = await request(app)
       .delete('/api/sample-types/507f1f77bcf86cd799439011')
@@ -478,7 +481,7 @@ describe('GET /api/sample-origins', () => {
     const coll = createCollectionMock({
       find: vi.fn().mockReturnValue({ sort: vi.fn().mockReturnThis(), toArray: vi.fn().mockResolvedValue([]) }),
     });
-    app.locals.db = createDbMock({ sampleOrigins: coll, ...rbacCollectionsAdmin });
+    app.locals.db = createDbMock({ sampleOrigins: coll, ...RBAC_COLLECTIONS });
 
     const res = await request(app)
       .get('/api/sample-origins')
@@ -498,7 +501,7 @@ describe('GET /api/extraction-protocols', () => {
     const coll = createCollectionMock({
       find: vi.fn().mockReturnValue({ sort: vi.fn().mockReturnThis(), toArray: vi.fn().mockResolvedValue([]) }),
     });
-    app.locals.db = createDbMock({ extractionProtocols: coll, ...rbacCollectionsAdmin });
+    app.locals.db = createDbMock({ extractionProtocols: coll, ...RBAC_COLLECTIONS });
 
     const res = await request(app)
       .get('/api/extraction-protocols')
@@ -518,7 +521,7 @@ describe('GET /api/quality-descriptions', () => {
     const coll = createCollectionMock({
       find: vi.fn().mockReturnValue({ sort: vi.fn().mockReturnThis(), toArray: vi.fn().mockResolvedValue([]) }),
     });
-    app.locals.db = createDbMock({ qualityDescriptions: coll, ...rbacCollectionsAdmin });
+    app.locals.db = createDbMock({ qualityDescriptions: coll, ...RBAC_COLLECTIONS });
 
     const res = await request(app)
       .get('/api/quality-descriptions')
@@ -580,7 +583,7 @@ describe('unexpected-error (500) branches', () => {
     const coll = createCollectionMock({
       find: vi.fn().mockImplementation(() => { throw new Error('boom'); }),
     });
-    app.locals.db = createDbMock({ measurementUnits: coll, ...rbacCollectionsAdmin });
+    app.locals.db = createDbMock({ measurementUnits: coll, ...RBAC_COLLECTIONS });
 
     const res = await request(app)
       .get('/api/measurement-units')
@@ -593,7 +596,7 @@ describe('unexpected-error (500) branches', () => {
     const coll = createCollectionMock({
       findOne: vi.fn().mockRejectedValue(new Error('boom')),
     });
-    app.locals.db = createDbMock({ measurementUnits: coll, ...rbacCollectionsAdmin });
+    app.locals.db = createDbMock({ measurementUnits: coll, ...RBAC_COLLECTIONS });
 
     const res = await request(app)
       .get('/api/measurement-units/507f1f77bcf86cd799439011')
@@ -605,7 +608,7 @@ describe('unexpected-error (500) branches', () => {
     const coll = createCollectionMock({
       insertOne: vi.fn().mockRejectedValue(new Error('boom')),
     });
-    app.locals.db = createDbMock({ measurementUnits: coll, ...rbacCollectionsAdmin });
+    app.locals.db = createDbMock({ measurementUnits: coll, ...RBAC_COLLECTIONS });
 
     const res = await request(app)
       .post('/api/measurement-units')
@@ -618,7 +621,7 @@ describe('unexpected-error (500) branches', () => {
     const coll = createCollectionMock({
       findOneAndUpdate: vi.fn().mockRejectedValue(new Error('boom')),
     });
-    app.locals.db = createDbMock({ measurementUnits: coll, ...rbacCollectionsAdmin });
+    app.locals.db = createDbMock({ measurementUnits: coll, ...RBAC_COLLECTIONS });
 
     const res = await request(app)
       .put('/api/measurement-units/507f1f77bcf86cd799439011')
@@ -631,7 +634,7 @@ describe('unexpected-error (500) branches', () => {
     const coll = createCollectionMock({
       deleteOne: vi.fn().mockRejectedValue(new Error('boom')),
     });
-    app.locals.db = createDbMock({ measurementUnits: coll, ...rbacCollectionsAdmin });
+    app.locals.db = createDbMock({ measurementUnits: coll, ...RBAC_COLLECTIONS });
 
     const res = await request(app)
       .delete('/api/measurement-units/507f1f77bcf86cd799439011')
@@ -659,7 +662,7 @@ describe('POST master-data: generated identifier satisfies the entity model (#88
       const coll = createCollectionMock({
         insertOne: vi.fn().mockResolvedValue({ insertedId: '507f1f77bcf86cd799439011' }),
       });
-      app.locals.db = createDbMock({ [collection]: coll, ...rbacCollectionsAdmin });
+      app.locals.db = createDbMock({ [collection]: coll, ...RBAC_COLLECTIONS });
 
       const res = await request(app)
         .post(route)
@@ -683,7 +686,7 @@ describe('POST master-data: generated identifier satisfies the entity model (#88
       const coll = createCollectionMock({
         insertOne: vi.fn().mockResolvedValue({ insertedId: '507f1f77bcf86cd799439011' }),
       });
-      app.locals.db = createDbMock({ [collection]: coll, ...rbacCollectionsAdmin });
+      app.locals.db = createDbMock({ [collection]: coll, ...RBAC_COLLECTIONS });
 
       const res = await request(app)
         .post(route)

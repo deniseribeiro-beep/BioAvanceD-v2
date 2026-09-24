@@ -58,8 +58,11 @@ function makeDb(collections = {}, client = null) {
     storageContainers: makeCollection(),
     rooms: makeCollection()
   };
+  // Stage 2E: product code asks for `specimens`; keep `samples` alias for older fixtures.
+  const resolved = { ...collections };
+  if (resolved.samples && !resolved.specimens) resolved.specimens = resolved.samples;
   return {
-    collection: (name) => collections[name] || defaults[name] || makeCollection(),
+    collection: (name) => resolved[name] || defaults[name] || makeCollection(),
     ...(client ? { client } : {})
   };
 }

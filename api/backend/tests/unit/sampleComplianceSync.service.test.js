@@ -61,7 +61,7 @@ describe('revalidateSamplesByParticipantId', () => {
     const db = { fake: true };
     await revalidateSamplesByParticipantId(db, '  P123  ');
 
-    expect(collectionResolverModule.getCollection).toHaveBeenCalledWith(db, 'samples');
+    expect(collectionResolverModule.getCollection).toHaveBeenCalledWith(db, 'Specimen');
     expect(find).toHaveBeenCalledWith(
       { participantId: 'P123' },
       { projection: { specimenId: 1 } }

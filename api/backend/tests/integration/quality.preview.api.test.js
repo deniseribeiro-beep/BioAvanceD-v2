@@ -2,13 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const request = require('supertest');
 const {
   makeAuthToken,
-  makeLegacyClaimsToken,
-  buildAuthenticatedCollections,
-  userForAccessType,
   TEST_USER_ACCOUNT_IDS,
 } = require('../factories/auth.factory');
-
-const jwt = require('jsonwebtoken');
+const { createDbMock, createCollectionMock } = require('../factories/db.factory');
+const { buildRbacCollections } = require('../factories/rbac.factory');
 
 process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
@@ -23,30 +20,21 @@ function admissibleGovernanceEvidence() {
   );
 }
 
-
 function createAuthToken() {
-  return jwt.sign(
-    {
-      id: 'quality-user-1',
-      userID: 'quality-user-1',
-      accessType: 2,
-      roleName: 'Tecnico',
-      mfaVerified: true,
-    },
-    process.env.JWT_SECRET,
-    { expiresIn: '1h' }
-  );
+  return makeAuthToken(2);
 }
 
 describe('POST /api/quality/preview RCS-GOV 1.0', () => {
   beforeEach(() => {
-    app.locals.db = {
-      collection: () => ({
-        findOne: vi.fn().mockResolvedValue(null),
-        updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
-        insertOne: vi.fn().mockResolvedValue({ insertedId: 'audit-1' }),
-      }),
-    };
+    const generic = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue(null),
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
+      insertOne: vi.fn().mockResolvedValue({ insertedId: 'audit-1' }),
+    });
+    app.locals.db = createDbMock({
+      ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[2], accessType: 2 }]),
+      auditLogs: generic,
+    });
     vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 'quality-preview-session' } });
     vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 'quality-preview-session' });
   });

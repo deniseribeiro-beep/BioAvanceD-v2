@@ -140,9 +140,16 @@ describe('auditLogger', () => {
       expect(info.userRole).toBe('Administrador');
     });
 
-    it('falls back to req.user._id.toString() when userID is absent', async () => {
+    it('returns USR-SYSTEM when only a non-UUID _id is present (Stage 2E requires userID UUID)', async () => {
       const info = await auditLogger.extractUserInfo({
         user: { _id: { toString: () => '550e8400-e29b-41d4-a716-4466554400aa' } },
+      });
+      expect(info.userID).toBe('USR-SYSTEM');
+    });
+
+    it('anonymizes when userAccountId UUID is present without userID', async () => {
+      const info = await auditLogger.extractUserInfo({
+        user: { userAccountId: '550e8400-e29b-41d4-a716-4466554400aa' },
       });
       expect(info.userID).toMatch(ANON_ID_RE);
     });
@@ -179,9 +186,10 @@ describe('auditLogger', () => {
     // carries no roleName, the label is resolved via UserRoleAssignment ->
     // Role instead of the JWT's accessType.
     it('resolves userRole via RBAC when db is available and roleName is absent', async () => {
-      const rbac = buildRbacCollections([{ userAccountId: 'u1', accessType: 3 }]);
+      const accountId = '550e8400-e29b-41d4-a716-446655440002';
+      const rbac = buildRbacCollections([{ userAccountId: accountId, accessType: 3 }]);
       const db = { collection: (name) => rbac[name] };
-      const info = await auditLogger.extractUserInfo({ user: { userID: '550e8400-e29b-41d4-a716-446655440002' } }, db);
+      const info = await auditLogger.extractUserInfo({ user: { userID: accountId } }, db);
       expect(info.userRole).toBe('Coordenador');
     });
 
@@ -447,7 +455,8 @@ describe('auditLogger', () => {
       await auditLogger.log({ action: 'X', resourceType: 'Y' });
       const [, logData] = logService.createLog.mock.calls[0];
       expect(logData.module).toBe('Sistema');
-      expect(logData.userID).toMatch(ANON_ID_RE);
+      // No authenticated user → USR-SYSTEM sentinel (not a hashed USR- anon id).
+      expect(logData.userID).toBe('USR-SYSTEM');
     });
 
     it('builds errorStack and default message when an error is passed without a message', async () => {

@@ -114,7 +114,7 @@ describe('POST /api/organizations', () => {
 
   it('returns 403 for a role below Administrador', async () => {
     app.locals.db = createDbMock({
-      ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 3 }]),
+      ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[3], accessType: 3 }]),
     });
 
     const res = await request(app)
@@ -176,7 +176,7 @@ describe('PUT /api/organizations/:id', () => {
 
   it('returns 403 for a role below Administrador', async () => {
     app.locals.db = createDbMock({
-      ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 3 }]),
+      ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[3], accessType: 3 }]),
     });
 
     const res = await request(app)
@@ -253,7 +253,7 @@ describe('DELETE /api/organizations/:id', () => {
 
   it('returns 403 for a role below Administrador', async () => {
     app.locals.db = createDbMock({
-      ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 3 }]),
+      ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[3], accessType: 3 }]),
     });
 
     const res = await request(app)

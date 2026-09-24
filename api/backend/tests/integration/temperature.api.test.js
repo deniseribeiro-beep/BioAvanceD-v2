@@ -318,7 +318,11 @@ describe('#1062: GET /api/temperature/alerts is organization-scoped', () => {
           };
         }),
       }),
-      ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[2], accessType, organizationId: callerOrganizationId }])
+      ...buildRbacCollections([{
+        userAccountId: TEST_USER_ACCOUNT_IDS[accessType] || TEST_USER_ACCOUNT_IDS[2],
+        accessType,
+        organizationId: callerOrganizationId,
+      }])
     });
     return captured;
   }
@@ -360,7 +364,7 @@ describe('#1062: GET /api/temperature/alerts is organization-scoped', () => {
 
     const res = await request(app)
       .get('/api/temperature/alerts')
-      .set('Authorization', `Bearer ${jwt.sign({ userID: TEST_USER_ACCOUNT_IDS[2], accessType: 4, roleName: 'Administrador', name: 'QA', mfaVerified: true }, process.env.JWT_SECRET, { expiresIn: '1h' })}`);
+      .set('Authorization', `Bearer ${makeToken(4)}`);
 
     expect(res.status).toBe(200);
     const body = JSON.stringify(res.body);
