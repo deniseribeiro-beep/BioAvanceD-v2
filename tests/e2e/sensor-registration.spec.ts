@@ -3,6 +3,7 @@ import {
   seedFreezerContainer,
   findSensorMetadata,
   removeSensorRegistration,
+  removeTemperaturePolicy,
   closeSeedSensorDb,
 } from './helpers/seedSensor';
 import { realLogin, seedRealAuth } from './helpers/realAuth';
@@ -110,6 +111,70 @@ test.describe('Sensor registration links SensorMetadata (#311)', () => {
       expect(metadata.storageContainer?.toString()).toBe(freezerId);
     } finally {
       await removeSensorRegistration(sensorId, freezerId);
+    }
+  });
+
+  // Real-backend proof for #1145: the form's policy dropdown used to send a
+  // numeric policyID onto Sensor.policyId, which no resolver reads, so a
+  // sensor registered with a policy was governed by nothing. It must now bind
+  // SensorMetadata.temperaturePolicy -- the field iot.controller and
+  // TelemetryMonitor resolve thresholds from -- to the chosen policy's _id.
+  // The policy is created through the real API, the path an operator uses.
+  test('the Novo Sensor policy dropdown binds SensorMetadata.temperaturePolicy (#1145)', async ({ page, request }) => {
+    const freezerId = await seedFreezerContainer();
+    const suffix = Date.now();
+    const sensorId = `rf009-ui-policy-e2e-${suffix}`;
+    const macSuffix = suffix.toString(16).padStart(4, '0').slice(-4);
+    let policyId: string | undefined;
+
+    try {
+      let session;
+      try {
+        session = await realLogin(request);
+      } catch (err: any) {
+        console.warn(`realLogin failed -- DB may not be seeded with an admin user yet: ${err.message}`);
+        return;
+      }
+
+      const policyResponse = await request.post(`${apiBaseURL}/api/policies`, {
+        headers: { Authorization: `Bearer ${session.token}` },
+        data: {
+          policyName: `e2e-1145-${suffix}`,
+          minThreshold: 2,
+          maxThreshold: 8,
+          targetTemperature: 5,
+          validFrom: new Date().toISOString(),
+          validTo: new Date(Date.now() + 86_400_000).toISOString(),
+        },
+      });
+      expect(policyResponse.status()).toBe(201);
+      policyId = (await policyResponse.json())?.data?._id;
+      expect(policyId).toBeTruthy();
+
+      await seedRealAuth(page, session);
+      await page.goto('/facility-management?tab=sensors');
+      await page.getByTestId('new-sensor-button').click();
+
+      // Without a MAC there is no SensorMetadata to bind to, so the
+      // dropdown stays disabled until one is entered.
+      await expect(page.getByTestId('sensor-policy-select')).toBeDisabled();
+
+      await page.getByTestId('sensor-id-input').fill(sensorId);
+      await page.getByTestId('sensor-type-input').fill('temperature');
+      await page.getByTestId('sensor-mac-address-input').fill(`AA:BB:CC:33:${macSuffix.slice(0, 2)}:${macSuffix.slice(2, 4)}`);
+      await expect(page.getByTestId('sensor-policy-select')).toBeEnabled();
+      await page.getByTestId('sensor-policy-select').selectOption(policyId!);
+      await page.getByTestId('sensor-storage-container-select').selectOption(freezerId);
+
+      await page.getByTestId('sensor-form-submit').click();
+      await expect(page.getByTestId('sensor-form-submit')).not.toBeVisible();
+
+      const metadata = await findSensorMetadata(sensorId);
+      expect(metadata).not.toBeNull();
+      expect(metadata.temperaturePolicy?.toString()).toBe(policyId);
+    } finally {
+      await removeSensorRegistration(sensorId, freezerId);
+      if (policyId) await removeTemperaturePolicy(policyId);
     }
   });
 });

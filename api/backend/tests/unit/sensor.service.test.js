@@ -201,6 +201,26 @@ describe('sensor.service (non-quarantine paths)', () => {
       expect(result.metadataLinked).toBe(true);
     });
 
+    // #1145: the binding lives on SensorMetadata, and that row is only
+    // created when a macAddress is given. A policy without one used to be
+    // dropped silently -- a sensor that looked governed and was not -- so it
+    // is refused before anything is written.
+    it('#1145: refuses temperaturePolicy without macAddress, writing nothing', async () => {
+      const { db } = makeDb();
+      const sensorsCollection = { insertOne: vi.fn().mockResolvedValue({ insertedId: 'abc123' }) };
+      const sensorMetadataCollection = { updateOne: vi.fn() };
+      db.collection = vi.fn((name) => (name === 'sensorMetadata' ? sensorMetadataCollection : sensorsCollection));
+
+      await expect(sensorService.createSensor(db, {
+        sensorId: 'S-1',
+        sensorType: 'temperature',
+        temperaturePolicy: '507f1f77bcf86cd799439088'
+      })).rejects.toThrow(/temperaturePolicy exige macAddress/);
+
+      expect(sensorsCollection.insertOne).not.toHaveBeenCalled();
+      expect(sensorMetadataCollection.updateOne).not.toHaveBeenCalled();
+    });
+
     // This one is not cosmetic and the mock cannot catch it on its own:
     // MongoDB REJECTS an update naming the same field in both $set and
     // $setOnInsert. temperaturePolicy is already in $setOnInsert, unlike

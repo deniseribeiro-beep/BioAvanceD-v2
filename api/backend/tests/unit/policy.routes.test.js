@@ -104,12 +104,13 @@ describe('policy.routes', () => {
       expect(res.body.data).toEqual({ policyId: 5 });
     });
 
-    it('falls back to ObjectId lookup when not a numeric match', async () => {
+    // #1178: this used to assert TWO lookups for '507f...', and the first was
+    // the defect -- parseInt('507f...') is 507, so a numeric policyId lookup ran
+    // before the _id one and could return an unrelated legacy policy. The
+    // frontend now keys every policy call on _id, which made that reachable.
+    it('#1178: an ObjectId-shaped id goes straight to the _id lookup, never a numeric policyId one', async () => {
       const objectId = '507f1f77bcf86cd799439011';
-      const findOne = vi
-        .fn()
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce({ _id: objectId });
+      const findOne = vi.fn().mockResolvedValueOnce({ _id: objectId });
       const db = { collection: vi.fn().mockReturnValue({ findOne }) };
       const { router } = loadRoute();
       const app = buildApp(router, db);
@@ -117,7 +118,23 @@ describe('policy.routes', () => {
       const res = await request(app).get(`/api/policies/${objectId}`);
 
       expect(res.status).toBe(200);
-      expect(findOne).toHaveBeenCalledTimes(2);
+      expect(findOne).toHaveBeenCalledTimes(1);
+      expect(findOne.mock.calls[0][0]).not.toHaveProperty('policyId');
+      expect(findOne.mock.calls[0][0]._id.toString()).toBe(objectId);
+    });
+
+    it('#1178: /:id/active-limit also skips the numeric lookup for an ObjectId-shaped id', async () => {
+      const objectId = '507f1f77bcf86cd799439011';
+      const findOne = vi.fn().mockResolvedValueOnce({ _id: objectId, maxTemp: 8, minTemp: 2 });
+      const db = { collection: vi.fn().mockReturnValue({ findOne }) };
+      const { router } = loadRoute();
+      const app = buildApp(router, db);
+
+      const res = await request(app).get(`/api/policies/${objectId}/active-limit`);
+
+      expect(res.status).toBe(200);
+      expect(findOne).toHaveBeenCalledTimes(1);
+      expect(findOne.mock.calls[0][0]).not.toHaveProperty('policyId');
     });
 
     it('returns 404 when no policy matches by id or objectId', async () => {

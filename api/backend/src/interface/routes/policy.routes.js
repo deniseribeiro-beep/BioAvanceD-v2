@@ -137,7 +137,10 @@ router.get('/:id', authenticate, requirePermission('viewTemperature'), async (re
     const numId = parseInt(id, 10);
     
     let policy;
-    if (!isNaN(numId)) {
+    // #1178: only an all-digit id is a legacy numeric policyId. parseInt
+    // reads the leading digits of an ObjectId hex string ('66f2...' -> 66),
+    // which could match an unrelated legacy policy before the _id lookup ran.
+    if (/^\d+$/.test(id) && !isNaN(numId)) {
       // Se é um número, busca por policyId
       policy = await policiesCollection.findOne({ policyId: numId });
     }
@@ -186,7 +189,10 @@ router.get('/:id/active-limit', authenticate, requirePermission('viewTemperature
     const numId = parseInt(id, 10);
     
     let policy;
-    if (!isNaN(numId)) {
+    // #1178: only an all-digit id is a legacy numeric policyId. parseInt
+    // reads the leading digits of an ObjectId hex string ('66f2...' -> 66),
+    // which could match an unrelated legacy policy before the _id lookup ran.
+    if (/^\d+$/.test(id) && !isNaN(numId)) {
       // Se é um número, busca por policyId
       policy = await policiesCollection.findOne({ policyId: numId });
     }

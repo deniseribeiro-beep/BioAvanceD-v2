@@ -530,14 +530,16 @@ export const sensorService = {
 // ========== POLICY SERVICES ==========
 export const policyService = {
   getAll: () => api.get<ApiEnvelope<Policy[]>>('/policies'),
-  getById: (id: number) => api.get<Policy>(`/policies/${id}`),
-  getActiveLimit: (id: number, isMax: boolean = true) =>
+  // #1178: `id` is the policy's _id. The API never returns a `policyID`, and
+  // PUT/DELETE look up by _id only.
+  getById: (id: string) => api.get<Policy>(`/policies/${id}`),
+  getActiveLimit: (id: string, isMax: boolean = true) =>
     api.get<{ limit: number; type: string; unit: string }>(`/policies/${id}/active-limit`, {
       params: { type: isMax ? 'max' : 'min' }
     }), // Implementa Policy.getActiveLimit()
   create: (data: Partial<Policy>) => api.post<ApiEnvelope<Policy>>('/policies', data), // policy.routes.js:224 (#1089 moved it)
-  update: (id: number, data: Partial<Policy>) => api.put<ApiEnvelope<never>>(`/policies/${id}`, data), // policy.routes.js:220-223, no data key
-  delete: (id: number) => api.delete(`/policies/${id}`),
+  update: (id: string, data: Partial<Policy>) => api.put<ApiEnvelope<never>>(`/policies/${id}`, data), // policy.routes.js:220-223, no data key
+  delete: (id: string) => api.delete(`/policies/${id}`),
 };
 
 // ========== USER SERVICES ==========

@@ -283,6 +283,12 @@ export async function removeSeededFreezerSample(sensor: SeededFreezerSample): Pr
   ]);
 }
 
+/** Deletes one temperaturePolicies document by _id (e.g. one created through the API). */
+export async function removeTemperaturePolicy(policyId: string): Promise<void> {
+  const db = await getDb();
+  await db.collection('temperaturePolicies').deleteOne({ _id: new ObjectId(policyId) });
+}
+
 /** Deletes a seeded freezer container and its linked sensorMetadata/sensors docs. */
 export async function removeSensorRegistration(sensorId: string, freezerId: string): Promise<void> {
   const db = await getDb();

@@ -1056,7 +1056,7 @@ function SensorForm({
       nextCalibration: null,
       calibrationCertificate: '',
       locationID: undefined,
-      policyID: undefined,
+      temperaturePolicy: undefined,
       macAddress: '',
       storageContainer: undefined,
       organizationId: null,
@@ -1180,21 +1180,36 @@ function SensorForm({
         </div>
         <div className="form-grid-full">
           <label className="input-label" htmlFor="sensorPolicySelect">Política de Temperatura</label>
+          {/* #1145: binds SensorMetadata.temperaturePolicy, the field the
+              telemetry path resolves thresholds from, by the policy's _id.
+              It used to send a numeric policyID onto Sensor.policyId, which
+              nothing read. The binding lives on SensorMetadata, which only
+              exists when a MAC address is given, so it needs one. Editing
+              cannot change it yet (#1179), so it is disabled there rather
+              than offered as a choice that saves nothing. */}
           <select
             id="sensorPolicySelect"
+            data-testid="sensor-policy-select"
             className="input"
-            value={formData.policyID || ''}
+            value={formData.temperaturePolicy || ''}
+            disabled={Boolean(sensor) || !formData.macAddress}
             onChange={(e) =>
               setFormData({
                 ...formData,
-                policyID: e.target.value ? parseInt(e.target.value) : undefined,
+                temperaturePolicy: e.target.value || undefined,
               })
             }
           >
-            <option value="">Selecione uma política</option>
-            {policies.map((policy) => (
-              <option key={policy.policyID} value={policy.policyID}>
-                Política #{policy.policyID} - {policy.targetTemperature}{policy.temperatureUnit} (Limites: {policy.minThreshold} - {policy.maxThreshold})
+            <option value="">
+              {sensor
+                ? 'Política definida no cadastro (não editável aqui)'
+                : formData.macAddress
+                  ? 'Selecione uma política'
+                  : 'Informe o MAC Address para vincular uma política'}
+            </option>
+            {policies.filter((policy) => policy && policy._id).map((policy) => (
+              <option key={policy._id} value={policy._id}>
+                {policy.policyName || 'Política'} - {policy.targetTemperature}{policy.temperatureUnit} (Limites: {policy.minThreshold} - {policy.maxThreshold})
               </option>
             ))}
           </select>
@@ -1205,7 +1220,14 @@ function SensorForm({
           placeholder="AA:BB:CC:DD:EE:FF"
           value={formData.macAddress || ''}
           onChange={(e) =>
-            setFormData({ ...formData, macAddress: e.target.value })
+            // #1145: without a MAC there is no SensorMetadata to bind a policy
+            // to, so clearing it clears the choice rather than submitting one
+            // the backend would refuse.
+            setFormData({
+              ...formData,
+              macAddress: e.target.value,
+              ...(e.target.value ? {} : { temperaturePolicy: undefined }),
+            })
           }
         />
         <div className="form-grid-full">
@@ -1268,18 +1290,19 @@ function PoliciesSection() {
   const { policies, loading, error, getActiveLimit, createPolicy, updatePolicy, deletePolicy } = usePolicies();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingPolicy, setEditingPolicy] = useState<Policy | null>(null);
-  const [activeLimits, setActiveLimits] = useState<Record<number, number>>({});
+  // #1178: keyed by _id, the only id the policy API returns.
+  const [activeLimits, setActiveLimits] = useState<Record<string, number>>({});
 
   const policyRows = useMemo(() => (Array.isArray(policies) ? policies : []), [policies]);
 
   useEffect(() => {
-    const validPolicies = policyRows.filter((p) => p && p.policyID);
+    const validPolicies = policyRows.filter((p) => p && p._id);
     validPolicies.forEach(async (policy) => {
       try {
-        const limit = await getActiveLimit(policy.policyID, true);
-        setActiveLimits((prev) => ({ ...prev, [policy.policyID]: limit.limit }));
+        const limit = await getActiveLimit(String(policy._id), true);
+        setActiveLimits((prev) => ({ ...prev, [String(policy._id)]: limit.limit }));
       } catch (err) {
-        console.error(`Erro ao obter limite para política ${policy.policyID}:`, err);
+        console.error(`Erro ao obter limite para política ${policy._id}:`, err);
       }
     });
   }, [policyRows, getActiveLimit]);
@@ -1309,7 +1332,7 @@ function PoliciesSection() {
             'Ações',
           ]}
         >
-          {policyRows.filter((policy) => policy && policy.policyID).length === 0 ? (
+          {policyRows.filter((policy) => policy && policy._id).length === 0 ? (
             <tr>
               <td colSpan={8} className="table-empty-state-cell">
                 <div className="table-empty-state">
@@ -1323,9 +1346,9 @@ function PoliciesSection() {
             </tr>
           ) : (
             policyRows
-              .filter((policy) => policy && policy.policyID)
+              .filter((policy) => policy && policy._id)
               .map((policy) => (
-              <tr key={`policy-${policy.policyID}`}>
+              <tr key={`policy-${policy._id}`} data-testid={`policy-row-${policy._id}`}>
                 <td>{policy.policyName}</td>
                 <td>
                   {policy.targetTemperature}°C
@@ -1337,7 +1360,7 @@ function PoliciesSection() {
                   {policy.maxThreshold}°C
                   <br />
                   <small style={{ color: 'var(--text-light)' }}>
-                    Limite ativo: {activeLimits[policy.policyID]?.toFixed(1) || 'N/A'}°C
+                    Limite ativo: {activeLimits[String(policy._id)]?.toFixed(1) || 'N/A'}°C
                   </small>
                 </td>
                 <td>{policy.hysteresis}°C</td>
@@ -1347,6 +1370,7 @@ function PoliciesSection() {
                   <div className="table-actions">
                     <button
                       className="action-button"
+                      data-testid={`policy-edit-${policy._id}`}
                       onClick={() => {
                         setEditingPolicy(policy);
                         setIsModalOpen(true);
@@ -1357,10 +1381,11 @@ function PoliciesSection() {
                     </button>
                     <button
                       className="action-button danger"
+                      data-testid={`policy-delete-${policy._id}`}
                       onClick={async () => {
                         if (confirm('Tem certeza que deseja excluir esta política?')) {
                           try {
-                            await deletePolicy(policy.policyID);
+                            await deletePolicy(String(policy._id));
                           } catch (err: any) {
                             alert(err.message);
                           }
@@ -1398,7 +1423,7 @@ function PoliciesSection() {
 
             try {
               if (editingPolicy) {
-                await updatePolicy(editingPolicy.policyID, data);
+                await updatePolicy(String(editingPolicy._id), data);
               } else {
                 await createPolicy(data);
               }

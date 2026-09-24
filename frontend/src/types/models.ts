@@ -718,7 +718,10 @@ export interface Sensor {
   nextCalibration?: Date | string | null;
   calibrationCertificate?: string;
   locationID?: number; // Padronizado para Number (consistente com Sample e Location)
-  policyID?: number; // Padronizado para Number (consistente com Policy)
+  // #1145: _id da TemperaturePolicy, vinculado ao SensorMetadata no cadastro
+  // (é o que a telemetria lê). Substitui policyID, que gravava Sensor.policyId
+  // e não era lido por nenhum resolvedor. Exige macAddress.
+  temperaturePolicy?: string;
   macAddress?: string; // Opcional: presente => backend vincula um SensorMetadata (ver #311)
   storageContainer?: string; // ID do StorageContainer (freezer) vinculado ao SensorMetadata
   organizationId?: string | null; // Organization.organizationId (UUID) -- sem backfill, null = não escopado/legado (#634)
@@ -727,8 +730,10 @@ export interface Sensor {
 }
 
 export interface Policy {
-  _id?: string; // MongoDB ID
-  policyID: number;
+  _id?: string; // MongoDB ID -- the id every policy route keys on (#1178)
+  // #1178: legacy numeric id. The API returns it as `policyId` (lowercase d)
+  // and it is null for any policy created since #1089, so nothing keys on it.
+  policyId?: number | null;
   policyName?: string;
   minThreshold: number;
   maxThreshold: number;
