@@ -29,6 +29,7 @@ vi.mock('../../src/services/SampleGraphValidator', () => ({
 vi.mock('../../src/services/MerkleService', () => ({ generateSampleHash: vi.fn(() => 'hash-1') }));
 
 const service = require('../../src/services/import-lgpd.service');
+const { revealStagedRecord } = require('../../src/utils/stagedRowCrypto');
 const patientIdentityService = require('../../src/services/PatientIdentityService');
 const qualityDomain = require('../../src/services/quality-domain.service');
 const DrugService = require('../../src/services/DrugService');
@@ -994,7 +995,8 @@ describe('ImportLGPDService.importSamples', () => {
 
       await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
 
-      const staged = importStagingRecordsCollection.insertMany.mock.calls[0][0];
+      // #807: sealed at rest, so read it back the way the batch reader does.
+      const staged = importStagingRecordsCollection.insertMany.mock.calls[0][0].map(revealStagedRecord);
       // The whole point of quarantine over a log line: the row can be
       // corrected and re-submitted, which needs the original values.
       expect(staged[0].row).toBeDefined();

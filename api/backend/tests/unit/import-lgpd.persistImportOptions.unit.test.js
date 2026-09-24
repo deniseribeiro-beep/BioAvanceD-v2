@@ -20,6 +20,8 @@ import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 const importLGPDService = require('../../src/services/import-lgpd.service');
+// #807: staged rows are sealed at rest; assert on what the reader gets back.
+const { revealStagedRecord } = require('../../src/utils/stagedRowCrypto');
 
 /** Captures what quarantineRejectedSampleRows writes, without a real Mongo. */
 function createDb() {
@@ -162,7 +164,7 @@ describe('#794: quarantined batches record the import options they were produced
     });
 
     expect(db.inserted.records).toHaveLength(1);
-    expect(db.inserted.records[0]).toMatchObject({
+    expect(revealStagedRecord(db.inserted.records[0])).toMatchObject({
       rowNumber: 5,
       row: { specimenId: 'S-3', participantId: '00000042' },
     });
@@ -178,7 +180,7 @@ describe('#794: quarantined batches record the import options they were produced
 
     expect(batchId).toBe('batch-1');
     expect(db.inserted.records).toHaveLength(1);
-    expect(db.inserted.records[0]).toMatchObject({
+    expect(revealStagedRecord(db.inserted.records[0])).toMatchObject({
       rowNumber: 4,
       status: 'ERROR',
       row: { specimenId: 'S-3', participantId: '00000042' },

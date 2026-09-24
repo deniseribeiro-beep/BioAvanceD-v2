@@ -245,5 +245,6 @@ module.exports = {
   hmacBlindIndex,
   hmacBlindIndexCandidates,
   isFieldEncryptionAvailable,
+  unencryptedFieldStorageAllowed,
   assertFieldEncryptionConfigured
 };

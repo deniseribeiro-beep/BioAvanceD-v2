@@ -15,6 +15,8 @@ const notificationService = require('./notification.service');
 const { generateUniqueParticipantId } = require('../utils/patientAnonymization');
 const { getCollection } = require('../utils/collectionResolver');
 const { omitLegacyIdentityFields } = require('../utils/legacyPatientIdentityFields');
+const { sealStagedRecord, revealStagedRecord } = require('../utils/stagedRowCrypto');
+const { encryptFileBuffer, isFileEncryptionAvailable } = require('../utils/fileCrypto');
 const {
   SPECIMEN_TYPES,
   SAMPLE_ORIGINS,
@@ -1146,7 +1148,8 @@ class ImportLGPDService {
       .sort({ rowNumber: 1 })
       .toArray();
 
-    return { batch, records };
+    // #807: rows are sealed at rest; the reader gets them back as staged.
+    return { batch, records: records.map(revealStagedRecord) };
   }
 
   /**
@@ -1260,7 +1263,10 @@ class ImportLGPDService {
       const batchResult = await db.collection('import_batches').insertOne(batchDoc);
       const batchId = batchResult.insertedId;
 
-      const stagedRecords = rejected.map((rejection) => ({
+      // #807: `row` is the pre-anonymisation spreadsheet row, so it and
+      // `normalized` are sealed at rest (stagedRowCrypto) like every other
+      // copy of civil identity.
+      const stagedRecords = rejected.map((rejection) => sealStagedRecord({
         batchId,
         // #1023: rowNumber e' a linha FISICA do arquivo -- o que o operador
         // ve' ao abrir a planilha -- e nao mais o indice do array filtrado
@@ -2580,13 +2586,39 @@ class ImportLGPDService {
       fs.mkdirSync(quarantineDir, { recursive: true });
 
       const storedPath = path.join(quarantineDir, `${String(batchId)}${extension}`);
-      fs.renameSync(file.path, storedPath);
+
+      // #807 (RNF029 AC#5): the file holds the same civil identifiers as the
+      // quarantined rows, so it is stored as ciphertext, in the envelope
+      // shape sample files use (decryptFileBuffer reads it back). With no
+      // key and no ALLOW_UNENCRYPTED_FILE_STORAGE opt-out it is not retained
+      // at all: the staged rows still record the rejection.
+      let encryption = null;
+      if (isFileEncryptionAvailable()) {
+        encryption = encryptFileBuffer(fs.readFileSync(file.path));
+        fs.writeFileSync(storedPath, encryption.ciphertext);
+        fs.unlinkSync(file.path);
+      } else if (process.env.ALLOW_UNENCRYPTED_FILE_STORAGE === 'true') {
+        fs.renameSync(file.path, storedPath);
+      } else {
+        logger.warn(
+          `[SECURITY][AES256] ENCRYPTION_KEY ausente: arquivo de origem do lote ${batchId} nao retido, `
+            + 'para nao gravar identificadores civis em texto claro (#807).'
+        );
+        return null;
+      }
 
       const sourceFile = {
         storedPath,
         originalName,
         size,
         retainedAt: new Date(),
+        encrypted: Boolean(encryption),
+        ...(encryption && {
+          encryptionAlgorithm: encryption.algorithm,
+          encryptionKeyId: encryption.keyId,
+          encryptionIv: encryption.iv,
+          encryptionTag: encryption.tag,
+        }),
       };
 
       await db.collection('import_batches').updateOne(
