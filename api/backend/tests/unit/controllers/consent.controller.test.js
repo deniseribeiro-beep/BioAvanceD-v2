@@ -965,6 +965,32 @@ describe('ConsentController.revokeConsent', () => {
 });
 
 describe('ConsentController.getPatientConsent', () => {
+  // #1188: a Consent has no organization field, so the check runs on its
+  // patient -- the #626 shape every other patient read uses.
+  it('returns 403 and reads no consent when the patient belongs to another organization', async () => {
+    vi.spyOn(patientService, 'getPatient').mockResolvedValue({ participantId: '12345678', clinicalUnitId: 'org-9' });
+    const consentSpy = vi.spyOn(consentService, 'getPatientConsent').mockResolvedValue({ _id: '1' });
+    const req = createReq({ params: { participantId: '12345678' }, organizationScope: { scope: 'organization', organizationIds: ['org-1'] } });
+    const res = createRes();
+
+    await consentController.getPatientConsent(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(consentSpy).not.toHaveBeenCalled();
+  });
+
+  it('CONTROL: reads the consent of a patient in the caller organization, by that patient id', async () => {
+    vi.spyOn(patientService, 'getPatient').mockResolvedValue({ participantId: '12345678', clinicalUnitId: 'org-1' });
+    const consentSpy = vi.spyOn(consentService, 'getPatientConsent').mockResolvedValue({ _id: '1' });
+    const req = createReq({ params: { participantId: '12345678' }, organizationScope: { scope: 'organization', organizationIds: ['org-1'] } });
+    const res = createRes();
+
+    await consentController.getPatientConsent(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(consentSpy).toHaveBeenCalledWith(expect.anything(), '12345678');
+  });
+
   it('returns 503 when db is unavailable', async () => {
     const req = NO_DB_REQ();
     const res = createRes();
@@ -973,8 +999,10 @@ describe('ConsentController.getPatientConsent', () => {
   });
 
   it('returns 404 when consent is not found', async () => {
+    // #1188: params.participantId -- patientId was the route's stale name.
+    vi.spyOn(patientService, 'getPatient').mockResolvedValue({ participantId: 'p1' });
     vi.spyOn(consentService, 'getPatientConsent').mockResolvedValue(null);
-    const req = createReq({ params: { patientId: 'p1' } });
+    const req = createReq({ params: { participantId: 'p1' }, organizationScope: { scope: 'global', organizationIds: [] } });
     const res = createRes();
 
     await consentController.getPatientConsent(req, res);
@@ -983,8 +1011,9 @@ describe('ConsentController.getPatientConsent', () => {
   });
 
   it('returns 200 with the consent', async () => {
+    vi.spyOn(patientService, 'getPatient').mockResolvedValue({ participantId: 'p1' });
     vi.spyOn(consentService, 'getPatientConsent').mockResolvedValue({ _id: '1' });
-    const req = createReq({ params: { patientId: 'p1' } });
+    const req = createReq({ params: { participantId: 'p1' }, organizationScope: { scope: 'global', organizationIds: [] } });
     const res = createRes();
 
     await consentController.getPatientConsent(req, res);

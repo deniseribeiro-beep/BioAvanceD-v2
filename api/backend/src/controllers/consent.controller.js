@@ -621,7 +621,26 @@ class ConsentController {
         });
       }
 
-      const consent = await consentService.getPatientConsent(db, req.params.participantId);
+      // #1188: a Consent carries no organization field, so the scope check
+      // runs on its patient (#626), and the consent is read by the id of the
+      // patient that passed it.
+      const patient = await patientService.getPatient(db, req.params.participantId);
+      if (!patient) {
+        return res.status(404).json({
+          success: false,
+          error: 'Paciente não encontrado'
+        });
+      }
+      const { isRecordInOrganizationScope } = require('../services/rbac-assignment.service');
+      if (!isRecordInOrganizationScope(patient, req.organizationScope, 'clinicalUnitId')) {
+        return res.status(403).json({
+          success: false,
+          error: 'Acesso negado',
+          message: 'Este paciente pertence a outra organização'
+        });
+      }
+
+      const consent = await consentService.getPatientConsent(db, patient.participantId);
       if (!consent) {
         return res.status(404).json({
           success: false,

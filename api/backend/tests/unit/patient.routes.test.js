@@ -69,7 +69,8 @@ const CONTROLLER_METHODS = [
 for (const method of CONTROLLER_METHODS) {
   patientController[method] = (req, res) => res.status(200).json({ success: true, stub: method });
 }
-consentController.getPatientConsent = (req, res) => res.status(200).json({ success: true, stub: 'getPatientConsent' });
+// #1188: echoes req.params so a test can see which name the route binds.
+consentController.getPatientConsent = (req, res) => res.status(200).json({ success: true, stub: 'getPatientConsent', params: req.params });
 
 // Required exactly once - see comments above.
 const router = require(routePath);
@@ -152,6 +153,18 @@ describe('patient.routes authorization gates (issue #921)', () => {
     }
   });
 
+  // #1188: e2549bee renamed the controller's read to req.params.participantId
+  // and left this route on :patientId, so the controller always got undefined.
+  it('GET /:participantId/consent binds the id under the name the controller reads', async () => {
+    const { router } = loadRoute();
+    const app = buildApp(router);
+
+    const res = await request(app).get('/api/patients/12345678/consent');
+
+    expect(res.status).toBe(200);
+    expect(res.body.params).toEqual({ participantId: '12345678' });
+  });
+
   describe('requireOrganizationScope presence pinning', () => {
     // Every gated registration wires in requireOrganizationScope. POST / and
     // POST /find-for-edit were pinned as NOT carrying it (e4ed4dc9, recording
@@ -171,6 +184,8 @@ describe('patient.routes authorization gates (issue #921)', () => {
       { label: 'POST /find-for-edit', method: 'post', path: '/find-for-edit' },
       // #1185: the create stamps the caller's organization, which needs the scope.
       { label: 'POST /', method: 'post', path: '/' },
+      // #1188: the consent read had only `authenticate`.
+      { label: 'GET /:participantId/consent', method: 'get', path: '/p1/consent' },
     ];
 
     for (const { label, method, path } of GATED_CASES) {
