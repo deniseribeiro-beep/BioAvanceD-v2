@@ -580,6 +580,16 @@ class PacienteController {
       const updatePayload = this.sanitizePatientPayload(req.body);
       this.validateDeceasedRepresentative(updatePayload);
 
+      // #1053: the check above proves the patient is CURRENTLY the caller's.
+      // clinicalUnitId is the field this module scopes on, and the payload
+      // can rewrite it directly or through a clinicalUnit name, so the
+      // destination is checked on the value updatePatient would resolve.
+      if (existingPatient && (updatePayload.clinicalUnitId !== undefined || updatePayload.clinicalUnit !== undefined)) {
+        const { assertOrganizationFieldNotReparented } = require('../services/rbac-assignment.service');
+        const destination = await patientService.resolveClinicalUnitSnapshot(db, updatePayload);
+        assertOrganizationFieldNotReparented(req.organizationScope, existingPatient.clinicalUnitId, destination?.clinicalUnitId ?? null, 'clinicalUnitId');
+      }
+
       const result = await patientService.updatePatient(db, id, updatePayload, {
         neo4jDriver: req.app.locals.neo4jDriver || null
       });

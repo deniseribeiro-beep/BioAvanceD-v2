@@ -119,3 +119,84 @@ describe('paciente.controller clinicalUnit allowlist stays Organization-referenc
     );
   });
 });
+
+// #1053: #626's check proves the patient is CURRENTLY the caller's -- the
+// source. clinicalUnitId is the field this module scopes on, and atualizar()
+// lets the payload rewrite it, either directly or through a clinicalUnit NAME
+// that resolveClinicalUnitSnapshot turns into an organizationId. So without a
+// destination check an in-scope caller could push their own patient into
+// another organization.
+describe('#1053: atualizar() cannot re-parent a patient to another clinical unit', () => {
+  const ORGS = [
+    { organizationId: 'org-1', officialName: 'Genética Médica', acronym: 'GEN', normalizedName: 'genetica medica' },
+    { organizationId: 'org-9', officialName: 'Outra Unidade', acronym: 'OUT', normalizedName: 'outra unidade' }
+  ];
+
+  function buildReq(body, organizationScope = { scope: 'organization', organizationIds: ['org-1'] }) {
+    const organizations = makeOrganizationsCollection(ORGS);
+    const samples = { find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }) };
+    return createReq({
+      app: { locals: { db: { collection: vi.fn((name) => (name === 'organizations' ? organizations : samples)) } } },
+      params: { id: '12345678' },
+      body,
+      organizationScope
+    });
+  }
+
+  function stubExisting() {
+    vi.spyOn(patientService, 'getPatient').mockResolvedValue({ participantId: '12345678', clinicalUnitId: 'org-1' });
+    return vi.spyOn(patientService, 'updatePatient').mockResolvedValue({ participantId: '12345678' });
+  }
+
+  it('refuses a clinicalUnitId that moves an in-scope patient to another organization', async () => {
+    const updateSpy = stubExisting();
+    const res = createRes();
+
+    await controller.atualizar(buildReq({ clinicalUnitId: 'org-9' }), res);
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(updateSpy).not.toHaveBeenCalled();
+  });
+
+  it('refuses a clinicalUnit NAME that resolves to another organization', async () => {
+    const updateSpy = stubExisting();
+    const res = createRes();
+
+    await controller.atualizar(buildReq({ clinicalUnit: 'Outra Unidade' }), res);
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(updateSpy).not.toHaveBeenCalled();
+  });
+
+  it('CONTROL: an update that names no clinical unit still succeeds', async () => {
+    const updateSpy = stubExisting();
+    const res = createRes();
+
+    await controller.atualizar(buildReq({ recordNumber: 'PR-1' }), res);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(updateSpy).toHaveBeenCalled();
+  });
+
+  // The edit form sends the patient's own unit back, so this is what a
+  // normal edit looks like.
+  it('CONTROL: re-sending the patient own clinicalUnitId and name is allowed', async () => {
+    const updateSpy = stubExisting();
+    const res = createRes();
+
+    await controller.atualizar(buildReq({ clinicalUnitId: 'org-1', clinicalUnit: 'Genética Médica' }), res);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(updateSpy).toHaveBeenCalled();
+  });
+
+  it('CONTROL: a global scope may still move a patient between organizations', async () => {
+    const updateSpy = stubExisting();
+    const res = createRes();
+
+    await controller.atualizar(buildReq({ clinicalUnitId: 'org-9' }, { scope: 'global', organizationIds: [] }), res);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(updateSpy).toHaveBeenCalled();
+  });
+});
