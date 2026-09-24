@@ -907,6 +907,55 @@ function defaultStorageContainersFindOne({ _id }) {
       expect(res.body.currentStoragePlacement.boxName).toBe('OK Box');
     });
 
+    it('falls back to boxID for boxName and readable placement when the box has no name', async () => {
+      const storageBoxesFind = () => makeCursor([
+        {
+          _id: 'box-1',
+          boxID: 'BOX-ID-ONLY',
+          status: 'ACTIVE',
+          dimension: { rows: 1, cols: 1 },
+          currentOccupancy: 0,
+          occupancyGrid: {},
+          parent_id: 'rack-1',
+        },
+      ]);
+
+      const { db, consentsCollection } = buildHappyPathDb({ storageBoxesFind });
+      const { samplesCollection, patientsCollection } = setupHappyMocks();
+
+      const getCollectionImpl = vi.fn(async (_db, key) => {
+        if (key === 'Specimen' || key === 'samples' || key === 'specimens') return samplesCollection;
+        if (key === 'Participant' || key === 'patients' || key === 'participants') return patientsCollection;
+        if (key === 'consents') return consentsCollection;
+        if (key === 'participantIdentities') return { findOne: vi.fn().mockResolvedValue(null), find: vi.fn(() => ({ toArray: async () => [] })), updateOne: vi.fn() };
+        throw new Error(`unexpected key ${key}`);
+      });
+
+      const { router } = loadRoute({ getCollectionImpl });
+
+      const sampleServiceModule = require(sampleServicePath);
+      vi.spyOn(sampleServiceModule, 'createSample').mockImplementation(async (_db, sample) => ({
+        _id: 'sample-1',
+        specimenId: sample.specimenId || 'spec-1',
+        participantId: '12345678',
+        currentStoragePlacement: {
+          specimenId: sample.specimenId || 'spec-1',
+          boxId: String(sample.boxId),
+          positionCode: sample.positionCode,
+        },
+      }));
+
+      const app = buildApp(router, db);
+      const res = await request(app).post('/api/intake-wizard').send(VALID_PAYLOAD);
+
+      expect(res.status).toBe(200);
+      expect(res.body.currentStoragePlacement).toMatchObject({
+        boxName: 'BOX-ID-ONLY',
+        equipmentID: 'EQ-1',
+      });
+      expect(res.body.currentStoragePlacement.readable).toContain('box BOX-ID-ONLY');
+    });
+
     it('finds the next free position using a Map-based occupancyGrid', async () => {
       const occupancyGrid = new Map([['A1', true]]);
       const storageBoxesFind = () => makeCursor([

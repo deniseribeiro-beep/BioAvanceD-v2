@@ -48,12 +48,14 @@ function buildGetCollectionImpl({ samplesCollection, quarantineActionsCollection
   return vi.fn((db, name) => Promise.resolve(name === 'quarantineActions' ? quarantineActions : samples));
 }
 
-function loadRouter({ getCollectionImpl, innerRouterBuilder } = {}) {
+function loadRouter({ getCollectionImpl, innerRouterBuilder, authUser } = {}) {
   clearCache();
 
   const authModule = require(authPath);
   authModule.authenticate = (req, res, next) => {
-    req.user = { userID: 'user-1', accessType: 3 };
+    req.user = authUser === undefined
+      ? { userID: 'user-1', accessType: 3 }
+      : authUser;
     next();
   };
 
@@ -263,6 +265,50 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
       expect.objectContaining({ $set: expect.objectContaining({ actionStatus: 'released', authorizedBy: 'user-1' }) }),
       undefined
     );
+  });
+
+  it('attributes quarantine release to SYSTEM when the authenticated user has no userID', async () => {
+    const existingSample = { _id: 'sample-10', specimenId: 'spec-10', specimenStatus: 'quarantined' };
+    const activeAction = { quarantineActionId: 'qa-10', specimenIds: ['sample-10'], actionStatus: 'active' };
+    const samplesCollection = buildSamplesCollection({ existingSample });
+    const quarantineActionsCollection = buildQuarantineActionsCollection({ activeAction });
+    const getCollectionImpl = buildGetCollectionImpl({ samplesCollection, quarantineActionsCollection });
+    const router = loadRouter({ getCollectionImpl, authUser: { accessType: 3 } });
+    const app = buildApp(router, {});
+
+    const res = await request(app).post('/api/intake-wizard').send({
+      success: true,
+      sample: { specimenId: 'spec-10' },
+      consent: { active: true },
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.sample.status).toBe('AVAILABLE');
+    expect(quarantineActionsCollection.updateOne).toHaveBeenCalledWith(
+      { quarantineActionId: 'qa-10' },
+      expect.objectContaining({ $set: expect.objectContaining({ actionStatus: 'released', authorizedBy: 'SYSTEM' }) }),
+      undefined
+    );
+  });
+
+  it('persists governance without recording quarantine actions when the specimen query finds no document', async () => {
+    const samplesCollection = buildSamplesCollection({ existingSample: null });
+    const quarantineActionsCollection = buildQuarantineActionsCollection();
+    const getCollectionImpl = buildGetCollectionImpl({ samplesCollection, quarantineActionsCollection });
+    const router = loadRouter({ getCollectionImpl });
+    const app = buildApp(router, {});
+
+    const res = await request(app).post('/api/intake-wizard').send({
+      success: true,
+      sample: { specimenId: 'spec-missing', specimenStatus: 'quarantined' },
+      consent: { active: true },
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.sample.status).toBe('QUARANTINE');
+    expect(samplesCollection.findOne).toHaveBeenCalled();
+    expect(samplesCollection.updateOne).toHaveBeenCalled();
+    expect(quarantineActionsCollection.insertOne).not.toHaveBeenCalled();
   });
 
   it('persists AVAILABLE status and builds the query from _id when it is a valid ObjectId', async () => {

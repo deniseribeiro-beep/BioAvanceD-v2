@@ -315,3 +315,30 @@ remaining_estimate=565
 ### Stage 2E-3 — lote 1 (pós–daily-merkle)
 
 Fila: `intakeWizard.js` + `intakeWizard.routes.js`, `SampleGraphValidator.js`, `orphanet.js` (só source-located do TSV Stage 2E-3).
+
+| Arquivo / linhas | id:braço (qtd) | Classificação | Evidência / resultado |
+| --- | --- | --- | --- |
+| `intakeWizard.js` 132,170,332,475,478,519,570*,676,690,692,715 | TSV (13) | DEFENSIVE_OR_INSTRUMENTATION | Stage 2B/2D: phenotypes/`atcCode`/aliasMap/consentId/capacity/placement/matchType/GOVERNANCE_BLOCKED/SPREC/`Error.message` — não fabricar; Stage 2D LEGACY/PRODUCTION não reabertos. |
+| `intakeWizard.js:734` | `197:1` (1) | TEST_V2 | Box só com `boxID` → fallback `boxName`/`readable` em `intakeWizard.routes.test.js`. |
+| `intakeWizard.routes.js:121,133` | `37:1;38:1` (2) | TEST_V2 | Specimen `findOne` null → `wasQuarantined=false` e sem QuarantineAction (`intakeWizard.routes.governance.test.js`). |
+| `intakeWizard.routes.js:138` | `42:1` (1) | DEFENSIVE_OR_INSTRUMENTATION | `INTAKE_GOVERNANCE` reason sempre setado ao quarentenar. |
+| `intakeWizard.routes.js:141` | `45:1` (1) | TEST_V2 | Release sem `userID` → `authorizedBy: 'SYSTEM'`. |
+| `SampleGraphValidator.js` 31–65,369,423 | TSV (18) | DEFENSIVE_OR_INSTRUMENTATION | `stableObject`/`hashSampleIntegrityPayload` sem call sites; guards preemptados por `_loadSample`/`specimenId` canônico (L403–405). |
+| `orphanet.js` (18) | TSV | DEFENSIVE_OR_INSTRUMENTATION | Isolado cobre quase tudo (153/155); merge global V8 zero — mesmo padrão 307–308 já documentado; sem duplicar residual. |
+
+**Resultado lote 1:** TEST_V2 **4** (intakeWizard boxID + governance SYSTEM + specimen ausente ×2 comportamentos); DEFENSIVE nos demais. Produção inalterada. Suítes: `intakeWizard.routes*.test.js` + validators/orphanet verdes (92 testes no smoke do lote).
+
+STAGE_2E_3_CURSOR
+
+last_file=src/routes/orphanet.js
+last_branch=54:1
+reviewed_this_session=54
+remaining_estimate=511
+
+### Stage 2E-3 — avaliação do déficit vs 95%
+
+Baseline Stage 2E-3: Branches **94,01%** (22.510 / 23.943), déficit **236** para 22.746. Statements / Functions / Lines já ≥ 95%.
+
+O lote 1 adicionou **4** `TEST_V2` pontuais; a maior parte dos 54 braços revisados é `DEFENSIVE_OR_INSTRUMENTATION` (helpers mortos / merge V8 / contratos que não se fabricam). Isso **não** fecha o déficit 236.
+
+**Decisão:** continuar a fila (próximos: `fhir-import-staging.service.js`, `batch-validation-engine.service.js`, `sample.service.js`, …) em ondas seguintes; **não** chase cego do contador global nem declarar Item 8 fechado. Re-medição Full+coverage só após lote(s) com volume material de `TEST_V2` executável.
