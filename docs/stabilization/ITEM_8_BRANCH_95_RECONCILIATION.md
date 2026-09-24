@@ -342,3 +342,5 @@ Baseline Stage 2E-3: Branches **94,01%** (22.510 / 23.943), déficit **236** par
 O lote 1 adicionou **4** `TEST_V2` pontuais; a maior parte dos 54 braços revisados é `DEFENSIVE_OR_INSTRUMENTATION` (helpers mortos / merge V8 / contratos que não se fabricam). Isso **não** fecha o déficit 236.
 
 **Decisão:** continuar a fila (próximos: `fhir-import-staging.service.js`, `batch-validation-engine.service.js`, `sample.service.js`, …) em ondas seguintes; **não** chase cego do contador global nem declarar Item 8 fechado. Re-medição Full+coverage só após lote(s) com volume material de `TEST_V2` executável.
+
+Docker espelho (`backend-unit-runner` / `current-state:ci`): exit 0 — `logs/item8-stage2/docker-stage2e3.log`.
