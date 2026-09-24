@@ -919,21 +919,6 @@ export const importLGPDService = {
       responseType: 'blob',
     });
   },
-  smartImportPatients: (formData: FormData) => {
-    return api.post('/import-lgpd/pacientes/smart-import', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data',
-      },
-    });
-  },
-  getSmartImportReports: (params?: { page?: number; limit?: number }) => {
-    return api.get('/import-lgpd/pacientes/smart-import/reports', {
-      params,
-    });
-  },
-  getSmartImportPatientsMetadata: () => {
-    return api.get('/import-lgpd/pacientes/smart-import/metadata');
-  },
   // #794 (RNF011 AC#4): the quarantine surface. #787 made rejected rows
   // survive and slice 1 made a batch readable by id; these are what let an
   // operator actually reach one.
