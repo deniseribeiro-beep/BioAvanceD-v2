@@ -23,18 +23,7 @@ const {
 
 
 function createAuthToken() {
-  return jwt.sign(
-    {
-      id: 'qa-user-3',
-      userID: 'qa-user-3',
-      accessType: 2,
-      roleName: 'Técnico',
-      name: 'QA User 3',
-      mfaVerified: true,
-    },
-    process.env.JWT_SECRET,
-    { expiresIn: '1h' }
-  );
+  return makeAuthToken(2);
 }
 
 describe('POST /api/users/register-sample - paridade de contrato com /api/samples', () => {
@@ -61,7 +50,7 @@ describe('POST /api/users/register-sample - paridade de contrato com /api/sample
         insertOne: vi.fn().mockResolvedValue({ insertedId: 'log-qa' }),
       }),
       participants: patientsCollectionMock,
-      ...buildRbacCollections([{ userAccountId: 'qa-user-3', accessType: 2 }]),
+      ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[2], accessType: 2 }]),
     });
   }
 

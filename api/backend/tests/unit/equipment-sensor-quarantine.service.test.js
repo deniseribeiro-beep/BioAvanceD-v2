@@ -115,7 +115,7 @@ describe('equipment-sensor-quarantine.service', () => {
       const quarantineActionsCollection = { insertOne: vi.fn(async () => ({ insertedId: 'QA1' })) };
 
       collectionResolverModule.getCollection.mockImplementation(async (_db, key) => {
-        if (key === 'samples') return samplesCollection;
+        if (key === 'Specimen' || key === 'samples' || key === 'specimens') return samplesCollection;
         if (key === 'sampleMovements') return movementsCollection;
         if (key === 'quarantineActions') return quarantineActionsCollection;
         throw new Error(`unexpected key ${key}`);
@@ -278,7 +278,7 @@ describe('equipment-sensor-quarantine.service', () => {
       const quarantineActionsCollection = { insertOne: vi.fn(async () => ({ insertedId: 'QA2' })) };
 
       collectionResolverModule.getCollection.mockImplementation(async (_db, key) => {
-        if (key === 'samples') return samplesCollection;
+        if (key === 'Specimen' || key === 'samples' || key === 'specimens') return samplesCollection;
         if (key === 'sampleMovements') return movementsCollection;
         if (key === 'quarantineActions') return quarantineActionsCollection;
         throw new Error(`unexpected key ${key}`);
@@ -470,7 +470,7 @@ describe('equipment-sensor-quarantine item 8 canonical storage branches', () => 
     };
 
     collectionResolverModule.getCollection.mockImplementation(async (_db, key) => {
-      if (key === 'samples') return samplesCollection;
+      if (key === 'Specimen' || key === 'samples' || key === 'specimens') return samplesCollection;
       if (key === 'sampleMovements') return movementsCollection;
       if (key === 'quarantineActions') return quarantineActionsCollection;
       throw new Error(`unexpected key ${key}`);
@@ -578,7 +578,7 @@ describe('equipment-sensor-quarantine item 8 canonical storage branches', () => 
       updateMany: vi.fn(async () => ({})),
     };
     collectionResolverModule.getCollection.mockImplementation(async (_db, key) => {
-      if (key === 'samples') return samplesCollection;
+      if (key === 'Specimen' || key === 'samples' || key === 'specimens') return samplesCollection;
       throw new Error(`unexpected key ${key}`);
     });
 

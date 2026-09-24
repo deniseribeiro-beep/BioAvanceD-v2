@@ -13,26 +13,13 @@ const auditLogger = require('../../src/utils/auditLogger');
 const { buildRbacCollections } = require('../factories/rbac.factory');
 const {
   makeAuthToken,
-  makeLegacyClaimsToken,
-  buildAuthenticatedCollections,
-  userForAccessType,
   TEST_USER_ACCOUNT_IDS,
+  TEST_ACTOR_IDS,
 } = require('../factories/auth.factory');
 
 
 function createAdminToken() {
-  return jwt.sign(
-    {
-      id: TEST_USER_ACCOUNT_IDS[4],
-      userID: TEST_USER_ACCOUNT_IDS[4],
-      accessType: 4,
-      roleName: 'Administrador',
-      name: 'QA Admin',
-      mfaVerified: true,
-    },
-    process.env.JWT_SECRET,
-    { expiresIn: '1h' }
-  );
+  return makeAuthToken(4);
 }
 
 describe('GET /api/compliance/verify-biomarker/:id', () => {

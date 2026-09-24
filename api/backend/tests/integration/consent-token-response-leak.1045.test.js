@@ -12,9 +12,6 @@ const auditLogger = require('../../src/utils/auditLogger');
 const { buildRbacCollections } = require('../factories/rbac.factory');
 const {
   makeAuthToken,
-  makeLegacyClaimsToken,
-  buildAuthenticatedCollections,
-  userForAccessType,
   TEST_USER_ACCOUNT_IDS,
 } = require('../factories/auth.factory');
 
@@ -61,34 +58,14 @@ function expectNoConsentSecret(body) {
 
 describe('#1045: no response hands out a live consentToken', () => {
   function createCoordinatorToken() {
-    return jwt.sign(
-      {
-        userID: TEST_USER_ACCOUNT_IDS[3],
-        accessType: 3,
-        roleName: 'Coordenador',
-        name: 'QA Coordenador',
-        mfaVerified: true,
-      },
-      process.env.JWT_SECRET,
-      { expiresIn: '1h' }
-    );
+    return makeAuthToken(3);
   }
 
   // GET /api/patients/:id runs requireOrganizationScope AND
   // isRecordInOrganizationScope; an Administrador resolves to `global` scope,
   // which is what reaches the handler whose response shape is being pinned.
   function createAdminToken() {
-    return jwt.sign(
-      {
-        userID: TEST_USER_ACCOUNT_IDS[4],
-        accessType: 4,
-        roleName: 'Administrador',
-        name: 'QA Admin',
-        mfaVerified: true,
-      },
-      process.env.JWT_SECRET,
-      { expiresIn: '1h' }
-    );
+    return makeAuthToken(4);
   }
 
   beforeEach(() => {

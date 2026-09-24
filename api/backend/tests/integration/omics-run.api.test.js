@@ -25,7 +25,7 @@ const {
 // mount: OmicsRunModel.validate() actually gates each POST.
 
 const rbacCollectionsAdmin = buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 4 }]);
-const rbacCollectionsTechnician = buildRbacCollections([{ userAccountId: 'qa-2', accessType: 2 }]);
+const rbacCollectionsTechnician = buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[2], accessType: 2 }]);
 
 function makeToken(accessType = 4) {
   return makeAuthToken(accessType);
@@ -57,7 +57,7 @@ describe('GET /api/omics-runs', () => {
     });
     app.locals.db = createDbMock({ omicsRuns: coll, ...rbacCollectionsAdmin });
 
-    const res = await request(app).get('/api/omics-runs').set('Authorization', `Bearer ${makeToken(TEST_USER_ACCOUNT_IDS[4], 4)}`);
+    const res = await request(app).get('/api/omics-runs').set('Authorization', `Bearer ${makeToken(4)}`);
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
   });
@@ -69,7 +69,7 @@ describe('POST /api/omics-runs', () => {
 
     const res = await request(app)
       .post('/api/omics-runs')
-      .set('Authorization', `Bearer ${makeToken('qa-2', 2)}`)
+      .set('Authorization', `Bearer ${makeToken(2)}`)
       .send(VALID_OMICS_RUN_PAYLOAD);
 
     expect(res.status).toBe(403);
@@ -80,7 +80,7 @@ describe('POST /api/omics-runs', () => {
 
     const res = await request(app)
       .post('/api/omics-runs')
-      .set('Authorization', `Bearer ${makeToken(TEST_USER_ACCOUNT_IDS[4], 4)}`)
+      .set('Authorization', `Bearer ${makeToken(4)}`)
       .send({ ...VALID_OMICS_RUN_PAYLOAD, modality: 'astrology' });
 
     expect(res.status).toBe(422);
@@ -92,7 +92,7 @@ describe('POST /api/omics-runs', () => {
 
     const res = await request(app)
       .post('/api/omics-runs')
-      .set('Authorization', `Bearer ${makeToken(TEST_USER_ACCOUNT_IDS[4], 4)}`)
+      .set('Authorization', `Bearer ${makeToken(4)}`)
       .send(VALID_OMICS_RUN_PAYLOAD);
 
     expect(res.status).toBe(201);
@@ -108,7 +108,7 @@ describe('POST /api/omics-runs', () => {
 
     const res = await request(app)
       .post('/api/omics-runs')
-      .set('Authorization', `Bearer ${makeToken(TEST_USER_ACCOUNT_IDS[4], 4)}`)
+      .set('Authorization', `Bearer ${makeToken(4)}`)
       .send({ modality: 'proteomics' });
 
     expect(res.status).toBe(201);

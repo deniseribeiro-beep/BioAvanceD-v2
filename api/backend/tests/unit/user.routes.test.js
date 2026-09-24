@@ -5,6 +5,16 @@ import express from 'express';
 import request from 'supertest';
 
 const require = createRequire(import.meta.url);
+const { TEST_ACTOR_IDS, TEST_USER_ACCOUNT_IDS } = require('../factories/auth.factory');
+
+const CALLER_ACCOUNT_ID = TEST_USER_ACCOUNT_IDS[4];
+const CALLER_ACTOR_ID = TEST_ACTOR_IDS[4];
+const TARGET_ACCOUNT_ID = TEST_USER_ACCOUNT_IDS[2];
+const FORCE_RESET_ACCOUNT_ID = TEST_USER_ACCOUNT_IDS[3];
+const ROLE_TARGET_ACCOUNT_ID = TEST_USER_ACCOUNT_IDS[1];
+const SCOPE_TARGET_ACCOUNT_ID = TEST_USER_ACCOUNT_IDS.legacy;
+const AUDITOR_TARGET_ACCOUNT_ID = '550e8400-e29b-41d4-a716-446655440021';
+const ROLE_ALLOWED_ACCOUNT_ID = '550e8400-e29b-41d4-a716-446655440022';
 
 // Same one-time-require pattern as storage.routes.test.js / patient.routes.test.js
 // (confirmed against both before copying it here): user.routes.js destructures
@@ -22,7 +32,11 @@ let currentAuth = defaultAuth;
 let currentRequirePermission = () => (req, res, next) => next();
 
 function defaultAuth(req, res, next) {
-  req.user = { userID: 'user-1', roleName: 'Administrador' };
+  req.user = {
+    userID: CALLER_ACCOUNT_ID,
+    actorId: CALLER_ACTOR_ID,
+    roleName: 'Administrador',
+  };
   req.t = (key) => key;
   next();
 }
@@ -447,7 +461,8 @@ describe('user.routes item 8 PUT residual branch closure', () => {
   it('covers PUT validation, normalization, update-result and auditor-role residual branches', async () => {
     const spies = installUpdateSpies();
     const target = {
-      _id: 'u1',
+      _id: 'mongo-u1',
+      userAccountId: TARGET_ACCOUNT_ID,
       name: 'Synthetic User',
       email: 'synthetic@example.test',
       username: 'synthetic',
@@ -500,11 +515,11 @@ describe('user.routes item 8 PUT residual branch closure', () => {
     const app = buildApp(router, { db });
 
     spies.validate.mockReturnValueOnce({ isValid: false, errors: ['invalid synthetic update'] });
-    const invalid = await request(app).put('/api/users/u1').send({ name: 42 });
+    const invalid = await request(app).put(`/api/users/${TARGET_ACCOUNT_ID}`).send({ name: 42 });
     expect(invalid.status).toBe(422);
     expect(invalid.body.message).toContain('invalid synthetic update');
 
-    const normalized = await request(app).put('/api/users/u1').send({
+    const normalized = await request(app).put(`/api/users/${TARGET_ACCOUNT_ID}`).send({
       status: 'Ativo',
       phone: '---',
       roleValidFrom: '2026-01-01T00:00:00.000Z',
@@ -518,13 +533,13 @@ describe('user.routes item 8 PUT residual branch closure', () => {
     expect(normalizedSet.roleValidUntil).toBeNull();
     expect(spies.auditPermission).toHaveBeenCalledWith(
       expect.anything(),
-      'u1',
+      TARGET_ACCOUNT_ID,
       expect.objectContaining({
         status: expect.objectContaining({ from: 'inactive', to: spies.UserModel.normalizeStatus('Ativo') }),
       })
     );
 
-    const alternateValues = await request(app).put('/api/users/u1').send({
+    const alternateValues = await request(app).put(`/api/users/${TARGET_ACCOUNT_ID}`).send({
       phone: null,
       roleValidFrom: null,
       roleValidUntil: '2027-01-01T00:00:00.000Z',
@@ -536,27 +551,27 @@ describe('user.routes item 8 PUT residual branch closure', () => {
     expect(alternateSet.roleValidUntil).toBeInstanceOf(Date);
     expect(spies.auditUpdate).toHaveBeenCalled();
 
-    const unmatched = await request(app).put('/api/users/u1').send({ name: 'Still Synthetic' });
+    const unmatched = await request(app).put(`/api/users/${TARGET_ACCOUNT_ID}`).send({ name: 'Still Synthetic' });
     expect(unmatched.status).toBe(404);
     expect(unmatched.body.error).toBe('Usuário não encontrado');
 
-    const missingAfterUpdate = await request(app).put('/api/users/u1').send({ name: 'Synthetic Updated' });
+    const missingAfterUpdate = await request(app).put(`/api/users/${TARGET_ACCOUNT_ID}`).send({ name: 'Synthetic Updated' });
     expect(missingAfterUpdate.status).toBe(404);
     expect(missingAfterUpdate.body.error).toBe('users.updateNotFound');
 
-    const auditorRevoked = await request(app).put('/api/users/u1').send({ auditorRole: false });
+    const auditorRevoked = await request(app).put(`/api/users/${TARGET_ACCOUNT_ID}`).send({ auditorRole: false });
     expect(auditorRevoked.status).toBe(200);
     expect(spies.revokeAdditionalRole).toHaveBeenCalledWith(
       db,
       expect.objectContaining({
-        userAccountId: 'u1',
+        userAccountId: TARGET_ACCOUNT_ID,
         roleCode: 'auditor',
-        revokedBy: 'user-1',
+        revokedBy: CALLER_ACTOR_ID,
       })
     );
     expect(spies.auditPermission).toHaveBeenCalledWith(
       expect.anything(),
-      'u1',
+      TARGET_ACCOUNT_ID,
       expect.objectContaining({ auditorRole: false })
     );
 
@@ -749,7 +764,8 @@ describe('user.routes item 8 administrative security success paths', () => {
     const invalidate = vi.spyOn(sessionService, 'invalidateUserSessions').mockResolvedValue(undefined);
 
     const target = {
-      _id: { toString: () => 'tech-target' },
+      _id: { toString: () => 'mongo-tech' },
+      userAccountId: TARGET_ACCOUNT_ID,
       mfaEnabled: true,
       mfaSecretCiphertext: 'ciphertext',
     };
@@ -760,7 +776,7 @@ describe('user.routes item 8 administrative security success paths', () => {
     const { router } = loadRoute();
     const app = buildApp(router, { db: { collection: () => usersCollection } });
 
-    const res = await request(app).post('/api/users/tech-target/reset-mfa');
+    const res = await request(app).post(`/api/users/${TARGET_ACCOUNT_ID}/reset-mfa`);
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
@@ -775,9 +791,9 @@ describe('user.routes item 8 administrative security success paths', () => {
     );
     expect(invalidate).toHaveBeenCalledWith(
       expect.anything(),
-      'tech-target',
+      TARGET_ACCOUNT_ID,
       'admin_action',
-      'user-1'
+      CALLER_ACTOR_ID
     );
     expect(audit).toHaveBeenCalledWith(expect.objectContaining({
       action: 'MFA',
@@ -798,7 +814,10 @@ describe('user.routes item 8 administrative security success paths', () => {
     vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
     const audit = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
 
-    const target = { _id: { toString: () => 'user-force-reset' } };
+    const target = {
+      _id: { toString: () => 'mongo-force-reset' },
+      userAccountId: FORCE_RESET_ACCOUNT_ID,
+    };
     const usersCollection = {
       findOne: vi.fn().mockResolvedValue(target),
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
@@ -806,7 +825,7 @@ describe('user.routes item 8 administrative security success paths', () => {
     const { router } = loadRoute();
     const app = buildApp(router, { db: { collection: () => usersCollection } });
 
-    const res = await request(app).post('/api/users/user-force-reset/force-password-reset');
+    const res = await request(app).post(`/api/users/${FORCE_RESET_ACCOUNT_ID}/force-password-reset`);
 
     expect(res.status).toBe(200);
     expect(usersCollection.updateOne).toHaveBeenCalledWith(
@@ -816,7 +835,7 @@ describe('user.routes item 8 administrative security success paths', () => {
     expect(audit).toHaveBeenCalledWith(expect.objectContaining({
       action: 'UPDATE',
       resourceType: 'User',
-      resourceId: 'user-force-reset',
+      resourceId: FORCE_RESET_ACCOUNT_ID,
       payload: { operation: 'forcePasswordReset', fieldsSet: ['forceReset'] },
     }));
 
@@ -1027,7 +1046,7 @@ describe('user.routes item 8 operational route branches', () => {
     expect(create).toHaveBeenCalledWith(expect.objectContaining({
       reportType: 'samples',
       filters: { status: 'AVAILABLE' },
-      generatedBy: 'user-1',
+      generatedBy: CALLER_ACCOUNT_ID,
       status: 'pending',
     }));
     expect(reportsCollection.insertOne).toHaveBeenCalled();
@@ -1136,7 +1155,11 @@ describe('user.routes item 8 remaining PUT governance branches', () => {
       .mockResolvedValueOnce(2)
       .mockResolvedValueOnce(3);
 
-    const target = { _id: 'u-role', organizationId: 'org-1' };
+    const target = {
+      _id: 'mongo-u-role',
+      userAccountId: ROLE_TARGET_ACCOUNT_ID,
+      organizationId: 'org-1',
+    };
     const usersCollection = {
       findOne: vi.fn().mockResolvedValue(target),
       updateOne: vi.fn(),
@@ -1145,13 +1168,13 @@ describe('user.routes item 8 remaining PUT governance branches', () => {
 
     const { router } = loadRoute();
     const res = await request(buildApp(router, { db }))
-      .put('/api/users/u-role')
+      .put(`/api/users/${ROLE_TARGET_ACCOUNT_ID}`)
       .send({ roleName: 'Administrador' });
 
     expect(res.status).toBe(403);
     expect(res.body.message).toContain('nível de acesso superior');
-    expect(hierarchy).toHaveBeenNthCalledWith(1, db, 'u-role');
-    expect(hierarchy).toHaveBeenNthCalledWith(2, db, 'user-1');
+    expect(hierarchy).toHaveBeenNthCalledWith(1, db, ROLE_TARGET_ACCOUNT_ID);
+    expect(hierarchy).toHaveBeenNthCalledWith(2, db, CALLER_ACCOUNT_ID);
     expect(usersCollection.updateOne).not.toHaveBeenCalled();
   });
 
@@ -1168,7 +1191,8 @@ describe('user.routes item 8 remaining PUT governance branches', () => {
     const logPermissionChange = vi.spyOn(auditLogger, 'logPermissionChange').mockResolvedValue(undefined);
 
     const target = {
-      _id: 'u-scope',
+      _id: 'mongo-u-scope',
+      userAccountId: SCOPE_TARGET_ACCOUNT_ID,
       name: 'Synthetic User',
       organizationId: 'org-old',
     };
@@ -1195,18 +1219,18 @@ describe('user.routes item 8 remaining PUT governance branches', () => {
 
     const { router } = loadRoute();
     const res = await request(buildApp(router, { db }))
-      .put('/api/users/u-scope')
+      .put(`/api/users/${SCOPE_TARGET_ACCOUNT_ID}`)
       .send({ organizationId: '  org-new  ' });
 
     expect(res.status).toBe(200);
     expect(updateAssignmentScope).toHaveBeenCalledWith(db, {
-      userAccountId: 'u-scope',
+      userAccountId: SCOPE_TARGET_ACCOUNT_ID,
       organizationId: 'org-new',
-      updatedBy: 'user-1',
+      updatedBy: CALLER_ACCOUNT_ID,
     });
     expect(logPermissionChange).toHaveBeenCalledWith(
       expect.anything(),
-      'u-scope',
+      SCOPE_TARGET_ACCOUNT_ID,
       expect.objectContaining({
         organizationId: { from: 'org-old', to: 'org-new' },
       })
@@ -1244,7 +1268,8 @@ describe('user.routes item 8 remaining RBAC mutation branches', () => {
     const changeUserRole = vi.spyOn(rbacAssignment, 'changeUserRole').mockResolvedValue({ changed: true });
 
     const target = {
-      _id: 'u-role-allowed',
+      _id: 'mongo-u-role-allowed',
+      userAccountId: ROLE_ALLOWED_ACCOUNT_ID,
       name: 'Synthetic User',
       organizationId: 'org-1',
     };
@@ -1259,14 +1284,14 @@ describe('user.routes item 8 remaining RBAC mutation branches', () => {
 
     const { router } = loadRoute();
     const res = await request(buildApp(router, { db }))
-      .put('/api/users/u-role-allowed')
+      .put(`/api/users/${ROLE_ALLOWED_ACCOUNT_ID}`)
       .send({ roleName: 'Coordenador' });
 
     expect(res.status).toBe(200);
     expect(changeUserRole).toHaveBeenCalledWith(db, {
-      userAccountId: 'u-role-allowed',
+      userAccountId: ROLE_ALLOWED_ACCOUNT_ID,
       accessType: 3,
-      changedBy: 'user-1',
+      changedBy: CALLER_ACTOR_ID,
       organizationId: 'org-1',
     });
   });
@@ -1278,7 +1303,8 @@ describe('user.routes item 8 remaining RBAC mutation branches', () => {
     const changeUserRole = vi.spyOn(rbacAssignment, 'changeUserRole').mockResolvedValue({ changed: true });
 
     const target = {
-      _id: 'u-auditor-grant',
+      _id: 'mongo-u-auditor-grant',
+      userAccountId: AUDITOR_TARGET_ACCOUNT_ID,
       name: 'Synthetic User',
       organizationId: 'org-a',
     };
@@ -1293,14 +1319,14 @@ describe('user.routes item 8 remaining RBAC mutation branches', () => {
 
     const { router } = loadRoute();
     const res = await request(buildApp(router, { db }))
-      .put('/api/users/u-auditor-grant')
+      .put(`/api/users/${AUDITOR_TARGET_ACCOUNT_ID}`)
       .send({ auditorRole: true });
 
     expect(res.status).toBe(200);
     expect(grantAdditionalRole).toHaveBeenCalledWith(db, {
-      userAccountId: 'u-auditor-grant',
+      userAccountId: AUDITOR_TARGET_ACCOUNT_ID,
       roleCode: 'auditor',
-      grantedBy: 'user-1',
+      grantedBy: CALLER_ACTOR_ID,
       organizationId: 'org-a',
     });
     expect(revokeAdditionalRole).not.toHaveBeenCalled();

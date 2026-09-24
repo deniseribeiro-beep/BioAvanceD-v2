@@ -24,6 +24,8 @@ function buildUserRegistrationPayload(overrides = {}) {
     password: `SenhaForte@${uniqueToken}`,
     accessType: 2,
     status: 'Ativo',
+    // Stage 2E: registerUser requires a canonical Actor UUID that already exists.
+    actorId: randomUUID(),
     ...overrides,
   };
 }

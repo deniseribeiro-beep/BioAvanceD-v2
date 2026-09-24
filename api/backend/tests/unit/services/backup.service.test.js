@@ -155,7 +155,7 @@ describe('backup.service', () => {
       };
       const fakeDb = {
         listCollections: vi.fn(() => ({
-          toArray: vi.fn().mockResolvedValue([{ name: 'patients' }, { name: 'samples' }])
+          toArray: vi.fn().mockResolvedValue([{ name: 'participants' }, { name: 'specimens' }])
         })),
         collection: vi.fn((name) => (name === 'participants' ? fakeCollectionA : fakeCollectionB))
       };
@@ -175,7 +175,7 @@ describe('backup.service', () => {
       expect(fakeClient.connect).toHaveBeenCalled();
       expect(fakeClient.close).toHaveBeenCalled();
       expect(fs.promises.writeFile).toHaveBeenCalledWith(
-        expect.stringContaining('patients.json'),
+        expect.stringContaining('participants.json'),
         expect.stringContaining('"name": "a"'),
         'utf8'
       );

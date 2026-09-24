@@ -9,14 +9,15 @@ const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const analysisValidationService = require('../../src/services/analysisValidation.service');
 const { createDbMock } = require('../factories/db.factory');
+const { buildRbacCollections } = require('../factories/rbac.factory');
 const {
   makeAuthToken,
-  makeLegacyClaimsToken,
-  buildAuthenticatedCollections,
-  userForAccessType,
   TEST_USER_ACCOUNT_IDS,
 } = require('../factories/auth.factory');
 
+const rbacCollections = buildRbacCollections([
+  { userAccountId: TEST_USER_ACCOUNT_IDS[2], accessType: 2 },
+]);
 
 function makeToken(accessType = 2) {
   return makeAuthToken(accessType);
@@ -29,7 +30,7 @@ function givenSession() {
 
 beforeEach(() => {
   givenSession();
-  app.locals.db = createDbMock({});
+  app.locals.db = createDbMock({ ...rbacCollections });
 });
 afterEach(() => { vi.restoreAllMocks(); });
 

@@ -206,12 +206,12 @@ describe('intakeWizard clinical-entity recording (#693)', () => {
     consentServiceModule.getPatientConsent = vi.fn().mockResolvedValue(consentRecord);
 
     const collections = {
-      samples: {
+      Specimen: {
         insertOne: vi.fn().mockResolvedValue({ insertedId: 'sample-1' }),
         findOne: vi.fn().mockResolvedValue({ _id: 'sample-1', specimenId: 'spec-1', participantId: '12345678', ...storedSampleFields }),
         updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
       },
-      patients: { updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) },
+      Participant: { updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) },
       consents: { findOne: vi.fn().mockResolvedValue(null) },
       encounters: makeInsertCapturingCollection(),
       conditions: makeInsertCapturingCollection(),

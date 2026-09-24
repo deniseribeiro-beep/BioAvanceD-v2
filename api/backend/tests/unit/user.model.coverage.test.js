@@ -245,6 +245,7 @@ describe('UserModel item 8 branch coverage', () => {
 
     const source = {
       _id: 'u1',
+      userAccountId: '550e8400-e29b-41d4-a716-446655440004',
       name: 'Synthetic',
       password: 'hash',
       mfaSecret: 'legacy-secret',
@@ -254,15 +255,20 @@ describe('UserModel item 8 branch coverage', () => {
       mfaEnabled: true,
     };
     const stripped = UserModel.stripSecrets(source);
+    // Stage 2E: stripSecrets drops Mongo _id; public identity is userAccountId.
     expect(stripped).toEqual({
-      _id: 'u1',
+      userAccountId: '550e8400-e29b-41d4-a716-446655440004',
       name: 'Synthetic',
       mfaEnabled: true,
     });
     expect(source.password).toBe('hash');
 
     expect(UserModel.stripSecrets([source, null])).toEqual([
-      { _id: 'u1', name: 'Synthetic', mfaEnabled: true },
+      {
+        userAccountId: '550e8400-e29b-41d4-a716-446655440004',
+        name: 'Synthetic',
+        mfaEnabled: true,
+      },
       null,
     ]);
   });

@@ -84,7 +84,7 @@ function buildDb(overrides = {}) {
       toArray: vi.fn(async () => [{ _id: ADMIN_ID, email: 'admin@example.com' }]),
     })),
   });
-  return createDbMock({ users, ...rbac, ...overrides });
+  return createDbMock({ ...rbac, userAccounts: users, ...overrides });
 }
 
 describe('notificationDispatch.service', () => {
@@ -276,7 +276,7 @@ describe('notificationDispatch.service item 8 residual branches', () => {
       })),
     });
     const rbac = buildRbacCollections([{ userAccountId: ADMIN_ID.toString(), accessType: 4 }]);
-    const db = createDbMock({ users, ...rbac, notificationRules: notificationRules.mock, notifications: notifications.mock });
+    const db = createDbMock({ ...rbac, userAccounts: users, notificationRules: notificationRules.mock, notifications: notifications.mock });
 
     await notificationRuleService.createRule(db, {
       eventType: 'governed_event',
@@ -306,7 +306,7 @@ describe('notificationDispatch.service item 8 residual branches', () => {
     const notificationRules = statefulCollection();
     const notifications = statefulCollection();
     const users = createCollectionMock({ aggregate: vi.fn() });
-    const db = createDbMock({ users, notificationRules: notificationRules.mock, notifications: notifications.mock });
+    const db = createDbMock({ userAccounts: users, notificationRules: notificationRules.mock, notifications: notifications.mock });
 
     // The canonical rule API rejects an empty recipientRoleCodes array.
     // Seed a persisted legacy/malformed row directly to prove the dispatcher

@@ -1,10 +1,3 @@
-const {
-  makeAuthToken,
-  makeLegacyClaimsToken,
-  buildAuthenticatedCollections,
-  userForAccessType,
-  TEST_USER_ACCOUNT_IDS,
-} = require('../../factories/auth.factory');
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'module';
 

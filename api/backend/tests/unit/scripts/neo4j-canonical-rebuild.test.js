@@ -73,9 +73,12 @@ function createFakeCollection() {
 }
 
 function createFakeDb(seed = {}) {
+  const specimens = createFakeCollection();
   const collections = {
     consents: createFakeCollection(),
-    specimens: createFakeCollection(),
+    // Stage 2E canonical name + legacy alias (rebuild script still reads `samples`)
+    specimens,
+    samples: specimens,
     rcsAssessments: createFakeCollection(),
     graph_projection_outbox: createFakeCollection(),
   };

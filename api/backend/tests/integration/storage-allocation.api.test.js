@@ -247,7 +247,7 @@ function buildDb({ withPlacement = false, accessType = 2 } = {}) {
     graph_projection_outbox: createStatefulCollection(),
     ...activeConsentCollections(),
     ...movementCollections(),
-    ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType }])
+    ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[accessType] || TEST_USER_ACCOUNT_IDS[4], accessType }])
   };
   const db = createDbMock(collections);
   return { db, collections };

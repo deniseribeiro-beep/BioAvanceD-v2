@@ -136,7 +136,7 @@ describe('PatientService.getPatientsCollection', () => {
 
     const result = await patientService.getPatientsCollection(db);
 
-    expect(db.collection).toHaveBeenCalledWith('patients');
+    expect(db.collection).toHaveBeenCalledWith('participants');
     expect(result).toBe(patientsCollection);
     // RF005/RNF007 (#575): only 2 indexes get created now — the two
     // patientName/identityDocument indexes are dropped, not created.

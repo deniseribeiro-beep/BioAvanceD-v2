@@ -2,13 +2,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 const request = require('supertest');
 const {
   makeAuthToken,
-  makeLegacyClaimsToken,
-  buildAuthenticatedCollections,
-  userForAccessType,
   TEST_USER_ACCOUNT_IDS,
+  TEST_ACTOR_IDS,
 } = require('../factories/auth.factory');
-
-const jwt = require('jsonwebtoken');
+const { buildRbacCollections } = require('../factories/rbac.factory');
+const { createDbMock } = require('../factories/db.factory');
 
 process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
@@ -17,42 +15,35 @@ const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const auditLogger = require('../../src/utils/auditLogger');
 
-function createToken(payload) {
-  return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '1h' });
-}
-
 function createAdminToken() {
-  return createToken({
-    userID: 'qa-admin-revoke-1',
-    accessType: 4,
-    roleName: 'Administrador',
-    mfaVerified: true,
-  });
+  return makeAuthToken(4);
 }
 
 function createCoordinatorToken() {
-  return createToken({
-    userID: 'qa-coord-revoke-1',
-    accessType: 3,
-    roleName: 'Coordenador',
-    mfaVerified: true,
-  });
+  return makeAuthToken(3);
 }
 
 describe('Session Revocation (DELETE /api/auth/sessions/:sessionId)', () => {
   beforeEach(() => {
+    app.locals.db = createDbMock({
+      ...buildRbacCollections([
+        { userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 4 },
+        { userAccountId: TEST_USER_ACCOUNT_IDS[3], accessType: 3 },
+      ]),
+    });
+
     vi.spyOn(sessionService, 'verifySession').mockResolvedValue({
       valid: true,
-      session: { sessionID: 'session-revoke-test-1', userID: 'qa-admin-revoke-1' }
+      session: { sessionID: 'session-revoke-test-1', userID: TEST_USER_ACCOUNT_IDS[4] },
     });
     vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({
       sessionID: 'session-revoke-test-1',
-      userID: 'qa-admin-revoke-1'
+      userID: TEST_USER_ACCOUNT_IDS[4],
     });
     vi.spyOn(sessionService, 'revokeSessionById').mockResolvedValue({
       sessionID: 'session-revoke-test-1',
       isRevoked: true,
-      revokedAt: new Date()
+      revokedAt: new Date(),
     });
 
     vi.spyOn(auditLogger, 'init').mockImplementation(() => undefined);
@@ -74,10 +65,10 @@ describe('Session Revocation (DELETE /api/auth/sessions/:sessionId)', () => {
     expect(response.body.success).toBe(true);
     expect(sessionService.revokeSessionById).toHaveBeenCalledWith(
       expect.anything(),
-      'qa-admin-revoke-1',
+      TEST_USER_ACCOUNT_IDS[4],
       'session-revoke-test-1',
       'user_request',
-      'qa-admin-revoke-1'
+      require('../factories/auth.factory').TEST_ACTOR_IDS[4],
     );
   });
 
@@ -95,7 +86,7 @@ describe('Session Revocation (DELETE /api/auth/sessions/:sessionId)', () => {
     // Agora simula que a sessão foi revogada simulando verifySession com invalid
     vi.spyOn(sessionService, 'verifySession').mockResolvedValue({
       valid: false,
-      reason: 'session_revoked'
+      reason: 'session_revoked',
     });
 
     // Tenta acessar rota protegida com o mesmo token
@@ -124,7 +115,7 @@ describe('Session Revocation (DELETE /api/auth/sessions/:sessionId)', () => {
     // Mock para coordenador
     vi.spyOn(sessionService, 'verifySession').mockResolvedValue({
       valid: true,
-      session: { sessionID: 'session-coord-1', userID: 'qa-coord-revoke-1' }
+      session: { sessionID: 'session-coord-1', userID: TEST_USER_ACCOUNT_IDS[3] },
     });
 
     const response = await request(app)
@@ -173,12 +164,16 @@ describe('Session Revocation (DELETE /api/auth/sessions/:sessionId)', () => {
 
 describe('Session List and Active Sessions (GET /api/auth/sessions)', () => {
   beforeEach(() => {
+    app.locals.db = createDbMock({
+      ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 4 }]),
+    });
+
     vi.spyOn(sessionService, 'verifySession').mockResolvedValue({
       valid: true,
-      session: { sessionID: 'session-list-test-1' }
+      session: { sessionID: 'session-list-test-1' },
     });
     vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({
-      sessionID: 'session-list-test-1'
+      sessionID: 'session-list-test-1',
     });
     vi.spyOn(sessionService, 'listUserSessions').mockResolvedValue([
       {
@@ -186,15 +181,15 @@ describe('Session List and Active Sessions (GET /api/auth/sessions)', () => {
         createdAt: new Date(),
         lastActivity: new Date(),
         deviceInfo: { browser: 'Chrome', os: 'Windows' },
-        ipAddress: '192.168.1.1'
+        ipAddress: '192.168.1.1',
       },
       {
         sessionID: 'session-2',
         createdAt: new Date(Date.now() - 86400000),
         lastActivity: new Date(),
         deviceInfo: { browser: 'Firefox', os: 'macOS' },
-        ipAddress: '192.168.1.2'
-      }
+        ipAddress: '192.168.1.2',
+      },
     ]);
 
     vi.spyOn(auditLogger, 'init').mockImplementation(() => undefined);
@@ -240,15 +235,19 @@ describe('Session List and Active Sessions (GET /api/auth/sessions)', () => {
 
 describe('Revoke All Other Sessions (DELETE /api/auth/sessions/all-others)', () => {
   beforeEach(() => {
+    app.locals.db = createDbMock({
+      ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 4 }]),
+    });
+
     vi.spyOn(sessionService, 'verifySession').mockResolvedValue({
       valid: true,
-      session: { sessionID: 'session-current-1' }
+      session: { sessionID: 'session-current-1' },
     });
     vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({
-      sessionID: 'session-current-1'
+      sessionID: 'session-current-1',
     });
     vi.spyOn(sessionService, 'revokeAllOtherSessions').mockResolvedValue({
-      revokedCount: 2
+      revokedCount: 2,
     });
 
     vi.spyOn(auditLogger, 'init').mockImplementation(() => undefined);

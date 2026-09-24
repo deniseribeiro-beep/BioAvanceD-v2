@@ -22,18 +22,7 @@ const {
 
 
 function createAuthToken() {
-  return jwt.sign(
-    {
-      id: TEST_USER_ACCOUNT_IDS[2],
-      userID: TEST_USER_ACCOUNT_IDS[2],
-      accessType: 2,
-      roleName: 'Técnico',
-      name: 'QA User 2',
-      mfaVerified: true,
-    },
-    process.env.JWT_SECRET,
-    { expiresIn: '1h' }
-  );
+  return makeAuthToken(2);
 }
 
 function buildPayload(overrides = {}) {

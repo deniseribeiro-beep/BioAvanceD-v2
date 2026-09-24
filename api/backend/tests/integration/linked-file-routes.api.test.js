@@ -25,7 +25,7 @@ const {
 // confirm the mount + auth/role gating on the real routes.
 
 const rbacCollectionsAdmin = buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 4 }]);
-const rbacCollectionsTechnician = buildRbacCollections([{ userAccountId: 'qa-2', accessType: 2 }]);
+const rbacCollectionsTechnician = buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[2], accessType: 2 }]);
 
 function makeToken(accessType = 4) {
   return makeAuthToken(accessType);
@@ -55,7 +55,7 @@ describe.each([
 
       const res = await request(app)
         .get(`/api/${entity}/missing-id/files`)
-        .set('Authorization', `Bearer ${makeToken(TEST_USER_ACCOUNT_IDS[4], 4)}`);
+        .set('Authorization', `Bearer ${makeToken(4)}`);
 
       expect(res.status).toBe(404);
     });
@@ -67,7 +67,7 @@ describe.each([
 
       const res = await request(app)
         .get(`/api/${entity}/p-1/files`)
-        .set('Authorization', `Bearer ${makeToken(TEST_USER_ACCOUNT_IDS[4], 4)}`);
+        .set('Authorization', `Bearer ${makeToken(4)}`);
 
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
@@ -86,7 +86,7 @@ describe.each([
 
       const res = await request(app)
         .post(`/api/${entity}/p-1/files/upload`)
-        .set('Authorization', `Bearer ${makeToken('qa-2', 2)}`)
+        .set('Authorization', `Bearer ${makeToken(2)}`)
         .attach('file', Buffer.from('a,b,c'), 'data.csv');
 
       expect(res.status).toBe(403);
@@ -98,7 +98,7 @@ describe.each([
 
       const res = await request(app)
         .post(`/api/${entity}/missing-id/files/upload`)
-        .set('Authorization', `Bearer ${makeToken(TEST_USER_ACCOUNT_IDS[4], 4)}`)
+        .set('Authorization', `Bearer ${makeToken(4)}`)
         .attach('file', Buffer.from('a,b,c'), 'data.csv');
 
       expect(res.status).toBe(404);
@@ -111,7 +111,7 @@ describe.each([
 
       const res = await request(app)
         .delete(`/api/${entity}/p-1/files/${new ObjectId()}`)
-        .set('Authorization', `Bearer ${makeToken('qa-2', 2)}`);
+        .set('Authorization', `Bearer ${makeToken(2)}`);
 
       expect(res.status).toBe(403);
     });

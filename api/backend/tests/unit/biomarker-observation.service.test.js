@@ -78,7 +78,7 @@ describe('biomarker-observation.service', () => {
 
       const result = await biomarkerObservationService.getObservationsCollection(db);
 
-      expect(db.collection).toHaveBeenCalledWith('biomarker_observations');
+      expect(db.collection).toHaveBeenCalledWith('biomarkerObservations');
       expect(result).toBe(collection);
       expect(collection.createIndex).toHaveBeenCalledTimes(5);
     });

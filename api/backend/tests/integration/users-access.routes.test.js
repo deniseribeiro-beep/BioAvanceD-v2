@@ -3,6 +3,11 @@ import { createRequire } from 'module';
 const require2 = createRequire(import.meta.url);
 const { buildRbacCollections } = require2('../factories/rbac.factory');
 const { createCollectionMock } = require2('../factories/db.factory');
+const {
+  TEST_USER_ACCOUNT_IDS,
+  TEST_ACTOR_IDS,
+} = require2('../factories/auth.factory');
+const { randomUUID } = require2('crypto');
 
 function matchesAssignmentQuery(doc, query = {}) {
   return Object.entries(query).every(([key, cond]) => {
@@ -101,7 +106,7 @@ function createResponse() {
   return response;
 }
 
-function createRequest({ body = {}, params = {}, query = {}, user = { userID: '507f1f77bcf86cd799439011', accessType: 4, roleName: 'Administrador' } } = {}) {
+function createRequest({ body = {}, params = {}, query = {}, user = { userID: TEST_USER_ACCOUNT_IDS[4], actorId: TEST_ACTOR_IDS[4], accessType: 4, roleName: 'Administrador' } } = {}) {
   return {
     body,
     params,
@@ -163,8 +168,8 @@ describe('Users and Access routes', () => {
     };
 
     const rbacCollections = buildRbacCollections([
-      { userAccountId: '507f1f77bcf86cd799439011', accessType: 4 },
-      { userAccountId: '507f1f77bcf86cd799439012', accessType: 2 },
+      { userAccountId: '550e8400-e29b-41d4-a716-446655440004', accessType: 4 },
+      { userAccountId: '550e8400-e29b-41d4-a716-446655440002', accessType: 2 },
     ]);
 
     // #963: named and memoized, deliberately. The fallback below returns a
@@ -189,6 +194,15 @@ describe('Users and Access routes', () => {
         if (name === 'logs') return logsCollection;
         if (name === 'organizations') return organizationsCollection;
         if (name === 'sessions') return sessionsCollection;
+        if (name === 'actors') {
+          return createCollectionMock({
+            findOne: vi.fn(async (q = {}) => (
+              q.actorId
+                ? { actorId: q.actorId, actorType: 'user', actorStatus: 'active', displayName: 'QA Actor' }
+                : null
+            )),
+          });
+        }
         if (rbacCollections[name]) return rbacCollections[name];
         return {
           find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
@@ -208,7 +222,8 @@ describe('Users and Access routes', () => {
     usersCollection.find.mockReturnValue({
       toArray: vi.fn().mockResolvedValue([
         {
-          _id: 'user-1',
+          _id: '550e8400-e29b-41d4-a716-446655441001',
+          userAccountId: '550e8400-e29b-41d4-a716-446655441001',
           name: 'Administrador',
           email: 'admin@bioavanced.com.br',
           username: 'admin',
@@ -229,7 +244,7 @@ describe('Users and Access routes', () => {
     expect(res.payload.success).toBe(true);
     expect(res.payload.data).toHaveLength(1);
     expect(res.payload.data[0].password).toBeUndefined();
-    expect(res.payload.data[0].id).toBe('user-1');
+    expect(res.payload.data[0].id).toBe('550e8400-e29b-41d4-a716-446655441001');
   });
 
   // #1068: dict-02 P1X-0197 says of mfaSecretCiphertext: "Nunca retornar na API
@@ -244,7 +259,8 @@ describe('Users and Access routes', () => {
 
     function seededUser(overrides = {}) {
       return {
-        _id: 'user-1',
+        _id: '550e8400-e29b-41d4-a716-446655441001',
+        userAccountId: '550e8400-e29b-41d4-a716-446655441001',
         name: 'Administrador',
         email: 'admin@bioavanced.com.br',
         username: 'admin',
@@ -286,7 +302,7 @@ describe('Users and Access routes', () => {
     it('GET /api/users/:id does not return mfaSecretCiphertext', async () => {
       const handler = getHandler(userRoutes, 'get', '/:id');
       usersCollection.findOne.mockResolvedValue(seededUser());
-      const req = createRequest({ params: { id: 'user-1' } });
+      const req = createRequest({ params: { id: '550e8400-e29b-41d4-a716-446655441001' } });
       req.app.locals.db = db;
       const res = createResponse();
 
@@ -309,6 +325,7 @@ describe('Users and Access routes', () => {
         username: 'newuser',
         password: 'Senha@123',
         accessType: 2,
+        actorId: randomUUID(),
         status: 'Ativo',
         phone: '(11) 99876-5432',
         organizationId: '   ',
@@ -353,13 +370,14 @@ describe('Users and Access routes', () => {
   it('POST /api/users/register deve negar usuário sem permissão', async () => {
     const handler = getHandler(userRoutes, 'post', '/register');
     const req = createRequest({
-      user: { userID: '507f1f77bcf86cd799439012', accessType: 2, roleName: 'Técnico' },
+      user: { userID: TEST_USER_ACCOUNT_IDS[2], actorId: TEST_ACTOR_IDS[2], accessType: 2, roleName: 'Técnico' },
       body: {
         name: 'Novo Usuário',
         email: 'new@example.com',
         username: 'newuser',
         password: 'Senha@123',
         accessType: 2,
+        actorId: randomUUID(),
       },
     });
     req.app.locals.db = db;
@@ -378,14 +396,15 @@ describe('Users and Access routes', () => {
     const handler = getHandler(userRoutes, 'post', '/:id/reset-mfa');
     usersCollection.findOne
       .mockResolvedValueOnce({
-        _id: 'user-target-1',
+        _id: '550e8400-e29b-41d4-a716-446655441101',
+        userAccountId: '550e8400-e29b-41d4-a716-446655441101',
         accessType: 2,
         roleName: 'Técnico',
         mfaEnabled: true,
       });
     usersCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
 
-    const req = createRequest({ params: { id: 'user-target-1' } });
+    const req = createRequest({ params: { id: '550e8400-e29b-41d4-a716-446655441101' } });
     req.app.locals.db = db;
     const res = createResponse();
 
@@ -409,12 +428,13 @@ describe('Users and Access routes', () => {
   it('#933: reset-mfa UNLOCKS an administrator target without touching the enrolment', async () => {
     const handler = getHandler(userRoutes, 'post', '/:id/reset-mfa');
     usersCollection.findOne.mockResolvedValueOnce({
-      _id: '507f1f77bcf86cd799439011',
+      _id: '550e8400-e29b-41d4-a716-446655440004',
+      userAccountId: '550e8400-e29b-41d4-a716-446655440004',
       accessType: 4, roleName: 'Administrador', mfaEnabled: true,
       mfaSecretCiphertext: 'SECRET-DO-NOT-CLEAR', mfaLocked: true, mfaFailedAttempts: 5,
     });
 
-    const req = createRequest({ params: { id: '507f1f77bcf86cd799439011' } });
+    const req = createRequest({ params: { id: '550e8400-e29b-41d4-a716-446655440004' } });
     req.app.locals.db = db;
     const res = createResponse();
 
@@ -437,8 +457,8 @@ describe('Users and Access routes', () => {
     const handler = getHandler(userRoutes, 'post', '/:id/disable-mfa');
 
     const req = createRequest({
-      params: { id: '507f1f77bcf86cd799439011' },
-      user: { userID: '507f1f77bcf86cd799439012', accessType: 2, roleName: 'Técnico' },
+      params: { id: '550e8400-e29b-41d4-a716-446655440004' },
+      user: { userID: TEST_USER_ACCOUNT_IDS[2], actorId: TEST_ACTOR_IDS[2], accessType: 2, roleName: 'Técnico' },
     });
     req.app.locals.db = db;
     const res = createResponse();
@@ -454,11 +474,12 @@ describe('Users and Access routes', () => {
   it('#933: disable-mfa REFUSES a non-administrator target -- it is admin-to-admin only', async () => {
     const handler = getHandler(userRoutes, 'post', '/:id/disable-mfa');
     usersCollection.findOne.mockResolvedValueOnce({
-      _id: '507f1f77bcf86cd799439012',
+      _id: '550e8400-e29b-41d4-a716-446655440002',
+      userAccountId: '550e8400-e29b-41d4-a716-446655440002',
       accessType: 2, roleName: 'Técnico', mfaEnabled: true,
     });
 
-    const req = createRequest({ params: { id: '507f1f77bcf86cd799439012' } });
+    const req = createRequest({ params: { id: '550e8400-e29b-41d4-a716-446655440002' } });
     req.app.locals.db = db;
     const res = createResponse();
 
@@ -480,14 +501,15 @@ describe('Users and Access routes', () => {
   it('POST /api/users/:id/reset-mfa revoga as sessões do alvo (#963)', async () => {
     const handler = getHandler(userRoutes, 'post', '/:id/reset-mfa');
     usersCollection.findOne.mockResolvedValueOnce({
-      _id: 'user-target-1',
+      _id: '550e8400-e29b-41d4-a716-446655441101',
+      userAccountId: '550e8400-e29b-41d4-a716-446655441101',
       accessType: 2,
       roleName: 'Técnico',
       mfaEnabled: true,
     });
     usersCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
 
-    const req = createRequest({ params: { id: 'user-target-1' } });
+    const req = createRequest({ params: { id: '550e8400-e29b-41d4-a716-446655441101' } });
     req.app.locals.db = db;
     const res = createResponse();
 
@@ -500,7 +522,7 @@ describe('Users and Access routes', () => {
     // user._id.toString()), so revoking with a non-string id matches
     // nothing, throws nothing and still returns 200 -- a silent no-op.
     expect(sessionsCollection.updateMany).toHaveBeenCalledWith(
-      { userID: 'user-target-1', isActive: true },
+      { userID: '550e8400-e29b-41d4-a716-446655441101', isActive: true },
       expect.objectContaining({
         $set: expect.objectContaining({ isActive: false, isRevoked: true }),
       })
@@ -514,14 +536,15 @@ describe('Users and Access routes', () => {
     const handler = getHandler(userRoutes, 'post', '/:id/force-password-reset');
     usersCollection.findOne
       .mockResolvedValueOnce({
-        _id: 'user-target-1',
+        _id: '550e8400-e29b-41d4-a716-446655441101',
+        userAccountId: '550e8400-e29b-41d4-a716-446655441101',
         accessType: 2,
         roleName: 'Técnico',
         forceReset: false,
       });
     usersCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
 
-    const req = createRequest({ params: { id: 'user-target-1' } });
+    const req = createRequest({ params: { id: '550e8400-e29b-41d4-a716-446655441101' } });
     req.app.locals.db = db;
     const res = createResponse();
 
@@ -549,14 +572,15 @@ describe('Users and Access routes', () => {
   });
 
   it('POST /api/users/:id/disable-mfa deve desativar MFA de admin', async () => {
-    // #426: both the requester ('...011') and the target ('user-target-2')
+    // #426: both the requester ('...011') and the target ('550e8400-e29b-41d4-a716-446655441102')
     // need an active administrator UserRoleAssignment for this scenario --
     // the shared beforeEach rbacCollections only grants '...011', so this
     // test builds its own db with both.
     const handler = getHandler(userRoutes, 'post', '/:id/disable-mfa');
     usersCollection.findOne
       .mockResolvedValueOnce({
-        _id: 'user-target-2',
+        _id: '550e8400-e29b-41d4-a716-446655441102',
+        userAccountId: '550e8400-e29b-41d4-a716-446655441102',
         accessType: 4,
         roleName: 'Administrador',
         mfaEnabled: true,
@@ -564,8 +588,8 @@ describe('Users and Access routes', () => {
     usersCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
 
     const rbacCollections = buildRbacCollections([
-      { userAccountId: '507f1f77bcf86cd799439011', accessType: 4 },
-      { userAccountId: 'user-target-2', accessType: 4 },
+      { userAccountId: '550e8400-e29b-41d4-a716-446655440004', accessType: 4 },
+      { userAccountId: '550e8400-e29b-41d4-a716-446655441102', accessType: 4 },
     ]);
     const dbWithTargetAdmin = {
       collection: vi.fn((name) => {
@@ -575,7 +599,7 @@ describe('Users and Access routes', () => {
       }),
     };
 
-    const req = createRequest({ params: { id: 'user-target-2' } });
+    const req = createRequest({ params: { id: '550e8400-e29b-41d4-a716-446655441102' } });
     req.app.locals.db = dbWithTargetAdmin;
     const res = createResponse();
 
@@ -591,7 +615,8 @@ describe('Users and Access routes', () => {
   it('PUT /api/users/:id nao persiste accessType/roleName e resolve roleName da RBAC assignment na resposta', async () => {
     const handler = getHandler(userRoutes, 'put', '/:id');
     const targetUser = {
-      _id: 'user-target-3',
+      _id: '550e8400-e29b-41d4-a716-446655441103',
+      userAccountId: '550e8400-e29b-41d4-a716-446655441103',
       name: 'Alvo',
       email: 'alvo@bioavanced.com.br',
       username: 'alvo',
@@ -605,8 +630,8 @@ describe('Users and Access routes', () => {
     usersCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
 
     const rbacCollections = buildRbacCollections([
-      { userAccountId: '507f1f77bcf86cd799439011', accessType: 4 },
-      { userAccountId: 'user-target-3', accessType: 4 },
+      { userAccountId: '550e8400-e29b-41d4-a716-446655440004', accessType: 4 },
+      { userAccountId: '550e8400-e29b-41d4-a716-446655441103', accessType: 4 },
     ]);
     const dbWithTarget = {
       collection: vi.fn((name) => {
@@ -617,7 +642,7 @@ describe('Users and Access routes', () => {
     };
 
     const req = createRequest({
-      params: { id: 'user-target-3' },
+      params: { id: '550e8400-e29b-41d4-a716-446655441103' },
       body: { accessType: 4, roleName: 'Administrador' },
     });
     req.app.locals.db = dbWithTarget;
@@ -635,7 +660,8 @@ describe('Users and Access routes', () => {
   it('#617: PUT /api/users/:id rejeita organizationId que não resolve a uma Organization real', async () => {
     const handler = getHandler(userRoutes, 'put', '/:id');
     const targetUser = {
-      _id: 'user-target-3b',
+      _id: '550e8400-e29b-41d4-a716-44665544113b',
+      userAccountId: '550e8400-e29b-41d4-a716-44665544113b',
       name: 'Alvo Org Inválida',
       email: 'alvo-org-invalida@bioavanced.com.br',
       username: 'alvoorginvalida',
@@ -645,8 +671,8 @@ describe('Users and Access routes', () => {
     usersCollection.findOne.mockResolvedValueOnce(targetUser);
 
     const rbacCollections = buildRbacCollections([
-      { userAccountId: '507f1f77bcf86cd799439011', accessType: 4 },
-      { userAccountId: 'user-target-3b', accessType: 2 },
+      { userAccountId: '550e8400-e29b-41d4-a716-446655440004', accessType: 4 },
+      { userAccountId: '550e8400-e29b-41d4-a716-44665544113b', accessType: 2 },
     ]);
     const invalidOrgCollection = {
       findOne: vi.fn().mockResolvedValue(null),
@@ -661,7 +687,7 @@ describe('Users and Access routes', () => {
     };
 
     const req = createRequest({
-      params: { id: 'user-target-3b' },
+      params: { id: '550e8400-e29b-41d4-a716-44665544113b' },
       body: { organizationId: 'org-inexistente' },
     });
     req.app.locals.db = dbWithTarget;
@@ -682,7 +708,8 @@ describe('Users and Access routes', () => {
   it('PUT /api/users/:id com auditorRole=true concede a role auditor sem persistir o campo no documento', async () => {
     const handler = getHandler(userRoutes, 'put', '/:id');
     const targetUser = {
-      _id: 'user-target-4',
+      _id: '550e8400-e29b-41d4-a716-446655441104',
+      userAccountId: '550e8400-e29b-41d4-a716-446655441104',
       name: 'Alvo Auditor',
       email: 'alvo-auditor@bioavanced.com.br',
       username: 'alvoauditor',
@@ -696,8 +723,8 @@ describe('Users and Access routes', () => {
     usersCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
 
     const rbacCollections = buildRbacCollections([
-      { userAccountId: '507f1f77bcf86cd799439011', accessType: 4 },
-      { userAccountId: 'user-target-4', accessType: 2 },
+      { userAccountId: '550e8400-e29b-41d4-a716-446655440004', accessType: 4 },
+      { userAccountId: '550e8400-e29b-41d4-a716-446655441104', accessType: 2 },
     ]);
     const dbWithTarget = {
       collection: vi.fn((name) => {
@@ -708,7 +735,7 @@ describe('Users and Access routes', () => {
     };
 
     const req = createRequest({
-      params: { id: 'user-target-4' },
+      params: { id: '550e8400-e29b-41d4-a716-446655441104' },
       body: { auditorRole: true },
     });
     req.app.locals.db = dbWithTarget;
@@ -720,7 +747,7 @@ describe('Users and Access routes', () => {
     const setPayload = usersCollection.updateOne.mock.calls[0][1].$set;
     expect(setPayload).not.toHaveProperty('auditorRole');
     expect(rbacCollections.userRoleAssignments.insertOne).toHaveBeenCalledWith(
-      expect.objectContaining({ userAccountId: 'user-target-4', roleId: 'role-auditor', assignmentStatus: 'active' })
+      expect.objectContaining({ userAccountId: '550e8400-e29b-41d4-a716-446655441104', roleId: 'role-auditor', assignmentStatus: 'active' })
     );
   });
 
@@ -729,7 +756,8 @@ describe('Users and Access routes', () => {
   it('PUT /api/users/:id com accessType e organizationId alterados escopa a nova assignment ao novo organizationId', async () => {
     const handler = getHandler(userRoutes, 'put', '/:id');
     const targetUser = {
-      _id: 'user-target-5',
+      _id: '550e8400-e29b-41d4-a716-446655441105',
+      userAccountId: '550e8400-e29b-41d4-a716-446655441105',
       name: 'Alvo Escopo',
       email: 'alvo-escopo@bioavanced.com.br',
       username: 'alvoescopo',
@@ -744,7 +772,7 @@ describe('Users and Access routes', () => {
 
     const rbacCollections = buildRbacCollections([]);
     const assignmentDocs = [
-      { assignmentId: 'assign-5', userAccountId: 'user-target-5', roleId: 'role-technician', scopeType: 'organization', scopeId: 'org-old', assignmentStatus: 'active', validUntil: null },
+      { assignmentId: 'assign-5', userAccountId: '550e8400-e29b-41d4-a716-446655441105', roleId: 'role-technician', scopeType: 'organization', scopeId: 'org-old', assignmentStatus: 'active', validUntil: null },
       // #998: the CALLER's own assignment. This fixture never needed one --
       // nothing on this route resolved the caller's level until the #998 floor
       // landed, so an unassigned caller was indistinguishable from an
@@ -752,7 +780,7 @@ describe('Users and Access routes', () => {
       // gate and is why this line is a fixture completion rather than a
       // loosening: createRequest's default caller is the accessType-4
       // administrator, and this makes the mock say so.
-      { assignmentId: 'assign-5-caller', userAccountId: '507f1f77bcf86cd799439011', roleId: 'role-administrator', scopeType: 'global', scopeId: null, assignmentStatus: 'active', validUntil: null },
+      { assignmentId: 'assign-5-caller', userAccountId: '550e8400-e29b-41d4-a716-446655440004', roleId: 'role-administrator', scopeType: 'global', scopeId: null, assignmentStatus: 'active', validUntil: null },
     ];
     const assignmentsMock = queryableAssignmentsMock(assignmentDocs);
     const dbWithTarget = {
@@ -766,7 +794,7 @@ describe('Users and Access routes', () => {
     };
 
     const req = createRequest({
-      params: { id: 'user-target-5' },
+      params: { id: '550e8400-e29b-41d4-a716-446655441105' },
       body: { accessType: 3, organizationId: 'org-new' },
     });
     req.app.locals.db = dbWithTarget;
@@ -787,7 +815,8 @@ describe('Users and Access routes', () => {
   it('PUT /api/users/:id com apenas organizationId alterado atualiza o scopeId da assignment existente sem revogar', async () => {
     const handler = getHandler(userRoutes, 'put', '/:id');
     const targetUser = {
-      _id: 'user-target-6',
+      _id: '550e8400-e29b-41d4-a716-446655441106',
+      userAccountId: '550e8400-e29b-41d4-a716-446655441106',
       name: 'Alvo Org',
       email: 'alvo-org@bioavanced.com.br',
       username: 'alvoorg',
@@ -802,7 +831,7 @@ describe('Users and Access routes', () => {
 
     const rbacCollections = buildRbacCollections([]);
     const assignmentDocs = [
-      { assignmentId: 'assign-6', userAccountId: 'user-target-6', roleId: 'role-technician', scopeType: 'organization', scopeId: 'org-old', assignmentStatus: 'active', validUntil: null },
+      { assignmentId: 'assign-6', userAccountId: '550e8400-e29b-41d4-a716-446655441106', roleId: 'role-technician', scopeType: 'organization', scopeId: 'org-old', assignmentStatus: 'active', validUntil: null },
     ];
     const assignmentsMock = queryableAssignmentsMock(assignmentDocs);
     const dbWithTarget = {
@@ -816,7 +845,7 @@ describe('Users and Access routes', () => {
     };
 
     const req = createRequest({
-      params: { id: 'user-target-6' },
+      params: { id: '550e8400-e29b-41d4-a716-446655441106' },
       body: { organizationId: 'org-new' },
     });
     req.app.locals.db = dbWithTarget;
@@ -837,7 +866,8 @@ describe('Users and Access routes', () => {
   it('PUT /api/users/:id com organizationId limpo zera o scopeId da assignment existente', async () => {
     const handler = getHandler(userRoutes, 'put', '/:id');
     const targetUser = {
-      _id: 'user-target-7',
+      _id: '550e8400-e29b-41d4-a716-446655441107',
+      userAccountId: '550e8400-e29b-41d4-a716-446655441107',
       name: 'Alvo Limpo',
       email: 'alvo-limpo@bioavanced.com.br',
       username: 'alvolimpo',
@@ -852,7 +882,7 @@ describe('Users and Access routes', () => {
 
     const rbacCollections = buildRbacCollections([]);
     const assignmentDocs = [
-      { assignmentId: 'assign-7', userAccountId: 'user-target-7', roleId: 'role-technician', scopeType: 'organization', scopeId: 'org-old', assignmentStatus: 'active', validUntil: null },
+      { assignmentId: 'assign-7', userAccountId: '550e8400-e29b-41d4-a716-446655441107', roleId: 'role-technician', scopeType: 'organization', scopeId: 'org-old', assignmentStatus: 'active', validUntil: null },
     ];
     const assignmentsMock = queryableAssignmentsMock(assignmentDocs);
     const dbWithTarget = {
@@ -866,7 +896,7 @@ describe('Users and Access routes', () => {
     };
 
     const req = createRequest({
-      params: { id: 'user-target-7' },
+      params: { id: '550e8400-e29b-41d4-a716-446655441107' },
       body: { organizationId: '' },
     });
     req.app.locals.db = dbWithTarget;
@@ -887,7 +917,8 @@ describe('Users and Access routes', () => {
   it('PUT /api/users/:id descarta chaves nao permitidas (injected/userID/mfaLocked) do $set', async () => {
     const handler = getHandler(userRoutes, 'put', '/:id');
     const targetUser = {
-      _id: 'user-target-8',
+      _id: '550e8400-e29b-41d4-a716-446655441108',
+      userAccountId: '550e8400-e29b-41d4-a716-446655441108',
       name: 'Alvo Original',
       email: 'alvo-injecao@bioavanced.com.br',
       username: 'alvoinjecao',
@@ -901,8 +932,8 @@ describe('Users and Access routes', () => {
     usersCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
 
     const rbacCollections = buildRbacCollections([
-      { userAccountId: '507f1f77bcf86cd799439011', accessType: 4 },
-      { userAccountId: 'user-target-8', accessType: 2 },
+      { userAccountId: '550e8400-e29b-41d4-a716-446655440004', accessType: 4 },
+      { userAccountId: '550e8400-e29b-41d4-a716-446655441108', accessType: 2 },
     ]);
     const dbWithTarget = {
       collection: vi.fn((name) => {
@@ -913,7 +944,7 @@ describe('Users and Access routes', () => {
     };
 
     const req = createRequest({
-      params: { id: 'user-target-8' },
+      params: { id: '550e8400-e29b-41d4-a716-446655441108' },
       body: { name: 'Alvo Renomeado', injected: 'x', mfaLocked: false, userID: 999, failedLoginAttempts: 0, accountLockedUntil: null },
     });
     req.app.locals.db = dbWithTarget;
@@ -946,7 +977,8 @@ describe('Users and Access routes', () => {
   it('#982: PUT /api/users/:id com senha nova revoga as sessões do alvo', async () => {
     const handler = getHandler(userRoutes, 'put', '/:id');
     const targetUser = {
-      _id: 'user-target-9',
+      _id: '550e8400-e29b-41d4-a716-446655441109',
+      userAccountId: '550e8400-e29b-41d4-a716-446655441109',
       name: 'Alvo Senha',
       email: 'alvo-senha@bioavanced.com.br',
       username: 'alvosenha',
@@ -960,8 +992,8 @@ describe('Users and Access routes', () => {
     usersCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
 
     const rbacCollections = buildRbacCollections([
-      { userAccountId: '507f1f77bcf86cd799439011', accessType: 4 },
-      { userAccountId: 'user-target-9', accessType: 2 },
+      { userAccountId: '550e8400-e29b-41d4-a716-446655440004', accessType: 4 },
+      { userAccountId: '550e8400-e29b-41d4-a716-446655441109', accessType: 2 },
     ]);
     const dbWithTarget = {
       collection: vi.fn((name) => {
@@ -972,7 +1004,7 @@ describe('Users and Access routes', () => {
     };
 
     const req = createRequest({
-      params: { id: 'user-target-9' },
+      params: { id: '550e8400-e29b-41d4-a716-446655441109' },
       body: { password: 'NovaSenh@2026' },
     });
     req.app.locals.db = dbWithTarget;
@@ -990,13 +1022,13 @@ describe('Users and Access routes', () => {
     // their owner as a string, so revoking with a non-string id matches
     // nothing, throws nothing and still returns 200.
     expect(sessionsCollection.updateMany).toHaveBeenCalledWith(
-      { userID: 'user-target-9', isActive: true },
+      { userID: '550e8400-e29b-41d4-a716-446655441109', isActive: true },
       expect.objectContaining({
         $set: expect.objectContaining({
           isActive: false,
           isRevoked: true,
           revocationReason: 'admin_action',
-          revokedBy: '507f1f77bcf86cd799439011',
+          revokedBy: '550e8400-e29b-41d4-a716-446655440004',
         }),
       })
     );
@@ -1008,7 +1040,8 @@ describe('Users and Access routes', () => {
   it('#982: PUT /api/users/:id sem senha não revoga sessão alguma', async () => {
     const handler = getHandler(userRoutes, 'put', '/:id');
     const targetUser = {
-      _id: 'user-target-10',
+      _id: '550e8400-e29b-41d4-a716-446655441110',
+      userAccountId: '550e8400-e29b-41d4-a716-446655441110',
       name: 'Alvo Sem Senha',
       email: 'alvo-sem-senha@bioavanced.com.br',
       username: 'alvosemsenha',
@@ -1022,8 +1055,8 @@ describe('Users and Access routes', () => {
     usersCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
 
     const rbacCollections = buildRbacCollections([
-      { userAccountId: '507f1f77bcf86cd799439011', accessType: 4 },
-      { userAccountId: 'user-target-10', accessType: 2 },
+      { userAccountId: '550e8400-e29b-41d4-a716-446655440004', accessType: 4 },
+      { userAccountId: '550e8400-e29b-41d4-a716-446655441110', accessType: 2 },
     ]);
     const dbWithTarget = {
       collection: vi.fn((name) => {
@@ -1034,7 +1067,7 @@ describe('Users and Access routes', () => {
     };
 
     const req = createRequest({
-      params: { id: 'user-target-10' },
+      params: { id: '550e8400-e29b-41d4-a716-446655441110' },
       body: { name: 'Renomeado' },
     });
     req.app.locals.db = dbWithTarget;
@@ -1057,7 +1090,8 @@ describe('Users and Access routes', () => {
   it('#993: PUT /api/users/:id nunca aceita mfaSecretCiphertext do chamador, mesmo com mfaEnabled=true em alvo admin', async () => {
     const handler = getHandler(userRoutes, 'put', '/:id');
     const targetUser = {
-      _id: 'user-target-11',
+      _id: '550e8400-e29b-41d4-a716-446655441111',
+      userAccountId: '550e8400-e29b-41d4-a716-446655441111',
       name: 'Alvo Admin',
       email: 'alvo-admin@bioavanced.com.br',
       username: 'alvoadmin',
@@ -1073,8 +1107,8 @@ describe('Users and Access routes', () => {
     usersCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
 
     const rbacCollections = buildRbacCollections([
-      { userAccountId: '507f1f77bcf86cd799439011', accessType: 4 },
-      { userAccountId: 'user-target-11', accessType: 4 },
+      { userAccountId: '550e8400-e29b-41d4-a716-446655440004', accessType: 4 },
+      { userAccountId: '550e8400-e29b-41d4-a716-446655441111', accessType: 4 },
     ]);
     const dbWithTarget = {
       collection: vi.fn((name) => {
@@ -1085,7 +1119,7 @@ describe('Users and Access routes', () => {
     };
 
     const req = createRequest({
-      params: { id: 'user-target-11' },
+      params: { id: '550e8400-e29b-41d4-a716-446655441111' },
       body: {
         mfaEnabled: true,
         mfaSecretCiphertext: 'SEGREDO-DO-ATACANTE', mfaSecret: 'SEGREDO-DO-ATACANTE',
@@ -1123,7 +1157,8 @@ describe('Users and Access routes', () => {
   it('#993/#1021: a PROMOCAO a Administrador zera mfaSecretCiphertext/mfaActivationDate, e nunca grava o do chamador', async () => {
     const handler = getHandler(userRoutes, 'put', '/:id');
     const targetUser = {
-      _id: 'user-target-12',
+      _id: '550e8400-e29b-41d4-a716-446655441112',
+      userAccountId: '550e8400-e29b-41d4-a716-446655441112',
       name: 'Alvo A Promover',
       email: 'alvo-admin2@bioavanced.com.br',
       username: 'alvoadmin2',
@@ -1139,8 +1174,8 @@ describe('Users and Access routes', () => {
     usersCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
 
     const rbacCollections = buildRbacCollections([
-      { userAccountId: '507f1f77bcf86cd799439011', accessType: 4 },
-      { userAccountId: 'user-target-12', accessType: 3 },
+      { userAccountId: '550e8400-e29b-41d4-a716-446655440004', accessType: 4 },
+      { userAccountId: '550e8400-e29b-41d4-a716-446655441112', accessType: 3 },
     ]);
     const dbWithTarget = {
       collection: vi.fn((name) => {
@@ -1151,7 +1186,7 @@ describe('Users and Access routes', () => {
     };
 
     const req = createRequest({
-      params: { id: 'user-target-12' },
+      params: { id: '550e8400-e29b-41d4-a716-446655441112' },
       body: { accessType: 4, mfaEnabled: true, mfaSecretCiphertext: 'SEGREDO-DO-ATACANTE', mfaSecret: 'SEGREDO-DO-ATACANTE' },
     });
     req.app.locals.db = dbWithTarget;
@@ -1189,7 +1224,7 @@ describe('Users and Access routes', () => {
   it('#1021: um PUT que OMITE mfaEnabled nao toca no MFA de um alvo Administrador', async () => {
     const handler = getHandler(userRoutes, 'put', '/:id');
     const targetUser = {
-      _id: 'user-target-1021',
+      _id: '550e8400-e29b-41d4-a716-44665544111021',
       name: 'Alvo Admin 1021',
       email: 'alvo1021@bioavanced.com.br',
       username: 'alvo1021',
@@ -1205,8 +1240,8 @@ describe('Users and Access routes', () => {
     usersCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
 
     const rbacCollections = buildRbacCollections([
-      { userAccountId: '507f1f77bcf86cd799439011', accessType: 4 },
-      { userAccountId: 'user-target-1021', accessType: 4 },
+      { userAccountId: '550e8400-e29b-41d4-a716-446655440004', accessType: 4 },
+      { userAccountId: '550e8400-e29b-41d4-a716-44665544111021', accessType: 4 },
     ]);
     const dbWithTarget = {
       collection: vi.fn((name) => {
@@ -1217,7 +1252,7 @@ describe('Users and Access routes', () => {
     };
 
     const req = createRequest({
-      params: { id: 'user-target-1021' },
+      params: { id: '550e8400-e29b-41d4-a716-44665544111021' },
       body: { name: 'Nome Novo' },
     });
     req.app.locals.db = dbWithTarget;
@@ -1241,7 +1276,7 @@ describe('Users and Access routes', () => {
   it('#1021: um mfaEnabled:false explicito tambem nao desabilita mais por esta rota', async () => {
     const handler = getHandler(userRoutes, 'put', '/:id');
     const targetUser = {
-      _id: 'user-target-1021b',
+      _id: '550e8400-e29b-41d4-a716-44665544111021b',
       name: 'Alvo Admin 1021b',
       email: 'alvo1021b@bioavanced.com.br',
       username: 'alvo1021b',
@@ -1257,8 +1292,8 @@ describe('Users and Access routes', () => {
     usersCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
 
     const rbacCollections = buildRbacCollections([
-      { userAccountId: '507f1f77bcf86cd799439011', accessType: 4 },
-      { userAccountId: 'user-target-1021b', accessType: 4 },
+      { userAccountId: '550e8400-e29b-41d4-a716-446655440004', accessType: 4 },
+      { userAccountId: '550e8400-e29b-41d4-a716-44665544111021b', accessType: 4 },
     ]);
     const dbWithTarget = {
       collection: vi.fn((name) => {
@@ -1269,7 +1304,7 @@ describe('Users and Access routes', () => {
     };
 
     const req = createRequest({
-      params: { id: 'user-target-1021b' },
+      params: { id: '550e8400-e29b-41d4-a716-44665544111021b' },
       body: { mfaEnabled: false },
     });
     req.app.locals.db = dbWithTarget;
@@ -1386,16 +1421,16 @@ describe('Users and Access routes', () => {
 
     it('refuses a Coordenador promoting a target to Administrador through PUT /:id', async () => {
       const handler = getHandler(userRoutes, 'put', '/:id');
-      seedTarget('user-target-998');
+      seedTarget('550e8400-e29b-41d4-a716-44665544110998');
 
       const req = createRequest({
-        params: { id: 'user-target-998' },
+        params: { id: '550e8400-e29b-41d4-a716-44665544110998' },
         body: { roleName: 'Administrador' },
         user: callerCoordenador(),
       });
       req.app.locals.db = dbWith([
         { userAccountId: '507f1f77bcf86cd799439013', accessType: 3 },
-        { userAccountId: 'user-target-998', accessType: 2 },
+        { userAccountId: '550e8400-e29b-41d4-a716-44665544110998', accessType: 2 },
       ]);
       const res = createResponse();
 
@@ -1430,15 +1465,15 @@ describe('Users and Access routes', () => {
     // from one that refuses every PUT.
     it('still allows an Administrador to promote a target to Administrador', async () => {
       const handler = getHandler(userRoutes, 'put', '/:id');
-      seedTarget('user-target-998b');
+      seedTarget('550e8400-e29b-41d4-a716-44665544110998b');
 
       const req = createRequest({
-        params: { id: 'user-target-998b' },
+        params: { id: '550e8400-e29b-41d4-a716-44665544110998b' },
         body: { roleName: 'Administrador' },
       });
       req.app.locals.db = dbWith([
-        { userAccountId: '507f1f77bcf86cd799439011', accessType: 4 },
-        { userAccountId: 'user-target-998b', accessType: 2 },
+        { userAccountId: '550e8400-e29b-41d4-a716-446655440004', accessType: 4 },
+        { userAccountId: '550e8400-e29b-41d4-a716-44665544110998b', accessType: 2 },
       ]);
       const res = createResponse();
 
@@ -1454,16 +1489,16 @@ describe('Users and Access routes', () => {
     // this test is the one that must flip.
     it('still allows a Coordenador to assign a level at or below their own', async () => {
       const handler = getHandler(userRoutes, 'put', '/:id');
-      seedTarget('user-target-998d');
+      seedTarget('550e8400-e29b-41d4-a716-44665544110998d');
 
       const req = createRequest({
-        params: { id: 'user-target-998d' },
+        params: { id: '550e8400-e29b-41d4-a716-44665544110998d' },
         body: { roleName: 'Coordenador' },
         user: callerCoordenador(),
       });
       req.app.locals.db = dbWith([
         { userAccountId: '507f1f77bcf86cd799439013', accessType: 3 },
-        { userAccountId: 'user-target-998d', accessType: 2 },
+        { userAccountId: '550e8400-e29b-41d4-a716-44665544110998d', accessType: 2 },
       ]);
       const res = createResponse();
 
@@ -1474,16 +1509,16 @@ describe('Users and Access routes', () => {
 
     it('still allows a Coordenador to edit a user without touching their role', async () => {
       const handler = getHandler(userRoutes, 'put', '/:id');
-      seedTarget('user-target-998c');
+      seedTarget('550e8400-e29b-41d4-a716-44665544110998c');
 
       const req = createRequest({
-        params: { id: 'user-target-998c' },
+        params: { id: '550e8400-e29b-41d4-a716-44665544110998c' },
         body: { name: 'Alvo Renomeado' },
         user: callerCoordenador(),
       });
       req.app.locals.db = dbWith([
         { userAccountId: '507f1f77bcf86cd799439013', accessType: 3 },
-        { userAccountId: 'user-target-998c', accessType: 2 },
+        { userAccountId: '550e8400-e29b-41d4-a716-44665544110998c', accessType: 2 },
       ]);
       const res = createResponse();
 
@@ -1507,7 +1542,7 @@ describe('Users and Access routes', () => {
   // existing tests unable to see this: the mock hands the route the field
   // whose absence IS the bug (same shape as #994's getMongo).
   describe('#1009: changeUserRole fires only on a real level change', () => {
-    const CALLER_ID = '507f1f77bcf86cd799439011';
+    const CALLER_ID = '550e8400-e29b-41d4-a716-446655440004';
 
     function seedTargetWithoutAccessType(id) {
       // Lifted from #998's seedTarget so a thin document cannot fail
@@ -1551,11 +1586,11 @@ describe('Users and Access routes', () => {
 
     it('#1009: an edit that carries the SAME roleName back does not revoke or re-grant the assignment', async () => {
       const handler = getHandler(userRoutes, 'put', '/:id');
-      seedTargetWithoutAccessType('user-target-1009a');
-      const assignmentDocs = assignmentsFor('user-target-1009a');
+      seedTargetWithoutAccessType('550e8400-e29b-41d4-a716-44665544111009a');
+      const assignmentDocs = assignmentsFor('550e8400-e29b-41d4-a716-44665544111009a');
 
       const req = createRequest({
-        params: { id: 'user-target-1009a' },
+        params: { id: '550e8400-e29b-41d4-a716-44665544111009a' },
         body: { name: 'Renomeado', roleName: 'Técnico' },
       });
       req.app.locals.db = dbWithAssignments(assignmentDocs);
@@ -1566,7 +1601,7 @@ describe('Users and Access routes', () => {
       expect(res.statusCode).toBe(200);
       // No spurious revoke + grant pair: the same assignment, untouched.
       expect(assignmentDocs).toHaveLength(2);
-      const targetAssignment = assignmentDocs.find((d) => d.userAccountId === 'user-target-1009a');
+      const targetAssignment = assignmentDocs.find((d) => d.userAccountId === '550e8400-e29b-41d4-a716-44665544111009a');
       expect(targetAssignment.assignmentId).toBe('assign-target-1009');
       expect(targetAssignment.assignmentStatus).toBe('active');
       expect(targetAssignment.revokedBy).toBeUndefined();
@@ -1582,7 +1617,7 @@ describe('Users and Access routes', () => {
     it('#1009: an org-only edit on a target holding a role still re-scopes without revoking', async () => {
       const handler = getHandler(userRoutes, 'put', '/:id');
       const targetUser = {
-        _id: 'user-target-1009d',
+        _id: '550e8400-e29b-41d4-a716-44665544111009d',
         name: 'Alvo 1009 Org',
         email: 'alvo-1009d@bioavanced.com.br',
         username: 'alvo1009d',
@@ -1593,12 +1628,12 @@ describe('Users and Access routes', () => {
         .mockResolvedValueOnce(targetUser)
         .mockResolvedValueOnce({ ...targetUser, organizationId: 'org-new' });
       usersCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
-      const assignmentDocs = assignmentsFor('user-target-1009d');
+      const assignmentDocs = assignmentsFor('550e8400-e29b-41d4-a716-44665544111009d');
       assignmentDocs[1].scopeType = 'organization';
       assignmentDocs[1].scopeId = 'org-old';
 
       const req = createRequest({
-        params: { id: 'user-target-1009d' },
+        params: { id: '550e8400-e29b-41d4-a716-44665544111009d' },
         body: { organizationId: 'org-new', roleName: 'Técnico' },
       });
       req.app.locals.db = dbWithAssignments(assignmentDocs);
@@ -1613,7 +1648,7 @@ describe('Users and Access routes', () => {
       // the guard. Before the fix this case ALSO fired changeUserRole, so the
       // scope landed on a brand-new assignment instead of the existing one.
       expect(assignmentDocs).toHaveLength(2);
-      const targetAssignment = assignmentDocs.find((d) => d.userAccountId === 'user-target-1009d');
+      const targetAssignment = assignmentDocs.find((d) => d.userAccountId === '550e8400-e29b-41d4-a716-44665544111009d');
       expect(targetAssignment.assignmentId).toBe('assign-target-1009');
       expect(targetAssignment.assignmentStatus).toBe('active');
       expect(targetAssignment.scopeId).toBe('org-new');
@@ -1625,11 +1660,11 @@ describe('Users and Access routes', () => {
     // assignment tripping #998's floor) rather than the bug reproducing.
     it('#1009 control: a real level change still revokes the old assignment and grants the new one', async () => {
       const handler = getHandler(userRoutes, 'put', '/:id');
-      seedTargetWithoutAccessType('user-target-1009c');
-      const assignmentDocs = assignmentsFor('user-target-1009c');
+      seedTargetWithoutAccessType('550e8400-e29b-41d4-a716-44665544111009c');
+      const assignmentDocs = assignmentsFor('550e8400-e29b-41d4-a716-44665544111009c');
 
       const req = createRequest({
-        params: { id: 'user-target-1009c' },
+        params: { id: '550e8400-e29b-41d4-a716-44665544111009c' },
         body: { roleName: 'Coordenador' },
       });
       req.app.locals.db = dbWithAssignments(assignmentDocs);
@@ -1642,7 +1677,7 @@ describe('Users and Access routes', () => {
       expect(old.assignmentStatus).toBe('revoked');
       expect(old.revocationReason).toBe('role_changed');
       const granted = assignmentDocs.filter(
-        (d) => d.userAccountId === 'user-target-1009c' && d.assignmentStatus === 'active'
+        (d) => d.userAccountId === '550e8400-e29b-41d4-a716-44665544111009c' && d.assignmentStatus === 'active'
       );
       expect(granted).toHaveLength(1);
       expect(granted[0].roleId).toBe('role-coordinator');
@@ -1656,7 +1691,7 @@ describe('Users and Access routes', () => {
       // assignment. Nothing in this suite could tell those apart until now.
       expect(auditSpies.logPermissionChange).toHaveBeenCalledWith(
         expect.anything(),
-        'user-target-1009c',
+        '550e8400-e29b-41d4-a716-44665544111009c',
         expect.objectContaining({ accessType: { from: 2, to: 3 } })
       );
     });

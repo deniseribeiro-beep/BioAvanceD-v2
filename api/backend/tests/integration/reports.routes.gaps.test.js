@@ -47,6 +47,35 @@ const DEFAULT_RBAC_COLLECTIONS = {
     // The real seeded Administrador row carries both.
 };
 
+// Stage 2E: getCanonicalCollection asks for specimens/participants while many
+// fixtures in this file still seed samples/patients. Alias both directions and
+// dual-write captures so legacy assertion keys keep working.
+const STAGE2E_COLLECTION_ALIASES = {
+  samples: 'specimens',
+  specimens: 'samples',
+  patients: 'participants',
+  participants: 'patients',
+  sample_movements: 'sampleMovements',
+  sampleMovements: 'sample_movements',
+};
+
+function resolveSeedDocs(mergedCollections, name) {
+  if (Object.prototype.hasOwnProperty.call(mergedCollections, name)) {
+    return mergedCollections[name];
+  }
+  const alias = STAGE2E_COLLECTION_ALIASES[name];
+  if (alias && Object.prototype.hasOwnProperty.call(mergedCollections, alias)) {
+    return mergedCollections[alias];
+  }
+  return [];
+}
+
+function captureUnderAliases(captureMap, name, value) {
+  captureMap[name] = value;
+  const alias = STAGE2E_COLLECTION_ALIASES[name];
+  if (alias) captureMap[alias] = value;
+}
+
 function buildCollectionDb(collections = {}) {
   const capturedQueries = {};
   // #769: the sort spec used to be swallowed by the stub below, which is
@@ -57,22 +86,35 @@ function buildCollectionDb(collections = {}) {
 
   const db = {
     collection(name) {
-      const docs = mergedCollections[name] || [];
+      const docs = resolveSeedDocs(mergedCollections, name);
       return {
         find(query = {}) {
-          capturedQueries[name] = query;
+          captureUnderAliases(capturedQueries, name, query);
           // #781: cursor.factory.js's mock captures the sort spec (and
           // is chainable in any order), replacing this file's own inline
           // stub -- same capturedSorts[name] shape the #769 assertions
-          // below already depend on.
-          return createCursorMock(docs, { capturedSorts, key: name });
+          // below already depend on. Dual-write the sort key for Stage 2E.
+          const cursor = createCursorMock(docs, { capturedSorts, key: name });
+          const alias = STAGE2E_COLLECTION_ALIASES[name];
+          if (alias && typeof cursor.sort?.mockImplementation === 'function') {
+            const previous = cursor.sort.getMockImplementation();
+            cursor.sort.mockImplementation((spec) => {
+              capturedSorts[alias] = spec;
+              return previous(spec);
+            });
+          }
+          return cursor;
         },
         async countDocuments(query = {}) {
           capturedQueries[`${name}.count`] = query;
+          const alias = STAGE2E_COLLECTION_ALIASES[name];
+          if (alias) capturedQueries[`${alias}.count`] = query;
           return docs.length;
         },
         async distinct(field, query = {}) {
           capturedQueries[`${name}.distinct`] = query;
+          const alias = STAGE2E_COLLECTION_ALIASES[name];
+          if (alias) capturedQueries[`${alias}.distinct`] = query;
           return [...new Set(docs.map((doc) => doc[field]).filter((value) => value !== undefined))];
         },
         async insertOne(doc) {
@@ -84,7 +126,7 @@ function buildCollectionDb(collections = {}) {
         // needs findOne -- simple equality match, same semantics as find's
         // own query shape above (this file's mocks don't need $in here).
         async findOne(query = {}) {
-          capturedQueries[`${name}.findOne`] = query;
+          captureUnderAliases(capturedQueries, `${name}.findOne`, query);
           return docs.find((doc) => Object.entries(query).every(([key, value]) => doc[key] === value)) || null;
         },
       };
@@ -554,19 +596,25 @@ describe('reports.routes.js gaps', () => {
   });
 
   describe('resolveCollection: candidato falsy sem lançar', () => {
+    // Stage 2E: patient/sample handlers use getCanonicalCollection (participants/
+    // specimens only). resolveCollection multi-candidate fallback still applies
+    // to temperature (temperature → temperatures) and similar non-canonical maps.
     it('cai para o segundo candidato quando o primeiro collection() retorna falsy', async () => {
       const db = {
         collection(name) {
           if (name === 'reportTemplates') {
             return { findOne: async (filter) => REPORT_TEMPLATE_DOCS.find((doc) => Object.entries(filter).every(([key, value]) => doc[key] === value)) || null };
           }
-          if (name === 'participants') return undefined;
-          if (name === 'pacientes') {
+          if (name === 'temperature') return undefined;
+          if (name === 'temperatures') {
             return {
               find() {
                 const chain = {
-                  toArray: async () => [{ participantId: 'P1', patientName: 'Ana' }],
+                  toArray: async () => [{ _id: 't1', timestamp: new Date('2026-01-05'), readingStatus: 'valid' }],
                   limit() {
+                    return chain;
+                  },
+                  sort() {
                     return chain;
                   },
                 };
@@ -577,12 +625,6 @@ describe('reports.routes.js gaps', () => {
               },
             };
           }
-          if (name === 'specimens' || name === 'amostras') {
-            return { distinct: async () => [] };
-          }
-          // #341: resolveUserOrganizationScope needs these two to resolve
-          // 'global' (not 'none') for req.user.userID 'user-1' — see the
-          // DEFAULT_RBAC_COLLECTIONS comment above.
           if (name === 'userRoleAssignments') {
             return { find: () => ({ toArray: async () => DEFAULT_RBAC_COLLECTIONS.userRoleAssignments }) };
           }
@@ -594,7 +636,7 @@ describe('reports.routes.js gaps', () => {
       };
       const testApp = appWithDb(db);
 
-      const response = await request(testApp).post('/api/reports/patients/preview').send({ filters: {} });
+      const response = await request(testApp).post('/api/reports/temperature/preview').send({ filters: {} });
 
       expect(response.status).toBe(200);
       expect(response.body.data.total).toBe(1);

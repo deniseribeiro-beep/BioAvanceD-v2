@@ -172,8 +172,8 @@ describe('intakeWizard routes', () => {
       const consentsCollection = { findOne: vi.fn().mockResolvedValue(null) };
 
       const getCollectionImpl = vi.fn(async (_db, key) => {
-        if (key === 'samples') return samplesCollection;
-        if (key === 'patients') return patientsCollection;
+        if (key === 'Specimen' || key === 'samples' || key === 'specimens') return samplesCollection;
+        if (key === 'Participant' || key === 'patients' || key === 'participants') return patientsCollection;
         if (key === 'consents') return consentsCollection;
         throw new Error(`unexpected key ${key}`);
       });
@@ -261,8 +261,8 @@ describe('intakeWizard routes', () => {
       const consentsCollection = { findOne: vi.fn().mockResolvedValue(null) };
 
       const getCollectionImpl = vi.fn(async (_db, key) => {
-        if (key === 'samples') return samplesCollection;
-        if (key === 'patients') return patientsCollection;
+        if (key === 'Specimen' || key === 'samples' || key === 'specimens') return samplesCollection;
+        if (key === 'Participant' || key === 'patients' || key === 'participants') return patientsCollection;
         if (key === 'consents') return consentsCollection;
         throw new Error(`unexpected key ${key}`);
       });
@@ -338,8 +338,8 @@ describe('intakeWizard routes', () => {
         const consentsCollection = { findOne: vi.fn().mockResolvedValue(null) };
 
         const getCollectionImpl = vi.fn(async (_db, key) => {
-          if (key === 'samples') return samplesCollection;
-          if (key === 'patients') return patientsCollection;
+          if (key === 'Specimen' || key === 'samples' || key === 'specimens') return samplesCollection;
+          if (key === 'Participant' || key === 'patients' || key === 'participants') return patientsCollection;
           if (key === 'consents') return consentsCollection;
           throw new Error(`unexpected key ${key}`);
         });
@@ -380,8 +380,8 @@ describe('intakeWizard routes', () => {
         const consentsCollection = { findOne: vi.fn().mockResolvedValue(null) };
 
         const getCollectionImpl = vi.fn(async (_db, key) => {
-          if (key === 'samples') return samplesCollection;
-          if (key === 'patients') return patientsCollection;
+          if (key === 'Specimen' || key === 'samples' || key === 'specimens') return samplesCollection;
+          if (key === 'Participant' || key === 'patients' || key === 'participants') return patientsCollection;
           if (key === 'consents') return consentsCollection;
           throw new Error(`unexpected key ${key}`);
         });
@@ -513,8 +513,8 @@ function defaultStorageContainersFindOne({ _id }) {
       const { samplesCollection, patientsCollection } = setupHappyMocks();
 
       const getCollectionImpl = vi.fn(async (_db, key) => {
-        if (key === 'samples') return samplesCollection;
-        if (key === 'patients') return patientsCollection;
+        if (key === 'Specimen' || key === 'samples' || key === 'specimens') return samplesCollection;
+        if (key === 'Participant' || key === 'patients' || key === 'participants') return patientsCollection;
         if (key === 'consents') return consentsCollection;
         throw new Error(`unexpected key ${key}`);
       });
@@ -553,8 +553,8 @@ function defaultStorageContainersFindOne({ _id }) {
       const { samplesCollection, patientsCollection } = setupHappyMocks();
 
       const getCollectionImpl = vi.fn(async (_db, key) => {
-        if (key === 'samples') return samplesCollection;
-        if (key === 'patients') return patientsCollection;
+        if (key === 'Specimen' || key === 'samples' || key === 'specimens') return samplesCollection;
+        if (key === 'Participant' || key === 'patients' || key === 'participants') return patientsCollection;
         if (key === 'consents') return consentsCollection;
         throw new Error(`unexpected key ${key}`);
       });
@@ -608,8 +608,8 @@ function defaultStorageContainersFindOne({ _id }) {
       const { samplesCollection, patientsCollection } = setupHappyMocks();
 
       const getCollectionImpl = vi.fn(async (_db, key) => {
-        if (key === 'samples') return samplesCollection;
-        if (key === 'patients') return patientsCollection;
+        if (key === 'Specimen' || key === 'samples' || key === 'specimens') return samplesCollection;
+        if (key === 'Participant' || key === 'patients' || key === 'participants') return patientsCollection;
         if (key === 'consents') return consentsCollection;
         throw new Error(`unexpected key ${key}`);
       });
@@ -659,8 +659,8 @@ function defaultStorageContainersFindOne({ _id }) {
       const { samplesCollection, patientsCollection } = setupHappyMocks();
 
       const getCollectionImpl = vi.fn(async (_db, key) => {
-        if (key === 'samples') return samplesCollection;
-        if (key === 'patients') return patientsCollection;
+        if (key === 'Specimen' || key === 'samples' || key === 'specimens') return samplesCollection;
+        if (key === 'Participant' || key === 'patients' || key === 'participants') return patientsCollection;
         if (key === 'consents') return consentsCollection;
         throw new Error(`unexpected key ${key}`);
       });
@@ -824,8 +824,8 @@ function defaultStorageContainersFindOne({ _id }) {
       const { samplesCollection, patientsCollection } = setupHappyMocks();
 
       const getCollectionImpl = vi.fn(async (_db, key) => {
-        if (key === 'samples') return samplesCollection;
-        if (key === 'patients') return patientsCollection;
+        if (key === 'Specimen' || key === 'samples' || key === 'specimens') return samplesCollection;
+        if (key === 'Participant' || key === 'patients' || key === 'participants') return patientsCollection;
         if (key === 'consents') return consentsCollection;
         throw new Error(`unexpected key ${key}`);
       });
@@ -863,8 +863,8 @@ function defaultStorageContainersFindOne({ _id }) {
       const { samplesCollection, patientsCollection } = setupHappyMocks();
 
       const getCollectionImpl = vi.fn(async (_db, key) => {
-        if (key === 'samples') return samplesCollection;
-        if (key === 'patients') return patientsCollection;
+        if (key === 'Specimen' || key === 'samples' || key === 'specimens') return samplesCollection;
+        if (key === 'Participant' || key === 'patients' || key === 'participants') return patientsCollection;
         if (key === 'consents') return consentsCollection;
         throw new Error(`unexpected key ${key}`);
       });
@@ -901,8 +901,8 @@ function defaultStorageContainersFindOne({ _id }) {
       const { samplesCollection, patientsCollection } = setupHappyMocks();
 
       const getCollectionImpl = vi.fn(async (_db, key) => {
-        if (key === 'samples') return samplesCollection;
-        if (key === 'patients') return patientsCollection;
+        if (key === 'Specimen' || key === 'samples' || key === 'specimens') return samplesCollection;
+        if (key === 'Participant' || key === 'patients' || key === 'participants') return patientsCollection;
         if (key === 'consents') return consentsCollection;
         throw new Error(`unexpected key ${key}`);
       });
@@ -946,8 +946,8 @@ function defaultStorageContainersFindOne({ _id }) {
       const { samplesCollection, patientsCollection } = setupHappyMocks();
 
       const getCollectionImpl = vi.fn(async (_db, key) => {
-        if (key === 'samples') return samplesCollection;
-        if (key === 'patients') return patientsCollection;
+        if (key === 'Specimen' || key === 'samples' || key === 'specimens') return samplesCollection;
+        if (key === 'Participant' || key === 'patients' || key === 'participants') return patientsCollection;
         if (key === 'consents') return consentsCollection;
         throw new Error(`unexpected key ${key}`);
       });

@@ -607,11 +607,11 @@ describe('reports.routes item 8 more residual canonical branches', () => {
     expect(res.body.data.samples).toHaveLength(1);
   });
 
-  it('POST /sample/preview resolves organization scope from req.user._id when userID is absent', async () => {
+  it('POST /sample/preview resolves organization scope from req.user.userID', async () => {
     delete require.cache[modulePaths.route];
     setCachedModule(modulePaths.auth, {
       authenticate: (req, _res, next) => {
-        req.user = { _id: 'user-object-id' };
+        req.user = { userID: 'user-object-id' };
         next();
       },
     });
@@ -760,11 +760,11 @@ describe('reports.routes item 8 more residual canonical branches', () => {
     expect(distinct).not.toHaveBeenCalled();
   });
 
-  it('GET export and export/pdf both resolve organization scope from req.user._id when userID is absent', async () => {
+  it('GET export and export/pdf both resolve organization scope from req.user.userID', async () => {
     delete require.cache[modulePaths.route];
     setCachedModule(modulePaths.auth, {
       authenticate: (req, _res, next) => {
-        req.user = { _id: 'report-export-user' };
+        req.user = { userID: 'report-export-user' };
         next();
       },
     });

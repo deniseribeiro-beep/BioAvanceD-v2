@@ -26,7 +26,7 @@ const {
 // dataset-file.routes.js's mount shape.
 
 const rbacCollectionsAdmin = buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 4 }]);
-const rbacCollectionsTechnician = buildRbacCollections([{ userAccountId: 'qa-2', accessType: 2 }]);
+const rbacCollectionsTechnician = buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[2], accessType: 2 }]);
 
 function makeToken(accessType = 4) {
   return makeAuthToken(accessType);
@@ -57,7 +57,7 @@ describe('GET /api/workflow-runs/:workflowRunId/files', () => {
 
     const res = await request(app)
       .get(`/api/workflow-runs/${workflowRunId}/files`)
-      .set('Authorization', `Bearer ${makeToken(TEST_USER_ACCOUNT_IDS[4], 4)}`);
+      .set('Authorization', `Bearer ${makeToken(4)}`);
 
     expect(res.status).toBe(404);
   });
@@ -72,7 +72,7 @@ describe('GET /api/workflow-runs/:workflowRunId/files', () => {
 
     const res = await request(app)
       .get(`/api/workflow-runs/${workflowRunId}/files`)
-      .set('Authorization', `Bearer ${makeToken(TEST_USER_ACCOUNT_IDS[4], 4)}`);
+      .set('Authorization', `Bearer ${makeToken(4)}`);
 
     expect(res.status).toBe(200);
     expect(res.body.data).toEqual({ inputFileIds: ['file-1'], outputFileIds: ['file-2'] });
@@ -85,7 +85,7 @@ describe('POST /api/workflow-runs/:workflowRunId/files', () => {
 
     const res = await request(app)
       .post(`/api/workflow-runs/${workflowRunId}/files`)
-      .set('Authorization', `Bearer ${makeToken('qa-2', 2)}`)
+      .set('Authorization', `Bearer ${makeToken(2)}`)
       .send({ fileId: new ObjectId().toString(), direction: 'input' });
 
     expect(res.status).toBe(403);
@@ -96,7 +96,7 @@ describe('POST /api/workflow-runs/:workflowRunId/files', () => {
 
     const res = await request(app)
       .post(`/api/workflow-runs/${workflowRunId}/files`)
-      .set('Authorization', `Bearer ${makeToken(TEST_USER_ACCOUNT_IDS[4], 4)}`)
+      .set('Authorization', `Bearer ${makeToken(4)}`)
       .send({ fileId: new ObjectId().toString(), direction: 'sideways' });
 
     expect(res.status).toBe(422);
@@ -110,7 +110,7 @@ describe('POST /api/workflow-runs/:workflowRunId/files', () => {
 
     const res = await request(app)
       .post(`/api/workflow-runs/${workflowRunId}/files`)
-      .set('Authorization', `Bearer ${makeToken(TEST_USER_ACCOUNT_IDS[4], 4)}`)
+      .set('Authorization', `Bearer ${makeToken(4)}`)
       .send({ fileId: new ObjectId().toString(), direction: 'input' });
 
     expect(res.status).toBe(404);
@@ -127,7 +127,7 @@ describe('POST /api/workflow-runs/:workflowRunId/files', () => {
 
     const res = await request(app)
       .post(`/api/workflow-runs/${workflowRunId}/files`)
-      .set('Authorization', `Bearer ${makeToken(TEST_USER_ACCOUNT_IDS[4], 4)}`)
+      .set('Authorization', `Bearer ${makeToken(4)}`)
       .send({ fileId: new ObjectId().toString(), direction: 'input' });
 
     expect(res.status).toBe(404);
@@ -151,7 +151,7 @@ describe('POST /api/workflow-runs/:workflowRunId/files', () => {
 
     const res = await request(app)
       .post(`/api/workflow-runs/${workflowRunId}/files`)
-      .set('Authorization', `Bearer ${makeToken(TEST_USER_ACCOUNT_IDS[4], 4)}`)
+      .set('Authorization', `Bearer ${makeToken(4)}`)
       .send({ fileId, direction: 'input' });
 
     expect(res.status).toBe(200);

@@ -79,13 +79,17 @@ describe('allocate-sample.controller', () => {
     }));
   });
 
-  it('builds the actor from req.user/req.ip/req.headers using the primary fallbacks', async () => {
+  it('builds the actor from req.user.userID/name/roleName and req.ip/headers (Stage 2E)', async () => {
     const executeSpy = vi.spyOn(AllocateSampleUseCase.prototype, 'execute')
       .mockResolvedValue({ sampleLocation: { position: 'A1' } });
     const req = {
       app: { locals: { db: { collection: vi.fn() } } },
       body: { specimenId: 's1', boxId: 'b1', position: 'A1' },
-      user: { id: 'user-1', name: 'Alice', roleName: 'admin' },
+      user: {
+        userID: '550e8400-e29b-41d4-a716-446655440001',
+        name: 'Alice',
+        roleName: 'admin',
+      },
       ip: '10.0.0.1',
       headers: { 'user-agent': 'test-agent' }
     };
@@ -95,7 +99,7 @@ describe('allocate-sample.controller', () => {
 
     expect(executeSpy).toHaveBeenCalledWith(expect.objectContaining({
       actor: {
-        userId: 'user-1',
+        userId: '550e8400-e29b-41d4-a716-446655440001',
         userName: 'Alice',
         userRole: 'admin',
         ipAddress: '10.0.0.1',
@@ -104,13 +108,19 @@ describe('allocate-sample.controller', () => {
     }));
   });
 
-  it('falls back through req.user._id/userID, req.headers x-forwarded-for and req.connection.remoteAddress when primary fields are absent', async () => {
+  it('ignores legacy id/_id actor fields; uses userID, username/role, and x-forwarded-for', async () => {
     const executeSpy = vi.spyOn(AllocateSampleUseCase.prototype, 'execute')
       .mockResolvedValue({ sampleLocation: { position: 'A1' } });
     const req = {
       app: { locals: { db: { collection: vi.fn() } } },
       body: { specimenId: 's1', boxId: 'b1', position: 'A1' },
-      user: { _id: { toString: () => 'id-from-_id' }, username: 'bob', role: 'tech' },
+      user: {
+        _id: { toString: () => 'id-from-_id' },
+        id: 'legacy-id',
+        userID: '550e8400-e29b-41d4-a716-446655440002',
+        username: 'bob',
+        role: 'tech',
+      },
       headers: { 'x-forwarded-for': '192.168.1.1' },
       connection: { remoteAddress: '127.0.0.1' }
     };
@@ -120,7 +130,7 @@ describe('allocate-sample.controller', () => {
 
     expect(executeSpy).toHaveBeenCalledWith(expect.objectContaining({
       actor: {
-        userId: 'id-from-_id',
+        userId: '550e8400-e29b-41d4-a716-446655440002',
         userName: 'bob',
         userRole: 'tech',
         ipAddress: '192.168.1.1',
@@ -129,13 +139,13 @@ describe('allocate-sample.controller', () => {
     }));
   });
 
-  it('falls back further to userID and connection.remoteAddress when higher-priority fields are absent', async () => {
+  it('falls back further to connection.remoteAddress when higher-priority fields are absent', async () => {
     const executeSpy = vi.spyOn(AllocateSampleUseCase.prototype, 'execute')
       .mockResolvedValue({ sampleLocation: { position: 'A1' } });
     const req = {
       app: { locals: { db: { collection: vi.fn() } } },
       body: { specimenId: 's1', boxId: 'b1', position: 'A1' },
-      user: { userID: 'id-from-userID' },
+      user: { userID: '550e8400-e29b-41d4-a716-446655440003' },
       headers: {},
       connection: { remoteAddress: '127.0.0.1' }
     };
@@ -145,7 +155,7 @@ describe('allocate-sample.controller', () => {
 
     expect(executeSpy).toHaveBeenCalledWith(expect.objectContaining({
       actor: {
-        userId: 'id-from-userID',
+        userId: '550e8400-e29b-41d4-a716-446655440003',
         userName: null,
         userRole: null,
         ipAddress: '127.0.0.1',
@@ -348,13 +358,17 @@ describe('release-sample.controller', () => {
     }));
   });
 
-  it('builds the actor from req.user/req.ip/req.headers using the primary fallbacks', async () => {
+  it('builds the actor from req.user.userID/name/roleName and req.ip/headers (Stage 2E)', async () => {
     const executeSpy = vi.spyOn(ReleaseSampleUseCase.prototype, 'execute')
       .mockResolvedValue({ releasedFrom: { position: 'A1' } });
     const req = {
       app: { locals: { db: { collection: vi.fn() } } },
       params: { specimenId: 's1' },
-      user: { id: 'user-1', name: 'Alice', roleName: 'admin' },
+      user: {
+        userID: '550e8400-e29b-41d4-a716-446655440001',
+        name: 'Alice',
+        roleName: 'admin',
+      },
       ip: '10.0.0.1',
       headers: { 'user-agent': 'test-agent' }
     };
@@ -365,7 +379,7 @@ describe('release-sample.controller', () => {
     expect(executeSpy).toHaveBeenCalledWith(expect.objectContaining({
       specimenId: 's1',
       actor: {
-        userId: 'user-1',
+        userId: '550e8400-e29b-41d4-a716-446655440001',
         userName: 'Alice',
         userRole: 'admin',
         ipAddress: '10.0.0.1',
@@ -374,13 +388,18 @@ describe('release-sample.controller', () => {
     }));
   });
 
-  it('falls back through req.user._id/userID, req.headers x-forwarded-for and req.connection.remoteAddress when primary fields are absent', async () => {
+  it('ignores legacy id/_id; uses userID, username/role, and x-forwarded-for', async () => {
     const executeSpy = vi.spyOn(ReleaseSampleUseCase.prototype, 'execute')
       .mockResolvedValue({ releasedFrom: { position: 'A1' } });
     const req = {
       app: { locals: { db: { collection: vi.fn() } } },
       params: { specimenId: 's1' },
-      user: { _id: { toString: () => 'id-from-_id' }, username: 'bob', role: 'tech' },
+      user: {
+        _id: { toString: () => 'id-from-_id' },
+        userID: '550e8400-e29b-41d4-a716-446655440002',
+        username: 'bob',
+        role: 'tech',
+      },
       headers: { 'x-forwarded-for': '192.168.1.1' },
       connection: { remoteAddress: '127.0.0.1' }
     };
@@ -390,7 +409,7 @@ describe('release-sample.controller', () => {
 
     expect(executeSpy).toHaveBeenCalledWith(expect.objectContaining({
       actor: {
-        userId: 'id-from-_id',
+        userId: '550e8400-e29b-41d4-a716-446655440002',
         userName: 'bob',
         userRole: 'tech',
         ipAddress: '192.168.1.1',

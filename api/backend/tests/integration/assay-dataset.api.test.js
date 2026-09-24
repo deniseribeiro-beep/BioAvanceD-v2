@@ -11,10 +11,8 @@ const { createCollectionMock, createDbMock } = require('../factories/db.factory'
 const { buildRbacCollections } = require('../factories/rbac.factory');
 const {
   makeAuthToken,
-  makeLegacyClaimsToken,
-  buildAuthenticatedCollections,
-  userForAccessType,
   TEST_USER_ACCOUNT_IDS,
+  TEST_ACTOR_IDS,
 } = require('../factories/auth.factory');
 
 
@@ -25,7 +23,7 @@ const {
 // mount: the right model's validate() actually gates each POST.
 
 const rbacCollectionsAdmin = buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 4 }]);
-const rbacCollectionsTechnician = buildRbacCollections([{ userAccountId: 'qa-2', accessType: 2 }]);
+const rbacCollectionsTechnician = buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[2], accessType: 2 }]);
 
 function makeToken(accessType = 4) {
   return makeAuthToken(accessType);
@@ -44,7 +42,7 @@ const VALID_ASSAY_PAYLOAD = {
   specimenIds: ['specimen-1'],
   assayType: 'RNA sequencing',
   protocolId: 'protocol-1',
-  operatorId: 'user-1',
+  operatorId: TEST_ACTOR_IDS[4],
   laboratoryId: 'org-1',
   assayDateTime: '2026-08-19T10:00:00.000Z',
   intendedUse: 'RNA-seq discovery',
@@ -69,7 +67,7 @@ describe('GET /api/assays', () => {
     });
     app.locals.db = createDbMock({ assays: coll, ...rbacCollectionsAdmin });
 
-    const res = await request(app).get('/api/assays').set('Authorization', `Bearer ${makeToken(TEST_USER_ACCOUNT_IDS[4], 4)}`);
+    const res = await request(app).get('/api/assays').set('Authorization', `Bearer ${makeToken(4)}`);
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
   });
@@ -81,7 +79,7 @@ describe('POST /api/assays', () => {
 
     const res = await request(app)
       .post('/api/assays')
-      .set('Authorization', `Bearer ${makeToken('qa-2', 2)}`)
+      .set('Authorization', `Bearer ${makeToken(2)}`)
       .send(VALID_ASSAY_PAYLOAD);
 
     expect(res.status).toBe(403);
@@ -93,7 +91,7 @@ describe('POST /api/assays', () => {
 
     const res = await request(app)
       .post('/api/assays')
-      .set('Authorization', `Bearer ${makeToken(TEST_USER_ACCOUNT_IDS[4], 4)}`)
+      .set('Authorization', `Bearer ${makeToken(4)}`)
       .send(invalidPayload);
 
     expect(res.status).toBe(422);
@@ -104,18 +102,18 @@ describe('POST /api/assays', () => {
     const coll = createCollectionMock({ insertOne: vi.fn().mockResolvedValue({ insertedId: '507f1f77bcf86cd799439011' }) });
     // #664: validateAssayReferences now checks specimenIds/protocolId/
     // operatorId/laboratoryId resolve to real records before create.
+    // operatorId must be Actor.actorId (UUID); rbacCollectionsAdmin seeds actors.
     app.locals.db = createDbMock({
       assays: coll,
       specimens: createCollectionMock({ findOne: vi.fn().mockResolvedValue({ _id: 'specimen-1' }) }),
       protocols: createCollectionMock({ findOne: vi.fn().mockResolvedValue({ protocolId: 'protocol-1' }) }),
-      userAccounts: createCollectionMock({ findOne: vi.fn().mockResolvedValue({ _id: 'user-1' }) }),
       organizations: createCollectionMock({ findOne: vi.fn().mockResolvedValue({ organizationId: 'org-1' }) }),
       ...rbacCollectionsAdmin,
     });
 
     const res = await request(app)
       .post('/api/assays')
-      .set('Authorization', `Bearer ${makeToken(TEST_USER_ACCOUNT_IDS[4], 4)}`)
+      .set('Authorization', `Bearer ${makeToken(4)}`)
       .send(VALID_ASSAY_PAYLOAD);
 
     expect(res.status).toBe(201);
@@ -127,14 +125,13 @@ describe('POST /api/assays', () => {
   it('#664: returns 404 when specimenIds does not resolve to a real sample', async () => {
     app.locals.db = createDbMock({
       protocols: createCollectionMock({ findOne: vi.fn().mockResolvedValue({ protocolId: 'protocol-1' }) }),
-      userAccounts: createCollectionMock({ findOne: vi.fn().mockResolvedValue({ _id: 'user-1' }) }),
       organizations: createCollectionMock({ findOne: vi.fn().mockResolvedValue({ organizationId: 'org-1' }) }),
       ...rbacCollectionsAdmin,
     });
 
     const res = await request(app)
       .post('/api/assays')
-      .set('Authorization', `Bearer ${makeToken(TEST_USER_ACCOUNT_IDS[4], 4)}`)
+      .set('Authorization', `Bearer ${makeToken(4)}`)
       .send(VALID_ASSAY_PAYLOAD);
 
     expect(res.status).toBe(404);
@@ -154,7 +151,7 @@ describe('GET /api/datasets', () => {
     });
     app.locals.db = createDbMock({ datasets: coll, ...rbacCollectionsAdmin });
 
-    const res = await request(app).get('/api/datasets').set('Authorization', `Bearer ${makeToken(TEST_USER_ACCOUNT_IDS[4], 4)}`);
+    const res = await request(app).get('/api/datasets').set('Authorization', `Bearer ${makeToken(4)}`);
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
   });
@@ -166,7 +163,7 @@ describe('POST /api/datasets', () => {
 
     const res = await request(app)
       .post('/api/datasets')
-      .set('Authorization', `Bearer ${makeToken('qa-2', 2)}`)
+      .set('Authorization', `Bearer ${makeToken(2)}`)
       .send(VALID_DATASET_PAYLOAD);
 
     expect(res.status).toBe(403);
@@ -178,7 +175,7 @@ describe('POST /api/datasets', () => {
 
     const res = await request(app)
       .post('/api/datasets')
-      .set('Authorization', `Bearer ${makeToken(TEST_USER_ACCOUNT_IDS[4], 4)}`)
+      .set('Authorization', `Bearer ${makeToken(4)}`)
       .send(invalidPayload);
 
     expect(res.status).toBe(422);
@@ -191,7 +188,7 @@ describe('POST /api/datasets', () => {
 
     const res = await request(app)
       .post('/api/datasets')
-      .set('Authorization', `Bearer ${makeToken(TEST_USER_ACCOUNT_IDS[4], 4)}`)
+      .set('Authorization', `Bearer ${makeToken(4)}`)
       .send(VALID_DATASET_PAYLOAD);
 
     expect(res.status).toBe(201);

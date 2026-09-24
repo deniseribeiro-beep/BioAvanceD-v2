@@ -12,13 +12,71 @@ const { buildUser, buildUserRegistrationPayload } = require('../factories/user.f
 const { buildRbacCollections } = require('../factories/rbac.factory');
 const {
   makeAuthToken,
-  makeLegacyClaimsToken,
-  buildAuthenticatedCollections,
-  userForAccessType,
   TEST_USER_ACCOUNT_IDS,
+  TEST_ACTOR_IDS,
 } = require('../factories/auth.factory');
 
+const ADMIN_CALLER_ID = TEST_USER_ACCOUNT_IDS[4];
+const ADMIN_CALLER_ACTOR = TEST_ACTOR_IDS[4];
+const MFA_OPERATOR_ID = '550e8400-e29b-41d4-a716-446655440021';
+const MFA_OPERATOR_ACTOR = '550e8400-e29b-41d4-a716-446655440022';
+const TARGET = Object.freeze({
+  admin1: '550e8400-e29b-41d4-a716-4466554400a1',
+  admin2: '550e8400-e29b-41d4-a716-4466554400a2',
+  tecnico1: '550e8400-e29b-41d4-a716-4466554400b1',
+  user1: '550e8400-e29b-41d4-a716-4466554400b2',
+});
 
+function adminAuthDoc() {
+  return {
+    userAccountId: ADMIN_CALLER_ID,
+    actorId: ADMIN_CALLER_ACTOR,
+    accessType: 4,
+    userStatus: 'active',
+    email: `${ADMIN_CALLER_ID}@example.test`,
+  };
+}
+
+function authAwareFindOne(targetId, targetDoc) {
+  return vi.fn(async (query = {}) => {
+    if (query.userAccountId === ADMIN_CALLER_ID) return adminAuthDoc();
+    if (query.userAccountId === MFA_OPERATOR_ID) {
+      return {
+        userAccountId: MFA_OPERATOR_ID,
+        actorId: MFA_OPERATOR_ACTOR,
+        accessType: 2,
+        userStatus: 'active',
+      };
+    }
+    if (query.userAccountId === TEST_USER_ACCOUNT_IDS[3]) {
+      return {
+        userAccountId: TEST_USER_ACCOUNT_IDS[3],
+        actorId: TEST_ACTOR_IDS[3],
+        accessType: 3,
+        userStatus: 'active',
+      };
+    }
+    if (query.userAccountId === targetId) {
+      return { _id: targetId, userAccountId: targetId, ...targetDoc };
+    }
+    return null;
+  });
+}
+
+function withCallerActors(extra = {}) {
+  return {
+    // Accept any UUID actorId lookup so registerUser's pre-insert Actor
+    // existence check succeeds for both grantedBy and the new account actor.
+    actors: createCollectionMock({
+      findOne: vi.fn(async (q = {}) => (
+        q.actorId
+          ? { actorId: q.actorId, actorType: 'user', actorStatus: 'active', displayName: 'QA Actor' }
+          : null
+      )),
+    }),
+    ...extra,
+  };
+}
 // #1031: user.routes.js requires auditLogger LAZILY inside its handlers, so a
 // spy on the shared CJS module object is observed at call time -- the pattern
 // #1017/#1025 established for this directory. vi.mock would not work here even
@@ -27,17 +85,7 @@ const {
 const auditLogger = require('../../src/utils/auditLogger');
 
 function createCoordinatorToken() {
-  return jwt.sign(
-    {
-      userID: TEST_USER_ACCOUNT_IDS[3],
-      accessType: 3,
-      roleName: 'Coordenador',
-      name: 'QA Coordenador',
-      mfaVerified: true,
-    },
-    process.env.JWT_SECRET,
-    { expiresIn: '1h' }
-  );
+  return makeAuthToken(3);
 }
 
 describe('RF003 - POST /api/users/register', () => {
@@ -47,10 +95,26 @@ describe('RF003 - POST /api/users/register', () => {
   }
 
   function givenUsersCollection(overrides = {}) {
-    const usersCollection = createCollectionMock(overrides);
+    const rbac = buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[3], accessType: 3 }]);
+    const baseFindOne = overrides.findOne || vi.fn().mockResolvedValue(null);
+    const usersCollection = createCollectionMock({
+      ...overrides,
+      findOne: vi.fn(async (query = {}) => {
+        if (query.userAccountId === TEST_USER_ACCOUNT_IDS[3]) {
+          return {
+            userAccountId: TEST_USER_ACCOUNT_IDS[3],
+            actorId: TEST_ACTOR_IDS[3],
+            accessType: 3,
+            userStatus: 'active',
+          };
+        }
+        return typeof baseFindOne === 'function' ? baseFindOne(query) : null;
+      }),
+    });
     app.locals.db = createDbMock({
+      ...rbac,
+      ...withCallerActors(),
       userAccounts: usersCollection,
-      ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[3], accessType: 3 }]),
     });
     return usersCollection;
   }
@@ -134,7 +198,26 @@ describe('RF003 - POST /api/users/register', () => {
     const organizationsCollection = createCollectionMock({
       findOne: vi.fn().mockResolvedValue({ organizationId: 'org-1' }),
     });
-    app.locals.db = createDbMock({ userAccounts: usersCollection, organizations: organizationsCollection, ...rbacCollections });
+    app.locals.db = createDbMock({
+      ...rbacCollections,
+      ...withCallerActors(),
+      organizations: organizationsCollection,
+      userAccounts: createCollectionMock({
+        findOne: vi.fn(async (query = {}) => {
+          if (query.userAccountId === TEST_USER_ACCOUNT_IDS[3]) {
+            return {
+              userAccountId: TEST_USER_ACCOUNT_IDS[3],
+              actorId: TEST_ACTOR_IDS[3],
+              accessType: 3,
+              userStatus: 'active',
+            };
+          }
+          return usersCollection.findOne(query);
+        }),
+        insertOne: (...args) => usersCollection.insertOne(...args),
+        updateOne: (...args) => usersCollection.updateOne(...args),
+      }),
+    });
 
     // When
     const response = await whenRegisterUser(
@@ -165,7 +248,26 @@ describe('RF003 - POST /api/users/register', () => {
     const organizationsCollection = createCollectionMock({
       findOne: vi.fn().mockResolvedValue(null),
     });
-    app.locals.db = createDbMock({ userAccounts: usersCollection, organizations: organizationsCollection, ...rbacCollections });
+    app.locals.db = createDbMock({
+      ...rbacCollections,
+      ...withCallerActors(),
+      organizations: organizationsCollection,
+      userAccounts: createCollectionMock({
+        findOne: vi.fn(async (query = {}) => {
+          if (query.userAccountId === TEST_USER_ACCOUNT_IDS[3]) {
+            return {
+              userAccountId: TEST_USER_ACCOUNT_IDS[3],
+              actorId: TEST_ACTOR_IDS[3],
+              accessType: 3,
+              userStatus: 'active',
+            };
+          }
+          return usersCollection.findOne(query);
+        }),
+        insertOne: (...args) => usersCollection.insertOne(...args),
+        updateOne: (...args) => usersCollection.updateOne(...args),
+      }),
+    });
 
     // When
     const response = await whenRegisterUser(
@@ -219,16 +321,29 @@ describe('resetMFA permission enforcement (#632)', () => {
       ]),
       permissions: queryableCollectionMock(permissionDocs),
       userRoleAssignments: queryableCollectionMock([
-        { userAccountId: 'qa-mfa-operator', roleId: 'role-mfa-operator', assignmentStatus: 'active', validUntil: null },
+        { userAccountId: MFA_OPERATOR_ID, roleId: 'role-mfa-operator', assignmentStatus: 'active', validUntil: null },
       ]),
+      userAccounts: queryableCollectionMock([{
+        userAccountId: MFA_OPERATOR_ID,
+        actorId: MFA_OPERATOR_ACTOR,
+        accessType: 2,
+        userStatus: 'active',
+      }]),
+      actors: queryableCollectionMock([{
+        actorId: MFA_OPERATOR_ACTOR,
+        actorType: 'user',
+        actorStatus: 'active',
+      }]),
     };
   }
   function mfaOperatorToken() {
-    return jwt.sign(
-      { userID: 'qa-mfa-operator', accessType: 2, roleName: 'Técnico', name: 'QA MFA Operator', mfaVerified: true },
-      process.env.JWT_SECRET,
-      { expiresIn: '1h' }
-    );
+    return makeAuthToken(2, {
+      userID: MFA_OPERATOR_ID,
+      actorId: MFA_OPERATOR_ACTOR,
+      accessType: 2,
+      roleName: 'Técnico',
+      name: 'QA MFA Operator',
+    });
   }
 
   beforeEach(() => {
@@ -238,14 +353,15 @@ describe('resetMFA permission enforcement (#632)', () => {
   afterEach(() => { vi.restoreAllMocks(); });
 
   it('allows a non-administrator role explicitly granted resetMFA', async () => {
+    const targetId = TARGET.user1;
     const usersCollection = createCollectionMock({
-      findOne: vi.fn().mockResolvedValue({ _id: 'user-target-1', accessType: 2, roleName: 'Técnico', mfaEnabled: true }),
+      findOne: authAwareFindOne(targetId, { accessType: 2, roleName: 'Técnico', mfaEnabled: true }),
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
     });
-    app.locals.db = createDbMock({ userAccounts: usersCollection, ...buildMfaOperatorCollections() });
+    app.locals.db = createDbMock({ ...buildMfaOperatorCollections(), userAccounts: usersCollection });
 
     const response = await request(app)
-      .post('/api/users/user-target-1/reset-mfa')
+      .post(`/api/users/${targetId}/reset-mfa`)
       .set('Authorization', `Bearer ${mfaOperatorToken()}`);
 
     expect(response.status).toBe(200);
@@ -309,11 +425,7 @@ describe('reset-mfa on an administrator target unlocks without re-enrolling (#93
   }
 
   function adminCallerToken() {
-    return jwt.sign(
-      { userID: 'qa-admin-caller', accessType: 4, roleName: 'Administrador', name: 'QA Admin', mfaVerified: true },
-      process.env.JWT_SECRET,
-      { expiresIn: '1h' }
-    );
+    return makeAuthToken(4);
   }
 
   function setFrom(updateOneMock) {
@@ -329,22 +441,23 @@ describe('reset-mfa on an administrator target unlocks without re-enrolling (#93
 
   it('clears the lock flags on an administrator target and preserves mfaSecretCiphertext/mfaEnabled', async () => {
     const usersCollection = createCollectionMock({
-      findOne: vi.fn().mockResolvedValue({
-        _id: 'admin-target-1', roleName: 'Administrador',
+      findOne: authAwareFindOne(TARGET.admin1, {
+        roleName: 'Administrador',
         mfaEnabled: true, mfaSecretCiphertext: 'SECRET-DO-NOT-CLEAR', mfaLocked: true, mfaFailedAttempts: 5,
       }),
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
     });
     app.locals.db = createDbMock({
-      userAccounts: usersCollection,
       ...buildCollections([
-        { userAccountId: 'qa-admin-caller', roleId: 'role-administrator' },
-        { userAccountId: 'admin-target-1', roleId: 'role-administrator' },
+        { userAccountId: ADMIN_CALLER_ID, roleId: 'role-administrator' },
+        { userAccountId: TARGET.admin1, roleId: 'role-administrator' },
       ]),
+      ...withCallerActors(),
+      userAccounts: usersCollection,
     });
 
     const response = await request(app)
-      .post('/api/users/admin-target-1/reset-mfa')
+      .post(`/api/users/${TARGET.admin1}/reset-mfa`)
       .set('Authorization', `Bearer ${adminCallerToken()}`);
 
     expect(response.status).toBe(200);
@@ -365,22 +478,23 @@ describe('reset-mfa on an administrator target unlocks without re-enrolling (#93
   // the bug (#695).
   it('CONTROL: a non-administrator target still gets the full reset, secret nulled', async () => {
     const usersCollection = createCollectionMock({
-      findOne: vi.fn().mockResolvedValue({
-        _id: 'tecnico-target-1', roleName: 'Tecnico',
+      findOne: authAwareFindOne(TARGET.tecnico1, {
+        roleName: 'Tecnico',
         mfaEnabled: true, mfaSecretCiphertext: 'SECRET-SHOULD-BE-CLEARED', mfaLocked: true, mfaFailedAttempts: 5,
       }),
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
     });
     app.locals.db = createDbMock({
-      userAccounts: usersCollection,
       ...buildCollections([
-        { userAccountId: 'qa-admin-caller', roleId: 'role-administrator' },
-        { userAccountId: 'tecnico-target-1', roleId: 'role-tecnico' },
+        { userAccountId: ADMIN_CALLER_ID, roleId: 'role-administrator' },
+        { userAccountId: TARGET.tecnico1, roleId: 'role-tecnico' },
       ]),
+      ...withCallerActors(),
+      userAccounts: usersCollection,
     });
 
     const response = await request(app)
-      .post('/api/users/tecnico-target-1/reset-mfa')
+      .post(`/api/users/${TARGET.tecnico1}/reset-mfa`)
       .set('Authorization', `Bearer ${adminCallerToken()}`);
 
     expect(response.status).toBe(200);
@@ -432,11 +546,7 @@ describe('reset-mfa writes a distinguishable audit row per branch (#1031)', () =
     };
   }
   function adminCallerToken() {
-    return jwt.sign(
-      { userID: 'qa-admin-caller', accessType: 4, roleName: 'Administrador', name: 'QA Admin', mfaVerified: true },
-      process.env.JWT_SECRET,
-      { expiresIn: '1h' }
-    );
+    return makeAuthToken(4);
   }
   function auditRowsFor(resourceId) {
     return auditLogger.log.mock.calls
@@ -457,30 +567,31 @@ describe('reset-mfa writes a distinguishable audit row per branch (#1031)', () =
 
   function givenTarget(id, roleId, doc) {
     const usersCollection = createCollectionMock({
-      findOne: vi.fn().mockResolvedValue({ _id: id, ...doc }),
+      findOne: authAwareFindOne(id, doc),
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
     });
     app.locals.db = createDbMock({
-      userAccounts: usersCollection,
       ...buildCollections([
-        { userAccountId: 'qa-admin-caller', roleId: 'role-administrator' },
+        { userAccountId: ADMIN_CALLER_ID, roleId: 'role-administrator' },
         { userAccountId: id, roleId },
       ]),
+      ...withCallerActors(),
+      userAccounts: usersCollection,
     });
     return usersCollection;
   }
 
   it('the UNLOCK branch writes a row naming the unlock and the preserved enrolment', async () => {
-    givenTarget('admin-target-1', 'role-administrator', {
+    givenTarget(TARGET.admin1, 'role-administrator', {
       roleName: 'Administrador', mfaEnabled: true, mfaSecretCiphertext: 'S', mfaLocked: true, mfaFailedAttempts: 5,
     });
 
     const response = await request(app)
-      .post('/api/users/admin-target-1/reset-mfa')
+      .post(`/api/users/${TARGET.admin1}/reset-mfa`)
       .set('Authorization', `Bearer ${adminCallerToken()}`);
 
     expect(response.status).toBe(200);
-    const rows = auditRowsFor('admin-target-1');
+    const rows = auditRowsFor(TARGET.admin1);
     expect(rows).toHaveLength(1);
     expect(rows[0].payload).toMatchObject({ operation: 'unlock', enrolmentPreserved: true });
     // #1042: pins the `secondFactorActive: true` at the unlock call site.
@@ -494,16 +605,16 @@ describe('reset-mfa writes a distinguishable audit row per branch (#1031)', () =
   });
 
   it('the FULL RESET branch writes a row naming the reset and the removed enrolment', async () => {
-    givenTarget('tecnico-target-1', 'role-tecnico', {
+    givenTarget(TARGET.tecnico1, 'role-tecnico', {
       roleName: 'Tecnico', mfaEnabled: true, mfaSecretCiphertext: 'S', mfaLocked: true, mfaFailedAttempts: 5,
     });
 
     const response = await request(app)
-      .post('/api/users/tecnico-target-1/reset-mfa')
+      .post(`/api/users/${TARGET.tecnico1}/reset-mfa`)
       .set('Authorization', `Bearer ${adminCallerToken()}`);
 
     expect(response.status).toBe(200);
-    const rows = auditRowsFor('tecnico-target-1');
+    const rows = auditRowsFor(TARGET.tecnico1);
     expect(rows).toHaveLength(1);
     expect(rows[0].payload).toMatchObject({ operation: 'reset', enrolmentPreserved: false });
     // #1042: same gap as the unlock pin above -- reset graded 'critical'
@@ -518,12 +629,12 @@ describe('reset-mfa writes a distinguishable audit row per branch (#1031)', () =
   // CONTROL: unchanged by this fix, must be GREEN before and after (#695).
   // If this is red the harness is wrong, not the product.
   it('CONTROL: the unlock branch still leaves mfaSecretCiphertext and mfaEnabled untouched', async () => {
-    const usersCollection = givenTarget('admin-target-2', 'role-administrator', {
+    const usersCollection = givenTarget(TARGET.admin2, 'role-administrator', {
       roleName: 'Administrador', mfaEnabled: true, mfaSecretCiphertext: 'S', mfaLocked: true, mfaFailedAttempts: 5,
     });
 
     const response = await request(app)
-      .post('/api/users/admin-target-2/reset-mfa')
+      .post(`/api/users/${TARGET.admin2}/reset-mfa`)
       .set('Authorization', `Bearer ${adminCallerToken()}`);
 
     expect(response.status).toBe(200);
@@ -582,11 +693,7 @@ describe('disable-mfa and force-password-reset write their own distinguishable a
     };
   }
   function adminCallerToken() {
-    return jwt.sign(
-      { userID: 'qa-admin-caller', accessType: 4, roleName: 'Administrador', name: 'QA Admin', mfaVerified: true },
-      process.env.JWT_SECRET,
-      { expiresIn: '1h' }
-    );
+    return makeAuthToken(4);
   }
   function auditRowsFor(resourceId) {
     return auditLogger.log.mock.calls
@@ -605,30 +712,31 @@ describe('disable-mfa and force-password-reset write their own distinguishable a
 
   function givenTarget(id, roleId, doc) {
     const usersCollection = createCollectionMock({
-      findOne: vi.fn().mockResolvedValue({ _id: id, ...doc }),
+      findOne: authAwareFindOne(id, doc),
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
     });
     app.locals.db = createDbMock({
-      userAccounts: usersCollection,
       ...buildCollections([
-        { userAccountId: 'qa-admin-caller', roleId: 'role-administrator' },
+        { userAccountId: ADMIN_CALLER_ID, roleId: 'role-administrator' },
         { userAccountId: id, roleId },
       ]),
+      ...withCallerActors(),
+      userAccounts: usersCollection,
     });
     return usersCollection;
   }
 
   it('disable-mfa writes a row naming the disable and the preserved enrolment, distinct from reset-mfa', async () => {
-    givenTarget('admin-target-1', 'role-administrator', {
+    givenTarget(TARGET.admin1, 'role-administrator', {
       roleName: 'Administrador', mfaEnabled: true, mfaSecretCiphertext: 'S', mfaLocked: true, mfaFailedAttempts: 5,
     });
 
     const response = await request(app)
-      .post('/api/users/admin-target-1/disable-mfa')
+      .post(`/api/users/${TARGET.admin1}/disable-mfa`)
       .set('Authorization', `Bearer ${adminCallerToken()}`);
 
     expect(response.status).toBe(200);
-    const rows = auditRowsFor('admin-target-1');
+    const rows = auditRowsFor(TARGET.admin1);
     expect(rows).toHaveLength(1);
     expect(rows[0].payload).toMatchObject({ operation: 'disable', enrolmentPreserved: true });
     // Must not collide with either reset-mfa branch's operation value.
@@ -637,16 +745,16 @@ describe('disable-mfa and force-password-reset write their own distinguishable a
   });
 
   it('force-password-reset writes its own row naming the forceReset flag, and it is not action MFA', async () => {
-    givenTarget('tecnico-target-1', 'role-tecnico', {
+    givenTarget(TARGET.tecnico1, 'role-tecnico', {
       roleName: 'Tecnico', mfaEnabled: false,
     });
 
     const response = await request(app)
-      .post('/api/users/tecnico-target-1/force-password-reset')
+      .post(`/api/users/${TARGET.tecnico1}/force-password-reset`)
       .set('Authorization', `Bearer ${adminCallerToken()}`);
 
     expect(response.status).toBe(200);
-    const rows = auditRowsFor('tecnico-target-1');
+    const rows = auditRowsFor(TARGET.tecnico1);
     expect(rows).toHaveLength(1);
     expect(rows[0].action).not.toBe('MFA');
     expect(rows[0].payload).toMatchObject({ fieldsSet: expect.arrayContaining(['forceReset']) });
@@ -666,16 +774,16 @@ describe('disable-mfa and force-password-reset write their own distinguishable a
   // factor" in the same severity bucket as clearing two counters, in a field
   // LogsPage.tsx offers to operators as a filter.
   it('grades disable-mfa critical: it leaves the account single-factor, as reset does', async () => {
-    givenTarget('admin-target-2', 'role-administrator', {
+    givenTarget(TARGET.admin2, 'role-administrator', {
       roleName: 'Administrador', mfaEnabled: true, mfaSecretCiphertext: 'S', mfaLocked: true, mfaFailedAttempts: 5,
     });
 
     const response = await request(app)
-      .post('/api/users/admin-target-2/disable-mfa')
+      .post(`/api/users/${TARGET.admin2}/disable-mfa`)
       .set('Authorization', `Bearer ${adminCallerToken()}`);
 
     expect(response.status).toBe(200);
-    const rows = auditRowsFor('admin-target-2');
+    const rows = auditRowsFor(TARGET.admin2);
     expect(rows).toHaveLength(1);
     // Control: unchanged by this fix, so it must be green BEFORE it too.
     expect(rows[0].payload.operation).toBe('disable');

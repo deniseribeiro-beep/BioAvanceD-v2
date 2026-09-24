@@ -1,10 +1,10 @@
-const { makeAuthToken, makeLegacyClaimsToken, buildAuthenticatedCollections, userForAccessType, TEST_USER_ACCOUNT_IDS } = require('../../factories/auth.factory');
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createRequire } from 'module';
 import express from 'express';
 import request from 'supertest';
 
 const require = createRequire(import.meta.url);
+const { TEST_USER_ACCOUNT_IDS } = require('../factories/auth.factory');
 
 const routePath = require.resolve('../../src/interface/routes/intakeWizard.routes.js');
 const authPath = require.resolve('../../src/infrastructure/middleware/auth.js');

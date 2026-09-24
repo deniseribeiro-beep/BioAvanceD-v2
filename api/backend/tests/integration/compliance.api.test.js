@@ -27,7 +27,7 @@ describe('Compliance API integration', () => {
   let fakeSecurityAlertsService;
   let fakeBiomarkerIntegrityService;
   const authenticate = (req, _res, next) => {
-    req.user = { _id: 'user-1' };
+    req.user = { userID: 'user-1', _id: 'user-1' };
     next();
   };
   const requireRole = () => (_req, _res, next) => next();

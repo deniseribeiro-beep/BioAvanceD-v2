@@ -28,7 +28,7 @@ function givenSession() {
 // #728: /api/backup-policy is gated by requireRole(4) directly (mirroring
 // security.routes.js's own singleton-config gate), not a granular
 // manageX permission -- only Administrador (accessType 4) should pass.
-const USER_BY_ACCESS_TYPE = { 2: 'qa-tech-1', 3: TEST_USER_ACCOUNT_IDS[3], 4: TEST_USER_ACCOUNT_IDS[4] };
+const USER_BY_ACCESS_TYPE = { 2: TEST_USER_ACCOUNT_IDS[2], 3: TEST_USER_ACCOUNT_IDS[3], 4: TEST_USER_ACCOUNT_IDS[4] };
 const ROLE_BY_ACCESS_TYPE = { 2: 'Tecnico', 3: 'Coordenador', 4: 'Administrador' };
 
 function makeToken(accessType = 4) {
@@ -38,7 +38,7 @@ function makeToken(accessType = 4) {
 function dbWithPolicy(overrides = {}) {
   return createDbMock({
     ...buildRbacCollections([
-      { userAccountId: 'qa-tech-1', accessType: 2 },
+      { userAccountId: TEST_USER_ACCOUNT_IDS[2], accessType: 2 },
       { userAccountId: TEST_USER_ACCOUNT_IDS[3], accessType: 3 },
       { userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 4 },
     ]),

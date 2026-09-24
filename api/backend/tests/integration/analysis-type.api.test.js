@@ -27,8 +27,8 @@ function makeToken(accessType = 4) {
 }
 
 const rbacCollections = buildRbacCollections([
-  { userAccountId: 'qa-4', accessType: 4 },
-  { userAccountId: 'qa-2', accessType: 2 },
+  { userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 4 },
+  { userAccountId: TEST_USER_ACCOUNT_IDS[2], accessType: 2 },
 ]);
 
 function givenSession() {

@@ -32,7 +32,9 @@ function collection(overrides = {}) {
 
 function dbFor(templates) {
   return {
-    collection: vi.fn((name) => name === 'consent_templates' ? templates : collection()),
+    collection: vi.fn((name) => (
+      name === 'consentTemplates' || name === 'consent_templates' ? templates : collection()
+    )),
   };
 }
 

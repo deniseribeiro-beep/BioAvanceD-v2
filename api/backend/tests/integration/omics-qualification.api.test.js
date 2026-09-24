@@ -25,7 +25,7 @@ const {
 // mount: OmicsQualificationModel.validate() actually gates each POST.
 
 const rbacCollectionsAdmin = buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 4 }]);
-const rbacCollectionsTechnician = buildRbacCollections([{ userAccountId: 'qa-2', accessType: 2 }]);
+const rbacCollectionsTechnician = buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[2], accessType: 2 }]);
 
 function makeToken(accessType = 4) {
   return makeAuthToken(accessType);
@@ -58,7 +58,7 @@ describe('GET /api/omics-qualifications', () => {
     });
     app.locals.db = createDbMock({ omicsQualifications: coll, ...rbacCollectionsAdmin });
 
-    const res = await request(app).get('/api/omics-qualifications').set('Authorization', `Bearer ${makeToken(TEST_USER_ACCOUNT_IDS[4], 4)}`);
+    const res = await request(app).get('/api/omics-qualifications').set('Authorization', `Bearer ${makeToken(4)}`);
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
   });
@@ -70,7 +70,7 @@ describe('POST /api/omics-qualifications', () => {
 
     const res = await request(app)
       .post('/api/omics-qualifications')
-      .set('Authorization', `Bearer ${makeToken('qa-2', 2)}`)
+      .set('Authorization', `Bearer ${makeToken(2)}`)
       .send(VALID_OMICS_QUALIFICATION_PAYLOAD);
 
     expect(res.status).toBe(403);
@@ -82,7 +82,7 @@ describe('POST /api/omics-qualifications', () => {
 
     const res = await request(app)
       .post('/api/omics-qualifications')
-      .set('Authorization', `Bearer ${makeToken(TEST_USER_ACCOUNT_IDS[4], 4)}`)
+      .set('Authorization', `Bearer ${makeToken(4)}`)
       .send(invalidPayload);
 
     expect(res.status).toBe(422);
@@ -94,7 +94,7 @@ describe('POST /api/omics-qualifications', () => {
 
     const res = await request(app)
       .post('/api/omics-qualifications')
-      .set('Authorization', `Bearer ${makeToken(TEST_USER_ACCOUNT_IDS[4], 4)}`)
+      .set('Authorization', `Bearer ${makeToken(4)}`)
       .send({ ...VALID_OMICS_QUALIFICATION_PAYLOAD, qualificationDecision: 'maybe' });
 
     expect(res.status).toBe(422);
@@ -106,7 +106,7 @@ describe('POST /api/omics-qualifications', () => {
 
     const res = await request(app)
       .post('/api/omics-qualifications')
-      .set('Authorization', `Bearer ${makeToken(TEST_USER_ACCOUNT_IDS[4], 4)}`)
+      .set('Authorization', `Bearer ${makeToken(4)}`)
       .send(VALID_OMICS_QUALIFICATION_PAYLOAD);
 
     expect(res.status).toBe(201);

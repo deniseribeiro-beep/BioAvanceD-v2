@@ -18,20 +18,10 @@ const {
 } = require('../factories/auth.factory');
 
 
-const rbacCollections = buildRbacCollections([{ userAccountId: 'qa-tech-1', accessType: 2 }]);
+const rbacCollections = buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[2], accessType: 2 }]);
 
 function createTechnicianToken() {
-  return jwt.sign(
-    {
-      userID: 'qa-tech-1',
-      accessType: 2,
-      roleName: 'Técnico',
-      name: 'QA Técnico',
-      mfaVerified: true,
-    },
-    process.env.JWT_SECRET,
-    { expiresIn: '1h' }
-  );
+  return makeAuthToken(2);
 }
 
 function buildValidSamplePayload(overrides = {}) {

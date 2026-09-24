@@ -155,7 +155,7 @@ function buildAutoAllocationDb({ accessType = 2, boxFull = false, specimenMissin
     consentRevocations,
     consentAuthorizationDecisions,
     ...ledgerCollections(),
-    ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType }]),
+    ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[accessType] || TEST_USER_ACCOUNT_IDS[4], accessType }]),
   };
 
   const db = createDbMock(collections);

@@ -1,4 +1,3 @@
-const { makeAuthToken, makeLegacyClaimsToken, buildAuthenticatedCollections, userForAccessType, TEST_USER_ACCOUNT_IDS } = require('../../factories/auth.factory');
 // backend/tests/unit/intakeWizard.governance-integration.test.js
 //
 // #409 file 3: api/backend/src/routes/intakeWizard.js has its own quarantine
@@ -17,6 +16,7 @@ import express from 'express';
 import request from 'supertest';
 
 const require = createRequire(import.meta.url);
+const { TEST_USER_ACCOUNT_IDS } = require('../factories/auth.factory');
 
 const routePath = require.resolve('../../src/interface/routes/intakeWizard.routes.js');
 const authPath = require.resolve('../../src/infrastructure/middleware/auth.js');

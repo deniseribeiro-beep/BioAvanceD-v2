@@ -12,7 +12,7 @@ const {
   buildAuthenticatedCollections,
   userForAccessType,
   TEST_USER_ACCOUNT_IDS,
-} = require('../../factories/auth.factory');
+} = require('../factories/auth.factory');
 
 
 const isQuarantineTriggerStatusMock = vi.fn();

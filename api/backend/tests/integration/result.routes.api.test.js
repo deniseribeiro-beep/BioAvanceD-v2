@@ -28,7 +28,10 @@ const {
 // regardless of which accessType a given test authenticates as. Each
 // accessType gets its own synthesized userAccountId (see makeToken) so the
 // assignments don't collide/union permissions for a single userID.
-const RBAC_USERS = [1, 2, 3, 4].map((accessType) => ({ userAccountId: `qa-1-${accessType}`, accessType }));
+const RBAC_USERS = [1, 2, 3, 4].map((accessType) => ({
+  userAccountId: TEST_USER_ACCOUNT_IDS[accessType],
+  accessType,
+}));
 const rbacCollections = buildRbacCollections(RBAC_USERS);
 
 function createDbMock(collections = {}) {

@@ -27,7 +27,7 @@ function makeToken(accessType = 3) {
 function dbWithRbac(collections, accessType = 3) {
   return createDbMock({
     ...collections,
-    ...buildRbacCollections([{ userAccountId: 'qa-topology-user', accessType }]),
+    ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[accessType] || TEST_USER_ACCOUNT_IDS[4], accessType }]),
   });
 }
 

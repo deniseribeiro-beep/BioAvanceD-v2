@@ -45,19 +45,11 @@ function dbWithRbac(collections = {}) {
  */
 
 function createAdminToken() {
-  return jwt.sign(
-    { userID: TEST_USER_ACCOUNT_IDS[4], accessType: 4, roleName: 'Administrador', name: 'QA Admin', mfaVerified: true },
-    process.env.JWT_SECRET,
-    { expiresIn: '1h' }
-  );
+  return makeAuthToken(4);
 }
 
 function createCoordinatorToken() {
-  return jwt.sign(
-    { userID: TEST_USER_ACCOUNT_IDS[3], accessType: 3, roleName: 'Coordenador', name: 'QA Coordenador', mfaVerified: true },
-    process.env.JWT_SECRET,
-    { expiresIn: '1h' }
-  );
+  return makeAuthToken(3);
 }
 
 function setupMocks() {

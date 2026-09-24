@@ -313,7 +313,7 @@ describe('auditLogger', () => {
       expect(logData.module).toBe('Cadastro');
       expect(logData.status).toBe('success');
       expect(logData.payload).not.toHaveProperty('name');
-      expect(logData.userID).toMatch(ANON_ID_RE);
+      expect(logData.userID).toBe('system');
       expect(logData.metadata.tracking.ip).toBe('1.1.1.1');
     });
 
@@ -455,8 +455,8 @@ describe('auditLogger', () => {
       await auditLogger.log({ action: 'X', resourceType: 'Y' });
       const [, logData] = logService.createLog.mock.calls[0];
       expect(logData.module).toBe('Sistema');
-      // No authenticated user → USR-SYSTEM sentinel (not a hashed USR- anon id).
-      expect(logData.userID).toBe('USR-SYSTEM');
+      // anonymizeLogUser maps non-UUID userID to literal 'system' (userName stays USR-SYSTEM)
+      expect(logData.userID).toBe('system');
     });
 
     it('builds errorStack and default message when an error is passed without a message', async () => {

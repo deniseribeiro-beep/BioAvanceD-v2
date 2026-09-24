@@ -24,7 +24,7 @@ const {
 const RBAC_TEST_USERS = [
   { userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 4 },
   { userAccountId: TEST_USER_ACCOUNT_IDS[3], accessType: 3 },
-  { userAccountId: 'qa-tech-1', accessType: 2 },
+  { userAccountId: TEST_USER_ACCOUNT_IDS[2], accessType: 2 },
 ];
 
 function dbWithRbac(collections = {}) {
@@ -60,45 +60,15 @@ function dbWithRbac(collections = {}) {
 
 // Helpers para autenticação
 function createAdminToken() {
-  return jwt.sign(
-    {
-      userID: TEST_USER_ACCOUNT_IDS[4],
-      accessType: 4,
-      roleName: 'Administrador',
-      name: 'QA Admin',
-      mfaVerified: true,
-    },
-    process.env.JWT_SECRET,
-    { expiresIn: '1h' }
-  );
+  return makeAuthToken(4);
 }
 
 function createCoordinatorToken() {
-  return jwt.sign(
-    {
-      userID: TEST_USER_ACCOUNT_IDS[3],
-      accessType: 3,
-      roleName: 'Coordenador',
-      name: 'QA Coordenador',
-      mfaVerified: true,
-    },
-    process.env.JWT_SECRET,
-    { expiresIn: '1h' }
-  );
+  return makeAuthToken(3);
 }
 
 function createTechnicianToken() {
-  return jwt.sign(
-    {
-      userID: 'qa-tech-1',
-      accessType: 2,
-      roleName: 'Técnico',
-      name: 'QA Técnico',
-      mfaVerified: true,
-    },
-    process.env.JWT_SECRET,
-    { expiresIn: '1h' }
-  );
+  return makeAuthToken(2);
 }
 
 // Helpers para payloads

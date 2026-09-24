@@ -2,11 +2,10 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 const request = require('supertest');
 const {
   makeAuthToken,
-  makeLegacyClaimsToken,
   buildAuthenticatedCollections,
   userForAccessType,
   TEST_USER_ACCOUNT_IDS,
-} = require('../../factories/auth.factory');
+} = require('../factories/auth.factory');
 
 const jwt = require('jsonwebtoken');
 
@@ -16,17 +15,8 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
 const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 
-function createToken(payload) {
-  return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '1h' });
-}
-
 function createTechnicianToken() {
-  return createToken({
-    userID: 'qa-dict-tech-1',
-    accessType: 2,
-    roleName: 'Tecnico',
-    mfaVerified: true,
-  });
+  return makeAuthToken(2);
 }
 
 function cursor(rows) {
@@ -59,12 +49,17 @@ function createMockDb({ localRows = [], count = 1 } = {}) {
     find: vi.fn().mockReturnValue(cursor([])),
   };
 
+  const authCols = buildAuthenticatedCollections([2]);
+  const named = {
+    medication_dictionary: medicationDictionary,
+    medicationDictionary,
+    logs: auditLogs,
+    audit_logs: auditLogs,
+    ...authCols,
+  };
+
   const db = {
-    collection: vi.fn((name) => {
-      if (name === 'medication_dictionary') return medicationDictionary;
-      if (name === 'logs' || name === 'audit_logs') return auditLogs;
-      return genericCollection;
-    }),
+    collection: vi.fn((name) => named[name] || genericCollection),
   };
 
   return { db, medicationDictionary, auditLogs };

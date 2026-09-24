@@ -241,7 +241,7 @@ describe('PatientService item 8 branch closure - update variants', () => {
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
       findOne: vi.fn().mockResolvedValue(updated)
     });
-    return { db: makeDb({ participants: patients }), participants };
+    return { db: makeDb({ participants: patients }), participants: patients };
   }
 
   it('covers unitAcronym null, email valid and nullable phone branches', async () => {
@@ -251,7 +251,7 @@ describe('PatientService item 8 branch closure - update variants', () => {
       email: 'OK@example.com',
       phone: null
     });
-    const payload = patients.updateOne.mock.calls[0][1].$set;
+    const payload = participants.updateOne.mock.calls[0][1].$set;
     expect(payload.unitAcronym).toBeNull();
     expect(payload.email).toBe('ok@example.com');
     expect(payload.phone).toBeNull();
@@ -277,12 +277,12 @@ describe('PatientService item 8 branch closure - update variants', () => {
     {
       const { db, participants } = updateDb();
       await patientService.updatePatient(db, '507f1f77bcf86cd799439011', {});
-      expect(patients.updateOne.mock.calls[0][0]).toHaveProperty('_id');
+      expect(participants.updateOne.mock.calls[0][0]).toHaveProperty('_id');
     }
     {
       const { db, participants } = updateDb({ participantId: 'fhir-x' });
       await patientService.updatePatient(db, 'fhir-x', {});
-      expect(patients.updateOne.mock.calls[0][0]).toEqual({ participantId: 'fhir-x' });
+      expect(participants.updateOne.mock.calls[0][0]).toEqual({ participantId: 'fhir-x' });
     }
   });
 
@@ -605,11 +605,11 @@ describe('PatientService item 8 branch closure - residual canonical outcomes', (
     return {
       db: makeDb({ participants: patients, participantIdentities: identities,
         consentTemplates: template,
-        consentTemplates: template,
         organizations: makeCollection({ findOne: vi.fn().mockResolvedValue(null) }),
         studies: makeCollection()
       }),
       patients,
+      participants: patients,
       identities
     };
   }
@@ -688,7 +688,7 @@ describe('PatientService item 8 branch closure - residual canonical outcomes', (
       alphaGal: 1.2,
       dadosEspecificos: [{ tipo: 'Fabry', dados: { lysoGb3: 2.3 } }]
     }), { skipConsentNotification: true });
-    const persisted = patients.insertOne.mock.calls[0][0];
+    const persisted = participants.insertOne.mock.calls[0][0];
     expect(persisted.dadosEspecificos).toEqual([
       { tipo: 'Fabry', dados: { lysoGb3: 2.3, alphaGal: 1.2 } }
     ]);

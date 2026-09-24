@@ -22,7 +22,17 @@ const logger = require('../../src/utils/logger');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'test-jwt-secret';
 const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'test-refresh-jwt-secret';
-const ACTOR_ID = '550e8400-e29b-41d4-a716-446655440001';
+const {
+  makeAuthToken,
+  makeLegacyClaimsToken,
+  buildAuthenticatedCollections,
+  userForAccessType,
+  TEST_USER_ACCOUNT_IDS,
+  TEST_ACTOR_IDS,
+} = require('../factories/auth.factory');
+
+// Fixed actorId for makeDb stubs that ignore the query and always return this value.
+const ACTOR_ID = TEST_ACTOR_IDS[2];
 
 function loadAuthRoutes() {
   // auth.routes.js `.bind()`s several authController methods at require time,
@@ -44,9 +54,26 @@ function makeUserId() {
   return randomUUID();
 }
 
+/** Mirror rbac.factory actorId derivation so JWT and userAccounts stay aligned. */
+function deriveActorId(userAccountId) {
+  const known = {
+    [TEST_USER_ACCOUNT_IDS[1]]: TEST_ACTOR_IDS[1],
+    [TEST_USER_ACCOUNT_IDS[2]]: TEST_ACTOR_IDS[2],
+    [TEST_USER_ACCOUNT_IDS[3]]: TEST_ACTOR_IDS[3],
+    [TEST_USER_ACCOUNT_IDS[4]]: TEST_ACTOR_IDS[4],
+    [TEST_USER_ACCOUNT_IDS.legacy]: TEST_ACTOR_IDS.legacy,
+  };
+  if (known[userAccountId]) return known[userAccountId];
+  return String(userAccountId).replace(/[0-9a-f]$/i, (c) => (c === '0' ? '1' : '0'));
+}
+
 function signAccessToken(overrides = {}) {
+  const userID = overrides.userID ?? makeUserId();
+  const actorId = overrides.actorId
+    ?? (overrides.userID ? deriveActorId(userID) : ACTOR_ID);
+  const { userID: _u, actorId: _a, ...rest } = overrides;
   return jwt.sign(
-    { userID: makeUserId(), actorId: ACTOR_ID, email: 'user@example.com', accessType: 2, mfaVerified: true, ...overrides },
+    { userID, actorId, email: 'user@example.com', accessType: 2, mfaVerified: true, ...rest },
     JWT_SECRET,
     { expiresIn: '15m' }
   );
@@ -69,16 +96,17 @@ function makeDb(userDoc) {
  */
 function makeDbWithRbac(userDoc, rbacUsers = []) {
   const { buildRbacCollections } = require('../factories/rbac.factory');
-const {
-  makeAuthToken,
-  makeLegacyClaimsToken,
-  buildAuthenticatedCollections,
-  userForAccessType,
-  TEST_USER_ACCOUNT_IDS,
-} = require('../factories/auth.factory');
 
   const rbac = buildRbacCollections(rbacUsers);
-  const findOne = vi.fn(async () => userDoc && { actorId: ACTOR_ID, ...userDoc });
+  const findOne = vi.fn(async (query = {}) => {
+    if (!userDoc) return null;
+    const userAccountId = query.userAccountId || rbacUsers[0]?.userAccountId;
+    return {
+      actorId: userAccountId ? deriveActorId(userAccountId) : ACTOR_ID,
+      userAccountId,
+      ...userDoc,
+    };
+  });
   return {
     collection: vi.fn((name) => rbac[name] || { findOne }),
     __findOne: findOne
@@ -224,12 +252,12 @@ describe('auth.routes.js (integration, real router mounted)', () => {
       function rbacDb(users) {
         const { buildRbacCollections } = require('../factories/rbac.factory');
         const collections = buildRbacCollections(users);
-        return { collection: vi.fn((name) => name === 'userAccounts'
-          ? { findOne: vi.fn(async ({ userAccountId }) => {
-            const user = users.find((entry) => entry.userAccountId === userAccountId);
-            return user ? { ...user, actorId: ACTOR_ID } : null;
-          }) }
-          : collections[name] || { findOne: vi.fn(async () => null), find: vi.fn(() => ({ toArray: vi.fn(async () => []) })) }) };
+        return {
+          collection: vi.fn((name) => collections[name] || {
+            findOne: vi.fn(async () => null),
+            find: vi.fn(() => ({ toArray: vi.fn(async () => []) })),
+          }),
+        };
       }
 
       it('refuses an authenticated caller who lacks createUser, without reaching the controller', async () => {

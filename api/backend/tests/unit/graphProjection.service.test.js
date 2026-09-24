@@ -1,8 +1,8 @@
-const { makeAuthToken, makeLegacyClaimsToken, buildAuthenticatedCollections, userForAccessType, TEST_USER_ACCOUNT_IDS } = require('../../factories/auth.factory');
 import { describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
+const { TEST_USER_ACCOUNT_IDS } = require('../factories/auth.factory');
 const { GraphProjectionService, stableHash } = require('../../src/services/graphProjection.service');
 
 function createFakeOutbox() {

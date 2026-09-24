@@ -87,6 +87,9 @@ const sampleService = require('../../src/services/sample.service');
 const sensorService = require('../../src/services/sensor.service');
 const consentValidator = require('../../src/services/consent.validator');
 const auditLogger = require('../../src/utils/auditLogger');
+const { TEST_USER_ACCOUNT_IDS } = require('../factories/auth.factory');
+
+const TARGET_ACCOUNT_ID = TEST_USER_ACCOUNT_IDS[2];
 
 function buildApp({ db = {}, locals = {}, authImpl } = {}) {
   currentAuth = authImpl || defaultAuth;
@@ -113,6 +116,11 @@ function collection(overrides = {}) {
 
 function dbWith(collections = {}) {
   const map = { ...collections };
+  // Stage 2E: product code asks for userAccounts / Specimen; keep legacy
+  // seed keys working inside this fake so existing fixtures stay readable.
+  if (map.users && !map.userAccounts) map.userAccounts = map.users;
+  if (map.samples && !map.Specimen) map.Specimen = map.samples;
+  if (map.specimens && !map.Specimen) map.Specimen = map.specimens;
   return {
     collections: map,
     collection: vi.fn((name) => {
@@ -291,7 +299,12 @@ describe('user.routes item 8 coverage — lower route bodies', () => {
       const res = await request(buildApp({
         db,
         authImpl: translatedAuth(
-          { _id: { toString: () => 'mongo-user' }, username: 'synthetic-user', role: 'Curador' },
+          {
+            userID: 'mongo-user',
+            _id: { toString: () => 'mongo-user' },
+            username: 'synthetic-user',
+            role: 'Curador',
+          },
           () => ''
         ),
       }))
@@ -585,7 +598,8 @@ describe('user.routes item 8 safe upper-route and neutral-update branches', () =
     vi.spyOn(rbacAssignments, 'resolveRoleDisplayName').mockResolvedValue('Técnico');
 
     const target = {
-      _id: { toString: () => 'u1' },
+      _id: { toString: () => 'mongo-u1' },
+      userAccountId: TARGET_ACCOUNT_ID,
       name: 'Before',
       email: 'before@example.test',
       username: 'before',
@@ -593,7 +607,8 @@ describe('user.routes item 8 safe upper-route and neutral-update branches', () =
       organizationId: null,
     };
     const updated = {
-      _id: { toString: () => 'u1' },
+      _id: { toString: () => 'mongo-u1' },
+      userAccountId: TARGET_ACCOUNT_ID,
       name: 'After',
       email: 'before@example.test',
       username: 'before',
@@ -608,7 +623,7 @@ describe('user.routes item 8 safe upper-route and neutral-update branches', () =
 
     vi.spyOn(auditLogger, 'logUpdate').mockResolvedValue(undefined);
     const res = await request(buildApp({ db: dbWith({ users }) }))
-      .put('/api/users/u1')
+      .put(`/api/users/${TARGET_ACCOUNT_ID}`)
       .send({ name: 'After', phone: '', organizationId: '' });
 
     expect(res.status).toBe(200);
@@ -617,12 +632,13 @@ describe('user.routes item 8 safe upper-route and neutral-update branches', () =
       { $set: expect.objectContaining({ phone: null, organizationId: null }) }
     );
     expect(res.body.data.status).toBeUndefined();
-    expect(res.body.data.id).toBe('u1');
+    expect(res.body.data.id).toBe(TARGET_ACCOUNT_ID);
   });
 
   it('rejects an organizationId that does not resolve to a canonical Organization', async () => {
     const target = {
-      _id: { toString: () => 'u1' },
+      _id: { toString: () => 'mongo-u1' },
+      userAccountId: TARGET_ACCOUNT_ID,
       name: 'Before',
       email: 'before@example.test',
       username: 'before',
@@ -631,7 +647,7 @@ describe('user.routes item 8 safe upper-route and neutral-update branches', () =
     const users = collection({ findOne: vi.fn().mockResolvedValue(target) });
     const organizations = collection({ findOne: vi.fn().mockResolvedValue(null) });
     const res = await request(buildApp({ db: dbWith({ users, organizations }) }))
-      .put('/api/users/u1')
+      .put(`/api/users/${TARGET_ACCOUNT_ID}`)
       .send({ organizationId: 'ORG-MISSING' });
 
     expect(res.status).toBe(400);
@@ -643,7 +659,8 @@ describe('user.routes item 8 safe upper-route and neutral-update branches', () =
     vi.spyOn(rbacAssignments, 'isAdministrator').mockResolvedValue(false);
 
     const target = {
-      _id: { toString: () => 'u1' },
+      _id: { toString: () => 'mongo-u1' },
+      userAccountId: TARGET_ACCOUNT_ID,
       name: 'Before',
       email: 'before@example.test',
       username: 'before',
@@ -657,7 +674,7 @@ describe('user.routes item 8 safe upper-route and neutral-update branches', () =
     });
 
     const res = await request(buildApp({ db: dbWith({ users }) }))
-      .put('/api/users/u1')
+      .put(`/api/users/${TARGET_ACCOUNT_ID}`)
       .send({ name: 'After' });
     expect(res.status).toBe(404);
   });
@@ -669,7 +686,8 @@ describe('user.routes item 8 safe upper-route and neutral-update branches', () =
     vi.spyOn(rbacAssignments, 'resolveRoleDisplayName').mockResolvedValue('Técnico');
 
     const target = {
-      _id: { toString: () => 'u1' },
+      _id: { toString: () => 'mongo-u1' },
+      userAccountId: TARGET_ACCOUNT_ID,
       name: 'Before',
       email: 'before@example.test',
       username: 'before',
@@ -687,7 +705,7 @@ describe('user.routes item 8 safe upper-route and neutral-update branches', () =
     });
 
     const res = await request(buildApp({ db: dbWith({ users }) }))
-      .put('/api/users/u1')
+      .put(`/api/users/${TARGET_ACCOUNT_ID}`)
       .send({ name: 'After', roleName: 'Técnico' });
 
     expect(res.status).toBe(200);

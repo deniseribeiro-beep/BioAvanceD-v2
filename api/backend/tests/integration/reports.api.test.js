@@ -154,16 +154,40 @@ const DEFAULT_RBAC_COLLECTIONS = {
     // The real seeded Administrador row carries both.
 };
 
+// Stage 2E: getCanonicalCollection asks for specimens/participants; fixtures
+// here still seed samples/patients. Alias both ways for lookup and capture.
+const STAGE2E_COLLECTION_ALIASES = {
+  samples: 'specimens',
+  specimens: 'samples',
+  patients: 'participants',
+  participants: 'patients',
+  sample_movements: 'sampleMovements',
+  sampleMovements: 'sample_movements',
+};
+
+function resolveSeedDocs(mergedCollections, name) {
+  if (Object.prototype.hasOwnProperty.call(mergedCollections, name)) {
+    return mergedCollections[name];
+  }
+  const alias = STAGE2E_COLLECTION_ALIASES[name];
+  if (alias && Object.prototype.hasOwnProperty.call(mergedCollections, alias)) {
+    return mergedCollections[alias];
+  }
+  return [];
+}
+
 function buildCollectionDb(collections = {}) {
   const capturedQueries = {};
   const mergedCollections = { reportTemplates: REPORT_TEMPLATE_DOCS, ...DEFAULT_RBAC_COLLECTIONS, ...collections };
 
   const db = {
     collection(name) {
-      const docs = mergedCollections[name] || [];
+      const docs = resolveSeedDocs(mergedCollections, name);
       return {
         find(query = {}) {
           capturedQueries[name] = query;
+          const alias = STAGE2E_COLLECTION_ALIASES[name];
+          if (alias) capturedQueries[alias] = query;
           const chain = {
             toArray: async () => docs,
             sort() {
@@ -177,10 +201,14 @@ function buildCollectionDb(collections = {}) {
         },
         async countDocuments(query = {}) {
           capturedQueries[`${name}.count`] = query;
+          const alias = STAGE2E_COLLECTION_ALIASES[name];
+          if (alias) capturedQueries[`${alias}.count`] = query;
           return docs.length;
         },
         async distinct(field, query = {}) {
           capturedQueries[`${name}.distinct`] = query;
+          const alias = STAGE2E_COLLECTION_ALIASES[name];
+          if (alias) capturedQueries[`${alias}.distinct`] = query;
           return [...new Set(docs.map((doc) => doc[field]).filter((value) => value !== undefined))];
         },
         async findOne(filter = {}) {

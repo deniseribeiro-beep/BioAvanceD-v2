@@ -1,10 +1,3 @@
-const {
-  makeAuthToken,
-  makeLegacyClaimsToken,
-  buildAuthenticatedCollections,
-  userForAccessType,
-  TEST_USER_ACCOUNT_IDS,
-} = require('../../factories/auth.factory');
 /**
  * Unit tests for fhir-import-staging.service.js's batch-type isolation (#799).
  *

@@ -79,7 +79,7 @@ describe('ConsentController.getPendingPatientsForPolicy', () => {
 
     await consentController.getPendingPatientsForPolicy(req, res);
 
-    expect(collection).toHaveBeenCalledWith('patients');
+    expect(collection).toHaveBeenCalledWith('participants');
     expect(patientsFind).toHaveBeenCalledWith({ status: 'PENDING_CONSENT', consentTemplateId: 'policy1' });
     expect(identitiesFind).toHaveBeenCalledWith({ participantId: { $in: ['p1'] } });
     expect(res.status).toHaveBeenCalledWith(200);

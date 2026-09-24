@@ -1,10 +1,3 @@
-const {
-  makeAuthToken,
-  makeLegacyClaimsToken,
-  buildAuthenticatedCollections,
-  userForAccessType,
-  TEST_USER_ACCOUNT_IDS,
-} = require('../../../factories/auth.factory');
 /**
  * Unit tests for fhir-import-staging.service.js's consent-token and
  * external-document flows — validateImportConsentToken,
@@ -17,6 +10,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
+const { TEST_USER_ACCOUNT_IDS } = require('../../factories/auth.factory');
 const jwt = require('jsonwebtoken');
 const fhirImportStagingService = require('../../../src/services/fhir-import-staging.service');
 
