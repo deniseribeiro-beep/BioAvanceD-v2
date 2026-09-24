@@ -63,7 +63,7 @@ describe('item 8 branch-95 utility behaviors', () => {
     };
     const db = {
       collection: vi.fn((name) => {
-        if (name === 'samples') return samples;
+        if (name === 'specimens') return samples;
         if (name === 'counters') return counters;
         throw new Error(`unexpected collection ${name}`);
       }),

@@ -10,6 +10,14 @@ const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
+const {
+  makeAuthToken,
+  makeLegacyClaimsToken,
+  buildAuthenticatedCollections,
+  userForAccessType,
+  TEST_USER_ACCOUNT_IDS,
+} = require('../factories/auth.factory');
+
 
 function cloneBsonValue(value) {
   if (value instanceof ObjectId) return new ObjectId(value.toHexString());
@@ -132,11 +140,7 @@ function createStatefulCollection(initial = []) {
 }
 
 function makeToken(accessType = 4) {
-  return jwt.sign(
-    { userID: 'qa-user-1', accessType, roleName: accessType >= 3 ? 'Coordenador' : 'Técnico', name: 'QA', mfaVerified: true },
-    process.env.JWT_SECRET,
-    { expiresIn: '1h' }
-  );
+  return makeAuthToken(accessType);
 }
 
 function givenSession() {
@@ -168,7 +172,7 @@ function activeConsentCollections() {
 function movementCollections() {
   return {
     counters: createCollectionMock({ findOneAndUpdate: vi.fn().mockResolvedValue({ _id: 'sample_movements', seq: 1 }) }),
-    sample_movements: createCollectionMock({
+    sampleMovements: createCollectionMock({
       find: vi.fn().mockReturnValue({
         sort: vi.fn().mockReturnValue({ limit: vi.fn().mockReturnValue({ next: vi.fn().mockResolvedValue(null) }) })
       }),
@@ -223,7 +227,7 @@ function buildDb({ withPlacement = false, accessType = 2 } = {}) {
   };
 
   const collections = {
-    samples: createStatefulCollection([{
+    specimens: createStatefulCollection([{
       _id: SAMPLE_ID,
       specimenId: String(SAMPLE_ID),
       barcode: 'BC-STORAGE-V2',
@@ -243,7 +247,7 @@ function buildDb({ withPlacement = false, accessType = 2 } = {}) {
     graph_projection_outbox: createStatefulCollection(),
     ...activeConsentCollections(),
     ...movementCollections(),
-    ...buildRbacCollections([{ userAccountId: 'qa-user-1', accessType }])
+    ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType }])
   };
   const db = createDbMock(collections);
   return { db, collections };

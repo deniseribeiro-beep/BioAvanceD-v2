@@ -27,7 +27,7 @@ function createDb({ sample = null, fileRecord = null } = {}) {
   return {
     db: {
       collection: vi.fn((name) => {
-        if (name === 'samples') return samples;
+        if (name === 'specimens') return samples;
         if (name === 'sample_files') return sampleFiles;
         throw new Error(`unexpected collection: ${name}`);
       }),

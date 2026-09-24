@@ -1,3 +1,10 @@
+const {
+  makeAuthToken,
+  makeLegacyClaimsToken,
+  buildAuthenticatedCollections,
+  userForAccessType,
+  TEST_USER_ACCOUNT_IDS,
+} = require('../../factories/auth.factory');
 /**
  * Unit tests for fhir-import-staging.service.js's batch-type isolation (#799).
  *
@@ -50,8 +57,8 @@ function createDb() {
   const collections = {
     import_batches: createCollection(),
     import_staging_records: createCollection(),
-    patients: createCollection(),
-    samples: createCollection(),
+    participants: createCollection(),
+    specimens: createCollection(),
     audit_logs: createCollection(),
   };
   return {
@@ -184,7 +191,7 @@ describe('fhir-import-staging.service -- batch-type isolation (#799)', () => {
       expect(record.status).toBe('ERROR');
       expect(record.quarantineStatus).toBeUndefined();
       expect(record.availabilityStatus).toBeUndefined();
-      expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
+      expect(db.collections.specimens.updateOne).not.toHaveBeenCalled();
     });
   });
 

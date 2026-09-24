@@ -143,7 +143,7 @@ describe('PatientService item 8 branch closure - identifier and duplicate checks
 
   it('returns a recordNumber conflict when a patient record already exists', async () => {
     const patients = makeCollection({ findOne: vi.fn().mockResolvedValue({ participantId: '12345678' }) });
-    const db = makeDb({ patients });
+    const db = makeDb({ participants: patients });
     const result = await patientService.checkIdentifierConflict(db, { recordNumber: ' REC-1 ' });
     expect(result).toMatchObject({ field: 'recordNumber', value: 'REC-1' });
   });
@@ -199,7 +199,7 @@ describe('PatientService item 8 branch closure - list and search', () => {
       find: vi.fn().mockReturnValue(makeCursor([])),
       countDocuments: vi.fn().mockResolvedValue(0)
     });
-    const result = await patientService.listPatients(makeDb({ patients }), {});
+    const result = await patientService.listPatients(makeDb({ participants: patients }), {});
     expect(result).toMatchObject({ total: 0, limit: 50, skip: 0 });
   });
 
@@ -208,7 +208,7 @@ describe('PatientService item 8 branch closure - list and search', () => {
       find: vi.fn().mockReturnValue(makeCursor([])),
       countDocuments: vi.fn().mockResolvedValue(0)
     });
-    await expect(patientService.searchPatients(makeDb({ patients }), 'Alpha')).resolves.toMatchObject({ total: 0 });
+    await expect(patientService.searchPatients(makeDb({ participants: patients }), 'Alpha')).resolves.toMatchObject({ total: 0 });
   });
 
   it('covers malformed slash parts and empty identity matches for a valid date', async () => {
@@ -217,7 +217,7 @@ describe('PatientService item 8 branch closure - list and search', () => {
       countDocuments: vi.fn().mockResolvedValue(0)
     });
     const identities = makeCollection({ find: vi.fn().mockReturnValue(makeCursor([])) });
-    const db = makeDb({ patients, participantIdentities: identities });
+    const db = makeDb({ participants: patients, participantIdentities: identities });
 
     await patientService.searchPatients(db, '12/34');
     await patientService.searchPatients(db, '15/06/1990');
@@ -230,7 +230,7 @@ describe('PatientService item 8 branch closure - list and search', () => {
       countDocuments: vi.fn().mockResolvedValue(0)
     });
     const scope = { type: 'global' };
-    await patientService.searchPatients(makeDb({ patients }), 'Alpha', scope);
+    await patientService.searchPatients(makeDb({ participants: patients }), 'Alpha', scope);
     expect(patients.find).toHaveBeenCalled();
   });
 });
@@ -241,11 +241,11 @@ describe('PatientService item 8 branch closure - update variants', () => {
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
       findOne: vi.fn().mockResolvedValue(updated)
     });
-    return { db: makeDb({ patients }), patients };
+    return { db: makeDb({ participants: patients }), participants };
   }
 
   it('covers unitAcronym null, email valid and nullable phone branches', async () => {
-    const { db, patients } = updateDb();
+    const { db, participants } = updateDb();
     await patientService.updatePatient(db, '12345678', {
       unitAcronym: '',
       email: 'OK@example.com',
@@ -275,12 +275,12 @@ describe('PatientService item 8 branch closure - update variants', () => {
 
   it('queries ObjectId and free-form identifiers on update', async () => {
     {
-      const { db, patients } = updateDb();
+      const { db, participants } = updateDb();
       await patientService.updatePatient(db, '507f1f77bcf86cd799439011', {});
       expect(patients.updateOne.mock.calls[0][0]).toHaveProperty('_id');
     }
     {
-      const { db, patients } = updateDb({ participantId: 'fhir-x' });
+      const { db, participants } = updateDb({ participantId: 'fhir-x' });
       await patientService.updatePatient(db, 'fhir-x', {});
       expect(patients.updateOne.mock.calls[0][0]).toEqual({ participantId: 'fhir-x' });
     }
@@ -292,7 +292,7 @@ describe('PatientService item 8 branch closure - update variants', () => {
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
       findOne: vi.fn().mockResolvedValue({ participantId: '12345678' })
     });
-    const db = makeDb({ patients, participantIdentities: identities });
+    const db = makeDb({ participants: patients, participantIdentities: identities });
     await patientService.updatePatient(db, '12345678', {
       patientName: 'Nova',
       birthDate: null,
@@ -309,13 +309,13 @@ describe('PatientService item 8 branch closure - update variants', () => {
     {
       const dup = Object.assign(new Error('dup'), { code: 11000, keyValue: { phone: '11999999999' } });
       const patients = makeCollection({ updateOne: vi.fn().mockRejectedValue(dup) });
-      await expect(patientService.updatePatient(makeDb({ patients }), '12345678', {}))
+      await expect(patientService.updatePatient(makeDb({ participants: patients }), '12345678', {}))
         .rejects.toMatchObject({ statusCode: 409 });
     }
     {
       const dup = Object.assign(new Error('dup-email'), { code: 11000, keyValue: { email: 'x' } });
       const patients = makeCollection({ updateOne: vi.fn().mockRejectedValue(dup) });
-      await expect(patientService.updatePatient(makeDb({ patients }), '12345678', {}))
+      await expect(patientService.updatePatient(makeDb({ participants: patients }), '12345678', {}))
         .rejects.toThrow('dup-email');
     }
   });
@@ -333,14 +333,14 @@ describe('PatientService item 8 branch closure - consent and deletion', () => {
       { participantId: '1', status: 'PENDING_CONSENT', consentToken: 't', consentTokenExpiresAt: new Date(Date.now() - 1000) }
     ]) {
       const patients = makeCollection({ findOne: vi.fn().mockResolvedValue(patient) });
-      const localDb = makeDb({ patients });
+      const localDb = makeDb({ participants: patients });
       await expect(patientService.validateConsentToken(localDb, '1', 't')).rejects.toThrow();
     }
 
     const patients = makeCollection({
       findOne: vi.fn().mockResolvedValue({ participantId: '1', status: 'PENDING_CONSENT', consentToken: 't' })
     });
-    await expect(patientService.validateConsentToken(makeDb({ patients }), '1', 't'))
+    await expect(patientService.validateConsentToken(makeDb({ participants: patients }), '1', 't'))
       .resolves.toEqual({ valid: true, participantId: '1' });
   });
 
@@ -362,7 +362,7 @@ describe('PatientService item 8 branch closure - consent and deletion', () => {
     vi.spyOn(notificationService, 'buildConsentLink').mockReturnValue('http://consent');
     vi.spyOn(notificationService, 'enqueueConsentNotification').mockResolvedValue(undefined);
 
-    const result = await patientService.resendConsentNotification(makeDb({ patients, participantIdentities: identities }), '1');
+    const result = await patientService.resendConsentNotification(makeDb({ participants: patients, participantIdentities: identities }), '1');
     expect(result.reusedToken).toBe(true);
     const updatePayload = patients.updateOne.mock.calls[0][1].$set;
     expect(updatePayload).not.toHaveProperty('consentToken');
@@ -391,7 +391,7 @@ describe('PatientService item 8 branch closure - consent and deletion', () => {
     vi.spyOn(notificationService, 'buildConsentLink').mockReturnValue('http://consent');
     vi.spyOn(notificationService, 'enqueueConsentNotification').mockResolvedValue(undefined);
 
-    const result = await patientService.resendConsentNotification(makeDb({ patients, participantIdentities: identities }), '2');
+    const result = await patientService.resendConsentNotification(makeDb({ participants: patients, participantIdentities: identities }), '2');
     expect(result.reusedToken).toBe(false);
     expect(patients.updateOne.mock.calls[0][1].$set.consentToken).toBe('new-token');
   });
@@ -401,19 +401,19 @@ describe('PatientService item 8 branch closure - consent and deletion', () => {
 
     for (const patient of [null, { participantId: '3', status: 'ACTIVE' }]) {
       const patients = makeCollection({ findOne: vi.fn().mockResolvedValue(patient) });
-      await expect(patientService.resendConsentNotification(makeDb({ patients }), '3')).rejects.toThrow();
+      await expect(patientService.resendConsentNotification(makeDb({ participants: patients }), '3')).rejects.toThrow();
     }
   });
 
   it('deletes by ObjectId and free-form participantId and covers deleted=false', async () => {
     {
       const patients = makeCollection({ deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }) });
-      await expect(patientService.deletePatient(makeDb({ patients }), '507f1f77bcf86cd799439011')).resolves.toBe(true);
+      await expect(patientService.deletePatient(makeDb({ participants: patients }), '507f1f77bcf86cd799439011')).resolves.toBe(true);
       expect(patients.deleteOne.mock.calls[0][0]).toHaveProperty('_id');
     }
     {
       const patients = makeCollection({ deleteOne: vi.fn().mockResolvedValue({ deletedCount: 0 }) });
-      await expect(patientService.deletePatient(makeDb({ patients }), 'fhir-x')).resolves.toBe(false);
+      await expect(patientService.deletePatient(makeDb({ participants: patients }), 'fhir-x')).resolves.toBe(false);
       expect(patients.deleteOne.mock.calls[0][0]).toEqual({ participantId: 'fhir-x' });
     }
   });
@@ -443,11 +443,9 @@ describe('PatientService item 8 branch closure - canonical residual matrix', () 
     });
     const organizations = makeCollection({ findOne: vi.fn().mockResolvedValue(null) });
     return {
-      db: makeDb({
-        patients,
-        participantIdentities: identities,
+      db: makeDb({ participants: patients, participantIdentities: identities,
         consentTemplates: template,
-        consent_templates: template,
+        consentTemplates: template,
         organizations
       }),
       patients,
@@ -494,7 +492,7 @@ describe('PatientService item 8 branch closure - canonical residual matrix', () 
   it('returns no record-number conflict when the canonical patient collection has no match', async () => {
     const patients = makeCollection({ findOne: vi.fn().mockResolvedValue(null) });
     await expect(patientService.checkIdentifierConflict(
-      makeDb({ patients }),
+      makeDb({ participants: patients }),
       { recordNumber: ' SYN-001 ' }
     )).resolves.toBeNull();
   });
@@ -540,7 +538,7 @@ describe('PatientService item 8 branch closure - canonical residual matrix', () 
     const identities = makeCollection({
       find: vi.fn().mockReturnValue(makeCursor([{ participantId: '12345678' }]))
     });
-    const db = makeDb({ patients, participantIdentities: identities });
+    const db = makeDb({ participants: patients, participantIdentities: identities });
 
     await expect(patientService.listPatients(db)).resolves.toMatchObject({ total: 0, limit: 50, skip: 0 });
     await expect(patientService.listPatients(db, {
@@ -560,7 +558,7 @@ describe('PatientService item 8 branch closure - canonical residual matrix', () 
     const identities = makeCollection({
       find: vi.fn().mockReturnValue(makeCursor([{ participantId: '12345678' }]))
     });
-    const db = makeDb({ patients, participantIdentities: identities });
+    const db = makeDb({ participants: patients, participantIdentities: identities });
 
     await patientService.searchPatients(db, '12345678');
     await patientService.searchPatients(db, '15/06/1990');
@@ -575,7 +573,7 @@ describe('PatientService item 8 branch closure - canonical residual matrix', () 
       findOne: vi.fn().mockResolvedValue({ participantId: '12345678' })
     });
     await expect(patientService.updatePatient(
-      makeDb({ patients }),
+      makeDb({ participants: patients }),
       '12345678',
       {}
     )).resolves.toEqual({ success: true });
@@ -605,11 +603,9 @@ describe('PatientService item 8 branch closure - residual canonical outcomes', (
       find: vi.fn().mockReturnValue(makeCursor([]))
     });
     return {
-      db: makeDb({
-        patients,
-        participantIdentities: identities,
+      db: makeDb({ participants: patients, participantIdentities: identities,
         consentTemplates: template,
-        consent_templates: template,
+        consentTemplates: template,
         organizations: makeCollection({ findOne: vi.fn().mockResolvedValue(null) }),
         studies: makeCollection()
       }),
@@ -627,7 +623,7 @@ describe('PatientService item 8 branch closure - residual canonical outcomes', (
 
   it('uses the canonical patients fallback name and non-duplicate phone outcomes', async () => {
     const patients = makeCollection({ collectionName: '' });
-    const db = makeDb({ patients });
+    const db = makeDb({ participants: patients });
     await expect(patientService.listPatients(db)).resolves.toMatchObject({ total: 0 });
     expect(patientService.handlePhoneUniqueConstraint(null)).toBeUndefined();
     expect(() => patientService.handlePhoneUniqueConstraint({
@@ -685,7 +681,7 @@ describe('PatientService item 8 branch closure - residual canonical outcomes', (
   });
 
   it('folds top-level Fabry values into the canonical dadosEspecificos shape', async () => {
-    const { db, patients } = creationDb();
+    const { db, participants } = creationDb();
     vi.spyOn(notificationService, 'buildConsentLink').mockReturnValue('https://example.test/consent');
     vi.spyOn(notificationService, 'enqueueConsentNotification').mockResolvedValue(undefined);
     await patientService.createPatient(db, validPatient({
@@ -731,7 +727,7 @@ describe('PatientService item 8 branch closure - residual canonical outcomes', (
       findOne: vi.fn().mockResolvedValue({})
     });
     const identities = makeCollection({ find: vi.fn().mockReturnValue(makeCursor([])) });
-    const db = makeDb({ patients, participantIdentities: identities });
+    const db = makeDb({ participants: patients, participantIdentities: identities });
     await patientService.searchPatients(db, '2020-invalid-date');
     await expect(patientService.updatePatient(db, '12345678', {
       patientName: 'Identidade Sintética'
@@ -758,12 +754,12 @@ describe('PatientService item 8 branch closure - final predicate matrix', () => 
       findOne: vi.fn().mockResolvedValue({ _id: '507f1f77bcf86cd799439011' })
     });
     return {
-      patients: makeCollection(),
+      participants: makeCollection(),
       db: makeDb({
-        patients: makeCollection(),
+        participants: makeCollection(),
         participantIdentities: makeCollection({ find: vi.fn().mockReturnValue(makeCursor([])) }),
         consentTemplates: template,
-        consent_templates: template,
+        consentTemplates: template,
         organizations: makeCollection({ findOne: vi.fn().mockResolvedValue(null) }),
         studies: makeCollection({ findOne: vi.fn().mockResolvedValue(study) })
       })
@@ -810,11 +806,9 @@ describe('PatientService item 8 branch closure - final predicate matrix', () => 
       findOne: vi.fn().mockResolvedValue({ _id: '507f1f77bcf86cd799439011' })
     });
     const patients = makeCollection();
-    const db = makeDb({
-      patients,
-      participantIdentities: makeCollection({ find: vi.fn().mockReturnValue(makeCursor([])) }),
+    const db = makeDb({ participants: patients, participantIdentities: makeCollection({ find: vi.fn().mockReturnValue(makeCursor([])) }),
       consentTemplates: template,
-      consent_templates: template,
+      consentTemplates: template,
       organizations: makeCollection({ findOne: vi.fn().mockResolvedValue(null) })
     });
     await patientService.createPatient(
@@ -832,11 +826,9 @@ describe('PatientService item 8 branch closure - final predicate matrix', () => 
       findOne: vi.fn().mockResolvedValue({ _id: '507f1f77bcf86cd799439011' })
     });
     const patients = makeCollection();
-    const db = makeDb({
-      patients,
-      participantIdentities: makeCollection({ find: vi.fn().mockReturnValue(makeCursor([])) }),
+    const db = makeDb({ participants: patients, participantIdentities: makeCollection({ find: vi.fn().mockReturnValue(makeCursor([])) }),
       consentTemplates: template,
-      consent_templates: template,
+      consentTemplates: template,
       organizations: makeCollection({ findOne: vi.fn().mockResolvedValue(null) }),
       studies: makeCollection({
         findOne: vi.fn().mockResolvedValue({ studyId: 'STUDY-1', studyStatus: 'active' })
@@ -891,11 +883,9 @@ describe('PatientService item 8 branch closure - clinical decision endpoints', (
       findOne: vi.fn().mockResolvedValue({ _id: '507f1f77bcf86cd799439011' })
     });
     const patients = makeCollection();
-    const db = makeDb({
-      patients,
-      participantIdentities: makeCollection({ find: vi.fn().mockReturnValue(makeCursor([])) }),
+    const db = makeDb({ participants: patients, participantIdentities: makeCollection({ find: vi.fn().mockReturnValue(makeCursor([])) }),
       consentTemplates: template,
-      consent_templates: template,
+      consentTemplates: template,
       organizations: makeCollection({ findOne: vi.fn().mockResolvedValue(null) })
     });
     const result = await patientService.createPatient(db, {
@@ -933,10 +923,10 @@ describe('PatientService item 8 branch closure - clinical decision endpoints', (
       findOne: vi.fn().mockResolvedValue({ _id: '507f1f77bcf86cd799439011' })
     });
     const db = makeDb({
-      patients: makeCollection(),
+      participants: makeCollection(),
       participantIdentities: makeCollection({ find: vi.fn().mockReturnValue(makeCursor([])) }),
       consentTemplates: template,
-      consent_templates: template,
+      consentTemplates: template,
       organizations: makeCollection({ findOne: vi.fn().mockResolvedValue(null) })
     });
     const validateSpy = vi.spyOn(PatientModel, 'validate').mockReturnValue({

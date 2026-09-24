@@ -11,14 +11,22 @@ const sessionService = require('../../src/services/session.service');
 const auditLogger = require('../../src/utils/auditLogger');
 const { createDbMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
+const {
+  makeAuthToken,
+  makeLegacyClaimsToken,
+  buildAuthenticatedCollections,
+  userForAccessType,
+  TEST_USER_ACCOUNT_IDS,
+} = require('../factories/auth.factory');
+
 const participantIdentityService = require('../../src/services/participantIdentity.service');
 
 process.env.ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || 'dGVzdGtleXRlc3RrZXl0ZXN0a2V5dGVzdGtleXQ=';
 process.env.ENCRYPTION_KEY_ID = process.env.ENCRYPTION_KEY_ID || 'test-key-1';
 
 const RBAC_TEST_USERS = [
-  { userAccountId: 'qa-admin-1', accessType: 4 },
-  { userAccountId: 'qa-coord-1', accessType: 3 },
+  { userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 4 },
+  { userAccountId: TEST_USER_ACCOUNT_IDS[3], accessType: 3 },
 ];
 
 function dbWithRbac(collections = {}) {
@@ -38,7 +46,7 @@ function dbWithRbac(collections = {}) {
 
 function createAdminToken() {
   return jwt.sign(
-    { userID: 'qa-admin-1', accessType: 4, roleName: 'Administrador', name: 'QA Admin', mfaVerified: true },
+    { userID: TEST_USER_ACCOUNT_IDS[4], accessType: 4, roleName: 'Administrador', name: 'QA Admin', mfaVerified: true },
     process.env.JWT_SECRET,
     { expiresIn: '1h' }
   );
@@ -46,7 +54,7 @@ function createAdminToken() {
 
 function createCoordinatorToken() {
   return jwt.sign(
-    { userID: 'qa-coord-1', accessType: 3, roleName: 'Coordenador', name: 'QA Coordenador', mfaVerified: true },
+    { userID: TEST_USER_ACCOUNT_IDS[3], accessType: 3, roleName: 'Coordenador', name: 'QA Coordenador', mfaVerified: true },
     process.env.JWT_SECRET,
     { expiresIn: '1h' }
   );
@@ -55,7 +63,7 @@ function createCoordinatorToken() {
 function setupMocks() {
   vi.spyOn(sessionService, 'verifySession').mockResolvedValue({
     valid: true,
-    session: { sessionID: 'session-test-1', userID: 'qa-admin-1' },
+    session: { sessionID: 'session-test-1', userID: TEST_USER_ACCOUNT_IDS[4] },
   });
   vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 'session-test-1' });
   vi.spyOn(auditLogger, 'init').mockImplementation(() => undefined);
@@ -85,7 +93,7 @@ describe('🔐 Reidentificação de participante - Testes de Integracao', () => 
       const participantIdentitiesCollection = { findOne: vi.fn().mockResolvedValue(identity) };
 
       app.locals.db = dbWithRbac({
-        patients: patientsCollection,
+        participants: patientsCollection,
         participantIdentities: participantIdentitiesCollection,
       });
 
@@ -132,7 +140,7 @@ describe('🔐 Reidentificação de participante - Testes de Integracao', () => 
       const participantIdentitiesCollection = { findOne: vi.fn().mockResolvedValue(storedIdentity) };
 
       app.locals.db = dbWithRbac({
-        patients: patientsCollection,
+        participants: patientsCollection,
         participantIdentities: participantIdentitiesCollection,
       });
 
@@ -151,7 +159,7 @@ describe('🔐 Reidentificação de participante - Testes de Integracao', () => 
       const participantIdentitiesCollection = { findOne: vi.fn().mockResolvedValue(null) };
 
       app.locals.db = dbWithRbac({
-        patients: patientsCollection,
+        participants: patientsCollection,
         participantIdentities: participantIdentitiesCollection,
       });
 
@@ -169,7 +177,7 @@ describe('🔐 Reidentificação de participante - Testes de Integracao', () => 
       const participantIdentitiesCollection = { findOne: vi.fn().mockResolvedValue(null) };
 
       app.locals.db = dbWithRbac({
-        patients: patientsCollection,
+        participants: patientsCollection,
         participantIdentities: participantIdentitiesCollection,
       });
 
@@ -185,7 +193,7 @@ describe('🔐 Reidentificação de participante - Testes de Integracao', () => 
     it('Given: participantId inexistente | When: reidentifica | Then: retorna 404', async () => {
       const patientsCollection = { findOne: vi.fn().mockResolvedValue(null) };
 
-      app.locals.db = dbWithRbac({ patients: patientsCollection });
+      app.locals.db = dbWithRbac({ participants: patientsCollection });
 
       const response = await request(app)
         .post('/api/patients/00000000/reidentify')
@@ -200,7 +208,7 @@ describe('🔐 Reidentificação de participante - Testes de Integracao', () => 
       const participantIdentitiesCollection = { findOne: vi.fn().mockResolvedValue(null) };
 
       app.locals.db = dbWithRbac({
-        patients: patientsCollection,
+        participants: patientsCollection,
         participantIdentities: participantIdentitiesCollection,
       });
 

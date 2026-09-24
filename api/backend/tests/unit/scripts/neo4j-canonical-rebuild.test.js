@@ -75,7 +75,7 @@ function createFakeCollection() {
 function createFakeDb(seed = {}) {
   const collections = {
     consents: createFakeCollection(),
-    samples: createFakeCollection(),
+    specimens: createFakeCollection(),
     rcsAssessments: createFakeCollection(),
     graph_projection_outbox: createFakeCollection(),
   };

@@ -14,6 +14,14 @@ const sessionService = require('../../src/services/session.service');
 const consentValidator = require('../../src/services/consent.validator');
 const { createCollectionMock, createDbMock: baseCreateDbMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
+const {
+  makeAuthToken,
+  makeLegacyClaimsToken,
+  buildAuthenticatedCollections,
+  userForAccessType,
+  TEST_USER_ACCOUNT_IDS,
+} = require('../factories/auth.factory');
+
 
 // #421: every accessType this file's tokens use (1, 2, 4) needs its own
 // UserRoleAssignment so requireRole/requirePermission resolve correctly
@@ -28,11 +36,7 @@ function createDbMock(collections = {}) {
 }
 
 function makeToken(accessType = 4) {
-  return jwt.sign(
-    { userID: `qa-1-${accessType}`, accessType, roleName: undefined, name: 'QA', mfaVerified: true },
-    process.env.JWT_SECRET,
-    { expiresIn: '1h' }
-  );
+  return makeAuthToken(accessType);
 }
 
 function givenSession() {

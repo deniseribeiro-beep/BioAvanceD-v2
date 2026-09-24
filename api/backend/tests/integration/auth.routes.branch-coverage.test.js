@@ -66,6 +66,14 @@ function makeDb(userDoc) {
 // makeDbWithRbac for the full rationale.
 function makeDbWithRbac(userDoc, rbacUsers = []) {
   const { buildRbacCollections } = require('../factories/rbac.factory');
+const {
+  makeAuthToken,
+  makeLegacyClaimsToken,
+  buildAuthenticatedCollections,
+  userForAccessType,
+  TEST_USER_ACCOUNT_IDS,
+} = require('../factories/auth.factory');
+
   const rbac = buildRbacCollections(rbacUsers);
   const findOne = vi.fn(async () => userDoc);
   return { collection: vi.fn((name) => rbac[name] || { findOne }) };

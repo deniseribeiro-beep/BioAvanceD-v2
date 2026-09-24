@@ -42,8 +42,8 @@ describe('Smart Import - Patient Deduplication & ATC Validation', () => {
         toArray: async () => ([{ name: 'patients' }, { name: 'samples' }, { name: 'participantIdentities' }]),
       }),
       collection: (name) => {
-        if (name === 'patients' || name === 'pacientes') return patientsCollection;
-        if (name === 'samples') return samplesCollection;
+        if (name === 'participants' || name === 'pacientes') return patientsCollection;
+        if (name === 'specimens') return samplesCollection;
         if (name === 'participantIdentities') return identitiesCollection;
         return {
           findOne: vi.fn(),

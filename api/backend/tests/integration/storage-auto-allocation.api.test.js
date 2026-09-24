@@ -10,13 +10,17 @@ const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
+const {
+  makeAuthToken,
+  makeLegacyClaimsToken,
+  buildAuthenticatedCollections,
+  userForAccessType,
+  TEST_USER_ACCOUNT_IDS,
+} = require('../factories/auth.factory');
+
 
 function makeToken(accessType = 4) {
-  return jwt.sign(
-    { userID: 'qa-user-1', accessType, roleName: accessType >= 3 ? 'Coordenador' : 'Técnico', name: 'QA', mfaVerified: true },
-    process.env.JWT_SECRET,
-    { expiresIn: '1h' }
-  );
+  return makeAuthToken(accessType);
 }
 
 function cursorOf(rows) {
@@ -71,7 +75,7 @@ function ledgerCollections() {
     counters: createCollectionMock({
       findOneAndUpdate: vi.fn().mockResolvedValue({ _id: 'sample_movements', seq: 1 }),
     }),
-    sample_movements: createCollectionMock({
+    sampleMovements: createCollectionMock({
       find: vi.fn().mockReturnValue({
         sort: vi.fn().mockReturnValue({
           limit: vi.fn().mockReturnValue({ next: vi.fn().mockResolvedValue(null) }),
@@ -151,7 +155,7 @@ function buildAutoAllocationDb({ accessType = 2, boxFull = false, specimenMissin
     consentRevocations,
     consentAuthorizationDecisions,
     ...ledgerCollections(),
-    ...buildRbacCollections([{ userAccountId: 'qa-user-1', accessType }]),
+    ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType }]),
   };
 
   const db = createDbMock(collections);

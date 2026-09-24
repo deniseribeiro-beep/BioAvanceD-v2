@@ -1,5 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 const request = require('supertest');
+const {
+  makeAuthToken,
+  makeLegacyClaimsToken,
+  buildAuthenticatedCollections,
+  userForAccessType,
+  TEST_USER_ACCOUNT_IDS,
+} = require('../factories/auth.factory');
+
 const jwt = require('jsonwebtoken');
 
 process.env.NODE_ENV = 'test';
@@ -74,7 +82,7 @@ describe('Audit Logging - PATIENT_MATCH_UPSERT', () => {
   function givenAuditDb({ logsCollection, usersCollection } = {}) {
     app.locals.db = createDbMock({
       logs: logsCollection || createCollectionMock(),
-      users: usersCollection || createCollectionMock(),
+      userAccounts: usersCollection || createCollectionMock(),
     });
     auditLogger.init(app.locals.db);
   }

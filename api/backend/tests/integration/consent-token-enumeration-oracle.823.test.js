@@ -92,7 +92,7 @@ describe('#823: the consent-token endpoints are not a participant-enumeration or
     };
     app.locals.db = {
       collection: (name) =>
-        name === 'patients' || name === 'pacientes' ? patients : genericCollection(),
+        name === 'participants' || name === 'pacientes' ? patients : genericCollection(),
     };
   }
 

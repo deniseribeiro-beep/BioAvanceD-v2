@@ -23,7 +23,7 @@ function makeRepository({
   };
   const db = {
     collection: vi.fn().mockImplementation((name) => {
-      if (name !== 'samples') throw new Error(`unexpected collection: ${name}`);
+      if (name !== 'specimens') throw new Error(`unexpected collection: ${name}`);
       return samples;
     })
   };

@@ -50,10 +50,10 @@ function makeOrganizationsCollection(orgs) {
   };
 }
 
-function makeDb({ patients, organizations }) {
+function makeDb({ participants: patients, organizations }) {
   return {
     collection: vi.fn((name) => {
-      if (name === 'patients') return patients;
+      if (name === 'participants') return patients;
       if (name === 'organizations') return organizations;
       throw new Error(`unexpected collection requested: ${name}`);
     }),
@@ -69,7 +69,7 @@ describe('clinicalUnit free-text search/filter paths stay consistent with Organi
     const organizations = makeOrganizationsCollection([
       { organizationId: 'org-1', officialName: 'Genética Médica', acronym: 'GEN', normalizedName: 'genetica medica' },
     ]);
-    const db = makeDb({ patients: null, organizations });
+    const db = makeDb({ participants: null, organizations });
 
     const snapshot = await patientService.resolveClinicalUnitSnapshot(db, { clinicalUnitId: 'org-1' });
     expect(snapshot.clinicalUnit).toBe('Genética Médica');
@@ -78,7 +78,7 @@ describe('clinicalUnit free-text search/filter paths stay consistent with Organi
       { participantId: '11111111', patientName: 'Ana', clinicalUnit: snapshot.clinicalUnit, unitAcronym: snapshot.unitAcronym },
       { participantId: '22222222', patientName: 'Bruno', clinicalUnit: 'Oncologia', unitAcronym: 'ONC' },
     ]);
-    db.collection = vi.fn((name) => (name === 'patients' ? patients : organizations));
+    db.collection = vi.fn((name) => (name === 'participants' ? patients : organizations));
 
     const result = await patientService.listPatients(db, { clinicalUnit: snapshot.clinicalUnit });
 
@@ -89,7 +89,7 @@ describe('clinicalUnit free-text search/filter paths stay consistent with Organi
     const organizations = makeOrganizationsCollection([
       { organizationId: 'org-1', officialName: 'Genética Médica', acronym: 'GEN', normalizedName: 'genetica medica' },
     ]);
-    const db = makeDb({ patients: null, organizations });
+    const db = makeDb({ participants: null, organizations });
 
     const snapshot = await patientService.resolveClinicalUnitSnapshot(db, { clinicalUnitId: 'org-1' });
 
@@ -97,7 +97,7 @@ describe('clinicalUnit free-text search/filter paths stay consistent with Organi
       { participantId: '11111111', patientName: 'Ana', clinicalUnit: snapshot.clinicalUnit, unitAcronym: snapshot.unitAcronym },
       { participantId: '22222222', patientName: 'Bruno', clinicalUnit: 'Oncologia', unitAcronym: 'ONC' },
     ]);
-    db.collection = vi.fn((name) => (name === 'patients' ? patients : organizations));
+    db.collection = vi.fn((name) => (name === 'participants' ? patients : organizations));
 
     const result = await patientService.searchPatients(db, 'genética');
 

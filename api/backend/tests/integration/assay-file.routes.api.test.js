@@ -9,6 +9,14 @@ const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
+const {
+  makeAuthToken,
+  makeLegacyClaimsToken,
+  buildAuthenticatedCollections,
+  userForAccessType,
+  TEST_USER_ACCOUNT_IDS,
+} = require('../factories/auth.factory');
+
 
 // #644: assay-file.routes.js (added in #643) mirrored sample.routes.js's
 // file sub-routes but left out the organization-scope enforcement
@@ -22,12 +30,8 @@ const { buildRbacCollections } = require('../factories/rbac.factory');
 const ASSAY_ID = 'assay-1';
 const ASSAY_OTHER_ORG = { assayId: ASSAY_ID, laboratoryId: 'org-other', studyId: 'study-1' };
 
-function makeToken(userID, accessType) {
-  return jwt.sign(
-    { userID, accessType, roleName: accessType >= 3 ? 'Coordenador' : 'Tecnico', name: 'QA', mfaVerified: true },
-    process.env.JWT_SECRET,
-    { expiresIn: '1h' }
-  );
+function makeToken(accessType = 4) {
+  return makeAuthToken(accessType);
 }
 
 function givenSession() {
@@ -38,7 +42,7 @@ function givenSession() {
 beforeEach(() => { givenSession(); });
 afterEach(() => { vi.restoreAllMocks(); });
 
-const rbacCollectionsScoped = buildRbacCollections([{ userAccountId: 'qa-1', accessType: 3, organizationId: 'org-mine' }]);
+const rbacCollectionsScoped = buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 3, organizationId: 'org-mine' }]);
 
 describe('GET /api/assays/:assayId/files', () => {
   it('returns 403 when the assay belongs to a different organization', async () => {
@@ -48,7 +52,7 @@ describe('GET /api/assays/:assayId/files', () => {
 
     const res = await request(app)
       .get(`/api/assays/${ASSAY_ID}/files`)
-      .set('Authorization', `Bearer ${makeToken('qa-1', 3)}`);
+      .set('Authorization', `Bearer ${makeToken(TEST_USER_ACCOUNT_IDS[4], 3)}`);
 
     expect(res.status).toBe(403);
   });
@@ -62,7 +66,7 @@ describe('POST /api/assays/:assayId/files/upload', () => {
 
     const res = await request(app)
       .post(`/api/assays/${ASSAY_ID}/files/upload`)
-      .set('Authorization', `Bearer ${makeToken('qa-1', 3)}`)
+      .set('Authorization', `Bearer ${makeToken(TEST_USER_ACCOUNT_IDS[4], 3)}`)
       .attach('file', Buffer.from('a,b,c\n1,2,3'), 'data.csv');
 
     expect(res.status).toBe(403);
@@ -81,7 +85,7 @@ describe('DELETE /api/assays/:assayId/files/:fileID', () => {
 
     const res = await request(app)
       .delete(`/api/assays/${ASSAY_ID}/files/${fileId.toString()}`)
-      .set('Authorization', `Bearer ${makeToken('qa-1', 3)}`);
+      .set('Authorization', `Bearer ${makeToken(TEST_USER_ACCOUNT_IDS[4], 3)}`);
 
     expect(res.status).toBe(403);
   });

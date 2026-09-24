@@ -17,7 +17,7 @@ function createDb(patientsByFilter = {}) {
   // is `participantId`. A stub that answered on `filter.patientID` matched
   // the buggy production filter instead of the real one, which is exactly
   // what hid this. The `patients` collection object is memoized (rather
-  // than rebuilt per `db.collection('patients')` call) so a test can grab a
+  // than rebuilt per `db.collection('participants')` call) so a test can grab a
   // stable reference to `findOne` and assert on the exact filter shape the
   // product code handed it.
   const patientsCollection = {
@@ -44,7 +44,7 @@ function createDb(patientsByFilter = {}) {
 
   return {
     collection(name) {
-      if (name !== 'patients') {
+      if (name !== 'participants') {
         return {
           findOne: vi.fn().mockResolvedValue(null),
         };
@@ -161,7 +161,7 @@ describe('batch-validation-engine.service', () => {
     );
 
     // Canonical v2 linkage is keyed only on participantId.
-    expect(db.collection('patients').findOne).toHaveBeenCalledWith({ participantId: '12345678' });
+    expect(db.collection('participants').findOne).toHaveBeenCalledWith({ participantId: '12345678' });
 
     expect(createPatientSpy).not.toHaveBeenCalled();
     expect(createSampleSpy).toHaveBeenCalledTimes(1);

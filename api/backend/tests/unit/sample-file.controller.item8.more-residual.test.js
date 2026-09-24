@@ -36,7 +36,7 @@ function buildDb({
     db: {
       collection: vi.fn((name) => {
         if (name === 'sample_files') return sampleFiles;
-        if (name === 'samples') return samples;
+        if (name === 'specimens') return samples;
         throw new Error(`unexpected collection: ${name}`);
       }),
     },

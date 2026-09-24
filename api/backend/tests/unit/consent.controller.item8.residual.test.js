@@ -42,7 +42,7 @@ describe('consent.controller.js item 8 residual branches', () => {
     const identitiesFind = vi.fn();
     const db = {
       collection: vi.fn((name) => {
-        if (name === 'patients') {
+        if (name === 'participants') {
           return { find: vi.fn(() => patientsCursor) };
         }
         if (name === 'participantIdentities') {

@@ -11,15 +11,19 @@ const sessionService = require('../../src/services/session.service');
 const logService = require('../../src/services/log.service');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
+const {
+  makeAuthToken,
+  makeLegacyClaimsToken,
+  buildAuthenticatedCollections,
+  userForAccessType,
+  TEST_USER_ACCOUNT_IDS,
+} = require('../factories/auth.factory');
 
-const TOKEN_USER_ID = 'qa-user-1';
 
-function makeToken({ accessType = 4, roleName = 'Administrador' } = {}) {
-  return jwt.sign(
-    { userID: TOKEN_USER_ID, accessType, roleName, name: 'QA User', mfaVerified: true },
-    process.env.JWT_SECRET,
-    { expiresIn: '1h' }
-  );
+const TOKEN_USER_ID = TEST_USER_ACCOUNT_IDS[4];
+
+function makeToken(accessType = 4) {
+  return makeAuthToken(accessType);
 }
 
 // #426: requireAuditReader now resolves admin status via

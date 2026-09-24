@@ -11,6 +11,14 @@ const auditLogger = require('../../src/utils/auditLogger');
 const scheduler = require('../../src/services/scheduler.service');
 const { createDbMock, createCollectionMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
+const {
+  makeAuthToken,
+  makeLegacyClaimsToken,
+  buildAuthenticatedCollections,
+  userForAccessType,
+  TEST_USER_ACCOUNT_IDS,
+} = require('../factories/auth.factory');
+
 
 function givenSession() {
   vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 'session-1' } });
@@ -20,24 +28,19 @@ function givenSession() {
 // #728: /api/backup-policy is gated by requireRole(4) directly (mirroring
 // security.routes.js's own singleton-config gate), not a granular
 // manageX permission -- only Administrador (accessType 4) should pass.
-const USER_BY_ACCESS_TYPE = { 2: 'qa-tech-1', 3: 'qa-coord-1', 4: 'qa-admin-1' };
+const USER_BY_ACCESS_TYPE = { 2: 'qa-tech-1', 3: TEST_USER_ACCOUNT_IDS[3], 4: TEST_USER_ACCOUNT_IDS[4] };
 const ROLE_BY_ACCESS_TYPE = { 2: 'Tecnico', 3: 'Coordenador', 4: 'Administrador' };
 
-function makeToken(accessType) {
-  const userID = USER_BY_ACCESS_TYPE[accessType];
-  return jwt.sign(
-    { userID, accessType, roleName: ROLE_BY_ACCESS_TYPE[accessType], name: 'QA User', mfaVerified: true },
-    process.env.JWT_SECRET,
-    { expiresIn: '1h' }
-  );
+function makeToken(accessType = 4) {
+  return makeAuthToken(accessType);
 }
 
 function dbWithPolicy(overrides = {}) {
   return createDbMock({
     ...buildRbacCollections([
       { userAccountId: 'qa-tech-1', accessType: 2 },
-      { userAccountId: 'qa-coord-1', accessType: 3 },
-      { userAccountId: 'qa-admin-1', accessType: 4 },
+      { userAccountId: TEST_USER_ACCOUNT_IDS[3], accessType: 3 },
+      { userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 4 },
     ]),
     ...overrides,
   });

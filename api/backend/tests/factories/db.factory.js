@@ -143,12 +143,33 @@ function createDbMock(collections = {}) {
     normalizedMap[normalize(k)] = collections[k];
   });
 
+  // Stage 2E: production resolves Specimen→specimens, Participant→participants,
+  // UserAccount→userAccounts. Keep bidirectional aliases so seeds keyed with
+  // either legacy or canonical names still resolve when product code asks for
+  // the canonical collection name via getCollection / db.collection.
   const aliasFallback = {
-    pacientes: 'patients',
-    amostras: 'samples',
+    samples: 'specimens',
+    specimens: 'samples',
+    amostras: 'specimens',
+    patients: 'participants',
+    participants: 'patients',
+    pacientes: 'participants',
+    users: 'userAccounts',
+    useraccounts: 'users',
     consent_templates: 'consentTemplates',
     consenttemplates: 'consentTemplates',
-    biomarkerobservations: 'biomarker_observations',
+    patientconsents: 'consents',
+    patient_consents: 'consents',
+    sample_movements: 'sampleMovements',
+    samplemovements: 'sampleMovements',
+    clinical_units: 'clinicalUnits',
+    clinicalunits: 'clinicalUnits',
+    biomarker_observations: 'biomarkerObservations',
+    biomarkerobservations: 'biomarkerObservations',
+    disease_dictionary: 'diseaseDictionary',
+    diseasedictionary: 'diseaseDictionary',
+    medication_dictionary: 'medicationDictionary',
+    medicationdictionary: 'medicationDictionary',
     observations: 'observations',
   };
 

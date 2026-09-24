@@ -186,7 +186,7 @@ describe('PatientService.checkIdentifierConflict', () => {
 
   it('returns null when no existing patient matches the filters', async () => {
     const patientsCollection = makeFakeCollection({ findOne: vi.fn().mockResolvedValue(null) });
-    const db = makeFakeDb({ patients: patientsCollection });
+    const db = makeFakeDb({ participants: patientsCollection });
 
     const result = await patientService.checkIdentifierConflict(db, { identityDocument: '529.982.247-25' });
     expect(result).toBeNull();
@@ -207,7 +207,7 @@ describe('PatientService.checkIdentifierConflict', () => {
     const patientsCollection = makeFakeCollection({
       findOne: vi.fn().mockResolvedValue({ identityDocument: '00000000000', recordNumber: 'RN-1' })
     });
-    const db = makeFakeDb({ patients: patientsCollection, participantIdentities: participantIdentitiesCollection });
+    const db = makeFakeDb({ participants: patientsCollection, participantIdentities: participantIdentitiesCollection });
 
     const result = await patientService.checkIdentifierConflict(db, {
       identityDocument: '52998224725',
@@ -223,7 +223,7 @@ describe('PatientService.checkIdentifierConflict', () => {
     const patientsCollection = makeFakeCollection({
       findOne: vi.fn().mockResolvedValue({ recordNumber: 'RN-1' })
     });
-    const db = makeFakeDb({ patients: patientsCollection, participantIdentities: participantIdentitiesCollection });
+    const db = makeFakeDb({ participants: patientsCollection, participantIdentities: participantIdentitiesCollection });
 
     const result = await patientService.checkIdentifierConflict(db, {
       identityDocument: '52998224725',
@@ -298,7 +298,7 @@ describe('PatientService.getPatient / updatePatient / deletePatient — ObjectId
   it('getPatient queries by ObjectId when participantId is not an 8-digit string', async () => {
     const id = new ObjectId();
     const patientsCollection = makeFakeCollection({ findOne: vi.fn().mockResolvedValue({ _id: id }) });
-    const db = makeFakeDb({ patients: patientsCollection });
+    const db = makeFakeDb({ participants: patientsCollection });
 
     await patientService.getPatient(db, id.toString());
 
@@ -308,7 +308,7 @@ describe('PatientService.getPatient / updatePatient / deletePatient — ObjectId
   it('deletePatient queries by ObjectId when participantId is not an 8-digit string', async () => {
     const id = new ObjectId();
     const patientsCollection = makeFakeCollection({ deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }) });
-    const db = makeFakeDb({ patients: patientsCollection });
+    const db = makeFakeDb({ participants: patientsCollection });
 
     const result = await patientService.deletePatient(db, id.toString());
 
@@ -322,7 +322,7 @@ describe('PatientService.getPatient / updatePatient / deletePatient — ObjectId
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
       findOne: vi.fn().mockResolvedValue({ _id: id })
     });
-    const db = makeFakeDb({ patients: patientsCollection });
+    const db = makeFakeDb({ participants: patientsCollection });
 
     await patientService.updatePatient(db, id.toString(), { alphaGal: 1.0 });
 
@@ -343,7 +343,7 @@ describe('PatientService.searchPatients — date-search branches', () => {
     const patientsCollection = makeFakeCollection({ find: findMock, countDocuments: vi.fn().mockResolvedValue(0) });
     const identitiesFindMock = vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([{ participantId: '11111111' }]) });
     const participantIdentitiesCollection = makeFakeCollection({ find: identitiesFindMock });
-    const db = makeFakeDb({ patients: patientsCollection, participantIdentities: participantIdentitiesCollection });
+    const db = makeFakeDb({ participants: patientsCollection, participantIdentities: participantIdentitiesCollection });
 
     await patientService.searchPatients(db, '15/03/2000');
 
@@ -361,7 +361,7 @@ describe('PatientService.searchPatients — date-search branches', () => {
   it('does not add a birthDate filter when a slash-term does not split into 3 parts', async () => {
     const findMock = findWithResults([]);
     const patientsCollection = makeFakeCollection({ find: findMock, countDocuments: vi.fn().mockResolvedValue(0) });
-    const db = makeFakeDb({ patients: patientsCollection });
+    const db = makeFakeDb({ participants: patientsCollection });
 
     await patientService.searchPatients(db, '15/2000');
 
@@ -374,7 +374,7 @@ describe('PatientService.searchPatients — date-search branches', () => {
     const patientsCollection = makeFakeCollection({ find: findMock, countDocuments: vi.fn().mockResolvedValue(0) });
     const identitiesFindMock = vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([{ participantId: '22222222' }]) });
     const participantIdentitiesCollection = makeFakeCollection({ find: identitiesFindMock });
-    const db = makeFakeDb({ patients: patientsCollection, participantIdentities: participantIdentitiesCollection });
+    const db = makeFakeDb({ participants: patientsCollection, participantIdentities: participantIdentitiesCollection });
 
     await patientService.searchPatients(db, '2000-03-15');
 
@@ -385,7 +385,7 @@ describe('PatientService.searchPatients — date-search branches', () => {
   it('does not add a birthDate filter for an unparseable YYYY-MM-DD-shaped term', async () => {
     const findMock = findWithResults([]);
     const patientsCollection = makeFakeCollection({ find: findMock, countDocuments: vi.fn().mockResolvedValue(0) });
-    const db = makeFakeDb({ patients: patientsCollection });
+    const db = makeFakeDb({ participants: patientsCollection });
 
     await patientService.searchPatients(db, 'not-a-date');
 
@@ -396,7 +396,7 @@ describe('PatientService.searchPatients — date-search branches', () => {
   it('adds a numeric recordNumber clause when the term parses as a number', async () => {
     const findMock = findWithResults([]);
     const patientsCollection = makeFakeCollection({ find: findMock, countDocuments: vi.fn().mockResolvedValue(0) });
-    const db = makeFakeDb({ patients: patientsCollection });
+    const db = makeFakeDb({ participants: patientsCollection });
 
     await patientService.searchPatients(db, '42');
 
@@ -408,7 +408,7 @@ describe('PatientService.searchPatients — date-search branches', () => {
     const patientsCollection = makeFakeCollection({
       find: vi.fn().mockImplementation(() => { throw new Error('db down'); })
     });
-    const db = makeFakeDb({ patients: patientsCollection });
+    const db = makeFakeDb({ participants: patientsCollection });
 
     await expect(patientService.searchPatients(db, 'UTI-A')).rejects.toThrow('db down');
   });

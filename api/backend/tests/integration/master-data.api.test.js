@@ -9,24 +9,28 @@ const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
+const {
+  makeAuthToken,
+  makeLegacyClaimsToken,
+  buildAuthenticatedCollections,
+  userForAccessType,
+  TEST_USER_ACCOUNT_IDS,
+} = require('../factories/auth.factory');
 
-const rbacCollectionsAdmin = buildRbacCollections([{ userAccountId: 'qa-1', accessType: 4 }]);
+
+const rbacCollectionsAdmin = buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 4 }]);
 // #913: real RBAC fixtures for the Técnico/Coordenador role-gate tests below --
 // without these, resolveUserHierarchyLevel finds no UserRoleAssignment and
 // returns null, and rbac.js:50's `userLevel === null || !allowedRoles.includes(userLevel)`
 // short-circuits on the null branch before the role list is ever consulted.
-const rbacCollectionsTechnician = buildRbacCollections([{ userAccountId: 'qa-1', accessType: 2 }]);
-const rbacCollectionsCoordenador = buildRbacCollections([{ userAccountId: 'qa-1', accessType: 3 }]);
+const rbacCollectionsTechnician = buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 2 }]);
+const rbacCollectionsCoordenador = buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 3 }]);
 
 // Tests for createMasterDataRouter — covers all 5 mounted instances via
 // /api/measurement-units (all branches of the factory router are shared code)
 
 function makeToken(accessType = 4) {
-  return jwt.sign(
-    { userID: 'qa-1', accessType, roleName: accessType >= 3 ? 'Coordenador' : 'Técnico', name: 'QA', mfaVerified: true },
-    process.env.JWT_SECRET,
-    { expiresIn: '1h' }
-  );
+  return makeAuthToken(accessType);
 }
 
 function givenSession() {

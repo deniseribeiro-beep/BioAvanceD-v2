@@ -15,7 +15,7 @@ const { createDbMock, createCollectionMock } = require('../factories/db.factory'
 describe('patient.service listPatients - organization scope (#340)', () => {
   it('restricts the query to clinicalUnitId $in organizationIds for an organization scope', async () => {
     const patientsCollection = createCollectionMock();
-    const db = createDbMock({ patients: patientsCollection });
+    const db = createDbMock({ participants: patientsCollection });
 
     await patientService.listPatients(db, {
       organizationScope: { scope: 'organization', organizationIds: ['org-1', 'org-2'] }
@@ -28,7 +28,7 @@ describe('patient.service listPatients - organization scope (#340)', () => {
 
   it('does not filter the query for a global scope (Administrador bypass)', async () => {
     const patientsCollection = createCollectionMock();
-    const db = createDbMock({ patients: patientsCollection });
+    const db = createDbMock({ participants: patientsCollection });
 
     await patientService.listPatients(db, {
       organizationScope: { scope: 'global', organizationIds: [] }
@@ -39,7 +39,7 @@ describe('patient.service listPatients - organization scope (#340)', () => {
 
   it('does not filter the query when no organizationScope is passed', async () => {
     const patientsCollection = createCollectionMock();
-    const db = createDbMock({ patients: patientsCollection });
+    const db = createDbMock({ participants: patientsCollection });
 
     await patientService.listPatients(db, {});
 
@@ -48,7 +48,7 @@ describe('patient.service listPatients - organization scope (#340)', () => {
 
   it('combines the organization-scope filter with an existing clinicalUnit filter', async () => {
     const patientsCollection = createCollectionMock();
-    const db = createDbMock({ patients: patientsCollection });
+    const db = createDbMock({ participants: patientsCollection });
 
     await patientService.listPatients(db, {
       clinicalUnit: 'Hospital X',

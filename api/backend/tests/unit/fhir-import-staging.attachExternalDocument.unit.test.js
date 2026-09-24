@@ -49,8 +49,8 @@ function createDb() {
   const collections = {
     import_batches: createCollection(),
     import_staging_records: createCollection(),
-    patients: createCollection(),
-    samples: createCollection(),
+    participants: createCollection(),
+    specimens: createCollection(),
     audit_logs: createCollection(),
   };
   return {
@@ -87,7 +87,7 @@ describe('fhir-import-staging.service#attachExternalDocument -- validation gate 
     // A sample would otherwise be found here -- proves the refusal comes
     // from the blocking-error check, not incidentally from the matchedCount
     // guard added alongside it.
-    await db.collection('samples').insertOne({ specimenId: 'SPEC-801', specimenStatus: 'available' });
+    await db.collection('specimens').insertOne({ specimenId: 'SPEC-801', specimenStatus: 'available' });
 
     await expect(
       fhirImportStagingService.attachExternalDocument(db, batchId, recordId, {})
@@ -99,14 +99,14 @@ describe('fhir-import-staging.service#attachExternalDocument -- validation gate 
     expect(record.quarantineStatus).toBeUndefined();
     expect(record.availabilityStatus).toBeUndefined();
     expect(record.externalDocument).toBeUndefined();
-    expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
+    expect(db.collections.specimens.updateOne).not.toHaveBeenCalled();
   });
 
   it('still attaches when the only error is NEEDS_EMAIL (the consent bypass keeps working)', async () => {
     const { batchId, recordId } = await seedFhirBatch(db, {
       errors: [{ field: 'patientEmail', code: 'NEEDS_EMAIL', message: 'E-mail do paciente é obrigatório quando TCLE precisa ser enviado.' }],
     });
-    await db.collection('samples').insertOne({ specimenId: 'SPEC-801', specimenStatus: 'available' });
+    await db.collection('specimens').insertOne({ specimenId: 'SPEC-801', specimenStatus: 'available' });
 
     const result = await fhirImportStagingService.attachExternalDocument(db, batchId, recordId, { userID: 'op-1', note: 'Termo assinado em papel' });
 
@@ -119,7 +119,7 @@ describe('fhir-import-staging.service#attachExternalDocument -- validation gate 
     expect(record.availabilityStatus).toBe('AVAILABLE');
     expect(record.externalDocument).toMatchObject({ attachedBy: 'op-1', note: 'Termo assinado em papel' });
 
-    const sample = db.collections.samples.docs.find((doc) => doc.specimenId === 'SPEC-801');
+    const sample = db.collections.specimens.docs.find((doc) => doc.specimenId === 'SPEC-801');
     expect(sample.consentStatus).toBe('EXTERNAL_ATTACHED');
     expect(sample.specimenStatus).toBe('available');
   });
@@ -168,7 +168,7 @@ describe('fhir-import-staging.service#attachExternalDocument -- transactional re
 
   it('runs the release inside a transaction, threading { session } through the sample write, the staging write, and releaseActiveAction', async () => {
     const { batchId, recordId } = await seedFhirBatch(db);
-    await db.collection('samples').insertOne({ specimenId: 'SPEC-801', specimenStatus: 'quarantined' });
+    await db.collection('specimens').insertOne({ specimenId: 'SPEC-801', specimenStatus: 'quarantined' });
 
     const mockSession = {
       withTransaction: vi.fn(async (fn) => {
@@ -184,10 +184,10 @@ describe('fhir-import-staging.service#attachExternalDocument -- transactional re
 
     expect(mockSession.withTransaction).toHaveBeenCalledTimes(1);
 
-    const sampleFindCall = db.collections.samples.findOne.mock.calls.find((call) => call[1]);
+    const sampleFindCall = db.collections.specimens.findOne.mock.calls.find((call) => call[1]);
     expect(sampleFindCall[1]).toEqual({ session: mockSession });
 
-    const sampleUpdateCall = db.collections.samples.updateOne.mock.calls.find((call) => call[2]);
+    const sampleUpdateCall = db.collections.specimens.updateOne.mock.calls.find((call) => call[2]);
     expect(sampleUpdateCall[2]).toEqual({ session: mockSession });
 
     const stagingUpdateCall = db.collections.import_staging_records.updateOne.mock.calls.find((call) => call[2]);

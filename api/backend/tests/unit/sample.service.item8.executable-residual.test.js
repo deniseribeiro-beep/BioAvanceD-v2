@@ -103,11 +103,11 @@ function buildCreateDb({ sensor = { status: 'active' } } = {}) {
   ]);
 
   const collections = {
-    samples: collection({
+    specimens: collection({
       findOne: vi.fn().mockResolvedValue(null),
       insertOne: vi.fn().mockResolvedValue({ insertedId }),
     }),
-    patients: collection({
+    participants: collection({
       findOne: vi.fn().mockResolvedValue({ participantId: '12345678' }),
     }),
     storageBoxes: collection({
@@ -122,7 +122,7 @@ function buildCreateDb({ sensor = { status: 'active' } } = {}) {
     sensors: collection({
       findOne: vi.fn().mockResolvedValue(sensor),
     }),
-    sample_movements: collection(),
+    sampleMovements: collection(),
     sampleMovements: collection(),
     counters: collection({
       findOneAndUpdate: vi.fn().mockResolvedValue({ seq: 1 }),
@@ -243,7 +243,7 @@ describe('sample.service item 8 executable residual branches', () => {
     });
     const db = {
       collection: vi.fn((name) => {
-        if (name === 'samples') return samples;
+        if (name === 'specimens') return samples;
         return collection();
       }),
     };
@@ -316,7 +316,7 @@ describe('sample.service item 8 read/query alternate branches', () => {
     const samples = collection({ findOne: vi.fn().mockResolvedValueOnce(sample) });
     const patients = collection();
     const db = {
-      collection: vi.fn((name) => name === 'samples' ? samples : patients),
+      collection: vi.fn((name) => name === 'specimens' ? samples : patients),
     };
 
     const result = await sampleService.getSampleByBarcode(db, 'ABC');
@@ -338,7 +338,7 @@ describe('sample.service item 8 read/query alternate branches', () => {
         countDocuments: vi.fn().mockResolvedValue(0),
         find: vi.fn(() => diagnosticsCursor),
       });
-      const db = { collection: vi.fn((name) => name === 'samples' ? samples : collection()) };
+      const db = { collection: vi.fn((name) => name === 'specimens' ? samples : collection()) };
 
       const result = await sampleService.getSampleByBarcode(db, encodedValue);
 
@@ -359,7 +359,7 @@ describe('sample.service item 8 read/query alternate branches', () => {
       countDocuments: vi.fn().mockResolvedValue(1),
       find: vi.fn(() => diagnosticsCursor),
     });
-    const db = { collection: vi.fn((name) => name === 'samples' ? samples : collection()) };
+    const db = { collection: vi.fn((name) => name === 'specimens' ? samples : collection()) };
 
     await expect(sampleService.getSampleByBarcode(db, 'not-found'))
       .resolves.toEqual({ sample: null, participant: null });
@@ -385,8 +385,8 @@ describe('sample.service item 8 read/query alternate branches', () => {
       const identities = collection({ findOne: vi.fn().mockResolvedValue(identity ? { encrypted: true } : null) });
       const db = {
         collection: vi.fn((name) => {
-          if (name === 'samples') return samples;
-          if (name === 'patients') return patients;
+          if (name === 'specimens') return samples;
+          if (name === 'participants') return patients;
           if (name === 'participantIdentities') return identities;
           return collection();
         }),
@@ -403,7 +403,7 @@ describe('sample.service item 8 read/query alternate branches', () => {
     const samples = collection({ findOne: vi.fn().mockResolvedValue(null) });
     const results = collection();
     const db = {
-      collection: vi.fn((name) => name === 'samples' ? samples : results),
+      collection: vi.fn((name) => name === 'specimens' ? samples : results),
     };
 
     await expect(sampleService.getSampleResults(db, 'missing')).rejects.toThrow('Amostra não encontrada');

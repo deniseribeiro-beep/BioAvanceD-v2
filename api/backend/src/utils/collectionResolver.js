@@ -4,6 +4,11 @@ const { enforceAppendOnlyCollection } = require('./sampleMovementLedger');
 const LOCAL_COLLECTIONS = Object.freeze({
   consents: 'consents',
   consentTemplates: 'consentTemplates',
+  consentPermissions: 'consentPermissions',
+  consentDecisionEvents: 'consentDecisionEvents',
+  consentRevocations: 'consentRevocations',
+  consentAuthorizationDecisions: 'consentAuthorizationDecisions',
+  consentCommunicationEvents: 'consentCommunicationEvents',
   sampleMovements: 'sampleMovements',
   clinicalUnits: 'clinicalUnits',
   organizations: 'organizations',
@@ -12,6 +17,7 @@ const LOCAL_COLLECTIONS = Object.freeze({
   userRoleAssignments: 'userRoleAssignments',
   participantIdentities: 'participantIdentities',
   terminologyConcepts: 'terminologyConcepts',
+  terminologyRelations: 'terminologyRelations',
   referenceDatasetReleases: 'referenceDatasetReleases',
   referenceImportRuns: 'referenceImportRuns',
   referenceImportIssues: 'referenceImportIssues',
@@ -42,6 +48,15 @@ const LOCAL_COLLECTIONS = Object.freeze({
   referenceSeedRuns: 'referenceSeedRuns',
   ingestionIdempotencyKeys: 'ingestionIdempotencyKeys',
   ingestionQuarantineRecords: 'ingestionQuarantineRecords',
+  biomarkerObservations: 'biomarkerObservations',
+  diseaseDictionary: 'diseaseDictionary',
+  medicationDictionary: 'medicationDictionary',
+  foundationDataRuns: 'foundationDataRuns',
+  canonicalModelReleases: 'canonicalModelReleases',
+  governanceInvariantCatalogs: 'governanceInvariantCatalogs',
+  configurationValidationRuns: 'configurationValidationRuns',
+  readinessReports: 'readinessReports',
+  graphProjectionCheckpoints: 'graphProjectionCheckpoints',
 });
 
 function resolveCollectionName(_db, key) {

@@ -13,6 +13,14 @@ const sessionService = require('../../src/services/session.service');
 const backupService = require('../../src/services/backup.service');
 const { createDbMock, createCollectionMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
+const {
+  makeAuthToken,
+  makeLegacyClaimsToken,
+  buildAuthenticatedCollections,
+  userForAccessType,
+  TEST_USER_ACCOUNT_IDS,
+} = require('../factories/auth.factory');
+
 const { PERMISSION_CATALOG } = require('../../src/services/rbac-catalog-seed.service');
 
 // #632: requireRole(4) grants access to *any* hierarchyLevel-4 role,
@@ -70,12 +78,7 @@ function partialAdminToken() {
 // admin-only); the "non-admin" token below uses a distinct userID with no
 // assignment at all, so it's denied regardless of its accessType claim.
 function makeToken(accessType = 4) {
-  const userID = accessType === 4 ? 'qa-admin-1' : 'qa-user-non-admin';
-  return jwt.sign(
-    { userID, accessType, roleName: accessType === 4 ? 'Administrador' : 'Técnico', name: 'QA Admin', mfaVerified: true },
-    process.env.JWT_SECRET,
-    { expiresIn: '1h' }
-  );
+  return makeAuthToken(accessType);
 }
 
 function givenSession() {
@@ -86,7 +89,7 @@ function givenSession() {
 beforeEach(() => {
   givenSession();
   app.locals.db = createDbMock({
-    ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]),
+    ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 4 }]),
   });
 });
 afterEach(() => { vi.restoreAllMocks(); });
@@ -240,7 +243,7 @@ describe('GET /api/backup/list', () => {
 
     vi.spyOn(backupService, 'getBackupBaseDir').mockReturnValue(baseDir);
     app.locals.db = createDbMock({
-      ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]),
+      ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 4 }]),
       backupHistory: createCollectionMock({
         find: vi.fn(() => ({
           sort: vi.fn().mockReturnThis(),

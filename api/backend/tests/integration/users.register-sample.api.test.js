@@ -13,6 +13,14 @@ const env = require('../../src/config/env');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
 const { buildSamplePayload } = require('../factories/sample.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
+const {
+  makeAuthToken,
+  makeLegacyClaimsToken,
+  buildAuthenticatedCollections,
+  userForAccessType,
+  TEST_USER_ACCOUNT_IDS,
+} = require('../factories/auth.factory');
+
 
 function createAuthToken() {
   return jwt.sign(
@@ -37,7 +45,7 @@ describe('POST /api/users/register-sample - paridade de contrato com /api/sample
   function givenAppDbCollections() {
     patientsCollectionMock = createCollectionMock();
     app.locals.db = createDbMock({
-      samples: createCollectionMock({
+      specimens: createCollectionMock({
         deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }),
         insertOne: vi.fn().mockResolvedValue({ insertedId: 'sample-inserted' }),
       }),
@@ -45,14 +53,14 @@ describe('POST /api/users/register-sample - paridade de contrato com /api/sample
         deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }),
         insertOne: vi.fn().mockResolvedValue({ insertedId: 'sample-inserted' }),
       }),
-      users: createCollectionMock({
+      userAccounts: createCollectionMock({
         findOne: vi.fn().mockResolvedValue({ anonId: 'anon-user-qa' }),
         insertOne: vi.fn().mockResolvedValue({ insertedId: 'user-1' }),
       }),
       logs: createCollectionMock({
         insertOne: vi.fn().mockResolvedValue({ insertedId: 'log-qa' }),
       }),
-      patients: patientsCollectionMock,
+      participants: patientsCollectionMock,
       ...buildRbacCollections([{ userAccountId: 'qa-user-3', accessType: 2 }]),
     });
   }

@@ -1,3 +1,10 @@
+const {
+  makeAuthToken,
+  makeLegacyClaimsToken,
+  buildAuthenticatedCollections,
+  userForAccessType,
+  TEST_USER_ACCOUNT_IDS,
+} = require('../../factories/auth.factory');
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'module';
 
@@ -72,8 +79,8 @@ function createDb() {
   const collections = {
     import_batches: createCollection(),
     import_staging_records: createCollection(),
-    patients: createCollection(),
-    samples: createCollection(),
+    participants: createCollection(),
+    specimens: createCollection(),
     audit_logs: createCollection(),
     quarantineActions: createCollection(),
   };
@@ -473,7 +480,7 @@ describe('fhir-import-staging item 8 canonical boundary branches', () => {
       expect.stringContaining('SpecimenPreanalytics'),
       'raw profile failure'
     );
-    const sample = db.collections.samples.docs.find((item) => item.specimenId === 'SPEC-SNAPSHOT');
+    const sample = db.collections.specimens.docs.find((item) => item.specimenId === 'SPEC-SNAPSHOT');
     expect(sample).toBeTruthy();
     expect(sample.sealedRcsAssessmentId).toBeUndefined();
     expect(sample.sealedSpecimenPreanalyticsId).toBeUndefined();

@@ -35,6 +35,7 @@ const VALID_ROW = {
 
 function makeDb({ templateFound = true } = {}) {
   const patientsCollection = {
+    findOne: vi.fn().mockResolvedValue(null),
     insertOne: vi.fn().mockResolvedValue({ insertedId: 'patient-id-1' }),
     updateOne: vi.fn().mockResolvedValue({}),
   };
@@ -60,8 +61,8 @@ function makeDb({ templateFound = true } = {}) {
   };
 
   const collections = {
-    patients: patientsCollection,
-    consent_templates: consentTemplatesCollection,
+    participants: patientsCollection,
+    consentTemplates: consentTemplatesCollection,
     pacientes: pacientesCollection,
     participantIdentities: participantIdentitiesCollection,
     import_batches: importBatchesCollection,

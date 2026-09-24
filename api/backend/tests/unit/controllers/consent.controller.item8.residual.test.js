@@ -50,7 +50,7 @@ describe('consent.controller item 8 residual branches', () => {
 
     const db = {
       collection: vi.fn((name) => {
-        if (name === 'patients') return { find: patientsFind };
+        if (name === 'participants') return { find: patientsFind };
         if (name === 'participantIdentities') return { find: identitiesFind };
         throw new Error(`unexpected collection: ${name}`);
       }),

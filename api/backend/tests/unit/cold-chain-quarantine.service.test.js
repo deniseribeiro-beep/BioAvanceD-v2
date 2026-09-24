@@ -137,7 +137,7 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
       sensors: makeCollection([{ sensorId: 'sensor-cold-001', locationID: 9001 }]),
       sensorMetadata: makeCollection([]),
       sampleMovements: makeCollection([]),
-      sample_movements: makeCollection([]),
+      sampleMovements: makeCollection([]),
       counters: makeCollection([]),
     };
     const { boxId } = seedStorageHierarchy(collections, 9001);
@@ -200,7 +200,7 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
       sensorMetadata: makeCollection([{ sensorId: 'sensor-freezer-002', equipment: equipmentObjectId }]),
       equipment: makeCollection([{ _id: equipmentObjectId, equipmentID: 9100 }]),
       sampleMovements: makeCollection([]),
-      sample_movements: makeCollection([]),
+      sampleMovements: makeCollection([]),
       counters: makeCollection([]),
     };
     const { boxId } = seedStorageHierarchy(collections, 9100);
@@ -234,7 +234,7 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
     const incidentId = new ObjectId();
     const sampleId = new ObjectId();
     const collections = {
-      samples: makeCollection([{
+      specimens: makeCollection([{
         _id: sampleId,
         coldChainIncidentId: String(incidentId),
         quarantineReasonCode: 'COLD_CHAIN_INCIDENT',
@@ -293,7 +293,7 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
 
     const byId = await quarantineService.quarantineByColdChainIncident(buildDb({
       sensors: makeCollection([{ sensorId: 'sensor-9', locationID: 42 }]),
-      samples: makeCollection([]),
+      specimens: makeCollection([]),
     }), { sensorId: 'sensor-9', status: 'open' });
     expect(byId.sensorKey).toBe('sensor-9');
   });
@@ -317,7 +317,7 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
     const collections = {
       sensors: makeCollection([]),
       sensorMetadata: makeCollection([]),
-      samples: makeCollection([]),
+      specimens: makeCollection([]),
     };
     const db = buildDb(collections);
     const result = await quarantineService.quarantineByColdChainIncident(db, {
@@ -329,7 +329,7 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
   });
 
   it('includes the temperature suffix in the reason when currentTemperature is defined', async () => {
-    const collections = { sensors: makeCollection([]), sensorMetadata: makeCollection([]), samples: makeCollection([]) };
+    const collections = { sensors: makeCollection([]), sensorMetadata: makeCollection([]), specimens: makeCollection([]) };
     const db = buildDb(collections);
     const result = await quarantineService.quarantineByColdChainIncident(db, {
       sensorKey: 'sensor-temp',
@@ -364,7 +364,7 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
   });
 
   it('markColdChainIncidentSamplesForReview reports 0/0 when nothing matches the incident filter', async () => {
-    const collections = { samples: makeCollection([]) };
+    const collections = { specimens: makeCollection([]) };
     const db = buildDb(collections);
     const result = await quarantineService.markColdChainIncidentSamplesForReview(db, { _id: new ObjectId() });
     expect(result.matched).toBe(0);
@@ -376,7 +376,7 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
     const collections = {
       sensors: makeCollection([]),
       sensorMetadata: makeCollection([]),
-      samples: makeCollection([{ _id: new ObjectId(), storageLocation: { boxId: new ObjectId(), position: 'A1' }, status: 'AVAILABLE' }]),
+      specimens: makeCollection([{ _id: new ObjectId(), storageLocation: { boxId: new ObjectId(), position: 'A1' }, status: 'AVAILABLE' }]),
     };
     const db = buildDb(collections);
     const result = await quarantineService.quarantineByColdChainIncident(db, {
@@ -389,7 +389,7 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
   });
 
   it('falls back to incident.sensorID (third field) when sensorKey and sensorId are both absent', async () => {
-    const collections = { sensors: makeCollection([]), sensorMetadata: makeCollection([]), samples: makeCollection([]) };
+    const collections = { sensors: makeCollection([]), sensorMetadata: makeCollection([]), specimens: makeCollection([]) };
     const db = buildDb(collections);
     const result = await quarantineService.quarantineByColdChainIncident(db, {
       sensorID: 'sensor-caps-id',
@@ -450,7 +450,7 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
       sensors: makeCollection([{ sensorId: 'sensor-session-2', locationID: 66 }]),
       sensorMetadata: makeCollection([]),
       sampleMovements: makeCollection([]),
-      sample_movements: makeCollection([]),
+      sampleMovements: makeCollection([]),
       counters: makeCollection([]),
     };
     const { boxId } = seedStorageHierarchy(collections, 66);
@@ -481,7 +481,7 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
 
   it('markColdChainIncidentSamplesForReview passes options.session through to the updateMany call', async () => {
     const session = { id: 'sess-review' };
-    const collections = { samples: makeCollection([]) };
+    const collections = { specimens: makeCollection([]) };
     const db = buildDb(collections);
     await quarantineService.markColdChainIncidentSamplesForReview(db, { _id: new ObjectId() }, { session });
     expect(collections.samples.updateMany).toHaveBeenCalledWith(expect.anything(), expect.anything(), { session });
@@ -492,7 +492,7 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
       sensors: makeCollection([{ sensorId: 'sensor-qty', locationID: 55 }]),
       sensorMetadata: makeCollection([]),
       sampleMovements: makeCollection([]),
-      sample_movements: makeCollection([]),
+      sampleMovements: makeCollection([]),
       counters: makeCollection([]),
     };
     const { boxId } = seedStorageHierarchy(collections, 55);

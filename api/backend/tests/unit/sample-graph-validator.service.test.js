@@ -1,3 +1,4 @@
+const { makeAuthToken, makeLegacyClaimsToken, buildAuthenticatedCollections, userForAccessType, TEST_USER_ACCOUNT_IDS } = require('../../factories/auth.factory');
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 const { ObjectId } = require('mongodb');
 const SampleGraphValidator = require('../../src/services/SampleGraphValidator');
@@ -157,7 +158,7 @@ describe('SampleGraphValidator', () => {
           toArray: vi.fn().mockResolvedValue([]),
         }),
       }),
-      insertOne: vi.fn().mockResolvedValue({ insertedId: 'qa-1' }),
+      insertOne: vi.fn().mockResolvedValue({ insertedId: TEST_USER_ACCOUNT_IDS[4] }),
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
     };
 
@@ -166,7 +167,7 @@ describe('SampleGraphValidator', () => {
         toArray: async () => ([{ name: 'samples' }, { name: 'consents' }]),
       }),
       collection: (name) => {
-        if (name === 'samples') return samplesCollection;
+        if (name === 'specimens') return samplesCollection;
         if (name === 'consents' || name === 'patientConsents') return consentsCollection;
         if (name === 'disease_dictionary' || name === 'diseaseDictionary') return diseaseDictionaryCollection;
         if (name === 'medication_dictionary' || name === 'medicationDictionary') return medicationDictionaryCollection;

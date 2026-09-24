@@ -51,10 +51,10 @@ function makeCollection(initialDocs = []) {
   };
 }
 
-function makeDb({ patients, participantIdentities }) {
+function makeDb({ participants: patients, participantIdentities }) {
   return {
     collection: vi.fn((name) => {
-      if (name === 'patients') return patients;
+      if (name === 'participants') return patients;
       if (name === 'participantIdentities') return participantIdentities;
       throw new Error(`unexpected collection requested: ${name}`);
     }),
@@ -73,7 +73,7 @@ describe('PatientIdentityService (import-time matching) resolves via Participant
     const participantIdentities = makeCollection([
       { participantId: '11111111', patientName: 'Ana Silva', birthDate: new Date(1990, 0, 20) },
     ]);
-    const db = makeDb({ patients, participantIdentities });
+    const db = makeDb({ participants: patients, participantIdentities });
 
     const result = await participantIdentityService.matchOrUpsertParticipant(db, {
       patientName: 'Ana Silva',
@@ -88,7 +88,7 @@ describe('PatientIdentityService (import-time matching) resolves via Participant
   it('creates a new participant and dual-writes ParticipantIdentity when no match exists', async () => {
     const patients = makeCollection([]);
     const participantIdentities = makeCollection([]);
-    const db = makeDb({ patients, participantIdentities });
+    const db = makeDb({ participants: patients, participantIdentities });
 
     const result = await participantIdentityService.matchOrUpsertParticipant(db, {
       patientName: 'Carla Souza',

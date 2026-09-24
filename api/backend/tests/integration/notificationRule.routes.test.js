@@ -9,20 +9,24 @@ const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
+const {
+  makeAuthToken,
+  makeLegacyClaimsToken,
+  buildAuthenticatedCollections,
+  userForAccessType,
+  TEST_USER_ACCOUNT_IDS,
+} = require('../factories/auth.factory');
+
 
 // #646 Wave 3 (RF015/RNF026) -- mirrors retentionPolicy.routes.test.js's
 // shape (RF014, #440/#441) for the same versioned-admin-policy pattern.
 
 function rbacFor(accessType) {
-  return buildRbacCollections([{ userAccountId: 'qa-user-1', accessType }]);
+  return buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType }]);
 }
 
 function makeToken(accessType = 4) {
-  return jwt.sign(
-    { userID: 'qa-user-1', accessType, roleName: 'Administrador', name: 'QA User', mfaVerified: true },
-    process.env.JWT_SECRET,
-    { expiresIn: '1h' }
-  );
+  return makeAuthToken(accessType);
 }
 
 function givenSession() {

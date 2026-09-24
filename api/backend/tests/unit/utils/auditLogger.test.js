@@ -132,7 +132,9 @@ describe('auditLogger', () => {
     });
 
     it('anonymizes req.user.userID into a USR- identifier', async () => {
-      const info = await auditLogger.extractUserInfo({ user: { userID: 'u1', accessType: 4 } });
+      const info = await auditLogger.extractUserInfo({
+        user: { userID: '550e8400-e29b-41d4-a716-446655440002', accessType: 4 },
+      });
       expect(info.userID).toMatch(ANON_ID_RE);
       expect(info.userName).toBe(info.userID);
       expect(info.userRole).toBe('Administrador');
@@ -140,29 +142,35 @@ describe('auditLogger', () => {
 
     it('falls back to req.user._id.toString() when userID is absent', async () => {
       const info = await auditLogger.extractUserInfo({
-        user: { _id: { toString: () => 'oid1' } },
+        user: { _id: { toString: () => '550e8400-e29b-41d4-a716-4466554400aa' } },
       });
       expect(info.userID).toMatch(ANON_ID_RE);
     });
 
     it('maps accessType 3 to Coordenador', async () => {
-      const info = await auditLogger.extractUserInfo({ user: { userID: 'u', accessType: 3 } });
+      const info = await auditLogger.extractUserInfo({
+        user: { userID: '550e8400-e29b-41d4-a716-446655440003', accessType: 3 },
+      });
       expect(info.userRole).toBe('Coordenador');
     });
 
     it('maps accessType 2 to Técnico', async () => {
-      const info = await auditLogger.extractUserInfo({ user: { userID: 'u', accessType: 2 } });
+      const info = await auditLogger.extractUserInfo({
+        user: { userID: '550e8400-e29b-41d4-a716-446655440002', accessType: 2 },
+      });
       expect(info.userRole).toBe('Técnico');
     });
 
     it('maps an unknown accessType to Usuário Externo', async () => {
-      const info = await auditLogger.extractUserInfo({ user: { userID: 'u', accessType: 1 } });
+      const info = await auditLogger.extractUserInfo({
+        user: { userID: '550e8400-e29b-41d4-a716-446655440001', accessType: 1 },
+      });
       expect(info.userRole).toBe('Usuário Externo');
     });
 
     it('prefers req.user.roleName over the accessType mapping', async () => {
       const info = await auditLogger.extractUserInfo({
-        user: { userID: 'u', roleName: 'CustomRole', accessType: 4 },
+        user: { userID: '550e8400-e29b-41d4-a716-446655440004', roleName: 'CustomRole', accessType: 4 },
       });
       expect(info.userRole).toBe('CustomRole');
     });
@@ -173,14 +181,14 @@ describe('auditLogger', () => {
     it('resolves userRole via RBAC when db is available and roleName is absent', async () => {
       const rbac = buildRbacCollections([{ userAccountId: 'u1', accessType: 3 }]);
       const db = { collection: (name) => rbac[name] };
-      const info = await auditLogger.extractUserInfo({ user: { userID: 'u1' } }, db);
+      const info = await auditLogger.extractUserInfo({ user: { userID: '550e8400-e29b-41d4-a716-446655440002' } }, db);
       expect(info.userRole).toBe('Coordenador');
     });
 
     it('falls back to the accessType mapping when db has no matching assignment', async () => {
       const rbac = buildRbacCollections([]);
       const db = { collection: (name) => rbac[name] };
-      const info = await auditLogger.extractUserInfo({ user: { userID: 'u1', accessType: 2 } }, db);
+      const info = await auditLogger.extractUserInfo({ user: { userID: '550e8400-e29b-41d4-a716-446655440002', accessType: 2 } }, db);
       expect(info.userRole).toBe('Técnico');
     });
   });
@@ -277,7 +285,7 @@ describe('auditLogger', () => {
         ip: '1.1.1.1',
         headers: { origin: 'https://x' },
         path: '/patients',
-        user: { userID: 'u1', accessType: 4 },
+        user: { userID: '550e8400-e29b-41d4-a716-446655440004', accessType: 4 },
       };
 
       await auditLogger.log({

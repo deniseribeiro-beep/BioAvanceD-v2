@@ -10,21 +10,25 @@ const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
+const {
+  makeAuthToken,
+  makeLegacyClaimsToken,
+  buildAuthenticatedCollections,
+  userForAccessType,
+  TEST_USER_ACCOUNT_IDS,
+} = require('../factories/auth.factory');
+
 
 // #643 (RF007 AC#6): wiring tests for /api/assays/:assayId/files and
 // /api/datasets/:datasetId/files -- the shared controller logic itself is
 // covered generically by createLinkedFileController.test.js; these only
 // confirm the mount + auth/role gating on the real routes.
 
-const rbacCollectionsAdmin = buildRbacCollections([{ userAccountId: 'qa-1', accessType: 4 }]);
+const rbacCollectionsAdmin = buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 4 }]);
 const rbacCollectionsTechnician = buildRbacCollections([{ userAccountId: 'qa-2', accessType: 2 }]);
 
-function makeToken(userID, accessType) {
-  return jwt.sign(
-    { userID, accessType, roleName: accessType >= 3 ? 'Coordenador' : 'Tecnico', name: 'QA', mfaVerified: true },
-    process.env.JWT_SECRET,
-    { expiresIn: '1h' }
-  );
+function makeToken(accessType = 4) {
+  return makeAuthToken(accessType);
 }
 
 function givenSession() {
@@ -51,7 +55,7 @@ describe.each([
 
       const res = await request(app)
         .get(`/api/${entity}/missing-id/files`)
-        .set('Authorization', `Bearer ${makeToken('qa-1', 4)}`);
+        .set('Authorization', `Bearer ${makeToken(TEST_USER_ACCOUNT_IDS[4], 4)}`);
 
       expect(res.status).toBe(404);
     });
@@ -63,7 +67,7 @@ describe.each([
 
       const res = await request(app)
         .get(`/api/${entity}/p-1/files`)
-        .set('Authorization', `Bearer ${makeToken('qa-1', 4)}`);
+        .set('Authorization', `Bearer ${makeToken(TEST_USER_ACCOUNT_IDS[4], 4)}`);
 
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
@@ -94,7 +98,7 @@ describe.each([
 
       const res = await request(app)
         .post(`/api/${entity}/missing-id/files/upload`)
-        .set('Authorization', `Bearer ${makeToken('qa-1', 4)}`)
+        .set('Authorization', `Bearer ${makeToken(TEST_USER_ACCOUNT_IDS[4], 4)}`)
         .attach('file', Buffer.from('a,b,c'), 'data.csv');
 
       expect(res.status).toBe(404);

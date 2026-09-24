@@ -1,3 +1,10 @@
+const {
+  makeAuthToken,
+  makeLegacyClaimsToken,
+  buildAuthenticatedCollections,
+  userForAccessType,
+  TEST_USER_ACCOUNT_IDS,
+} = require('../factories/auth.factory');
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { createRequire } from 'module';
 
@@ -71,8 +78,8 @@ function createDb() {
   const collections = {
     import_batches: createCollection(),
     import_staging_records: createCollection(),
-    patients: createCollection(),
-    samples: createCollection(),
+    participants: createCollection(),
+    specimens: createCollection(),
     audit_logs: createCollection(),
   };
   return {
@@ -222,10 +229,10 @@ describe('FHIR import staging', () => {
     expect(result.batch._id).toBeTruthy();
     expect(db.collections.import_batches.insertOne).toHaveBeenCalledTimes(1);
     expect(db.collections.import_staging_records.insertMany).toHaveBeenCalledTimes(1);
-    expect(db.collections.patients.insertOne).not.toHaveBeenCalled();
-    expect(db.collections.samples.insertOne).not.toHaveBeenCalled();
-    expect(db.collections.patients.updateOne).not.toHaveBeenCalled();
-    expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
+    expect(db.collections.participants.insertOne).not.toHaveBeenCalled();
+    expect(db.collections.specimens.insertOne).not.toHaveBeenCalled();
+    expect(db.collections.participants.updateOne).not.toHaveBeenCalled();
+    expect(db.collections.specimens.updateOne).not.toHaveBeenCalled();
     expect(result.records.map((record) => record.status)).toEqual(['READY_TO_COMMIT', 'ERROR']);
     expect(result.records[1].validationErrors.some((error) => error.field === 'patient')).toBe(true);
     expect(result.records[1].validationErrors.some((error) => error.field === 'patientName')).toBe(true);
@@ -268,8 +275,8 @@ describe('FHIR import staging', () => {
     });
     expect(db.collections.import_batches.docs).toHaveLength(1);
     expect(db.collections.import_staging_records.docs).toHaveLength(1);
-    expect(db.collections.patients.docs).toHaveLength(0);
-    expect(db.collections.samples.docs).toHaveLength(0);
+    expect(db.collections.participants.docs).toHaveLength(0);
+    expect(db.collections.specimens.docs).toHaveLength(0);
   });
 
   it('mapeia Patient, Specimen, Condition, Observation e Consent para staging', async () => {
@@ -515,8 +522,8 @@ describe('FHIR import staging', () => {
 
     const commitWhilePending = await fhirImportStagingService.commitBatch(db, staged.batch._id);
     expect(commitWhilePending.committed).toBe(0);
-    expect(db.collections.patients.updateOne).not.toHaveBeenCalled();
-    expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
+    expect(db.collections.participants.updateOne).not.toHaveBeenCalled();
+    expect(db.collections.specimens.updateOne).not.toHaveBeenCalled();
   });
 
   it('rejeita token inválido ou expirado e impede uso de token canônico no staging', async () => {
@@ -611,8 +618,8 @@ describe('FHIR import staging', () => {
     expect(accepted.record.quarantineReason).toBeNull();
     expect(accepted.record.availabilityStatus).toBe('AVAILABLE');
     expect(accepted.record.warnings.some((warning) => warning.field === 'consent')).toBe(false);
-    expect(db.collections.patients.docs).toHaveLength(0);
-    expect(db.collections.samples.docs).toHaveLength(0);
+    expect(db.collections.participants.docs).toHaveLength(0);
+    expect(db.collections.specimens.docs).toHaveLength(0);
 
     const acceptedAgain = await fhirImportStagingService.acceptImportConsentToken(db, token);
     expect(acceptedAgain.updated).toBe(false);
@@ -651,7 +658,7 @@ describe('FHIR import staging', () => {
 
     const committed = await fhirImportStagingService.commitBatch(db, staged.batch._id);
     expect(committed.committed).toBe(1);
-    expect(db.collections.samples.docs[0].specimenId).toBe('S-SIGNED-LATER');
+    expect(db.collections.specimens.docs[0].specimenId).toBe('S-SIGNED-LATER');
     expect(db.collections.audit_logs.docs.some((doc) => doc.action === 'FHIR_IMPORT_RECORD_COMMITTED')).toBe(true);
   });
 
@@ -705,15 +712,15 @@ describe('FHIR import staging', () => {
     const result = await fhirImportStagingService.commitBatch(db, staged.batch._id);
 
     expect(result.committed).toBe(1);
-    expect(db.collections.patients.updateOne).toHaveBeenCalledTimes(1);
+    expect(db.collections.participants.updateOne).toHaveBeenCalledTimes(1);
     // #526: 1 upsert + 2 sealed-id pins (RcsAssessment, SpecimenPreanalytics).
-    expect(db.collections.samples.updateOne).toHaveBeenCalledTimes(3);
-    expect(db.collections.samples.updateOne.mock.calls[0][0]).toEqual({ specimenId: 'S-001' });
-    expect(db.collections.samples.docs).toHaveLength(1);
-    expect(db.collections.samples.docs[0].specimenId).toBe('S-001');
-    expect(db.collections.samples.docs[0].final_grade).toBe('A');
-    expect(db.collections.samples.docs[0].axis_penalties.length).toBeGreaterThan(0);
-    expect(db.collections.samples.docs[0].calculation_trace.axes.length).toBeGreaterThan(0);
+    expect(db.collections.specimens.updateOne).toHaveBeenCalledTimes(3);
+    expect(db.collections.specimens.updateOne.mock.calls[0][0]).toEqual({ specimenId: 'S-001' });
+    expect(db.collections.specimens.docs).toHaveLength(1);
+    expect(db.collections.specimens.docs[0].specimenId).toBe('S-001');
+    expect(db.collections.specimens.docs[0].final_grade).toBe('A');
+    expect(db.collections.specimens.docs[0].axis_penalties.length).toBeGreaterThan(0);
+    expect(db.collections.specimens.docs[0].calculation_trace.axes.length).toBeGreaterThan(0);
   });
 
   it('#526: registra RcsAssessment e SpecimenPreanalytics referenciados ao comitar amostra nova', async () => {
@@ -733,7 +740,7 @@ describe('FHIR import staging', () => {
     expect(db.collections.specimenPreanalytics.insertOne).toHaveBeenCalledTimes(1);
     expect(db.collections.specimenPreanalytics.docs[0].specimenId).toBe('S-001');
 
-    const committedSample = db.collections.samples.docs[0];
+    const committedSample = db.collections.specimens.docs[0];
     expect(committedSample.sealedRcsAssessmentId).toBe(db.collections.rcsAssessments.docs[0]._id);
     expect(committedSample.sealedSpecimenPreanalyticsId).toBe(db.collections.specimenPreanalytics.docs[0]._id);
   });
@@ -764,7 +771,7 @@ describe('FHIR import staging', () => {
       expect.objectContaining({ matrixType: 'fluid' })
     );
 
-    const committedSample = db.collections.samples.docs[0];
+    const committedSample = db.collections.specimens.docs[0];
     expect(committedSample.specimenId).toBe('S-001');
     expect(committedSample.sealedRcsAssessmentId).toBeUndefined();
     expect(committedSample.sealedSpecimenPreanalyticsId).toBeUndefined();
@@ -975,7 +982,7 @@ describe('FHIR import staging', () => {
       };
       const staged = await fhirImportStagingService.stageBundle(db, bundle, { fileName: 'bundle.json' });
       const recordId = db.collections.import_staging_records.docs[0]._id;
-      db.collections.samples.docs.push({ _id: 'sample-ext', specimenId: 'S-EXT' });
+      db.collections.specimens.docs.push({ _id: 'sample-ext', specimenId: 'S-EXT' });
 
       const result = await fhirImportStagingService.attachExternalDocument(db, staged.batch._id, recordId, {});
 
@@ -983,7 +990,7 @@ describe('FHIR import staging', () => {
       expect(updatedRecord.status).toBe('COMMITTED');
       expect(updatedRecord.consentStatus).toBe('EXTERNAL_ATTACHED');
       expect(updatedRecord.externalDocument).toMatchObject({ attachedBy: null, validatedBy: null, note: null });
-      const updatedSample = db.collections.samples.docs.find((doc) => doc.specimenId === 'S-EXT');
+      const updatedSample = db.collections.specimens.docs.find((doc) => doc.specimenId === 'S-EXT');
       expect(updatedSample.consentStatus).toBe('EXTERNAL_ATTACHED');
       expect(updatedSample.specimenStatus).toBe('available');
       expect(db.collections.audit_logs.docs.some((doc) => doc.action === 'FHIR_IMPORT_EXTERNAL_DOCUMENT_ATTACHED')).toBe(true);
@@ -1007,7 +1014,7 @@ describe('FHIR import staging', () => {
       // sibling test above ("anexa documentação externa...") always seeded
       // one; this one is brought in line with it rather than the guard being
       // relaxed.
-      db.collections.samples.docs.push({ _id: 'sample-ext2', specimenId: 'S-EXT2' });
+      db.collections.specimens.docs.push({ _id: 'sample-ext2', specimenId: 'S-EXT2' });
 
       await fhirImportStagingService.attachExternalDocument(db, staged.batch._id, recordId, { userID: 'admin-1', note: '  Documento validado manualmente  ' });
 

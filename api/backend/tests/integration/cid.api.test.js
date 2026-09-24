@@ -10,13 +10,17 @@ const sessionService = require('../../src/services/session.service');
 const cidService = require('../../src/services/cid.service');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
+const {
+  makeAuthToken,
+  makeLegacyClaimsToken,
+  buildAuthenticatedCollections,
+  userForAccessType,
+  TEST_USER_ACCOUNT_IDS,
+} = require('../factories/auth.factory');
+
 
 function makeToken(accessType = 4) {
-  return jwt.sign(
-    { userID: 'qa-1', accessType, roleName: 'Administrador', name: 'QA', mfaVerified: true },
-    process.env.JWT_SECRET,
-    { expiresIn: '1h' }
-  );
+  return makeAuthToken(accessType);
 }
 
 // #421: enforcement resolves permissions via UserRoleAssignment -> Role ->
@@ -26,7 +30,7 @@ function makeToken(accessType = 4) {
 function dbWithRbac(collections = {}, accessType = 4) {
   return createDbMock({
     ...collections,
-    ...buildRbacCollections([{ userAccountId: 'qa-1', accessType }]),
+    ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[accessType] || TEST_USER_ACCOUNT_IDS[4], accessType }]),
   });
 }
 

@@ -9,13 +9,17 @@ const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
+const {
+  makeAuthToken,
+  makeLegacyClaimsToken,
+  buildAuthenticatedCollections,
+  userForAccessType,
+  TEST_USER_ACCOUNT_IDS,
+} = require('../factories/auth.factory');
+
 
 function makeToken(accessType = 4) {
-  return jwt.sign(
-    { userID: 'qa-admin-1', accessType, roleName: 'Administrador', name: 'QA Admin', mfaVerified: true },
-    process.env.JWT_SECRET,
-    { expiresIn: '1h' }
-  );
+  return makeAuthToken(accessType);
 }
 
 function givenSession() {
@@ -45,7 +49,7 @@ describe('GET /api/organizations', () => {
     });
     app.locals.db = createDbMock({
       organizations: coll,
-      ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]),
+      ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 4 }]),
     });
 
     const res = await request(app)
@@ -71,7 +75,7 @@ describe('GET /api/organizations/:id', () => {
     const coll = createCollectionMock({ findOne: vi.fn().mockResolvedValue(null) });
     app.locals.db = createDbMock({
       organizations: coll,
-      ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]),
+      ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 4 }]),
     });
 
     const res = await request(app)
@@ -86,7 +90,7 @@ describe('GET /api/organizations/:id', () => {
     const coll = createCollectionMock({ findOne: vi.fn().mockResolvedValue(existing) });
     app.locals.db = createDbMock({
       organizations: coll,
-      ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]),
+      ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 4 }]),
     });
 
     const res = await request(app)
@@ -110,7 +114,7 @@ describe('POST /api/organizations', () => {
 
   it('returns 403 for a role below Administrador', async () => {
     app.locals.db = createDbMock({
-      ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 3 }]),
+      ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 3 }]),
     });
 
     const res = await request(app)
@@ -136,7 +140,7 @@ describe('POST /api/organizations', () => {
     });
     app.locals.db = createDbMock({
       organizations: coll,
-      ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]),
+      ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 4 }]),
     });
 
     const res = await request(app)
@@ -150,7 +154,7 @@ describe('POST /api/organizations', () => {
 
   it('returns 422 for missing required fields', async () => {
     app.locals.db = createDbMock({
-      ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]),
+      ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 4 }]),
     });
     const res = await request(app)
       .post('/api/organizations')
@@ -172,7 +176,7 @@ describe('PUT /api/organizations/:id', () => {
 
   it('returns 403 for a role below Administrador', async () => {
     app.locals.db = createDbMock({
-      ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 3 }]),
+      ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 3 }]),
     });
 
     const res = await request(app)
@@ -187,7 +191,7 @@ describe('PUT /api/organizations/:id', () => {
     const coll = createCollectionMock({ findOne: vi.fn().mockResolvedValue(null) });
     app.locals.db = createDbMock({
       organizations: coll,
-      ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]),
+      ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 4 }]),
     });
 
     const res = await request(app)
@@ -207,7 +211,7 @@ describe('PUT /api/organizations/:id', () => {
     });
     app.locals.db = createDbMock({
       organizations: coll,
-      ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]),
+      ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 4 }]),
     });
 
     const res = await request(app)
@@ -226,7 +230,7 @@ describe('PUT /api/organizations/:id', () => {
     const coll = createCollectionMock({ findOne: vi.fn().mockResolvedValue(existing) });
     app.locals.db = createDbMock({
       organizations: coll,
-      ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]),
+      ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 4 }]),
     });
 
     const res = await request(app)
@@ -249,7 +253,7 @@ describe('DELETE /api/organizations/:id', () => {
 
   it('returns 403 for a role below Administrador', async () => {
     app.locals.db = createDbMock({
-      ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 3 }]),
+      ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 3 }]),
     });
 
     const res = await request(app)
@@ -263,7 +267,7 @@ describe('DELETE /api/organizations/:id', () => {
     const coll = createCollectionMock({ deleteOne: vi.fn().mockResolvedValue({ deletedCount: 0 }) });
     app.locals.db = createDbMock({
       organizations: coll,
-      ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]),
+      ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 4 }]),
     });
 
     const res = await request(app)
@@ -277,7 +281,7 @@ describe('DELETE /api/organizations/:id', () => {
     const coll = createCollectionMock({ deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }) });
     app.locals.db = createDbMock({
       organizations: coll,
-      ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]),
+      ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 4 }]),
     });
 
     const res = await request(app)

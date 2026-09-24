@@ -260,7 +260,7 @@ describe('paciente.controller', () => {
         }),
         countDocuments: vi.fn().mockResolvedValue(1)
       };
-      const db = createDbMock({ patients: patientsCollection });
+      const db = createDbMock({ participants: patientsCollection });
       vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
       vi.spyOn(auditLogger, 'log').mockResolvedValue();
       const req = createReq({ app: { locals: { db } }, user: { accessType: 1, userID: 'operational-user' } });
@@ -286,7 +286,7 @@ describe('paciente.controller', () => {
         }),
         countDocuments: vi.fn().mockResolvedValue(1)
       };
-      const db = createDbMock({ patients: patientsCollection });
+      const db = createDbMock({ participants: patientsCollection });
       vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
       vi.spyOn(auditLogger, 'log').mockResolvedValue();
       const req = createReq({ app: { locals: { db } }, user: { accessType: 1, userID: 'operational-user' } });
@@ -340,7 +340,7 @@ describe('paciente.controller', () => {
         }),
         countDocuments: vi.fn().mockResolvedValue(0)
       };
-      const db = createDbMock({ patients: patientsCollection });
+      const db = createDbMock({ participants: patientsCollection });
       vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
       vi.spyOn(auditLogger, 'log').mockResolvedValue();
       const req = createReq({

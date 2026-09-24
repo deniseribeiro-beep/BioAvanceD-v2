@@ -25,7 +25,7 @@ function makeDb({ samples = [], sampleFiles = [], findOneImpl, insertOneImpl } =
 
   const db = {
     collection: vi.fn((name) => {
-      if (name === 'samples') return samplesCol;
+      if (name === 'specimens') return samplesCol;
       if (name === 'sample_files') return filesCol;
       if (name === 'logs') return logsCol;
       throw new Error('unexpected collection: ' + name);

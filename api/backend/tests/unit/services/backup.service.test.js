@@ -157,7 +157,7 @@ describe('backup.service', () => {
         listCollections: vi.fn(() => ({
           toArray: vi.fn().mockResolvedValue([{ name: 'patients' }, { name: 'samples' }])
         })),
-        collection: vi.fn((name) => (name === 'patients' ? fakeCollectionA : fakeCollectionB))
+        collection: vi.fn((name) => (name === 'participants' ? fakeCollectionA : fakeCollectionB))
       };
       const fakeClient = {
         connect: vi.fn().mockResolvedValue(),

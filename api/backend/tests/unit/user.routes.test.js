@@ -162,7 +162,7 @@ describe('user.routes authorization gates (issue #921)', () => {
   // boundary) -- see the report for the suggested follow-up issue.
   it('GET /logs reaches its own registration, not GET /:id (#926)', async () => {
     const { router } = loadRoute();
-    // GET /:id's handler queries db.collection('users').findOne(...) and
+    // GET /:id's handler queries db.collection('userAccounts').findOne(...) and
     // answers 404 'users.notFound' when nothing matches. GET /logs's own
     // handler never produces that shape, so the absence of it is the signal.
     const usersCollectionStub = { findOne: async () => null };
@@ -1111,7 +1111,7 @@ describe('user.routes item 8 remaining PUT governance branches', () => {
     };
     const db = {
       collection: vi.fn((name) => {
-        if (name === 'users') return usersCollection;
+        if (name === 'userAccounts') return usersCollection;
         if (name === 'organizations') return organizationsCollection;
         throw new Error(`unexpected collection ${name}`);
       }),
@@ -1187,7 +1187,7 @@ describe('user.routes item 8 remaining PUT governance branches', () => {
     };
     const db = {
       collection: vi.fn((name) => {
-        if (name === 'users') return usersCollection;
+        if (name === 'userAccounts') return usersCollection;
         if (name === 'organizations') return organizationsCollection;
         throw new Error(`unexpected collection ${name}`);
       }),

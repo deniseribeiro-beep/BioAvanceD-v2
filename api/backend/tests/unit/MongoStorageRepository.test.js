@@ -52,7 +52,7 @@ function makeProjectionService(overrides = {}) {
 
 function makeDb(collections = {}, client = null) {
   const defaults = {
-    samples: makeCollection(),
+    specimens: makeCollection(),
     storagePaths: makeCollection(),
     storageBoxes: makeCollection(),
     storageContainers: makeCollection(),
@@ -807,7 +807,7 @@ describe('MongoStorageRepository canonical v2', () => {
         limit: vi.fn().mockReturnThis(),
         toArray: vi.fn().mockResolvedValue([first, second])
       };
-      repo.db = makeDb({ samples: makeCollection({ find: vi.fn().mockReturnValue(cursor) }) });
+      repo.db = makeDb({ specimens: makeCollection({ find: vi.fn().mockReturnValue(cursor) }) });
       vi.spyOn(repo, 'findCurrentStoragePlacement')
         .mockResolvedValueOnce({ specimenId: 'SPEC-1' })
         .mockResolvedValueOnce(null);

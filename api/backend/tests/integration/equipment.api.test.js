@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 const request = require('supertest');
-const jwt = require('jsonwebtoken');
 
 process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
@@ -9,39 +8,32 @@ const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
+const {
+  makeAuthToken,
+  makeLegacyClaimsToken,
+  buildAuthenticatedCollections,
+  userForAccessType,
+  TEST_USER_ACCOUNT_IDS,
+} = require('../factories/auth.factory');
 
 function userIdFor(accessType) {
-  return `qa-user-at${accessType}`;
+  return userForAccessType(accessType).userAccountId;
 }
 
 function makeToken(accessType = 4) {
-  return jwt.sign(
-    { userID: userIdFor(accessType), accessType, roleName: accessType >= 3 ? 'Coordenador' : 'Técnico', name: 'QA', mfaVerified: true },
-    process.env.JWT_SECRET,
-    { expiresIn: '1h' }
-  );
+  return makeAuthToken(accessType);
 }
 
-// Token shaped without `name`/`roleName` but with `userName`/`role` instead,
-// to exercise the audit-info fallback branches (req.user?.name || req.user?.userName; req.user?.role || null).
 function makeTokenLegacyClaims(accessType = 4) {
-  return jwt.sign(
-    { userID: 'qa-user-legacy', accessType, role: 'Coordenador', userName: 'legacyUser', mfaVerified: true },
-    process.env.JWT_SECRET,
-    { expiresIn: '1h' }
-  );
+  return makeLegacyClaimsToken(accessType);
 }
 
 // #421: enforcement now resolves permissions via UserRoleAssignment -> Role
 // -> Permission, keyed by userID, not accessType directly off the JWT. Seed
 // one active assignment per distinct (userID, accessType) pair this file's
 // tokens use, reproducing the exact legacy accessType->permission mapping.
-const RBAC_COLLECTIONS = buildRbacCollections([
-  { userAccountId: userIdFor(2), accessType: 2 },
-  { userAccountId: userIdFor(3), accessType: 3 },
-  { userAccountId: userIdFor(4), accessType: 4 },
-  { userAccountId: 'qa-user-legacy', accessType: 4 },
-]);
+// Stage 2E: also seeds userAccounts + actors with canonical UUIDs.
+const RBAC_COLLECTIONS = buildAuthenticatedCollections([2, 3, 4]);
 
 
 // #1071: the create now stamps organizationId from the CALLER'S resolved
@@ -98,6 +90,7 @@ describe('GET /api/equipment', () => {
   it('returns 403 for a caller whose org assignment has no scopeId (unassigned)', async () => {
     app.locals.db = createDbMock({
       ...buildRbacCollections([{ userAccountId: userIdFor(2), accessType: 2, organizationId: '' }]),
+      ...require('../factories/auth.factory').buildAuthIdentityCollections([2]),
       equipment: createCollectionMock(),
     });
 
@@ -173,6 +166,7 @@ describe('GET /api/equipment/analytical', () => {
   it('returns 403 for a caller whose org assignment has no scopeId (unassigned)', async () => {
     app.locals.db = createDbMock({
       ...buildRbacCollections([{ userAccountId: userIdFor(2), accessType: 2, organizationId: '' }]),
+      ...require('../factories/auth.factory').buildAuthIdentityCollections([2]),
       equipment: createCollectionMock(),
     });
 

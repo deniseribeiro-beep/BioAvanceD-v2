@@ -1,3 +1,4 @@
+const { makeAuthToken, makeLegacyClaimsToken, buildAuthenticatedCollections, userForAccessType, TEST_USER_ACCOUNT_IDS } = require('../../factories/auth.factory');
 import { describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'module';
 
@@ -160,7 +161,7 @@ describe('graphProjection.service', () => {
       const outbox = createFakeOutbox();
       const service = new GraphProjectionService({ outbox });
       await service.appendQualityEvent({}, {
-        specimenId: 's-1', qualityAssessmentId: 'qa-1', status: 'PASSED', score: 0.9,
+        specimenId: 's-1', qualityAssessmentId: TEST_USER_ACCOUNT_IDS[4], status: 'PASSED', score: 0.9,
         evaluatedAt: '2026-01-02T00:00:00Z',
       });
       const call = outbox.appendEvent.mock.calls[0][1];

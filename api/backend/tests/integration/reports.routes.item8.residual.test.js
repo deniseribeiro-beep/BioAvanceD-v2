@@ -248,7 +248,7 @@ describe('reports.routes.js item 8 residual branches', () => {
           };
         }
 
-        if (name === 'samples') {
+        if (name === 'specimens') {
           return {
             find(query) {
               sampleQuery = query;

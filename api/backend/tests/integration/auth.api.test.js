@@ -10,11 +10,19 @@ const app = require('../../app');
 const sampleService = require('../../src/services/sample.service');
 const sessionService = require('../../src/services/session.service');
 const { buildRbacCollections } = require('../factories/rbac.factory');
+const {
+  makeAuthToken,
+  makeLegacyClaimsToken,
+  buildAuthenticatedCollections,
+  userForAccessType,
+  TEST_USER_ACCOUNT_IDS,
+} = require('../factories/auth.factory');
+
 
 const rbacCollections = buildRbacCollections([
   { userAccountId: 'qa-pesquisador-1', accessType: 1 },
-  { userAccountId: 'qa-tecnico-1', accessType: 2 },
-  { userAccountId: 'qa-admin-1', accessType: 4 },
+  { userAccountId: TEST_USER_ACCOUNT_IDS[2], accessType: 2 },
+  { userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 4 },
 ]);
 
 function createToken(payload) {
@@ -62,7 +70,7 @@ describe('RNF008 - RBAC (Least Privilege) em DELETE /api/samples/:id', () => {
 
   it('deve retornar 403 para perfil Técnico', async () => {
     const token = createToken({
-      userID: 'qa-tecnico-1',
+      userID: TEST_USER_ACCOUNT_IDS[2],
       accessType: 2,
       roleName: 'Técnico',
       mfaVerified: true,
@@ -79,7 +87,7 @@ describe('RNF008 - RBAC (Least Privilege) em DELETE /api/samples/:id', () => {
 
   it('deve permitir exclusão para perfil Admin', async () => {
     const token = createToken({
-      userID: 'qa-admin-1',
+      userID: TEST_USER_ACCOUNT_IDS[4],
       accessType: 4,
       roleName: 'Administrador',
       mfaVerified: true,

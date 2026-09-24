@@ -36,7 +36,7 @@ function makeDb(user = null, securityConfig = null) {
   };
   const db = {
     collection: vi.fn((name) => {
-      if (name === 'users') return users;
+      if (name === 'userAccounts') return users;
       if (name === 'security_config') {
         return {
           findOne: vi.fn().mockResolvedValue(securityConfig),

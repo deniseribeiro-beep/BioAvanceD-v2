@@ -10,6 +10,14 @@ const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const auditLogger = require('../../src/utils/auditLogger');
 const { buildRbacCollections } = require('../factories/rbac.factory');
+const {
+  makeAuthToken,
+  makeLegacyClaimsToken,
+  buildAuthenticatedCollections,
+  userForAccessType,
+  TEST_USER_ACCOUNT_IDS,
+} = require('../factories/auth.factory');
+
 
 // #1045: `consentToken` is the 64-char secret that is the SOLE credential for
 // the UNAUTHENTICATED POST /api/e-consent/consent-tokens/accept. Any response
@@ -55,7 +63,7 @@ describe('#1045: no response hands out a live consentToken', () => {
   function createCoordinatorToken() {
     return jwt.sign(
       {
-        userID: 'qa-coord-1',
+        userID: TEST_USER_ACCOUNT_IDS[3],
         accessType: 3,
         roleName: 'Coordenador',
         name: 'QA Coordenador',
@@ -72,7 +80,7 @@ describe('#1045: no response hands out a live consentToken', () => {
   function createAdminToken() {
     return jwt.sign(
       {
-        userID: 'qa-admin-1',
+        userID: TEST_USER_ACCOUNT_IDS[4],
         accessType: 4,
         roleName: 'Administrador',
         name: 'QA Admin',
@@ -97,12 +105,12 @@ describe('#1045: no response hands out a live consentToken', () => {
 
   function createDbMock(patientsCollection) {
     const rbacCollections = buildRbacCollections([
-      { userAccountId: 'qa-coord-1', accessType: 3 },
-      { userAccountId: 'qa-admin-1', accessType: 4 },
+      { userAccountId: TEST_USER_ACCOUNT_IDS[3], accessType: 3 },
+      { userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 4 },
     ]);
     return {
       collection: (name) => {
-        if (name === 'patients' || name === 'pacientes') return patientsCollection;
+        if (name === 'participants' || name === 'pacientes') return patientsCollection;
         if (rbacCollections[name]) return rbacCollections[name];
         return {
           findOne: vi.fn().mockResolvedValue(null),

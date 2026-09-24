@@ -560,7 +560,7 @@ describe('reports.routes.js gaps', () => {
           if (name === 'reportTemplates') {
             return { findOne: async (filter) => REPORT_TEMPLATE_DOCS.find((doc) => Object.entries(filter).every(([key, value]) => doc[key] === value)) || null };
           }
-          if (name === 'patients') return undefined;
+          if (name === 'participants') return undefined;
           if (name === 'pacientes') {
             return {
               find() {
@@ -577,7 +577,7 @@ describe('reports.routes.js gaps', () => {
               },
             };
           }
-          if (name === 'samples' || name === 'amostras') {
+          if (name === 'specimens' || name === 'amostras') {
             return { distinct: async () => [] };
           }
           // #341: resolveUserOrganizationScope needs these two to resolve
@@ -615,7 +615,7 @@ describe('reports.routes.js gaps', () => {
     // now, not the never-written 'withdrawals' collection — see the
     // dedicated describe block below for the full fix coverage.
     it('apenas startDate aplica somente $gte', async () => {
-      const { db, capturedQueries } = buildCollectionDb({ sample_movements: [{ type: 'withdraw', createdAt: new Date('2026-01-05') }] });
+      const { db, capturedQueries } = buildCollectionDb({ sampleMovements: [{ type: 'withdraw', createdAt: new Date('2026-01-05') }] });
       const testApp = appWithDb(db);
 
       const response = await request(testApp)
@@ -627,7 +627,7 @@ describe('reports.routes.js gaps', () => {
     });
 
     it('apenas endDate aplica somente $lte', async () => {
-      const { db, capturedQueries } = buildCollectionDb({ sample_movements: [{ type: 'withdraw', createdAt: new Date('2026-01-05') }] });
+      const { db, capturedQueries } = buildCollectionDb({ sampleMovements: [{ type: 'withdraw', createdAt: new Date('2026-01-05') }] });
       const testApp = appWithDb(db);
 
       const response = await request(testApp)
@@ -1052,7 +1052,7 @@ describe('reports.routes.js gaps', () => {
   });
 
   it('withdrawalhistory: sem filtros de data filtra apenas por type: withdraw', async () => {
-    const { db, capturedQueries } = buildCollectionDb({ sample_movements: [{ type: 'withdraw', createdAt: new Date('2026-01-05') }] });
+    const { db, capturedQueries } = buildCollectionDb({ sampleMovements: [{ type: 'withdraw', createdAt: new Date('2026-01-05') }] });
     const testApp = appWithDb(db);
 
     const response = await request(testApp).post('/api/reports/withdrawal_history/preview').send({ filters: {} });
@@ -1064,7 +1064,7 @@ describe('reports.routes.js gaps', () => {
   describe('#620: withdrawalhistory lê do ledger de movimentações, não da coleção "withdrawals" (nunca escrita)', () => {
     it('retorna apenas movimentações type: withdraw, ignorando outras (return/adjust/move)', async () => {
       const { db, capturedQueries } = buildCollectionDb({
-        sample_movements: [
+        sampleMovements: [
           { type: 'withdraw', specimenId: 'SP1', quantity: 5, createdAt: new Date('2026-01-05') },
         ],
       });
@@ -1081,7 +1081,7 @@ describe('reports.routes.js gaps', () => {
     });
 
     it('nunca consulta a coleção "withdrawals" (dead collection, #620)', async () => {
-      const { db, capturedQueries } = buildCollectionDb({ sample_movements: [{ type: 'withdraw', createdAt: new Date('2026-01-05') }] });
+      const { db, capturedQueries } = buildCollectionDb({ sampleMovements: [{ type: 'withdraw', createdAt: new Date('2026-01-05') }] });
       const testApp = appWithDb(db);
 
       await request(testApp).post('/api/reports/withdrawal_history/preview').send({ filters: {} });

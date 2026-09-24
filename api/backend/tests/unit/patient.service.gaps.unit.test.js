@@ -127,7 +127,7 @@ describe('PatientService.checkIdentifierConflict', () => {
   });
 
   it('returns null when no existing patient matches', async () => {
-    const db = makeFakeDb({ patients: makeFakeCollection({ findOne: vi.fn().mockResolvedValue(null) }) });
+    const db = makeFakeDb({ participants: makeFakeCollection({ findOne: vi.fn().mockResolvedValue(null) }) });
     const result = await patientService.checkIdentifierConflict(db, { identityDocument: '123.456.789-00' });
     expect(result).toBeNull();
   });
@@ -142,7 +142,7 @@ describe('PatientService.checkIdentifierConflict', () => {
 
   it('reports a recordNumber conflict when the existing patient matches by recordNumber', async () => {
     const db = makeFakeDb({
-      patients: makeFakeCollection({ findOne: vi.fn().mockResolvedValue({ recordNumber: 'REC-1' }) })
+      participants: makeFakeCollection({ findOne: vi.fn().mockResolvedValue({ recordNumber: 'REC-1' }) })
     });
     const result = await patientService.checkIdentifierConflict(db, { recordNumber: 'REC-1' });
     expect(result).toEqual({ field: 'recordNumber', value: 'REC-1', existing: { recordNumber: 'REC-1' } });
@@ -151,7 +151,7 @@ describe('PatientService.checkIdentifierConflict', () => {
   it('checks identityDocument (ParticipantIdentity) before recordNumber (Patient), matching the original priority', async () => {
     const db = makeFakeDb({
       participantIdentities: makeFakeCollection({ findOne: vi.fn().mockResolvedValue({ identityDocument: '11111111111' }) }),
-      patients: makeFakeCollection({ findOne: vi.fn().mockResolvedValue({ recordNumber: 'REC-1' }) })
+      participants: makeFakeCollection({ findOne: vi.fn().mockResolvedValue({ recordNumber: 'REC-1' }) })
     });
     const result = await patientService.checkIdentifierConflict(db, { identityDocument: '11111111111', recordNumber: 'REC-1' });
     expect(result).toEqual({ field: 'identityDocument', value: '11111111111', existing: { identityDocument: '11111111111' } });

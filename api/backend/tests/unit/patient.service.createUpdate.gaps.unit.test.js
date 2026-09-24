@@ -56,7 +56,7 @@ describe('PatientService.createPatient additional branches', () => {
 
   it('rejects when consentTemplateId does not match any template', async () => {
     const consentTemplatesCollection = makeFakeCollection({ findOne: vi.fn().mockResolvedValue(null) });
-    const db = makeFakeDb({ consent_templates: consentTemplatesCollection });
+    const db = makeFakeDb({ consentTemplates: consentTemplatesCollection });
 
     await expect(
       patientService.createPatient(db, validPatientData(), {
@@ -77,7 +77,7 @@ describe('PatientService.createPatient additional branches', () => {
         toArray: vi.fn().mockResolvedValue([{ patientName: 'Maria Silva', birthDate: new Date(1990, 0, 1) }])
       })
     });
-    const db = makeFakeDb({ participantIdentities: identitiesCollection, consent_templates: consentTemplatesCollection });
+    const db = makeFakeDb({ participantIdentities: identitiesCollection, consentTemplates: consentTemplatesCollection });
 
     await expect(
       patientService.createPatient(db, validPatientData(), {
@@ -94,8 +94,8 @@ describe('PatientService.createPatient additional branches', () => {
     const organizationsCollection = makeFakeCollection({ findOne: vi.fn().mockResolvedValue(null) });
     const patientsCollection = makeFakeCollection();
     const db = makeFakeDb({
-      patients: patientsCollection,
-      consent_templates: consentTemplatesCollection,
+      participants: patientsCollection,
+      consentTemplates: consentTemplatesCollection,
       organizations: organizationsCollection
     });
 
@@ -113,7 +113,7 @@ describe('PatientService.createPatient additional branches', () => {
       findOne: vi.fn().mockResolvedValue({ _id: '507f1f77bcf86cd799439011' })
     });
     const patientsCollection = makeFakeCollection();
-    const db = makeFakeDb({ patients: patientsCollection, consent_templates: consentTemplatesCollection });
+    const db = makeFakeDb({ participants: patientsCollection, consentTemplates: consentTemplatesCollection });
 
     const enqueueSpy = vi.spyOn(notificationService, 'enqueueConsentNotification').mockResolvedValue(undefined);
 
@@ -133,7 +133,7 @@ describe('PatientService.createPatient additional branches', () => {
       findOne: vi.fn().mockResolvedValue({ _id: '507f1f77bcf86cd799439011' })
     });
     const patientsCollection = makeFakeCollection();
-    const db = makeFakeDb({ patients: patientsCollection, consent_templates: consentTemplatesCollection });
+    const db = makeFakeDb({ participants: patientsCollection, consentTemplates: consentTemplatesCollection });
 
     const enqueueSpy = vi.spyOn(notificationService, 'enqueueConsentNotification').mockRejectedValue(new Error('smtp down'));
 
@@ -156,7 +156,7 @@ describe('PatientService.createPatient additional branches', () => {
     const patientsCollection = makeFakeCollection({
       insertOne: vi.fn().mockRejectedValue(duplicateKeyError)
     });
-    const db = makeFakeDb({ patients: patientsCollection, consent_templates: consentTemplatesCollection });
+    const db = makeFakeDb({ participants: patientsCollection, consentTemplates: consentTemplatesCollection });
 
     await expect(
       patientService.createPatient(db, validPatientData({ phone: '11999999999' }), {
@@ -190,7 +190,7 @@ describe('PatientService.updatePatient additional branches', () => {
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
       findOne: vi.fn().mockResolvedValue({ patientID: '12345678' })
     });
-    const db = makeFakeDb({ patients: patientsCollection, organizations: organizationsCollection });
+    const db = makeFakeDb({ participants: patientsCollection, organizations: organizationsCollection });
     const tsSpy = vi.spyOn(patientBiomarkerTimeseriesService, 'writePatientBiomarkers').mockResolvedValue(undefined);
 
     await patientService.updatePatient(db, '12345678', { clinicalUnit: 'UTI Adulto' });
@@ -214,7 +214,7 @@ describe('PatientService.updatePatient additional branches', () => {
         representativePhone: '11988887777'
       })
     });
-    const db = makeFakeDb({ patients: patientsCollection });
+    const db = makeFakeDb({ participants: patientsCollection });
     const tsSpy = vi.spyOn(patientBiomarkerTimeseriesService, 'writePatientBiomarkers').mockResolvedValue(undefined);
 
     await patientService.updatePatient(db, '12345678', { isDeceased: true });
@@ -230,7 +230,7 @@ describe('PatientService.updatePatient additional branches', () => {
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
       findOne: vi.fn().mockResolvedValue({ patientID: '12345678' })
     });
-    const db = makeFakeDb({ patients: patientsCollection });
+    const db = makeFakeDb({ participants: patientsCollection });
     const tsSpy = vi.spyOn(patientBiomarkerTimeseriesService, 'writePatientBiomarkers').mockResolvedValue(undefined);
 
     await patientService.updatePatient(db, '12345678', { height: 1.75 });
@@ -247,7 +247,7 @@ describe('PatientService.updatePatient additional branches', () => {
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
       findOne: vi.fn().mockResolvedValue({ patientID: '12345678' })
     });
-    const db = makeFakeDb({ patients: patientsCollection });
+    const db = makeFakeDb({ participants: patientsCollection });
     const tsSpy = vi.spyOn(patientBiomarkerTimeseriesService, 'writePatientBiomarkers').mockResolvedValue(undefined);
 
     await patientService.updatePatient(db, '12345678', { height: 175 });
@@ -264,7 +264,7 @@ describe('PatientService.updatePatient additional branches', () => {
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
       findOne: vi.fn().mockResolvedValue({ patientID: '12345678' })
     });
-    const db = makeFakeDb({ patients: patientsCollection });
+    const db = makeFakeDb({ participants: patientsCollection });
     const tsSpy = vi.spyOn(patientBiomarkerTimeseriesService, 'writePatientBiomarkers').mockResolvedValue(undefined);
 
     await patientService.updatePatient(db, objectIdHex, { alphaGal: 2.0 });
@@ -284,7 +284,7 @@ describe('PatientService.updatePatient additional branches', () => {
     const patientsCollection = makeFakeCollection({
       updateOne: vi.fn().mockRejectedValue(duplicateKeyError)
     });
-    const db = makeFakeDb({ patients: patientsCollection });
+    const db = makeFakeDb({ participants: patientsCollection });
 
     await expect(
       patientService.updatePatient(db, '12345678', { phone: '11999999999' })

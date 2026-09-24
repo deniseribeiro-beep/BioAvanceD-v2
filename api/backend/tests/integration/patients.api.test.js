@@ -12,13 +12,21 @@ const sessionService = require('../../src/services/session.service');
 const auditLogger = require('../../src/utils/auditLogger');
 const notificationService = require('../../src/services/notification.service');
 const { buildRbacCollections } = require('../factories/rbac.factory');
+const {
+  makeAuthToken,
+  makeLegacyClaimsToken,
+  buildAuthenticatedCollections,
+  userForAccessType,
+  TEST_USER_ACCOUNT_IDS,
+} = require('../factories/auth.factory');
+
 
 const consentTemplateId = new ObjectId().toString();
 
 function createCoordinatorToken() {
   return jwt.sign(
     {
-      userID: 'qa-coord-1',
+      userID: TEST_USER_ACCOUNT_IDS[3],
       accessType: 3,
       roleName: 'Coordenador',
       name: 'QA Coordenador',
@@ -62,10 +70,10 @@ describe('RF005 - POST /api/v1/patients', () => {
   });
 
   function createDbMock(patientsCollection) {
-    const rbacCollections = buildRbacCollections([{ userAccountId: 'qa-coord-1', accessType: 3 }]);
+    const rbacCollections = buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[3], accessType: 3 }]);
     return {
       collection: (name) => {
-        if (name === 'patients' || name === 'pacientes') {
+        if (name === 'participants' || name === 'pacientes') {
           return patientsCollection;
         }
         if (rbacCollections[name]) {

@@ -6,6 +6,14 @@ import router from '../../src/interface/routes/equipment.routes.js';
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const { buildRbacCollections } = require('../factories/rbac.factory');
+const {
+  makeAuthToken,
+  makeLegacyClaimsToken,
+  buildAuthenticatedCollections,
+  userForAccessType,
+  TEST_USER_ACCOUNT_IDS,
+} = require('../../factories/auth.factory');
+
 
 const isQuarantineTriggerStatusMock = vi.fn();
 const quarantineByEquipmentStatusMock = vi.fn();
@@ -71,7 +79,7 @@ describe('equipment.routes quarantine flow', () => {
       collection: vi.fn((name) => {
         if (name === 'equipment') return equipmentCollection;
         if (name === 'sessions') return sessionsCollection;
-        if (name === 'users') return usersCollection;
+        if (name === 'userAccounts') return usersCollection;
         if (name === 'logs') return logsCollection;
         if (rbacCollections[name]) return rbacCollections[name];
         return logsCollection;
@@ -151,7 +159,7 @@ describe('equipment.routes quarantine flow', () => {
       collection: vi.fn((name) => {
         if (name === 'equipment') return equipmentCollection;
         if (name === 'sessions') return sessionsCollection;
-        if (name === 'users') return usersCollection;
+        if (name === 'userAccounts') return usersCollection;
         if (name === 'logs') return logsCollection;
         if (rbacCollections[name]) return rbacCollections[name];
         return logsCollection;
@@ -250,7 +258,7 @@ describe('equipment.routes quarantine flow', () => {
       collection: vi.fn((name) => {
         if (name === 'equipment') return equipmentCollection;
         if (name === 'sessions') return sessionsCollection;
-        if (name === 'users') return usersCollection;
+        if (name === 'userAccounts') return usersCollection;
         if (name === 'logs') return logsCollection;
         if (rbacCollections[name]) return rbacCollections[name];
         return logsCollection;

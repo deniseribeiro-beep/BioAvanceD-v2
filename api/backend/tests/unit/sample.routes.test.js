@@ -235,7 +235,7 @@ describe('sample.routes item 8 label reprint residual', () => {
     });
     const db = {
       collection: (name) => {
-        if (name === 'samples') return samples;
+        if (name === 'specimens') return samples;
         if (name === 'labelGenerations') return labelGenerations;
         throw new Error(`unexpected collection ${name}`);
       },
@@ -1365,7 +1365,7 @@ describe('sample.routes', () => {
         countDocuments: vi.fn().mockResolvedValue(1),
       };
       const db = {
-        collection: (name) => (name === 'patients' ? patientsCollection : consentsCollection),
+        collection: (name) => (name === 'participants' ? patientsCollection : consentsCollection),
       };
       const app = buildApp(router, db);
 
@@ -1393,7 +1393,7 @@ describe('sample.routes', () => {
         countDocuments: vi.fn().mockResolvedValue(5),
       };
       const db = {
-        collection: (name) => (name === 'patients' ? patientsCollection : consentsCollection),
+        collection: (name) => (name === 'participants' ? patientsCollection : consentsCollection),
       };
       const app = buildApp(router, db);
 
@@ -1415,7 +1415,7 @@ describe('sample.routes', () => {
       const patientsCollection = { findOne: vi.fn().mockResolvedValue(null) };
       const consentsCollection = { findOne: vi.fn(), countDocuments: vi.fn() };
       const db = {
-        collection: (name) => (name === 'patients' ? patientsCollection : consentsCollection),
+        collection: (name) => (name === 'participants' ? patientsCollection : consentsCollection),
       };
       const app = buildApp(router, db);
 
@@ -1463,7 +1463,7 @@ describe('sample.routes', () => {
         { participantId: '53117577', status: 'ACTIVE' },
       ]);
       const db = {
-        collection: (name) => (name === 'patients' ? patientsCollection : consentsCollection),
+        collection: (name) => (name === 'participants' ? patientsCollection : consentsCollection),
       };
       const app = buildApp(router, db);
 
@@ -1505,7 +1505,7 @@ describe('sample.routes', () => {
         { patientId: 'patient-unrelated', status: 'ACTIVE' },
       ]);
       const db = {
-        collection: (name) => (name === 'patients' ? patientsCollection : consentsCollection),
+        collection: (name) => (name === 'participants' ? patientsCollection : consentsCollection),
       };
       const app = buildApp(router, db);
 
@@ -1543,7 +1543,7 @@ describe('sample.routes', () => {
       const patientsCollection = { findOne: vi.fn().mockResolvedValue(patient) };
       const consentsCollection = { findOne: vi.fn(), countDocuments: vi.fn() };
       const db = {
-        collection: (name) => (name === 'patients' ? patientsCollection : consentsCollection),
+        collection: (name) => (name === 'participants' ? patientsCollection : consentsCollection),
       };
       const app = buildApp(router, db);
 
@@ -1609,7 +1609,7 @@ describe('sample.routes', () => {
       });
       const specimenPreanalyticsCollection = { find: specimenPreanalyticsFind };
       const collectionsByName = {
-        patients: patientsCollection,
+        participants: patientsCollection,
         patientConsents: patientConsentsCollection,
         storagePaths: storagePathsCollection,
         specimenPreanalytics: specimenPreanalyticsCollection,
@@ -1643,7 +1643,7 @@ describe('sample.routes', () => {
         find: vi.fn().mockReturnValue({ sort: vi.fn().mockReturnThis(), toArray: vi.fn().mockResolvedValue([]) }),
       };
       const collectionsByName = {
-        patients: patientsCollection,
+        participants: patientsCollection,
         patientConsents: patientConsentsCollection,
         storagePaths: storagePathsCollection,
         specimenPreanalytics: specimenPreanalyticsCollection,

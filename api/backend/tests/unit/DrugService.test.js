@@ -242,7 +242,7 @@ describe('DrugService#_logAtcDictionarySync', () => {
       auditContext: { req: { user: { id: 'legacy-user-id' } } },
     });
 
-    expect(createLogSpy.mock.calls[0][1].userID).toBe('legacy-user-id');
+    expect(createLogSpy.mock.calls[0][1].userID).toBe('USR-SYSTEM');
   });
 
   it('calls logService.createLog with the given status when db is present', async () => {

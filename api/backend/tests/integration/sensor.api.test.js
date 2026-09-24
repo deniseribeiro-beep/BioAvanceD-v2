@@ -8,15 +8,19 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
 const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const sensorService = require('../../src/services/sensor.service');
-const { createDbMock } = require('../factories/db.factory');
+const { createDbMock, createCollectionMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
+const {
+  makeAuthToken,
+  makeLegacyClaimsToken,
+  buildAuthenticatedCollections,
+  userForAccessType,
+  TEST_USER_ACCOUNT_IDS,
+} = require('../factories/auth.factory');
+
 
 function makeToken(accessType = 2) {
-  return jwt.sign(
-    { userID: `qa-tecnico-${accessType}`, accessType, roleName: 'Técnico', name: 'QA Técnico', mfaVerified: true },
-    process.env.JWT_SECRET,
-    { expiresIn: '1h' }
-  );
+  return makeAuthToken(accessType);
 }
 
 function givenSession() {
@@ -33,8 +37,9 @@ beforeEach(() => {
   givenSession();
   app.locals.db = createDbMock({
     ...buildRbacCollections([
-      { userAccountId: 'qa-tecnico-1', accessType: 1 },
-      { userAccountId: 'qa-tecnico-2', accessType: 2 }
+      { userAccountId: TEST_USER_ACCOUNT_IDS[1], accessType: 1 },
+      { userAccountId: TEST_USER_ACCOUNT_IDS[2], accessType: 2 },
+      { userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 4 },
     ])
   });
 });
@@ -71,7 +76,7 @@ describe('GET /api/sensors', () => {
   // isolates the 403 to requireOrganizationScope, not requirePermission.
   it('returns 403 for a caller whose org assignment has no scopeId (unassigned)', async () => {
     app.locals.db = createDbMock({
-      ...buildRbacCollections([{ userAccountId: 'qa-tecnico-2', accessType: 2, organizationId: '' }])
+      ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[2], accessType: 2, organizationId: '' }])
     });
 
     const res = await request(app)
@@ -312,10 +317,16 @@ describe('sensor write routes are organization-scoped (#1029)', () => {
   });
 
   it('an org-LESS caller is refused by the middleware before any handler runs', async () => {
-    // buildRbacCollections gives this user no assignment at all, so
+    // Authenticated UserAccount/Actor exist, but no role assignments — so
     // resolveUserOrganizationScope returns an unusable scope and
-    // requireOrganizationScope 403s ahead of the handler.
-    app.locals.db = createDbMock({ ...buildRbacCollections([]) });
+    // requireOrganizationScope 403s ahead of the handler (Stage 2E: empty
+    // buildRbacCollections([]) also omits userAccounts and would 401 first).
+    const seed = buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[2], accessType: 2 }]);
+    seed.userRoleAssignments = createCollectionMock({
+      findOne: vi.fn(async () => null),
+      find: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([]) })),
+    });
+    app.locals.db = createDbMock(seed);
     const getSensor = vi.spyOn(sensorService, 'getSensor').mockResolvedValue(FAKE_SENSOR);
 
     const res = await request(app)
@@ -340,11 +351,19 @@ describe('sensor write routes are organization-scoped (#1029)', () => {
 // rather than a code change. These cases pin that separability, which is the
 // whole content of the fix and is not observable through any seeded role.
 describe('#1073: sensor writes are gated on a write permission, not viewTemperature', () => {
-  const VIEW_ONLY_USER = 'qa-view-only-temp';
+  const VIEW_ONLY_USER = '550e8400-e29b-41d4-a716-4466554400a1';
+  const VIEW_ONLY_ACTOR = '550e8400-e29b-41d4-a716-4466554400b1';
 
   function viewOnlyToken() {
     return jwt.sign(
-      { userID: VIEW_ONLY_USER, accessType: 2, roleName: 'Técnico', name: 'QA View Only', mfaVerified: true },
+      {
+        userID: VIEW_ONLY_USER,
+        actorId: VIEW_ONLY_ACTOR,
+        accessType: 2,
+        roleName: 'Técnico',
+        name: 'QA View Only',
+        mfaVerified: true,
+      },
       process.env.JWT_SECRET,
       { expiresIn: '1h' }
     );
@@ -353,9 +372,14 @@ describe('#1073: sensor writes are gated on a write permission, not viewTemperat
   beforeEach(() => {
     app.locals.db = createDbMock({
       ...buildRbacCollections(
-        [{ userAccountId: VIEW_ONLY_USER, roleCodes: ['temperature_viewer'], organizationId: 'test-org-default' }],
+        [{
+          userAccountId: VIEW_ONLY_USER,
+          actorId: VIEW_ONLY_ACTOR,
+          roleCodes: ['temperature_viewer'],
+          organizationId: 'test-org-default',
+        }],
         [{ roleCode: 'temperature_viewer', hierarchyLevel: 2, permissions: ['viewTemperature'] }]
-      )
+      ),
     });
   });
 
@@ -428,7 +452,7 @@ describe('#1073: sensor writes are gated on a write permission, not viewTemperat
   // for manageStorageTopology).
   it('CONTROL: a Tecnico still deletes a sensor after the split', async () => {
     app.locals.db = createDbMock({
-      ...buildRbacCollections([{ userAccountId: 'qa-tecnico-2', accessType: 2 }])
+      ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[2], accessType: 2 }])
     });
     vi.spyOn(sensorService, 'getSensor').mockResolvedValue(FAKE_SENSOR);
     vi.spyOn(sensorService, 'deleteSensor').mockResolvedValue({ deleted: true });
@@ -457,10 +481,21 @@ describe('#1073: sensor writes are gated on a write permission, not viewTemperat
 describe('#1071: a CREATE stamps organizationId from the caller resolved scope', () => {
   const ORG_A = 'org-a';
   const ORG_B = 'org-b';
+  const ORG_A_USER = '550e8400-e29b-41d4-a716-4466554400a2';
+  const ORG_A_ACTOR = '550e8400-e29b-41d4-a716-4466554400b2';
+  const ORGLESS_USER = '550e8400-e29b-41d4-a716-4466554400a3';
+  const ORGLESS_ACTOR = '550e8400-e29b-41d4-a716-4466554400b3';
 
-  function tokenFor(userAccountId, accessType) {
+  function tokenFor(userAccountId, actorId, accessType) {
     return jwt.sign(
-      { userID: userAccountId, accessType, roleName: 'Técnico', name: 'QA', mfaVerified: true },
+      {
+        userID: userAccountId,
+        actorId,
+        accessType,
+        roleName: accessType >= 4 ? 'Administrador' : 'Técnico',
+        name: 'QA',
+        mfaVerified: true,
+      },
       process.env.JWT_SECRET,
       { expiresIn: '1h' }
     );
@@ -468,13 +503,13 @@ describe('#1071: a CREATE stamps organizationId from the caller resolved scope',
 
   it('ignores a body organizationId naming another organization', async () => {
     app.locals.db = createDbMock({
-      ...buildRbacCollections([{ userAccountId: 'qa-org-a', accessType: 2, organizationId: ORG_A }])
+      ...buildRbacCollections([{ userAccountId: ORG_A_USER, actorId: ORG_A_ACTOR, accessType: 2, organizationId: ORG_A }]),
     });
     const createSensor = vi.spyOn(sensorService, 'createSensor').mockResolvedValue({ ...FAKE_SENSOR, _id: { toString: () => 'new-id' } });
 
     const res = await request(app)
       .post('/api/sensors')
-      .set('Authorization', `Bearer ${tokenFor('qa-org-a', 2)}`)
+      .set('Authorization', `Bearer ${tokenFor(ORG_A_USER, ORG_A_ACTOR, 2)}`)
       .send({ sensorId: 'S-9', type: 'temperature', organizationId: ORG_B });
 
     expect([200, 201]).toContain(res.status);
@@ -484,13 +519,13 @@ describe('#1071: a CREATE stamps organizationId from the caller resolved scope',
 
   it('stamps the caller organization when the body omits it entirely', async () => {
     app.locals.db = createDbMock({
-      ...buildRbacCollections([{ userAccountId: 'qa-org-a', accessType: 2, organizationId: ORG_A }])
+      ...buildRbacCollections([{ userAccountId: ORG_A_USER, actorId: ORG_A_ACTOR, accessType: 2, organizationId: ORG_A }]),
     });
     const createSensor = vi.spyOn(sensorService, 'createSensor').mockResolvedValue({ ...FAKE_SENSOR, _id: { toString: () => 'new-id' } });
 
     const res = await request(app)
       .post('/api/sensors')
-      .set('Authorization', `Bearer ${tokenFor('qa-org-a', 2)}`)
+      .set('Authorization', `Bearer ${tokenFor(ORG_A_USER, ORG_A_ACTOR, 2)}`)
       .send({ sensorId: 'S-9', type: 'temperature' });
 
     expect([200, 201]).toContain(res.status);
@@ -502,13 +537,13 @@ describe('#1071: a CREATE stamps organizationId from the caller resolved scope',
   // the #637 precedent treats global the same way.
   it('CONTROL: an Administrador may still name any organization', async () => {
     app.locals.db = createDbMock({
-      ...buildRbacCollections([{ userAccountId: 'qa-admin', accessType: 4 }])
+      ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 4 }]),
     });
     const createSensor = vi.spyOn(sensorService, 'createSensor').mockResolvedValue({ ...FAKE_SENSOR, _id: { toString: () => 'new-id' } });
 
     const res = await request(app)
       .post('/api/sensors')
-      .set('Authorization', `Bearer ${jwt.sign({ userID: 'qa-admin', accessType: 4, roleName: 'Administrador', name: 'QA Admin', mfaVerified: true }, process.env.JWT_SECRET, { expiresIn: '1h' })}`)
+      .set('Authorization', `Bearer ${makeToken(4)}`)
       .send({ sensorId: 'S-9', type: 'temperature', organizationId: ORG_B });
 
     expect([200, 201]).toContain(res.status);
@@ -520,13 +555,18 @@ describe('#1071: a CREATE stamps organizationId from the caller resolved scope',
   // fixture, not the bug (#695).
   it('CONTROL: an org-less caller is still refused before the stamp', async () => {
     app.locals.db = createDbMock({
-      ...buildRbacCollections([{ userAccountId: 'qa-orgless', accessType: 2, organizationId: '' }])
+      ...buildRbacCollections([{
+        userAccountId: ORGLESS_USER,
+        actorId: ORGLESS_ACTOR,
+        accessType: 2,
+        organizationId: '',
+      }]),
     });
     vi.spyOn(sensorService, 'createSensor').mockResolvedValue(FAKE_SENSOR);
 
     const res = await request(app)
       .post('/api/sensors')
-      .set('Authorization', `Bearer ${tokenFor('qa-orgless', 2)}`)
+      .set('Authorization', `Bearer ${tokenFor(ORGLESS_USER, ORGLESS_ACTOR, 2)}`)
       .send({ sensorId: 'S-9', type: 'temperature', organizationId: ORG_B });
 
     expect(res.status).toBe(403);
@@ -551,7 +591,7 @@ describe('#1053: a sensor PUT cannot re-parent the sensor to another organizatio
 
   beforeEach(() => {
     app.locals.db = createDbMock({
-      ...buildRbacCollections([{ userAccountId: 'qa-tecnico-2', accessType: 2 }])
+      ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[2], accessType: 2 }])
     });
   });
 
@@ -600,14 +640,14 @@ describe('#1053: a sensor PUT cannot re-parent the sensor to another organizatio
 
   it('CONTROL: an Administrador may still move a sensor between organizations', async () => {
     app.locals.db = createDbMock({
-      ...buildRbacCollections([{ userAccountId: 'qa-admin-move', accessType: 4 }])
+      ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 4 }]),
     });
     vi.spyOn(sensorService, 'getSensor').mockResolvedValue(IN_SCOPE);
     vi.spyOn(sensorService, 'updateSensor').mockResolvedValue({ ...IN_SCOPE, organizationId: 'other-org' });
 
     const res = await request(app)
       .put('/api/sensors/S-001')
-      .set('Authorization', `Bearer ${jwt.sign({ userID: 'qa-admin-move', accessType: 4, roleName: 'Administrador', name: 'QA', mfaVerified: true }, process.env.JWT_SECRET, { expiresIn: '1h' })}`)
+      .set('Authorization', `Bearer ${makeToken(4)}`)
       .send({ organizationId: 'other-org' });
 
     expect(res.status).toBe(200);

@@ -9,6 +9,14 @@ const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const sampleService = require('../../src/services/sample.service');
 const { buildRbacCollections } = require('../factories/rbac.factory');
+const {
+  makeAuthToken,
+  makeLegacyClaimsToken,
+  buildAuthenticatedCollections,
+  userForAccessType,
+  TEST_USER_ACCOUNT_IDS,
+} = require('../factories/auth.factory');
+
 
 const rbacCollections = buildRbacCollections([{ userAccountId: 'qa-tech-1', accessType: 2 }]);
 
@@ -56,7 +64,7 @@ describe('RF004/RNF011 - POST /api/samples validações de integridade', () => {
     app.locals.db = {
       collection: (name) => {
         if (rbacCollections[name]) return rbacCollections[name];
-        if (name === 'patients' || name === 'pacientes') {
+        if (name === 'participants' || name === 'pacientes') {
           return {
             findOne: vi.fn().mockResolvedValue(null),
           };
@@ -68,7 +76,7 @@ describe('RF004/RNF011 - POST /api/samples validações de integridade', () => {
           };
         }
 
-        if (name === 'samples' || name === 'amostras') {
+        if (name === 'specimens' || name === 'amostras') {
           return {
             findOne: vi.fn().mockResolvedValue(null),
             insertOne: vi.fn().mockResolvedValue({ insertedId: 'sample-1' }),

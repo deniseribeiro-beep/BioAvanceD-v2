@@ -176,12 +176,12 @@ function buildDb() {
       collection: vi.fn().mockImplementation((name) => {
         if (name === 'temperatureIncidents') return incidentCollection;
         if (name === 'environmentalExcursions') return environmentalExcursionsCollection;
-        if (name === 'users') return usersCollection;
+        if (name === 'userAccounts') return usersCollection;
         if (name === 'sensors') return sensorsCollection;
         if (name === 'sensorMetadata') return sensorMetadataCollection;
         if (name === 'storageContainers') return storageContainersCollection;
         if (name === 'storageBoxes') return storageBoxesCollection;
-        if (name === 'samples') return samplesCollection;
+        if (name === 'specimens') return samplesCollection;
         if (name === 'sampleMovements') return sampleMovementsCollection;
         if (name === 'sample_movements') return sampleMovementsCollection;
         if (name === 'counters') return countersCollection;

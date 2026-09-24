@@ -56,8 +56,8 @@ describe('PatientService.createPatient — alphaGal/lysoGb3 folding', () => {
     });
     const patientsCollection = makeFakeCollection();
     const db = makeFakeDb({
-      consent_templates: consentTemplatesCollection,
-      patients: patientsCollection
+      consentTemplates: consentTemplatesCollection,
+      participants: patientsCollection
     });
     const result = await patientService.createPatient(db, patientData, { skipConsentNotification: true });
     return { result, patientsCollection };
@@ -113,7 +113,7 @@ describe('PatientService.createPatient — non-phone duplicate-key error passthr
       insertOne: vi.fn().mockRejectedValue(duplicateKeyError)
     });
     const consentTemplateId = new ObjectId().toString();
-    const db = makeFakeDb({ consent_templates: consentTemplatesCollection, patients: patientsCollection });
+    const db = makeFakeDb({ consentTemplates: consentTemplatesCollection, participants: patientsCollection });
 
     await expect(
       patientService.createPatient(db, {
@@ -142,7 +142,7 @@ describe('PatientService.updatePatient — non-phone duplicate-key error passthr
     const patientsCollection = makeFakeCollection({
       updateOne: vi.fn().mockRejectedValue(duplicateKeyError)
     });
-    const db = makeFakeDb({ patients: patientsCollection });
+    const db = makeFakeDb({ participants: patientsCollection });
 
     await expect(
       patientService.updatePatient(db, '12345678', { patientName: 'New Name' })
@@ -155,7 +155,7 @@ describe('PatientService.getPatient — error propagation', () => {
     const patientsCollection = makeFakeCollection({
       findOne: vi.fn().mockRejectedValue(new Error('db down'))
     });
-    const db = makeFakeDb({ patients: patientsCollection });
+    const db = makeFakeDb({ participants: patientsCollection });
 
     await expect(patientService.getPatient(db, '12345678')).rejects.toThrow('db down');
   });
@@ -166,7 +166,7 @@ describe('PatientService.listPatients — error propagation', () => {
     const patientsCollection = makeFakeCollection({
       find: vi.fn().mockImplementation(() => { throw new Error('db down'); })
     });
-    const db = makeFakeDb({ patients: patientsCollection });
+    const db = makeFakeDb({ participants: patientsCollection });
 
     await expect(patientService.listPatients(db, {})).rejects.toThrow('db down');
   });
@@ -177,7 +177,7 @@ describe('PatientService.deletePatient — error propagation and ObjectId branch
     const patientsCollection = makeFakeCollection({
       deleteOne: vi.fn().mockRejectedValue(new Error('db down'))
     });
-    const db = makeFakeDb({ patients: patientsCollection });
+    const db = makeFakeDb({ participants: patientsCollection });
 
     await expect(patientService.deletePatient(db, '12345678')).rejects.toThrow('db down');
   });
@@ -187,7 +187,7 @@ describe('PatientService.deletePatient — error propagation and ObjectId branch
     const patientsCollection = makeFakeCollection({
       deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 })
     });
-    const db = makeFakeDb({ patients: patientsCollection });
+    const db = makeFakeDb({ participants: patientsCollection });
 
     const result = await patientService.deletePatient(db, id.toString());
     expect(result).toBe(true);
@@ -199,7 +199,7 @@ describe('PatientService.resolveClinicalUnitSnapshot — remaining normalization
     const organizationsCollection = makeFakeCollection({
       findOne: vi.fn().mockResolvedValue({ organizationId: 'unit-1', officialName: 'Enfermaria', acronym: '' })
     });
-    const db = makeFakeDb({ organizations: organizationsCollection, patients: makeFakeCollection() });
+    const db = makeFakeDb({ organizations: organizationsCollection, participants: makeFakeCollection() });
 
     const result = await patientService.resolveClinicalUnitSnapshot(db, {
       clinicalUnitId: null,

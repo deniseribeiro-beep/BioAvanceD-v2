@@ -1,3 +1,4 @@
+const { makeAuthToken, makeLegacyClaimsToken, buildAuthenticatedCollections, userForAccessType, TEST_USER_ACCOUNT_IDS } = require('../../factories/auth.factory');
 const { Neo4jCanonicalProjectionService } = require('../../src/services/neo4jCanonicalProjection.service');
 
 describe('Neo4jCanonicalProjectionService', () => {
@@ -67,7 +68,7 @@ describe('Neo4jCanonicalProjectionService', () => {
       aggregateId: 'sample-child',
       schemaVersion: 1,
       sourceService: 'unit-test',
-      payload: { specimenId: 'sample-child', qualityAssessmentId: 'qa-1', status: 'GOOD', score: 98 }
+      payload: { specimenId: 'sample-child', qualityAssessmentId: TEST_USER_ACCOUNT_IDS[4], status: 'GOOD', score: 98 }
     });
 
     await service.applyTelemetryProjection(session, {
@@ -83,7 +84,7 @@ describe('Neo4jCanonicalProjectionService', () => {
     expect(calls).toHaveLength(3);
     expect(calls[0].params.specimenId).toBe('sample-child');
     expect(calls[0].params.parentSpecimenId).toBe('sample-parent');
-    expect(calls[1].params.assessmentId).toBe('qa-1');
+    expect(calls[1].params.assessmentId).toBe(TEST_USER_ACCOUNT_IDS[4]);
     expect(calls[2].params.incidentId).toBe('ti-1');
   });
 });

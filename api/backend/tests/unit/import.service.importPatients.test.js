@@ -50,10 +50,10 @@ function makeCollection({ existing = null } = {}) {
   };
 }
 
-function makeDb({ patients, participantIdentities }) {
+function makeDb({ participants: patients, participantIdentities }) {
   return {
     collection: (name) => {
-      if (name === 'patients') return patients;
+      if (name === 'participants') return patients;
       if (name === 'participantIdentities') return participantIdentities;
       throw new Error(`unexpected collection requested: ${name}`);
     },
@@ -80,7 +80,7 @@ describe('ImportService.importPatients (JSON)', () => {
     const filePath = writeTmpFile('new.json', JSON.stringify(validPatient()));
     const patients = makeCollection();
     const participantIdentities = makeCollection();
-    const db = makeDb({ patients, participantIdentities });
+    const db = makeDb({ participants: patients, participantIdentities });
 
     const result = await importService.importPatients(db, { path: filePath, originalname: 'new.json' });
 
@@ -110,7 +110,7 @@ describe('ImportService.importPatients (JSON)', () => {
     const patients = makeCollection();
     const participantIdentities = makeCollection();
 
-    const result = await importService.importPatients(makeDb({ patients, participantIdentities }), { path: filePath, originalname: 'notify-fails.json' });
+    const result = await importService.importPatients(makeDb({ participants: patients, participantIdentities }), { path: filePath, originalname: 'notify-fails.json' });
 
     expect(result.success).toBe(1);
     expect(result.errors).toEqual([]);
@@ -126,7 +126,7 @@ describe('ImportService.importPatients (JSON)', () => {
       existing: { participantId: '10203040', identityDocument: '12345678900' },
     });
 
-    const result = await importService.importPatients(makeDb({ patients, participantIdentities }), { path: filePath, originalname: 'merge.json' });
+    const result = await importService.importPatients(makeDb({ participants: patients, participantIdentities }), { path: filePath, originalname: 'merge.json' });
 
     expect(result.success).toBe(1);
     expect(patients.updates).toHaveLength(1);
@@ -173,7 +173,7 @@ describe('ImportService.importPatients (JSON)', () => {
     };
 
     const result = await importService.importPatients(
-      makeDb({ patients: patientsCollection, participantIdentities: identitiesCollection }),
+      makeDb({ participants: patientsCollection, participantIdentities: identitiesCollection }),
       { path: filePath, originalname: 'hash-match.json' }
     );
 
@@ -194,7 +194,7 @@ describe('ImportService.importPatients (JSON)', () => {
       existing: { participantId: '10203040', identityDocument: '12345678900' },
     });
 
-    const result = await importService.importPatients(makeDb({ patients, participantIdentities }), { path: filePath, originalname: 'conflict.json' });
+    const result = await importService.importPatients(makeDb({ participants: patients, participantIdentities }), { path: filePath, originalname: 'conflict.json' });
 
     expect(result.success).toBe(0);
     expect(result.errors).toEqual([
@@ -209,7 +209,7 @@ describe('ImportService.importPatients (JSON)', () => {
     const patients = makeCollection();
     const participantIdentities = makeCollection();
 
-    const result = await importService.importPatients(makeDb({ patients, participantIdentities }), { path: filePath, originalname: 'no-id.json' });
+    const result = await importService.importPatients(makeDb({ participants: patients, participantIdentities }), { path: filePath, originalname: 'no-id.json' });
 
     expect(result.success).toBe(0);
     expect(result.total).toBe(1);
@@ -224,7 +224,7 @@ describe('ImportService.importPatients (JSON)', () => {
     const patients = makeCollection();
     const participantIdentities = makeCollection();
 
-    const result = await importService.importPatients(makeDb({ patients, participantIdentities }), { path: filePath, originalname: 'invalid.json' });
+    const result = await importService.importPatients(makeDb({ participants: patients, participantIdentities }), { path: filePath, originalname: 'invalid.json' });
 
     expect(result.success).toBe(0);
     expect(result.total).toBe(1);
@@ -252,7 +252,7 @@ describe('ImportService.importPatients (JSON)', () => {
       existing: { participantId: '10203040', identityDocument: '12345678900' },
     });
 
-    const result = await importService.importPatients(makeDb({ patients, participantIdentities }), { path: filePath, originalname: 'merge-array-object.json' });
+    const result = await importService.importPatients(makeDb({ participants: patients, participantIdentities }), { path: filePath, originalname: 'merge-array-object.json' });
 
     expect(result.success).toBe(1);
     expect(patients.updates[0].update.$set.dadosEspecificos).toEqual(['item-1', 'item-2']);
@@ -267,7 +267,7 @@ describe('ImportService.importPatients (JSON)', () => {
     const patients = makeCollection();
     const participantIdentities = makeCollection();
 
-    const result = await importService.importPatients(makeDb({ patients, participantIdentities }), { path: filePath, originalname: 'array.json' });
+    const result = await importService.importPatients(makeDb({ participants: patients, participantIdentities }), { path: filePath, originalname: 'array.json' });
 
     expect(result.total).toBe(2);
     expect(result.success).toBe(1);
@@ -294,7 +294,7 @@ describe('ImportService.importPatients item 8 identity/merge residuals', () => {
     });
 
     const result = await importService.importPatients(
-      makeDb({ patients, participantIdentities }),
+      makeDb({ participants: patients, participantIdentities }),
       { path: filePath, originalname: 'plaintext-fallback.json' }
     );
 
@@ -326,7 +326,7 @@ describe('ImportService.importPatients item 8 identity/merge residuals', () => {
     const participantIdentities = makeCollection();
 
     const result = await importService.importPatients(
-      makeDb({ patients, participantIdentities }),
+      makeDb({ participants: patients, participantIdentities }),
       { path: filePath, originalname: 'record-number-merge.json' }
     );
 
@@ -366,7 +366,7 @@ describe('ImportService.importPatients item 8 identity/merge residuals', () => {
     });
 
     const result = await importService.importPatients(
-      makeDb({ patients, participantIdentities }),
+      makeDb({ participants: patients, participantIdentities }),
       { path: filePath, originalname: 'null-optional-merge.json' }
     );
 
@@ -382,7 +382,7 @@ describe('ImportService.importPatients (CSV)', () => {
     const patients = makeCollection();
     const participantIdentities = makeCollection();
 
-    const result = await importService.importPatients(makeDb({ patients, participantIdentities }), { path: filePath, originalname: 'patients.csv' });
+    const result = await importService.importPatients(makeDb({ participants: patients, participantIdentities }), { path: filePath, originalname: 'patients.csv' });
 
     expect(result.success).toBe(1);
     expect(result.errors).toHaveLength(0);
@@ -409,7 +409,7 @@ describe('ImportService.importPatients (CSV)', () => {
     const patients = makeCollection();
     const participantIdentities = makeCollection();
 
-    const result = await importService.importPatients(makeDb({ patients, participantIdentities }), { path: filePath, originalname: 'patients-invalid.csv' });
+    const result = await importService.importPatients(makeDb({ participants: patients, participantIdentities }), { path: filePath, originalname: 'patients-invalid.csv' });
 
     expect(result.success).toBe(0);
     expect(result.errors).toHaveLength(1);
@@ -420,7 +420,7 @@ describe('ImportService.importPatients (CSV)', () => {
     const patients = makeCollection();
     const participantIdentities = makeCollection();
 
-    const result = await importService.importPatients(makeDb({ patients, participantIdentities }), { path: filePath, originalname: 'patients-no-id.csv' });
+    const result = await importService.importPatients(makeDb({ participants: patients, participantIdentities }), { path: filePath, originalname: 'patients-no-id.csv' });
 
     expect(result.success).toBe(0);
     expect(result.errors).toEqual([
@@ -437,7 +437,7 @@ describe('ImportService.importPatients (CSV)', () => {
       existing: { participantId: '10203040', identityDocument: '98765432100' },
     });
 
-    const result = await importService.importPatients(makeDb({ patients, participantIdentities }), { path: filePath, originalname: 'patients-conflict.csv' });
+    const result = await importService.importPatients(makeDb({ participants: patients, participantIdentities }), { path: filePath, originalname: 'patients-conflict.csv' });
 
     expect(result.success).toBe(0);
     expect(result.errors).toEqual([

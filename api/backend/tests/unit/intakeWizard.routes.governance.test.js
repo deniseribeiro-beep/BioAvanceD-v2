@@ -1,3 +1,4 @@
+const { makeAuthToken, makeLegacyClaimsToken, buildAuthenticatedCollections, userForAccessType, TEST_USER_ACCOUNT_IDS } = require('../../factories/auth.factory');
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createRequire } from 'module';
 import express from 'express';
@@ -35,7 +36,7 @@ function buildQuarantineActionsCollection({ activeAction = null } = {}) {
   const toArray = vi.fn().mockResolvedValue(activeAction ? [activeAction] : []);
   const sort = vi.fn().mockReturnValue({ toArray });
   return {
-    insertOne: vi.fn().mockResolvedValue({ insertedId: 'qa-1' }),
+    insertOne: vi.fn().mockResolvedValue({ insertedId: TEST_USER_ACCOUNT_IDS[4] }),
     find: vi.fn().mockReturnValue({ sort }),
     updateOne: vi.fn().mockResolvedValue({ matchedCount: activeAction ? 1 : 0 }),
   };

@@ -323,7 +323,7 @@ describe('reports.routes item 8 more residual canonical branches', () => {
             templateStatus: 'active',
           }) };
         }
-        if (name === 'samples') return samples;
+        if (name === 'specimens') return samples;
         if (name === 'results') return results;
         throw new Error(`unexpected collection ${name}`);
       },
@@ -369,7 +369,7 @@ describe('reports.routes item 8 more residual canonical branches', () => {
             templateStatus: 'active',
           }) };
         }
-        if (name === 'samples') return samples;
+        if (name === 'specimens') return samples;
         throw new Error(`unexpected collection ${name}`);
       },
     };
@@ -480,8 +480,8 @@ describe('reports.routes item 8 more residual canonical branches', () => {
             templateStatus: 'active',
           }) };
         }
-        if (name === 'samples') return samples;
-        if (name === 'patients') return patients;
+        if (name === 'specimens') return samples;
+        if (name === 'participants') return patients;
         throw new Error(`unexpected collection ${name}`);
       },
     };
@@ -523,8 +523,8 @@ describe('reports.routes item 8 more residual canonical branches', () => {
             templateStatus: 'active',
           }) };
         }
-        if (name === 'samples') return samples;
-        if (name === 'patients') return patients;
+        if (name === 'specimens') return samples;
+        if (name === 'participants') return patients;
         throw new Error(`unexpected collection ${name}`);
       },
     };
@@ -554,7 +554,7 @@ describe('reports.routes item 8 more residual canonical branches', () => {
     const db = {
       collection(name) {
         if (name === 'reportTemplates') return templates;
-        if (name === 'samples') return samples;
+        if (name === 'specimens') return samples;
         throw new Error(`unexpected collection ${name}`);
       },
     };
@@ -594,7 +594,7 @@ describe('reports.routes item 8 more residual canonical branches', () => {
             templateStatus: 'active',
           }) };
         }
-        if (name === 'samples') return samples;
+        if (name === 'specimens') return samples;
         throw new Error(`unexpected collection ${name}`);
       },
     };
@@ -630,7 +630,7 @@ describe('reports.routes item 8 more residual canonical branches', () => {
             templateStatus: 'active',
           }) };
         }
-        if (name === 'samples') return samples;
+        if (name === 'specimens') return samples;
         throw new Error(`unexpected collection ${name}`);
       },
     };
@@ -659,7 +659,7 @@ describe('reports.routes item 8 more residual canonical branches', () => {
             templateStatus: 'active',
           }) };
         }
-        if (name === 'samples') return samples;
+        if (name === 'specimens') return samples;
         if (name === 'results') return results;
         throw new Error(`unexpected collection ${name}`);
       },
@@ -697,8 +697,8 @@ describe('reports.routes item 8 more residual canonical branches', () => {
             templateStatus: 'active',
           }) };
         }
-        if (name === 'samples') return samples;
-        if (name === 'patients') return patients;
+        if (name === 'specimens') return samples;
+        if (name === 'participants') return patients;
         throw new Error(`unexpected collection ${name}`);
       },
     };
@@ -741,8 +741,8 @@ describe('reports.routes item 8 more residual canonical branches', () => {
             templateStatus: 'active',
           }) };
         }
-        if (name === 'samples') return samples;
-        if (name === 'patients') return patients;
+        if (name === 'specimens') return samples;
+        if (name === 'participants') return patients;
         throw new Error(`unexpected collection ${name}`);
       },
     };
@@ -784,7 +784,7 @@ describe('reports.routes item 8 more residual canonical branches', () => {
     const db = {
       collection(name) {
         if (name === 'reportTemplates') return templates;
-        if (name === 'samples') return samples;
+        if (name === 'specimens') return samples;
         throw new Error(`unexpected collection ${name}`);
       },
     };

@@ -70,7 +70,7 @@ function createDb() {
   return {
     collection: vi.fn((name) => {
       if (name === 'consentTemplates' || name === 'consent_templates') return consentTemplatesCollection;
-      if (name === 'patients') return patientsCollection;
+      if (name === 'participants') return patientsCollection;
       if (name === 'clinicalUnits' || name === 'clinical_units') return clinicalUnitsCollection;
       return {
         findOne: vi.fn().mockResolvedValue(null),

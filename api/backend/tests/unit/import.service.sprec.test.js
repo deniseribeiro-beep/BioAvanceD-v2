@@ -25,7 +25,7 @@ describe('ImportService SPREC import', () => {
         toArray: async () => ([{ name: 'samples' }]),
       }),
       collection: (name) => {
-        if (name === 'samples') return samplesCollection;
+        if (name === 'specimens') return samplesCollection;
         throw new Error(`Unexpected collection name: ${name}`);
       },
     };
@@ -195,7 +195,7 @@ describe('ImportService SPREC import', () => {
       insertOne: vi.fn().mockResolvedValue({ insertedId: 'assessment-1' }),
     };
     db.collection = (name) => {
-      if (name === 'samples') return samplesCollection;
+      if (name === 'specimens') return samplesCollection;
       if (name === 'rcsAssessments') return rcsAssessmentsCollection;
       throw new Error(`Unexpected collection name: ${name}`);
     };
@@ -227,7 +227,7 @@ describe('ImportService SPREC import', () => {
       insertOne: vi.fn().mockResolvedValue({ insertedId: 'profile-1' }),
     };
     db.collection = (name) => {
-      if (name === 'samples') return samplesCollection;
+      if (name === 'specimens') return samplesCollection;
       if (name === 'specimenPreanalytics') return specimenPreanalyticsCollection;
       throw new Error(`Unexpected collection name: ${name}`);
     };
@@ -260,7 +260,7 @@ describe('ImportService SPREC import', () => {
       insertOne: vi.fn().mockResolvedValue({ insertedId: 'profile-2' }),
     };
     db.collection = (name) => {
-      if (name === 'samples') return samplesCollection;
+      if (name === 'specimens') return samplesCollection;
       if (name === 'specimenPreanalytics') return specimenPreanalyticsCollection;
       throw new Error(`Unexpected collection name: ${name}`);
     };
@@ -303,7 +303,7 @@ describe('ImportService SPREC import', () => {
       insertOne: vi.fn().mockResolvedValue({ insertedId: 'profile-3' }),
     };
     db.collection = (name) => {
-      if (name === 'samples') return samplesCollection;
+      if (name === 'specimens') return samplesCollection;
       if (name === 'specimenPreanalytics') return specimenPreanalyticsCollection;
       throw new Error(`Unexpected collection name: ${name}`);
     };

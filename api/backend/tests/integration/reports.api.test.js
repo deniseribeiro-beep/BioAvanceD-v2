@@ -525,7 +525,7 @@ describe('Reports API integration', () => {
     // ledger entries, sample.service.js#withdrawSample) — the 'withdrawals'
     // collection this test previously mocked is never written anywhere.
     it('historico de retirada: aplica intervalo de datas e ordena', async () => {
-      const { db, capturedQueries } = buildCollectionDb({ sample_movements: [{ type: 'withdraw', createdAt: new Date('2026-01-05') }] });
+      const { db, capturedQueries } = buildCollectionDb({ sampleMovements: [{ type: 'withdraw', createdAt: new Date('2026-01-05') }] });
       const testApp = appWithDb(db);
 
       const response = await request(testApp)
@@ -955,7 +955,7 @@ describe('Reports API integration', () => {
       results: { results: [{ resultID: 'R-1', specimenId: 'S-1' }] },
       audit: { logs: [{ logId: 'L-1', action: 'LOGIN', timestamp: '2026-01-01' }] },
       access_logs: { logs: [{ logId: 'L-1', action: 'LOGIN', timestamp: '2026-01-01' }] },
-      withdrawal_history: { sample_movements: [{ movementId: 'M-1', specimenId: 'S-1', type: 'withdrawal' }] },
+      withdrawal_history: { sampleMovements: [{ movementId: 'M-1', specimenId: 'S-1', type: 'withdrawal' }] },
       tissue_origin_history: { samples: [{ specimenId: 'S-1', sampleType: 'tissue' }] },
       extracellular_network: { samples: [{ specimenId: 'S-1', sampleType: 'plasma' }] },
     };
@@ -1028,7 +1028,7 @@ describe('Reports API integration', () => {
 
     it('#1058: withdrawal_history exports real rows instead of "Sem dados"', async () => {
       const { db } = buildCollectionDb({
-        sample_movements: [{ movementId: 'M-1', specimenId: 'S-1', type: 'withdrawal', quantity: 2 }],
+        sampleMovements: [{ movementId: 'M-1', specimenId: 'S-1', type: 'withdrawal', quantity: 2 }],
       });
       const response = await request(appWithDb(db)).get('/api/reports/withdrawal_history/export');
 
@@ -1042,7 +1042,7 @@ describe('Reports API integration', () => {
     // integrity hashes all live on the same document as the movement.
     it('#1050: the withdrawal export omits operator identity, network identifiers and ledger hashes', async () => {
       const { db } = buildCollectionDb({
-        sample_movements: [{
+        sampleMovements: [{
           movementId: 'M-1',
           specimenId: 'S-1',
           type: 'withdrawal',

@@ -184,7 +184,7 @@ describe('Users and Access routes', () => {
 
     db = {
       collection: vi.fn((name) => {
-        if (name === 'users') return usersCollection;
+        if (name === 'userAccounts') return usersCollection;
         if (name === 'access') return accessCollection;
         if (name === 'logs') return logsCollection;
         if (name === 'organizations') return organizationsCollection;
@@ -569,7 +569,7 @@ describe('Users and Access routes', () => {
     ]);
     const dbWithTargetAdmin = {
       collection: vi.fn((name) => {
-        if (name === 'users') return usersCollection;
+        if (name === 'userAccounts') return usersCollection;
         if (rbacCollections[name]) return rbacCollections[name];
         return db.collection(name);
       }),
@@ -610,7 +610,7 @@ describe('Users and Access routes', () => {
     ]);
     const dbWithTarget = {
       collection: vi.fn((name) => {
-        if (name === 'users') return usersCollection;
+        if (name === 'userAccounts') return usersCollection;
         if (rbacCollections[name]) return rbacCollections[name];
         return db.collection(name);
       }),
@@ -653,7 +653,7 @@ describe('Users and Access routes', () => {
     };
     const dbWithTarget = {
       collection: vi.fn((name) => {
-        if (name === 'users') return usersCollection;
+        if (name === 'userAccounts') return usersCollection;
         if (name === 'organizations') return invalidOrgCollection;
         if (rbacCollections[name]) return rbacCollections[name];
         return db.collection(name);
@@ -701,7 +701,7 @@ describe('Users and Access routes', () => {
     ]);
     const dbWithTarget = {
       collection: vi.fn((name) => {
-        if (name === 'users') return usersCollection;
+        if (name === 'userAccounts') return usersCollection;
         if (rbacCollections[name]) return rbacCollections[name];
         return db.collection(name);
       }),
@@ -757,7 +757,7 @@ describe('Users and Access routes', () => {
     const assignmentsMock = queryableAssignmentsMock(assignmentDocs);
     const dbWithTarget = {
       collection: vi.fn((name) => {
-        if (name === 'users') return usersCollection;
+        if (name === 'userAccounts') return usersCollection;
         if (name === 'roles') return rbacCollections.roles;
         if (name === 'permissions') return rbacCollections.permissions;
         if (name === 'userRoleAssignments') return assignmentsMock;
@@ -807,7 +807,7 @@ describe('Users and Access routes', () => {
     const assignmentsMock = queryableAssignmentsMock(assignmentDocs);
     const dbWithTarget = {
       collection: vi.fn((name) => {
-        if (name === 'users') return usersCollection;
+        if (name === 'userAccounts') return usersCollection;
         if (name === 'roles') return rbacCollections.roles;
         if (name === 'permissions') return rbacCollections.permissions;
         if (name === 'userRoleAssignments') return assignmentsMock;
@@ -857,7 +857,7 @@ describe('Users and Access routes', () => {
     const assignmentsMock = queryableAssignmentsMock(assignmentDocs);
     const dbWithTarget = {
       collection: vi.fn((name) => {
-        if (name === 'users') return usersCollection;
+        if (name === 'userAccounts') return usersCollection;
         if (name === 'roles') return rbacCollections.roles;
         if (name === 'permissions') return rbacCollections.permissions;
         if (name === 'userRoleAssignments') return assignmentsMock;
@@ -906,7 +906,7 @@ describe('Users and Access routes', () => {
     ]);
     const dbWithTarget = {
       collection: vi.fn((name) => {
-        if (name === 'users') return usersCollection;
+        if (name === 'userAccounts') return usersCollection;
         if (rbacCollections[name]) return rbacCollections[name];
         return db.collection(name);
       }),
@@ -965,7 +965,7 @@ describe('Users and Access routes', () => {
     ]);
     const dbWithTarget = {
       collection: vi.fn((name) => {
-        if (name === 'users') return usersCollection;
+        if (name === 'userAccounts') return usersCollection;
         if (rbacCollections[name]) return rbacCollections[name];
         return db.collection(name);
       }),
@@ -1027,7 +1027,7 @@ describe('Users and Access routes', () => {
     ]);
     const dbWithTarget = {
       collection: vi.fn((name) => {
-        if (name === 'users') return usersCollection;
+        if (name === 'userAccounts') return usersCollection;
         if (rbacCollections[name]) return rbacCollections[name];
         return db.collection(name);
       }),
@@ -1078,7 +1078,7 @@ describe('Users and Access routes', () => {
     ]);
     const dbWithTarget = {
       collection: vi.fn((name) => {
-        if (name === 'users') return usersCollection;
+        if (name === 'userAccounts') return usersCollection;
         if (rbacCollections[name]) return rbacCollections[name];
         return db.collection(name);
       }),
@@ -1144,7 +1144,7 @@ describe('Users and Access routes', () => {
     ]);
     const dbWithTarget = {
       collection: vi.fn((name) => {
-        if (name === 'users') return usersCollection;
+        if (name === 'userAccounts') return usersCollection;
         if (rbacCollections[name]) return rbacCollections[name];
         return db.collection(name);
       }),
@@ -1210,7 +1210,7 @@ describe('Users and Access routes', () => {
     ]);
     const dbWithTarget = {
       collection: vi.fn((name) => {
-        if (name === 'users') return usersCollection;
+        if (name === 'userAccounts') return usersCollection;
         if (rbacCollections[name]) return rbacCollections[name];
         return db.collection(name);
       }),
@@ -1262,7 +1262,7 @@ describe('Users and Access routes', () => {
     ]);
     const dbWithTarget = {
       collection: vi.fn((name) => {
-        if (name === 'users') return usersCollection;
+        if (name === 'userAccounts') return usersCollection;
         if (rbacCollections[name]) return rbacCollections[name];
         return db.collection(name);
       }),
@@ -1377,7 +1377,7 @@ describe('Users and Access routes', () => {
       const rbacCollections = buildRbacCollections(callers);
       return {
         collection: vi.fn((name) => {
-          if (name === 'users') return usersCollection;
+          if (name === 'userAccounts') return usersCollection;
           if (rbacCollections[name]) return rbacCollections[name];
           return db.collection(name);
         }),
@@ -1540,7 +1540,7 @@ describe('Users and Access routes', () => {
       const assignmentsMock = queryableAssignmentsMock(assignmentDocs);
       return {
         collection: vi.fn((name) => {
-          if (name === 'users') return usersCollection;
+          if (name === 'userAccounts') return usersCollection;
           if (name === 'roles') return rbacCollections.roles;
           if (name === 'permissions') return rbacCollections.permissions;
           if (name === 'userRoleAssignments') return assignmentsMock;

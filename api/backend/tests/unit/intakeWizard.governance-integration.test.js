@@ -1,3 +1,4 @@
+const { makeAuthToken, makeLegacyClaimsToken, buildAuthenticatedCollections, userForAccessType, TEST_USER_ACCOUNT_IDS } = require('../../factories/auth.factory');
 // backend/tests/unit/intakeWizard.governance-integration.test.js
 //
 // #409 file 3: api/backend/src/routes/intakeWizard.js has its own quarantine
@@ -65,7 +66,7 @@ function makeCursor(rows) {
 
 function buildQuarantineActionsCollection() {
   return {
-    insertOne: vi.fn().mockResolvedValue({ insertedId: 'qa-1' }),
+    insertOne: vi.fn().mockResolvedValue({ insertedId: TEST_USER_ACCOUNT_IDS[4] }),
     find: vi.fn().mockReturnValue({ sort: () => ({ toArray: async () => [] }) }),
     updateOne: vi.fn().mockResolvedValue({ matchedCount: 0 }),
   };

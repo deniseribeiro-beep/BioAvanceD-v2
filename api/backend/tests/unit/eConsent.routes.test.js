@@ -1,3 +1,10 @@
+const {
+  makeAuthToken,
+  makeLegacyClaimsToken,
+  buildAuthenticatedCollections,
+  userForAccessType,
+  TEST_USER_ACCOUNT_IDS,
+} = require('../../factories/auth.factory');
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createRequire } from 'module';
 import express from 'express';
@@ -251,7 +258,7 @@ describe('eConsent.routes GET /validate/:token', () => {
   // #562: patientName/birthDate/identityDocument are resolved via
   // ParticipantIdentity, merged into the returned `patient` object — a
   // second db.collection('participantIdentities') lookup alongside the
-  // existing db.collection('patients') one.
+  // existing db.collection('participants') one.
   function buildPatientDb({ patient, identity = null }) {
     return {
       collection: vi.fn((name) => ({
@@ -386,7 +393,7 @@ describe('eConsent.routes POST /update', () => {
     };
     const db = {
       collection: vi.fn((name) => {
-        if (name === 'samples') return samplesCollection;
+        if (name === 'specimens') return samplesCollection;
         if (name === 'quarantineActions') return quarantineActionsCollection;
         throw new Error(`unexpected collection: ${name}`);
       }),
@@ -877,7 +884,7 @@ describe('eConsent.routes item 8 residual branches', () => {
     const patient = { participantId: '12345678', consentToken: 'must-not-leak' };
     const db = {
       collection: vi.fn((name) => {
-        if (name === 'patients') return { findOne: vi.fn().mockResolvedValue(patient) };
+        if (name === 'participants') return { findOne: vi.fn().mockResolvedValue(patient) };
         if (name === 'participantIdentities') return { findOne: vi.fn().mockResolvedValue(null) };
         throw new Error(`unexpected collection: ${name}`);
       }),

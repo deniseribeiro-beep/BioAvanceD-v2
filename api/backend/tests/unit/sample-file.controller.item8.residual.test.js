@@ -92,7 +92,7 @@ describe('sample-file.controller item 8 residual branches', () => {
   it('uploadFile resolves a canonical non-ObjectId specimenId', async () => {
     const sample = { _id: new ObjectId(), specimenId: '42', collectionSite: 'org-1' };
     const sampleLookup = vi.fn().mockResolvedValue(sample);
-    const db = createDb({ samples: { findOne: sampleLookup } });
+    const db = createDb({ specimens: { findOne: sampleLookup } });
     const req = {
       app: { locals: { db } },
       params: { specimenId: '42' },
@@ -112,7 +112,7 @@ describe('sample-file.controller item 8 residual branches', () => {
 
   it('uploadFile tolerates an already-missing temporary file when the sample is absent', async () => {
     const sampleLookup = vi.fn().mockResolvedValue(null);
-    const db = createDb({ samples: { findOne: sampleLookup } });
+    const db = createDb({ specimens: { findOne: sampleLookup } });
     const req = {
       app: { locals: { db } },
       params: { specimenId: new ObjectId().toString() },
@@ -149,7 +149,7 @@ describe('sample-file.controller item 8 residual branches', () => {
       }]),
     });
     const db = createDb({
-      samples: { findOne: sampleLookup },
+      specimens: { findOne: sampleLookup },
       sample_files: { find },
     });
     const res = createRes();

@@ -11,12 +11,20 @@ const biomarkerIntegrityService = require('../../src/services/biomarker-integrit
 const sessionService = require('../../src/services/session.service');
 const auditLogger = require('../../src/utils/auditLogger');
 const { buildRbacCollections } = require('../factories/rbac.factory');
+const {
+  makeAuthToken,
+  makeLegacyClaimsToken,
+  buildAuthenticatedCollections,
+  userForAccessType,
+  TEST_USER_ACCOUNT_IDS,
+} = require('../factories/auth.factory');
+
 
 function createAdminToken() {
   return jwt.sign(
     {
-      id: 'qa-admin-1',
-      userID: 'qa-admin-1',
+      id: TEST_USER_ACCOUNT_IDS[4],
+      userID: TEST_USER_ACCOUNT_IDS[4],
       accessType: 4,
       roleName: 'Administrador',
       name: 'QA Admin',
@@ -35,7 +43,7 @@ describe('GET /api/compliance/verify-biomarker/:id', () => {
     // with an active admin (accessType 4) assignment for qa-admin-1, so the
     // route's requireRole/requirePermission guard behaves like the old
     // accessType-based check did.
-    const rbacCollections = buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]);
+    const rbacCollections = buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 4 }]);
     const genericCollection = () => ({
       findOne: vi.fn(),
       find: vi.fn(() => ({

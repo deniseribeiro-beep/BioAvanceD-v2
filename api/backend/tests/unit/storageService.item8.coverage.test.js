@@ -124,7 +124,7 @@ describe('StorageService item 8 residual canonical branches', () => {
 
   it('returns BOX_NOT_FOUND from integrity validation', async () => {
     const storageBoxes = createCollectionMock({ findOne: vi.fn().mockResolvedValue(null) });
-    const service = new StorageService(createDbMock({ storageBoxes, samples: createCollectionMock() }));
+    const service = new StorageService(createDbMock({ storageBoxes, specimens: createCollectionMock() }));
     await expect(service.verifyBoxIntegrity(new ObjectId())).resolves.toEqual({ valid: false, error: 'BOX_NOT_FOUND' });
   });
 

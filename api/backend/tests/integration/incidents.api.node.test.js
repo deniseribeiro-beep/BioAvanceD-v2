@@ -255,7 +255,7 @@ function buildMongoCollections(seedIncidents = []) {
   const db = {
     collection(name) {
       if (name === 'temperatureIncidents') return incidentsCollection;
-      if (name === 'users') return usersCollection;
+      if (name === 'userAccounts') return usersCollection;
       if (name === 'sensors') return sensorsCollection;
       if (name === 'sensorMetadata') return sensorMetadataCollection;
       if (name === 'storageContainers') return storageContainersCollection;
@@ -264,7 +264,7 @@ function buildMongoCollections(seedIncidents = []) {
       if (name === 'containerPositionAssignments') return containerPositionAssignmentsCollection;
       if (name === 'specimenContainerAssignments') return specimenContainerAssignmentsCollection;
       if (name === 'containers' || name === 'storageRacks' || name === 'rackLocationAssignments') return emptyCanonicalCollection();
-      if (name === 'samples') return samplesCollection;
+      if (name === 'specimens') return samplesCollection;
       if (name === 'sampleMovements') return sampleMovementsCollection;
       if (name === 'sample_movements') return sampleMovementsCollection;
       if (name === 'counters') return countersCollection;

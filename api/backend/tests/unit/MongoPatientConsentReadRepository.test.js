@@ -22,7 +22,7 @@ function createDb({ patients = {}, consents = {} } = {}) {
   };
 
   const collection = vi.fn((name) => {
-    if (name === 'patients') return patientsCollection;
+    if (name === 'participants') return patientsCollection;
     if (name === 'consents') return consentsCollection;
     throw new Error(`Unexpected collection name: ${name}`);
   });
@@ -71,7 +71,7 @@ describe('MongoPatientConsentReadRepository', () => {
   it('marks sample allocatable with "Consentimento ativo" when patient found and has an active consent', async () => {
     const patientObjId = { toString: () => 'patient-id-1' };
     const db = createDb({
-      patients: {
+      participants: {
         findOne: vi.fn().mockResolvedValue({ _id: patientObjId, participantId: 'P1' })
       },
       consents: {
@@ -101,7 +101,7 @@ describe('MongoPatientConsentReadRepository', () => {
   it('rejects (canAllocate=false, filtered out) when patient found, no active consent, and the consents collection is empty', async () => {
     const patientObjId = { toString: () => 'patient-id-2' };
     const db = createDb({
-      patients: {
+      participants: {
         findOne: vi.fn().mockResolvedValue({ _id: patientObjId, participantId: 'P2' })
       },
       consents: {
@@ -121,7 +121,7 @@ describe('MongoPatientConsentReadRepository', () => {
   it('rejects (canAllocate=false, filtered out) when patient found, no active consent, and other consents exist in the collection', async () => {
     const patientObjId = { toString: () => 'patient-id-3' };
     const db = createDb({
-      patients: {
+      participants: {
         findOne: vi.fn().mockResolvedValue({ _id: patientObjId, participantId: 'P3' })
       },
       consents: {
@@ -139,7 +139,7 @@ describe('MongoPatientConsentReadRepository', () => {
 
   it('rejects (canAllocate=false, filtered out) when the patient is not found', async () => {
     const db = createDb({
-      patients: { findOne: vi.fn().mockResolvedValue(null) },
+      participants: { findOne: vi.fn().mockResolvedValue(null) },
       consents: { countDocuments: vi.fn().mockResolvedValue(3) }
     });
     const repo = new MongoPatientConsentReadRepository(db);
@@ -155,7 +155,7 @@ describe('MongoPatientConsentReadRepository', () => {
 
   it('issues no patient lookup at all when participantId is absent, and treats the sample as not found', async () => {
     const db = createDb({
-      patients: { findOne: vi.fn().mockResolvedValue({ _id: 'someone-else', participantId: 'other' }) }
+      participants: { findOne: vi.fn().mockResolvedValue({ _id: 'someone-else', participantId: 'other' }) }
     });
     const repo = new MongoPatientConsentReadRepository(db);
 
@@ -179,7 +179,7 @@ describe('MongoPatientConsentReadRepository', () => {
   // The filter is now single-key, and this pins that exact shape.
   it('looks up the patient by participantId alone, with no dead _id leg', async () => {
     const db = createDb({
-      patients: { findOne: vi.fn().mockResolvedValue(null) }
+      participants: { findOne: vi.fn().mockResolvedValue(null) }
     });
     const repo = new MongoPatientConsentReadRepository(db);
 
@@ -196,7 +196,7 @@ describe('MongoPatientConsentReadRepository', () => {
     const rejectedPatientId = { toString: () => 'rejected-id' };
 
     const db = createDb({
-      patients: {
+      participants: {
         findOne: vi.fn((query) => {
           const target = query.participantId;
           if (target === 'accept-me') {
@@ -237,7 +237,7 @@ describe('MongoPatientConsentReadRepository', () => {
     const patientC = { toString: () => 'id-c' };
 
     const db = createDb({
-      patients: {
+      participants: {
         findOne: vi.fn((query) => {
           const target = query.participantId;
           if (target === 'A') return Promise.resolve({ _id: patientA, participantId: 'A' });
@@ -274,7 +274,7 @@ describe('MongoPatientConsentReadRepository', () => {
 
   it('never calls countDocuments (per-patient consent check only, no collection-wide escape hatch)', async () => {
     const db = createDb({
-      patients: { findOne: vi.fn().mockResolvedValue(null) }
+      participants: { findOne: vi.fn().mockResolvedValue(null) }
     });
     const repo = new MongoPatientConsentReadRepository(db);
 

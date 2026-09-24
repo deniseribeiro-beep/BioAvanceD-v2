@@ -35,7 +35,7 @@ function makeFakeDb({ samplesCollection, consentsCollection }) {
     // literal string 'consents'. Match on collection identity rather than
     // hardcoding the resolved name so this stays correct if the mapping changes.
     collection: vi.fn((name) => {
-      if (name === 'samples') return samplesCollection;
+      if (name === 'specimens') return samplesCollection;
       return consentsCollection;
     })
   };

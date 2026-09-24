@@ -118,13 +118,13 @@ function makeSession() {
 
 function makeDb(overrides = {}) {
   const collections = {
-    samples: makeCollection('samples'),
-    sample_movements: makeCollection('sample_movements'),
+    specimens: makeCollection('specimens'),
+    sampleMovements: makeCollection('sampleMovements'),
     // #779: generateUniqueBarcode seeds a per-year counter then advances it
     // atomically, so this one has to hold state -- a fixed `seq` cannot
     // advance, and every barcode after the first would collide.
     counters: makeCountersCollection(),
-    patients: makeCollection('patients'),
+    participants: makeCollection('participants'),
     storageBoxes: makeCollection('storageBoxes'),
     storageContainers: makeCollection('storageContainers'),
     results: makeCollection('results'),
@@ -174,7 +174,7 @@ function validSampleData(overrides = {}) {
 // BOX_ID -> RACK_ID -> SHELF_ID -> FREEZER_ID (containerID 'EQ-1'), mirroring
 // the hierarchy the #461 backfill script materializes.
 function mockOperationalStorage(db) {
-  db.collections.patients.findOne.mockResolvedValue({ participantId: '12345678' });
+  db.collections.participants.findOne.mockResolvedValue({ participantId: '12345678' });
 
   const containersById = new Map([
     [String(RACK_ID), { _id: RACK_ID, containerType: 'RACK', parent_id: SHELF_ID }],
@@ -210,7 +210,7 @@ function mockOperationalStorage(db) {
   // createSample's own insertOne — distinct from the specimenId/barcode
   // duplicate-check lookups earlier in the same call, which keep resolving
   // null (the default from makeCollection) unless a test overrides them.
-  db.collections.samples.findOne.mockImplementation((query) => {
+  db.collections.specimens.findOne.mockImplementation((query) => {
     if (query && query._id !== undefined) {
       return Promise.resolve({ _id: query._id, specimenId: String(query._id), barcode: null });
     }
@@ -251,12 +251,12 @@ describe('sample.service', () => {
 
       expect(result._id).toBe('generated-id');
       expect(result.barcode).toBe('BR-TEST-001');
-      expect(db.collections.samples.insertOne).toHaveBeenCalledTimes(1);
+      expect(db.collections.specimens.insertOne).toHaveBeenCalledTimes(1);
       // This unit isolates SampleService: the canonical allocation use case is
       // doubled here and its own immutable audit/outbox behavior is covered
       // by AllocateSampleUseCase + storage integration tests.
-      expect(db.collections.sample_movements.insertOne).toHaveBeenCalledTimes(1);
-      const [movementArg] = db.collections.sample_movements.insertOne.mock.calls[0];
+      expect(db.collections.sampleMovements.insertOne).toHaveBeenCalledTimes(1);
+      const [movementArg] = db.collections.sampleMovements.insertOne.mock.calls[0];
       expect(movementArg.type).toBe('create');
       expect(movementArg.destination).toBe(`storage:${BOX_ID.toString()}:A1`);
     });
@@ -273,7 +273,7 @@ describe('sample.service', () => {
       };
 
       const result = await sampleService.createSample(db, validSampleData({ positionCode: 'B2' }));
-      const [insertedSample] = db.collections.samples.insertOne.mock.calls[0];
+      const [insertedSample] = db.collections.specimens.insertOne.mock.calls[0];
 
       expect(insertedSample.currentStoragePlacement).toBeUndefined();
       expect(result.currentStoragePlacement).toEqual(currentCanonicalPlacement);
@@ -310,7 +310,7 @@ describe('sample.service', () => {
       currentAllocateExecute = vi.fn(async () => { throw new Error('STORAGE_COLLISION: position occupied'); });
 
       await expect(sampleService.createSample(db, validSampleData())).rejects.toMatchObject({ statusCode: 409 });
-      expect(db.collections.samples.deleteOne).toHaveBeenCalledWith({ _id: 'generated-id' });
+      expect(db.collections.specimens.deleteOne).toHaveBeenCalledWith({ _id: 'generated-id' });
     });
 
     it('rejects with 422 when required MIABIS fields are missing', async () => {
@@ -321,13 +321,13 @@ describe('sample.service', () => {
       await expect(sampleService.createSample(db, bad)).rejects.toMatchObject({
         statusCode: 422
       });
-      expect(db.collections.samples.insertOne).not.toHaveBeenCalled();
+      expect(db.collections.specimens.insertOne).not.toHaveBeenCalled();
     });
 
     it('rejects with 404 when the participant does not exist', async () => {
       const db = makeDb();
       mockOperationalStorage(db);
-      db.collections.patients.findOne.mockResolvedValue(null); // not found
+      db.collections.participants.findOne.mockResolvedValue(null); // not found
 
       await expect(sampleService.createSample(db, validSampleData())).rejects.toMatchObject({
         statusCode: 404
@@ -337,7 +337,7 @@ describe('sample.service', () => {
     it('rejects when the barcode is already taken', async () => {
       const db = makeDb();
       mockOperationalStorage(db);
-      db.collections.samples.findOne
+      db.collections.specimens.findOne
         .mockResolvedValueOnce(null) // specimenId dup check passes
         .mockResolvedValueOnce({ barcode: 'BR-TEST-001' }); // barcode dup check
 
@@ -349,7 +349,7 @@ describe('sample.service', () => {
     it('rejects when the specimenId is already taken', async () => {
       const db = makeDb();
       mockOperationalStorage(db);
-      db.collections.samples.findOne.mockResolvedValueOnce({ specimenId: 555001 }); // specimenId dup check
+      db.collections.specimens.findOne.mockResolvedValueOnce({ specimenId: 555001 }); // specimenId dup check
 
       await expect(sampleService.createSample(db, validSampleData())).rejects.toThrow(
         /Já existe um espécime com o ID/
@@ -382,7 +382,7 @@ describe('sample.service', () => {
 
     it('rejects when boxId is provided but does not exist', async () => {
       const db = makeDb();
-      db.collections.patients.findOne.mockResolvedValue({ participantId: '12345678' });
+      db.collections.participants.findOne.mockResolvedValue({ participantId: '12345678' });
       db.collections.storageBoxes.findOne.mockResolvedValue(null);
 
       await expect(
@@ -431,7 +431,7 @@ describe('sample.service', () => {
       await expect(
         sampleService.createSample(db, validSampleData({ studyId: 'STU-1' }))
       ).rejects.toMatchObject({ statusCode: 422 });
-      expect(db.collections.samples.insertOne).not.toHaveBeenCalled();
+      expect(db.collections.specimens.insertOne).not.toHaveBeenCalled();
     });
 
     it('rejects with 422 when the protocol is not approved (RF021 AC#5, #591)', async () => {
@@ -442,7 +442,7 @@ describe('sample.service', () => {
       await expect(
         sampleService.createSample(db, validSampleData({ protocolId: 'PRO-1' }))
       ).rejects.toMatchObject({ statusCode: 422 });
-      expect(db.collections.samples.insertOne).not.toHaveBeenCalled();
+      expect(db.collections.specimens.insertOne).not.toHaveBeenCalled();
     });
 
     it('rejects with 422 when the protocol is retired (RF021 AC#5, #591)', async () => {
@@ -458,12 +458,12 @@ describe('sample.service', () => {
     it('rolls back the inserted sample when the ledger append fails', async () => {
       const db = makeDb();
       mockOperationalStorage(db);
-      db.collections.sample_movements.insertOne.mockRejectedValue(new Error('ledger down'));
+      db.collections.sampleMovements.insertOne.mockRejectedValue(new Error('ledger down'));
 
       await expect(sampleService.createSample(db, validSampleData())).rejects.toThrow(
         /Falha ao registrar cadeia de custódia/
       );
-      expect(db.collections.samples.deleteOne).toHaveBeenCalledWith({ _id: 'generated-id' });
+      expect(db.collections.specimens.deleteOne).toHaveBeenCalledWith({ _id: 'generated-id' });
     });
 
     it('generates a specimenId automatically when none is provided', async () => {
@@ -473,7 +473,7 @@ describe('sample.service', () => {
       const result = await sampleService.createSample(db, validSampleData({ specimenId: undefined }));
 
       expect(result.specimenId).toBeDefined();
-      expect(db.collections.samples.insertOne).toHaveBeenCalledTimes(1);
+      expect(db.collections.specimens.insertOne).toHaveBeenCalledTimes(1);
     });
 
     it('rejects when quantity is a numeric string instead of a number', async () => {
@@ -610,7 +610,7 @@ describe('sample.service', () => {
 
       await sampleService.createSample(db, validSampleData({ location }));
 
-      const [insertedSample] = db.collections.samples.insertOne.mock.calls[0];
+      const [insertedSample] = db.collections.specimens.insertOne.mock.calls[0];
       expect(insertedSample.location).toBeUndefined();
     });
 
@@ -696,7 +696,7 @@ describe('sample.service', () => {
         expect(recorded.specimenId).toBe(String(result.specimenId));
         expect(recorded.rcsScore).toBe(87.5);
         expect(recorded.scoreBasedGrade).toBe('A');
-        expect(db.collections.samples.updateOne).toHaveBeenCalledWith(
+        expect(db.collections.specimens.updateOne).toHaveBeenCalledWith(
           { _id: 'generated-id' },
           { $set: { sealedRcsAssessmentId: 'assessment-1' } }
         );
@@ -732,7 +732,7 @@ describe('sample.service', () => {
         const result = await sampleService.createSample(db, validSampleData({ sprec: { matrixType: 'PLASMA' } }));
 
         expect(result._id).toBe('generated-id');
-        expect(db.collections.samples.updateOne).not.toHaveBeenCalledWith(
+        expect(db.collections.specimens.updateOne).not.toHaveBeenCalledWith(
           expect.anything(),
           expect.objectContaining({ $set: expect.objectContaining({ sealedRcsAssessmentId: expect.anything() }) })
         );
@@ -769,7 +769,7 @@ describe('sample.service', () => {
         expect(db.collections.specimenPreanalytics.insertOne).toHaveBeenCalledTimes(1);
         const recorded = db.collections.specimenPreanalytics.insertOne.mock.calls[0][0];
         expect(recorded.specimenId).toBe(String(result.specimenId));
-        expect(db.collections.samples.updateOne).toHaveBeenCalledWith(
+        expect(db.collections.specimens.updateOne).toHaveBeenCalledWith(
           { _id: 'generated-id' },
           { $set: { sealedSpecimenPreanalyticsId: 'profile-1' } }
         );
@@ -796,7 +796,7 @@ describe('sample.service', () => {
         const result = await sampleService.createSample(db, validSampleData({ sprec: { matrixType: 'PLASMA' } }));
 
         expect(result._id).toBe('generated-id');
-        expect(db.collections.samples.updateOne).not.toHaveBeenCalledWith(
+        expect(db.collections.specimens.updateOne).not.toHaveBeenCalledWith(
           expect.anything(),
           expect.objectContaining({ $set: expect.objectContaining({ sealedSpecimenPreanalyticsId: expect.anything() }) })
         );
@@ -822,7 +822,7 @@ describe('sample.service', () => {
 
     it('performs a total withdrawal and updates the sample', async () => {
       const db = makeDb();
-      db.collections.samples.findOne.mockResolvedValue(existingSample());
+      db.collections.specimens.findOne.mockResolvedValue(existingSample());
 
       const result = await sampleService.withdrawSample(db, 'sample-1', {
         withdrawalType: 'Total',
@@ -833,8 +833,8 @@ describe('sample.service', () => {
       expect(result.success).toBe(true);
       expect(result.withdrawnQuantity).toBe(10);
       expect(result.remainingQuantity).toBe(0);
-      expect(db.collections.samples.updateOne).toHaveBeenCalledTimes(1);
-      const [, updateArg] = db.collections.samples.updateOne.mock.calls[0];
+      expect(db.collections.specimens.updateOne).toHaveBeenCalledTimes(1);
+      const [, updateArg] = db.collections.specimens.updateOne.mock.calls[0];
       expect(updateArg.$set.currentQuantity).toBe(0);
       // #405: specimenStatus is the source of truth; the legacy
       // lifecycleStatus/availabilityStatus dual-write was removed in #408.
@@ -845,7 +845,7 @@ describe('sample.service', () => {
 
     it('performs a partial withdrawal within available quantity', async () => {
       const db = makeDb();
-      db.collections.samples.findOne.mockResolvedValue(existingSample());
+      db.collections.specimens.findOne.mockResolvedValue(existingSample());
 
       const result = await sampleService.withdrawSample(db, 'sample-1', {
         withdrawalType: 'Parcial',
@@ -860,7 +860,7 @@ describe('sample.service', () => {
 
     it('throws when the sample cannot be found', async () => {
       const db = makeDb();
-      db.collections.samples.findOne.mockResolvedValue(null);
+      db.collections.specimens.findOne.mockResolvedValue(null);
 
       await expect(
         sampleService.withdrawSample(db, '507f1f77bcf86cd799439011', {
@@ -873,7 +873,7 @@ describe('sample.service', () => {
 
     it('rejects when the sample is already destroyed (RF006 AC#4)', async () => {
       const db = makeDb();
-      db.collections.samples.findOne.mockResolvedValue(
+      db.collections.specimens.findOne.mockResolvedValue(
         existingSample({ specimenStatus: 'destroyed' })
       );
 
@@ -888,7 +888,7 @@ describe('sample.service', () => {
 
     it('rejects an invalid withdrawal type', async () => {
       const db = makeDb();
-      db.collections.samples.findOne.mockResolvedValue(existingSample());
+      db.collections.specimens.findOne.mockResolvedValue(existingSample());
 
       await expect(
         sampleService.withdrawSample(db, 'sample-1', {
@@ -901,7 +901,7 @@ describe('sample.service', () => {
 
     it('rejects a responsible name without a surname', async () => {
       const db = makeDb();
-      db.collections.samples.findOne.mockResolvedValue(existingSample());
+      db.collections.specimens.findOne.mockResolvedValue(existingSample());
 
       await expect(
         sampleService.withdrawSample(db, 'sample-1', {
@@ -914,7 +914,7 @@ describe('sample.service', () => {
 
     it('rejects a missing linkedProject', async () => {
       const db = makeDb();
-      db.collections.samples.findOne.mockResolvedValue(existingSample());
+      db.collections.specimens.findOne.mockResolvedValue(existingSample());
 
       await expect(
         sampleService.withdrawSample(db, 'sample-1', {
@@ -927,7 +927,7 @@ describe('sample.service', () => {
 
     it('rejects a partial withdrawal exceeding available quantity', async () => {
       const db = makeDb();
-      db.collections.samples.findOne.mockResolvedValue(existingSample());
+      db.collections.specimens.findOne.mockResolvedValue(existingSample());
 
       await expect(
         sampleService.withdrawSample(db, 'sample-1', {
@@ -941,7 +941,7 @@ describe('sample.service', () => {
 
     it('rejects a partial withdrawal missing a quantity', async () => {
       const db = makeDb();
-      db.collections.samples.findOne.mockResolvedValue(existingSample());
+      db.collections.specimens.findOne.mockResolvedValue(existingSample());
 
       await expect(
         sampleService.withdrawSample(db, 'sample-1', {
@@ -962,7 +962,7 @@ describe('sample.service', () => {
     // the Sample document, with nothing actually withdrawn.
     it('rejects a Total re-withdrawal on an already-depleted sample (#541)', async () => {
       const db = makeDb();
-      db.collections.samples.findOne.mockResolvedValue(
+      db.collections.specimens.findOne.mockResolvedValue(
         existingSample({ specimenStatus: 'depleted', currentQuantity: 0 })
       );
 
@@ -973,12 +973,12 @@ describe('sample.service', () => {
           linkedProject: 'ProjectX'
         })
       ).rejects.toThrow(/Quantidade indisponível/);
-      expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
+      expect(db.collections.specimens.updateOne).not.toHaveBeenCalled();
     });
 
     it('does not treat a Data Matrix value as an alternate specimenId for withdrawal', async () => {
       const db = makeDb();
-      db.collections.samples.findOne.mockResolvedValue(null);
+      db.collections.specimens.findOne.mockResolvedValue(null);
       const physicalLookup = vi.spyOn(sampleService, 'getSampleByBarcode');
 
       await expect(
@@ -996,7 +996,7 @@ describe('sample.service', () => {
     // one atomic operation, not two independent writes a crash could split.
     it('wraps the ledger append and balance update in a single Mongo transaction', async () => {
       const db = makeDb();
-      db.collections.samples.findOne.mockResolvedValue(existingSample());
+      db.collections.specimens.findOne.mockResolvedValue(existingSample());
 
       await sampleService.withdrawSample(db, 'sample-1', {
         withdrawalType: 'Total',
@@ -1008,16 +1008,16 @@ describe('sample.service', () => {
       expect(db.session.withTransaction).toHaveBeenCalledTimes(1);
       expect(db.session.endSession).toHaveBeenCalledTimes(1);
 
-      const [, insertOptions] = db.collections.sample_movements.insertOne.mock.calls[0];
-      const [, , updateOptions] = db.collections.samples.updateOne.mock.calls[0];
+      const [, insertOptions] = db.collections.sampleMovements.insertOne.mock.calls[0];
+      const [, , updateOptions] = db.collections.specimens.updateOne.mock.calls[0];
       expect(insertOptions).toEqual({ session: db.session });
       expect(updateOptions).toEqual({ session: db.session });
     });
 
     it('propagates a failed balance update without a partial write left standing', async () => {
       const db = makeDb();
-      db.collections.samples.findOne.mockResolvedValue(existingSample());
-      db.collections.samples.updateOne.mockRejectedValue(new Error('connection dropped'));
+      db.collections.specimens.findOne.mockResolvedValue(existingSample());
+      db.collections.specimens.updateOne.mockRejectedValue(new Error('connection dropped'));
 
       await expect(
         sampleService.withdrawSample(db, 'sample-1', {
@@ -1031,7 +1031,7 @@ describe('sample.service', () => {
       // update — real MongoDB aborts the whole transaction on throw, so
       // the movement never actually commits even though insertOne (the
       // mock) recorded the call.
-      expect(db.collections.sample_movements.insertOne).toHaveBeenCalledTimes(1);
+      expect(db.collections.sampleMovements.insertOne).toHaveBeenCalledTimes(1);
       expect(db.session.endSession).toHaveBeenCalledTimes(1);
     });
   });
@@ -1040,16 +1040,16 @@ describe('sample.service', () => {
   describe('getSample', () => {
     it('returns the sample by specimenId', async () => {
       const db = makeDb();
-      db.collections.samples.findOne.mockResolvedValue({ _id: 'sample-1', specimenId: 'sample-1' });
+      db.collections.specimens.findOne.mockResolvedValue({ _id: 'sample-1', specimenId: 'sample-1' });
 
       const result = await sampleService.getSample(db, 'sample-1');
       expect(result._id).toBe('sample-1');
-      expect(db.collections.samples.findOne).toHaveBeenCalledWith({ specimenId: 'sample-1' });
+      expect(db.collections.specimens.findOne).toHaveBeenCalledWith({ specimenId: 'sample-1' });
     });
 
     it('propagates and logs an error from the collection lookup', async () => {
       const db = makeDb();
-      db.collections.samples.findOne.mockRejectedValue(new Error('mongo down'));
+      db.collections.specimens.findOne.mockRejectedValue(new Error('mongo down'));
 
       await expect(sampleService.getSample(db, 'sample-1')).rejects.toThrow('mongo down');
     });
@@ -1060,8 +1060,8 @@ describe('sample.service', () => {
     it('builds a filtered query and returns paginated results', async () => {
       const db = makeDb();
       const cursor = makeCursor([{ specimenId: 1 }]);
-      db.collections.samples.find.mockReturnValue(cursor);
-      db.collections.samples.countDocuments.mockResolvedValue(1);
+      db.collections.specimens.find.mockReturnValue(cursor);
+      db.collections.specimens.countDocuments.mockResolvedValue(1);
 
       const result = await sampleService.listSamples(db, {
         participantId: '12345678',
@@ -1071,7 +1071,7 @@ describe('sample.service', () => {
         skip: 1
       });
 
-      expect(db.collections.samples.find).toHaveBeenCalledWith({
+      expect(db.collections.specimens.find).toHaveBeenCalledWith({
         participantId: '12345678',
         specimenStatus: 'available',
         sampleType: 'PLASMA'
@@ -1092,7 +1092,7 @@ describe('sample.service', () => {
 
     it('propagates an error from the collection query', async () => {
       const db = makeDb();
-      db.collections.samples.find.mockImplementation(() => {
+      db.collections.specimens.find.mockImplementation(() => {
         throw new Error('mongo down');
       });
 
@@ -1107,7 +1107,7 @@ describe('sample.service', () => {
         organizationScope: { scope: 'organization', organizationIds: ['org-1', 'org-2'] }
       });
 
-      expect(db.collections.samples.find).toHaveBeenCalledWith({
+      expect(db.collections.specimens.find).toHaveBeenCalledWith({
         collectionSite: { $in: ['org-1', 'org-2'] }
       });
     });
@@ -1118,14 +1118,14 @@ describe('sample.service', () => {
         organizationScope: { scope: 'global', organizationIds: [] }
       });
 
-      expect(db.collections.samples.find).toHaveBeenCalledWith({});
+      expect(db.collections.specimens.find).toHaveBeenCalledWith({});
     });
 
     it('does not filter the query when no organizationScope is passed', async () => {
       const db = makeDb();
       await sampleService.listSamples(db, {});
 
-      expect(db.collections.samples.find).toHaveBeenCalledWith({});
+      expect(db.collections.specimens.find).toHaveBeenCalledWith({});
     });
 
     // #647 (found blocking a real-UI e2e proof for #647 itself): same shape
@@ -1162,8 +1162,8 @@ describe('sample.service', () => {
       };
 
       const db = makeDb();
-      db.collections.samples.find = vi.fn(() => makeRealCursor(naturalOrderDocs));
-      db.collections.samples.countDocuments.mockResolvedValue(naturalOrderDocs.length);
+      db.collections.specimens.find = vi.fn(() => makeRealCursor(naturalOrderDocs));
+      db.collections.specimens.countDocuments.mockResolvedValue(naturalOrderDocs.length);
 
       const result = await sampleService.listSamples(db, {});
 
@@ -1176,11 +1176,11 @@ describe('sample.service', () => {
   describe('updateSample', () => {
     it('returns null when the sample does not exist', async () => {
       const db = makeDb();
-      db.collections.samples.findOne.mockResolvedValue(null);
+      db.collections.specimens.findOne.mockResolvedValue(null);
 
       const result = await sampleService.updateSample(db, 'missing', { quantity: 5 });
       expect(result).toBeNull();
-      expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
+      expect(db.collections.specimens.updateOne).not.toHaveBeenCalled();
     });
 
     it('recomputes lifecycle status and persists the update', async () => {
@@ -1192,14 +1192,14 @@ describe('sample.service', () => {
         currentQuantity: 10,
         lifecycleStatus: 'AVAILABLE'
       };
-      db.collections.samples.findOne
+      db.collections.specimens.findOne
         .mockResolvedValueOnce(existing) // initial lookup
         .mockResolvedValueOnce({ ...existing, currentQuantity: 4 }); // post-update re-fetch
 
       const result = await sampleService.updateSample(db, 'sample-1', { currentQuantity: 4 });
 
-      expect(db.collections.samples.updateOne).toHaveBeenCalledTimes(1);
-      const [, updateArg] = db.collections.samples.updateOne.mock.calls[0];
+      expect(db.collections.specimens.updateOne).toHaveBeenCalledTimes(1);
+      const [, updateArg] = db.collections.specimens.updateOne.mock.calls[0];
       // #405: specimenStatus is the source of truth; the legacy
       // lifecycleStatus/availabilityStatus dual-write was removed in #408.
       expect(updateArg.$set.specimenStatus).toBe('partial');
@@ -1221,7 +1221,7 @@ describe('sample.service', () => {
         currentQuantity: 10,
         specimenStatus: 'available'
       };
-      db.collections.samples.findOne
+      db.collections.specimens.findOne
         .mockResolvedValueOnce(existing)
         .mockResolvedValueOnce(existing);
 
@@ -1231,7 +1231,7 @@ describe('sample.service', () => {
         notes: 'edited via SampleDetailsPage'
       });
 
-      const [, updateArg] = db.collections.samples.updateOne.mock.calls[0];
+      const [, updateArg] = db.collections.specimens.updateOne.mock.calls[0];
       expect(updateArg.$set.currentStatus).toBeUndefined();
       expect(updateArg.$set.status).toBeUndefined();
       expect(updateArg.$set.notes).toBe('edited via SampleDetailsPage');
@@ -1250,7 +1250,7 @@ describe('sample.service', () => {
         currentQuantity: 10,
         specimenStatus: 'available'
       };
-      db.collections.samples.findOne
+      db.collections.specimens.findOne
         .mockResolvedValueOnce(existing)
         .mockResolvedValueOnce(existing);
 
@@ -1260,7 +1260,7 @@ describe('sample.service', () => {
         participantId: 'switch'
       });
 
-      const [, updateArg] = db.collections.samples.updateOne.mock.calls[0];
+      const [, updateArg] = db.collections.specimens.updateOne.mock.calls[0];
       expect(updateArg.$set.quantity).toBe(5);
       expect(updateArg.$set.hacked).toBeUndefined();
       expect(updateArg.$set.participantId).toBeUndefined();
@@ -1277,7 +1277,7 @@ describe('sample.service', () => {
         currentQuantity: 10,
         specimenStatus: 'available',
       };
-      db.collections.samples.findOne.mockResolvedValue(existing);
+      db.collections.specimens.findOne.mockResolvedValue(existing);
 
       await expect(sampleService.updateSample(db, 'sample-1', { barcode: 12345 }))
         .rejects.toThrow('barcode deve ser uma string canônica');
@@ -1285,7 +1285,7 @@ describe('sample.service', () => {
       await expect(sampleService.updateSample(db, 'sample-1', { barcode: '   ' }))
         .rejects.toThrow('barcode não pode ser vazio');
 
-      expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
+      expect(db.collections.specimens.updateOne).not.toHaveBeenCalled();
     });
 
     it('rejects a duplicate Data Matrix value on update', async () => {
@@ -1299,14 +1299,14 @@ describe('sample.service', () => {
         currentQuantity: 10,
         specimenStatus: 'available',
       };
-      db.collections.samples.findOne
+      db.collections.specimens.findOne
         .mockResolvedValueOnce(existing)
         .mockResolvedValueOnce({ _id: 'sample-2', specimenId: 'SPEC-2', barcode: 'DM-002' });
 
       await expect(sampleService.updateSample(db, 'sample-1', { barcode: 'DM-002' }))
         .rejects.toThrow('Já existe uma amostra com o código de barras DM-002');
 
-      expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
+      expect(db.collections.specimens.updateOne).not.toHaveBeenCalled();
     });
 
     it('trims and persists a new unique Data Matrix value on update', async () => {
@@ -1320,15 +1320,15 @@ describe('sample.service', () => {
         currentQuantity: 10,
         specimenStatus: 'available',
       };
-      db.collections.samples.findOne
+      db.collections.specimens.findOne
         .mockResolvedValueOnce(existing)
         .mockResolvedValueOnce(null)
         .mockResolvedValueOnce({ ...existing, barcode: 'DM-002' });
 
       const result = await sampleService.updateSample(db, 'sample-1', { barcode: '  DM-002  ' });
 
-      expect(db.collections.samples.findOne).toHaveBeenNthCalledWith(2, { barcode: 'DM-002' });
-      expect(db.collections.samples.updateOne).toHaveBeenCalledWith(
+      expect(db.collections.specimens.findOne).toHaveBeenNthCalledWith(2, { barcode: 'DM-002' });
+      expect(db.collections.specimens.updateOne).toHaveBeenCalledWith(
         { specimenId: 'SPEC-1' },
         { $set: expect.objectContaining({ barcode: 'DM-002' }) }
       );
@@ -1346,14 +1346,14 @@ describe('sample.service', () => {
         currentQuantity: 10,
         specimenStatus: 'available',
       };
-      db.collections.samples.findOne
+      db.collections.specimens.findOne
         .mockResolvedValueOnce(existing)
         .mockResolvedValueOnce(existing);
 
       await sampleService.updateSample(db, 'sample-1', { barcode: 'DM-001' });
 
-      expect(db.collections.samples.findOne).toHaveBeenCalledTimes(2);
-      expect(db.collections.samples.updateOne).toHaveBeenCalledWith(
+      expect(db.collections.specimens.findOne).toHaveBeenCalledTimes(2);
+      expect(db.collections.specimens.updateOne).toHaveBeenCalledWith(
         { specimenId: 'SPEC-1' },
         { $set: expect.objectContaining({ barcode: 'DM-001' }) }
       );
@@ -1361,8 +1361,8 @@ describe('sample.service', () => {
 
     it('returns null when updateOne matches nothing', async () => {
       const db = makeDb();
-      db.collections.samples.findOne.mockResolvedValue({ _id: 'sample-1', quantity: 10 });
-      db.collections.samples.updateOne.mockResolvedValue({ matchedCount: 0 });
+      db.collections.specimens.findOne.mockResolvedValue({ _id: 'sample-1', quantity: 10 });
+      db.collections.specimens.updateOne.mockResolvedValue({ matchedCount: 0 });
 
       const result = await sampleService.updateSample(db, 'sample-1', { quantity: 5 });
       expect(result).toBeNull();
@@ -1370,7 +1370,7 @@ describe('sample.service', () => {
 
     it('propagates an error from the collection lookup', async () => {
       const db = makeDb();
-      db.collections.samples.findOne.mockRejectedValue(new Error('mongo down'));
+      db.collections.specimens.findOne.mockRejectedValue(new Error('mongo down'));
 
       await expect(sampleService.updateSample(db, 'sample-1', { quantity: 5 })).rejects.toThrow(
         'mongo down'
@@ -1382,21 +1382,21 @@ describe('sample.service', () => {
   describe('deleteSample', () => {
     it('returns true when a sample was deleted', async () => {
       const db = makeDb();
-      db.collections.samples.deleteOne.mockResolvedValue({ deletedCount: 1 });
+      db.collections.specimens.deleteOne.mockResolvedValue({ deletedCount: 1 });
 
       expect(await sampleService.deleteSample(db, 'sample-1')).toBe(true);
     });
 
     it('returns false when nothing matched', async () => {
       const db = makeDb();
-      db.collections.samples.deleteOne.mockResolvedValue({ deletedCount: 0 });
+      db.collections.specimens.deleteOne.mockResolvedValue({ deletedCount: 0 });
 
       expect(await sampleService.deleteSample(db, 'missing')).toBe(false);
     });
 
     it('propagates an error from the collection delete', async () => {
       const db = makeDb();
-      db.collections.samples.deleteOne.mockRejectedValue(new Error('mongo down'));
+      db.collections.specimens.deleteOne.mockRejectedValue(new Error('mongo down'));
 
       await expect(sampleService.deleteSample(db, 'sample-1')).rejects.toThrow('mongo down');
     });
@@ -1406,12 +1406,12 @@ describe('sample.service', () => {
   describe('getSampleByBarcode', () => {
     it('returns the sample and an anonymized participant on exact match, resolving patientName via ParticipantIdentity (#561/#564)', async () => {
       const db = makeDb();
-      db.collections.samples.findOne.mockResolvedValueOnce({
+      db.collections.specimens.findOne.mockResolvedValueOnce({
         _id: 's1',
         barcode: 'BR-1',
         participantId: '12345678'
       });
-      db.collections.patients.findOne.mockResolvedValue({
+      db.collections.participants.findOne.mockResolvedValue({
         participantId: '12345678',
         recordNumber: 'RN1'
       });
@@ -1436,24 +1436,24 @@ describe('sample.service', () => {
 
     it('uses exact encodedValue matching without case, numeric or regex compatibility fallbacks', async () => {
       const db = makeDb();
-      db.collections.samples.findOne.mockResolvedValue(null);
+      db.collections.specimens.findOne.mockResolvedValue(null);
 
       const result = await sampleService.getSampleByBarcode(db, 'br-upper');
 
       expect(result).toEqual({ sample: null, participant: null });
-      expect(db.collections.samples.findOne).toHaveBeenCalledTimes(1);
-      expect(db.collections.samples.findOne).toHaveBeenCalledWith({ barcode: 'br-upper' });
+      expect(db.collections.specimens.findOne).toHaveBeenCalledTimes(1);
+      expect(db.collections.specimens.findOne).toHaveBeenCalledWith({ barcode: 'br-upper' });
     });
 
     it('does not coerce all-digit encoded values to numeric legacy barcodes', async () => {
       const db = makeDb();
-      db.collections.samples.findOne.mockResolvedValue(null);
+      db.collections.specimens.findOne.mockResolvedValue(null);
 
       const result = await sampleService.getSampleByBarcode(db, '123456');
 
       expect(result).toEqual({ sample: null, participant: null });
-      expect(db.collections.samples.findOne).toHaveBeenCalledTimes(1);
-      expect(db.collections.samples.findOne).toHaveBeenCalledWith({ barcode: '123456' });
+      expect(db.collections.specimens.findOne).toHaveBeenCalledTimes(1);
+      expect(db.collections.specimens.findOne).toHaveBeenCalledWith({ barcode: '123456' });
     });
 
     it('rejects unsupported AIM scanner prefixes', async () => {
@@ -1462,12 +1462,12 @@ describe('sample.service', () => {
       await expect(sampleService.getSampleByBarcode(db, ']x1BR-1')).rejects.toThrow(
         'apenas Data Matrix canônico'
       );
-      expect(db.collections.samples.findOne).not.toHaveBeenCalled();
+      expect(db.collections.specimens.findOne).not.toHaveBeenCalled();
     });
 
     it('returns the sample without a participant when it has no participantId', async () => {
       const db = makeDb();
-      db.collections.samples.findOne.mockResolvedValueOnce({ _id: 's1', barcode: 'BR-1' });
+      db.collections.specimens.findOne.mockResolvedValueOnce({ _id: 's1', barcode: 'BR-1' });
 
       const { sample, participant } = await sampleService.getSampleByBarcode(db, 'BR-1');
       expect(sample._id).toBe('s1');
@@ -1476,12 +1476,12 @@ describe('sample.service', () => {
 
     it('anonymizes a single-word participant name', async () => {
       const db = makeDb();
-      db.collections.samples.findOne.mockResolvedValueOnce({
+      db.collections.specimens.findOne.mockResolvedValueOnce({
         _id: 's1',
         barcode: 'BR-1',
         participantId: '12345678'
       });
-      db.collections.patients.findOne.mockResolvedValue({
+      db.collections.participants.findOne.mockResolvedValue({
         participantId: '12345678',
         recordNumber: 'RN1'
       });
@@ -1496,7 +1496,7 @@ describe('sample.service', () => {
 
     it('propagates an error from the collection lookup', async () => {
       const db = makeDb();
-      db.collections.samples.findOne.mockRejectedValue(new Error('mongo down'));
+      db.collections.specimens.findOne.mockRejectedValue(new Error('mongo down'));
 
       await expect(sampleService.getSampleByBarcode(db, 'BR-1')).rejects.toThrow('mongo down');
     });
@@ -1510,12 +1510,12 @@ describe('sample.service', () => {
       const ciphertextOnlyIdentity = { ...encrypted, patientName: null };
 
       const db = makeDb();
-      db.collections.samples.findOne.mockResolvedValueOnce({
+      db.collections.specimens.findOne.mockResolvedValueOnce({
         _id: 's1',
         barcode: 'BR-1',
         participantId: '12345678'
       });
-      db.collections.patients.findOne.mockResolvedValue({
+      db.collections.participants.findOne.mockResolvedValue({
         participantId: '12345678',
         recordNumber: 'RN1'
       });
@@ -1531,7 +1531,7 @@ describe('sample.service', () => {
   describe('getSampleResults', () => {
     it('throws when the sample cannot be found', async () => {
       const db = makeDb();
-      db.collections.samples.findOne.mockResolvedValue(null);
+      db.collections.specimens.findOne.mockResolvedValue(null);
 
       await expect(sampleService.getSampleResults(db, 'missing')).rejects.toThrow(
         'Amostra não encontrada'
@@ -1540,7 +1540,7 @@ describe('sample.service', () => {
 
     it('returns the results linked to the sample', async () => {
       const db = makeDb();
-      db.collections.samples.findOne.mockResolvedValue({ _id: 's1', specimenId: 555001 });
+      db.collections.specimens.findOne.mockResolvedValue({ _id: 's1', specimenId: 555001 });
       db.collections.results.find.mockReturnValue(makeCursor([{ resultID: 'r1' }]));
 
       const results = await sampleService.getSampleResults(db, 's1');
@@ -1585,7 +1585,7 @@ describe('sample.service', () => {
 
     it('throws when the sample cannot be found', async () => {
       const db = makeDb();
-      db.collections.samples.findOne.mockResolvedValue(null);
+      db.collections.specimens.findOne.mockResolvedValue(null);
 
       await expect(
         sampleService.returnSample(db, '507f1f77bcf86cd799439011', {
@@ -1598,7 +1598,7 @@ describe('sample.service', () => {
 
     it('rejects when there is nothing pending to return', async () => {
       const db = makeDb();
-      db.collections.samples.findOne.mockResolvedValue(
+      db.collections.specimens.findOne.mockResolvedValue(
         withdrawnSample({ totalWithdrawn: 5, totalReturned: 5 })
       );
 
@@ -1613,7 +1613,7 @@ describe('sample.service', () => {
 
     it('rejects a missing/too-short responsible name', async () => {
       const db = makeDb();
-      db.collections.samples.findOne.mockResolvedValue(withdrawnSample());
+      db.collections.specimens.findOne.mockResolvedValue(withdrawnSample());
 
       await expect(
         sampleService.returnSample(db, 'sample-1', {
@@ -1626,7 +1626,7 @@ describe('sample.service', () => {
 
     it('rejects a genuinely invalid/unspecified condition', async () => {
       const db = makeDb();
-      db.collections.samples.findOne.mockResolvedValue(withdrawnSample());
+      db.collections.specimens.findOne.mockResolvedValue(withdrawnSample());
 
       await expect(
         sampleService.returnSample(db, 'sample-1', {
@@ -1639,7 +1639,7 @@ describe('sample.service', () => {
 
     it('accepts a PT-BR condition alias from the UI copy and normalizes it', async () => {
       const db = makeDb();
-      db.collections.samples.findOne.mockResolvedValue(withdrawnSample());
+      db.collections.specimens.findOne.mockResolvedValue(withdrawnSample());
 
       const result = await sampleService.returnSample(db, 'sample-1', {
         returnResponsible: 'Jane Doe',
@@ -1653,7 +1653,7 @@ describe('sample.service', () => {
 
     it('completes a total return with the "intact" condition (observations supplied)', async () => {
       const db = makeDb();
-      db.collections.samples.findOne.mockResolvedValue(withdrawnSample());
+      db.collections.specimens.findOne.mockResolvedValue(withdrawnSample());
 
       const result = await sampleService.returnSample(db, 'sample-1', {
         returnResponsible: 'Jane Doe',
@@ -1668,7 +1668,7 @@ describe('sample.service', () => {
 
       // #405: specimenStatus is the source of truth; the legacy
       // lifecycleStatus/availabilityStatus dual-write was removed in #408.
-      const [, updateArg] = db.collections.samples.updateOne.mock.calls[0];
+      const [, updateArg] = db.collections.specimens.updateOne.mock.calls[0];
       expect(updateArg.$set.specimenStatus).toBe('available');
       expect(updateArg.$set.lifecycleStatus).toBeUndefined();
       expect(updateArg.$set.availabilityStatus).toBeUndefined();
@@ -1676,7 +1676,7 @@ describe('sample.service', () => {
 
     it('does not require observations for the "intact" condition', async () => {
       const db = makeDb();
-      db.collections.samples.findOne.mockResolvedValue(withdrawnSample());
+      db.collections.specimens.findOne.mockResolvedValue(withdrawnSample());
 
       const result = await sampleService.returnSample(db, 'sample-1', {
         returnResponsible: 'Jane Doe',
@@ -1689,7 +1689,7 @@ describe('sample.service', () => {
 
     it('does not restock the available quantity when the condition is "unusable"', async () => {
       const db = makeDb();
-      db.collections.samples.findOne.mockResolvedValue(withdrawnSample());
+      db.collections.specimens.findOne.mockResolvedValue(withdrawnSample());
 
       const result = await sampleService.returnSample(db, 'sample-1', {
         returnResponsible: 'Jane Doe',
@@ -1703,7 +1703,7 @@ describe('sample.service', () => {
 
     it('rejects a partial return quantity exceeding the pending amount', async () => {
       const db = makeDb();
-      db.collections.samples.findOne.mockResolvedValue(withdrawnSample());
+      db.collections.specimens.findOne.mockResolvedValue(withdrawnSample());
 
       await expect(
         sampleService.returnSample(db, 'sample-1', {
@@ -1718,7 +1718,7 @@ describe('sample.service', () => {
 
     it('rejects a partial return missing a quantity', async () => {
       const db = makeDb();
-      db.collections.samples.findOne.mockResolvedValue(withdrawnSample());
+      db.collections.specimens.findOne.mockResolvedValue(withdrawnSample());
 
       await expect(
         sampleService.returnSample(db, 'sample-1', {
@@ -1732,7 +1732,7 @@ describe('sample.service', () => {
 
     it('requires observations when the condition is not "intact"', async () => {
       const db = makeDb();
-      db.collections.samples.findOne.mockResolvedValue(withdrawnSample());
+      db.collections.specimens.findOne.mockResolvedValue(withdrawnSample());
 
       await expect(
         sampleService.returnSample(db, 'sample-1', {
@@ -1745,7 +1745,7 @@ describe('sample.service', () => {
 
     it('does not treat a Data Matrix value as an alternate specimenId for return', async () => {
       const db = makeDb();
-      db.collections.samples.findOne.mockResolvedValue(null);
+      db.collections.specimens.findOne.mockResolvedValue(null);
       const physicalLookup = vi.spyOn(sampleService, 'getSampleByBarcode');
 
       await expect(sampleService.returnSample(db, 'DM-NOT-A-SPECIMEN-ID', {
@@ -1761,7 +1761,7 @@ describe('sample.service', () => {
     // and balance update must be one atomic transaction.
     it('wraps the ledger append and balance update in a single Mongo transaction', async () => {
       const db = makeDb();
-      db.collections.samples.findOne.mockResolvedValue(withdrawnSample());
+      db.collections.specimens.findOne.mockResolvedValue(withdrawnSample());
 
       await sampleService.returnSample(db, 'sample-1', {
         returnResponsible: 'Jane Doe',
@@ -1773,16 +1773,16 @@ describe('sample.service', () => {
       expect(db.session.withTransaction).toHaveBeenCalledTimes(1);
       expect(db.session.endSession).toHaveBeenCalledTimes(1);
 
-      const [, insertOptions] = db.collections.sample_movements.insertOne.mock.calls[0];
-      const [, , updateOptions] = db.collections.samples.updateOne.mock.calls[0];
+      const [, insertOptions] = db.collections.sampleMovements.insertOne.mock.calls[0];
+      const [, , updateOptions] = db.collections.specimens.updateOne.mock.calls[0];
       expect(insertOptions).toEqual({ session: db.session });
       expect(updateOptions).toEqual({ session: db.session });
     });
 
     it('propagates a failed balance update without a partial write left standing', async () => {
       const db = makeDb();
-      db.collections.samples.findOne.mockResolvedValue(withdrawnSample());
-      db.collections.samples.updateOne.mockRejectedValue(new Error('connection dropped'));
+      db.collections.specimens.findOne.mockResolvedValue(withdrawnSample());
+      db.collections.specimens.updateOne.mockRejectedValue(new Error('connection dropped'));
 
       await expect(
         sampleService.returnSample(db, 'sample-1', {
@@ -1792,7 +1792,7 @@ describe('sample.service', () => {
         })
       ).rejects.toThrow('connection dropped');
 
-      expect(db.collections.sample_movements.insertOne).toHaveBeenCalledTimes(1);
+      expect(db.collections.sampleMovements.insertOne).toHaveBeenCalledTimes(1);
       expect(db.session.endSession).toHaveBeenCalledTimes(1);
     });
   });
@@ -1802,11 +1802,11 @@ describe('sample.service', () => {
     it('queries movements by canonical specimenId and sorts by newest first', async () => {
       const db = makeDb();
       const cursor = makeCursor([{ movementID: 2 }, { movementID: 1 }]);
-      db.collections.sample_movements.find.mockReturnValue(cursor);
+      db.collections.sampleMovements.find.mockReturnValue(cursor);
 
       const movements = await sampleService.getSampleMovements(db, 'sample-1');
 
-      expect(db.collections.sample_movements.find).toHaveBeenCalledWith({
+      expect(db.collections.sampleMovements.find).toHaveBeenCalledWith({
         specimenId: 'sample-1'
       });
       expect(cursor.sort).toHaveBeenCalledWith({ timestamp: -1 });
@@ -1816,19 +1816,19 @@ describe('sample.service', () => {
     it('stringifies an object-like specimenId before querying', async () => {
       const db = makeDb();
       const cursor = makeCursor([]);
-      db.collections.sample_movements.find.mockReturnValue(cursor);
+      db.collections.sampleMovements.find.mockReturnValue(cursor);
       const objectIdLike = { toString: () => 'sample-1' };
 
       await sampleService.getSampleMovements(db, objectIdLike);
 
-      expect(db.collections.sample_movements.find).toHaveBeenCalledWith({
+      expect(db.collections.sampleMovements.find).toHaveBeenCalledWith({
         specimenId: 'sample-1'
       });
     });
 
     it('propagates an error from the collection query', async () => {
       const db = makeDb();
-      db.collections.sample_movements.find.mockImplementation(() => {
+      db.collections.sampleMovements.find.mockImplementation(() => {
         throw new Error('mongo down');
       });
 
@@ -1840,7 +1840,7 @@ describe('sample.service', () => {
   describe('getRcsAssessments', () => {
     it('resolves the specimenId from the sample document and queries rcsAssessments sorted by newest first', async () => {
       const db = makeDb({ rcsAssessments: makeCollection('rcsAssessments') });
-      db.collections.samples.findOne.mockResolvedValue({ specimenId: 'sample-1', barcode: 'BR-1' });
+      db.collections.specimens.findOne.mockResolvedValue({ specimenId: 'sample-1', barcode: 'BR-1' });
       const cursor = makeCursor([{ rcsScore: 95 }, { rcsScore: 70 }]);
       db.collections.rcsAssessments.find.mockReturnValue(cursor);
 
@@ -1876,7 +1876,7 @@ describe('sample.service', () => {
   describe('getSprecProfiles', () => {
     it('resolves the specimenId from the sample document and queries specimenPreanalytics sorted by newest first', async () => {
       const db = makeDb({ specimenPreanalytics: makeCollection('specimenPreanalytics') });
-      db.collections.samples.findOne.mockResolvedValue({ specimenId: 'sample-1', barcode: 'BR-1' });
+      db.collections.specimens.findOne.mockResolvedValue({ specimenId: 'sample-1', barcode: 'BR-1' });
       const cursor = makeCursor([{ matrixType: 'solid' }, { matrixType: 'fluid' }]);
       db.collections.specimenPreanalytics.find.mockReturnValue(cursor);
 
@@ -1913,14 +1913,14 @@ describe('sample.service', () => {
     it('forces specimenStatus to available even if the caller requests something else', async () => {
       const db = makeDb();
       const cursor = makeCursor([{ specimenStatus: 'available' }]);
-      db.collections.samples.find.mockReturnValue(cursor);
+      db.collections.specimens.find.mockReturnValue(cursor);
 
       const result = await sampleService.findAvailableSamplesForResearch(db, {
         specimenStatus: 'quarantined',
         sampleType: 'PLASMA'
       });
 
-      expect(db.collections.samples.find).toHaveBeenCalledWith({
+      expect(db.collections.specimens.find).toHaveBeenCalledWith({
         sampleType: 'PLASMA',
         specimenStatus: 'available'
       });
@@ -2148,7 +2148,7 @@ describe('sample.service item 8 residual branch coverage', () => {
       barcode: 'BR-ACTOR-1',
     }), { auditInfo: { actorName: 'Fallback Actor' } });
 
-    const birthMovement = db.collections.sample_movements.insertOne.mock.calls[0][0];
+    const birthMovement = db.collections.sampleMovements.insertOne.mock.calls[0][0];
     expect(birthMovement.responsible).toBe('Fallback Actor');
     expect(currentAllocateExecute.mock.calls[0][0].actor.userName).toBe('Fallback Actor');
 
@@ -2178,7 +2178,7 @@ describe('sample.service item 8 residual branch coverage', () => {
 
   it('covers withdrawal blocked status, exhausted quantity and quantity fallback branches', async () => {
     let db = makeDb();
-    db.collections.samples.findOne.mockResolvedValue({
+    db.collections.specimens.findOne.mockResolvedValue({
       specimenId: 'S1', specimenStatus: 'quarantined', quantity: 10, currentQuantity: 10,
     });
     await expect(sampleService.withdrawSample(db, 'S1', {
@@ -2188,7 +2188,7 @@ describe('sample.service item 8 residual branch coverage', () => {
     })).rejects.toThrow(/não está disponível para retirada/);
 
     db = makeDb();
-    db.collections.samples.findOne.mockResolvedValue({
+    db.collections.specimens.findOne.mockResolvedValue({
       specimenId: 'S2', specimenStatus: 'available', quantity: 10, currentQuantity: 0, unit: null,
     });
     await expect(sampleService.withdrawSample(db, 'S2', {
@@ -2198,7 +2198,7 @@ describe('sample.service item 8 residual branch coverage', () => {
     })).rejects.toThrow(/Quantidade indisponível/);
 
     db = makeDb();
-    db.collections.samples.findOne.mockResolvedValue({
+    db.collections.specimens.findOne.mockResolvedValue({
       specimenId: 'S3', specimenStatus: 'available', quantity: 5, currentQuantity: undefined,
       totalWithdrawn: null, unit: null, barcode: null,
     });
@@ -2227,7 +2227,7 @@ describe('sample.service item 8 residual branch coverage', () => {
     };
 
     let db = makeDb();
-    db.collections.samples.findOne.mockResolvedValue({ ...base });
+    db.collections.specimens.findOne.mockResolvedValue({ ...base });
     await expect(sampleService.withdrawSample(db, 'S4', {
       withdrawalType: 'Parcial',
       withdrawalResponsible: 'Jane Doe',
@@ -2235,7 +2235,7 @@ describe('sample.service item 8 residual branch coverage', () => {
     })).rejects.toThrow(/Quantidade a retirar é obrigatória/);
 
     db = makeDb();
-    db.collections.samples.findOne.mockResolvedValue({ ...base });
+    db.collections.specimens.findOne.mockResolvedValue({ ...base });
     await expect(sampleService.withdrawSample(db, 'S4', {
       withdrawalType: 'Parcial',
       withdrawalQuantity: 99,
@@ -2244,7 +2244,7 @@ describe('sample.service item 8 residual branch coverage', () => {
     })).rejects.toThrow(/Quantidade indisponível/);
 
     db = makeDb();
-    db.collections.samples.findOne.mockResolvedValue({ ...base });
+    db.collections.specimens.findOne.mockResolvedValue({ ...base });
     const result = await sampleService.withdrawSample(db, 'S4', {
       withdrawalType: 'Parcial',
       quantity: 2,
@@ -2261,7 +2261,7 @@ describe('sample.service item 8 residual branch coverage', () => {
       userAgent: 'vitest',
     });
     expect(result.withdrawnQuantity).toBe(2);
-    const movement = db.collections.sample_movements.insertOne.mock.calls[0][0];
+    const movement = db.collections.sampleMovements.insertOne.mock.calls[0][0];
     expect(movement.destination).toBe('Lab C');
     expect(movement.purpose).toBe('Research use');
     expect(movement.observations).toBe('fallback notes');
@@ -2270,8 +2270,8 @@ describe('sample.service item 8 residual branch coverage', () => {
   it('applies every listSamples filter including organization scope', async () => {
     const db = makeDb();
     const cursor = makeCursor([{ specimenId: 'S1' }]);
-    db.collections.samples.find.mockReturnValue(cursor);
-    db.collections.samples.countDocuments.mockResolvedValue(1);
+    db.collections.specimens.find.mockReturnValue(cursor);
+    db.collections.specimens.countDocuments.mockResolvedValue(1);
 
     const result = await sampleService.listSamples(db, {
       participantId: 'P1',
@@ -2282,7 +2282,7 @@ describe('sample.service item 8 residual branch coverage', () => {
       skip: 3,
     });
 
-    expect(db.collections.samples.find).toHaveBeenCalledWith({
+    expect(db.collections.specimens.find).toHaveBeenCalledWith({
       participantId: 'P1',
       specimenStatus: 'available',
       sampleType: 'PLASMA',
@@ -2294,7 +2294,7 @@ describe('sample.service item 8 residual branch coverage', () => {
 
   it('finds samples only by exact canonical encodedValue', async () => {
     const db = makeDb();
-    db.collections.samples.findOne.mockResolvedValueOnce({
+    db.collections.specimens.findOne.mockResolvedValueOnce({
       _id: 'x',
       barcode: 'ABC',
       specimenStatus: 'available',
@@ -2303,15 +2303,15 @@ describe('sample.service item 8 residual branch coverage', () => {
     const result = await sampleService.getSampleByBarcode(db, ']d2ABC');
 
     expect(result.sample).toMatchObject({ _id: 'x', barcode: 'ABC' });
-    expect(db.collections.samples.findOne).toHaveBeenCalledTimes(1);
-    expect(db.collections.samples.findOne).toHaveBeenCalledWith({ barcode: 'ABC' });
+    expect(db.collections.specimens.findOne).toHaveBeenCalledTimes(1);
+    expect(db.collections.specimens.findOne).toHaveBeenCalledWith({ barcode: 'ABC' });
   });
 
   it('returns the explicit not-found barcode shape and logs example barcodes', async () => {
     const db = makeDb();
-    db.collections.samples.findOne.mockResolvedValue(null);
-    db.collections.samples.countDocuments.mockResolvedValue(2);
-    db.collections.samples.find.mockReturnValue(makeCursor([{ barcode: 'ONE' }, { barcode: 'TWO' }]));
+    db.collections.specimens.findOne.mockResolvedValue(null);
+    db.collections.specimens.countDocuments.mockResolvedValue(2);
+    db.collections.specimens.find.mockReturnValue(makeCursor([{ barcode: 'ONE' }, { barcode: 'TWO' }]));
 
     const result = await sampleService.getSampleByBarcode(db, 'MISSING');
 
@@ -2322,29 +2322,29 @@ describe('sample.service item 8 residual branch coverage', () => {
     const participantIdentityService = require('../../src/services/participantIdentity.service');
 
     let db = makeDb({ participantIdentities: makeCollection('participantIdentities') });
-    db.collections.samples.findOne.mockResolvedValue({
+    db.collections.specimens.findOne.mockResolvedValue({
       _id: 's1', barcode: 'B1', specimenStatus: 'available', participantId: 'P1',
     });
-    db.collections.patients.findOne.mockResolvedValue({ participantId: 'P1', recordNumber: 'R1' });
+    db.collections.participants.findOne.mockResolvedValue({ participantId: 'P1', recordNumber: 'R1' });
     db.collections.participantIdentities.findOne.mockResolvedValue(null);
     let result = await sampleService.getSampleByBarcode(db, 'B1');
     expect(result.participant.patientName).toBe('***');
 
     db = makeDb({ participantIdentities: makeCollection('participantIdentities') });
-    db.collections.samples.findOne.mockResolvedValue({
+    db.collections.specimens.findOne.mockResolvedValue({
       _id: 's2', barcode: 'B2', specimenStatus: 'available', participantId: 'P2',
     });
-    db.collections.patients.findOne.mockResolvedValue({ participantId: 'P2', recordNumber: 'R2' });
+    db.collections.participants.findOne.mockResolvedValue({ participantId: 'P2', recordNumber: 'R2' });
     db.collections.participantIdentities.findOne.mockResolvedValue({ participantId: 'P2' });
     vi.spyOn(participantIdentityService, 'decryptIdentity').mockReturnValueOnce({ patientName: 'Alice' });
     result = await sampleService.getSampleByBarcode(db, 'B2');
     expect(result.participant.patientName).toBe('A***');
 
     db = makeDb({ participantIdentities: makeCollection('participantIdentities') });
-    db.collections.samples.findOne.mockResolvedValue({
+    db.collections.specimens.findOne.mockResolvedValue({
       _id: 's3', barcode: 'B3', specimenStatus: 'available', participantId: 'P3',
     });
-    db.collections.patients.findOne.mockResolvedValue({ participantId: 'P3', recordNumber: 'R3' });
+    db.collections.participants.findOne.mockResolvedValue({ participantId: 'P3', recordNumber: 'R3' });
     db.collections.participantIdentities.findOne.mockResolvedValue({ participantId: 'P3' });
     vi.spyOn(participantIdentityService, 'decryptIdentity').mockReturnValueOnce({ patientName: 'Alice Example' });
     result = await sampleService.getSampleByBarcode(db, 'B3');
@@ -2353,24 +2353,24 @@ describe('sample.service item 8 residual branch coverage', () => {
 
   it('covers barcode sample branches with no participant id and missing participant record', async () => {
     let db = makeDb();
-    db.collections.samples.findOne.mockResolvedValue({
+    db.collections.specimens.findOne.mockResolvedValue({
       _id: 's1', barcode: 'B1', specimenStatus: 'available',
     });
     let result = await sampleService.getSampleByBarcode(db, 'B1');
     expect(result.participant).toBeNull();
 
     db = makeDb();
-    db.collections.samples.findOne.mockResolvedValue({
+    db.collections.specimens.findOne.mockResolvedValue({
       _id: 's2', barcode: 'B2', specimenStatus: 'available', participantId: 'P2',
     });
-    db.collections.patients.findOne.mockResolvedValue(null);
+    db.collections.participants.findOne.mockResolvedValue(null);
     result = await sampleService.getSampleByBarcode(db, 'B2');
     expect(result.participant).toBeNull();
   });
 
   it('blocks returns for governed blocked statuses and covers partial quantity fallback', async () => {
     let db = makeDb();
-    db.collections.samples.findOne.mockResolvedValue({
+    db.collections.specimens.findOne.mockResolvedValue({
       specimenId: 'S1',
       specimenStatus: 'destroyed',
       totalWithdrawn: 5,
@@ -2383,7 +2383,7 @@ describe('sample.service item 8 residual branch coverage', () => {
     })).rejects.toThrow(/não está disponível para devolução/);
 
     db = makeDb();
-    db.collections.samples.findOne.mockResolvedValue({
+    db.collections.specimens.findOne.mockResolvedValue({
       specimenId: 'S2',
       specimenStatus: 'available',
       quantity: 10,
@@ -2413,12 +2413,12 @@ describe('sample.service item 8 residual branch coverage', () => {
       .mockResolvedValue([{ quarantineActionId: 'Q1' }]);
 
     let db = makeDb();
-    db.collections.samples.findOne.mockResolvedValue({ specimenId: 'SPEC-1' });
+    db.collections.specimens.findOne.mockResolvedValue({ specimenId: 'SPEC-1' });
     await sampleService.getQuarantineActions(db, 'business-key');
     expect(actionSpy).toHaveBeenLastCalledWith(db, 'SPEC-1');
 
     db = makeDb();
-    db.collections.samples.findOne.mockResolvedValue(null);
+    db.collections.specimens.findOne.mockResolvedValue(null);
     const idWithoutToString = Object.create(null);
     await sampleService.getQuarantineActions(db, idWithoutToString);
     expect(actionSpy).toHaveBeenLastCalledWith(db, idWithoutToString);
@@ -2427,15 +2427,15 @@ describe('sample.service item 8 residual branch coverage', () => {
   it('falls back from a canonical ObjectId lookup to specimenId when the _id lookup misses', async () => {
     const db = makeDb();
     const id = '507f1f77bcf86cd799439011';
-    db.collections.samples.findOne
+    db.collections.specimens.findOne
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce({ specimenId: id, specimenStatus: 'available' });
 
     const result = await sampleService.getSample(db, id);
 
     expect(result.specimenId).toBe(id);
-    expect(db.collections.samples.findOne).toHaveBeenNthCalledWith(1, { _id: expect.any(ObjectId) });
-    expect(db.collections.samples.findOne).toHaveBeenNthCalledWith(2, { specimenId: id });
+    expect(db.collections.specimens.findOne).toHaveBeenNthCalledWith(1, { _id: expect.any(ObjectId) });
+    expect(db.collections.specimens.findOne).toHaveBeenNthCalledWith(2, { specimenId: id });
   });
 
   it('resolves a BOX -> DRAWER -> RACK -> SHELF -> FREEZER hierarchy without changing canonical custody semantics', async () => {
@@ -2495,9 +2495,9 @@ describe('sample.service item 8 residual branch coverage', () => {
 
   it('covers canonical withdrawal lookup fallbacks and validation guards', async () => {
     let db = makeDb();
-    db.collections.samples.findOne.mockResolvedValue(null);
-    db.collections.samples.countDocuments.mockResolvedValue(0);
-    db.collections.samples.find.mockReturnValue(makeCursor([]));
+    db.collections.specimens.findOne.mockResolvedValue(null);
+    db.collections.specimens.countDocuments.mockResolvedValue(0);
+    db.collections.specimens.find.mockReturnValue(makeCursor([]));
     await expect(sampleService.withdrawSample(db, 'UNKNOWN-BARCODE', {
       withdrawalType: 'Total',
       withdrawalResponsible: 'Jane Doe',
@@ -2505,7 +2505,7 @@ describe('sample.service item 8 residual branch coverage', () => {
     })).rejects.toThrow('Amostra não encontrada');
 
     db = makeDb();
-    db.collections.samples.findOne.mockResolvedValue({
+    db.collections.specimens.findOne.mockResolvedValue({
       specimenId: 'S-W1', specimenStatus: 'available', quantity: 10, currentQuantity: 10,
     });
     await expect(sampleService.withdrawSample(db, 'S-W1', {
@@ -2515,7 +2515,7 @@ describe('sample.service item 8 residual branch coverage', () => {
     })).rejects.toThrow(/Tipo de retirada inválido/);
 
     db = makeDb();
-    db.collections.samples.findOne.mockResolvedValue({
+    db.collections.specimens.findOne.mockResolvedValue({
       specimenId: 'S-W2', specimenStatus: 'available', quantity: 10, currentQuantity: 10,
     });
     await expect(sampleService.withdrawSample(db, 'S-W2', {
@@ -2525,7 +2525,7 @@ describe('sample.service item 8 residual branch coverage', () => {
     })).rejects.toThrow(/nome e sobrenome/i);
 
     db = makeDb();
-    db.collections.samples.findOne.mockResolvedValue({
+    db.collections.specimens.findOne.mockResolvedValue({
       specimenId: 'S-W3', specimenStatus: 'available', quantity: 10, currentQuantity: 10,
     });
     await expect(sampleService.withdrawSample(db, 'S-W3', {
@@ -2549,37 +2549,37 @@ describe('sample.service item 8 residual branch coverage', () => {
     };
 
     let db = makeDb();
-    db.collections.samples.findOne.mockResolvedValue({ ...base, totalWithdrawn: 1, totalReturned: 1 });
+    db.collections.specimens.findOne.mockResolvedValue({ ...base, totalWithdrawn: 1, totalReturned: 1 });
     await expect(sampleService.returnSample(db, 'S-R', {
       returnResponsible: 'Jane Doe', condition: 'intact', returnType: 'Total',
     })).rejects.toThrow(/Não há quantidade pendente/);
 
     db = makeDb();
-    db.collections.samples.findOne.mockResolvedValue({ ...base });
+    db.collections.specimens.findOne.mockResolvedValue({ ...base });
     await expect(sampleService.returnSample(db, 'S-R', {
       returnResponsible: 'J', condition: 'intact', returnType: 'Total',
     })).rejects.toThrow(/Responsável pela devolução é obrigatório/);
 
     db = makeDb();
-    db.collections.samples.findOne.mockResolvedValue({ ...base });
+    db.collections.specimens.findOne.mockResolvedValue({ ...base });
     await expect(sampleService.returnSample(db, 'S-R', {
       returnResponsible: 'Jane Doe', condition: 'unknown', returnType: 'Total',
     })).rejects.toThrow(/Condição da amostra é obrigatória/);
 
     db = makeDb();
-    db.collections.samples.findOne.mockResolvedValue({ ...base });
+    db.collections.specimens.findOne.mockResolvedValue({ ...base });
     await expect(sampleService.returnSample(db, 'S-R', {
       returnResponsible: 'Jane Doe', condition: 'partially_compromised', returnType: 'Total',
     })).rejects.toThrow(/Observações são obrigatórias/);
 
     db = makeDb();
-    db.collections.samples.findOne.mockResolvedValue({ ...base });
+    db.collections.specimens.findOne.mockResolvedValue({ ...base });
     await expect(sampleService.returnSample(db, 'S-R', {
       returnResponsible: 'Jane Doe', condition: 'intact', returnType: 'Parcial',
     })).rejects.toThrow(/Quantidade a devolver é obrigatória/);
 
     db = makeDb();
-    db.collections.samples.findOne.mockResolvedValue({ ...base });
+    db.collections.specimens.findOne.mockResolvedValue({ ...base });
     await expect(sampleService.returnSample(db, 'S-R', {
       returnResponsible: 'Jane Doe', condition: 'intact', returnType: 'Parcial', returnQuantity: 99,
     })).rejects.toThrow(/Quantidade excede o pendente/);
@@ -2587,7 +2587,7 @@ describe('sample.service item 8 residual branch coverage', () => {
 
   it('keeps unusable returned material out of available stock and preserves a non-available computed status', async () => {
     const db = makeDb();
-    db.collections.samples.findOne.mockResolvedValue({
+    db.collections.specimens.findOne.mockResolvedValue({
       specimenId: 'S-R2',
       specimenStatus: 'depleted',
       quantity: 10,
@@ -2615,17 +2615,17 @@ describe('sample.service item 8 residual branch coverage', () => {
 
   it('covers result lookup, deletion false result and industrial-barcode validation branches', async () => {
     let db = makeDb();
-    db.collections.samples.findOne.mockResolvedValue(null);
+    db.collections.specimens.findOne.mockResolvedValue(null);
     await expect(sampleService.getSampleResults(db, 'SPEC-404')).rejects.toThrow('Amostra não encontrada');
 
     db = makeDb();
-    db.collections.samples.findOne.mockResolvedValue({ specimenId: 'SPEC-1', specimenStatus: 'available' });
+    db.collections.specimens.findOne.mockResolvedValue({ specimenId: 'SPEC-1', specimenStatus: 'available' });
     db.collections.results.find.mockReturnValue(makeCursor([{ resultId: 'R1' }]));
     const results = await sampleService.getSampleResults(db, 'SPEC-1');
     expect(results).toEqual([{ resultId: 'R1' }]);
 
     db = makeDb();
-    db.collections.samples.deleteOne.mockResolvedValue({ deletedCount: 0 });
+    db.collections.specimens.deleteOne.mockResolvedValue({ deletedCount: 0 });
     await expect(sampleService.deleteSample(db, 'SPEC-1')).resolves.toBe(false);
 
     await expect(sampleService.getBarcodeIndustrialAssets('')).rejects.toThrow(/Código de barras inválido/);
@@ -2634,22 +2634,22 @@ describe('sample.service item 8 residual branch coverage', () => {
 
   it('covers update miss/matchedCount guards and default list pagination', async () => {
     let db = makeDb();
-    db.collections.samples.findOne.mockResolvedValueOnce(null);
+    db.collections.specimens.findOne.mockResolvedValueOnce(null);
     await expect(sampleService.updateSample(db, 'SPEC-404', { notes: 'x' })).resolves.toBeNull();
 
     db = makeDb();
-    db.collections.samples.findOne.mockResolvedValueOnce({
+    db.collections.specimens.findOne.mockResolvedValueOnce({
       specimenId: 'SPEC-1',
       quantity: 10,
       currentQuantity: 10,
       specimenStatus: 'available',
     });
-    db.collections.samples.updateOne.mockResolvedValue({ matchedCount: 0, modifiedCount: 0 });
+    db.collections.specimens.updateOne.mockResolvedValue({ matchedCount: 0, modifiedCount: 0 });
     await expect(sampleService.updateSample(db, 'SPEC-1', { notes: 'x' })).resolves.toBeNull();
 
     db = makeDb();
     const cursor = makeCursor([]);
-    db.collections.samples.find.mockReturnValue(cursor);
+    db.collections.specimens.find.mockReturnValue(cursor);
     const listed = await sampleService.listSamples(db);
     expect(listed.limit).toBe(50);
     expect(listed.skip).toBe(0);
@@ -2662,22 +2662,22 @@ describe('sample.service item 8 residual branch coverage', () => {
     const sprecSpy = vi.spyOn(specimenPreanalyticsService, 'getProfilesForSpecimen').mockResolvedValue([]);
 
     let db = makeDb();
-    db.collections.samples.findOne.mockResolvedValue({ specimenId: 'SPEC-RCS' });
+    db.collections.specimens.findOne.mockResolvedValue({ specimenId: 'SPEC-RCS' });
     await sampleService.getRcsAssessments(db, 'lookup-key');
     expect(rcsSpy).toHaveBeenLastCalledWith(db, 'SPEC-RCS');
 
     db = makeDb();
-    db.collections.samples.findOne.mockResolvedValue(null);
+    db.collections.specimens.findOne.mockResolvedValue(null);
     await sampleService.getRcsAssessments(db, 12345);
     expect(rcsSpy).toHaveBeenLastCalledWith(db, '12345');
 
     db = makeDb();
-    db.collections.samples.findOne.mockResolvedValue({ specimenId: 'SPEC-SPREC' });
+    db.collections.specimens.findOne.mockResolvedValue({ specimenId: 'SPEC-SPREC' });
     await sampleService.getSprecProfiles(db, 'lookup-key');
     expect(sprecSpy).toHaveBeenLastCalledWith(db, 'SPEC-SPREC');
 
     db = makeDb();
-    db.collections.samples.findOne.mockResolvedValue(null);
+    db.collections.specimens.findOne.mockResolvedValue(null);
     const noString = Object.create(null);
     await sampleService.getSprecProfiles(db, noString);
     expect(sprecSpy).toHaveBeenLastCalledWith(db, noString);
@@ -2690,7 +2690,7 @@ describe('sample.service item 8 residual branch coverage', () => {
     it('getSample resolves a direct Mongo ObjectId hit before falling back to specimenId', async () => {
       const db = makeDb();
       const objectId = new ObjectId();
-      db.collections.samples.findOne.mockResolvedValueOnce({
+      db.collections.specimens.findOne.mockResolvedValueOnce({
         _id: objectId,
         specimenId: 'SPEC-OBJECTID',
         specimenStatus: 'available'
@@ -2699,13 +2699,13 @@ describe('sample.service item 8 residual branch coverage', () => {
       const result = await sampleService.getSample(db, objectId.toString());
 
       expect(result.specimenId).toBe('SPEC-OBJECTID');
-      expect(db.collections.samples.findOne).toHaveBeenCalledTimes(1);
-      expect(db.collections.samples.findOne.mock.calls[0][0]._id.toString()).toBe(objectId.toString());
+      expect(db.collections.specimens.findOne).toHaveBeenCalledTimes(1);
+      expect(db.collections.specimens.findOne.mock.calls[0][0]._id.toString()).toBe(objectId.toString());
     });
 
     it('createSample resolves a BOX -> DRAWER -> RACK -> SHELF -> FREEZER hierarchy', async () => {
       const db = makeDb();
-      db.collections.patients.findOne.mockResolvedValue({ participantId: '12345678' });
+      db.collections.participants.findOne.mockResolvedValue({ participantId: '12345678' });
 
       const drawerId = new ObjectId();
       const rackId = new ObjectId();
@@ -2744,7 +2744,7 @@ describe('sample.service item 8 residual branch coverage', () => {
         if (name === 'sensors') return sensors;
         return db.collections[name] || (db.collections[name] = makeCollection(name));
       });
-      db.collections.samples.findOne.mockImplementation((query) => {
+      db.collections.specimens.findOne.mockImplementation((query) => {
         if (query && query._id !== undefined) {
           return Promise.resolve({ _id: query._id, specimenId: String(query._id), barcode: null });
         }
@@ -2764,12 +2764,12 @@ describe('sample.service item 8 residual branch coverage', () => {
 
     it('getSampleByBarcode preserves pseudonymization when identity is absent and when the participant record is absent', async () => {
       let db = makeDb();
-      db.collections.samples.findOne.mockResolvedValueOnce({
+      db.collections.specimens.findOne.mockResolvedValueOnce({
         _id: 's1',
         barcode: 'BR-1',
         participantId: '12345678',
       });
-      db.collections.patients.findOne.mockResolvedValue({
+      db.collections.participants.findOne.mockResolvedValue({
         participantId: '12345678',
         recordNumber: 'RN1',
       });
@@ -2783,12 +2783,12 @@ describe('sample.service item 8 residual branch coverage', () => {
       });
 
       db = makeDb();
-      db.collections.samples.findOne.mockResolvedValueOnce({
+      db.collections.specimens.findOne.mockResolvedValueOnce({
         _id: 's2',
         barcode: 'BR-2',
         participantId: '87654321',
       });
-      db.collections.patients.findOne.mockResolvedValue(null);
+      db.collections.participants.findOne.mockResolvedValue(null);
 
       result = await sampleService.getSampleByBarcode(db, 'BR-2');
       expect(result.sample._id).toBe('s2');
@@ -2833,14 +2833,14 @@ describe('sample.service item 8 remaining precedence branches', () => {
       }
     );
 
-    const movement = db.collections.sample_movements.insertOne.mock.calls[0][0];
+    const movement = db.collections.sampleMovements.insertOne.mock.calls[0][0];
     expect(movement.responsible).toBe('Primary Actor');
     expect(currentAllocateExecute.mock.calls[0][0].actor.userName).toBe('Primary Actor');
   });
 
   it('prefers explicit sampleDestination and linkedProject overrides during a successful withdrawal', async () => {
     const db = makeDb();
-    db.collections.samples.findOne.mockResolvedValue({
+    db.collections.specimens.findOne.mockResolvedValue({
       specimenId: 'SPEC-WITHDRAW-PRECEDENCE',
       specimenStatus: 'available',
       quantity: 10,
@@ -2875,13 +2875,13 @@ describe('sample.service item 8 remaining precedence branches', () => {
     );
 
     expect(result.withdrawnQuantity).toBe(2);
-    const movement = db.collections.sample_movements.insertOne.mock.calls[0][0];
+    const movement = db.collections.sampleMovements.insertOne.mock.calls[0][0];
     expect(movement.destination).toBe('Primary Lab');
     expect(movement.purpose).toBe('Primary purpose');
     expect(movement.linkedProject).toBe('override-project');
     expect(movement.observations).toBe('Primary observation');
 
-    const update = db.collections.samples.updateOne.mock.calls[0][1].$set;
+    const update = db.collections.specimens.updateOne.mock.calls[0][1].$set;
     expect(update.sampleDestination).toBe('Primary Lab');
     expect(update.linkedProject).toBe('override-project');
   });

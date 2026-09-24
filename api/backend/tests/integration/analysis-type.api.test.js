@@ -9,17 +9,21 @@ const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
+const {
+  makeAuthToken,
+  makeLegacyClaimsToken,
+  buildAuthenticatedCollections,
+  userForAccessType,
+  TEST_USER_ACCOUNT_IDS,
+} = require('../factories/auth.factory');
+
 
 // #421: enforcement resolves permissions purely by req.user.userID (via
 // UserRoleAssignment), ignoring accessType/roleName carried in the JWT.
 // Different accessType levels therefore need distinct userIDs so each one
 // resolves to the correct seeded role.
 function makeToken(accessType = 4) {
-  return jwt.sign(
-    { userID: `qa-${accessType}`, accessType, roleName: accessType === 4 ? 'Administrador' : 'Técnico', name: 'QA', mfaVerified: true },
-    process.env.JWT_SECRET,
-    { expiresIn: '1h' }
-  );
+  return makeAuthToken(accessType);
 }
 
 const rbacCollections = buildRbacCollections([

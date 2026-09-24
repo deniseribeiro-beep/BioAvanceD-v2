@@ -113,7 +113,7 @@ describe('sample.routes item 8 safe residual branches without barcode compatibil
   });
 
   it('print-job returns 404 for a missing canonical sample', async () => {
-    const db = dbWith({ samples: collection() });
+    const db = dbWith({ specimens: collection() });
     expect((await request(buildApp(db)).get('/api/samples/SPEC-MISSING/label/print-job')).status).toBe(404);
   });
 
@@ -137,7 +137,7 @@ describe('sample.routes item 8 safe residual branches without barcode compatibil
     const findOne = vi.fn()
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce({ _id: 's2', specimenId: 'SPEC-2', barcode: 'DM-002', collectionSite: 'org-2' });
-    const db = dbWith({ samples: collection({ findOne }) });
+    const db = dbWith({ specimens: collection({ findOne }) });
 
     scopeAllowed = false;
     const assets = vi.spyOn(sampleService, 'getBarcodeIndustrialAssets');

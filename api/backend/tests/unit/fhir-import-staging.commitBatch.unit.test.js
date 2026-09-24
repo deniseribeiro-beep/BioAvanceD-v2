@@ -45,8 +45,8 @@ function createDb() {
   const collections = {
     import_batches: createCollection(),
     import_staging_records: createCollection(),
-    patients: createCollection(),
-    samples: createCollection(),
+    participants: createCollection(),
+    specimens: createCollection(),
     audit_logs: createCollection(),
   };
   return {
@@ -94,7 +94,7 @@ describe('fhir-import-staging.service#commitBatch — ParticipantIdentity dual-w
     // #571/#575: patientName/birthDate/identityDocument are civil identity
     // — they land only on ParticipantIdentity, never on Patient (a
     // non-canonical field there per PatientModel's allowlist).
-    const patient = db.collections.patients.docs.find((doc) => doc.participantId === 'PART-563');
+    const patient = db.collections.participants.docs.find((doc) => doc.participantId === 'PART-563');
     expect(patient).toBeTruthy();
     expect(patient.patientName).toBeUndefined();
     expect(patient.cpf).toBeUndefined();
@@ -117,7 +117,7 @@ describe('fhir-import-staging.service#commitBatch — ParticipantIdentity dual-w
 
     await fhirImportStagingService.commitBatch(db, batchId);
 
-    const patient = db.collections.patients.docs.find((doc) => doc.participantId === 'PART-563');
+    const patient = db.collections.participants.docs.find((doc) => doc.participantId === 'PART-563');
     expect(patient.sex).toBe('F');
   });
 

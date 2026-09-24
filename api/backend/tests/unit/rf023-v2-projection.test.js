@@ -107,7 +107,7 @@ describe('MongoLineageRepository', () => {
     const sampleCollection = { findOne: vi.fn().mockResolvedValue(specimen) };
     const db = {
       collection: vi.fn((name) => {
-        if (name === 'samples') return sampleCollection;
+        if (name === 'specimens') return sampleCollection;
         return {};
       }),
     };

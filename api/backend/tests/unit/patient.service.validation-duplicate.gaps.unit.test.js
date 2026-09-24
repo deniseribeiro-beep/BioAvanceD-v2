@@ -245,7 +245,7 @@ describe('PatientService.checkIdentifierConflict', () => {
   it('returns null when no existing identity/patient matches', async () => {
     const patientsCollection = makeFakeCollection({ findOne: vi.fn().mockResolvedValue(null) });
     const participantIdentitiesCollection = makeFakeCollection({ findOne: vi.fn().mockResolvedValue(null) });
-    const db = makeFakeDb({ patients: patientsCollection, participantIdentities: participantIdentitiesCollection });
+    const db = makeFakeDb({ participants: patientsCollection, participantIdentities: participantIdentitiesCollection });
 
     const result = await patientService.checkIdentifierConflict(db, { identityDocument: '52998224725' });
 
@@ -271,7 +271,7 @@ describe('PatientService.checkIdentifierConflict', () => {
     const patientsCollection = makeFakeCollection({
       findOne: vi.fn().mockResolvedValue({ identityDocument: 'DIFFERENT', recordNumber: 'REC-1' })
     });
-    const db = makeFakeDb({ patients: patientsCollection, participantIdentities: participantIdentitiesCollection });
+    const db = makeFakeDb({ participants: patientsCollection, participantIdentities: participantIdentitiesCollection });
 
     const result = await patientService.checkIdentifierConflict(db, {
       identityDocument: '52998224725',
@@ -410,7 +410,7 @@ describe('PatientService.createPatient identifier-conflict handling', () => {
     const participantIdentitiesCollection = makeFakeCollection({
       findOne: vi.fn().mockResolvedValue({ identityDocument: '52998224725' })
     });
-    const db = makeFakeDb({ participantIdentities: participantIdentitiesCollection, consent_templates: consentTemplatesCollection });
+    const db = makeFakeDb({ participantIdentities: participantIdentitiesCollection, consentTemplates: consentTemplatesCollection });
 
     await expect(
       patientService.createPatient(db, validPatientData({ identityDocument: '52998224725' }), {
@@ -430,7 +430,7 @@ describe('PatientService.createPatient identifier-conflict handling', () => {
     const patientsCollection = makeFakeCollection({
       findOne: vi.fn().mockResolvedValue({ identityDocument: 'DIFFERENT', recordNumber: 'REC-1' })
     });
-    const db = makeFakeDb({ patients: patientsCollection, consent_templates: consentTemplatesCollection });
+    const db = makeFakeDb({ participants: patientsCollection, consentTemplates: consentTemplatesCollection });
 
     await expect(
       patientService.createPatient(db, validPatientData({ recordNumber: 'REC-1' }), {

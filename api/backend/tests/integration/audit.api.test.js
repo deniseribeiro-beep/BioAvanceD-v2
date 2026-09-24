@@ -9,26 +9,26 @@ const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
+const {
+  makeAuthToken,
+  makeLegacyClaimsToken,
+  buildAuthenticatedCollections,
+  userForAccessType,
+  TEST_USER_ACCOUNT_IDS,
+} = require('../factories/auth.factory');
+
 
 const rbacCollections = buildRbacCollections([
-  { userAccountId: 'qa-admin-1', accessType: 4 },
-  { userAccountId: 'qa-user-1', accessType: 2 },
+  { userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 4 },
+  { userAccountId: TEST_USER_ACCOUNT_IDS[2], accessType: 2 },
 ]);
 
 function makeToken(accessType = 4) {
-  return jwt.sign(
-    { userID: 'qa-admin-1', accessType, roleName: 'Administrador', name: 'QA Admin', mfaVerified: true },
-    process.env.JWT_SECRET,
-    { expiresIn: '1h' }
-  );
+  return makeAuthToken(accessType);
 }
 
 function makeLowToken() {
-  return jwt.sign(
-    { userID: 'qa-user-1', accessType: 2, roleName: 'Técnico', name: 'QA Tech', mfaVerified: true },
-    process.env.JWT_SECRET,
-    { expiresIn: '1h' }
-  );
+  return makeAuthToken(2);
 }
 
 function givenSession() {

@@ -9,6 +9,14 @@ const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
+const {
+  makeAuthToken,
+  makeLegacyClaimsToken,
+  buildAuthenticatedCollections,
+  userForAccessType,
+  TEST_USER_ACCOUNT_IDS,
+} = require('../factories/auth.factory');
+
 
 // #913: ReagentLot is mounted at /api/reagent-lots (app.js:311) via
 // createMasterDataRouter (same factory Assay/Dataset/WorkflowRun use) --
@@ -20,15 +28,11 @@ const { buildRbacCollections } = require('../factories/rbac.factory');
 // validateReferences hook (like Dataset/WorkflowRun, unlike Assay). Before
 // this file, /api/reagent-lots had zero integration coverage.
 
-const rbacCollectionsAdmin = buildRbacCollections([{ userAccountId: 'qa-1', accessType: 4 }]);
+const rbacCollectionsAdmin = buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 4 }]);
 const rbacCollectionsTechnician = buildRbacCollections([{ userAccountId: 'qa-2', accessType: 2 }]);
 
-function makeToken(userID, accessType) {
-  return jwt.sign(
-    { userID, accessType, roleName: accessType >= 3 ? 'Coordenador' : 'Tecnico', name: 'QA', mfaVerified: true },
-    process.env.JWT_SECRET,
-    { expiresIn: '1h' }
-  );
+function makeToken(accessType = 4) {
+  return makeAuthToken(accessType);
 }
 
 function givenSession() {
@@ -60,7 +64,7 @@ describe('GET /api/reagent-lots', () => {
     });
     app.locals.db = createDbMock({ reagentLots: coll, ...rbacCollectionsAdmin });
 
-    const res = await request(app).get('/api/reagent-lots').set('Authorization', `Bearer ${makeToken('qa-1', 4)}`);
+    const res = await request(app).get('/api/reagent-lots').set('Authorization', `Bearer ${makeToken(TEST_USER_ACCOUNT_IDS[4], 4)}`);
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
   });
@@ -84,7 +88,7 @@ describe('POST /api/reagent-lots', () => {
 
     const res = await request(app)
       .post('/api/reagent-lots')
-      .set('Authorization', `Bearer ${makeToken('qa-1', 4)}`)
+      .set('Authorization', `Bearer ${makeToken(TEST_USER_ACCOUNT_IDS[4], 4)}`)
       .send(invalidPayload);
 
     expect(res.status).toBe(422);
@@ -98,7 +102,7 @@ describe('POST /api/reagent-lots', () => {
 
     const res = await request(app)
       .post('/api/reagent-lots')
-      .set('Authorization', `Bearer ${makeToken('qa-1', 4)}`)
+      .set('Authorization', `Bearer ${makeToken(TEST_USER_ACCOUNT_IDS[4], 4)}`)
       .send(invalidPayload);
 
     expect(res.status).toBe(422);
@@ -111,7 +115,7 @@ describe('POST /api/reagent-lots', () => {
 
     const res = await request(app)
       .post('/api/reagent-lots')
-      .set('Authorization', `Bearer ${makeToken('qa-1', 4)}`)
+      .set('Authorization', `Bearer ${makeToken(TEST_USER_ACCOUNT_IDS[4], 4)}`)
       .send(VALID_REAGENT_LOT_PAYLOAD);
 
     expect(res.status).toBe(201);

@@ -54,7 +54,7 @@ function createFakeCollection(seedDocs = []) {
 function createFakeDb({ samples = [], consents = [], terminologyConcepts = [], studies = [], sampleFiles = [] } = {}) {
   const collections = {
     accessRequests: createFakeCollection(),
-    samples: createFakeCollection(samples),
+    specimens: createFakeCollection(samples),
     consents: createFakeCollection(consents),
     terminologyConcepts: createFakeCollection(terminologyConcepts),
     studies: createFakeCollection(studies),

@@ -70,10 +70,10 @@ function makeInMemoryCollection(initialDocs = []) {
   };
 }
 
-function makeDb({ patients, participantIdentities }) {
+function makeDb({ participants: patients, participantIdentities }) {
   return {
     collection: vi.fn((name) => {
-      if (name === 'patients') return patients;
+      if (name === 'participants') return patients;
       if (name === 'participantIdentities') return participantIdentities;
       throw new Error(`unexpected collection requested: ${name}`);
     }),
@@ -92,7 +92,7 @@ describe('patient.service.js identity resolution migrated to ParticipantIdentity
     const participantIdentities = makeInMemoryCollection([
       { participantId: '11111111', identityDocument: '11144477735' },
     ]);
-    const db = makeDb({ patients, participantIdentities });
+    const db = makeDb({ participants: patients, participantIdentities });
 
     const conflict = await patientService.checkIdentifierConflict(db, { identityDocument: '11144477735' });
 
@@ -113,7 +113,7 @@ describe('patient.service.js identity resolution migrated to ParticipantIdentity
     const participantIdentities = makeInMemoryCollection([
       { ...encrypted, identityDocument: null },
     ]);
-    const db = makeDb({ patients, participantIdentities });
+    const db = makeDb({ participants: patients, participantIdentities });
 
     const conflict = await patientService.checkIdentifierConflict(db, { identityDocument: '11144477735' });
 
@@ -130,7 +130,7 @@ describe('patient.service.js identity resolution migrated to ParticipantIdentity
     const participantIdentities = makeInMemoryCollection([
       { ...encrypted, identityDocument: null },
     ]);
-    const db = makeDb({ patients, participantIdentities });
+    const db = makeDb({ participants: patients, participantIdentities });
 
     const conflict = await patientService.checkIdentifierConflict(db, { identityDocument: '11144477735' });
 
@@ -154,7 +154,7 @@ describe('patient.service.js identity resolution migrated to ParticipantIdentity
     const participantIdentities = makeInMemoryCollection([
       { ...encrypted, identityDocument: null },
     ]);
-    const db = makeDb({ patients, participantIdentities });
+    const db = makeDb({ participants: patients, participantIdentities });
 
     const conflict = await patientService.checkIdentifierConflict(db, { identityDocument: '111.444.777-35' });
 
@@ -169,7 +169,7 @@ describe('patient.service.js identity resolution migrated to ParticipantIdentity
     );
     const patients = makeInMemoryCollection([]);
     const participantIdentities = makeInMemoryCollection([encrypted]);
-    const db = makeDb({ patients, participantIdentities });
+    const db = makeDb({ participants: patients, participantIdentities });
 
     const conflict = await patientService.checkIdentifierConflict(db, { identityDocument: '11144477735' });
 
@@ -187,7 +187,7 @@ describe('patient.service.js identity resolution migrated to ParticipantIdentity
     );
     const patients = makeInMemoryCollection([]);
     const participantIdentities = makeInMemoryCollection([encrypted]);
-    const db = makeDb({ patients, participantIdentities });
+    const db = makeDb({ participants: patients, participantIdentities });
 
     const conflict = await patientService.checkIdentifierConflict(db, { identityDocument: '111.444.777-35' });
 
@@ -199,7 +199,7 @@ describe('patient.service.js identity resolution migrated to ParticipantIdentity
       { participantId: '11111111', recordNumber: 'PRONT-1' },
     ]);
     const participantIdentities = makeInMemoryCollection([]);
-    const db = makeDb({ patients, participantIdentities });
+    const db = makeDb({ participants: patients, participantIdentities });
 
     const conflict = await patientService.checkIdentifierConflict(db, { recordNumber: 'PRONT-1' });
 
@@ -222,7 +222,7 @@ describe('patient.service.js identity resolution migrated to ParticipantIdentity
         birthDate: new Date(1990, 0, 20),
       }),
     ]);
-    const db = makeDb({ patients, participantIdentities });
+    const db = makeDb({ participants: patients, participantIdentities });
 
     const duplicate = await patientService.checkDuplicatePatient(db, { patientName: 'ana   silva', birthDate: new Date(1990, 0, 20) });
 
@@ -251,7 +251,7 @@ describe('patient.service.js identity resolution migrated to ParticipantIdentity
     const participantIdentities = makeInMemoryCollection([
       { ...encrypted, patientName: null, birthDate: null },
     ]);
-    const db = makeDb({ patients, participantIdentities });
+    const db = makeDb({ participants: patients, participantIdentities });
 
     const duplicate = await patientService.checkDuplicatePatient(db, { patientName: 'ana   silva', birthDate });
 
@@ -271,7 +271,7 @@ describe('patient.service.js identity resolution migrated to ParticipantIdentity
     const participantIdentities = makeInMemoryCollection([
       { ...encrypted, patientName: null, birthDate: null },
     ]);
-    const db = makeDb({ patients, participantIdentities });
+    const db = makeDb({ participants: patients, participantIdentities });
 
     const duplicate = await patientService.checkDuplicatePatient(db, { patientName: 'ana silva', birthDate });
 
@@ -287,7 +287,7 @@ describe('patient.service.js identity resolution migrated to ParticipantIdentity
       { participantId: '11111111', patientName: 'Ana Silva' },
       { participantId: '22222222', patientName: 'Bruno Costa' },
     ]);
-    const db = makeDb({ patients, participantIdentities });
+    const db = makeDb({ participants: patients, participantIdentities });
 
     const result = await patientService.listPatients(db, { patientName: 'ana' });
 
@@ -307,7 +307,7 @@ describe('patient.service.js identity resolution migrated to ParticipantIdentity
       participantIdentityService.encryptIdentityFields({ participantId: '11111111', birthDate: new Date(1990, 0, 20) }),
       participantIdentityService.encryptIdentityFields({ participantId: '22222222', birthDate: new Date(1985, 5, 1) }),
     ]);
-    const db = makeDb({ patients, participantIdentities });
+    const db = makeDb({ participants: patients, participantIdentities });
 
     const result = await patientService.searchPatients(db, '20/01/1990');
 
@@ -330,7 +330,7 @@ describe('patient.service.js identity resolution migrated to ParticipantIdentity
       { ...encrypted, birthDate: null },
       { participantId: '22222222', birthDate: new Date(1985, 5, 1) },
     ]);
-    const db = makeDb({ patients, participantIdentities });
+    const db = makeDb({ participants: patients, participantIdentities });
 
     const result = await patientService.searchPatients(db, '20/01/1990');
 
@@ -344,7 +344,7 @@ describe('patient.service.js identity resolution migrated to ParticipantIdentity
     const participantIdentities = makeInMemoryCollection([
       { participantId: '11111111', patientName: 'Old Name', birthDate: new Date(1990, 0, 20) },
     ]);
-    const db = makeDb({ patients, participantIdentities });
+    const db = makeDb({ participants: patients, participantIdentities });
 
     await patientService.updatePatient(db, '11111111', { patientName: 'New Name' });
 
@@ -357,7 +357,7 @@ describe('patient.service.js identity resolution migrated to ParticipantIdentity
       { participantId: '22222222', patientName: 'Old Name' },
     ]);
     const participantIdentities = makeInMemoryCollection([]);
-    const db = makeDb({ patients, participantIdentities });
+    const db = makeDb({ participants: patients, participantIdentities });
 
     await patientService.updatePatient(db, '22222222', { identityDocument: '11144477735' });
 

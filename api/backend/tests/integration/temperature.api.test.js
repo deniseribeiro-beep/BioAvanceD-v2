@@ -9,13 +9,17 @@ const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
+const {
+  makeAuthToken,
+  makeLegacyClaimsToken,
+  buildAuthenticatedCollections,
+  userForAccessType,
+  TEST_USER_ACCOUNT_IDS,
+} = require('../factories/auth.factory');
+
 
 function makeToken(accessType = 2) {
-  return jwt.sign(
-    { userID: 'qa-tecnico-1', accessType, roleName: 'Técnico', name: 'QA Técnico', mfaVerified: true },
-    process.env.JWT_SECRET,
-    { expiresIn: '1h' }
-  );
+  return makeAuthToken(accessType);
 }
 
 function givenSession() {
@@ -28,7 +32,7 @@ function givenTemperatureCollection(overrides = {}) {
   app.locals.db = createDbMock({
     temperature_readings: coll,
     temperaturereadings: coll,
-    ...buildRbacCollections([{ userAccountId: 'qa-tecnico-1', accessType: 2 }])
+    ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[2], accessType: 2 }])
   });
   return coll;
 }
@@ -211,7 +215,7 @@ describe('POST /api/temperature/reading stamps organizationId from the caller sc
   function givenScopedCaller(organizationId) {
     app.locals.db = createDbMock({
       organizations: createCollectionMock({ findOne: vi.fn().mockResolvedValue({ organizationId }) }),
-      ...buildRbacCollections([{ userAccountId: 'qa-tecnico-1', accessType: 2, organizationId }])
+      ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[2], accessType: 2, organizationId }])
     });
   }
 
@@ -314,7 +318,7 @@ describe('#1062: GET /api/temperature/alerts is organization-scoped', () => {
           };
         }),
       }),
-      ...buildRbacCollections([{ userAccountId: 'qa-tecnico-1', accessType, organizationId: callerOrganizationId }])
+      ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[2], accessType, organizationId: callerOrganizationId }])
     });
     return captured;
   }
@@ -356,7 +360,7 @@ describe('#1062: GET /api/temperature/alerts is organization-scoped', () => {
 
     const res = await request(app)
       .get('/api/temperature/alerts')
-      .set('Authorization', `Bearer ${jwt.sign({ userID: 'qa-tecnico-1', accessType: 4, roleName: 'Administrador', name: 'QA', mfaVerified: true }, process.env.JWT_SECRET, { expiresIn: '1h' })}`);
+      .set('Authorization', `Bearer ${jwt.sign({ userID: TEST_USER_ACCOUNT_IDS[2], accessType: 4, roleName: 'Administrador', name: 'QA', mfaVerified: true }, process.env.JWT_SECRET, { expiresIn: '1h' })}`);
 
     expect(res.status).toBe(200);
     const body = JSON.stringify(res.body);

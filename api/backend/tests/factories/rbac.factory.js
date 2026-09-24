@@ -142,10 +142,41 @@ function buildRbacCollections(users = [], extraRoles = []) {
     return docs;
   });
 
+  const accountDocs = users.map(({ userAccountId, accessType, actorId: explicitActorId }) => {
+    const id = String(userAccountId);
+    // Prefer stable Stage 2E test Actor ids when the account id is one of the
+    // well-known TEST_USER_ACCOUNT_IDS; otherwise use explicit actorId or a
+    // deterministic sibling derived from the account UUID.
+    const known = {
+      '550e8400-e29b-41d4-a716-446655440001': '550e8400-e29b-41d4-a716-446655440011',
+      '550e8400-e29b-41d4-a716-446655440002': '550e8400-e29b-41d4-a716-446655440012',
+      '550e8400-e29b-41d4-a716-446655440003': '550e8400-e29b-41d4-a716-446655440013',
+      '550e8400-e29b-41d4-a716-446655440004': '550e8400-e29b-41d4-a716-446655440014',
+      '550e8400-e29b-41d4-a716-446655440099': '550e8400-e29b-41d4-a716-446655440019',
+    };
+    const actorId = explicitActorId || known[id] || id.replace(/[0-9a-f]$/i, (c) => (c === '0' ? '1' : '0'));
+    return {
+      userAccountId: id,
+      actorId,
+      accessType: Number(accessType) || 4,
+      email: `${id}@example.test`,
+      userStatus: 'active',
+    };
+  });
+  const actorDocs = accountDocs.map((account) => ({
+    actorId: account.actorId,
+    actorType: 'user',
+    actorStatus: 'active',
+    displayName: `QA ${account.accessType}`,
+  }));
+
   return {
     roles: queryableCollectionMock(allRoleDocs(extraRoles)),
     permissions: queryableCollectionMock(allPermissionDocs()),
     userRoleAssignments: queryableCollectionMock(assignments),
+    // Stage 2E: authenticate() requires matching UserAccount + Actor UUID docs.
+    userAccounts: queryableCollectionMock(accountDocs),
+    actors: queryableCollectionMock(actorDocs),
   };
 }
 

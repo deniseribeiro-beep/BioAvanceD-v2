@@ -47,7 +47,7 @@ function createFakeCollection(name, { dateField } = {}) {
 
 function createFakeDb(seed = {}) {
   const collections = {
-    samples: createFakeCollection('samples'),
+    specimens: createFakeCollection('specimens'),
     rcsAssessments: createFakeCollection('rcsAssessments', { dateField: 'assessedAt' }),
     specimenPreanalytics: createFakeCollection('specimenPreanalytics', { dateField: 'recordedAt' }),
   };
@@ -74,7 +74,7 @@ describe('sealed-snapshot-backfill.service', () => {
     const { summary } = await backfillSealedSnapshotPins(db);
 
     expect(summary).toEqual({ samplesProcessed: 1, rcsPinned: 1, sprecPinned: 1 });
-    const sample = db.collections.samples.docs[0];
+    const sample = db.collections.specimens.docs[0];
     expect(sample.sealedRcsAssessmentId).toBe('rcs-1');
     expect(sample.sealedSpecimenPreanalyticsId).toBe('sprec-1');
   });
@@ -91,7 +91,7 @@ describe('sealed-snapshot-backfill.service', () => {
     const { summary } = await backfillSealedSnapshotPins(db);
 
     expect(summary.rcsPinned).toBe(1);
-    expect(db.collections.samples.docs[0].sealedRcsAssessmentId).toBe('rcs-new');
+    expect(db.collections.specimens.docs[0].sealedRcsAssessmentId).toBe('rcs-new');
   });
 
   it('is a no-op for a sample that already carries the sealed*Id own-property, even if the value is null', async () => {
@@ -103,7 +103,7 @@ describe('sealed-snapshot-backfill.service', () => {
     const { summary } = await backfillSealedSnapshotPins(db);
 
     expect(summary).toEqual({ samplesProcessed: 1, rcsPinned: 0, sprecPinned: 0 });
-    expect(db.collections.samples.docs[0].sealedRcsAssessmentId).toBeNull();
+    expect(db.collections.specimens.docs[0].sealedRcsAssessmentId).toBeNull();
   });
 
   it('leaves a sample with no recorded snapshot untouched (no matching specimenId in either collection)', async () => {
@@ -114,6 +114,6 @@ describe('sealed-snapshot-backfill.service', () => {
     const { summary } = await backfillSealedSnapshotPins(db);
 
     expect(summary).toEqual({ samplesProcessed: 1, rcsPinned: 0, sprecPinned: 0 });
-    expect(db.collections.samples.docs[0]).not.toHaveProperty('sealedRcsAssessmentId');
+    expect(db.collections.specimens.docs[0]).not.toHaveProperty('sealedRcsAssessmentId');
   });
 });

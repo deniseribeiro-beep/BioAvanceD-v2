@@ -11,12 +11,20 @@ const sampleService = require('../../src/services/sample.service');
 const auditLogger = require('../../src/utils/auditLogger');
 const sessionService = require('../../src/services/session.service');
 const { buildRbacCollections } = require('../factories/rbac.factory');
+const {
+  makeAuthToken,
+  makeLegacyClaimsToken,
+  buildAuthenticatedCollections,
+  userForAccessType,
+  TEST_USER_ACCOUNT_IDS,
+} = require('../factories/auth.factory');
+
 
 function createAuthToken() {
   return jwt.sign(
     {
-      id: 'qa-user-1',
-      userID: 'qa-user-1',
+      id: TEST_USER_ACCOUNT_IDS[4],
+      userID: TEST_USER_ACCOUNT_IDS[4],
       accessType: 2,
       roleName: 'Técnico',
       name: 'QA User',
@@ -35,7 +43,7 @@ describe('POST /api/samples - modo de risco e projeção assíncrona v2', () => 
       findOne: vi.fn().mockResolvedValue(null),
       find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
     };
-    const rbacCollections = buildRbacCollections([{ userAccountId: 'qa-user-1', accessType: 2 }]);
+    const rbacCollections = buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 2 }]);
     app.locals.db = {
       collection: (name) => rbacCollections[name] || genericCollection,
     };

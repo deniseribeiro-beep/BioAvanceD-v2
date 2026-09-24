@@ -132,7 +132,7 @@ describe('PatientService.getPatientsCollection', () => {
     const patientsCollection = makeFakeCollection();
     // collectionName mirrors what a real MongoDB Collection instance exposes.
     Object.defineProperty(patientsCollection, 'collectionName', { value: collectionName });
-    const db = makeFakeDb({ patients: patientsCollection });
+    const db = makeFakeDb({ participants: patientsCollection });
 
     const result = await patientService.getPatientsCollection(db);
 
@@ -145,7 +145,7 @@ describe('PatientService.getPatientsCollection', () => {
 
   it('falls back to the literal "patients" name when the collection has no collectionName property', async () => {
     const patientsCollection = makeFakeCollection();
-    const db = makeFakeDb({ patients: patientsCollection });
+    const db = makeFakeDb({ participants: patientsCollection });
 
     const result = await patientService.getPatientsCollection(db);
 

@@ -19,8 +19,8 @@ function createDb({ samples = {}, patients = {} } = {}) {
   const patientsCollection = { findOne: vi.fn(), ...patients };
 
   const collection = vi.fn((name) => {
-    if (name === 'samples') return samplesCollection;
-    if (name === 'patients') return patientsCollection;
+    if (name === 'specimens') return samplesCollection;
+    if (name === 'participants') return patientsCollection;
     throw new Error(`Unexpected collection name: ${name}`);
   });
 
@@ -39,7 +39,7 @@ describe('analysisValidationService.validateSampleExists', () => {
     const findOne = vi.fn()
       .mockResolvedValueOnce(sampleDoc) // _id hit
       .mockResolvedValueOnce(null); // collision check: no other sample matches
-    const db = createDb({ samples: { findOne } });
+    const db = createDb({ specimens: { findOne } });
 
     const result = await analysisValidationService.validateSampleExists(db, oid.toString());
 
@@ -51,7 +51,7 @@ describe('analysisValidationService.validateSampleExists', () => {
   it('falls back to specimenId lookup when identifier is not a valid ObjectId', async () => {
     const sampleDoc = { _id: new ObjectId(), specimenId: '00001' };
     const findOne = vi.fn().mockResolvedValue(sampleDoc);
-    const db = createDb({ samples: { findOne } });
+    const db = createDb({ specimens: { findOne } });
 
     const result = await analysisValidationService.validateSampleExists(db, '00001');
 
@@ -66,7 +66,7 @@ describe('analysisValidationService.validateSampleExists', () => {
     const findOne = vi.fn()
       .mockResolvedValueOnce(null) // specimenId miss
       .mockResolvedValueOnce(sampleDoc); // barcode hit
-    const db = createDb({ samples: { findOne } });
+    const db = createDb({ specimens: { findOne } });
 
     const result = await analysisValidationService.validateSampleExists(db, 'BR-2025-001');
 
@@ -83,7 +83,7 @@ describe('analysisValidationService.validateSampleExists', () => {
       .mockResolvedValueOnce(null) // ObjectId miss
       .mockResolvedValueOnce(null) // specimenId miss
       .mockResolvedValueOnce(sampleDoc); // barcode hit
-    const db = createDb({ samples: { findOne } });
+    const db = createDb({ specimens: { findOne } });
 
     // A 24-hex-char string is a valid ObjectId shape AND happens to be used as a barcode here.
     const result = await analysisValidationService.validateSampleExists(db, oid.toString());
@@ -100,7 +100,7 @@ describe('analysisValidationService.validateSampleExists', () => {
       .mockResolvedValueOnce(idMatch) // _id hit
       .mockResolvedValueOnce(otherSample); // collision check: a different sample matches by Data Matrix/specimenId
 
-    const db = createDb({ samples: { findOne } });
+    const db = createDb({ specimens: { findOne } });
 
     const result = await analysisValidationService.validateSampleExists(db, oid.toString());
 
@@ -118,7 +118,7 @@ describe('analysisValidationService.validateSampleExists', () => {
     const findOne = vi.fn()
       .mockResolvedValueOnce(idMatch) // _id hit
       .mockResolvedValueOnce(null); // collision check: no other sample matches
-    const db = createDb({ samples: { findOne } });
+    const db = createDb({ specimens: { findOne } });
 
     await analysisValidationService.validateSampleExists(db, oid.toString());
 
@@ -128,7 +128,7 @@ describe('analysisValidationService.validateSampleExists', () => {
 
   it('returns a not-found failure (distinct message) when no strategy matches', async () => {
     const db = createDb({
-      samples: { findOne: vi.fn().mockResolvedValue(null) }
+      specimens: { findOne: vi.fn().mockResolvedValue(null) }
     });
 
     const result = await analysisValidationService.validateSampleExists(db, 'nope');
@@ -140,7 +140,7 @@ describe('analysisValidationService.validateSampleExists', () => {
   it('returns a generic DB-error failure (distinct from not-found) when the collection throws', async () => {
     const errSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
     const db = createDb({
-      samples: { findOne: vi.fn().mockRejectedValue(new Error('connection lost')) }
+      specimens: { findOne: vi.fn().mockRejectedValue(new Error('connection lost')) }
     });
 
     const result = await analysisValidationService.validateSampleExists(db, 'whatever');
@@ -170,7 +170,7 @@ describe('analysisValidationService.validatePatientConsent', () => {
 
   it('returns a not-found error including the participantId when patient is missing', async () => {
     const db = createDb({
-      patients: { findOne: vi.fn().mockResolvedValue(null) }
+      participants: { findOne: vi.fn().mockResolvedValue(null) }
     });
 
     const result = await analysisValidationService.validatePatientConsent(db, { participantId: 'P123' });
@@ -181,7 +181,7 @@ describe('analysisValidationService.validatePatientConsent', () => {
 
   it('rejects with wrong-status failure and defaults displayed status to NÃO DEFINIDO when status is missing', async () => {
     const db = createDb({
-      patients: { findOne: vi.fn().mockResolvedValue({ participantId: 'P1' }) } // no status field
+      participants: { findOne: vi.fn().mockResolvedValue({ participantId: 'P1' }) } // no status field
     });
 
     const result = await analysisValidationService.validatePatientConsent(db, { participantId: 'P1' });
@@ -193,7 +193,7 @@ describe('analysisValidationService.validatePatientConsent', () => {
 
   it('rejects with wrong-status failure reflecting the actual status when present but not ACCEPTED_CONSENT', async () => {
     const db = createDb({
-      patients: { findOne: vi.fn().mockResolvedValue({ participantId: 'P1', status: 'PENDING' }) }
+      participants: { findOne: vi.fn().mockResolvedValue({ participantId: 'P1', status: 'PENDING' }) }
     });
 
     const result = await analysisValidationService.validatePatientConsent(db, { participantId: 'P1' });
@@ -205,7 +205,7 @@ describe('analysisValidationService.validatePatientConsent', () => {
 
   it('rejects with a distinct message when status is ACCEPTED_CONSENT but consentAcceptedAt is missing', async () => {
     const db = createDb({
-      patients: { findOne: vi.fn().mockResolvedValue({ participantId: 'P1', status: 'ACCEPTED_CONSENT' }) }
+      participants: { findOne: vi.fn().mockResolvedValue({ participantId: 'P1', status: 'ACCEPTED_CONSENT' }) }
     });
 
     const result = await analysisValidationService.validatePatientConsent(db, { participantId: 'P1' });
@@ -225,7 +225,7 @@ describe('analysisValidationService.validatePatientConsent', () => {
       fullName: 'Jane Doe'
     };
     const db = createDb({
-      patients: { findOne: vi.fn().mockResolvedValue(rawPatient) }
+      participants: { findOne: vi.fn().mockResolvedValue(rawPatient) }
     });
 
     const result = await analysisValidationService.validatePatientConsent(db, { participantId: 'P1' });
@@ -246,7 +246,7 @@ describe('analysisValidationService.validatePatientConsent', () => {
   it('returns a generic error when the patients collection lookup throws', async () => {
     const errSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
     const db = createDb({
-      patients: { findOne: vi.fn().mockRejectedValue(new Error('boom')) }
+      participants: { findOne: vi.fn().mockRejectedValue(new Error('boom')) }
     });
 
     const result = await analysisValidationService.validatePatientConsent(db, { participantId: 'P1' });
@@ -264,7 +264,7 @@ describe('analysisValidationService.validateUploadEligibility', () => {
     const legacySample = { _id: new ObjectId(), barcode: 'BR-LEGACY', participantId: 'P1' };
     const findOne = vi.fn().mockResolvedValue(legacySample);
     const patientsFindOne = vi.fn();
-    const db = createDb({ samples: { findOne }, patients: { findOne: patientsFindOne } });
+    const db = createDb({ specimens: { findOne }, participants: { findOne: patientsFindOne } });
 
     const result = await analysisValidationService.validateUploadEligibility(db, 'BR-LEGACY');
 
@@ -278,8 +278,8 @@ describe('analysisValidationService.validateUploadEligibility', () => {
 
   it('short-circuits and returns the sample-validation failure as-is when the sample is not found', async () => {
     const db = createDb({
-      samples: { findOne: vi.fn().mockResolvedValue(null) },
-      patients: { findOne: vi.fn() }
+      specimens: { findOne: vi.fn().mockResolvedValue(null) },
+      participants: { findOne: vi.fn() }
     });
 
     const result = await analysisValidationService.validateUploadEligibility(db, 'missing-sample');
@@ -293,8 +293,8 @@ describe('analysisValidationService.validateUploadEligibility', () => {
   it('short-circuits and returns the consent-validation failure as-is when consent is invalid', async () => {
     const sampleDoc = { _id: new ObjectId(), specimenId: '00001', participantId: 'P1' };
     const db = createDb({
-      samples: { findOne: vi.fn().mockResolvedValue(sampleDoc) },
-      patients: { findOne: vi.fn().mockResolvedValue({ participantId: 'P1', status: 'PENDING' }) }
+      specimens: { findOne: vi.fn().mockResolvedValue(sampleDoc) },
+      participants: { findOne: vi.fn().mockResolvedValue({ participantId: 'P1', status: 'PENDING' }) }
     });
 
     const result = await analysisValidationService.validateUploadEligibility(db, '00001');
@@ -322,8 +322,8 @@ describe('analysisValidationService.validateUploadEligibility', () => {
       consentAcceptedAt: '2025-01-01T00:00:00Z'
     };
     const db = createDb({
-      samples: { findOne: vi.fn().mockResolvedValue(sampleDoc) },
-      patients: { findOne: vi.fn().mockResolvedValue(patientDoc) }
+      specimens: { findOne: vi.fn().mockResolvedValue(sampleDoc) },
+      participants: { findOne: vi.fn().mockResolvedValue(patientDoc) }
     });
 
     const result = await analysisValidationService.validateUploadEligibility(db, '00001');

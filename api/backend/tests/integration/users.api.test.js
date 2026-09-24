@@ -10,6 +10,14 @@ const sessionService = require('../../src/services/session.service');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
 const { buildUser, buildUserRegistrationPayload } = require('../factories/user.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
+const {
+  makeAuthToken,
+  makeLegacyClaimsToken,
+  buildAuthenticatedCollections,
+  userForAccessType,
+  TEST_USER_ACCOUNT_IDS,
+} = require('../factories/auth.factory');
+
 
 // #1031: user.routes.js requires auditLogger LAZILY inside its handlers, so a
 // spy on the shared CJS module object is observed at call time -- the pattern
@@ -21,7 +29,7 @@ const auditLogger = require('../../src/utils/auditLogger');
 function createCoordinatorToken() {
   return jwt.sign(
     {
-      userID: 'qa-coord-1',
+      userID: TEST_USER_ACCOUNT_IDS[3],
       accessType: 3,
       roleName: 'Coordenador',
       name: 'QA Coordenador',
@@ -41,8 +49,8 @@ describe('RF003 - POST /api/users/register', () => {
   function givenUsersCollection(overrides = {}) {
     const usersCollection = createCollectionMock(overrides);
     app.locals.db = createDbMock({
-      users: usersCollection,
-      ...buildRbacCollections([{ userAccountId: 'qa-coord-1', accessType: 3 }]),
+      userAccounts: usersCollection,
+      ...buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[3], accessType: 3 }]),
     });
     return usersCollection;
   }
@@ -122,11 +130,11 @@ describe('RF003 - POST /api/users/register', () => {
       insertOne: vi.fn().mockResolvedValue({ insertedId: 'new-user-1' }),
       updateOne: vi.fn(),
     });
-    const rbacCollections = buildRbacCollections([{ userAccountId: 'qa-coord-1', accessType: 3 }]);
+    const rbacCollections = buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[3], accessType: 3 }]);
     const organizationsCollection = createCollectionMock({
       findOne: vi.fn().mockResolvedValue({ organizationId: 'org-1' }),
     });
-    app.locals.db = createDbMock({ users: usersCollection, organizations: organizationsCollection, ...rbacCollections });
+    app.locals.db = createDbMock({ userAccounts: usersCollection, organizations: organizationsCollection, ...rbacCollections });
 
     // When
     const response = await whenRegisterUser(
@@ -153,11 +161,11 @@ describe('RF003 - POST /api/users/register', () => {
       insertOne: vi.fn(),
       updateOne: vi.fn(),
     });
-    const rbacCollections = buildRbacCollections([{ userAccountId: 'qa-coord-1', accessType: 3 }]);
+    const rbacCollections = buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[3], accessType: 3 }]);
     const organizationsCollection = createCollectionMock({
       findOne: vi.fn().mockResolvedValue(null),
     });
-    app.locals.db = createDbMock({ users: usersCollection, organizations: organizationsCollection, ...rbacCollections });
+    app.locals.db = createDbMock({ userAccounts: usersCollection, organizations: organizationsCollection, ...rbacCollections });
 
     // When
     const response = await whenRegisterUser(
@@ -234,7 +242,7 @@ describe('resetMFA permission enforcement (#632)', () => {
       findOne: vi.fn().mockResolvedValue({ _id: 'user-target-1', accessType: 2, roleName: 'Técnico', mfaEnabled: true }),
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
     });
-    app.locals.db = createDbMock({ users: usersCollection, ...buildMfaOperatorCollections() });
+    app.locals.db = createDbMock({ userAccounts: usersCollection, ...buildMfaOperatorCollections() });
 
     const response = await request(app)
       .post('/api/users/user-target-1/reset-mfa')
@@ -328,7 +336,7 @@ describe('reset-mfa on an administrator target unlocks without re-enrolling (#93
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
     });
     app.locals.db = createDbMock({
-      users: usersCollection,
+      userAccounts: usersCollection,
       ...buildCollections([
         { userAccountId: 'qa-admin-caller', roleId: 'role-administrator' },
         { userAccountId: 'admin-target-1', roleId: 'role-administrator' },
@@ -364,7 +372,7 @@ describe('reset-mfa on an administrator target unlocks without re-enrolling (#93
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
     });
     app.locals.db = createDbMock({
-      users: usersCollection,
+      userAccounts: usersCollection,
       ...buildCollections([
         { userAccountId: 'qa-admin-caller', roleId: 'role-administrator' },
         { userAccountId: 'tecnico-target-1', roleId: 'role-tecnico' },
@@ -453,7 +461,7 @@ describe('reset-mfa writes a distinguishable audit row per branch (#1031)', () =
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
     });
     app.locals.db = createDbMock({
-      users: usersCollection,
+      userAccounts: usersCollection,
       ...buildCollections([
         { userAccountId: 'qa-admin-caller', roleId: 'role-administrator' },
         { userAccountId: id, roleId },
@@ -601,7 +609,7 @@ describe('disable-mfa and force-password-reset write their own distinguishable a
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
     });
     app.locals.db = createDbMock({
-      users: usersCollection,
+      userAccounts: usersCollection,
       ...buildCollections([
         { userAccountId: 'qa-admin-caller', roleId: 'role-administrator' },
         { userAccountId: id, roleId },

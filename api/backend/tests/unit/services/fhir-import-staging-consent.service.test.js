@@ -1,3 +1,10 @@
+const {
+  makeAuthToken,
+  makeLegacyClaimsToken,
+  buildAuthenticatedCollections,
+  userForAccessType,
+  TEST_USER_ACCOUNT_IDS,
+} = require('../../../factories/auth.factory');
 /**
  * Unit tests for fhir-import-staging.service.js's consent-token and
  * external-document flows — validateImportConsentToken,
@@ -53,8 +60,8 @@ function createDb() {
   const collections = {
     import_batches: createCollection(),
     import_staging_records: createCollection(),
-    patients: createCollection(),
-    samples: createCollection(),
+    participants: createCollection(),
+    specimens: createCollection(),
     audit_logs: createCollection(),
     quarantineActions: createCollection(),
   };
@@ -221,7 +228,7 @@ describe('fhir-import-staging.service — consent token & external document flow
       const result = await fhirImportStagingService.commitBatch(db, batchId);
 
       expect(result.committed).toBe(1);
-      const sample = db.collections.samples.docs.find((doc) => doc.specimenId === 'SPEC-COMMIT-1');
+      const sample = db.collections.specimens.docs.find((doc) => doc.specimenId === 'SPEC-COMMIT-1');
       expect(sample.specimenStatus).toBe('available');
       expect(db.collections.quarantineActions.docs).toHaveLength(0);
 
@@ -240,7 +247,7 @@ describe('fhir-import-staging.service — consent token & external document flow
           consentSigned: true,
         },
       });
-      await db.collection('samples').insertOne({
+      await db.collection('specimens').insertOne({
         specimenId: 'SPEC-COMMIT-2',
         specimenStatus: 'quarantined',
         lifecycleStatus: 'QUARANTINED',
@@ -255,7 +262,7 @@ describe('fhir-import-staging.service — consent token & external document flow
 
       await fhirImportStagingService.commitBatch(db, batchId);
 
-      const sample = db.collections.samples.docs.find((doc) => doc.specimenId === 'SPEC-COMMIT-2');
+      const sample = db.collections.specimens.docs.find((doc) => doc.specimenId === 'SPEC-COMMIT-2');
       expect(sample.specimenStatus).toBe('available');
 
       const releasedAction = db.collections.quarantineActions.docs.find((doc) => doc.quarantineActionId === 'qa-commit-2');
@@ -268,14 +275,14 @@ describe('fhir-import-staging.service — consent token & external document flow
       const { batchId, recordId } = await seedBatchAndRecord({
         normalized: { participantId: 'PART-1', patientEmail: '', specimenId: 'SPEC-1' },
       });
-      await db.collection('samples').insertOne({
+      await db.collection('specimens').insertOne({
         specimenId: 'SPEC-1',
         quarantineStatus: 'QUARANTINED',
         specimenStatus: 'quarantined',
         lifecycleStatus: 'QUARANTINED',
       });
       await db.collection('quarantineActions').insertOne({
-        quarantineActionId: 'qa-1',
+        quarantineActionId: TEST_USER_ACCOUNT_IDS[4],
         specimenIds: ['id-1'],
         actionStatus: 'active',
         startedAt: new Date(),
@@ -295,10 +302,10 @@ describe('fhir-import-staging.service — consent token & external document flow
         note: 'Documento validado manualmente',
       });
 
-      const updatedSample = db.collections.samples.docs.find((doc) => doc.specimenId === 'SPEC-1');
+      const updatedSample = db.collections.specimens.docs.find((doc) => doc.specimenId === 'SPEC-1');
       expect(updatedSample.specimenStatus).toBe('available');
 
-      const releasedAction = db.collections.quarantineActions.docs.find((doc) => doc.quarantineActionId === 'qa-1');
+      const releasedAction = db.collections.quarantineActions.docs.find((doc) => doc.quarantineActionId === TEST_USER_ACCOUNT_IDS[4]);
       expect(releasedAction.actionStatus).toBe('released');
       expect(releasedAction.authorizedBy).toBe('user-1');
 
@@ -314,7 +321,7 @@ describe('fhir-import-staging.service — consent token & external document flow
       const { batchId, recordId } = await seedBatchAndRecord({
         normalized: { participantId: 'PART-1', patientEmail: '', specimenId: 'SPEC-2' },
       });
-      await db.collection('samples').insertOne({ specimenId: 'SPEC-2' });
+      await db.collection('specimens').insertOne({ specimenId: 'SPEC-2' });
 
       await fhirImportStagingService.attachExternalDocument(db, batchId, recordId, {});
 

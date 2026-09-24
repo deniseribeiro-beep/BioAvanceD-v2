@@ -12,12 +12,20 @@ const auditLogger = require('../../src/utils/auditLogger');
 const sessionService = require('../../src/services/session.service');
 const env = require('../../src/config/env');
 const { buildRbacCollections } = require('../factories/rbac.factory');
+const {
+  makeAuthToken,
+  makeLegacyClaimsToken,
+  buildAuthenticatedCollections,
+  userForAccessType,
+  TEST_USER_ACCOUNT_IDS,
+} = require('../factories/auth.factory');
+
 
 function createAuthToken() {
   return jwt.sign(
     {
-      id: 'qa-user-2',
-      userID: 'qa-user-2',
+      id: TEST_USER_ACCOUNT_IDS[2],
+      userID: TEST_USER_ACCOUNT_IDS[2],
       accessType: 2,
       roleName: 'Técnico',
       name: 'QA User 2',
@@ -58,7 +66,7 @@ describe('POST /api/samples - matriz de risco e contrato de projeção assíncro
       findOne: vi.fn().mockResolvedValue(null),
       find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
     };
-    const rbacCollections = buildRbacCollections([{ userAccountId: 'qa-user-2', accessType: 2 }]);
+    const rbacCollections = buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[2], accessType: 2 }]);
     app.locals.db = {
       collection: (name) => rbacCollections[name] || genericCollection,
     };
