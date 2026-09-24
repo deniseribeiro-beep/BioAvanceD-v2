@@ -5,7 +5,7 @@ const { validateMiabisCompliance } = require('../../services/miabisValidator.ser
 const SampleGraphValidator = require('../../services/SampleGraphValidator');
 const { authenticate } = require('../../infrastructure/middleware/auth');
 const { requireOrganizationScope } = require('../../infrastructure/middleware/rbac');
-const { isRecordInOrganizationScope, assertOrganizationFieldNotReparented, resolveOrganizationIdForCreate } = require('../../services/rbac-assignment.service');
+const { isRecordInOrganizationScope, assertOrganizationFieldNotReparented, resolveOrganizationIdForCreate, applyOrganizationScopeFilter } = require('../../services/rbac-assignment.service');
 // const { authenticate } = require('../../infrastructure/middleware/auth');
 const sampleService = require('../../services/sample.service');
 
@@ -1243,7 +1243,7 @@ router.delete('/:id', authenticate, requirePermission('deleteSample'), requireOr
 });
 
 // Buscar amostras por termo (barcode ou ID) - para autocomplete
-router.get('/search/by-term', authenticate, async (req, res) => {
+router.get('/search/by-term', authenticate, requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -1275,6 +1275,8 @@ router.get('/search/by-term', authenticate, async (req, res) => {
       ],
       withdrawnAt: null
     };
+    // #1187: scoped like GET / -- this search carried only `authenticate`.
+    applyOrganizationScopeFilter(query, req.organizationScope, 'collectionSite');
 
     const samples = await samplesCollection
       .find(query)
@@ -1304,7 +1306,7 @@ router.get('/search/by-term', authenticate, async (req, res) => {
 });
 
 // Buscar amostra por código de barras
-router.get('/by-barcode/:barcode', authenticate, async (req, res) => {
+router.get('/by-barcode/:barcode', authenticate, requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -1335,6 +1337,16 @@ router.get('/by-barcode/:barcode', authenticate, async (req, res) => {
       return res.status(404).json({
         success: false,
         error: `Amostra não encontrada com código de barras: ${barcode}`
+      });
+    }
+
+    // #1187: GET /:id's #340 check. This lookup returned the sample and its
+    // patient's name to any authenticated caller.
+    if (!isRecordInOrganizationScope(result.sample, req.organizationScope, 'collectionSite')) {
+      return res.status(403).json({
+        success: false,
+        error: 'Acesso negado',
+        message: 'Esta amostra pertence a outra organização'
       });
     }
 

@@ -1037,6 +1037,29 @@ describe('sample.routes', () => {
       );
     });
 
+    // #1187: the search now filters on the caller's organizations, as
+    // GET / does.
+    it('filters the search to the caller organizations', async () => {
+      const { router } = loadRoute({
+        requireOrganizationScopeImpl: (req, res, next) => {
+          req.organizationScope = { scope: 'organization', organizationIds: ['org-mine'] };
+          next();
+        },
+      });
+      const toArray = vi.fn().mockResolvedValue([]);
+      const project = vi.fn().mockReturnValue({ toArray });
+      const limit = vi.fn().mockReturnValue({ project });
+      const find = vi.fn().mockReturnValue({ limit });
+      const app = buildApp(router, { collection: () => ({ find }) });
+
+      const res = await request(app).get('/api/samples/search/by-term').query({ q: 'BC1' });
+
+      expect(res.status).toBe(200);
+      expect(find).toHaveBeenCalledWith(
+        expect.objectContaining({ collectionSite: { $in: ['org-mine'] } })
+      );
+    });
+
     it('returns 500 when the collection lookup throws', async () => {
       const { router } = loadRoute();
       const find = vi.fn().mockImplementation(() => {
@@ -1092,6 +1115,40 @@ describe('sample.routes', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
+    });
+
+    // #1187: every other sample read 403s outside the caller's scope;
+    // this one returned the sample and its patient's name to anyone.
+    it('returns 403 when the sample belongs to a different organization', async () => {
+      const getSampleByBarcode = vi.fn().mockResolvedValue({ sample: { _id: { toString: () => 's1' }, collectionSite: 'org-other' } });
+      const { router } = loadRoute({
+        sampleServiceOverrides: { getSampleByBarcode },
+        requireOrganizationScopeImpl: (req, res, next) => {
+          req.organizationScope = { scope: 'organization', organizationIds: ['org-mine'] };
+          next();
+        },
+      });
+      const app = buildApp(router, {});
+
+      const res = await request(app).get('/api/samples/by-barcode/BC1');
+
+      expect(res.status).toBe(403);
+    });
+
+    it('CONTROL: returns 200 for a sample in the caller organization', async () => {
+      const getSampleByBarcode = vi.fn().mockResolvedValue({ sample: { _id: { toString: () => 's1' }, collectionSite: 'org-mine' } });
+      const { router } = loadRoute({
+        sampleServiceOverrides: { getSampleByBarcode },
+        requireOrganizationScopeImpl: (req, res, next) => {
+          req.organizationScope = { scope: 'organization', organizationIds: ['org-mine'] };
+          next();
+        },
+      });
+      const app = buildApp(router, {});
+
+      const res = await request(app).get('/api/samples/by-barcode/BC1');
+
+      expect(res.status).toBe(200);
     });
   });
 
@@ -2778,14 +2835,12 @@ describe('sample.routes', () => {
 // Re-derived against source (`git grep -n -E
 // "requirePermission[(]|requireRole[(]|requireOrganizationScope" --
 // api/backend/src/interface/routes/sample.routes.js`): the file has no
-// requireRole call at all. 27 routes are registered in total; 25 carry
-// requireOrganizationScope (8 of those also carry requirePermission) and 2
-// (GET /search/by-term, GET /by-barcode/:barcode) carry neither -- only
-// `authenticate`. That is 8 + 25 = 33 individual gate call sites, matching
-// the line count `git grep -c` reports (line count and site count agree
-// here only because two routes each carry both gates on one source line,
-// which offsets the handful of matched lines that are a comment or the
-// `requireOrganizationScope` import rather than a call site).
+// requireRole call at all. Recounted for #1187 by parsing each
+// router.<verb>( registration's middleware list: 28 routes, ALL 28 carrying
+// requireOrganizationScope, 8 of them also carrying requirePermission. The
+// earlier count here (27 routes, 25 scoped, GET /search/by-term and GET
+// /by-barcode/:barcode carrying only `authenticate`) predated one route and
+// both #1185's POST / scope and #1187's scoping of those two reads.
 describe('sample.routes authorization gates (issue #921)', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -2831,6 +2886,9 @@ describe('sample.routes authorization gates (issue #921)', () => {
     const GATED_CASES = [
       // #1185: the create stamps the caller's organization, so it needs the scope.
       { label: 'POST /', method: 'post', path: '/' },
+      // #1187: the two reads that carried only `authenticate`.
+      { label: 'GET /search/by-term', method: 'get', path: '/search/by-term?q=BC1' },
+      { label: 'GET /by-barcode/:barcode', method: 'get', path: '/by-barcode/BC1' },
       { label: 'GET /:id/miabis-compliance', method: 'get', path: '/s1/miabis-compliance' },
       { label: 'GET /:id/compliance-graph', method: 'get', path: '/s1/compliance-graph' },
       { label: 'GET /', method: 'get', path: '/' },
@@ -2875,41 +2933,6 @@ describe('sample.routes authorization gates (issue #921)', () => {
       });
     }
 
-    // GET /search/by-term and GET /by-barcode/:barcode are the only two
-    // routes in the file with no gate beyond `authenticate` -- confirmed
-    // against source (sample.routes.js:1220, :1281). A denying
-    // requireOrganizationScope stub must never fire on either.
-    it('does not apply requireOrganizationScope on GET /search/by-term', async () => {
-      const requireOrganizationScopeImpl = denyingRequireOrganizationScope();
-      const { router } = loadRoute({ requireOrganizationScopeImpl });
-      const app = buildApp(router, {});
-
-      const res = await request(app).get('/api/samples/search/by-term').query({ q: 'a' });
-
-      // Not the 403/orgScope shape the denying stub would answer with if it
-      // had actually been reached -- this specific 400 is the route's own
-      // "term too short" validation, reached only because the gate never
-      // fired.
-      expect(res.status).toBe(400);
-      expect(res.body.gate).toBeUndefined();
-      expect(requireOrganizationScopeImpl.recordedCalls).toEqual([]);
-    });
-
-    it('does not apply requireOrganizationScope on GET /by-barcode/:barcode', async () => {
-      const getSampleByBarcode = vi.fn().mockResolvedValue({ sample: null });
-      const requireOrganizationScopeImpl = denyingRequireOrganizationScope();
-      const { router } = loadRoute({
-        sampleServiceOverrides: { getSampleByBarcode },
-        requireOrganizationScopeImpl,
-      });
-      const app = buildApp(router, {});
-
-      const res = await request(app).get('/api/samples/by-barcode/UNKNOWN');
-
-      expect(res.status).toBe(404);
-      expect(res.body.gate).toBeUndefined();
-      expect(requireOrganizationScopeImpl.recordedCalls).toEqual([]);
-    });
   });
 
   // Route-shadowing check (per issue #921's brief): Express matches
