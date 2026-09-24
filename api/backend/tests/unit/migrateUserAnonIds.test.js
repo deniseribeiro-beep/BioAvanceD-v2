@@ -103,7 +103,7 @@ describe('scripts/migrateUserAnonIds', () => {
       await mod.migrateUserAnonIds();
 
       expect(db).toHaveBeenCalledWith('custom-db');
-      expect(collection).toHaveBeenCalledWith('users');
+      expect(collection).toHaveBeenCalledWith('userAccounts');
       expect(updateOne).toHaveBeenCalledTimes(2);
       expect(updateOne).toHaveBeenNthCalledWith(
         1,

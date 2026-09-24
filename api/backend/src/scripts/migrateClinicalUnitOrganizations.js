@@ -38,8 +38,8 @@ async function migrateClinicalUnitOrganizations() {
     console.log('Conectado ao MongoDB');
 
     const db = client.db(dbName);
-    const patientsCollection = db.collection('patients');
-    const clinicalUnitsCollection = db.collection('clinical_units');
+    const patientsCollection = db.collection(getCanonicalCollectionName('Participant'));
+    const clinicalUnitsCollection = db.collection('clinicalUnits');
     const organizationsCollection = db.collection(getCanonicalCollectionName('Organization'));
 
     const patientsToMigrate = await patientsCollection.find({

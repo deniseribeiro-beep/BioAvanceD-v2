@@ -53,7 +53,7 @@ function fakeDb({ users, organizations }) {
   const orgsInsertOne = vi.fn().mockResolvedValue({ acknowledged: true });
   const organizationsCollection = { find: orgsFind, insertOne: orgsInsertOne };
 
-  const collection = vi.fn((name) => (name === 'users' ? usersCollection : organizationsCollection));
+  const collection = vi.fn((name) => (name === 'userAccounts' ? usersCollection : organizationsCollection));
 
   return { collection, usersFind, usersUpdateOne, orgsFind, orgsInsertOne };
 }

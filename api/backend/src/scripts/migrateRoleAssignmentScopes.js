@@ -39,7 +39,7 @@ async function migrateRoleAssignmentScopes() {
     console.log('Conectado ao MongoDB');
 
     const db = client.db(dbName);
-    const usersCollection = db.collection('users');
+    const usersCollection = db.collection(getCanonicalCollectionName('UserAccount'));
     const rolesCollection = db.collection(getCanonicalCollectionName('Role'));
     const assignmentsCollection = db.collection(getCanonicalCollectionName('UserRoleAssignment'));
     const organizationsCollection = db.collection(getCanonicalCollectionName('Organization'));

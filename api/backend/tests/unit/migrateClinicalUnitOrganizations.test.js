@@ -59,8 +59,8 @@ function fakeDb({ patients, clinicalUnits, organizations }) {
   const organizationsCollection = { find: orgsFind, insertOne: orgsInsertOne };
 
   const collection = vi.fn((name) => {
-    if (name === 'patients') return patientsCollection;
-    if (name === 'clinical_units') return clinicalUnitsCollection;
+    if (name === 'participants') return patientsCollection;
+    if (name === 'clinicalUnits') return clinicalUnitsCollection;
     return organizationsCollection;
   });
 

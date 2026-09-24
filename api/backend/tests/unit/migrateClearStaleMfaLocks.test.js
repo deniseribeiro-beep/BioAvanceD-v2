@@ -115,7 +115,7 @@ describe('scripts/migrateClearStaleMfaLocks', () => {
       const result = await mod.migrateClearStaleMfaLocks();
 
       expect(db).toHaveBeenCalledWith('custom-db');
-      expect(dbApi.collection).toHaveBeenCalledWith('users');
+      expect(dbApi.collection).toHaveBeenCalledWith('userAccounts');
       expect(result).toEqual({ usersUpdated: 2 });
       expect(dbApi.updateOne).toHaveBeenCalledTimes(2);
       expect(dbApi.updateOne).toHaveBeenNthCalledWith(

@@ -20,12 +20,14 @@ function makeCollection(overrides = {}) {
     findOne: vi.fn().mockResolvedValue(null),
     updateOne: vi.fn().mockResolvedValue({ acknowledged: true, matchedCount: 1, modifiedCount: 1 }),
     insertOne: vi.fn().mockResolvedValue({ acknowledged: true, insertedId: 'inserted-1' }),
+    rename: vi.fn().mockResolvedValue(undefined),
     find: vi.fn(() => ({
       sort: vi.fn(() => ({
         limit: vi.fn(() => ({
           next: vi.fn().mockResolvedValue(null),
         })),
       })),
+      toArray: vi.fn().mockResolvedValue([]),
     })),
     ...overrides,
   };
@@ -38,7 +40,13 @@ function makeCollection(overrides = {}) {
   return collection;
 }
 
-function makeFoundationDb({ previousRun = null, existingRelease = null, failIndex = false } = {}) {
+function makeFoundationDb({
+  previousRun = null,
+  existingRelease = null,
+  failIndex = false,
+  topologyConflict = false,
+  failCanonicalIndexes = false,
+} = {}) {
   const actorDocs = existingRelease?.approvedBy
     ? [{ actorId: existingRelease.approvedBy, actorType: 'user', actorStatus: 'active' }]
     : [];
@@ -75,12 +83,32 @@ function makeFoundationDb({ previousRun = null, existingRelease = null, failInde
     graph_projection_outbox: makeCollection(),
   };
 
+  if (topologyConflict) {
+    collections.patients = makeCollection();
+    collections.participants = makeCollection();
+  }
+
+  function collectionFactory() {
+    if (!failCanonicalIndexes) return makeCollection();
+    return makeCollection({
+      createIndex: vi.fn(async (_keys, options = {}) => {
+        if (String(options.name || '').startsWith('canonical_v2_')) {
+          throw Object.assign(new Error('canonical index conflict'), { code: 85 });
+        }
+        return 'idx';
+      }),
+    });
+  }
+
   return {
     db: {
       listCollections: vi.fn(() => ({ toArray: async () => Object.keys(collections).map((name) => ({ name })) })),
-      createCollection: vi.fn(async (name) => { collections[name] = makeCollection(); return collections[name]; }),
+      createCollection: vi.fn(async (name) => {
+        collections[name] = collectionFactory();
+        return collections[name];
+      }),
       collection: vi.fn((name) => {
-        if (!collections[name]) collections[name] = makeCollection();
+        if (!collections[name]) collections[name] = collectionFactory();
         return collections[name];
       }),
     },
@@ -174,6 +202,36 @@ describe('foundation-v2.service item 8 coverage', () => {
     });
 
     expect(canonicalContract.getRegistry).not.toHaveBeenCalled();
+  });
+
+  it('stops when topology dry-run would block before applying renames', async () => {
+    const { db, collections } = makeFoundationDb({ topologyConflict: true });
+
+    await expect(
+      foundation.runFoundationV2({
+        db,
+        environment: 'test',
+        deploymentId: 'dep-topology-block',
+        pipelineVersion: '2.0.0',
+      })
+    ).rejects.toMatchObject({ code: 'COLLECTION_MIGRATION_CONFLICT' });
+
+    expect(collections.canonicalModelReleases.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('stops when canonical index readiness is blocked after topology apply', async () => {
+    const { db, collections } = makeFoundationDb({ failCanonicalIndexes: true });
+
+    await expect(
+      foundation.runFoundationV2({
+        db,
+        environment: 'test',
+        deploymentId: 'dep-index-block',
+        pipelineVersion: '2.0.0',
+      })
+    ).rejects.toMatchObject({ code: 'CANONICAL_INDEX_NOT_READY' });
+
+    expect(collections.canonicalModelReleases.updateOne).not.toHaveBeenCalled();
   });
 
   it('builds deterministic contract checksums from schemas, enums, mappings, invariants and policies', async () => {

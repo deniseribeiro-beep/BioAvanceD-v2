@@ -202,7 +202,6 @@ test('#777: the guard still collects both root entrypoints', () => {
   for (const name of [
     'app.js',
     'server.js',
-    'src/config/collections.js',
     'src/config/redis.js',
     'src/services/user-security.service.js',
   ]) {

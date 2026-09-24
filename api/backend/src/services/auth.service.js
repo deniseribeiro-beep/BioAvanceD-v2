@@ -15,6 +15,15 @@ const { grantRoleForAccessType, assertGrantPreconditions, isAdministrator, resol
 const notificationDispatchService = require('./notificationDispatch.service');
 const { isUuid } = require('../foundation/userAccountIdentityMigrationV2');
 const { BIOAVANCED_SYSTEM_ACTOR_ID } = require('../foundation/systemActorSeedV2');
+const { getCanonicalCollectionName } = require('../config/canonicalEntityCollections.v2');
+
+function userAccountsCollection(db) {
+  return db.collection(getCanonicalCollectionName('UserAccount'));
+}
+
+function actorsCollection(db) {
+  return db.collection(getCanonicalCollectionName('Actor'));
+}
 
 function requireCanonicalAccountId(user) {
   if (!isUuid(user?.userAccountId)) throw new Error('Identidade canônica UserAccount indisponível');
@@ -281,7 +290,7 @@ class AuthService {
         throw new Error(validation.errors.join(', '));
       }
 
-      const usersCollection = db.collection('userAccounts');
+      const usersCollection = userAccountsCollection(db);
 
       // Verifica se usuário já existe
       const existingUser = await usersCollection.findOne({
@@ -314,7 +323,7 @@ class AuthService {
       if (!isUuid(user.actorId) || !isUuid(grantedBy)) {
         throw new Error('actorId e grantedBy devem referenciar Actor canônico');
       }
-      const actors = db.collection('actors');
+      const actors = actorsCollection(db);
       const [accountActor, grantActor] = await Promise.all([
         actors.findOne({ actorId: user.actorId }),
         actors.findOne({ actorId: grantedBy }),
@@ -432,7 +441,7 @@ class AuthService {
       // happened is what an operator needs; the payload is not.
       logger.info('Tentativa de login recebida');
 
-      const usersCollection = db.collection('userAccounts');
+      const usersCollection = userAccountsCollection(db);
       
       // Busca por email ou username
       // Tenta busca exata primeiro (mais rápida)
@@ -817,7 +826,7 @@ class AuthService {
       }
       const usernameTerm = username.trim();
 
-      const usersCollection = db.collection('userAccounts');
+      const usersCollection = userAccountsCollection(db);
       const user = await usersCollection.findOne({
         $or: [
           { email: usernameTerm },
@@ -970,7 +979,7 @@ class AuthService {
         throw new Error('Código MFA é obrigatório');
       }
 
-      const usersCollection = db.collection('userAccounts');
+      const usersCollection = userAccountsCollection(db);
       const { ObjectId } = require('mongodb');
       
       const user = await usersCollection.findOne({
@@ -1109,7 +1118,7 @@ class AuthService {
    */
   async setupMFA(db, userID) {
     try {
-      const usersCollection = db.collection('userAccounts');
+      const usersCollection = userAccountsCollection(db);
       const { ObjectId } = require('mongodb');
       const user = await usersCollection.findOne({ userAccountId: userID });
 
@@ -1151,7 +1160,7 @@ class AuthService {
    */
   async enableMFA(db, userID, mfaCode) {
     try {
-      const usersCollection = db.collection('userAccounts');
+      const usersCollection = userAccountsCollection(db);
       const { ObjectId } = require('mongodb');
       const user = await usersCollection.findOne({ userAccountId: userID });
 
@@ -1226,7 +1235,7 @@ class AuthService {
    */
   async requestPasswordReset(db, email, req) {
     try {
-      const usersCollection = db.collection('userAccounts');
+      const usersCollection = userAccountsCollection(db);
       const { ObjectId } = require('mongodb');
 
       // #887: same coercion as login() and the MFA-first-login siblings.
@@ -1333,7 +1342,7 @@ class AuthService {
    */
   async resetPassword(db, token, newPassword, req) {
     try {
-      const usersCollection = db.collection('userAccounts');
+      const usersCollection = userAccountsCollection(db);
       const { ObjectId } = require('mongodb');
 
       if (!token) {

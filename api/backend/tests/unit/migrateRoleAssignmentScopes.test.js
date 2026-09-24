@@ -66,7 +66,7 @@ function fakeDb({ users = [], roles = [], assignments = [], organizations }) {
   const organizationsCollection = { findOne: organizationsFindOne };
 
   const collection = vi.fn((name) => {
-    if (name === 'users') return usersCollection;
+    if (name === 'userAccounts') return usersCollection;
     if (name === 'roles') return rolesCollection;
     if (name === 'organizations') return organizationsCollection;
     return assignmentsCollection; // 'userRoleAssignments'

@@ -7,6 +7,7 @@ const { generateAnonId } = require('../utils/userAnonymization');
 const { grantRoleForAccessType } = require('../services/rbac-assignment.service');
 const { seedRolesAndPermissions } = require('../services/rbac-catalog-seed.service');
 const { BIOAVANCED_SYSTEM_ACTOR_ID, ensureSystemActor } = require('../foundation/systemActorSeedV2');
+const { getCanonicalCollection, getCanonicalCollectionName } = require('../config/canonicalEntityCollections.v2');
 
 dotenv.config();
 
@@ -41,7 +42,7 @@ async function createFirstAdmin(options = {}) {
   const shouldClose = !options.db;
 
   try {
-    const users = db.collection('userAccounts');
+    const users = db.collection(getCanonicalCollectionName('UserAccount'));
     const systemBootstrap = db.collection('systemBootstrap');
 
     await users.createIndex({ email: 1 }, { unique: true });
@@ -103,7 +104,7 @@ async function createFirstAdmin(options = {}) {
     // after it. This is the same pre-write-guard shape registerUser now uses.
     await seedRolesAndPermissions(db);
     await ensureSystemActor(db);
-    await db.collection('actors').insertOne({
+    await getCanonicalCollection(db, 'Actor').insertOne({
       actorId,
       actorType: 'user',
       displayName: config.name,

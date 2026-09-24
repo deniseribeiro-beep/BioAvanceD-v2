@@ -35,7 +35,7 @@ async function migrateUserOrganizations() {
     console.log('Conectado ao MongoDB');
 
     const db = client.db(dbName);
-    const usersCollection = db.collection('users');
+    const usersCollection = db.collection(getCanonicalCollectionName('UserAccount'));
     const organizationsCollection = db.collection(getCanonicalCollectionName('Organization'));
 
     const usersToMigrate = await usersCollection.find({

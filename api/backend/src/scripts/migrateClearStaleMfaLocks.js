@@ -33,6 +33,7 @@
  */
 
 const { MongoClient } = require('mongodb');
+const { getCanonicalCollectionName } = require('../config/canonicalEntityCollections.v2');
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '../../.env') });
 
@@ -55,7 +56,7 @@ async function migrateClearStaleMfaLocks() {
     console.log('Conectado ao MongoDB');
 
     const db = client.db(dbName);
-    const usersCollection = db.collection('users');
+    const usersCollection = db.collection(getCanonicalCollectionName('UserAccount'));
 
     const usersWithStaleLock = await usersCollection.find({
       mfaLocked: true

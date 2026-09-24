@@ -3,6 +3,7 @@ const env = require('../../config/env');
 const logger = require('../../utils/logger');
 const sessionService = require('../../services/session.service');
 const { isUuid } = require('../../foundation/userAccountIdentityMigrationV2');
+const { getCanonicalCollectionName } = require('../../config/canonicalEntityCollections.v2');
 
 /**
  * Middleware de autenticação JWT
@@ -145,7 +146,7 @@ const authenticate = async (req, res, next) => {
         // RF003 AC#3 - o papel atribuído pode ter vigência (validade); uma
         // sessão sob um papel já expirado é recusada mesmo com token/sessão
         // válidos, já que a expiração vive no documento do usuário, não no JWT.
-        const currentUser = await db.collection('userAccounts').findOne({ userAccountId: decoded.userID });
+        const currentUser = await db.collection(getCanonicalCollectionName('UserAccount')).findOne({ userAccountId: decoded.userID });
         if (!currentUser) {
           return res.status(401).json({ success: false, error: 'Token inválido', message: 'Faça login novamente' });
         }
