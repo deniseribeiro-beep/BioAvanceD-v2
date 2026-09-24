@@ -14,7 +14,11 @@ export default defineConfig({
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
-  workers: process.env.CI ? 1 : undefined,
+  // One worker everywhere, not only on CI (#1174). Every spec shares one
+  // backend and one database, and several seed global singletons such as the
+  // active consent template, so parallel workers race each other's fixtures.
+  // Pass --workers=N to override for a run you know is isolated.
+  workers: 1,
   reporter: [
     ['list'],
     ['html', { outputFolder: 'playwright-report' }],
