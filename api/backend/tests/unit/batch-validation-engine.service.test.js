@@ -6,6 +6,7 @@ const ExcelJS = require('exceljs');
 const { ObjectId } = require('mongodb');
 
 const batchValidationEngine = require('../../src/services/batch-validation-engine.service');
+const { sealStagedRecord, revealStagedRecord } = require('../../src/utils/stagedRowCrypto');
 const patientService = require('../../src/services/patient.service');
 const sampleService = require('../../src/services/sample.service');
 const biomarkerObservationService = require('../../src/services/biomarker-observation.service');
@@ -714,7 +715,11 @@ describe('#813 quarantine of rejected rows', () => {
     });
 
     expect(stagingRecords.insertMany).toHaveBeenCalledTimes(1);
-    const docs = stagingRecords.insertMany.mock.calls[0][0];
+    const stored = stagingRecords.insertMany.mock.calls[0][0];
+    // #807: sealed at rest -- no row value in the stored document.
+    expect(JSON.stringify(stored)).not.toContain('NOPE');
+    expect(stored[0].sealedPayload).toMatchObject({ alg: 'aes-256-gcm' });
+    const docs = stored.map(revealStagedRecord);
     expect(docs).toHaveLength(2);
     expect(docs[0]).toMatchObject({
       batchId: 'batch-813',
@@ -744,26 +749,28 @@ describe('#813 quarantine of rejected rows', () => {
     expect(stagingRecords.insertMany).not.toHaveBeenCalled();
   });
 
-  // #807/#814: a patient row carries patientName/birthDate/email -- civil
-  // identifiers, which are encrypted at rest everywhere else (#566). Staging
-  // them here would widen a known plaintext-at-rest problem to the most
-  // sensitive of the import paths, which is exactly what #814 says to settle
-  // (via #807) before quarantining a patient path. Samples are pseudonymous
-  // (participantId), which is why #787 was able to quarantine them.
-  it('refuses to quarantine patient rows while #807 is open', async () => {
+  // #813's patients half, unblocked by #807: a patient row carries
+  // patientName/birthDate/email, so it is quarantined like a sample row but
+  // sealed at rest, as participantIdentities stores the same values (#566).
+  it('quarantines patient rows too, with the civil values sealed at rest', async () => {
     const { db, importBatches, stagingRecords } = quarantineDb();
 
     const batchId = await batchValidationEngine.quarantineRejectedRows(db, {
       jobId: 'job-813',
       dataType: 'patients',
       fileName: 'pacientes.csv',
-      rejected: [{ rowNumber: 2, row: { patientName: 'Maria', birthDate: '01/01/1990' }, errors: ['x'] }],
+      rejected: [{ rowNumber: 2, row: { patientName: 'Maria Souza', birthDate: '01/01/1990' }, errors: ['x'] }],
       counts: { total: 3, success: 2 },
     });
 
-    expect(batchId).toBeNull();
-    expect(importBatches.insertOne).not.toHaveBeenCalled();
-    expect(stagingRecords.insertMany).not.toHaveBeenCalled();
+    expect(batchId).toBe('batch-813');
+    expect(importBatches.insertOne.mock.calls[0][0]).toMatchObject({ type: 'ASYNC_BATCH_IMPORT', dataType: 'patients' });
+    const stored = stagingRecords.insertMany.mock.calls[0][0];
+    expect(stored).toHaveLength(1);
+    expect(JSON.stringify(stored)).not.toContain('Maria Souza');
+    expect(JSON.stringify(stored)).not.toContain('01/01/1990');
+    expect(stored[0]).toMatchObject({ rowNumber: 2, status: 'ERROR', errors: ['x'] });
+    expect(revealStagedRecord(stored[0]).row).toEqual({ patientName: 'Maria Souza', birthDate: '01/01/1990' });
   });
 
   // Quarantine is a record-keeping step appended to an import that already
@@ -870,6 +877,24 @@ describe('#939 reading a quarantined ASYNC_BATCH_IMPORT batch back', () => {
 
     expect(records.map((record) => record.rowNumber)).toEqual([2, 5]);
     expect(importStagingRecords.find.mock.results[0].value.sort).toHaveBeenCalledWith({ rowNumber: 1 });
+  });
+
+  // #807: rows are sealed at rest; the reader hands them back as staged, and
+  // a row staged before #807 (plaintext) reads back unchanged.
+  it('unseals the staged row for the reader, and passes a legacy row through', async () => {
+    const batchId = new ObjectId();
+    const sealed = sealStagedRecord({ batchId, rowNumber: 2, status: 'ERROR', row: { patientName: 'Maria Souza' } });
+    const { db } = createReaderDb([
+      { __collection: 'import_batches', _id: batchId, type: 'ASYNC_BATCH_IMPORT', status: 'QUARANTINED' },
+      { __collection: 'import_staging_records', ...sealed },
+      { __collection: 'import_staging_records', batchId, rowNumber: 5, status: 'ERROR', row: { participantId: '1' } },
+    ]);
+
+    const { records } = await batchValidationEngine.getQuarantineBatch(db, String(batchId));
+
+    expect(records[0].row).toEqual({ patientName: 'Maria Souza' });
+    expect(records[0]).not.toHaveProperty('sealedPayload');
+    expect(records[1].row).toEqual({ participantId: '1' });
   });
 
   it('400s on an id that is not a valid ObjectId', async () => {

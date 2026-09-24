@@ -11,6 +11,7 @@ const patientService = require('./patient.service');
 const sampleService = require('./sample.service');
 const biomarkerObservationService = require('./biomarker-observation.service');
 const logger = require('../utils/logger');
+const { sealStagedRecord, revealStagedRecord } = require('../utils/stagedRowCrypto');
 
 const CHUNK_SIZE = 100;
 
@@ -987,20 +988,10 @@ class BatchValidationEngine {
     if (!Array.isArray(rejected) || rejected.length === 0) return null;
     if (!db) return null;
 
-    // #807/#814: uma linha de paciente carrega patientName/birthDate/email --
-    // identificadores civis, cifrados em repouso em todo o resto do sistema
-    // (#566). Persistir isso aqui ampliaria um problema conhecido de texto
-    // claro para o caminho mais sensivel, que e justamente o que #814 manda
-    // resolver (via #807) antes de colocar um caminho de pacientes em
-    // quarentena. Amostras sao pseudonimizadas (participantId), e por isso
-    // #787 pode coloca-las em quarentena.
-    if (dataType !== 'samples') {
-      logger.warn(
-        `[BATCH_IMPORT] ${rejected.length} linha(s) de '${dataType}' rejeitadas NAO foram para quarentena: ` +
-        'linhas de paciente carregam identificadores civis e #807 (texto claro em repouso) ainda esta aberto. Ver #814.'
-      );
-      return null;
-    }
+    // #813/#807: todo tipo de dado vai para a quarentena, inclusive
+    // pacientes. Uma linha de paciente carrega patientName/birthDate/email, e
+    // por isso `row` e selado em repouso (stagedRowCrypto), como os mesmos
+    // valores ja sao em participantIdentities (#566).
 
     try {
       const now = new Date();
@@ -1024,7 +1015,7 @@ class BatchValidationEngine {
       const batchId = batchResult.insertedId;
 
       await db.collection('import_staging_records').insertMany(
-        rejected.map((rejection) => ({
+        rejected.map((rejection) => sealStagedRecord({
           batchId,
           rowNumber: rejection.rowNumber,
           // #1041: additive and .xlsx-only. rowNumber stays numeric so the
@@ -1100,7 +1091,8 @@ class BatchValidationEngine {
       .sort({ rowNumber: 1 })
       .toArray();
 
-    return { batch, records };
+    // #807: rows are sealed at rest; the reader gets them back as staged.
+    return { batch, records: records.map(revealStagedRecord) };
   }
 
   async processBatchImport(db, stagingImportId, job = null) {
