@@ -928,6 +928,53 @@ describe('AuthService.requestPasswordReset', () => {
       $or: [{ email: 'user@test.com' }, { username: 'user@test.com' }]
     });
   });
+
+  // #1203: the link used to leave only in the NODE_ENV=development response,
+  // so production promised an email nothing sent.
+  describe('#1203: emails the reset link', () => {
+    const notificationService = require('../../src/services/NotificationService');
+
+    it('sends the link to the account email, carrying the stored token and its real 1 h lifetime', async () => {
+      const sendSpy = vi.spyOn(notificationService, 'sendPasswordReset').mockResolvedValue({ success: true });
+      const usersMock = createMatchingCollection([{ ...BASE_USER }]);
+      const db = makeDb(usersMock);
+
+      await authService.requestPasswordReset(db, 'user1', {});
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(sendSpy).toHaveBeenCalledTimes(1);
+      const [to, link, opts] = sendSpy.mock.calls[0];
+      expect(to).toBe(BASE_USER.email);
+      expect(opts).toEqual({ expiresInMinutes: 60 });
+      const token = new URL(link).searchParams.get('token');
+      expect(new URL(link).pathname).toBe('/reset-password');
+      expect(hashToken(token)).toBe(usersMock.updateOne.mock.calls[0][1].$set.passwordResetTokenHash);
+    });
+
+    it('sends nothing for an unknown or inactive account', async () => {
+      const sendSpy = vi.spyOn(notificationService, 'sendPasswordReset').mockResolvedValue({ success: true });
+      await authService.requestPasswordReset(makeDb(createMatchingCollection([])), 'nobody@test.com', {});
+      await authService.requestPasswordReset(
+        makeDb(createMatchingCollection([{ ...BASE_USER, status: 'inactive' }])), 'user@test.com', {}
+      );
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(sendSpy).not.toHaveBeenCalled();
+    });
+
+    // Not awaited: an SMTP round-trip only on the found-user branch would
+    // separate it from the miss branch by latency (the #1036 channel).
+    it('answers without waiting for delivery, and the same way when delivery fails', async () => {
+      vi.spyOn(notificationService, 'sendPasswordReset').mockReturnValue(new Promise(() => {}));
+      const pending = await authService.requestPasswordReset(makeDb(createMatchingCollection([{ ...BASE_USER }])), 'user@test.com', {});
+
+      vi.spyOn(notificationService, 'sendPasswordReset').mockRejectedValue(new Error('smtp down'));
+      const failed = await authService.requestPasswordReset(makeDb(createMatchingCollection([{ ...BASE_USER }])), 'user@test.com', {});
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(pending.message).toBe(failed.message);
+      expect(failed.success).toBe(true);
+    });
+  });
 });
 
 describe('AuthService.resetPassword', () => {

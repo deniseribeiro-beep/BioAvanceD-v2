@@ -796,10 +796,19 @@ class NotificationService {
     });
   }
 
-  async sendPasswordReset(email, link) {
+  // #1203: the expiry line follows the caller's token. It used to read a
+  // fixed "30 minutos", which matched neither the unauthenticated path's
+  // 1 h token nor user-security's 1-24 h one.
+  async sendPasswordReset(email, link, { expiresInMinutes } = {}) {
     if (!email || !link) {
       throw new Error('email e link são obrigatórios para recuperação de conta');
     }
+    const minutes = Number(expiresInMinutes);
+    const expiryText = Number.isFinite(minutes) && minutes > 0
+      ? (minutes % 60 === 0
+        ? `Este link expira em ${minutes / 60} hora${minutes === 60 ? '' : 's'}.`
+        : `Este link expira em ${minutes} minutos.`)
+      : 'Este link expira em breve.';
 
     const html = `
       <div style="font-family: Arial, sans-serif; background:#f4f7fb; padding:24px; color:#1d3557;">
@@ -811,14 +820,14 @@ class NotificationService {
           <p style="margin:24px 0;">
             <a href="${link}" style="display:inline-block; padding:12px 20px; background:#1d4ed8; color:#ffffff; text-decoration:none; border-radius:8px; font-weight:bold;">Redefinir senha</a>
           </p>
-          <p style="font-size:13px; color:#6b7280; line-height:1.5;">Se você não solicitou esta recuperação, ignore este e-mail. Este link expira em 30 minutos.</p>
+          <p style="font-size:13px; color:#6b7280; line-height:1.5;">Se você não solicitou esta recuperação, ignore este e-mail. ${expiryText}</p>
           <hr style="border:none; border-top:1px solid #e5e7eb; margin:24px 0;" />
           <p style="font-size:12px; color:#94a3b8; margin:0;">© ${new Date().getFullYear()} BioAvanceD · <a href="https://bioadvanced.dev" style="color:#1d4ed8; text-decoration:none;">bioadvanced.dev</a></p>
         </div>
       </div>
     `;
 
-    const text = `BioAvanceD - Recuperação de senha\n\nAcesse: ${link}\n\nSe você não solicitou, ignore este e-mail.`;
+    const text = `BioAvanceD - Recuperação de senha\n\nAcesse: ${link}\n${expiryText}\n\nSe você não solicitou, ignore este e-mail.`;
 
     return this.sendEmail({
       to: email,
@@ -896,11 +905,6 @@ class NotificationService {
     };
   }
 
-  async sendRecoveryEmail(email, token) {
-    const appDomain = process.env.APP_DOMAIN || 'http://localhost:5173';
-    const link = `${appDomain.replace(/\/$/, '')}/recover-password?token=${encodeURIComponent(token)}`;
-    return this.sendPasswordReset(email, link);
-  }
 
   async sendCriticalTempAlert(sampleId, temp, options = {}) {
     const minTemp = Number(options.minTemp ?? process.env.TELEMETRY_MIN_TEMP_ALERT ?? -196);

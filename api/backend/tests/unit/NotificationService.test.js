@@ -1047,6 +1047,22 @@ describe('NotificationService', () => {
         })
       );
     });
+
+    // #1203: the text used to promise "30 minutos" whatever the token said.
+    it('states the expiry the caller passes, and no fixed duration otherwise', async () => {
+      const sendEmailSpy = vi.spyOn(notificationService, 'sendEmail').mockResolvedValue({ success: true });
+      await notificationService.sendPasswordReset('a@x.com', 'https://app.example.com/reset?token=t1', { expiresInMinutes: 60 });
+      await notificationService.sendPasswordReset('a@x.com', 'https://app.example.com/reset?token=t1', { expiresInMinutes: 1440 });
+      await notificationService.sendPasswordReset('a@x.com', 'https://app.example.com/reset?token=t1');
+
+      const [hour, day, none] = sendEmailSpy.mock.calls.map(([arg]) => arg);
+      expect(hour.text).toContain('expira em 1 hora.');
+      expect(day.html).toContain('expira em 24 horas.');
+      expect(none.text).toContain('expira em breve.');
+      for (const call of [hour, day, none]) {
+        expect(call.html).not.toContain('30 minutos');
+      }
+    });
   });
 
   describe('sendTemperatureAlert', () => {
@@ -1096,19 +1112,6 @@ describe('NotificationService', () => {
         note: 'Fluxo legado de SMS redirecionado para e-mail no provedor único Resend',
         emailResult: { success: true, messageId: 'm1' }
       });
-    });
-  });
-
-  describe('sendRecoveryEmail', () => {
-    it('builds a recovery link from APP_DOMAIN and delegates to sendPasswordReset', async () => {
-      process.env.APP_DOMAIN = 'https://app.example.com/';
-      const resetSpy = vi.spyOn(notificationService, 'sendPasswordReset').mockResolvedValue({ success: true });
-
-      await notificationService.sendRecoveryEmail('a@x.com', 'tok en');
-      expect(resetSpy).toHaveBeenCalledWith(
-        'a@x.com',
-        'https://app.example.com/recover-password?token=tok%20en'
-      );
     });
   });
 

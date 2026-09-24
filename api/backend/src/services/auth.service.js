@@ -1284,9 +1284,24 @@ class AuthService {
         module: 'Autenticação'
       });
 
-      // Em produção, aqui você enviaria um email com o link
-      // Por enquanto, retornamos o token para desenvolvimento
       const resetLink = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/reset-password?token=${resetToken}`;
+
+      // #1203: the link goes out by email in every environment. Until now it
+      // left only in the development response below, so in production this
+      // route promised a link it never sent.
+      //
+      // NOT awaited, deliberately: the unknown-user and inactive-user
+      // branches above return without sending, so an awaited SMTP round-trip
+      // would make "this address exists" visible through latency -- the
+      // channel #1036 closed on the login path. And a delivery failure is
+      // logged, never thrown, so the response cannot differ by outcome
+      // either. sendEmail records its own compliance row for each attempt.
+      const notificationService = require('./NotificationService');
+      Promise.resolve()
+        .then(() => notificationService.sendPasswordReset(user.email, resetLink, { expiresInMinutes: 60 }))
+        .catch((mailError) => {
+          logger.error('#1203: falha ao enviar email de recuperação de senha:', mailError && mailError.message);
+        });
 
       logger.info('Token de recuperação gerado para:', email);
 
