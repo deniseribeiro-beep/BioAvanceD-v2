@@ -9,6 +9,7 @@ const PatientModel = require('../../models/Patient');
 const { SampleModel } = require('../../models/Sample');
 const { SPECIMEN_TYPE_IDS, SAMPLE_ORIGIN_IDS } = require('../../config/constants/specimen.constants');
 const logger = require('../../utils/logger');
+const { anonymizeLogs } = require('../../utils/userAnonymization');
 const specimenPreanalyticsService = require('../../services/specimen-preanalytics.service');
 const rcsAssessmentService = require('../../services/rcs-assessment.service');
 const { resolveUserOrganizationScope, isOrganizationScopeUsable, applyOrganizationScopeFilter, isRecordInOrganizationScope, isAuditReader } = require('../../services/rbac-assignment.service');
@@ -818,8 +819,14 @@ async function handleAccessLogs(db, filters) {
     query.$or = [{ dateTime: dateQuery }, { timestamp: dateQuery }];
   }
 
-  const logs = await collection.find(query).sort({ dateTime: -1, timestamp: -1 }).limit(200).toArray();
+  const rawLogs = await collection.find(query).sort({ dateTime: -1, timestamp: -1 }).limit(200).toArray();
   const total = await collection.countDocuments(query);
+  // #1076: the same read-time anonymization log.service#getLogs applies for
+  // /api/logs. auditLogger already writes a USR- pseudonym into userName, but
+  // this handler returned raw documents, so any row not written through it
+  // (or written before it anonymized) left with its stored name through the
+  // preview, the CSV, /export/pdf and the persisted Report alike.
+  const logs = await anonymizeLogs(rawLogs, db);
   return { total, logs, previewLimited: total > 200 };
 }
 
@@ -967,11 +974,11 @@ const SAMPLE_EXPORT_COLUMNS = [
 // leave through the other route -- it would only create an unrecorded
 // divergence between two exports of one collection.
 //
-// Note this means real userName and ipSource DO leave through both, which
-// dict-04's P-033 row names as an anti-pattern outright ("nomes reais em
-// exportações de log") and dict-02 P1X-0328 `actorAnonId` exists to
-// replace. That is a real finding against BOTH surfaces and is filed
-// separately rather than half-fixed here.
+// The `userName` column carries the USR- pseudonym, not a real name (dict-04
+// P-033 forbids "nomes reais em exportações de log"): auditLogger writes it
+// anonymized, and both surfaces anonymize again on read -- getLogs for
+// /api/logs, handleAccessLogs here (#1076). ipSource is exported as stored;
+// dict-02 only says it "pode" be masked.
 const AUDIT_LOG_EXPORT_COLUMNS = [
   'timestamp', 'userName', 'action', 'entity', 'result', 'severity',
   'module', 'ipSource', 'message',

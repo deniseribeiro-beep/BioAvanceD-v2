@@ -831,7 +831,7 @@ describe('Reports API integration', () => {
       const response = await request(testApp).get('/api/reports/access_logs/export');
 
       expect(response.status).toBe(200);
-      expect(response.text).toContain('alice');
+      expect(response.text).toContain('LOGIN');
     });
 
     it('CONTROL: um auditor continua exportando access_logs', async () => {
@@ -841,7 +841,56 @@ describe('Reports API integration', () => {
       const response = await request(testApp).get('/api/reports/access_logs/export');
 
       expect(response.status).toBe(200);
-      expect(response.text).toContain('alice');
+      expect(response.text).toContain('LOGIN');
+    });
+
+    // #1076: /api/logs anonymizes on read (log.service#getLogs ->
+    // anonymizeLogs) while this handler returned the raw documents, so a row
+    // whose stored userName is a real name -- a pre-anonymization row, or one
+    // written by a caller that bypasses auditLogger -- left through the
+    // preview JSON, the CSV, /export/pdf and the persisted Report. dict-04
+    // P-033 names "nomes reais em exportações de log" as an anti-pattern.
+    describe('#1076: the access-log report anonymizes the actor like /api/logs does', () => {
+      const saltBefore = process.env.USER_ANON_SALT;
+      beforeEach(() => { process.env.USER_ANON_SALT = 'test-user-anon-salt'; });
+      afterEach(() => {
+        if (saltBefore === undefined) delete process.env.USER_ANON_SALT;
+        else process.env.USER_ANON_SALT = saltBefore;
+      });
+
+      const RAW_ROWS = [{
+        logId: 'L-7',
+        userId: 'user-7',
+        userName: 'Alice Real Name',
+        action: 'LOGIN_SUCCESS',
+        metadata: { user: { userName: 'Alice Real Name', email: 'alice@example.org', userRole: 'Tecnico' } },
+        payload: { email: 'alice@example.org' },
+      }];
+
+      it('the CSV export carries the USR- pseudonym, not the stored name', async () => {
+        const { generateAnonId } = require('../../src/utils/userAnonymization');
+        const { db } = buildCollectionDb({ ...rbacFor('administrator', 4), logs: RAW_ROWS });
+
+        const response = await request(appWithDb(db)).get('/api/reports/access_logs/export');
+
+        expect(response.status).toBe(200);
+        // CONTROL: the row is genuinely exported.
+        expect(response.text).toContain('LOGIN_SUCCESS');
+        expect(response.text).toContain(generateAnonId('user-7'));
+        expect(response.text).not.toContain('Alice Real Name');
+      });
+
+      it('the preview JSON carries no real name or email anywhere in the row', async () => {
+        const { db } = buildCollectionDb({ ...rbacFor('administrator', 4), logs: RAW_ROWS });
+
+        const response = await request(appWithDb(db)).post('/api/reports/access_logs/preview').send({ filters: {} });
+
+        expect(response.status).toBe(200);
+        const body = JSON.stringify(response.body);
+        expect(body).toContain('LOGIN_SUCCESS');
+        expect(body).not.toContain('Alice Real Name');
+        expect(body).not.toContain('alice@example.org');
+      });
     });
 
     it('CONTROL: um usuário externo continua exportando um relatório NÃO-auditoria', async () => {
@@ -864,7 +913,7 @@ describe('Reports API integration', () => {
       const response = await request(testApp).get('/api/reports/access_logs/export');
 
       expect(response.status).toBe(403);
-      expect(response.text).not.toContain('alice');
+      expect(response.text).not.toContain('LOGIN');
       expect(response.text).not.toContain('deadbeef');
     });
 
@@ -877,7 +926,7 @@ describe('Reports API integration', () => {
       const response = await request(testApp).get('/api/reports/audit/export');
 
       expect(response.status).toBe(403);
-      expect(response.text).not.toContain('alice');
+      expect(response.text).not.toContain('LOGIN');
     });
 
     it('técnico recebe 403 no preview da trilha de auditoria', async () => {
@@ -887,7 +936,7 @@ describe('Reports API integration', () => {
       const response = await request(testApp).post('/api/reports/access_logs/preview').send({ filters: {} });
 
       expect(response.status).toBe(403);
-      expect(JSON.stringify(response.body)).not.toContain('alice');
+      expect(JSON.stringify(response.body)).not.toContain('LOGIN');
     });
 
     // The PDF route returns previewData verbatim as JSON with no CSV layer,
@@ -899,7 +948,7 @@ describe('Reports API integration', () => {
       const response = await request(testApp).get('/api/reports/audit/export/pdf');
 
       expect(response.status).toBe(403);
-      expect(JSON.stringify(response.body)).not.toContain('alice');
+      expect(JSON.stringify(response.body)).not.toContain('LOGIN');
     });
 
     it('CONTROL: POST /generate de um relatório NÃO-auditoria continua sendo persistido', async () => {
@@ -918,7 +967,7 @@ describe('Reports API integration', () => {
       const response = await request(testApp).post('/api/reports/generate').send({ reportType: 'audit' });
 
       expect(response.status).toBe(403);
-      expect(JSON.stringify(response.body)).not.toContain('alice');
+      expect(JSON.stringify(response.body)).not.toContain('LOGIN');
     });
   });
 
