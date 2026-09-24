@@ -55,6 +55,12 @@ describe('AccessModel', () => {
     expect(created.grantedAt).toBeInstanceOf(Date);
     expect(created.createdAt).toBeInstanceOf(Date);
     expect(created.updatedAt).toBeInstanceOf(Date);
+    // #1202: AccessGrant canonical fields.
+    expect(created.resourceType).toBe('report');
+    expect(created.resourceId).toBe(2);
+    expect(created.grantStatus).toBe('active');
+    expect(created.grantedBy).toBeNull();
+    expect(created.revokedAt).toBeNull();
   });
 
   it('deve mapear descrição de tipo de acesso para número', () => {

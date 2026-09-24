@@ -90,7 +90,7 @@ router.post('/', authenticate, requirePermission('createUser'), async (req, res)
     }
 
     const accessCollection = db.collection('access');
-    const access = AccessModel.create(req.body);
+    const access = AccessModel.create(req.body, { grantedBy: req.user?.userID || null });
 
     const result = await accessCollection.insertOne(access);
 
@@ -138,6 +138,9 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
         updateFields[field] = req.body[field];
       }
     }
+    if (Object.prototype.hasOwnProperty.call(updateFields, 'reportID')) {
+      updateFields.resourceId = updateFields.reportID;
+    }
     updateFields.updatedAt = new Date();
 
     const result = await accessCollection.updateOne(
@@ -183,9 +186,20 @@ router.delete('/:id', authenticate, requirePermission('createUser'), async (req,
 
     const { ObjectId } = require('mongodb');
     const accessCollection = db.collection('access');
-    const result = await accessCollection.deleteOne({ _id: new ObjectId(req.params.id) });
+    // #1202: AccessGrant has grantStatus 'revoked' + revokedAt (P1X-0248,
+    // P1X-0249), so a revocation is a state change that keeps the grant's
+    // history rather than a hard delete. Revoking twice is a 404, as the
+    // delete was.
+    const now = new Date();
+    const reason = typeof req.body?.revocationReason === 'string' && req.body.revocationReason.trim()
+      ? req.body.revocationReason.trim()
+      : null;
+    const result = await accessCollection.updateOne(
+      { _id: new ObjectId(req.params.id), grantStatus: { $ne: 'revoked' } },
+      { $set: { grantStatus: 'revoked', revokedAt: now, revocationReason: reason, updatedAt: now } }
+    );
 
-    if (result.deletedCount === 0) {
+    if (result.matchedCount === 0) {
       return res.status(404).json({
         success: false,
         error: 'Acesso não encontrado'
@@ -199,7 +213,7 @@ router.delete('/:id', authenticate, requirePermission('createUser'), async (req,
 
     return res.status(200).json({
       success: true,
-      message: 'Acesso deletado com sucesso'
+      message: 'Acesso revogado com sucesso'
     });
   } catch (error) {
     logger.error('Erro ao deletar acesso:', error.message);

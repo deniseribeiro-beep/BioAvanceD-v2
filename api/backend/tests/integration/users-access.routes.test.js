@@ -1329,6 +1329,64 @@ describe('Users and Access routes', () => {
     expect(accessCollection.insertOne).toHaveBeenCalled();
   });
 
+  // #1202: dict v2.0.0 AccessGrant fields on the written grant.
+  it('#1202: POST /api/access grava grantedBy do chamador e os campos canônicos, ignorando o corpo', async () => {
+    const handler = getHandler(accessRoutes, 'post', '/');
+    accessCollection.insertOne.mockResolvedValue({ insertedId: 'access-3' });
+
+    const req = createRequest({
+      body: { reportID: 7, reportType: 'Relatório', grantedBy: 'forged', grantStatus: 'revoked' },
+    });
+    req.app.locals.db = db;
+    const res = createResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(201);
+    const written = accessCollection.insertOne.mock.calls[0][0];
+    expect(written).toMatchObject({
+      resourceType: 'report',
+      resourceId: 7,
+      grantedBy: '507f1f77bcf86cd799439011',
+      grantStatus: 'active',
+      revokedAt: null,
+    });
+  });
+
+  it('#1202: DELETE /api/access/:id revoga a concessão em vez de apagá-la', async () => {
+    const handler = getHandler(accessRoutes, 'delete', '/:id');
+    accessCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
+
+    const req = createRequest({
+      params: { id: '507f1f77bcf86cd799439099' },
+      body: { revocationReason: '  fim do estudo  ' },
+    });
+    req.app.locals.db = db;
+    const res = createResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(accessCollection.deleteOne).not.toHaveBeenCalled();
+    const [filter, update] = accessCollection.updateOne.mock.calls[0];
+    expect(filter.grantStatus).toEqual({ $ne: 'revoked' });
+    expect(update.$set).toMatchObject({ grantStatus: 'revoked', revocationReason: 'fim do estudo' });
+    expect(update.$set.revokedAt).toBeInstanceOf(Date);
+  });
+
+  it('#1202: DELETE /api/access/:id de uma concessão já revogada responde 404', async () => {
+    const handler = getHandler(accessRoutes, 'delete', '/:id');
+    accessCollection.updateOne.mockResolvedValue({ matchedCount: 0 });
+
+    const req = createRequest({ params: { id: '507f1f77bcf86cd799439099' } });
+    req.app.locals.db = db;
+    const res = createResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(404);
+  });
+
   // #998 (RF003, RNF008 AC#1): role assignment is Administrador-only.
   //
   // requirePermission('createUser') is the ONLY gate on the three routes that
