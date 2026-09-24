@@ -3,6 +3,7 @@ const consentService = require('../../src/services/consent.service');
 const notificationService = require('../../src/services/notification.service');
 const notificationDispatchService = require('../../src/services/notificationDispatch.service');
 const logger = require('../../src/utils/logger');
+const consentEvidence = require('../../src/services/consentEvidence.service');
 const { ObjectId } = require('mongodb');
 
 // Fake, chainable Mongo cursor helper: supports .sort().skip().limit().toArray()
@@ -1465,6 +1466,17 @@ describe('ConsentService.createPatientConsent', () => {
   // POST /api/e-consent/consents carries one).
   const validSignature = { signatureImageBase64: Buffer.from('sig').toString('base64'), signatureName: 'Jane Doe' };
 
+  // #827: every recorded consent now writes an encrypted evidence document.
+  // Kept off the disk here; consentEvidence.service.unit.test.js owns it.
+  beforeEach(() => {
+    vi.spyOn(consentEvidence, 'storeConsentEvidence').mockReturnValue({
+      evidenceDocumentUri: 'objstore://consents/stub/evidence.json',
+      evidenceHash: `sha256:${'0'.repeat(64)}`,
+      evidenceMimeType: 'application/json',
+      evidenceEncryption: null,
+    });
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -1522,6 +1534,50 @@ describe('ConsentService.createPatientConsent', () => {
     // Origin evidence is still captured (RF010 AC#4's "origem").
     expect(result.ipAddress).toBe('203.0.113.7');
     expect(result.userAgent).toBe('Mozilla/5.0');
+  });
+
+  // #827: RF010 AC#3 ("Vincular as respostas à versão exata do termo") and
+  // AC#4's evidence -- dict-02 consentVersion (ELM-0091) and the evidence
+  // trio (ELM-0105/0106, P1X-0373), all 1..1 Core. The recorder stored the
+  // template id alone, so once the template group was revised the consent
+  // could not be resolved back to the text the participant saw.
+  it('records the exact term version and the stored evidence on every consent (#827)', async () => {
+    const storeSpy = vi.spyOn(consentEvidence, 'storeConsentEvidence').mockReturnValue({
+      evidenceDocumentUri: 'objstore://consents/x/evidence.json',
+      evidenceHash: `sha256:${'a'.repeat(64)}`,
+      evidenceMimeType: 'application/json',
+      evidenceEncryption: { algorithm: 'aes-256-gcm', keyId: 'k1', iv: 'iv', tag: 'tag' },
+    });
+    const patients = makeCollection({ findOne: vi.fn(async () => ({ participantId: '12345678' })) });
+    const versioned = { ...activeTemplate, version: '4', htmlContent: '<p>v4</p>' };
+    const templates = makeCollection({ findOne: vi.fn(async () => versioned) });
+    const consents = makeCollection({ insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })) });
+    const db = makeDb({ patients, consent_templates: templates, patientConsents: consents });
+
+    const result = await consentService.createPatientConsent(db, {
+      participantId: '12345678',
+      consentTemplateId: templateId.toString(),
+      responses: { analytics: true },
+      ipAddress: '203.0.113.7',
+    });
+
+    expect(result.consentVersion).toBe('4');
+    expect(result.evidenceDocumentUri).toBe('objstore://consents/x/evidence.json');
+    expect(result.evidenceHash).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(result.evidenceMimeType).toBe('application/json');
+    // The evidence is written for THIS consent's id, against the template
+    // actually loaded, with the answers actually recorded.
+    expect(storeSpy).toHaveBeenCalledWith(expect.objectContaining({
+      consentId: result.consentId,
+      participantId: '12345678',
+      template: versioned,
+      responses: { analytics: true },
+      ipAddress: '203.0.113.7',
+    }));
+    expect(consents.insertOne).toHaveBeenCalledWith(expect.objectContaining({
+      consentVersion: '4',
+      evidenceHash: `sha256:${'a'.repeat(64)}`,
+    }));
   });
 
   it('drops a caller-supplied empty signatureImageBase64 instead of 422ing on it', async () => {

@@ -5,6 +5,7 @@ const { ObjectId } = require('mongodb');
 const ConsentTemplateModel = require('../models/ConsentTemplate');
 const ConsentPolicyModel = require('../models/ConsentPolicy');
 const PatientConsentModel = require('../models/PatientConsent');
+const consentEvidence = require('./consentEvidence.service');
 const { validateParticipantId } = require('../utils/patientAnonymization');
 const logger = require('../utils/logger');
 const { getCollection } = require('../utils/collectionResolver');
@@ -852,9 +853,30 @@ class ConsentService {
         );
       }
 
+      // #827: RF010 AC#3/AC#4 -- the exact term version and the stored
+      // evidence of this manifestation (dict-02 ELM-0091/0105/0106,
+      // P1X-0373), written before the insert so a keyless deployment
+      // refuses rather than recording a consent with no evidence.
+      const consentId = crypto.randomUUID();
+      const signedAt = new Date();
+      const evidence = consentEvidence.storeConsentEvidence({
+        consentId,
+        participantId,
+        template,
+        responses: normalizedPayload.responses || {},
+        decisionDateTime: signedAt,
+        signatureHash: normalizedPayload.signatureHash || null,
+        ipAddress: normalizedPayload.ipAddress,
+        userAgent: normalizedPayload.userAgent
+      });
+
       const consent = PatientConsentModel.create({
         ...normalizedPayload,
+        consentId,
+        signedAt,
         consentTemplateId: consentTemplateId.toString(),
+        consentVersion: template.version != null ? String(template.version) : null,
+        ...evidence,
         status: 'ACTIVE'
       });
 
