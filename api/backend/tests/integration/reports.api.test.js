@@ -228,7 +228,7 @@ describe('Reports API integration', () => {
     ]);
 
     setCachedModule(modulePaths.auth, { authenticate });
-    setCachedModule(modulePaths.rbac, { requirePermission });
+    setCachedModule(modulePaths.rbac, { requirePermission, requireRole: () => (_req, _res, next) => next() });
     delete require.cache[modulePaths.controller];
 
     const reportsRouter = require(modulePaths.controller);

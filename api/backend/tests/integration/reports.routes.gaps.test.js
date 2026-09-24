@@ -117,8 +117,17 @@ describe('reports.routes.js gaps', () => {
     next();
   };
   const requirePermission = () => (_req, _res, next) => next();
+  // #1186: records each registration's requireRole(...) arguments and
+  // denies when a request carries x-deny-role, so a test can tell which
+  // routes the gate is on without re-implementing the hierarchy lookup.
+  let requireRoleCalls = [];
+  const requireRole = (...levels) => {
+    requireRoleCalls.push(levels);
+    return (req, res, next) => (req.headers['x-deny-role'] ? res.status(403).json({ gate: 'role' }) : next());
+  };
 
   beforeEach(() => {
+    requireRoleCalls = [];
     vi.clearAllMocks();
 
     for (const modulePath of Object.values(modulePaths)) {
@@ -126,7 +135,7 @@ describe('reports.routes.js gaps', () => {
     }
 
     setCachedModule(modulePaths.auth, { authenticate });
-    setCachedModule(modulePaths.rbac, { requirePermission });
+    setCachedModule(modulePaths.rbac, { requirePermission, requireRole });
     delete require.cache[modulePaths.controller];
   });
 
@@ -1411,6 +1420,32 @@ describe('reports.routes.js gaps', () => {
 
       expect(response.status).toBe(403);
       expect(reports).toHaveLength(1);
+    });
+
+    // #1186: viewReports is UsuarioExterno's whole permission set, and
+    // RF008's actor is the Coordenador -- the external actor only consults
+    // (diagrams-index). Deleting a saved report is Coordenador-and-up.
+    it('DELETE /api/reports/:id is gated on requireRole(3, 4), and nothing else in the file is', async () => {
+      const reports = [{ reportID: 1, reportType: 'audit', organizationIds: ['org-1'] }];
+      const { db } = buildCollectionDb({ ...ORG_SCOPED_RBAC, reports });
+      const testApp = appWithDb(db);
+
+      const denied = await request(testApp).delete('/api/reports/1').set('x-deny-role', '1');
+
+      expect(requireRoleCalls).toEqual([[3, 4]]);
+      expect(denied.status).toBe(403);
+      expect(denied.body.gate).toBe('role');
+      expect(reports).toHaveLength(1);
+    });
+
+    it('CONTROL: GET /api/reports/:id is not behind the role gate', async () => {
+      const reports = [{ reportID: 1, reportType: 'audit', organizationIds: ['org-1'] }];
+      const { db } = buildCollectionDb({ ...ORG_SCOPED_RBAC, reports });
+      const testApp = appWithDb(db);
+
+      const res = await request(testApp).get('/api/reports/1').set('x-deny-role', '1');
+
+      expect(res.status).toBe(200);
     });
 
     it('CONTROL: DELETE /api/reports/:id remove um relatório no escopo do usuário', async () => {

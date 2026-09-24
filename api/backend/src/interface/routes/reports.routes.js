@@ -2,7 +2,7 @@ const express = require('express');
 const { ObjectId } = require('mongodb');
 const router = express.Router();
 const { authenticate } = require('../../infrastructure/middleware/auth');
-const { requirePermission } = require('../../infrastructure/middleware/rbac');
+const { requirePermission, requireRole } = require('../../infrastructure/middleware/rbac');
 const ReportsModel = require('../../models/Reports');
 // #1045: stripConsentSecrets -- the patient reports return raw participant documents.
 const PatientModel = require('../../models/Patient');
@@ -1171,7 +1171,10 @@ router.post('/generate', authenticate, requirePermission('viewReports'), async (
   }
 });
 
-router.delete('/:id', authenticate, requirePermission('viewReports'), async (req, res) => {
+// #1186: viewReports is UsuarioExterno's whole permission set, and RF008's
+// actor is the Coordenador; the external actor only consults data. Deleting
+// a saved report is Coordenador-and-up, as createMasterDataRouter's writes are.
+router.delete('/:id', authenticate, requirePermission('viewReports'), requireRole(3, 4), async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
