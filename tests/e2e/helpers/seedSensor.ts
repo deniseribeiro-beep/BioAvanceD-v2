@@ -289,6 +289,12 @@ export async function removeTemperaturePolicy(policyId: string): Promise<void> {
   await db.collection('temperaturePolicies').deleteOne({ _id: new ObjectId(policyId) });
 }
 
+/** Reads back a temperaturePolicies doc by _id (raw, no Mongoose) to assert the stored canonical shape. */
+export async function findTemperaturePolicy(policyId: string): Promise<any | null> {
+  const db = await getDb();
+  return db.collection('temperaturePolicies').findOne({ _id: new ObjectId(policyId) });
+}
+
 /** Deletes a seeded freezer container and its linked sensorMetadata/sensors docs. */
 export async function removeSensorRegistration(sensorId: string, freezerId: string): Promise<void> {
   const db = await getDb();

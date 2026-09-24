@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { realLogin, seedRealAuth } from './helpers/realAuth';
-import { removeTemperaturePolicy, closeSeedSensorDb } from './helpers/seedSensor';
+import { removeTemperaturePolicy, findTemperaturePolicy, closeSeedSensorDb } from './helpers/seedSensor';
 
 // Real-backend proof for #1178: the Políticas de Temperatura tab keyed every
 // row on `policyID`, which GET /api/policies never returns (it returns _id,
@@ -34,6 +34,7 @@ test.describe('Temperature policies tab (#1178) — real backend', () => {
         minThreshold: 2,
         maxThreshold: 8,
         targetTemperature: 5,
+        alertDelayMin: 30,
         validFrom: new Date().toISOString(),
         validTo: new Date(Date.now() + 86_400_000).toISOString(),
       },
@@ -47,6 +48,19 @@ test.describe('Temperature policies tab (#1178) — real backend', () => {
 
     let deleted = false;
     try {
+      // #1195: the alert delay lands on minimumDuration, the field
+      // TelemetryMonitor enforces, and not on an extension nothing reads.
+      // Read from Mongo, because before the fix GET echoed the stored
+      // extension back and an API-only check passed either way.
+      const stored = await findTemperaturePolicy(policyId);
+      expect(stored?.minimumDuration).toBe(30);
+      expect(stored).not.toHaveProperty('alertDelayMin');
+      const fetched = await request.get(`${apiBaseURL}/api/policies/${policyId}`, {
+        headers: { Authorization: `Bearer ${session.token}` },
+      });
+      expect(fetched.status()).toBe(200);
+      expect((await fetched.json())?.data?.alertDelayMin).toBe(30);
+
       await seedRealAuth(page, session);
       await page.goto('/facility-management?tab=policies');
 

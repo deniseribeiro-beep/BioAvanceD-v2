@@ -24,11 +24,18 @@ const PolicyModel = require('../../models/Policy');
 //         source for it, so callers now supply policyName. That is a new
 //         REQUIRED request field (PolicyModel.validate enforces it).
 //
-// Q2/Q3 were not put to him, because Q4 answers them: temperatureUnit and
-// alertDelayMin have no dict-02 counterpart, but a GET still returns them,
-// so they must round-trip and are persisted as non-canonical extensions
-// alongside policyId. Retiring this translation -- and with it the legacy
-// names in the frontend's Policy type -- is the follow-up issue's job.
+// Q2/Q3 were not put to him, because Q4 answers them: temperatureUnit has
+// no dict-02 counterpart, but a GET still returns it, so it must round-trip
+// and is persisted as a non-canonical extension alongside policyId.
+// Retiring this translation -- and with it the legacy names in the
+// frontend's Policy type -- is the follow-up issue's job.
+//
+// #1195: alertDelayMin is NOT such an extension. The form defines it as the
+// minutes out of range before an alert, which is dict-02 P1X-0110
+// minimumDuration ("tempo fora de limite necessario para abrir excursao"),
+// the field TelemetryMonitor enforces, in the same unit. It was stored
+// under its HTTP name, where nothing read it, beside a hard-coded null
+// minimumDuration, so no operator's value ever took effect.
 const CANONICAL_METRIC_TYPE = 'temperature';
 const CANONICAL_RULE_VERSION = '1.0.0';
 
@@ -45,13 +52,13 @@ function toCanonical(body) {
       start: body.validFrom ? new Date(body.validFrom) : new Date(),
       end: body.validTo ? new Date(body.validTo) : null
     },
-    // P1X-0110. Set explicitly because these routes use the native driver,
-    // so TemperaturePolicySchema's own default never runs. TelemetryMonitor
-    // treats a non-positive value as "fall back to the global threshold".
-    minimumDuration: null,
+    // P1X-0110, sent as alertDelayMin (#1195). Set explicitly because these
+    // routes use the native driver, so TemperaturePolicySchema's own default
+    // never runs. Omitted stays null, which TelemetryMonitor treats as "fall
+    // back to the global threshold", as does any non-positive value.
+    minimumDuration: body.alertDelayMin === undefined ? null : body.alertDelayMin,
     // Non-canonical, kept because the HTTP contract above still exposes them.
     policyId: body.policyId || body.policyID || null,
-    alertDelayMin: body.alertDelayMin === undefined ? 5 : body.alertDelayMin,
     temperatureUnit: body.temperatureUnit || '\u00b0C',
     createdAt: new Date(),
     updatedAt: new Date()
@@ -60,10 +67,13 @@ function toCanonical(body) {
 
 function toApiShape(doc) {
   if (!doc) return doc;
-  const { name, minTemp, maxTemp, targetTemp, effectivePeriod, ...rest } = doc;
+  // #1195: alertDelayMin is read from minimumDuration, the value enforced. A
+  // legacy stored alertDelayMin was never enforced, so it is not reported.
+  const { name, minTemp, maxTemp, targetTemp, effectivePeriod, minimumDuration, alertDelayMin, ...rest } = doc;
   return {
     ...rest,
     policyName: name,
+    alertDelayMin: minimumDuration,
     minThreshold: minTemp,
     maxThreshold: maxTemp,
     targetTemperature: targetTemp,
@@ -299,7 +309,7 @@ router.put('/:id', authenticate, requirePermission('manageTemperaturePolicy'), a
       maxThreshold: 'maxTemp',
       targetTemperature: 'targetTemp',
       hysteresis: 'hysteresis',
-      alertDelayMin: 'alertDelayMin',
+      alertDelayMin: 'minimumDuration', // #1195
       temperatureUnit: 'temperatureUnit',
       validFrom: 'effectivePeriod.start',
       validTo: 'effectivePeriod.end'

@@ -345,9 +345,10 @@ describe('policy.routes', () => {
 
       // Q2/Q3 follow from Q4 rather than being separate calls: a GET still
       // returns these, so they have to round-trip through storage.
+      // #1195: alertDelayMin is not one of them any more -- it is dict-02's
+      // minimumDuration under its HTTP name (see the #1195 block below).
       const stored = insertOne.mock.calls[0][0];
       expect(stored.temperatureUnit).toBe('\u00b0C');
-      expect(stored.alertDelayMin).toBe(5);
     });
 
     it('POST answers the caller in the legacy HTTP shape', async () => {
@@ -390,6 +391,80 @@ describe('policy.routes', () => {
       expect(res.body.data[0].minThreshold).toBe(-85);
       expect(res.body.data[0].maxThreshold).toBe(-75);
       expect(res.body.data[0].policyName).toBe('Freezer -80');
+    });
+  });
+
+  // #1195: the form's "Atraso de Alerta" was stored as alertDelayMin, which
+  // nothing reads, while TelemetryMonitor reads minimumDuration (dict-02
+  // P1X-0110, minutes), which POST hard-coded to null. The operator's value
+  // was never enforced. The HTTP name now lands on the canonical field.
+  describe('#1195: alertDelayMin is minimumDuration at the boundary', () => {
+    const body = {
+      policyName: 'Freezer -80',
+      minThreshold: -85,
+      maxThreshold: -75,
+      targetTemperature: -80,
+    };
+
+    it('POST stores alertDelayMin as minimumDuration, not as an extension', async () => {
+      const insertOne = vi.fn().mockResolvedValue({ insertedId: 'new-id' });
+      const db = { collection: vi.fn().mockReturnValue({ insertOne }) };
+      const { router } = loadRoute();
+      const app = buildApp(router, db);
+
+      await request(app).post('/api/policies').send({ ...body, alertDelayMin: 30 });
+
+      const stored = insertOne.mock.calls[0][0];
+      expect(stored.minimumDuration).toBe(30);
+      expect(stored).not.toHaveProperty('alertDelayMin');
+    });
+
+    it('POST without alertDelayMin keeps minimumDuration null, the global fallback', async () => {
+      const insertOne = vi.fn().mockResolvedValue({ insertedId: 'new-id' });
+      const db = { collection: vi.fn().mockReturnValue({ insertOne }) };
+      const { router } = loadRoute();
+      const app = buildApp(router, db);
+
+      await request(app).post('/api/policies').send(body);
+
+      const stored = insertOne.mock.calls[0][0];
+      expect(stored.minimumDuration).toBeNull();
+      expect(stored).not.toHaveProperty('alertDelayMin');
+    });
+
+    it('PUT sets alertDelayMin on minimumDuration', async () => {
+      const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+      const db = { collection: vi.fn().mockReturnValue({ updateOne }) };
+      const { router } = loadRoute();
+      const app = buildApp(router, db);
+
+      const res = await request(app)
+        .put('/api/policies/507f1f77bcf86cd799439011')
+        .send({ alertDelayMin: 45 });
+
+      expect(res.status).toBe(200);
+      const setArg = updateOne.mock.calls[0][1].$set;
+      expect(Object.keys(setArg).sort()).toEqual(['minimumDuration', 'updatedAt']);
+      expect(setArg.minimumDuration).toBe(45);
+    });
+
+    it('GET reports alertDelayMin from minimumDuration, the value actually enforced', async () => {
+      const toArray = vi.fn().mockResolvedValue([
+        { _id: 'p1', name: 'A', minTemp: -85, maxTemp: -75, targetTemp: -80, minimumDuration: 30 },
+        // Written before #1195: the stored extension was never enforced.
+        { _id: 'p2', name: 'B', minTemp: -85, maxTemp: -75, targetTemp: -80, minimumDuration: null, alertDelayMin: 5 },
+      ]);
+      const find = vi.fn().mockReturnValue({ toArray });
+      const db = { collection: vi.fn().mockReturnValue({ find }) };
+      const { router } = loadRoute();
+      const app = buildApp(router, db);
+
+      const res = await request(app).get('/api/policies');
+
+      expect(res.status).toBe(200);
+      expect(res.body.data[0].alertDelayMin).toBe(30);
+      expect(res.body.data[1].alertDelayMin).toBeNull();
+      expect(res.body.data[0]).not.toHaveProperty('minimumDuration');
     });
   });
 
