@@ -118,3 +118,107 @@ test('#1183: every EXEMPT entry still names an ungated registration', () => {
   const stale = [...EXEMPT.keys()].filter((key) => !byKey.has(key) || byKey.get(key).gated);
   assert.deepEqual(stale, [], 'EXEMPT names a route that is gone or now gated -- drop it');
 });
+
+// ---------------------------------------------------------------------------
+// #1189: the ALLOWLIST arm. A module whose update allowlist lets the caller
+// write the very field the module scopes on must refuse a move between
+// organizations on the destination side, through
+// assertOrganizationFieldNotReparented. The allowlist and that check live
+// in different files for sensor and sample (service vs controller/route),
+// so the pairing is declared here rather than inferred: every allowlist in
+// src/ holding a scope-field name must appear in SCOPE_FIELD_GUARDS (and its
+// guard must still call the helper with that field) or in
+// SCOPE_FIELD_EXEMPT with the reason it is not a tenancy key.
+// ---------------------------------------------------------------------------
+
+const SCOPE_FIELD_NAMES = ['organizationId', 'organizationIds', 'collectionSite', 'clinicalUnitId', 'laboratoryId'];
+
+// key: '<allowlist file relative to src> <field>'
+// guard: file (relative to src) whose assertOrganizationFieldNotReparented(
+// call arguments must contain `token`.
+const SCOPE_FIELD_GUARDS = new Map([
+  ['services/sensor.service.js organizationId', { guard: 'controllers/sensor.controller.js', token: 'organizationId' }], // 5c776c4d
+  ['services/sample.service.js collectionSite', { guard: 'interface/routes/sample.routes.js', token: "'collectionSite'" }], // 7a8a3d7e
+  ['interface/routes/equipment.routes.js organizationId', { guard: 'interface/routes/equipment.routes.js', token: 'organizationId' }], // 67b7b35e
+  // The factory passes its scopeField through; app.js must set it to
+  // laboratoryId on the assays mount -- asserted separately below.
+  ['interface/routes/master-data.routes.js laboratoryId', { guard: 'interface/routes/master-data.routes.js', token: 'scopeField' }], // e2d2058b
+]);
+
+const SCOPE_FIELD_EXEMPT = new Map([
+  // A user's own organizationId/organizationIds are profile data, not the
+  // tenancy key: resolveUserOrganizationScope reads UserRoleAssignment
+  // scopeId only (rbac-assignment.service.js), so writing them moves no
+  // record between organizations.
+  ['interface/routes/user.routes.js organizationId', 'user profile field; scope resolves from UserRoleAssignment.scopeId'],
+  ['interface/routes/user.routes.js organizationIds', 'user profile field; scope resolves from UserRoleAssignment.scopeId'],
+]);
+
+const ALLOWLIST_DECL = /\bconst\s+(ALLOWED_\w*UPDATE_FIELDS|HAND_ENUMERATED_UPDATE_FIELDS)\s*=\s*[[{]/g;
+
+function sourceFiles(dir) {
+  const out = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...sourceFiles(full));
+    else if (entry.isFile() && entry.name.endsWith('.js')) out.push(full);
+  }
+  return out;
+}
+
+function allowlistScopeFields() {
+  const found = [];
+  let allowlists = 0;
+  for (const file of sourceFiles(BACKEND_SRC)) {
+    const code = stripComments(fs.readFileSync(file, 'utf8'));
+    for (const m of code.matchAll(ALLOWLIST_DECL)) {
+      allowlists += 1;
+      const close = code.slice(m.index).search(/\n\s*[\]}];/);
+      const body = code.slice(m.index, close === -1 ? undefined : m.index + close);
+      const rel = path.relative(BACKEND_SRC, file).split(path.sep).join('/');
+      for (const field of SCOPE_FIELD_NAMES) {
+        if (new RegExp(`['"]${field}['"]`).test(body)) found.push(`${rel} ${field}`);
+      }
+    }
+  }
+  return { found: [...new Set(found)], allowlists };
+}
+
+test('#1189: the allowlist sweep finds real allowlists and scope fields in them', () => {
+  const { found, allowlists } = allowlistScopeFields();
+  // 2026-09-24: 8 allowlist declarations, 6 scope-field entries in them.
+  assert.ok(allowlists >= 6, `only ${allowlists} update allowlists found`);
+  assert.ok(found.length >= 4, `only ${found.length} scope fields found in allowlists`);
+});
+
+test('#1189: every update allowlist holding a scope field is paired with the re-parent check', () => {
+  const { found } = allowlistScopeFields();
+  const unpaired = found.filter((key) => !SCOPE_FIELD_GUARDS.has(key) && !SCOPE_FIELD_EXEMPT.has(key));
+  assert.deepEqual(unpaired, [],
+    'An update allowlist lets the caller write the field its module scopes on, so an in-scope caller ' +
+    'can move a record into another organization. Call assertOrganizationFieldNotReparented on that ' +
+    'update and add the pair to SCOPE_FIELD_GUARDS, or add it to SCOPE_FIELD_EXEMPT with the reason ' +
+    'the field is not a tenancy key.');
+});
+
+test('#1189: every declared guard still calls the re-parent check with its field', () => {
+  const missingGuard = [];
+  for (const [key, { guard, token }] of SCOPE_FIELD_GUARDS) {
+    const code = stripComments(fs.readFileSync(path.join(BACKEND_SRC, guard), 'utf8'));
+    const calls = [...code.matchAll(/assertOrganizationFieldNotReparented\(([\s\S]*?)\);/g)].map((m) => m[1]);
+    if (!calls.some((args) => args.includes(token))) missingGuard.push(`${key} -> ${guard}`);
+  }
+  assert.deepEqual(missingGuard, [], 'a declared guard no longer calls assertOrganizationFieldNotReparented with its field');
+});
+
+test('#1189: every SCOPE_FIELD_GUARDS/SCOPE_FIELD_EXEMPT entry still names a live allowlist field', () => {
+  const { found } = allowlistScopeFields();
+  const live = new Set(found);
+  const stale = [...SCOPE_FIELD_GUARDS.keys(), ...SCOPE_FIELD_EXEMPT.keys()].filter((key) => !live.has(key));
+  assert.deepEqual(stale, [], 'an entry names an allowlist field that is gone -- drop it');
+});
+
+test('#1189: the assays mount still passes scopeField laboratoryId to the factory', () => {
+  const appJs = fs.readFileSync(path.resolve(BACKEND_SRC, '../app.js'), 'utf8');
+  assert.match(appJs, /app\.use\("\/api\/assays", createMasterDataRouter\(\{[\s\S]*?scopeField: "laboratoryId"[\s\S]*?\}\)\);/);
+});
