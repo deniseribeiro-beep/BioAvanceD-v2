@@ -147,6 +147,27 @@ describe('usePolicies mutations (#898)', () => {
     expect(policyService.getActiveLimit).toHaveBeenCalledWith(basePolicy._id, true);
   });
 
+  // #1194: PoliciesSection lists getActiveLimit in an effect's deps and sets
+  // state from that effect. A new identity per render re-fired the effect on
+  // every setActiveLimits, re-fetching every policy's limit without end.
+  it('#1194: getActiveLimit keeps one identity across renders', async () => {
+    vi.mocked(policyService.getAll).mockResolvedValue({ data: { success: true, data: [basePolicy] }, status: 200 } as any);
+
+    const identities = new Set<unknown>();
+    let renders = 0;
+    function Probe() {
+      const hook = usePolicies();
+      identities.add(hook.getActiveLimit);
+      renders += 1;
+      return <div data-testid="loading">{String(hook.loading)}</div>;
+    }
+    render(<Probe />);
+    await waitFor(() => expect(screen.getByTestId('loading')).toHaveTextContent('false'));
+
+    expect(renders).toBeGreaterThan(1);
+    expect(identities.size).toBe(1);
+  });
+
   // #1178: deletePolicy used to filter local state on `policyID`, which the
   // API never returns -- `undefined !== undefined` is false, so every row
   // without one was dropped from the list, not just the deleted row.

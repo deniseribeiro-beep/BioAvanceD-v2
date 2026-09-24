@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Policy } from '../types/models';
 import { policyService } from '../services/api';
 import { extractResponseEntity, extractResponseItems } from '../api/response.adapters';
@@ -46,7 +46,11 @@ export function usePolicies() {
   };
 
   // #1178: every id below is the policy's _id, the only id the API returns.
-  const getActiveLimit = async (id: string, isMax: boolean = true) => {
+  // #1194: stable identity. PoliciesSection lists this in an effect's deps
+  // and sets state from that effect, so a new function per render re-fired
+  // the effect on every render and re-fetched every policy's limit forever.
+  // It closes over nothing but policyService, so no deps.
+  const getActiveLimit = useCallback(async (id: string, isMax: boolean = true) => {
     try {
       const response = await policyService.getActiveLimit(id, isMax);
       // #1178: GET /:id/active-limit answers { success, data: { limit, type,
@@ -57,7 +61,7 @@ export function usePolicies() {
     } catch (err: any) {
       throw new Error(err.message || 'Erro ao obter limite ativo');
     }
-  };
+  }, []);
 
   const createPolicy = async (data: Partial<Policy>) => {
     try {
