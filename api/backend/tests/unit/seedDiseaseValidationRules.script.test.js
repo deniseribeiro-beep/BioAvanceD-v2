@@ -232,8 +232,8 @@ describe('scripts/seedDiseaseValidationRules', () => {
       miabis: { requireTreatmentStatus: true },
       biomarkers: { required: [], recommended: [] },
       pharmacology: {
-        required: ['treatment_status'],
-        recommended: ['medication_name', 'last_dose_date'],
+        required: ['treatmentStatus'],
+        recommended: ['medicationName', 'lastDoseDate'],
         treatmentStatuses: ['NAIVE', 'TREATED', 'WASHOUT'],
       },
     });
@@ -285,5 +285,42 @@ describe('scripts/seedDiseaseValidationRules', () => {
     } finally {
       process.exitCode = originalExitCode;
     }
+  });
+
+  // The seeded validation_requirements are read by SampleGraphValidator, which
+  // looks each pharmacology.required entry up as a literal key on
+  // sample.pharmacologyData, and samples store camelCase (treatmentStatus).
+  // A seeded disease must accept the same complete sample the validator's own
+  // defaults accept.
+  it('seeds pharmacology requirements the validator can satisfy from a stored sample', async () => {
+    const SampleGraphValidator = require('../../src/services/SampleGraphValidator');
+    const { db, bulkWrite } = mockDb({
+      orphanetRows: [{ code: '999', name: 'Default-rule disease' }],
+    });
+    const connectDB = vi.fn().mockResolvedValue(db);
+    const closeConnection = vi.fn().mockResolvedValue(undefined);
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    loadScript({ connectDB, closeConnection });
+    await vi.waitFor(() => expect(closeConnection).toHaveBeenCalledTimes(1));
+
+    const seeded = (orpha) => bulkWrite.mock.calls[0][0]
+      .find((op) => op.updateOne.filter.orpha_code === orpha)
+      .updateOne.update.$set.validation_requirements;
+    const sample = (orphaCode, biomarkerValues = {}) => ({
+      clinicalData: { orphaCode, cid: 'E75.2', biomarkerValues },
+      pharmacologyData: {
+        treatmentStatus: 'NAIVE',
+        medicationName: 'none',
+        lastDoseDate: '2026-01-01',
+      },
+    });
+    const validator = new SampleGraphValidator({});
+
+    // Control: the validator's own defaults accept this sample.
+    expect(validator._validateClinical(sample('999')).valid).toBe(true);
+
+    expect(validator._validateClinical(sample('999'), seeded('999'))).toMatchObject({ valid: true });
+    expect(validator._validateClinical(sample('58', { CK_TOTAL: 1200 }), seeded('58'))).toMatchObject({ valid: true });
   });
 });

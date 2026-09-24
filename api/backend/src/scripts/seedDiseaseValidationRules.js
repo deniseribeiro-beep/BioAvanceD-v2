@@ -9,8 +9,8 @@ const DEFAULT_RULES = {
     recommended: [],
   },
   pharmacology: {
-    required: ['treatment_status'],
-    recommended: ['medication_name', 'last_dose_date'],
+    required: ['treatmentStatus'],
+    recommended: ['medicationName', 'lastDoseDate'],
     treatmentStatuses: ['NAIVE', 'TREATED', 'WASHOUT'],
   },
 };
