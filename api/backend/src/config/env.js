@@ -2,7 +2,6 @@ require('dotenv').config();
 
 module.exports = {
   NODE_ENV: process.env.NODE_ENV || 'development',
-  TEST_ENVIRONMENT: process.env.TEST_ENVIRONMENT === 'true' || process.env.TEST_ENVIRONMENT === '1',
   // #359 / RNF008.6: authLimiter's relaxed budget must be an explicit,
   // isolated opt-in, not inferred from NODE_ENV (a generic environment
   // indicator every non-production run shares, including one where

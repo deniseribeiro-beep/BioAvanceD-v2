@@ -7,7 +7,6 @@ x-audit-key-id: &audit-key-id audit-ed25519-test-1
 
 x-test-env: &test-env
   NODE_ENV: test
-  TEST_ENVIRONMENT: "true"
   MONGO_URI: mongodb://mongodb-test:27017/bioavanced_test?replicaSet=rs0
   MONGO_DB: bioavanced_test
   MONGO_DB_NOVO: bioavanced_test
