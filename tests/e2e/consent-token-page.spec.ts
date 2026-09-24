@@ -27,7 +27,9 @@ const seededParticipantIds: string[] = [];
 let templateId: string;
 
 async function seedPendingParticipant(): Promise<{ participantId: string; token: string }> {
-  const participantId = `809${String(Date.now()).slice(-8)}${seededParticipantIds.length}`;
+  // #821: acceptance now goes through createPatientConsent, whose
+  // validateParticipantId requires the canonical 8-digit shape.
+  const participantId = String(crypto.randomInt(80_000_000, 90_000_000));
   const token = crypto.randomBytes(32).toString('hex');
   await db.collection('patients').insertOne({
     participantId,
@@ -71,6 +73,7 @@ test.describe('RF010 bulk consent-token page (/patients/:id/consent?token=) -- r
   test.afterAll(async () => {
     if (!client) return;
     await db.collection('patients').deleteMany({ participantId: { $in: seededParticipantIds } });
+    await db.collection('patientConsents').deleteMany({ participantId: { $in: seededParticipantIds } });
     await db.collection('consent_templates').deleteMany({ version: 'e2e-809' });
     await client.close();
     client = null;
@@ -93,6 +96,10 @@ test.describe('RF010 bulk consent-token page (/patients/:id/consent?token=) -- r
       'Uso das amostras em pesquisa'
     );
 
+    // #821: the manifestation is granular -- the required purpose must be
+    // accepted before the term can be, and the optional one stays declined.
+    await expect(page.getByTestId('consent-token-accept')).toBeDisabled();
+    await page.getByTestId('consent-token-permission-research-809').check();
     await page.getByTestId('consent-token-accept').click();
     await expect(page.getByTestId('consent-token-success')).toBeVisible();
 
@@ -102,6 +109,22 @@ test.describe('RF010 bulk consent-token page (/patients/:id/consent?token=) -- r
     expect(stored?.consentAcceptedAt).toBeTruthy();
     // The token is single-use: acceptConsentToken nulls it.
     expect(stored?.consentToken).toBeNull();
+
+    // #821 (RF010 AC#2-4): the acceptance is a recorded Consent, not only a
+    // status flag -- bound to the term the page showed, with the answers given
+    // and #827's version and evidence.
+    const consents = await db.collection('patientConsents').find({ participantId }).toArray();
+    expect(consents).toHaveLength(1);
+    const [consent] = consents;
+    expect(consent.status).toBe('ACTIVE');
+    expect(consent.consentId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(consent.consentTemplateId).toBe(templateId);
+    expect(consent.consentVersion).toBe('e2e-809');
+    expect(consent.responses).toEqual({ 'research-809': true, 'recontact-809': false });
+    expect(consent.evidenceDocumentUri).toBe(`objstore://consents/${consent.consentId}/evidence.json`);
+    expect(consent.evidenceHash).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(consent.evidenceMimeType).toBe('application/json');
+    expect(consent.evidenceEncryption?.algorithm).toBe('aes-256-gcm');
   });
 
   // #1172 (#1152): in a real outage the request gets no response at all --
@@ -128,6 +151,7 @@ test.describe('RF010 bulk consent-token page (/patients/:id/consent?token=) -- r
     await expect(page.getByTestId('consent-token-content')).toContainText(TERM_CONTENT, {
       timeout: 15_000,
     });
+    await page.getByTestId('consent-token-permission-research-809').check();
     await page.getByTestId('consent-token-accept').click();
 
     const error = page.getByTestId('consent-token-error');

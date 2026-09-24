@@ -140,13 +140,18 @@ describe('#1127: an infrastructure failure in the token check is not reported as
     // consent, and the write recording it failed. Telling them the link is
     // invalid leaves them believing they failed to consent.
     it('answers 503 when the acceptance write fails on a valid token', async () => {
+      // #821: an accept now carries the manifestation and is recorded by the
+      // canonical recorder before the status write; stubbed so this case keeps
+      // exercising the token check and the write it guards.
+      vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue({ _id: 'tpl-1', active: true, permissions: [] });
+      vi.spyOn(consentService, 'createPatientConsent').mockResolvedValue({ consentId: 'uuid-1', consentVersion: '1' });
       useDb(patientDoc(), {
         updateOne: vi.fn().mockRejectedValue(new Error(INFRA_MESSAGE)),
       });
 
       const response = await request(app)
         .post('/api/e-consent/consent-tokens/accept')
-        .send({ patientId: PARTICIPANT_ID, token: VALID_TOKEN });
+        .send({ patientId: PARTICIPANT_ID, token: VALID_TOKEN, consentTemplateId: 'tpl-1', responses: {} });
 
       expectInfrastructureAnswer(response);
     });
@@ -204,11 +209,16 @@ describe('#1127: an infrastructure failure in the token check is not reported as
     });
 
     it('CONTROL: a valid token still accepts', async () => {
+      // #821: an accept now carries the manifestation and is recorded by the
+      // canonical recorder before the status write; stubbed so this case keeps
+      // exercising the token check and the write it guards.
+      vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue({ _id: 'tpl-1', active: true, permissions: [] });
+      vi.spyOn(consentService, 'createPatientConsent').mockResolvedValue({ consentId: 'uuid-1', consentVersion: '1' });
       useDb(patientDoc());
 
       const response = await request(app)
         .post('/api/e-consent/consent-tokens/accept')
-        .send({ patientId: PARTICIPANT_ID, token: VALID_TOKEN });
+        .send({ patientId: PARTICIPANT_ID, token: VALID_TOKEN, consentTemplateId: 'tpl-1', responses: {} });
 
       expect(response.status).toBe(200);
       expect(response.body.success).toBe(true);

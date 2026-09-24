@@ -512,31 +512,130 @@ describe('PatientService.validateConsentToken', () => {
 });
 
 describe('PatientService.acceptConsentToken', () => {
-  it('validates the token then activates the patient and clears the token', async () => {
-    const patientsCollection = makeFakeCollection({
-      findOne: vi.fn().mockResolvedValue({
-        participantId: '12345678',
-        status: 'PENDING_CONSENT',
-        consentToken: 'tok',
-      }),
-      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 })
+  // #821: acceptance used to flip Patient.status and nothing else -- no
+  // Consent, no consentId, no template version, no evidence, no outbox
+  // event (RF010 AC#2-5,7). A bulk-invited participant's manifestation is now
+  // recorded by the canonical recorder, against the term the page showed,
+  // with the participant's per-permission answers.
+  const consentService = require('../../src/services/consent.service');
+  const activeTemplate = {
+    _id: 'aaaaaaaaaaaaaaaaaaaaaaaa',
+    active: true,
+    version: '2',
+    permissions: [
+      { key: 'storage', label: 'Armazenamento', required: true },
+      { key: 'contact', label: 'Contato futuro', required: false },
+    ],
+  };
+  const manifestation = {
+    consentTemplateId: activeTemplate._id,
+    responses: { storage: true, contact: false },
+    ipAddress: '203.0.113.7',
+    userAgent: 'Mozilla/5.0',
+  };
+  const pendingPatient = () => makeFakeCollection({
+    findOne: vi.fn().mockResolvedValue({
+      participantId: '12345678',
+      status: 'PENDING_CONSENT',
+      consentToken: 'tok',
+    }),
+    updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 })
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('records a Consent for the manifestation, THEN activates the patient and clears the token', async () => {
+    vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue(activeTemplate);
+    const recordSpy = vi.spyOn(consentService, 'createPatientConsent').mockResolvedValue({
+      _id: 'c1', consentId: 'uuid-1', consentVersion: '2', status: 'ACTIVE',
     });
+    const patientsCollection = pendingPatient();
     const db = makeFakeDb({ patients: patientsCollection });
 
-    const result = await patientService.acceptConsentToken(db, '12345678', 'tok');
+    const result = await patientService.acceptConsentToken(db, '12345678', 'tok', manifestation);
 
-    expect(result).toEqual({ success: true, participantId: '12345678' });
+    expect(recordSpy).toHaveBeenCalledWith(db, {
+      participantId: '12345678',
+      consentTemplateId: activeTemplate._id,
+      responses: { storage: true, contact: false },
+      ipAddress: '203.0.113.7',
+      userAgent: 'Mozilla/5.0',
+    });
+    expect(recordSpy.mock.invocationCallOrder[0])
+      .toBeLessThan(patientsCollection.updateOne.mock.invocationCallOrder[0]);
     expect(patientsCollection.updateOne).toHaveBeenCalledWith(
       { participantId: '12345678' },
       { $set: expect.objectContaining({ status: 'ACTIVE', consentToken: null, consentTokenExpiresAt: null }) }
     );
+    expect(result).toEqual({ success: true, participantId: '12345678', consentId: 'uuid-1', consentVersion: '2' });
   });
 
-  it('propagates validation failure without updating', async () => {
+  it('refuses a manifestation against a term that is no longer the active one, recording nothing', async () => {
+    vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue({ ...activeTemplate, _id: 'bbbbbbbbbbbbbbbbbbbbbbbb' });
+    const recordSpy = vi.spyOn(consentService, 'createPatientConsent');
+    const patientsCollection = pendingPatient();
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    const error = await patientService.acceptConsentToken(db, '12345678', 'tok', manifestation).catch(e => e);
+
+    expect(patientService.isConsentManifestationRejection(error)).toBe(true);
+    expect(patientService.isConsentTokenRejection(error)).toBe(false);
+    expect(recordSpy).not.toHaveBeenCalled();
+    expect(patientsCollection.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('refuses answers that decline a required purpose, recording nothing', async () => {
+    vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue(activeTemplate);
+    const recordSpy = vi.spyOn(consentService, 'createPatientConsent');
+    const patientsCollection = pendingPatient();
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    const error = await patientService.acceptConsentToken(db, '12345678', 'tok', {
+      ...manifestation,
+      responses: { storage: false, contact: true },
+    }).catch(e => e);
+
+    expect(patientService.isConsentManifestationRejection(error)).toBe(true);
+    expect(recordSpy).not.toHaveBeenCalled();
+    expect(patientsCollection.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('refuses a whole-term accept with no answers at all (the pre-#821 request shape)', async () => {
+    vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue(activeTemplate);
+    const recordSpy = vi.spyOn(consentService, 'createPatientConsent');
+    const patientsCollection = pendingPatient();
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    const error = await patientService.acceptConsentToken(db, '12345678', 'tok').catch(e => e);
+
+    expect(patientService.isConsentManifestationRejection(error)).toBe(true);
+    expect(recordSpy).not.toHaveBeenCalled();
+    expect(patientsCollection.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('leaves the token live when the record cannot be written, so the participant can retry', async () => {
+    vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue(activeTemplate);
+    vi.spyOn(consentService, 'createPatientConsent').mockRejectedValue(new Error('connection <monitor> closed'));
+    const patientsCollection = pendingPatient();
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    const error = await patientService.acceptConsentToken(db, '12345678', 'tok', manifestation).catch(e => e);
+
+    // An outage, not the participant's fault: neither rejection code.
+    expect(patientService.isConsentManifestationRejection(error)).toBe(false);
+    expect(patientService.isConsentTokenRejection(error)).toBe(false);
+    expect(patientsCollection.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('propagates token validation failure without recording or updating', async () => {
+    const recordSpy = vi.spyOn(consentService, 'createPatientConsent');
     const patientsCollection = makeFakeCollection({ findOne: vi.fn().mockResolvedValue(null) });
     const db = makeFakeDb({ patients: patientsCollection });
 
-    await expect(patientService.acceptConsentToken(db, '12345678', 'tok')).rejects.toThrow('não encontrado');
+    await expect(patientService.acceptConsentToken(db, '12345678', 'tok', manifestation)).rejects.toThrow('não encontrado');
+    expect(recordSpy).not.toHaveBeenCalled();
     expect(patientsCollection.updateOne).not.toHaveBeenCalled();
   });
 });

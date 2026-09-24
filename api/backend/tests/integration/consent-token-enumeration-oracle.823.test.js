@@ -180,11 +180,16 @@ describe('#823: the consent-token endpoints are not a participant-enumeration or
   });
 
   it('CONTROL: a valid token still accepts', async () => {
+    // #821: an accept now carries the manifestation and is recorded by the
+    // canonical recorder before the status write; stubbed so this case keeps
+    // exercising the token check and the write it guards.
+    vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue({ _id: 'tpl-1', active: true, permissions: [] });
+    vi.spyOn(consentService, 'createPatientConsent').mockResolvedValue({ consentId: 'uuid-1', consentVersion: '1' });
     useDb(patientDoc());
 
     const response = await request(app)
       .post('/api/e-consent/consent-tokens/accept')
-      .send({ patientId: PARTICIPANT_ID, token: VALID_TOKEN });
+      .send({ patientId: PARTICIPANT_ID, token: VALID_TOKEN, consentTemplateId: 'tpl-1', responses: {} });
 
     expect(response.status).toBe(200);
     expect(response.body.success).toBe(true);

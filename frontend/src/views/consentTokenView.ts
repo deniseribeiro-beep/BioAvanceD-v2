@@ -89,7 +89,34 @@ export function normalizeConsentTemplate(raw: unknown): ConsentTokenTemplate | n
   };
 }
 
+// #821: the manifestation the page submits -- one boolean per purpose, keyed
+// the way ConsentTemplate.permissions is and createPatientConsent validates.
+// Every purpose starts declined, so nothing is recorded as granted that the
+// participant did not tick.
+export function initialConsentResponses(permissions: ConsentTokenPermission[]): Record<string, boolean> {
+  return Object.fromEntries(permissions.map(permission => [permission.key, false]));
+}
+
+// Labels of the required purposes not yet accepted. The accept button stays
+// disabled while this is non-empty: the backend refuses such an answer set,
+// and a term cannot be accepted without its required purposes.
+export function missingRequiredPermissions(
+  permissions: ConsentTokenPermission[],
+  responses: Record<string, boolean>
+): string[] {
+  return permissions
+    .filter(permission => permission.required && responses[permission.key] !== true)
+    .map(permission => permission.label);
+}
+
 export function mapConsentTokenError(status?: number): string {
+  if (status === 422) {
+    // #821: the link was accepted as valid but the answers could not be
+    // recorded as sent -- usually because the term was republished after this
+    // page loaded. A reload shows the current term; a new invitation would not
+    // help, so the copy keeps the link-is-still-good promise of the 503 arm.
+    return 'O termo de consentimento foi atualizado ou suas respostas estão incompletas. Seu link continua válido -- recarregue a página e responda novamente.';
+  }
   if (status === 400) {
     return 'Link inválido ou expirado. Solicite um novo convite à equipe do biobanco.';
   }

@@ -843,10 +843,20 @@ export const consentTokenService = {
       '/e-consent/consent-tokens/validate',
       { patientId: participantId, token }
     ),
-  accept: (participantId: string, token: string) =>
-    api.post<{ success: boolean; message: string; data: { success: boolean; participantId: string } }>(
+  // #821: the accept carries the manifestation -- the term shown and one
+  // answer per purpose -- which the backend records as a Consent.
+  accept: (
+    participantId: string,
+    token: string,
+    manifestation: { consentTemplateId: string; responses: Record<string, boolean> }
+  ) =>
+    api.post<{
+      success: boolean;
+      message: string;
+      data: { success: boolean; participantId: string; consentId: string; consentVersion: string | null };
+    }>(
       '/e-consent/consent-tokens/accept',
-      { patientId: participantId, token }
+      { patientId: participantId, token, ...manifestation }
     ),
 };
 

@@ -40,6 +40,19 @@ function consentTokenRejection(message) {
   return error;
 }
 
+// #821: the token was good but the manifestation it carries cannot be
+// recorded as sent -- no answers, answers that do not fit the term, or a term
+// that was republished after the page loaded. Distinct from a token rejection
+// so the participant is told to reload rather than that their link is bad,
+// and distinct from an unmarked outage for the same reason #1127 gave.
+const CONSENT_MANIFESTATION_REJECTION_CODE = 'CONSENT_MANIFESTATION_REJECTED';
+
+function consentManifestationRejection(message) {
+  const error = new Error(message);
+  error.code = CONSENT_MANIFESTATION_REJECTION_CODE;
+  return error;
+}
+
 /**
  * Service de Pacientes
  * RF005 - Cadastro de Paciente com Anonimização LGPD
@@ -1170,6 +1183,11 @@ class PatientService {
     return error?.code === CONSENT_TOKEN_REJECTION_CODE;
   }
 
+  /** #821: true for a manifestation refused as sent; the controller answers 422. */
+  isConsentManifestationRejection(error) {
+    return error?.code === CONSENT_MANIFESTATION_REJECTION_CODE;
+  }
+
   async validateConsentToken(db, participantId, token) {
     if (!participantId || !token) {
       throw consentTokenRejection('participantId e token são obrigatórios');
@@ -1200,8 +1218,49 @@ class PatientService {
     return { valid: true, participantId: patient.participantId };
   }
 
-  async acceptConsentToken(db, participantId, token) {
+  /**
+   * #821: RF010 AC#2-5,7 -- a bulk-invited participant's acceptance is a
+   * manifestation, so it is recorded as a Consent by the canonical recorder
+   * (consentId, exact term version, evidence, outbox event), with the
+   * participant's per-permission answers, against the term the page showed.
+   * It used to flip Patient.status and record nothing.
+   *
+   * The record is written BEFORE the status flip, so a failed write leaves
+   * the token live and the participant can retry.
+   */
+  async acceptConsentToken(db, participantId, token, manifestation = {}) {
     await this.validateConsentToken(db, participantId, token);
+
+    // Lazy: consent.service's module graph is not needed by any other path
+    // here, and the recorder is the only thing taken from it.
+    const consentService = require('./consent.service');
+
+    const { consentTemplateId, responses, ipAddress, userAgent } = manifestation || {};
+    if (!consentTemplateId || !responses || typeof responses !== 'object' || Array.isArray(responses)) {
+      throw consentManifestationRejection('consentTemplateId e responses são obrigatórios');
+    }
+
+    // The page renders getActiveTemplate (consent.controller validate), so an
+    // answer set is only meaningful against that same term. A republish in
+    // between would otherwise record answers to a text never shown.
+    const activeTemplate = await consentService.getActiveTemplate(db);
+    if (!activeTemplate || String(activeTemplate._id) !== String(consentTemplateId)) {
+      throw consentManifestationRejection('O termo de consentimento foi atualizado');
+    }
+
+    try {
+      consentService.validateResponsesAgainstTemplate(activeTemplate, responses);
+    } catch (validationError) {
+      throw consentManifestationRejection(validationError.message);
+    }
+
+    const consent = await consentService.createPatientConsent(db, {
+      participantId,
+      consentTemplateId: String(consentTemplateId),
+      responses,
+      ipAddress,
+      userAgent
+    });
 
     const patientsCollection = await this.getPatientsCollection(db);
     await patientsCollection.updateOne(
@@ -1217,7 +1276,12 @@ class PatientService {
       }
     );
 
-    return { success: true, participantId };
+    return {
+      success: true,
+      participantId,
+      consentId: consent.consentId,
+      consentVersion: consent.consentVersion
+    };
   }
 
   async resendConsentNotification(db, participantId) {

@@ -1206,12 +1206,21 @@ describe('ConsentController.acceptConsentToken', () => {
 
   it('returns 200 with confirmation on success', async () => {
     const acceptSpy = vi.spyOn(patientService, 'acceptConsentToken').mockResolvedValue({ accepted: true });
-    const req = createReq({ body: { patientId: 'p1', token: 'tok' } });
+    const req = createReq({
+      body: { patientId: 'p1', token: 'tok', consentTemplateId: 'tpl-1', responses: { storage: true } },
+      headers: { 'user-agent': 'Mozilla/5.0' },
+    });
     const res = createRes();
 
     await consentController.acceptConsentToken(req, res);
 
-    expect(acceptSpy).toHaveBeenCalledWith(req.app.locals.db, 'p1', 'tok');
+    // #821: the manifestation and its origin reach the service.
+    expect(acceptSpy).toHaveBeenCalledWith(req.app.locals.db, 'p1', 'tok', {
+      consentTemplateId: 'tpl-1',
+      responses: { storage: true },
+      ipAddress: '127.0.0.1',
+      userAgent: 'Mozilla/5.0',
+    });
     expect(res.status).toHaveBeenCalledWith(200);
     expect(res.json).toHaveBeenCalledWith({
       success: true,
@@ -1260,6 +1269,27 @@ describe('ConsentController.acceptConsentToken', () => {
     expect(body).not.toContain('connection <monitor> closed');
   });
 
+  // #821: a good link carrying answers that cannot be recorded as sent is
+  // neither a bad link (400) nor an outage (503).
+  it('returns 422 with a fixed body when the service refuses the MANIFESTATION', async () => {
+    const refusal = await patientService
+      .acceptConsentToken({ collection: () => ({ findOne: async () => ({ participantId: 'p1', status: 'PENDING_CONSENT', consentToken: 'tok' }) }) }, 'p1', 'tok', {})
+      .catch(e => e);
+    expect(patientService.isConsentManifestationRejection(refusal)).toBe(true);
+
+    vi.spyOn(patientService, 'acceptConsentToken').mockRejectedValue(refusal);
+    const req = createReq({ body: { patientId: 'p1', token: 'tok' } });
+    const res = createRes();
+
+    await consentController.acceptConsentToken(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(422);
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'Respostas do termo inválidas ou termo atualizado',
+    });
+  });
+
   it('falls back to query values when body is empty', async () => {
     const acceptSpy = vi.spyOn(patientService, 'acceptConsentToken').mockResolvedValue({ accepted: true });
     const req = createReq({ body: {}, query: { patientID: 'p2', token: 'tok2' } });
@@ -1267,6 +1297,6 @@ describe('ConsentController.acceptConsentToken', () => {
 
     await consentController.acceptConsentToken(req, res);
 
-    expect(acceptSpy).toHaveBeenCalledWith(req.app.locals.db, 'p2', 'tok2');
+    expect(acceptSpy).toHaveBeenCalledWith(req.app.locals.db, 'p2', 'tok2', expect.any(Object));
   });
 });

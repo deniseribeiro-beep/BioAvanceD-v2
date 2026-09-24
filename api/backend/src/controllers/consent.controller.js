@@ -741,7 +741,14 @@ class ConsentController {
       const patientId = req.body.patientId || req.body.patientID || req.query.patientId || req.query.patientID;
       const token = req.body.token || req.query.token;
 
-      const result = await patientService.acceptConsentToken(db, String(patientId), String(token));
+      // #821: the manifestation itself -- the term the page showed and the
+      // participant's per-permission answers -- plus its origin (RF010 AC#4).
+      const result = await patientService.acceptConsentToken(db, String(patientId), String(token), {
+        consentTemplateId: req.body.consentTemplateId,
+        responses: req.body.responses,
+        ipAddress: req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress,
+        userAgent: req.headers['user-agent']
+      });
 
       return res.status(200).json({
         success: true,
@@ -755,6 +762,15 @@ class ConsentController {
       // the validate route; both leak, so both answer identically, which also
       // stops the PAIR of endpoints from distinguishing each other.
       logger.error('Erro ao aceitar consentimento:', error.message);
+      // #821: the link was good, the answers were not recordable as sent (none,
+      // not fitting the term, or the term was republished). Fixed body, same
+      // no-`message` rule as the 400: this route is unauthenticated.
+      if (patientService.isConsentManifestationRejection(error)) {
+        return res.status(422).json({
+          success: false,
+          error: 'Respostas do termo inválidas ou termo atualizado'
+        });
+      }
       // #1127: worse on this route than on validate. The write recording the
       // acceptance can fail after a good token has been checked, and a 400
       // then tells a participant who DID consent that their link was invalid

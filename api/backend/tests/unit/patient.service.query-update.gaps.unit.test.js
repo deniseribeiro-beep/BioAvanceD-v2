@@ -389,7 +389,13 @@ describe('PatientService.validateConsentToken', () => {
 });
 
 describe('PatientService.acceptConsentToken', () => {
+  // #821: acceptance now records a Consent first; that behaviour is pinned in
+  // patient.service.unit.test.js. Stubbed here so this case keeps covering
+  // the status/token write that follows it.
   it('activates the patient and clears the consent token after validating it', async () => {
+    const consentService = require('../../src/services/consent.service');
+    vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue({ _id: 'tpl-1', active: true, permissions: [] });
+    vi.spyOn(consentService, 'createPatientConsent').mockResolvedValue({ consentId: 'uuid-1', consentVersion: '1' });
     const patientsCollection = makeFakeCollection({
       findOne: vi.fn().mockResolvedValue({
         participantId: '12345678',
@@ -401,9 +407,12 @@ describe('PatientService.acceptConsentToken', () => {
     });
     const db = makeFakeDb({ patients: patientsCollection });
 
-    const result = await patientService.acceptConsentToken(db, '12345678', 'tok');
+    const result = await patientService.acceptConsentToken(db, '12345678', 'tok', {
+      consentTemplateId: 'tpl-1',
+      responses: {}
+    });
 
-    expect(result).toEqual({ success: true, participantId: '12345678' });
+    expect(result).toEqual({ success: true, participantId: '12345678', consentId: 'uuid-1', consentVersion: '1' });
     const setPayload = patientsCollection.updateOne.mock.calls[0][1].$set;
     expect(setPayload.status).toBe('ACTIVE');
     expect(setPayload.consentToken).toBeNull();

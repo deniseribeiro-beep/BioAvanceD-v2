@@ -4,6 +4,8 @@ import {
   normalizeConsentTemplate,
   mapConsentTokenError,
   mapConsentTokenRequestError,
+  initialConsentResponses,
+  missingRequiredPermissions,
 } from './consentTokenView';
 
 describe('resolveConsentTokenParams', () => {
@@ -109,7 +111,47 @@ describe('normalizeConsentTemplate', () => {
   });
 });
 
+// #821: the page now collects a granular manifestation (RF010) instead of a
+// whole-term accept, so the answer set and its required-purpose gate are
+// derived here.
+describe('initialConsentResponses', () => {
+  it('starts every purpose unanswered-as-declined, keyed by permission key', () => {
+    expect(initialConsentResponses([
+      { key: 'storage', label: 'Armazenamento', required: true },
+      { key: 'contact', label: 'Contato', required: false },
+    ])).toEqual({ storage: false, contact: false });
+  });
+
+  it('is empty for a term with no purposes', () => {
+    expect(initialConsentResponses([])).toEqual({});
+  });
+});
+
+describe('missingRequiredPermissions', () => {
+  const permissions = [
+    { key: 'storage', label: 'Armazenamento', required: true },
+    { key: 'contact', label: 'Contato', required: false },
+  ];
+
+  it('names each required purpose not yet accepted', () => {
+    expect(missingRequiredPermissions(permissions, { storage: false, contact: true })).toEqual(['Armazenamento']);
+  });
+
+  it('is empty once every required purpose is accepted, whatever the optional ones say', () => {
+    expect(missingRequiredPermissions(permissions, { storage: true, contact: false })).toEqual([]);
+  });
+});
+
 describe('mapConsentTokenError', () => {
+  // #821: 422 is a good link whose answers could not be recorded as sent --
+  // most often the term was republished after the page loaded. Reloading
+  // fixes it; a new invitation does not.
+  it('asks for a reload, not a new invitation, on a 422', () => {
+    expect(mapConsentTokenError(422)).toMatch(/recarregue/i);
+    expect(mapConsentTokenError(422)).toMatch(/link continua válido/i);
+    expect(mapConsentTokenError(422)).not.toMatch(/novo convite/i);
+  });
+
   it('reports an invalid or expired link for 400', () => {
     expect(mapConsentTokenError(400)).toMatch(/inválido|expirado/i);
   });

@@ -524,7 +524,9 @@ test.describe('Human-paced e2e showcase reel — Wave 5', () => {
       updatedAt: new Date(),
     });
 
-    const participantId = `W5${String(Date.now()).slice(-9)}`;
+    // #821: acceptance now records a Consent via createPatientConsent, whose
+    // validateParticipantId requires the canonical 8-digit shape.
+    const participantId = String(80_000_000 + (Date.now() % 10_000_000));
     const consentToken = randomBytes(32).toString('hex');
     await db.collection('patients').insertOne({
       participantId,
@@ -575,7 +577,10 @@ test.describe('Human-paced e2e showcase reel — Wave 5', () => {
       );
       await beat(page, LARGE);
 
-      // 4. Consent given.
+      // 4. Consent given, purpose by purpose (#821): the required one is
+      //    accepted, the optional recontact stays declined.
+      await page.getByTestId('consent-token-permission-showcase-w5-research').check();
+      await beat(page, LARGE);
       await page.getByTestId('consent-token-accept').click();
       await expect(page.getByTestId('consent-token-success')).toBeVisible();
       await beat(page, LARGE);
@@ -588,6 +593,7 @@ test.describe('Human-paced e2e showcase reel — Wave 5', () => {
       expect(stored?.consentToken).toBeNull();
     } finally {
       await db.collection('patients').deleteMany({ participantId }).catch(() => {});
+      await db.collection('patientConsents').deleteMany({ participantId }).catch(() => {});
       await db.collection('consent_templates').deleteMany({ title: TERM_TITLE }).catch(() => {});
     }
   });
