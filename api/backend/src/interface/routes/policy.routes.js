@@ -20,7 +20,14 @@ const logger = require('../../utils/logger');
 // not a boundary one.
 const CANONICAL_METRIC_TYPE = 'temperature';
 const CANONICAL_RULE_VERSION = '1.0.0';
-const TEMPERATURE_UNITS = ['\u00b0C', '\u00b0F'];
+// #1198: Celsius only. Nothing that enforces a policy reads its unit --
+// iot.controller and checkPolicyAndAlert compare a reading's bare number with
+// minTemp/maxTemp, and the schema has no unit field -- so a policy saved as
+// degF was enforced as if its numbers were degC. Accepting only the unit the
+// comparison already assumes makes the stored value true, rather than
+// converting at the boundary.
+const TEMPERATURE_UNITS = ['\u00b0C'];
+const TEMPERATURE_UNIT_ERROR = 'temperatureUnit deve ser \u00b0C';
 
 function validatePolicy(body) {
   const errors = [];
@@ -37,7 +44,7 @@ function validatePolicy(body) {
     errors.push('minTemp deve ser menor que maxTemp');
   }
   if (body.temperatureUnit && !TEMPERATURE_UNITS.includes(body.temperatureUnit)) {
-    errors.push('temperatureUnit deve ser \u00b0C ou \u00b0F');
+    errors.push(TEMPERATURE_UNIT_ERROR);
   }
   return { isValid: errors.length === 0, errors };
 }
@@ -307,6 +314,15 @@ router.put('/:id', authenticate, requirePermission('manageTemperaturePolicy'), a
       if (Object.prototype.hasOwnProperty.call(req.body, field)) {
         updateFields[field] = req.body[field];
       }
+    }
+    // #1198: POST's unit check, applied to the one field a PUT could
+    // otherwise set to a unit nothing honours.
+    if (updateFields.temperatureUnit && !TEMPERATURE_UNITS.includes(updateFields.temperatureUnit)) {
+      return res.status(422).json({
+        success: false,
+        error: 'Dados inválidos',
+        message: TEMPERATURE_UNIT_ERROR
+      });
     }
     const period = req.body.effectivePeriod;
     if (period && typeof period === 'object') {

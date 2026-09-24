@@ -440,7 +440,7 @@ describe('policy.routes', () => {
       expect(res.status).toBe(422);
       expect(res.body.message).toContain('minTemp deve ser menor que maxTemp');
       expect(res.body.message).toContain('targetTemp é obrigatório e deve ser number');
-      expect(res.body.message).toContain('temperatureUnit deve ser °C ou °F');
+      expect(res.body.message).toContain('temperatureUnit deve ser °C');
     });
 
     // #1195: omitted stays null, which TelemetryMonitor reads as "fall back
@@ -495,6 +495,71 @@ describe('policy.routes', () => {
       const setArg = updateOne.mock.calls[0][1].$set;
       expect(Object.keys(setArg).sort()).toEqual(['effectivePeriod.end', 'updatedAt']);
       expect(setArg['effectivePeriod.end']).toBeNull();
+    });
+  });
+
+  // #1198: the form offered degF and K, and nothing that enforces a policy
+  // reads its unit -- iot.controller compares the reading's bare number with
+  // minTemp/maxTemp. A degF policy was stored and enforced as if it were degC.
+  describe('#1198: a policy is Celsius, the unit its enforcement assumes', () => {
+    const body = {
+      name: 'Geladeira 2-8',
+      minTemp: 35.6,
+      maxTemp: 46.4,
+      targetTemp: 41,
+    };
+
+    it('POST 422s on °F rather than storing limits enforcement would misread', async () => {
+      const insertOne = vi.fn().mockResolvedValue({ insertedId: 'new-id' });
+      const db = { collection: vi.fn().mockReturnValue({ insertOne }) };
+      const { router } = loadRoute();
+      const app = buildApp(router, db);
+
+      const res = await request(app).post('/api/policies').send({ ...body, temperatureUnit: '°F' });
+
+      expect(res.status).toBe(422);
+      expect(res.body.message).toContain('temperatureUnit deve ser °C');
+      expect(insertOne).not.toHaveBeenCalled();
+    });
+
+    it('PUT 422s on °F and writes nothing', async () => {
+      const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+      const db = { collection: vi.fn().mockReturnValue({ updateOne }) };
+      const { router } = loadRoute();
+      const app = buildApp(router, db);
+
+      const res = await request(app)
+        .put('/api/policies/507f1f77bcf86cd799439011')
+        .send({ temperatureUnit: '°F' });
+
+      expect(res.status).toBe(422);
+      expect(updateOne).not.toHaveBeenCalled();
+    });
+
+    // CONTROLS: Celsius is accepted before and after the fix.
+    it('CONTROL: POST accepts °C', async () => {
+      const insertOne = vi.fn().mockResolvedValue({ insertedId: 'new-id' });
+      const db = { collection: vi.fn().mockReturnValue({ insertOne }) };
+      const { router } = loadRoute();
+      const app = buildApp(router, db);
+
+      const res = await request(app).post('/api/policies').send({ ...body, temperatureUnit: '°C' });
+
+      expect(res.status).toBe(201);
+    });
+
+    it('CONTROL: PUT accepts °C', async () => {
+      const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+      const db = { collection: vi.fn().mockReturnValue({ updateOne }) };
+      const { router } = loadRoute();
+      const app = buildApp(router, db);
+
+      const res = await request(app)
+        .put('/api/policies/507f1f77bcf86cd799439011')
+        .send({ temperatureUnit: '°C' });
+
+      expect(res.status).toBe(200);
+      expect(updateOne.mock.calls[0][1].$set.temperatureUnit).toBe('°C');
     });
   });
 

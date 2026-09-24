@@ -99,6 +99,15 @@ class TemperatureModel {
     return ['°C', '°F', 'K'].includes(unit);
   }
 
+  // #1198: a reading may be recorded in any unit validateTemperatureUnit
+  // accepts, while policy limits are Celsius. Compare in Celsius; the reading
+  // itself is stored as recorded.
+  static toCelsius(value, unit) {
+    if (unit === '°F') return (value - 32) * 5 / 9;
+    if (unit === 'K') return value - 273.15;
+    return value;
+  }
+
   /**
    * Gera alerta se a leitura exceder os limites
    */

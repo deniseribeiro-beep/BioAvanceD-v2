@@ -1563,22 +1563,13 @@ function PolicyForm({
           }
           helperText="Tempo em minutos que a temperatura deve estar fora dos limites antes de gerar um alerta."
         />
+        {/* #1198: fixed, not selectable. Alert enforcement compares readings
+            against these limits in Celsius, so a policy entered in another
+            unit was misapplied (°F) or rejected by the API (K). */}
         <div className="form-grid-full">
-          <label className="input-label" htmlFor="temperatureUnitSelect">Unidade de Temperatura *</label>
-          <select
-            id="temperatureUnitSelect"
-            className="input"
-            value={formData.temperatureUnit || '°C'}
-            onChange={(e) =>
-              setFormData({ ...formData, temperatureUnit: e.target.value })
-            }
-          >
-            <option value="°C">Celsius (°C)</option>
-            <option value="°F">Fahrenheit (°F)</option>
-            <option value="K">Kelvin (K)</option>
-          </select>
-          <p className="form-help-text" style={{ marginTop: '0.5rem', fontSize: '0.875rem', color: 'var(--text-light)' }}>
-            Selecione a unidade de medida para todas as temperaturas desta política.
+          <p className="input-label">Unidade de Temperatura</p>
+          <p className="form-help-text" data-testid="policy-temperature-unit" style={{ fontSize: '0.875rem', color: 'var(--text-light)' }}>
+            Celsius (°C). Todas as temperaturas desta política são em °C.
           </p>
         </div>
         <Input

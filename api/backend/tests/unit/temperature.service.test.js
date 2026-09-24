@@ -222,6 +222,59 @@ describe('temperatureService.checkPolicyAndAlert', () => {
     expect(insertOne).not.toHaveBeenCalled();
   });
 
+  // #1198: a policy's limits are Celsius, and a manually recorded reading may
+  // carry degF or K (TemperatureModel accepts all three). The comparison used
+  // the reading's bare number, so 41 degF -- 5 degC, inside 2..8 -- alerted.
+  describe('#1198: the reading is compared in Celsius', () => {
+    function inRangeDb() {
+      const findOne = vi.fn().mockResolvedValue({ minTemp: 2, maxTemp: 8 });
+      const insertOne = vi.fn().mockResolvedValue({ insertedId: 'alert1' });
+      const updateMany = vi.fn().mockResolvedValue({ modifiedCount: 0 });
+      const db = makeDb({ temperaturePolicies: { findOne }, alerts: { insertOne, updateMany, findOne: alertFindOne() } });
+      return { db, insertOne };
+    }
+
+    it('a °F reading inside the policy range raises no alert', async () => {
+      const { db, insertOne } = inRangeDb();
+
+      await temperatureService.checkPolicyAndAlert(db, {
+        policyId: 'p1',
+        temperatureValue: 41,
+        temperatureUnit: '°F'
+      });
+
+      expect(insertOne).not.toHaveBeenCalled();
+    });
+
+    it('a K reading inside the policy range raises no alert', async () => {
+      const { db, insertOne } = inRangeDb();
+
+      await temperatureService.checkPolicyAndAlert(db, {
+        policyId: 'p1',
+        temperatureValue: 278.15,
+        temperatureUnit: 'K'
+      });
+
+      expect(insertOne).not.toHaveBeenCalled();
+    });
+
+    it('CONTROL: a °F reading outside the range still alerts, recording the value as read', async () => {
+      const { db, insertOne } = inRangeDb();
+      vi.spyOn(notificationServiceV2, 'sendCriticalTempAlert').mockResolvedValue(undefined);
+      vi.spyOn(notificationDispatchService, 'dispatchNotification').mockResolvedValue(null);
+
+      await temperatureService.checkPolicyAndAlert(db, {
+        policyId: 'p1',
+        sensorId: 'sensor-a',
+        temperatureValue: 50,
+        temperatureUnit: '°F'
+      });
+
+      expect(insertOne).toHaveBeenCalledTimes(1);
+      expect(insertOne.mock.calls[0][0].temperatureValue).toBe(50);
+    });
+  });
+
   it('inserts an alert and notifies when the reading is outside policy thresholds', async () => {
     const policy = { minTemp: 0, maxTemp: 10 };
     const findOne = vi.fn().mockResolvedValue(policy);

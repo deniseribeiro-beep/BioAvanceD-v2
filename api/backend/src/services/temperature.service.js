@@ -95,8 +95,10 @@ class TemperatureService {
       const minThreshold = temperature.minThreshold || policy.minTemp;
       const maxThreshold = temperature.maxThreshold || policy.maxTemp;
 
+      // #1198: the limits are Celsius, so the reading is converted for the
+      // comparison only.
       const isValid = TemperatureModel.validateReading(
-        temperature.temperatureValue,
+        TemperatureModel.toCelsius(temperature.temperatureValue, temperature.temperatureUnit),
         minThreshold,
         maxThreshold
       );

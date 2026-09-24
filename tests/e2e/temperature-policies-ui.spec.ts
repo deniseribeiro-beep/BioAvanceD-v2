@@ -106,6 +106,8 @@ test.describe('Temperature policies tab (#1178) — real backend', () => {
       await page.getByRole('button', { name: 'Nova Política' }).click();
       await page.getByLabel('Nome da Política').fill(policyName);
       await page.getByLabel('Atraso de Alerta (minutos)').fill('15');
+      // #1198: the unit is fixed at Celsius, not a select offering °F/K.
+      await expect(page.getByTestId('policy-temperature-unit')).toContainText('°C');
       await page.getByRole('button', { name: 'Salvar' }).click();
 
       await expect(page.getByRole('row', { name: new RegExp(policyName) })).toBeVisible();
@@ -117,6 +119,7 @@ test.describe('Temperature policies tab (#1178) — real backend', () => {
       expect(stored.maxTemp).toBe(-75);
       expect(stored.targetTemp).toBe(-80);
       expect(stored.minimumDuration).toBe(15);
+      expect(stored.temperatureUnit).toBe('°C');
       expect(stored.effectivePeriod.start).toBeInstanceOf(Date);
       for (const legacy of ['policyName', 'minThreshold', 'maxThreshold', 'targetTemperature', 'alertDelayMin', 'validFrom', 'validTo']) {
         expect(stored).not.toHaveProperty(legacy);
@@ -124,5 +127,29 @@ test.describe('Temperature policies tab (#1178) — real backend', () => {
     } finally {
       if (stored?._id) await removeTemperaturePolicy(String(stored._id));
     }
+  });
+
+  // #1198: enforcement compares readings against a policy's limits in
+  // Celsius, so a °F policy is refused rather than stored and misapplied.
+  test('a °F policy is refused by the real API and never stored (#1198)', async ({ request }) => {
+    let session;
+    try {
+      session = await realLogin(request);
+    } catch (err: any) {
+      console.warn(`realLogin failed — DB may not be seeded with an admin user yet: ${err.message}`);
+      return;
+    }
+
+    const policyName = `e2e-1198-${Date.now()}`;
+    const res = await request.post(`${apiBaseURL}/api/policies`, {
+      headers: { Authorization: `Bearer ${session.token}` },
+      data: { name: policyName, minTemp: 35.6, maxTemp: 46.4, targetTemp: 41, temperatureUnit: '°F' },
+    });
+    expect(res.status()).toBe(422);
+    expect((await res.json())?.message).toContain('temperatureUnit deve ser °C');
+
+    const stored = await findTemperaturePolicyByName(policyName);
+    if (stored?._id) await removeTemperaturePolicy(String(stored._id));
+    expect(stored).toBeNull();
   });
 });
