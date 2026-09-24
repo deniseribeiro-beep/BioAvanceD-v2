@@ -35,18 +35,18 @@ function hasValue(value) {
   return value !== undefined && value !== null;
 }
 
-function sealStagedRecord(record) {
+function sealStagedRecord(record, { fields = SEALED_FIELDS } = {}) {
   if (!record || typeof record !== 'object') return record;
 
   const payload = {};
-  for (const field of SEALED_FIELDS) {
+  for (const field of fields) {
     if (hasValue(record[field])) payload[field] = record[field];
   }
   if (Object.keys(payload).length === 0) return record;
 
   if (isFieldEncryptionAvailable()) {
     const sealed = { ...record, sealedPayload: encryptValue(payload) };
-    for (const field of SEALED_FIELDS) sealed[field] = null;
+    for (const field of fields) sealed[field] = null;
     return sealed;
   }
 
@@ -57,7 +57,7 @@ function sealStagedRecord(record) {
       + 'original, para nao persistir identificadores civis em texto claro (#807).'
   );
   const withheld = { ...record, payloadWithheld: PAYLOAD_WITHHELD_KEY_MISSING };
-  for (const field of SEALED_FIELDS) withheld[field] = null;
+  for (const field of fields) withheld[field] = null;
   return withheld;
 }
 
@@ -72,15 +72,72 @@ function revealStagedRecord(record) {
     return { ...rest, payloadUnreadable: true };
   }
 
-  const revealed = { ...rest };
-  for (const field of SEALED_FIELDS) {
-    revealed[field] = hasValue(payload[field]) ? payload[field] : null;
+  // Restores whatever the envelope holds, so a caller that sealed a wider
+  // field list (#1191) reads back through the same function.
+  return { ...rest, ...payload };
+}
+
+/**
+ * #1191: a collection handle that seals on write and reveals on read.
+ *
+ * The FHIR staging service reads and updates its records at about fifteen
+ * sites, and some updates `$set` a sealed field on its own (`normalized` on
+ * consent acceptance, `consentTracking` when a consent is sent). Wrapping the
+ * handle keeps the service's logic unchanged: insertMany seals, find/findOne
+ * reveal, and an updateOne whose `$set` names a sealed field merges it with
+ * the record's current payload and seals the result, so the fields the
+ * update did not name survive. Anything else passes straight through.
+ */
+function sealedStagingCollection(collection, { fields = SEALED_FIELDS } = {}) {
+  const seal = (doc) => sealStagedRecord(doc, { fields });
+  const has = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
+
+  function wrapCursor(cursor) {
+    return {
+      sort(...args) { return wrapCursor(cursor.sort(...args)); },
+      limit(...args) { return wrapCursor(cursor.limit(...args)); },
+      skip(...args) { return wrapCursor(cursor.skip(...args)); },
+      async toArray() { return (await cursor.toArray()).map(revealStagedRecord); },
+    };
   }
-  return revealed;
+
+  return {
+    insertMany(docs, options) {
+      return collection.insertMany(docs.map(seal), options);
+    },
+    insertOne(doc, options) {
+      return collection.insertOne(seal(doc), options);
+    },
+    find(filter, options) {
+      return wrapCursor(collection.find(filter, options));
+    },
+    async findOne(filter, options) {
+      return revealStagedRecord(await collection.findOne(filter, options));
+    },
+    async updateOne(filter, update, options) {
+      const set = update && update.$set;
+      if (!set || !fields.some((field) => has(set, field))) {
+        return collection.updateOne(filter, update, options);
+      }
+
+      const current = revealStagedRecord(await collection.findOne(filter, options)) || {};
+      const merged = {};
+      for (const field of fields) merged[field] = has(set, field) ? set[field] : current[field];
+      const sealed = seal(merged);
+
+      const nextSet = { ...set };
+      for (const field of fields) nextSet[field] = sealed[field] ?? null;
+      nextSet.sealedPayload = sealed.sealedPayload || null;
+      if (sealed.payloadWithheld) nextSet.payloadWithheld = sealed.payloadWithheld;
+
+      return collection.updateOne(filter, { ...update, $set: nextSet }, options);
+    },
+  };
 }
 
 module.exports = {
   PAYLOAD_WITHHELD_KEY_MISSING,
   sealStagedRecord,
   revealStagedRecord,
+  sealedStagingCollection,
 };

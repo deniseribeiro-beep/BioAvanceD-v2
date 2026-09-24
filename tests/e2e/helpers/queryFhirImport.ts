@@ -75,9 +75,13 @@ export async function removeForeignImportBatch(batchId: string): Promise<void> {
   await db.collection('import_batches').deleteOne({ _id: new ObjectId(batchId) });
 }
 
-export async function findStagingRecordBySpecimenId(specimenId: string) {
+// #1191: `normalized` (which holds specimenId) is sealed at rest, so a
+// query on 'normalized.specimenId' matches nothing. Staged records are found
+// by their batch instead; the fields a test asserts on (status, errors) stay
+// readable without the key.
+export async function findStagingRecordsByBatch(batchId: string) {
   const db = await getDb();
-  return db.collection('import_staging_records').findOne({ 'normalized.specimenId': specimenId });
+  return db.collection('import_staging_records').find({ batchId: new ObjectId(batchId) }).toArray();
 }
 
 export async function findCommittedSample(specimenId: string) {
@@ -111,10 +115,17 @@ export async function findFhirImportAuditLogs(batchId: string) {
     .toArray();
 }
 
-export async function removeFhirImportFixtures(specimenId: string, participantId: string): Promise<void> {
+export async function removeFhirImportFixtures(
+  specimenId: string,
+  participantId: string,
+  batchId?: string
+): Promise<void> {
   const db = await getDb();
   await db.collection('samples').deleteMany({ specimenId });
   await db.collection('patients').deleteMany({ participantId });
   await db.collection('participantIdentities').deleteMany({ participantId });
-  await db.collection('import_staging_records').deleteMany({ 'normalized.specimenId': specimenId });
+  // #1191: by batch, since 'normalized.specimenId' is sealed at rest.
+  if (batchId) {
+    await db.collection('import_staging_records').deleteMany({ batchId: new ObjectId(batchId) });
+  }
 }

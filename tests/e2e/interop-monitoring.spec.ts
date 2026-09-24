@@ -15,7 +15,7 @@ import { computeTotp } from './helpers/totp';
 import { createRealParticipant, closeSeedDb as closeSeedParticipantDb } from './helpers/seedParticipant';
 import { seedSampleNode, readSampleStatus, removeSampleNodes, closeNeo4jDriver } from './helpers/queryNeo4j';
 import {
-  findStagingRecordBySpecimenId,
+  findStagingRecordsByBatch,
   findCommittedSample,
   findCommittedPatient,
   findCommittedParticipantIdentity,
@@ -637,6 +637,7 @@ test.describe('Interoperabilidade HL7 FHIR R4 (RF011) — real backend, staging 
     const { token } = await realLogin(request);
     const { patientId, specimenId, bundle } = buildFhirBundle(String(Date.now()));
 
+    let batchId: string | undefined;
     try {
       const stageResponse = await request.post(`${apiBaseURL}/api/import/fhir/stage`, {
         headers: { Authorization: `Bearer ${token}` },
@@ -662,7 +663,7 @@ test.describe('Interoperabilidade HL7 FHIR R4 (RF011) — real backend, staging 
       expect(record.normalized.biomarkers.length).toBeGreaterThanOrEqual(1);
       expect(record.normalized.biomarkers[0].biomarkerType).toBe('RF011 e2e biomarker');
 
-      const batchId = stageBody.batch._id;
+      batchId = stageBody.batch._id;
 
       const commitResponse = await request.post(`${apiBaseURL}/api/import/fhir/batches/${batchId}/commit`, {
         headers: { Authorization: `Bearer ${token}` },
@@ -707,7 +708,7 @@ test.describe('Interoperabilidade HL7 FHIR R4 (RF011) — real backend, staging 
       expect(committedLog?.participantId).toBe(patientId);
       expect(committedLog?.specimenId).toBe(specimenId);
     } finally {
-      await removeFhirImportFixtures(specimenId, patientId);
+      await removeFhirImportFixtures(specimenId, patientId, batchId);
     }
   });
 
@@ -734,6 +735,7 @@ test.describe('Interoperabilidade HL7 FHIR R4 (RF011) — real backend, staging 
     const specimenEntry = bundle.entry.find((entry) => entry.resource.resourceType === 'Specimen');
     delete (specimenEntry!.resource as { type?: unknown }).type;
 
+    let batchId: string | undefined;
     try {
       const stageResponse = await request.post(`${apiBaseURL}/api/import/fhir/stage`, {
         headers: { Authorization: `Bearer ${token}` },
@@ -745,20 +747,20 @@ test.describe('Interoperabilidade HL7 FHIR R4 (RF011) — real backend, staging 
       expect(record.status).toBe('ERROR');
       expect(record.errors.some((error: { field: string }) => error.field === 'sampleType')).toBe(true);
 
-      const batchId = stageBody.batch._id;
+      batchId = stageBody.batch._id;
       const commitResponse = await request.post(`${apiBaseURL}/api/import/fhir/batches/${batchId}/commit`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       const commitBody = await commitResponse.json();
       expect(commitBody.committed).toBe(0);
 
-      const stagingRecord = await findStagingRecordBySpecimenId(specimenId);
+      const [stagingRecord] = await findStagingRecordsByBatch(batchId!);
       expect(stagingRecord?.status).toBe('ERROR');
 
       const committedSample = await findCommittedSample(specimenId);
       expect(committedSample).toBeNull();
     } finally {
-      await removeFhirImportFixtures(specimenId, patientId);
+      await removeFhirImportFixtures(specimenId, patientId, batchId);
     }
   });
 });

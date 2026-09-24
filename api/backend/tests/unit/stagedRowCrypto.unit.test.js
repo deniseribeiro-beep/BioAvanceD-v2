@@ -13,7 +13,7 @@ import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 const keyRegistry = require('../../src/config/keyRegistry');
-const { sealStagedRecord, revealStagedRecord } = require('../../src/utils/stagedRowCrypto');
+const { sealStagedRecord, revealStagedRecord, sealedStagingCollection } = require('../../src/utils/stagedRowCrypto');
 
 const CIVIL_ROW = { Nome: 'Maria da Silva', CPF: '12345678900', 'Data de nascimento': '1980-01-02' };
 const NORMALIZED = { patientName: 'Maria da Silva', identityDocument: '12345678900' };
@@ -109,5 +109,117 @@ describe('#807: stagedRowCrypto', () => {
       expect(sealed.row).toEqual(CIVIL_ROW);
       expect(sealed).not.toHaveProperty('payloadWithheld');
     });
+  });
+});
+
+/**
+ * #1191: the FHIR import staging path keeps civil identity in `normalized`
+ * (patientName, patientDocument, patientBirthDate, patientEmail), the whole
+ * FHIR Patient resource in `fhir`, and a copy of the email in
+ * `consentTracking`, and it reads and updates those records at about fifteen
+ * sites. sealedStagingCollection wraps the collection handle so every write
+ * seals and every read reveals, without touching the service's own logic.
+ */
+describe('#1191: sealedStagingCollection', () => {
+  const FIELDS = ['row', 'normalized', 'fhir', 'consentTracking'];
+
+  // A minimal in-memory stand-in for a driver collection: enough of
+  // insertMany/find/findOne/updateOne($set) to observe what reaches storage.
+  function fakeCollection() {
+    const docs = [];
+    const matches = (doc, filter) =>
+      Object.entries(filter || {}).every(([k, v]) => String(doc[k]) === String(v));
+    return {
+      docs,
+      async insertMany(input) {
+        input.forEach((d, i) => docs.push({ _id: d._id ?? `id-${docs.length + i}`, ...d }));
+        return { insertedCount: input.length };
+      },
+      find(filter) {
+        let out = docs.filter((d) => matches(d, filter));
+        const cursor = {
+          sort() { return cursor; },
+          async toArray() { return out.map((d) => ({ ...d })); },
+        };
+        return cursor;
+      },
+      async findOne(filter) {
+        const found = docs.find((d) => matches(d, filter));
+        return found ? { ...found } : null;
+      },
+      async updateOne(filter, update) {
+        const found = docs.find((d) => matches(d, filter));
+        if (found) Object.assign(found, update.$set || {});
+        return { matchedCount: found ? 1 : 0 };
+      },
+    };
+  }
+
+  const FHIR_RECORD = {
+    _id: 'r1',
+    batchId: 'b1',
+    rowNumber: 1,
+    status: 'VALID',
+    normalized: { patientName: 'Joana Lima', patientDocument: '98765432100', patientEmail: 'joana@example.com', specimenId: 'SP-1' },
+    fhir: { patient: { name: [{ text: 'Joana Lima' }], birthDate: '1975-03-04' } },
+  };
+
+  it('seals every configured field on insert, including fhir', async () => {
+    const raw = fakeCollection();
+    const staging = sealedStagingCollection(raw, { fields: FIELDS });
+
+    await staging.insertMany([FHIR_RECORD]);
+
+    const atRest = JSON.stringify(raw.docs);
+    expect(atRest).not.toContain('Joana Lima');
+    expect(atRest).not.toContain('98765432100');
+    expect(atRest).not.toContain('1975-03-04');
+    expect(raw.docs[0].status).toBe('VALID');
+  });
+
+  it('reveals on find().sort().toArray() and on findOne', async () => {
+    const raw = fakeCollection();
+    const staging = sealedStagingCollection(raw, { fields: FIELDS });
+    await staging.insertMany([FHIR_RECORD]);
+
+    const [listed] = await staging.find({ batchId: 'b1' }).sort({ rowNumber: 1 }).toArray();
+    const one = await staging.findOne({ _id: 'r1' });
+
+    for (const record of [listed, one]) {
+      expect(record.normalized).toEqual(FHIR_RECORD.normalized);
+      expect(record.fhir).toEqual(FHIR_RECORD.fhir);
+      expect(record).not.toHaveProperty('sealedPayload');
+    }
+  });
+
+  it('a $set of one sealed field keeps the others and stays sealed', async () => {
+    const raw = fakeCollection();
+    const staging = sealedStagingCollection(raw, { fields: FIELDS });
+    await staging.insertMany([FHIR_RECORD]);
+
+    await staging.updateOne(
+      { _id: 'r1' },
+      { $set: { status: 'PENDING_CONSENT', consentTracking: { email: 'joana@example.com', sentAt: 'x' } } }
+    );
+
+    expect(JSON.stringify(raw.docs)).not.toContain('joana@example.com');
+    const after = await staging.findOne({ _id: 'r1' });
+    expect(after.status).toBe('PENDING_CONSENT');
+    expect(after.consentTracking).toEqual({ email: 'joana@example.com', sentAt: 'x' });
+    // The fields the update did not name survive the reseal.
+    expect(after.normalized).toEqual(FHIR_RECORD.normalized);
+    expect(after.fhir).toEqual(FHIR_RECORD.fhir);
+  });
+
+  // Control: an update that names no sealed field is passed through as is.
+  it('passes an update naming no sealed field straight through', async () => {
+    const raw = fakeCollection();
+    const staging = sealedStagingCollection(raw, { fields: FIELDS });
+    await staging.insertMany([FHIR_RECORD]);
+
+    await staging.updateOne({ _id: 'r1' }, { $set: { status: 'COMMITTED' } });
+
+    expect(raw.docs[0].status).toBe('COMMITTED');
+    expect((await staging.findOne({ _id: 'r1' })).normalized).toEqual(FHIR_RECORD.normalized);
   });
 });

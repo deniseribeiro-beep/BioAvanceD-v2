@@ -120,7 +120,7 @@ test.describe('RF011 FHIR-import consent page (/patient/e-consent/import/:token)
   });
 
   test('accepting releases the staged record for commit', async ({ page }) => {
-    const { batchId, recordId, token } = await seedPendingImportRecord();
+    const { batchId, recordId, patientName, token } = await seedPendingImportRecord();
 
     await page.goto(importLinkPath(token));
     const accept = page.getByRole('button', { name: 'Aceitar consentimento' });
@@ -136,12 +136,16 @@ test.describe('RF011 FHIR-import consent page (/patient/e-consent/import/:token)
 
     // acceptImportConsentToken's writes, read back from the store.
     const record = await db.collection('import_staging_records').findOne({ _id: recordId, batchId });
-    expect(record?.normalized?.consentSigned).toBe(true);
+    // #1191: the update sealed the record, including the plaintext this spec
+    // seeded -- normalized and consentTracking now live in one envelope, and
+    // consentSigned is proven by the status and consentStatus it produced.
+    expect(record?.sealedPayload).toBeTruthy();
+    expect(record?.normalized ?? null).toBeNull();
+    expect(JSON.stringify(record)).not.toContain(patientName);
     expect(record?.status).toBe('READY_TO_COMMIT');
     expect(record?.consentStatus).toBe('SIGNED');
     expect(record?.quarantineStatus).toBe('RELEASED');
     expect(record?.availabilityStatus).toBe('AVAILABLE');
-    expect(record?.consentTracking?.signedAt).toBeTruthy();
     expect(record?.warnings).toEqual([]);
   });
 
