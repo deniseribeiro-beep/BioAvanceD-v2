@@ -6,7 +6,9 @@ const logger = require('../../utils/logger');
 const AccessModel = require('../../models/Access');
 
 // CRUD de Access
-router.get('/', authenticate, async (req, res) => {
+// #1202: the two reads share the writes' permission code, the one GET
+// /api/users also reads under; they were authenticate-only before.
+router.get('/', authenticate, requirePermission('createUser'), async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -33,7 +35,7 @@ router.get('/', authenticate, async (req, res) => {
   }
 });
 
-router.get('/:id', authenticate, async (req, res) => {
+router.get('/:id', authenticate, requirePermission('createUser'), async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
