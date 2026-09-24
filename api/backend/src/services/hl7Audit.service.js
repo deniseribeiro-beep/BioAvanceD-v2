@@ -12,7 +12,7 @@ class HL7AuditService {
   }
 
   async _hashFHIRResources(db, date) {
-    const samplesCol = db.collection('samples');
+    const samplesCol = db.collection('specimens');
     // search for samples with a 'fhir' field and createdAt on date
     const start = new Date(date + 'T00:00:00.000Z');
     const end = new Date(date + 'T23:59:59.999Z');

@@ -1,4 +1,4 @@
-const { CANONICAL_COLLECTIONS } = require('../config/collections');
+const { getCanonicalCollectionName } = require('../config/canonicalEntityCollections.v2');
 const { getCollection } = require('../utils/collectionResolver');
 const ClinicalObservationModel = require('../models/ClinicalObservation');
 const { assertReferencesExist } = require('../ingestion/canonicalGateway');
@@ -17,8 +17,8 @@ async function createClinicalObservation(db, data) {
   const observation = ClinicalObservationModel.create(data);
 
   const referenceCheck = await assertReferencesExist(db, [
-    { collection: CANONICAL_COLLECTIONS.samples, field: 'specimenId', value: observation.specimenId, label: 'specimenId' },
-    { collection: 'devices', field: 'deviceId', value: observation.deviceId, label: 'deviceId' },
+    { collection: getCanonicalCollectionName('Specimen'), field: 'specimenId', value: observation.specimenId, label: 'specimenId' },
+    { collection: getCanonicalCollectionName('Device'), field: 'deviceId', value: observation.deviceId, label: 'deviceId' },
   ]);
   if (!referenceCheck.valid) {
     throw new Error(referenceCheck.violations.map((v) => v.message).join(', '));

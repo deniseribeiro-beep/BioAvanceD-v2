@@ -484,7 +484,7 @@ class BatchValidationEngine {
   }
 
   async findLinkedPatient(db, rawRow = {}, patientData = {}) {
-    const patientsCollection = db.collection('patients');
+    const patientsCollection = db.collection('participants');
     const criteria = this.buildPatientLinkageQuery(rawRow, patientData);
 
     for (const filter of criteria) {

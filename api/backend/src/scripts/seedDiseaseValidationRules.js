@@ -95,7 +95,7 @@ function categoryFromRecord(record = {}) {
 
 async function run() {
   const db = await connectDB();
-  const diseaseCollection = db.collection('disease_dictionary');
+  const diseaseCollection = db.collection('diseaseDictionary');
   const orphanetCollection = db.collection('orphanet_diseases');
 
   const orphanetRows = await orphanetCollection.find({}, {

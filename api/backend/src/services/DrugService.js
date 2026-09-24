@@ -49,7 +49,7 @@ class DrugService {
     }
 
     const limit = Math.min(Math.max(Number(options.limit ?? DEFAULT_LIMIT), 1), 50);
-    const collection = this.db.collection('medication_dictionary');
+    const collection = this.db.collection('medicationDictionary');
     const regex = new RegExp(normalizedQuery, 'i');
 
     const localRows = await collection
@@ -111,7 +111,7 @@ class DrugService {
     try {
       if (!this.db) return;
       const req = auditContext?.req || null;
-      const userID = auditContext?.userID || req?.user?.userID || req?.user?.id || req?.user?._id || 'USR-SYSTEM';
+      const userID = auditContext?.userID || req?.user?.userID || 'USR-SYSTEM';
       await logService.createLog(this.db, {
         userID: String(userID || 'USR-SYSTEM'),
         action: 'ATC_DICTIONARY_SYNC',

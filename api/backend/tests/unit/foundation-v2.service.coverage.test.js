@@ -11,8 +11,12 @@ const env = require('../../src/config/env');
 const foundation = require('../../src/foundation/foundation-v2.service');
 
 function makeCollection(overrides = {}) {
-  return {
+  const indexes = [];
+  const collection = {
     createIndex: vi.fn().mockResolvedValue('idx'),
+    listIndexes: vi.fn(() => ({ toArray: async () => [...indexes] })),
+    aggregate: vi.fn(() => ({ toArray: async () => [] })),
+    countDocuments: vi.fn().mockResolvedValue(0),
     findOne: vi.fn().mockResolvedValue(null),
     updateOne: vi.fn().mockResolvedValue({ acknowledged: true, matchedCount: 1, modifiedCount: 1 }),
     insertOne: vi.fn().mockResolvedValue({ acknowledged: true, insertedId: 'inserted-1' }),
@@ -25,9 +29,26 @@ function makeCollection(overrides = {}) {
     })),
     ...overrides,
   };
+  const originalCreate = collection.createIndex;
+  collection.createIndex = vi.fn(async (keys, options = {}) => {
+    const result = await originalCreate(keys, options);
+    indexes.push({ key: keys, ...options, name: options.name || `index_${indexes.length}` });
+    return result;
+  });
+  return collection;
 }
 
 function makeFoundationDb({ previousRun = null, existingRelease = null, failIndex = false } = {}) {
+  const actorDocs = existingRelease?.approvedBy
+    ? [{ actorId: existingRelease.approvedBy, actorType: 'user', actorStatus: 'active' }]
+    : [];
+  const actors = makeCollection({
+    updateOne: vi.fn(async (_filter, update) => {
+      if (!actorDocs.some((actor) => actor.actorId === update.$setOnInsert.actorId)) actorDocs.push(update.$setOnInsert);
+    }),
+    findOne: vi.fn(async ({ actorId }) => actorDocs.find((actor) => actor.actorId === actorId) || null),
+    find: vi.fn(() => ({ toArray: vi.fn(async () => [...actorDocs]) })),
+  });
   const foundationDataRuns = makeCollection({
     createIndex: failIndex
       ? vi.fn().mockRejectedValue(new Error('synthetic index failure'))
@@ -42,6 +63,7 @@ function makeFoundationDb({ previousRun = null, existingRelease = null, failInde
   });
 
   const collections = {
+    actors,
     foundationDataRuns,
     canonicalModelReleases: makeCollection({
       findOne: vi.fn().mockResolvedValue(existingRelease),
@@ -55,6 +77,8 @@ function makeFoundationDb({ previousRun = null, existingRelease = null, failInde
 
   return {
     db: {
+      listCollections: vi.fn(() => ({ toArray: async () => Object.keys(collections).map((name) => ({ name })) })),
+      createCollection: vi.fn(async (name) => { collections[name] = makeCollection(); return collections[name]; }),
       collection: vi.fn((name) => {
         if (!collections[name]) collections[name] = makeCollection();
         return collections[name];
@@ -232,6 +256,8 @@ describe('foundation-v2.service item 8 coverage', () => {
       expect.objectContaining({ $set: expect.objectContaining({ releaseStatus: 'active' }) }),
       { upsert: true }
     );
+    expect(result.release).not.toHaveProperty('approvedBy');
+    expect(result.release).not.toHaveProperty('approvedAt');
     expect(collections.configurationValidationRuns.insertOne).toHaveBeenCalledTimes(1);
     expect(collections.readinessReports.insertOne).toHaveBeenCalledTimes(1);
     expect(collections.foundationDataRuns.insertOne).toHaveBeenCalledTimes(1);
@@ -252,7 +278,7 @@ describe('foundation-v2.service item 8 coverage', () => {
     const existingRelease = {
       canonicalModelReleaseId: 'release-existing',
       approvedAt,
-      approvedBy: 'committee',
+      approvedBy: '550e8400-e29b-41d4-a716-446655440001',
       supersedesId: 'release-old',
       effectivePeriod: { start: '2026-01-01T00:00:00.000Z', end: null },
       createdAt,
@@ -269,12 +295,30 @@ describe('foundation-v2.service item 8 coverage', () => {
     expect(result.release).toMatchObject({
       canonicalModelReleaseId: 'release-existing',
       approvedAt,
-      approvedBy: 'committee',
+      approvedBy: '550e8400-e29b-41d4-a716-446655440001',
       supersedesId: 'release-old',
       effectivePeriod: existingRelease.effectivePeriod,
       createdAt,
     });
     expect(result.run.previousRunId).toBeNull();
+  });
+
+  it('rejects a legacy canonical release approver that is not an Actor UUID', async () => {
+    const { db, collections } = makeFoundationDb({
+      existingRelease: {
+        canonicalModelReleaseId: 'release-existing',
+        approvedAt: new Date('2026-01-01T00:00:00.000Z'),
+        approvedBy: 'project-owner-approved-documentation',
+      },
+    });
+
+    await expect(foundation.runFoundationV2({
+      db,
+      environment: 'staging',
+      deploymentId: 'deployment-staging',
+      pipelineVersion: '2.0.0',
+    })).rejects.toMatchObject({ code: 'DATA_MIGRATION_CONFLICT' });
+    expect(collections.canonicalModelReleases.updateOne).not.toHaveBeenCalled();
   });
 
   it('records a failed FoundationDataRun when an apply-stage technical index fails and then rethrows the original error', async () => {
@@ -311,7 +355,7 @@ describe('foundation-v2.service item 8 coverage', () => {
       postCondition: { unauthorizedOperationalRecordsCreated: 0 },
     });
     expect(failedRun.validationSummary.failed).toBe(1);
-    expect(failedRun.validationSummary.passed).toBe(2);
+    expect(failedRun.validationSummary.passed).toBe(7);
     expect(failedRun.errorSummary).toEqual({
       fatal: 1,
       message: 'synthetic index failure',

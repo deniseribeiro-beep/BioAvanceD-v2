@@ -96,10 +96,9 @@ describe('scripts/clearMfaLockForUser', () => {
     }
   });
 
-  it('builds the same $or filter as user.routes.js buildUserFilterById for a plausible ObjectId', async () => {
+  it('resolves only the canonical UUID and rejects a legacy ObjectId', async () => {
     process.env.MONGODB_URI = 'mongodb://primary-host/db';
-    const { ObjectId } = require('mongodb');
-    const hexId = new ObjectId().toString();
+    const hexId = '507f1f77bcf86cd799439011';
 
     const dbApi = fakeDb(null);
     const connect = vi.fn().mockResolvedValue(undefined);
@@ -111,12 +110,7 @@ describe('scripts/clearMfaLockForUser', () => {
 
       expect(dbApi.findOne).toHaveBeenCalledTimes(1);
       const filterUsed = dbApi.findOne.mock.calls[0][0];
-      expect(filterUsed.$or).toEqual([
-        { _id: new ObjectId(hexId) },
-        { _id: hexId },
-        { id: hexId },
-        { userID: hexId },
-      ]);
+      expect(filterUsed).toEqual({ userAccountId: { $in: [] } });
     } finally {
       restore();
     }
@@ -128,6 +122,7 @@ describe('scripts/clearMfaLockForUser', () => {
 
     const user = {
       _id: { toString: () => 'user-1' },
+      userAccountId: '550e8400-e29b-41d4-a716-446655440002',
       email: 'admin@example.com',
       username: 'admin',
       mfaLocked: true,
@@ -145,11 +140,11 @@ describe('scripts/clearMfaLockForUser', () => {
       // Identifier is id-shaped (what buildUserFilterById actually matches
       // on) -- 'admin@example.com' below is display data on the found
       // document, not the lookup key.
-      const result = await mod.clearMfaLockForUser('user-1');
+      const result = await mod.clearMfaLockForUser(user.userAccountId);
 
       expect(db).toHaveBeenCalledWith('custom-db');
-      expect(dbApi.collection).toHaveBeenCalledWith('users');
-      expect(result).toEqual({ userId: 'user-1', email: 'admin@example.com', username: 'admin' });
+      expect(dbApi.collection).toHaveBeenCalledWith('userAccounts');
+      expect(result).toEqual({ userId: user.userAccountId, email: 'admin@example.com', username: 'admin' });
 
       expect(dbApi.updateOne).toHaveBeenCalledTimes(1);
       expect(dbApi.updateOne).toHaveBeenCalledWith(
@@ -163,7 +158,7 @@ describe('scripts/clearMfaLockForUser', () => {
       // The script must print who it unlocked -- the whole point is an
       // auditable deliberate act, not a silent sweep.
       const printedLines = logSpy.mock.calls.map((call) => call.join(' '));
-      expect(printedLines.some((line) => line.includes('user-1') && line.includes('admin@example.com'))).toBe(true);
+      expect(printedLines.some((line) => line.includes(user.userAccountId) && line.includes('admin@example.com'))).toBe(true);
     } finally {
       restore();
     }
@@ -174,6 +169,7 @@ describe('scripts/clearMfaLockForUser', () => {
 
     const alreadyClearedUser = {
       _id: { toString: () => 'user-1' },
+      userAccountId: '550e8400-e29b-41d4-a716-446655440002',
       email: 'admin@example.com',
       mfaLocked: false,
       mfaFailedAttempts: 0,
@@ -186,9 +182,9 @@ describe('scripts/clearMfaLockForUser', () => {
 
     const { mod, restore } = loadScriptWithFakeMongo({ connect, db });
     try {
-      const result = await mod.clearMfaLockForUser('user-1');
+      const result = await mod.clearMfaLockForUser(alreadyClearedUser.userAccountId);
 
-      expect(result).toEqual({ userId: 'user-1', email: 'admin@example.com', username: null });
+      expect(result).toEqual({ userId: alreadyClearedUser.userAccountId, email: 'admin@example.com', username: null });
       expect(dbApi.updateOne).toHaveBeenCalledWith(
         { _id: alreadyClearedUser._id },
         { $set: { mfaLocked: false, mfaFailedAttempts: 0 } },

@@ -1,8 +1,8 @@
 const bcrypt = require('bcryptjs');
 const speakeasy = require('speakeasy');
 const logger = require('../utils/logger');
-const { ObjectId } = require('mongodb');
 const { hashToken } = require('../utils/tokenHash');
+const { getCanonicalCollectionName } = require('../config/canonicalEntityCollections.v2');
 
 /**
  * Service de Segurança do Usuário
@@ -58,8 +58,8 @@ class UserSecurityService {
    */
   async getSecurityStatus(db, userID) {
     try {
-      const usersCollection = db.collection('users');
-      const user = await usersCollection.findOne({ _id: new ObjectId(userID) });
+      const usersCollection = db.collection(getCanonicalCollectionName('UserAccount'));
+      const user = await usersCollection.findOne({ userAccountId: userID });
       
       if (!user) {
         throw new Error('Usuário não encontrado');
@@ -94,16 +94,16 @@ class UserSecurityService {
    */
   async getMFAStatus(db, userID) {
     try {
-      const usersCollection = db.collection('users');
-      const user = await usersCollection.findOne({ _id: new ObjectId(userID) });
+      const usersCollection = db.collection(getCanonicalCollectionName('UserAccount'));
+      const user = await usersCollection.findOne({ userAccountId: userID });
       
       if (!user) {
         throw new Error('Usuário não encontrado');
       }
 
       // Busca recovery codes
-      const recoveryCodesCollection = db.collection('recovery_codes');
-      const recoveryCodes = await recoveryCodesCollection.findOne({ userID: new ObjectId(userID) });
+      const recoveryCodesCollection = db.collection(getCanonicalCollectionName('RecoveryCodeSet'));
+      const recoveryCodes = await recoveryCodesCollection.findOne({ userAccountId: userID });
       
       return {
         primaryEnabled: user.mfaEnabled || false,
@@ -142,8 +142,8 @@ class UserSecurityService {
    */
   async getPasswordStatus(db, userID) {
     try {
-      const usersCollection = db.collection('users');
-      const user = await usersCollection.findOne({ _id: new ObjectId(userID) });
+      const usersCollection = db.collection(getCanonicalCollectionName('UserAccount'));
+      const user = await usersCollection.findOne({ userAccountId: userID });
       
       if (!user) {
         throw new Error('Usuário não encontrado');
@@ -411,7 +411,7 @@ class UserSecurityService {
   async getUserAnonId(db, userID) {
     try {
       const { getUserAnonId } = require('../utils/userAnonymization');
-      const user = { _id: userID };
+      const user = { userAccountId: userID };
       return await getUserAnonId(user, db);
     } catch (error) {
       logger.error('Erro ao obter userAnonId:', error.message);
@@ -424,8 +424,8 @@ class UserSecurityService {
    */
   async updatePassword(db, userID, currentPassword, newPassword) {
     try {
-      const usersCollection = db.collection('users');
-      const user = await usersCollection.findOne({ _id: new ObjectId(userID) });
+      const usersCollection = db.collection(getCanonicalCollectionName('UserAccount'));
+      const user = await usersCollection.findOne({ userAccountId: userID });
       
       if (!user) {
         throw new Error('Usuário não encontrado');
@@ -480,7 +480,7 @@ class UserSecurityService {
       const newPasswordHistory = [user.password, ...passwordHistory].slice(0, 5);
       
       await usersCollection.updateOne(
-        { _id: new ObjectId(userID) },
+        { userAccountId: userID },
         {
           $set: {
             password: newPasswordHash,
@@ -505,7 +505,7 @@ class UserSecurityService {
    */
   async generateRecoveryCodes(db, userID) {
     try {
-      const recoveryCodesCollection = db.collection('recovery_codes');
+      const recoveryCodesCollection = db.collection(getCanonicalCollectionName('RecoveryCodeSet'));
       
       // Gera 10 códigos únicos
       const codes = [];
@@ -521,7 +521,7 @@ class UserSecurityService {
       
       // Remove códigos antigos e salva novos
       await recoveryCodesCollection.updateOne(
-        { userID: new ObjectId(userID) },
+        { userAccountId: userID },
         {
           $set: {
             codes: hashedCodes,
@@ -557,14 +557,16 @@ class UserSecurityService {
   /**
    * Revoga uma sessão específica
    */
-  async revokeSession(db, userID, sessionId) {
+  async revokeSession(db, userID, sessionId, actorId) {
     try {
+      const { assertActorReference } = require('../foundation/systemActorSeedV2');
+      await assertActorReference(db, actorId);
       const sessionsCollection = db.collection('sessions');
       const { ObjectId } = require('mongodb');
 
       // Suporta documentos que usam sessionID ou apenas _id
       const query = {
-        userID: userID.toString(),
+        userAccountId: userID.toString(),
         $or: [
           { sessionID: sessionId }
         ]
@@ -581,7 +583,7 @@ class UserSecurityService {
             isRevoked: true,
             revokedAt: new Date(),
             revocationReason: 'user_request',
-            revokedBy: String(userID),
+            revokedBy: actorId,
             // #974: every other session-revoke write in the tree sets this
             // (session.service.js :217 :295 :331 :385 :438 :482 :523); this
             // one did not, so a revocation through this route was invisible
@@ -621,10 +623,10 @@ class UserSecurityService {
    * (esta e DELETE /sessions/all-others) precisam produzir o mesmo formato
    * de documento revogado -- delegar impede que voltem a divergir.
    */
-  async revokeAllSessions(db, userID, currentToken) {
+  async revokeAllSessions(db, userID, currentToken, actorId) {
     try {
       const sessionService = require('./session.service');
-      await sessionService.revokeAllOtherSessions(db, userID, currentToken);
+      await sessionService.revokeAllOtherSessions(db, userID, currentToken, 'user_request', actorId);
     } catch (error) {
       logger.error('Erro ao revogar todas as sessões:', error.message);
       throw error;
@@ -636,7 +638,7 @@ class UserSecurityService {
    */
   async requestPasswordReset(db, userID, expirationHours = 1) {
     try {
-      const usersCollection = db.collection('users');
+      const usersCollection = db.collection(getCanonicalCollectionName('UserAccount'));
       const jwt = require('jsonwebtoken');
       // #873: this was '../../config/env', which resolves to the
       // compatibility re-export under api/backend/config/ rather than to the
@@ -648,7 +650,7 @@ class UserSecurityService {
       // left its reads unchecked.
       const env = require('../config/env');
       
-      const user = await usersCollection.findOne({ _id: new ObjectId(userID) });
+      const user = await usersCollection.findOne({ userAccountId: userID });
       
       if (!user) {
         throw new Error('Usuário não encontrado');
@@ -660,7 +662,7 @@ class UserSecurityService {
       
       const resetToken = jwt.sign(
         {
-          userID: user._id.toString(),
+          userID: user.userAccountId,
           email: user.email,
           type: 'password-reset',
           expirationHours: expirationHours
@@ -671,7 +673,7 @@ class UserSecurityService {
 
       // Salva token no banco
       await usersCollection.updateOne(
-        { _id: new ObjectId(userID) },
+        { userAccountId: userID },
         {
           $set: {
             // #1078: same hash-at-rest rule as auth.service's writer. Note
@@ -702,4 +704,3 @@ class UserSecurityService {
 }
 
 module.exports = new UserSecurityService();
-

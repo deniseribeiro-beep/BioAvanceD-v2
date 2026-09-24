@@ -16,7 +16,7 @@ class MongoPatientConsentReadRepository {
    * @param {Array<object>} samples
    */
   async enrichSamplesWithConsent(samples) {
-    const patientsCollection = await getCollection(this.db, 'patients');
+    const patientsCollection = await getCollection(this.db, 'Participant');
     const patientConsentsCollection = await getCollection(this.db, 'consents');
 
     const enriched = await Promise.all((samples || []).map(async (sample) => {

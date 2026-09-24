@@ -22,6 +22,7 @@ const logger = require('../../src/utils/logger');
 // there would assert on a call that never happens.
 const { createMatchingCollection, createFilterCaptureStore } = require('../factories/filter.factory');
 const { encryptValue } = require('../../src/utils/fieldEncryption');
+const { BIOAVANCED_SYSTEM_ACTOR_ID } = require('../../src/foundation/systemActorSeedV2');
 
 // #1072: the MFA seed is stored encrypted, so every fixture that stands in
 // for an ENROLLED user has to carry a real envelope rather than a bare
@@ -53,7 +54,9 @@ function makeDb(overrides = {}) {
   };
   const RBAC_COLLECTIONS = new Set(['roles', 'permissions', 'userRoleAssignments']);
   return {
-    collection: vi.fn((name) => (RBAC_COLLECTIONS.has(name) ? rbacCollectionApi : collectionApi)),
+    collection: vi.fn((name) => name === 'actors'
+      ? { findOne: vi.fn(async ({ actorId }) => [BIOAVANCED_SYSTEM_ACTOR_ID, BASE_USER.actorId].includes(actorId) ? { actorId } : null) }
+      : RBAC_COLLECTIONS.has(name) ? rbacCollectionApi : collectionApi),
     _collectionApi: collectionApi,
   };
 }
@@ -62,7 +65,9 @@ const HASHED = 'a'.repeat(60); // 20+ chars to pass length check
 const { hashToken } = require('../../src/utils/tokenHash');
 
 const BASE_USER = {
-  _id: { toString: () => 'user-1' },
+  _id: { toString: () => '507f1f77bcf86cd799439011' },
+    userAccountId: '550e8400-e29b-41d4-a716-446655440002',
+  actorId: '550e8400-e29b-41d4-a716-446655440001',
   email: 'user@test.com',
   username: 'user1',
   name: 'User One',
@@ -221,9 +226,9 @@ describe('AuthService.processLogin', () => {
     expect(dispatchSpy).toHaveBeenCalledWith(db, {
       eventType: 'mfa_brute_force_lockout',
       sourceEventType: 'User',
-      sourceEventId: user._id,
+      sourceEventId: user.userAccountId,
       payload: {
-        userId: 'user-1',
+        userId: '550e8400-e29b-41d4-a716-446655440002',
         username: user.username,
         failedAttempts: 5
       }
@@ -975,7 +980,7 @@ describe('AuthService.resetPassword', () => {
   });
 
   it('throws when user for token not found', async () => {
-    vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'password-reset', userID: '507f1f77bcf86cd799439011' });
+    vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'password-reset', userID: '550e8400-e29b-41d4-a716-446655440002' });
     const db = makeDb();
     await expect(
       authService.resetPassword(db, 'tok', 'NewPass123!@#', {})
@@ -983,7 +988,7 @@ describe('AuthService.resetPassword', () => {
   });
 
   it('throws when saved reset token does not match', async () => {
-    vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'password-reset', userID: '507f1f77bcf86cd799439011' });
+    vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'password-reset', userID: '550e8400-e29b-41d4-a716-446655440002' });
     const db = makeDb({
       findOne: vi.fn().mockResolvedValue({ ...BASE_USER, passwordResetTokenHash: hashToken('a-different-token') }),
     });
@@ -1002,7 +1007,7 @@ describe('AuthService.resetPassword', () => {
   // USED link was a full account takeover for the rest of the JWT's lifetime
   // -- 1h on the unauthenticated path, up to 24h on the authenticated one.
   it('#1084: refuses a REPLAYED token once passwordResetTokenHash has been cleared, and does not touch the password', async () => {
-    vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'password-reset', userID: '507f1f77bcf86cd799439011' });
+    vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'password-reset', userID: '550e8400-e29b-41d4-a716-446655440002' });
     const collectionApi = {
       // Exactly the post-reset state: $unset removed both fields.
       findOne: vi.fn().mockResolvedValue({ ...BASE_USER }),
@@ -1019,7 +1024,7 @@ describe('AuthService.resetPassword', () => {
   });
 
   it('#1084: refuses when the stored token matches but the stored expiry is absent', async () => {
-    vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'password-reset', userID: '507f1f77bcf86cd799439011' });
+    vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'password-reset', userID: '550e8400-e29b-41d4-a716-446655440002' });
     const collectionApi = {
       findOne: vi.fn().mockResolvedValue({ ...BASE_USER, passwordResetTokenHash: hashToken('tok') }),
       updateOne: vi.fn().mockResolvedValue({}),
@@ -1038,7 +1043,7 @@ describe('AuthService.resetPassword', () => {
   // first, unused token with a live expiry must still reset -- the guards
   // becoming unconditional must not close the happy path.
   it('#1084 control: a first, unused token with a live expiry still resets', async () => {
-    vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'password-reset', userID: '507f1f77bcf86cd799439011' });
+    vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'password-reset', userID: '550e8400-e29b-41d4-a716-446655440002' });
     const collectionApi = {
       findOne: vi.fn().mockResolvedValue({
         ...BASE_USER,
@@ -1063,7 +1068,7 @@ describe('AuthService.resetPassword', () => {
   // a plain user listing carried an account-takeover credential -- the same
   // shape models/User.js's own docblock described and nobody filed.
   it('#1078: accepts a token whose HASH matches the stored value, proving the compare is hash-based', async () => {
-    vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'password-reset', userID: '507f1f77bcf86cd799439011' });
+    vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'password-reset', userID: '550e8400-e29b-41d4-a716-446655440002' });
     const collectionApi = {
       findOne: vi.fn().mockResolvedValue({
         ...BASE_USER,
@@ -1091,7 +1096,7 @@ describe('AuthService.resetPassword', () => {
   // field has no passwordResetTokenHash, so #1084's unconditional guard
   // refuses it rather than falling back to a raw compare.
   it('#1078: refuses a row still holding the OLD plaintext passwordResetToken field', async () => {
-    vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'password-reset', userID: '507f1f77bcf86cd799439011' });
+    vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'password-reset', userID: '550e8400-e29b-41d4-a716-446655440002' });
     const collectionApi = {
       findOne: vi.fn().mockResolvedValue({
         ...BASE_USER,
@@ -1111,7 +1116,7 @@ describe('AuthService.resetPassword', () => {
   });
 
   it('throws when the saved reset token has expired', async () => {
-    vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'password-reset', userID: '507f1f77bcf86cd799439011' });
+    vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'password-reset', userID: '550e8400-e29b-41d4-a716-446655440002' });
     const db = makeDb({
       findOne: vi.fn().mockResolvedValue({
         ...BASE_USER,
@@ -1125,7 +1130,7 @@ describe('AuthService.resetPassword', () => {
   });
 
   it('resets the password successfully and clears the reset token fields', async () => {
-    vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'password-reset', userID: '507f1f77bcf86cd799439011' });
+    vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'password-reset', userID: '550e8400-e29b-41d4-a716-446655440002' });
     const collectionApi = {
       findOne: vi.fn().mockResolvedValue({
         ...BASE_USER,
@@ -1170,7 +1175,7 @@ describe('#958: password changes revoke sessions', () => {
   it('resetPassword revokes every session for the account', async () => {
     // resetPassword verifies the token as a JWT before any lookup; the sibling
     // happy-path test stubs it the same way.
-    vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'password-reset', userID: '507f1f77bcf86cd799439011' });
+    vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'password-reset', userID: '550e8400-e29b-41d4-a716-446655440002' });
     const { db, sessionsCollection } = dbWithSessions({
       findOne: vi.fn().mockResolvedValue({
         ...BASE_USER,
@@ -1183,10 +1188,10 @@ describe('#958: password changes revoke sessions', () => {
     await authService.resetPassword(db, 'tok', 'NewPass123!@#', {});
 
     expect(sessionsCollection.updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({ userID: 'user-1', isActive: true }),
+      expect.objectContaining({ userAccountId: '550e8400-e29b-41d4-a716-446655440002', isActive: true }),
       expect.objectContaining({
         $set: expect.objectContaining({
-          isRevoked: true, revocationReason: 'password_change', revokedBy: 'system',
+          isRevoked: true, revocationReason: 'password_change', revokedBy: BIOAVANCED_SYSTEM_ACTOR_ID,
         }),
       })
     );
@@ -1543,4 +1548,3 @@ describe('#1036: the guard branches that skip the real compare are latency-equal
     expect(compare).not.toHaveBeenCalled();
   });
 });
-

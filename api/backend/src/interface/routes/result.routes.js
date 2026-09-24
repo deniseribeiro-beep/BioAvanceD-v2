@@ -24,7 +24,7 @@ const { STORAGE_BASE } = require('../../config/uploadConfig');
 const isResultInOrganizationScope = async (db, result, scope) => {
   if (!scope || scope.scope === 'global') return true;
   if (!result || !result.specimenId) return false;
-  const sample = await db.collection('amostras').findOne({ specimenId: result.specimenId });
+  const sample = await db.collection('specimens').findOne({ specimenId: result.specimenId });
   if (!sample) return false;
   return isRecordInOrganizationScope(sample, scope, 'collectionSite');
 };
@@ -105,7 +105,7 @@ router.get('/', authenticate, requireOrganizationScope, async (req, res) => {
     // sample is in the caller's organization scope; 'global' is left unfiltered,
     // the same bypass every other RBAC gate gives Administrador.
     if (req.organizationScope && req.organizationScope.scope !== 'global') {
-      const inScopeSpecimenIds = await db.collection('amostras')
+      const inScopeSpecimenIds = await db.collection('specimens')
         .distinct('specimenId', applyOrganizationScopeFilter({}, req.organizationScope, 'collectionSite'));
       query.specimenId = { $in: inScopeSpecimenIds };
     }
@@ -161,7 +161,7 @@ router.post('/upload', authenticate, requirePermission('uploadFiles'), requireOr
     // Resolve the referenced Sample first, then store its own canonical
     // specimenId on the Result. Mongo _id remains accepted as an internal
     // transport identifier; retired sampleID/sampleId aliases are not queried.
-    const samplesCollection = db.collection('amostras');
+    const samplesCollection = db.collection('specimens');
     const { ObjectId } = require('mongodb');
     let sample = null;
     if (ObjectId.isValid(String(specimenId))) {
@@ -431,7 +431,7 @@ router.post('/', authenticate, requirePermission('createResult'), requireOrganiz
     // Resolve the referenced Sample first; canonical specimenId and Mongo
     // _id are the only supported identifiers at this boundary.
     const { ObjectId } = require('mongodb');
-    const samplesCollection = db.collection('amostras');
+    const samplesCollection = db.collection('specimens');
     let sample = null;
     if (ObjectId.isValid(String(req.body?.specimenId))) {
       sample = await samplesCollection.findOne({ _id: new ObjectId(req.body.specimenId) });
@@ -623,7 +623,7 @@ router.put('/:id/link-sample', authenticate, requirePermission('editResult'), re
 
     // Resolve the destination Sample by canonical specimenId or internal
     // Mongo _id. Retired sample aliases are not accepted.
-    const samplesCollection = db.collection('amostras');
+    const samplesCollection = db.collection('specimens');
     let sample = null;
     if (ObjectId.isValid(String(specimenId))) {
       sample = await samplesCollection.findOne({ _id: new ObjectId(specimenId) });

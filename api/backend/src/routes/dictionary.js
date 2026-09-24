@@ -119,7 +119,7 @@ async function buildLocalSemanticSuggestions(db, orphaCode) {
     return null;
   }
 
-  const disease = await db.collection('disease_dictionary').findOne({
+  const disease = await db.collection('diseaseDictionary').findOne({
     orpha_code: normalizedOrpha,
     active: { $ne: false },
   });
@@ -196,7 +196,7 @@ const medicationDictionaryIndexedDbs = new WeakSet();
 
 async function ensureMedicationDictionaryIndexes(db) {
   if (medicationDictionaryIndexedDbs.has(db)) return;
-  const collection = db.collection('medication_dictionary');
+  const collection = db.collection('medicationDictionary');
   await collection.createIndex({ generic_name: 1 }, { name: 'generic_name_idx' });
   await collection.createIndex({ atc_code: 1 }, { name: 'atc_code_idx' });
   await collection.createIndex({ name: 'text', generic_name: 'text', synonyms: 'text', code: 'text', atc_code: 'text' }, { name: 'medication_text_idx' });
@@ -221,7 +221,7 @@ router.get('/atc/search', async (req, res) => {
       limit: Math.min(Math.max(Number(req.query?.limit || 10), 1), 50),
       auditContext: {
         req,
-        userID: req.user?.userID || req.user?.id || req.user?._id || null,
+        userID: req.user?.userID || null,
       },
     });
 
@@ -354,7 +354,7 @@ router.get('/disease-profile', async (req, res) => {
   }
 
   try {
-    const collection = db.collection('disease_dictionary');
+    const collection = db.collection('diseaseDictionary');
     const disease = await collection.findOne({ orpha_code: orphaCode, active: { $ne: false } });
     if (!disease) {
       return res.status(404).json({ error: 'Disease profile not found' });
@@ -382,7 +382,7 @@ router.get('/medications/search', async (req, res) => {
 
   try {
     await ensureMedicationDictionaryIndexes(db);
-    const collection = db.collection('medication_dictionary');
+    const collection = db.collection('medicationDictionary');
 
     const filters = [{ active: { $ne: false } }];
     if (query) {

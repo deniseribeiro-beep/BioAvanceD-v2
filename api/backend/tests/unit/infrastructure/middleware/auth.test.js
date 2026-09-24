@@ -22,12 +22,13 @@ jwt.verify = verifyMock;
 const { authenticate, optionalAuth } = require('../../../../src/infrastructure/middleware/auth');
 const sessionService = require('../../../../src/services/session.service');
 const logger = require('../../../../src/utils/logger');
+const ACTOR_ID = '550e8400-e29b-41d4-a716-446655440001';
 
 function createReq(overrides = {}) {
   return {
     headers: {},
     path: '/api/samples',
-    app: { locals: { db: {} } },
+    app: { locals: { db: { collection: () => ({ findOne: async () => ({ actorId: ACTOR_ID }) }) } } },
     ...overrides
   };
 }
@@ -121,13 +122,24 @@ describe('auth middleware', () => {
       expect(next).not.toHaveBeenCalled();
     });
 
+    it('rejects a signed pre-cutover ObjectId claim even on MFA routes', async () => {
+      const req = createReq({ headers: { authorization: 'Bearer old-token' }, path: '/mfa/setup' });
+      const res = createRes();
+      verifyMock.mockReturnValue({ userID: '507f1f77bcf86cd799439011', mfaSetupRequired: true });
+
+      await authenticate(req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(next).not.toHaveBeenCalled();
+    });
+
     it('returns 503 when db is unavailable for session validation', async () => {
       const req = createReq({
         headers: { authorization: 'Bearer good-token' },
         app: { locals: {} }
       });
       const res = createRes();
-      verifyMock.mockReturnValue({ id: 'user1' });
+      verifyMock.mockReturnValue({ userID: '550e8400-e29b-41d4-a716-446655440002', actorId: ACTOR_ID });
 
       await authenticate(req, res, next);
 
@@ -138,7 +150,7 @@ describe('auth middleware', () => {
     it('returns 401 with sessionExpired flag when session check reports session_expired', async () => {
       const req = createReq({ headers: { authorization: 'Bearer good-token' } });
       const res = createRes();
-      verifyMock.mockReturnValue({ id: 'user1' });
+      verifyMock.mockReturnValue({ userID: '550e8400-e29b-41d4-a716-446655440002', actorId: ACTOR_ID });
       vi.spyOn(sessionService, 'verifySession').mockResolvedValue({
         valid: false,
         reason: 'session_expired'
@@ -156,7 +168,7 @@ describe('auth middleware', () => {
     it('returns 401 with session revoked message when session check reports session_revoked', async () => {
       const req = createReq({ headers: { authorization: 'Bearer good-token' } });
       const res = createRes();
-      verifyMock.mockReturnValue({ id: 'user1' });
+      verifyMock.mockReturnValue({ userID: '550e8400-e29b-41d4-a716-446655440002', actorId: ACTOR_ID });
       vi.spyOn(sessionService, 'verifySession').mockResolvedValue({
         valid: false,
         reason: 'session_revoked'
@@ -174,7 +186,7 @@ describe('auth middleware', () => {
     it('returns generic 401 session invalid for any other invalid reason', async () => {
       const req = createReq({ headers: { authorization: 'Bearer good-token' } });
       const res = createRes();
-      verifyMock.mockReturnValue({ id: 'user1' });
+      verifyMock.mockReturnValue({ userID: '550e8400-e29b-41d4-a716-446655440002', actorId: ACTOR_ID });
       vi.spyOn(sessionService, 'verifySession').mockResolvedValue({
         valid: false,
         reason: 'session_not_found'
@@ -192,14 +204,14 @@ describe('auth middleware', () => {
     it('calls next() and sets req.user when the session is valid', async () => {
       const req = createReq({ headers: { authorization: 'Bearer good-token' } });
       const res = createRes();
-      verifyMock.mockReturnValue({ id: 'user1', mfaVerified: true });
+      verifyMock.mockReturnValue({ userID: '550e8400-e29b-41d4-a716-446655440002', actorId: ACTOR_ID, mfaVerified: true });
       vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true });
       vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({});
 
       await authenticate(req, res, next);
 
       expect(sessionService.updateActivity).toHaveBeenCalledWith(req.app.locals.db, 'good-token');
-      expect(req.user).toEqual({ id: 'user1', mfaVerified: true });
+      expect(req.user).toEqual({ userID: '550e8400-e29b-41d4-a716-446655440002', actorId: ACTOR_ID, mfaVerified: true });
       expect(next).toHaveBeenCalled();
     });
 
@@ -209,7 +221,7 @@ describe('auth middleware', () => {
         path: '/api/auth/keepalive'
       });
       const res = createRes();
-      verifyMock.mockReturnValue({ id: 'user1' });
+      verifyMock.mockReturnValue({ userID: '550e8400-e29b-41d4-a716-446655440002', actorId: ACTOR_ID });
       vi.spyOn(sessionService, 'verifySession');
 
       await authenticate(req, res, next);
@@ -224,7 +236,7 @@ describe('auth middleware', () => {
         path: '/api/mfa/setup'
       });
       const res = createRes();
-      verifyMock.mockReturnValue({ id: 'user1', mfaSetupRequired: true });
+      verifyMock.mockReturnValue({ userID: '550e8400-e29b-41d4-a716-446655440002', actorId: ACTOR_ID, mfaSetupRequired: true });
       vi.spyOn(sessionService, 'verifySession');
 
       await authenticate(req, res, next);
@@ -239,7 +251,7 @@ describe('auth middleware', () => {
         path: '/api/user/security/mfa-setup'
       });
       const res = createRes();
-      verifyMock.mockReturnValue({ id: 'user1' });
+      verifyMock.mockReturnValue({ userID: '550e8400-e29b-41d4-a716-446655440002', actorId: ACTOR_ID });
       vi.spyOn(sessionService, 'verifySession');
 
       await authenticate(req, res, next);
@@ -251,7 +263,7 @@ describe('auth middleware', () => {
     it('returns 403 requiring MFA setup when mfaSetupRequired and not mfaVerified', async () => {
       const req = createReq({ headers: { authorization: 'Bearer good-token' } });
       const res = createRes();
-      verifyMock.mockReturnValue({ id: 'user1', mfaSetupRequired: true, mfaVerified: false });
+      verifyMock.mockReturnValue({ userID: '550e8400-e29b-41d4-a716-446655440002', actorId: ACTOR_ID, mfaSetupRequired: true, mfaVerified: false });
       vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true });
       vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({});
 
@@ -270,14 +282,14 @@ describe('auth middleware', () => {
         path: '/api/security/mfa-setup'
       });
       const res = createRes();
-      verifyMock.mockReturnValue({ id: 'user1', mfaSetupRequired: true, mfaVerified: false });
+      verifyMock.mockReturnValue({ userID: '550e8400-e29b-41d4-a716-446655440002', actorId: ACTOR_ID, mfaSetupRequired: true, mfaVerified: false });
       vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true });
       vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({});
 
       await authenticate(req, res, next);
 
       expect(next).toHaveBeenCalled();
-      expect(req.user).toEqual({ id: 'user1', mfaSetupRequired: true, mfaVerified: false });
+      expect(req.user).toEqual({ userID: '550e8400-e29b-41d4-a716-446655440002', actorId: ACTOR_ID, mfaSetupRequired: true, mfaVerified: false });
     });
 
     it('returns 500 when an unexpected error escapes the outer try block', async () => {
@@ -287,7 +299,7 @@ describe('auth middleware', () => {
         get headers() {
           throw new Error('boom');
         },
-        app: { locals: { db: {} } },
+        app: { locals: { db: { collection: () => ({ findOne: async () => ({}) }) } } },
         path: '/api/samples'
       };
 
@@ -323,11 +335,11 @@ describe('auth middleware', () => {
 
     it('sets req.user and calls next() for a valid token', async () => {
       const req = createReq({ headers: { authorization: 'Bearer valid-token' } });
-      verifyMock.mockReturnValue({ id: 'user1' });
+      verifyMock.mockReturnValue({ userID: '550e8400-e29b-41d4-a716-446655440002', actorId: ACTOR_ID });
 
       await optionalAuth(req, {}, next);
 
-      expect(req.user).toEqual({ id: 'user1' });
+      expect(req.user).toEqual({ userID: '550e8400-e29b-41d4-a716-446655440002', actorId: ACTOR_ID });
       expect(next).toHaveBeenCalled();
     });
 

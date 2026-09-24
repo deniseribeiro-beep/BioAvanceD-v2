@@ -4,6 +4,7 @@ const logger = require('../utils/logger');
 // implementation instead of adding a third copy. Byte-identical body; the
 // only crypto use in this file was inside it, so the require went with it.
 const { hashToken } = require('../utils/tokenHash');
+const { BIOAVANCED_SYSTEM_ACTOR_ID, assertActorReference } = require('../foundation/systemActorSeedV2');
 
 const ACCESS_TOKEN_TTL_MS = 15 * 60 * 1000;
 const REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -128,7 +129,7 @@ class SessionService {
 
       const sessionData = {
         sessionID,
-        userID,
+        userAccountId: userID,
         tokenHash: accessTokenHash,
         refreshTokenHash,
         ipAddress: clientInfo.ipAddress,
@@ -197,7 +198,7 @@ class SessionService {
         // 'expiration'/'system' pair. Without it, a session the clock killed
         // was byte-identical to one an administrator killed, which is the
         // whole subject of #974.
-        await this.invalidateSession(db, session.sessionID, 'expiration', 'system');
+        await this.invalidateSession(db, session.sessionID, 'expiration', BIOAVANCED_SYSTEM_ACTOR_ID);
         return null;
       }
 
@@ -267,7 +268,7 @@ class SessionService {
       // Verifica se está ativa
       if (!SessionModel.isSessionActive(session)) {
         // #974: same expiry eviction as updateActivity above.
-        await this.invalidateSession(db, session.sessionID, 'expiration', 'system');
+        await this.invalidateSession(db, session.sessionID, 'expiration', BIOAVANCED_SYSTEM_ACTOR_ID);
         return { valid: false, reason: 'session_expired' };
       }
 
@@ -283,6 +284,7 @@ class SessionService {
    */
   async invalidateSession(db, sessionID, reason = null, revokedBy = null) {
     try {
+      await assertActorReference(db, revokedBy);
       // Remove do cache
       this.sessions.delete(sessionID);
 
@@ -291,7 +293,7 @@ class SessionService {
         const sessionsCollection = db.collection('sessions');
         await sessionsCollection.updateOne(
           { sessionID },
-          { $set: { isActive: false, isRevoked: true, revokedAt: new Date(), revocationReason: reason, revokedBy: revokedBy == null ? revokedBy : String(revokedBy), updatedAt: new Date() } }
+          { $set: { isActive: false, isRevoked: true, revokedAt: new Date(), revocationReason: reason, revokedBy, updatedAt: new Date() } }
         );
       } catch (dbError) {
         logger.warn('Erro ao invalidar sessão no banco:', dbError.message);
@@ -307,17 +309,13 @@ class SessionService {
    */
   async invalidateUserSessions(db, userID, reason = null, revokedBy = null) {
     try {
-      // #963: coage como os irmãos (listUserSessions, revokeSessionById,
-      // revokeAllOtherSessions) já fazem. O campo gravado é sempre string
-      // -- Session.js faz String(data.userID), alimentado pelo
-      // user._id.toString() de auth.service.js -- então receber um ObjectId
-      // aqui não casava nada, não lançava nada, e deixava o chamador
-      // devolver 200 sobre uma revogação que não aconteceu.
+      await assertActorReference(db, revokedBy);
+      // Session.userAccountId e o claim autenticado são UUIDs canônicos.
       const ownerID = String(userID);
 
       // Remove do cache
       for (const [sessionID, session] of this.sessions.entries()) {
-        if (String(session.userID) === ownerID) {
+        if (String(session.userAccountId) === ownerID) {
           this.sessions.delete(sessionID);
         }
       }
@@ -326,8 +324,8 @@ class SessionService {
       try {
         const sessionsCollection = db.collection('sessions');
         await sessionsCollection.updateMany(
-          { userID: ownerID, isActive: true },
-          { $set: { isActive: false, isRevoked: true, revokedAt: new Date(), revocationReason: reason, revokedBy: revokedBy == null ? revokedBy : String(revokedBy), updatedAt: new Date() } }
+          { userAccountId: ownerID, isActive: true },
+          { $set: { isActive: false, isRevoked: true, revokedAt: new Date(), revocationReason: reason, revokedBy, updatedAt: new Date() } }
         );
       } catch (dbError) {
         logger.warn('Erro ao invalidar sessões do usuário no banco:', dbError.message);
@@ -343,6 +341,7 @@ class SessionService {
    */
   async cleanupExpiredSessions(db) {
     try {
+      await assertActorReference(db, BIOAVANCED_SYSTEM_ACTOR_ID);
       const now = new Date();
       const expiredSessions = [];
 
@@ -381,7 +380,7 @@ class SessionService {
             ],
             isActive: true
           },
-          { $set: { isActive: false, isRevoked: true, revokedAt: new Date(), revocationReason: 'expiration', revokedBy: 'system', updatedAt: new Date() } }
+          { $set: { isActive: false, isRevoked: true, revokedAt: new Date(), revocationReason: 'expiration', revokedBy: BIOAVANCED_SYSTEM_ACTOR_ID, updatedAt: new Date() } }
         );
       } catch (dbError) {
         logger.warn('Erro ao limpar sessões expiradas no banco:', dbError.message);
@@ -400,7 +399,7 @@ class SessionService {
 
     const sessions = await sessionsCollection
       .find({
-        userID: String(userID),
+        userAccountId: String(userID),
         isActive: true,
         isRevoked: { $ne: true }
       })
@@ -423,17 +422,18 @@ class SessionService {
   }
 
   async revokeSessionById(db, userID, sessionID, reason = null, revokedBy = null) {
+    await assertActorReference(db, revokedBy);
     const sessionsCollection = db.collection('sessions');
 
     const result = await sessionsCollection.updateOne(
-      { userID: String(userID), sessionID, isActive: true },
+      { userAccountId: String(userID), sessionID, isActive: true },
       {
         $set: {
           isActive: false,
           isRevoked: true,
           revokedAt: new Date(),
           revocationReason: reason,
-          revokedBy: revokedBy == null ? revokedBy : String(revokedBy),
+          revokedBy,
           updatedAt: new Date()
         }
       }
@@ -456,6 +456,7 @@ class SessionService {
   // and logs themselves out mid-configuration is a foreseeable self-lockout on
   // the only role that can undo it.
   async revokeAllSessionsForPolicyChange(db, exceptAccessToken, revokedBy) {
+    await assertActorReference(db, revokedBy);
     const sessionsCollection = db.collection('sessions');
     const exceptHash = hashToken(exceptAccessToken);
 
@@ -477,7 +478,7 @@ class SessionService {
           // change is an administrator acting. Extending that enum is a
           // dictionary amendment, not an implementation choice.
           revocationReason: 'admin_action',
-          revokedBy: String(revokedBy || 'system'),
+          revokedBy,
           updatedAt: new Date()
         }
       }
@@ -500,12 +501,13 @@ class SessionService {
   // Refs #974, which added the same optional pair to the other three helpers
   // and deliberately left this one alone.
   async revokeAllOtherSessions(db, userID, currentAccessToken, reason = 'user_request', revokedBy = null) {
+    await assertActorReference(db, revokedBy);
     const sessionsCollection = db.collection('sessions');
     const currentHash = hashToken(currentAccessToken);
 
     await sessionsCollection.updateMany(
       {
-        userID: String(userID),
+        userAccountId: String(userID),
         isActive: true,
         $and: [
           { tokenHash: { $ne: currentHash } },
@@ -518,7 +520,7 @@ class SessionService {
           isRevoked: true,
           revokedAt: new Date(),
           revocationReason: reason,
-          revokedBy: revokedBy === null ? String(userID) : String(revokedBy),
+          revokedBy,
           updatedAt: new Date()
         }
       }
@@ -526,7 +528,7 @@ class SessionService {
 
     for (const [sid, session] of this.sessions.entries()) {
       if (
-        String(session.userID) === String(userID) &&
+        String(session.userAccountId) === String(userID) &&
         session.tokenHash !== currentHash &&
         session.token !== currentAccessToken
       ) {
@@ -578,4 +580,3 @@ class SessionService {
 }
 
 module.exports = new SessionService();
-

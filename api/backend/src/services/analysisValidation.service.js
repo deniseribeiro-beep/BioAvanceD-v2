@@ -16,7 +16,7 @@ class AnalysisValidationService {
   */
   async validateSampleExists(db, sampleIdentifier) {
     try {
-      const samplesCollection = await getCollection(db, 'samples');
+      const samplesCollection = await getCollection(db, 'Specimen');
       let sample = null;
 
       // Tenta buscar por ObjectId
@@ -73,7 +73,7 @@ class AnalysisValidationService {
         };
       }
 
-      const patientsCollection = await getCollection(db, 'patients');
+      const patientsCollection = await getCollection(db, 'Participant');
       
       // Busca o paciente e verifica status de consentimento
       const patient = await patientsCollection.findOne({ 

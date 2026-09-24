@@ -14,7 +14,7 @@ describe('SessionModel - Unit Tests', () => {
 
   beforeEach(() => {
     validSessionData = {
-      userID: '67890',
+      userAccountId: '550e8400-e29b-41d4-a716-446655440002',
       tokenHash: 'abc123def456',
       refreshTokenHash: 'xyz789uvw012',
       userAgent: 'Mozilla/5.0',
@@ -31,7 +31,7 @@ describe('SessionModel - Unit Tests', () => {
     it('deve criar sessão válida com todos os campos obrigatórios', () => {
       const session = SessionModel.create(validSessionData);
 
-      expect(session.userID).toBe('67890');
+      expect(session.userAccountId).toBe('550e8400-e29b-41d4-a716-446655440002');
       expect(session.tokenHash).toBe('abc123def456');
       expect(session.refreshTokenHash).toBe('xyz789uvw012');
       expect(session.isActive).toBe(true);
@@ -111,12 +111,12 @@ describe('SessionModel - Unit Tests', () => {
       expect(result.errors).toHaveLength(0);
     });
 
-    it('deve rejeitar quando userID ausente', () => {
-      delete validSessionData.userID;
+    it('deve rejeitar quando userAccountId ausente', () => {
+      delete validSessionData.userAccountId;
       const result = SessionModel.validate(validSessionData);
 
       expect(result.isValid).toBe(false);
-      expect(result.errors).toContain('userID é obrigatório');
+      expect(result.errors).toContain('userAccountId é obrigatório');
     });
 
     it('deve rejeitar quando tokenHash ausente', () => {
@@ -136,7 +136,7 @@ describe('SessionModel - Unit Tests', () => {
     });
 
     it('deve rejeitar quando múltiplos campos obrigatórios ausentes', () => {
-      delete validSessionData.userID;
+      delete validSessionData.userAccountId;
       delete validSessionData.tokenHash;
       const result = SessionModel.validate(validSessionData);
 

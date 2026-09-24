@@ -105,7 +105,7 @@ async function generateUniqueBarcode(db) {
   const prefix = `BR-${currentYear}-`;
   const sequencePattern = new RegExp(`^${prefix}([0-9]+)$`);
 
-  const samplesCollection = await getCollection(db, 'samples');
+  const samplesCollection = await getCollection(db, 'Specimen');
   const counters = db.collection(COUNTERS_COLLECTION);
   const counterId = counterIdForYear(currentYear);
 

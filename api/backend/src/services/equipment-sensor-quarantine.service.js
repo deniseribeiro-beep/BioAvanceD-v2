@@ -342,7 +342,7 @@ async function quarantineSamplesByFilter(db, filter, context = {}) {
   }
 
   const now = new Date();
-  const samplesCollection = await getCollection(db, 'samples');
+  const samplesCollection = await getCollection(db, 'Specimen');
   const movementsCollection = await getCollection(db, 'sampleMovements');
   const queryOptions = context.session ? { session: context.session } : undefined;
 
@@ -585,7 +585,7 @@ async function markColdChainIncidentSamplesForReview(db, incident = {}, options 
     return { matched: 0, modified: 0, reviewRequired: false };
   }
 
-  const samplesCollection = await getCollection(db, 'samples');
+  const samplesCollection = await getCollection(db, 'Specimen');
   const now = new Date();
   const queryOptions = options.session ? { session: options.session } : undefined;
   const matchFilter = {

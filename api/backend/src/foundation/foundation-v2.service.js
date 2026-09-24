@@ -6,8 +6,11 @@ const canonicalDictionary = require('../reference-data/canonical-dictionary');
 const canonicalContract = require('../contracts/canonical/v2');
 const FoundationDataRunModel = require('../models/FoundationDataRun');
 const { Neo4jOutboxService } = require('../services/neo4jOutbox.service');
-const { CANONICAL_COLLECTIONS } = require('../config/collections');
+const { getCanonicalCollection } = require('../config/canonicalEntityCollections.v2');
 const env = require('../config/env');
+const { runTopology } = require('./mongoTopologyV2');
+const { runIndexLifecycle } = require('./mongoIndexLifecycleV2');
+const { ensureSystemActor, assertActorReference } = require('./systemActorSeedV2');
 
 const CANONICAL_RELEASE_ID = 'bioavanced-canonical-2.0.0';
 const MIGRATION_PLAN_ID = 'bioavanced-1.3.0-to-2.0.0';
@@ -70,31 +73,23 @@ function persistReport(kind, id, payload) {
 }
 
 function collection(db, key) {
-  const name = CANONICAL_COLLECTIONS[key];
-  if (!name) throw new Error(`Coleção canônica não registrada: ${key}`);
-  return db.collection(name);
+  const entities = {
+    foundationDataRuns: 'FoundationDataRun',
+    readinessReports: 'ReadinessReport',
+    graphProjectionCheckpoints: 'GraphProjectionCheckpoint',
+    canonicalModelReleases: 'CanonicalModelRelease',
+    governanceInvariantCatalogs: 'GovernanceInvariantCatalog',
+    configurationValidationRuns: 'ConfigurationValidationRun',
+  };
+  const entity = entities[key];
+  if (!entity) throw new Error(`Coleção canônica não registrada: ${key}`);
+  return getCanonicalCollection(db, entity);
 }
 
 async function ensureFoundationIndexes(db) {
   await collection(db, 'foundationDataRuns').createIndex(
     { foundationDataRunId: 1 },
     { unique: true, name: 'foundation_data_run_id_unique' },
-  );
-  await collection(db, 'canonicalModelReleases').createIndex(
-    { semanticVersion: 1 },
-    { unique: true, name: 'canonical_model_release_semver_unique' },
-  );
-  await collection(db, 'governanceInvariantCatalogs').createIndex(
-    { semanticVersion: 1, canonicalModelReleaseId: 1 },
-    { unique: true, name: 'governance_invariant_catalog_release_unique' },
-  );
-  await collection(db, 'configurationValidationRuns').createIndex(
-    { configurationValidationRunId: 1 },
-    { unique: true, name: 'configuration_validation_run_id_unique' },
-  );
-  await collection(db, 'readinessReports').createIndex(
-    { readinessReportId: 1 },
-    { unique: true, name: 'readiness_report_id_unique' },
   );
   await collection(db, 'readinessReports').createIndex(
     { foundationDataRunId: 1, generatedAt: -1 },
@@ -133,13 +128,27 @@ async function ensureCanonicalRelease(db, contractChecksums, now) {
   const releaseChecksum = checksum(artifactManifest);
   const releases = collection(db, 'canonicalModelReleases');
   const existing = await releases.findOne({ semanticVersion: canonicalDictionary.DICTIONARY_VERSION });
+  if (Boolean(existing?.approvedAt) !== Boolean(existing?.approvedBy)) {
+    const error = new Error('Canonical release approval has incomplete Actor provenance');
+    error.code = 'DATA_MIGRATION_CONFLICT';
+    throw error;
+  }
+  if (existing?.approvedBy) {
+    try {
+      await assertActorReference(db, existing.approvedBy);
+    } catch (cause) {
+      const error = new Error('Canonical release approver does not resolve to Actor.actorId');
+      error.code = 'DATA_MIGRATION_CONFLICT';
+      error.cause = cause;
+      throw error;
+    }
+  }
   const release = {
     canonicalModelReleaseId: existing?.canonicalModelReleaseId || CANONICAL_RELEASE_ID,
     semanticVersion: canonicalDictionary.DICTIONARY_VERSION,
     releaseStatus: 'active',
     checksum: releaseChecksum,
-    approvedAt: existing?.approvedAt || now,
-    approvedBy: existing?.approvedBy || 'project-owner-approved-documentation',
+    ...(existing?.approvedAt ? { approvedAt: existing.approvedAt, approvedBy: existing.approvedBy } : {}),
     supersedesId: existing?.supersedesId || '1.3.0',
     effectivePeriod: existing?.effectivePeriod || { start: now.toISOString(), end: null },
     artifactManifest,
@@ -237,6 +246,7 @@ async function runFoundationV2({ db, environment, deploymentId, pipelineVersion,
     steps.push({ step, status, at, evidence });
     checkpoints.push({ step, status, at, checksum: checksum(evidence) });
   };
+  let indexResult = null;
 
   try {
     checkpoint('F1.0-preflight', 'completed', { environment, deploymentId, dictionaryVersion: completeness.dictionaryVersion });
@@ -248,8 +258,59 @@ async function runFoundationV2({ db, environment, deploymentId, pipelineVersion,
       missingRequiredFields: completeness.missingRequiredFieldIds.length,
     });
 
+    const topologyDryRun = await runTopology(db, { mode: 'dry-run' });
+    checkpoint('F1.1a-topology-plan', topologyDryRun.wouldBlock ? 'failed' : 'completed', {
+      collectionsToRename: topologyDryRun.plan.renames.length,
+      collectionsToCreate: topologyDryRun.plan.toCreate.length,
+      accountIdentity: {
+        totalAccounts: topologyDryRun.preflight.accountIdentity.totalAccounts,
+        missingUuid: topologyDryRun.preflight.accountIdentity.missingUuid,
+        legacyReferences: topologyDryRun.preflight.accountIdentity.legacyReferences,
+        conflicts: topologyDryRun.preflight.accountIdentity.issues.length,
+      },
+    });
+    if (topologyDryRun.wouldBlock) {
+      const error = new Error('Canonical topology preflight blocked');
+      error.code = topologyDryRun.preflight.accountIdentity.issues.length
+        ? 'DATA_MIGRATION_CONFLICT' : 'COLLECTION_MIGRATION_CONFLICT';
+      throw error;
+    }
+
+    // The read-only topology preflight has passed. Seed the stable service
+    // Actor before any migration/apply step can write a dependent reference.
+    await ensureSystemActor(db);
+    checkpoint('F1.1b-system-actor', 'completed', { actorType: 'service' });
+
+    const topology = await runTopology(db);
+    checkpoint('F1.3a-topology-verify', 'completed', {
+      renamedCollections: topology.renamedCollections.length,
+      createdCollections: topology.createdCollections.length,
+      resolvedEntities: topology.verification.resolvedEntities,
+      verified: topology.verification.verified,
+    });
+
+    const indexDryRun = await runIndexLifecycle(db, { mode: 'dry-run' });
+    checkpoint('F1.4a-index-plan', 'completed', {
+      wouldCreate: indexDryRun.wouldCreate.length,
+      dataConflicts: indexDryRun.preflight.conflicts.length,
+      migrationRequired: indexDryRun.migrationRequired,
+    });
+    indexResult = await runIndexLifecycle(db);
+    checkpoint('F1.4b-index-verify', indexResult.ready ? 'completed' : 'failed', {
+      created: indexResult.created.length,
+      verified: indexResult.verified,
+      blocked: indexResult.blocked.length,
+      errors: indexResult.errors.length,
+    });
+    if (!indexResult.ready) {
+      const error = new Error('Canonical index readiness blocked');
+      error.code = 'CANONICAL_INDEX_NOT_READY';
+      throw error;
+    }
+
     await ensureFoundationIndexes(db);
     checkpoint('F1.4-storage-indexes', 'completed', { outboxIndexes: true, technicalIndexes: true });
+
 
     const release = await ensureCanonicalRelease(db, contractChecksums, startedAt);
     const invariantCatalog = await ensureInvariantCatalog(db, release.canonicalModelReleaseId, startedAt);
@@ -343,6 +404,24 @@ async function runFoundationV2({ db, environment, deploymentId, pipelineVersion,
     return { run, readiness, configurationValidation, release, invariantCatalog };
   } catch (error) {
     const failedAt = new Date();
+    const blockers = indexResult?.blocked?.map((item) => ({
+      code: item.state === 'DATA_CONFLICT' ? 'DATA_CONFLICT' : 'CANONICAL_INDEX_NOT_READY',
+      constraintId: item.constraintId,
+      state: item.state,
+    })) || [{ code: error?.code || 'FOUNDATION_APPLY_FAILED' }];
+    const blockedReadinessId = crypto.randomUUID();
+    const blockedReadiness = {
+      readinessReportId: blockedReadinessId,
+      foundationDataRunId,
+      canonicalModelReleaseId: CANONICAL_RELEASE_ID,
+      p0Coverage: 0,
+      gateResults: [],
+      blockers,
+      status: 'blocked',
+      generatedAt: failedAt,
+    };
+    blockedReadiness.reportUri = persistReport('readiness', blockedReadinessId, blockedReadiness);
+    await collection(db, 'readinessReports').insertOne(blockedReadiness).catch(() => {});
     const failedPayload = {
       foundationDataRunId,
       pipelineVersion,
@@ -357,7 +436,7 @@ async function runFoundationV2({ db, environment, deploymentId, pipelineVersion,
       configurationChecksum: checksum({ environment, deploymentId }),
       dictionaryChecksum: contractChecksums.dictionary,
       steps,
-      validationSummary: { passed: steps.filter((step) => step.status === 'completed').length, failed: 1, dictionaryCompleteness: completeness },
+      validationSummary: { passed: steps.filter((step) => step.status === 'completed').length, failed: 1, dictionaryCompleteness: completeness, readinessReportId: blockedReadinessId, blockedConstraints: indexResult?.blocked?.length || 0 },
       errorSummary: { fatal: 1, message: String(error?.message || error).slice(0, 300) },
       initiatedBy,
       previousRunId: previousRun?.foundationDataRunId || null,

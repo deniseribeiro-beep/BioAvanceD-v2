@@ -8,7 +8,7 @@ async function revalidateSamplesByParticipantId(db, participantId) {
     return { total: 0, validated: 0, failed: 0 };
   }
 
-  const samplesCollection = await getCollection(db, 'samples');
+  const samplesCollection = await getCollection(db, 'Specimen');
   const samples = await samplesCollection
     .find({ participantId: normalizedParticipantId }, { projection: { specimenId: 1 } })
     .toArray();

@@ -10,7 +10,7 @@ const sprecSeed = require('../src/reference-data/sprec.min.json');
 const rcsReferenceData = require('../src/services/rcs-reference-data');
 const FoundationDataRunModel = require('../src/models/FoundationDataRun');
 const canonicalDictionary = require('../src/reference-data/canonical-dictionary');
-const { CANONICAL_COLLECTIONS } = require('../src/config/collections');
+const { getCanonicalCollection } = require('../src/config/canonicalEntityCollections.v2');
 
 function parseArgs(argv) {
   const args = { dryRun: false, list: false, only: null };
@@ -111,7 +111,7 @@ async function runSeed({ db, args, environment, deploymentId }) {
     return null;
   }
 
-  const runs = db.collection(CANONICAL_COLLECTIONS.foundationDataRuns);
+  const runs = getCanonicalCollection(db, 'FoundationDataRun');
   const previousRun = await runs.find({ environment }).sort({ startedAt: -1 }).limit(1).next();
   const steps = [];
   const dictionaryCompleteness = await canonicalDictionary.checkCompleteness();

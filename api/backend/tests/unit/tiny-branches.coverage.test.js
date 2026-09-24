@@ -127,24 +127,15 @@ describe('tiny residual branches for item 8', () => {
     });
   });
 
-  it('covers user-filter empty, ObjectId and nonnumeric identifier branches', () => {
-    expect(buildUserFilterById()).toEqual({ _id: null });
+  it('accepts only canonical account UUIDs', () => {
+    expect(buildUserFilterById()).toEqual({ userAccountId: { $in: [] } });
 
     const objectId = '507f1f77bcf86cd799439011';
-    const valid = buildUserFilterById(objectId);
-    expect(valid.$or).toEqual(expect.arrayContaining([
-      { _id: expect.anything() },
-      { _id: objectId },
-      { id: objectId },
-      { userID: objectId },
-    ]));
+    expect(buildUserFilterById(objectId)).toEqual({ userAccountId: { $in: [] } });
 
-    const nonNumeric = buildUserFilterById('user-alpha');
-    expect(nonNumeric.$or).toEqual([
-      { _id: 'user-alpha' },
-      { id: 'user-alpha' },
-      { userID: 'user-alpha' },
-    ]);
+    expect(buildUserFilterById('user-alpha')).toEqual({ userAccountId: { $in: [] } });
+    expect(buildUserFilterById('550e8400-e29b-41d4-a716-446655440002'))
+      .toEqual({ userAccountId: '550e8400-e29b-41d4-a716-446655440002' });
   });
 
   it('covers blank JSONL rows in the streaming parser', async () => {

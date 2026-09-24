@@ -41,7 +41,7 @@ router.use((req, _res, next) => {
 });
 
 function actorId(req) {
-  return req.user?.userID || req.user?.userId || req.user?._id || null;
+  return req.user?.userID || null;
 }
 
 function sendTopologyError(res, error) {

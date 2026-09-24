@@ -432,8 +432,8 @@ class ImportLGPDController {
       const results = await importLGPDService.importPatients(db, file, {
         groupFields,
         actor: {
-          userID: req.user?.userID || req.user?.id || req.user?._id || null,
-          userId: req.user?.userID || req.user?.id || req.user?._id || null,
+          userID: req.user?.userID || null,
+          userId: req.user?.userID || null,
           userName: req.user?.name || req.user?.email || 'IMPORT_LGPD',
           userRole: req.user?.role || null,
           ipAddress: req.ip || null,
@@ -617,8 +617,8 @@ class ImportLGPDController {
         mapping,
         groupFields,
         actor: {
-          userID: req.user?.userID || req.user?.id || req.user?._id || null,
-          userId: req.user?.userID || req.user?.id || req.user?._id || null,
+          userID: req.user?.userID || null,
+          userId: req.user?.userID || null,
           userName: req.user?.name || req.user?.email || 'IMPORT_LGPD',
           userRole: req.user?.role || null,
           ipAddress: req.ip || null,
@@ -641,7 +641,7 @@ class ImportLGPDController {
         // decoded verbatim -- so `id`/`_id` are both undefined and this
         // recorded null for every smart import ever run. Canonical key first,
         // matching fhir-import-staging.controller.js's own actor resolution.
-        userId: req.user?.userID || req.user?.id || req.user?._id || null,
+        userId: req.user?.userID || null,
         userName: req.user?.name || req.user?.username || null,
         totalSucesso: results.success,
         totalFalhas: results.errors.length,
@@ -805,8 +805,8 @@ class ImportLGPDController {
         // batch's createdBy, while the storage-allocation audit trail reads
         // `actor?.userId` -- both spellings are live consumers.
         actor: {
-          userID: req.user?.userID || req.user?.id || req.user?._id || null,
-          userId: req.user?.userID || req.user?.id || req.user?._id || null,
+          userID: req.user?.userID || null,
+          userId: req.user?.userID || null,
           userName: req.user?.name || req.user?.email || 'IMPORT_LGPD',
           userRole: req.user?.role || null,
           ipAddress: req.ip || null,
@@ -889,8 +889,8 @@ class ImportLGPDController {
               fileName: req.file.originalname,
               error,
               actor: {
-                userID: req.user?.userID || req.user?.id || req.user?._id || null,
-                userId: req.user?.userID || req.user?.id || req.user?._id || null,
+                userID: req.user?.userID || null,
+                userId: req.user?.userID || null,
               },
               importOptions: {
                 startBoxId: req.body?.boxId || null,

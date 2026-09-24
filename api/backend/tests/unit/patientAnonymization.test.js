@@ -33,15 +33,15 @@ describe('patientAnonymization.generateUniqueParticipantId', () => {
     const id = await generateUniqueParticipantId(db);
 
     expect(id).toMatch(/^[1-9]\d{7}$/);
-    expect(db.collection).toHaveBeenCalledWith('patients');
+    expect(db.collection).toHaveBeenCalledWith('participants');
   });
 
-  it('uses the provided collectionName override', async () => {
+  it('always resolves Participant through the canonical registry', async () => {
     const db = createDb(async () => null);
 
-    await generateUniqueParticipantId(db, 'pacientes');
+    await generateUniqueParticipantId(db);
 
-    expect(db.collection).toHaveBeenCalledWith('pacientes');
+    expect(db.collection).toHaveBeenCalledWith('participants');
   });
 
   it('retries on collision until a unique ID is found', async () => {

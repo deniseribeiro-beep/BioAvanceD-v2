@@ -48,12 +48,8 @@ class AuthController {
         });
       }
 
-      // #1037: attribute the grant. registerUser's third parameter defaults
-      // to the string 'system', which is what UserRoleAssignment.grantedBy
-      // carried for every account created through this route while it was
-      // unauthenticated. The route now requires authenticate +
-      // requirePermission('createUser'), so there is always a real actor.
-      const user = await authService.registerUser(db, req.body, req.user?.userID);
+      // Attribute the grant to the authenticated account's Actor.
+      const user = await authService.registerUser(db, req.body, req.user?.actorId);
 
       // #1037: RF003 AC#6 requires auditing account creation, and RF012 AC#1
       // / RNF009 AC#2 (Crítica) both make the actor a mandatory element of
@@ -68,7 +64,7 @@ class AuthController {
         await auditLogger.log({
           action: 'CREATE',
           resourceType: 'User',
-          resourceId: user._id?.toString() || user.id,
+          resourceId: user.userAccountId,
           status: 'success',
           severity: 'info',
           message: 'Usuário registrado com sucesso',
@@ -361,9 +357,8 @@ class AuthController {
         });
       }
 
-      const { ObjectId } = require('mongodb');
-      const usersCollection = db.collection('users');
-      const user = await usersCollection.findOne({ _id: new ObjectId(req.user.userID) });
+      const usersCollection = db.collection('userAccounts');
+      const user = await usersCollection.findOne({ userAccountId: req.user.userID });
 
       if (!user) {
         return res.status(404).json({
@@ -449,7 +444,7 @@ class AuthController {
       // sessions die.
       const currentToken = (req.headers && req.headers.authorization || '').replace('Bearer ', '');
       await sessionService.revokeAllOtherSessions(
-        db, req.user.userID, currentToken, 'password_change', req.user.userID
+        db, req.user.userID, currentToken, 'password_change', req.user.actorId
       );
       
       return res.status(200).json({
@@ -553,4 +548,3 @@ class AuthController {
 }
 
 module.exports = new AuthController();
-

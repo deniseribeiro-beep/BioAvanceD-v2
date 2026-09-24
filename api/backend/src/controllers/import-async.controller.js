@@ -179,7 +179,7 @@ class ImportAsyncController {
         parsedGroupFields = parsed.value;
       }
 
-      const userID = req.user?.userID || req.user?._id?.toString() || null;
+      const userID = req.user?.userID || null;
 
       // Cria job na fila
       const result = await importAsyncService.createImportJob(
@@ -283,7 +283,7 @@ class ImportAsyncController {
       }
 
       const filters = {
-        userID: req.user?.userID || req.user?._id?.toString(),
+        userID: req.user?.userID?.toString(),
         dataType: req.query.dataType,
         status: req.query.status,
         limit: req.query.limit,

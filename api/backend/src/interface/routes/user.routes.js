@@ -11,6 +11,7 @@ const { ObjectId } = require('mongodb');
 // #933: extraída para src/utils/userFilter.js para que os scripts de
 // manutenção em src/scripts/ usem exatamente esta regra em vez de uma cópia.
 const { buildUserFilterById } = require('../../utils/userFilter');
+const { getCanonicalCollectionName } = require('../../config/canonicalEntityCollections.v2');
 
 // #1031: POST /:id/reset-mfa faz duas coisas materialmente diferentes desde
 // f24b853e (#933) -- uma redefinição completa, que destrói o segundo fator e
@@ -55,7 +56,7 @@ async function writeMfaResetAudit(db, req, targetUser, { operation, enrolmentPre
   await auditLogger.log({
     action: 'MFA',
     resourceType: 'User',
-    resourceId: targetUser._id.toString(),
+    resourceId: targetUser.userAccountId,
     status: 'success',
     // #1033: a severidade acompanha se a conta CONTINUA com um segundo fator
     // ATIVO -- não se o segredo do cadastro sobreviveu. Nos dois ramos
@@ -152,7 +153,7 @@ router.post('/register',
         }
       }
 
-      const user = await authService.registerUser(db, req.body, req.user?.userID);
+      const user = await authService.registerUser(db, req.body, req.user?.actorId);
 
       // Registra log de criação de usuário
       if (req.user) {
@@ -161,7 +162,7 @@ router.post('/register',
         await auditLogger.log({
           action: 'CREATE',
           resourceType: 'User',
-          resourceId: user._id?.toString() || user.id,
+          resourceId: user.userAccountId,
           status: 'success',
           severity: 'info',
           message: 'Usuário registrado com sucesso',
@@ -199,7 +200,7 @@ router.get('/', authenticate, requirePermission('createUser'), async (req, res) 
       });
     }
 
-    const usersCollection = db.collection('users');
+    const usersCollection = db.collection(getCanonicalCollectionName('UserAccount'));
     const users = await usersCollection.find({}).toArray();
     const UserModel = require('../../models/User');
     const { resolveRoleDisplayName } = require('../../services/rbac-assignment.service');
@@ -216,11 +217,11 @@ router.get('/', authenticate, requirePermission('createUser'), async (req, res) 
       // #427: roleName resolved from the active RBAC assignment — no
       // longer persisted on the User document for new/edited users.
       if (!userWithoutPassword.roleName) {
-        userWithoutPassword.roleName = await resolveRoleDisplayName(db, String(userWithoutPassword._id));
+        userWithoutPassword.roleName = await resolveRoleDisplayName(db, userWithoutPassword.userAccountId);
       }
       // Garante que o ID esteja disponível como _id e id
-      if (userWithoutPassword._id && !userWithoutPassword.id) {
-        userWithoutPassword.id = userWithoutPassword._id.toString();
+      if (userWithoutPassword.userAccountId && !userWithoutPassword.id) {
+        userWithoutPassword.id = userWithoutPassword.userAccountId;
       }
       return userWithoutPassword;
     }));
@@ -281,7 +282,7 @@ router.get('/:id', authenticate, async (req, res) => {
       });
     }
 
-    const usersCollection = db.collection('users');
+    const usersCollection = db.collection(getCanonicalCollectionName('UserAccount'));
     const userFilter = buildUserFilterById(req.params.id);
     const user = await usersCollection.findOne(userFilter);
 
@@ -327,7 +328,7 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
     }
 
     const UserModel = require('../../models/User');
-    const usersCollection = db.collection('users');
+    const usersCollection = db.collection(getCanonicalCollectionName('UserAccount'));
     const userFilter = buildUserFilterById(req.params.id);
     
     // Busca usuário atual para validação
@@ -426,7 +427,7 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
     // #426: resolve via UserRoleAssignment -> Role, não accessType/roleName
     // direto no documento.
     const { isAdministrator } = require('../../services/rbac-assignment.service');
-    const isAdmin = targetUser && (await isAdministrator(db, targetUser._id.toString()));
+    const isAdmin = targetUser && (await isAdministrator(db, targetUser.userAccountId));
 
     // Mapeia roleName para accessType se necessário — resolvido aqui, antes
     // de remover os campos do payload, para uso abaixo (grant da
@@ -457,7 +458,7 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
     let targetLevel = null;
     if (requestedAccessType) {
       const { resolveUserHierarchyLevel } = require('../../services/rbac-assignment.service');
-      targetLevel = await resolveUserHierarchyLevel(db, targetUser._id.toString());
+      targetLevel = await resolveUserHierarchyLevel(db, targetUser.userAccountId);
       const isRoleChange = Number(requestedAccessType) !== Number(targetLevel);
       if (isRoleChange) {
         const callerLevel = await resolveUserHierarchyLevel(db, req.user?.userID);
@@ -604,13 +605,13 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
     // senha que não existe mais: middleware/auth.js só relê roleValidUntil, e
     // rotateSessionTokens renova indefinidamente.
     //
-    // targetUser._id.toString(), não req.params.id: buildUserFilterById aceita
+    // targetUser.userAccountId, não req.params.id: buildUserFilterById aceita
     // _id/id/userID em forma string E numérica, então o parâmetro da rota não é
     // necessariamente igual ao userID gravado na sessão. Mesmo motivo do
     // reset-mfa abaixo.
     if (passwordWasSet) {
       const sessionService = require('../../services/session.service');
-      await sessionService.invalidateUserSessions(db, targetUser._id.toString(), 'admin_action', req.user?.userID);
+      await sessionService.invalidateUserSessions(db, targetUser.userAccountId, 'admin_action', req.user?.actorId);
     }
 
     // #615: organizationId used for RBAC scoping below — already normalized
@@ -648,9 +649,9 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
       // permissions until this happens.
       const { changeUserRole } = require('../../services/rbac-assignment.service');
       await changeUserRole(db, {
-        userAccountId: targetUser._id.toString(),
+        userAccountId: targetUser.userAccountId,
         accessType: requestedAccessType,
-        changedBy: req.user?.userID,
+        changedBy: req.user?.actorId,
         organizationId: effectiveOrganizationId,
       });
     }
@@ -658,16 +659,16 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
       const { grantAdditionalRole, revokeAdditionalRole } = require('../../services/rbac-assignment.service');
       if (requestedAuditorRole) {
         await grantAdditionalRole(db, {
-          userAccountId: targetUser._id.toString(),
+          userAccountId: targetUser.userAccountId,
           roleCode: 'auditor',
-          grantedBy: req.user?.userID,
+          grantedBy: req.user?.actorId,
           organizationId: effectiveOrganizationId,
         });
       } else {
         await revokeAdditionalRole(db, {
-          userAccountId: targetUser._id.toString(),
+          userAccountId: targetUser.userAccountId,
           roleCode: 'auditor',
-          revokedBy: req.user?.userID,
+          revokedBy: req.user?.actorId,
         });
       }
       changes.auditorRole = Boolean(requestedAuditorRole);
@@ -682,7 +683,7 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
     if (organizationIdProvided && req.body.organizationId !== (targetUser.organizationId ?? null)) {
       const { updateAssignmentScope } = require('../../services/rbac-assignment.service');
       await updateAssignmentScope(db, {
-        userAccountId: targetUser._id.toString(),
+        userAccountId: targetUser.userAccountId,
         organizationId: req.body.organizationId,
         updatedBy: req.user?.userID,
       });
@@ -711,7 +712,7 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
     // #427: roleName resolved from the active RBAC assignment for display —
     // no longer persisted on the User document.
     const { resolveRoleDisplayName } = require('../../services/rbac-assignment.service');
-    userWithoutPassword.roleName = await resolveRoleDisplayName(db, targetUser._id.toString());
+    userWithoutPassword.roleName = await resolveRoleDisplayName(db, targetUser.userAccountId);
 
     // Traduz status para português
     if (userWithoutPassword.status) {
@@ -719,8 +720,8 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
     }
     
     // Garante que o ID esteja disponível
-    if (userWithoutPassword._id && !userWithoutPassword.id) {
-      userWithoutPassword.id = userWithoutPassword._id.toString();
+    if (userWithoutPassword.userAccountId && !userWithoutPassword.id) {
+      userWithoutPassword.id = userWithoutPassword.userAccountId;
     }
 
     return res.status(200).json({
@@ -748,7 +749,7 @@ router.delete('/:id', authenticate, requirePermission('createUser'), async (req,
       });
     }
 
-    const usersCollection = db.collection('users');
+    const usersCollection = db.collection(getCanonicalCollectionName('UserAccount'));
     const userFilter = buildUserFilterById(req.params.id);
     const result = await usersCollection.deleteOne(userFilter);
 
@@ -788,7 +789,7 @@ router.get('/:id/validate-status', authenticate, async (req, res) => {
       });
     }
 
-    const usersCollection = db.collection('users');
+    const usersCollection = db.collection(getCanonicalCollectionName('UserAccount'));
     const userFilter = buildUserFilterById(req.params.id);
     const user = await usersCollection.findOne(userFilter);
 
@@ -863,7 +864,7 @@ router.post('/register-sample', authenticate, requirePermission('createSample'),
         return savedSample;
       },
       deleteById: async (specimenId) => {
-        const samplesCollection = await getCollection(db, 'samples');
+        const samplesCollection = await getCollection(db, 'Specimen');
         const filter = ObjectId.isValid(specimenId)
           ? { _id: new ObjectId(specimenId) }
           : { _id: specimenId };
@@ -878,7 +879,7 @@ router.post('/register-sample', authenticate, requirePermission('createSample'),
     const result = await registerSampleUseCase.execute({
       sampleData: req.body,
       actor: {
-        userId: req.user?.id || req.user?._id?.toString() || req.user?.userID || null,
+        userId: req.user?.userID || null,
         userName: req.user?.name || req.user?.username || null,
         userRole: req.user?.roleName || req.user?.role || null,
         ipAddress: req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress || null,
@@ -1048,7 +1049,7 @@ router.post('/:id/reset-mfa', authenticate, requirePermission('resetMFA', 'UPDAT
     // #426/#632: alvo resolvido via UserRoleAssignment -> Role, não
     // accessType/roleName direto no documento.
     const { isAdministrator } = require('../../services/rbac-assignment.service');
-    const usersCollection = db.collection('users');
+    const usersCollection = db.collection(getCanonicalCollectionName('UserAccount'));
 
     // Busca o usuário alvo
     const userFilter = buildUserFilterById(req.params.id);
@@ -1080,7 +1081,7 @@ router.post('/:id/reset-mfa', authenticate, requirePermission('resetMFA', 'UPDAT
     // própria RF003 (:39) põe o ciclo de vida de MFA de contas de usuário sob
     // o Administrador sem ressalva que exclua alvos administradores. Logo a
     // recusa é estreitada ao segredo, não aplicada à operação toda.
-    if (await isAdministrator(db, targetUser._id.toString())) {
+    if (await isAdministrator(db, targetUser.userAccountId)) {
       await usersCollection.updateOne(
         userFilter,
         {
@@ -1146,11 +1147,11 @@ router.post('/:id/reset-mfa', authenticate, requirePermission('resetMFA', 'UPDAT
     // via rotateSessionTokens. Um admin reseta MFA justamente porque acredita
     // que o segundo fator foi comprometido.
     //
-    // targetUser._id.toString(), não req.params.id: buildUserFilterById
+    // targetUser.userAccountId, não req.params.id: buildUserFilterById
     // aceita _id/id/userID em forma string E numérica, então o parâmetro da
     // rota não é necessariamente igual ao userID gravado na sessão.
     const sessionService = require('../../services/session.service');
-    await sessionService.invalidateUserSessions(db, targetUser._id.toString(), 'admin_action', req.user?.userID);
+    await sessionService.invalidateUserSessions(db, targetUser.userAccountId, 'admin_action', req.user?.actorId);
 
     // #1031: par explícito da linha do desbloqueio acima. Sem as duas, a
     // trilha registra as duas operações de forma indistinguível.
@@ -1190,7 +1191,7 @@ router.post('/:id/force-password-reset', authenticate, requirePermission('forceP
       });
     }
 
-    const usersCollection = db.collection('users');
+    const usersCollection = db.collection(getCanonicalCollectionName('UserAccount'));
 
     const userFilter = buildUserFilterById(req.params.id);
     const targetUser = await usersCollection.findOne(userFilter);
@@ -1226,7 +1227,7 @@ router.post('/:id/force-password-reset', authenticate, requirePermission('forceP
     await auditLogger.log({
       action: 'UPDATE',
       resourceType: 'User',
-      resourceId: targetUser._id.toString(),
+      resourceId: targetUser.userAccountId,
       status: 'success',
       severity: 'info',
       message: 'Redefinição de senha forçada no próximo login',
@@ -1272,7 +1273,7 @@ router.post('/:id/disable-mfa', authenticate, requirePermission('disableMFA', 'U
     // #426: resolve via UserRoleAssignment -> Role, não accessType/roleName
     // direto no documento.
     const { isAdministrator } = require('../../services/rbac-assignment.service');
-    const usersCollection = db.collection('users');
+    const usersCollection = db.collection(getCanonicalCollectionName('UserAccount'));
 
     const isCurrentUserAdmin = await isAdministrator(db, req.user.userID);
     if (!isCurrentUserAdmin) {
@@ -1296,7 +1297,7 @@ router.post('/:id/disable-mfa', authenticate, requirePermission('disableMFA', 'U
 
     // Verifica se o usuário alvo é administrador
     // Este endpoint permite desativar MFA apenas de outros administradores
-    const isTargetAdmin = await isAdministrator(db, targetUser._id.toString());
+    const isTargetAdmin = await isAdministrator(db, targetUser.userAccountId);
     
     if (!isTargetAdmin) {
       return res.status(403).json({
@@ -1358,4 +1359,3 @@ module.exports = router;
 // chamando a funcao diretamente, ja que todos os call sites internos passam
 // literais.
 module.exports.writeMfaResetAudit = writeMfaResetAudit;
-

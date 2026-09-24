@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const { isUuid } = require('../../foundation/userAccountIdentityMigrationV2');
 const authController = require('../../controllers/auth.controller');
 const authService = require('../../services/auth.service');
 const { authenticate } = require('../../infrastructure/middleware/auth');
@@ -158,9 +159,8 @@ router.get('/two-factor/status', authenticate, async (req, res) => {
   try {
     const db = req.app.locals.db;
 
-    const usersCollection = db.collection('users');
-    const { ObjectId } = require('mongodb');
-    const user = await usersCollection.findOne({ _id: new ObjectId(req.user.userID) });
+    const usersCollection = db.collection('userAccounts');
+    const user = await usersCollection.findOne({ userAccountId: req.user.userID });
 
     if (!user) {
       return res.status(404).json({
@@ -276,15 +276,12 @@ router.post('/logout', authenticate, async (req, res) => {
       const sessionCheck = await sessionService.verifySession(db, token);
       
       if (sessionCheck.valid && sessionCheck.session?.sessionID) {
-        // #974: an explicit logout is 'user_request' by the session's own
-        // owner. req.user is not relied on here because this route reaches
-        // the revoke through verifySession rather than the authenticate
-        // middleware, so the session document is the authoritative actor.
+        // An explicit logout is attributed to the authenticated account's Actor.
         await sessionService.invalidateSession(
           db,
           sessionCheck.session.sessionID,
           'user_request',
-          sessionCheck.session.userID
+          req.user.actorId
         );
       }
     }
@@ -321,9 +318,8 @@ router.get('/verify', authenticate, async (req, res) => {
     const db = req.app.locals.db;
 
     // Busca dados completos do usuário
-    const usersCollection = db.collection('users');
-    const { ObjectId } = require('mongodb');
-    const user = await usersCollection.findOne({ _id: new ObjectId(req.user.userID) });
+    const usersCollection = db.collection('userAccounts');
+    const user = await usersCollection.findOne({ userAccountId: req.user.userID });
 
     if (!user) {
       // Registra tentativa de verificar token de usuário inexistente
@@ -357,8 +353,7 @@ router.get('/verify', authenticate, async (req, res) => {
       success: true,
       data: {
         user: {
-          _id: user._id,
-          userID: req.user.userID,
+          userAccountId: req.user.userID,
           email: user.email,
           username: user.username,
           accessType,
@@ -409,7 +404,7 @@ router.delete('/sessions/all-others', authenticate, async (req, res) => {
 
     const token = req.headers.authorization?.substring(7);
     const sessionService = require('../../services/session.service');
-    await sessionService.revokeAllOtherSessions(db, req.user.userID, token);
+    await sessionService.revokeAllOtherSessions(db, req.user.userID, token, 'user_request', req.user.actorId);
 
     return res.status(200).json({
       success: true,
@@ -439,7 +434,7 @@ router.delete('/sessions/:sessionId', authenticate, async (req, res) => {
       clearRefreshCookie(res);
     }
 
-    const revoked = await sessionService.revokeSessionById(db, req.user.userID, sessionId, 'user_request', req.user.userID);
+    const revoked = await sessionService.revokeSessionById(db, req.user.userID, sessionId, 'user_request', req.user.actorId);
 
     if (!revoked) {
       return res.status(404).json({
@@ -492,7 +487,7 @@ router.post('/refresh', async (req, res) => {
       });
     }
 
-    if (!decoded?.userID || decoded?.type !== 'refresh') {
+    if (!isUuid(decoded?.userID) || decoded?.type !== 'refresh') {
       clearRefreshCookie(res);
       return res.status(401).json({
         success: false,
@@ -502,7 +497,7 @@ router.post('/refresh', async (req, res) => {
 
     const sessionService = require('../../services/session.service');
     const session = await sessionService.getSessionByRefreshToken(db, refreshToken);
-    if (!session || session.userID !== String(decoded.userID)) {
+    if (!session || session.userAccountId !== decoded.userID) {
       clearRefreshCookie(res);
       return res.status(401).json({
         success: false,
@@ -510,9 +505,8 @@ router.post('/refresh', async (req, res) => {
       });
     }
 
-    const usersCollection = db.collection('users');
-    const { ObjectId } = require('mongodb');
-    const user = await usersCollection.findOne({ _id: new ObjectId(decoded.userID) });
+    const usersCollection = db.collection('userAccounts');
+    const user = await usersCollection.findOne({ userAccountId: decoded.userID });
     if (!user) {
       clearRefreshCookie(res);
       return res.status(401).json({
@@ -528,7 +522,7 @@ router.post('/refresh', async (req, res) => {
 
     const newRefreshToken = jwt.sign(
       {
-        userID: user._id.toString(),
+        userID: user.userAccountId,
         sessionID: session.sessionID,
         type: 'refresh'
       },
@@ -568,4 +562,3 @@ router.post('/mfa/setup', authenticate, authController.setupMFA.bind(authControl
 router.post('/mfa/enable', authenticate, authController.enableMFA.bind(authController));
 
 module.exports = router;
-

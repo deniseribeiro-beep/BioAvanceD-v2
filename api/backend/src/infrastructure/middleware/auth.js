@@ -2,6 +2,7 @@ const jwt = require('jsonwebtoken');
 const env = require('../../config/env');
 const logger = require('../../utils/logger');
 const sessionService = require('../../services/session.service');
+const { isUuid } = require('../../foundation/userAccountIdentityMigrationV2');
 
 /**
  * Middleware de autenticação JWT
@@ -60,6 +61,10 @@ const authenticate = async (req, res, next) => {
         error: 'Token inválido',
         message: 'Token de autenticação inválido'
       });
+    }
+
+    if (!isUuid(decoded.userID) || !isUuid(decoded.actorId)) {
+      return res.status(401).json({ success: false, error: 'Token inválido', message: 'Faça login novamente' });
     }
 
     {
@@ -140,17 +145,20 @@ const authenticate = async (req, res, next) => {
         // RF003 AC#3 - o papel atribuído pode ter vigência (validade); uma
         // sessão sob um papel já expirado é recusada mesmo com token/sessão
         // válidos, já que a expiração vive no documento do usuário, não no JWT.
-        const { ObjectId } = require('mongodb');
-        if (decoded.userID && ObjectId.isValid(decoded.userID)) {
-          const currentUser = await db.collection('users').findOne({ _id: new ObjectId(decoded.userID) });
-          if (currentUser?.roleValidUntil && new Date(currentUser.roleValidUntil) <= new Date()) {
-            return res.status(403).json({
-              success: false,
-              error: 'Papel expirado',
-              message: 'A vigência do papel atribuído a este usuário expirou. Contate um administrador.',
-              roleExpired: true
-            });
-          }
+        const currentUser = await db.collection('userAccounts').findOne({ userAccountId: decoded.userID });
+        if (!currentUser) {
+          return res.status(401).json({ success: false, error: 'Token inválido', message: 'Faça login novamente' });
+        }
+        if (currentUser.actorId !== decoded.actorId) {
+          return res.status(401).json({ success: false, error: 'Token inválido', message: 'Faça login novamente' });
+        }
+        if (currentUser.roleValidUntil && new Date(currentUser.roleValidUntil) <= new Date()) {
+          return res.status(403).json({
+            success: false,
+            error: 'Papel expirado',
+            message: 'A vigência do papel atribuído a este usuário expirou. Contate um administrador.',
+            roleExpired: true
+          });
         }
       }
       
@@ -190,7 +198,7 @@ const optionalAuth = async (req, res, next) => {
       const token = authHeader.substring(7);
       try {
         const decoded = jwt.verify(token, env.JWT_SECRET);
-        req.user = decoded;
+        if (isUuid(decoded.userID) && isUuid(decoded.actorId)) req.user = decoded;
       } catch (error) {
         // Ignora erro, continua sem usuário autenticado
       }
@@ -205,4 +213,3 @@ module.exports = {
   authenticate,
   optionalAuth
 };
-

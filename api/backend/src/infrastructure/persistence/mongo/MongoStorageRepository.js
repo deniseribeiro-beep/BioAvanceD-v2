@@ -57,7 +57,7 @@ class MongoStorageRepository {
   }
 
   async findSampleById(specimenId, session) {
-    const samplesCollection = await getCollection(this.db, 'samples');
+    const samplesCollection = await getCollection(this.db, 'Specimen');
     const normalizedId = this.toObjectId(specimenId);
     const sample = await samplesCollection.findOne({
       $or: [{ _id: normalizedId }, { specimenId: String(specimenId) }]
@@ -346,7 +346,7 @@ class MongoStorageRepository {
   }
 
   async allocateSamplePosition(input, session) {
-    const samples = await getCollection(this.db, 'samples');
+    const samples = await getCollection(this.db, 'Specimen');
     const boxes = this.db.collection('storageBoxes');
     const sampleObjId = this.toObjectId(input.specimenId);
     const boxObjId = this.toObjectId(input.boxId);
@@ -404,7 +404,7 @@ class MongoStorageRepository {
   }
 
   async autoAssignSamplePosition(input, session) {
-    const samples = await getCollection(this.db, 'samples');
+    const samples = await getCollection(this.db, 'Specimen');
     const boxes = this.db.collection('storageBoxes');
     const sampleObjId = this.toObjectId(input.specimenId);
     const boxObjId = this.toObjectId(input.boxId);
@@ -459,7 +459,7 @@ class MongoStorageRepository {
   }
 
   async moveSamplePosition(input, session) {
-    const samples = await getCollection(this.db, 'samples');
+    const samples = await getCollection(this.db, 'Specimen');
     const boxes = this.db.collection('storageBoxes');
     const sampleObjId = this.toObjectId(input.specimenId);
     const fromBoxObjId = this.toObjectId(input.fromBoxId);
@@ -533,7 +533,7 @@ class MongoStorageRepository {
   }
 
   async releaseSamplePosition(input, session) {
-    const samples = await getCollection(this.db, 'samples');
+    const samples = await getCollection(this.db, 'Specimen');
     const boxes = this.db.collection('storageBoxes');
     const sampleObjId = this.toObjectId(input.specimenId);
     const sample = await samples.findOne({ _id: sampleObjId }, { session });
@@ -632,7 +632,7 @@ class MongoStorageRepository {
     const searchTerm = String(input.query || '').trim();
     if (searchTerm.length < 2) return [];
     const searchRegex = new RegExp(searchTerm, 'i');
-    const samples = await getCollection(this.db, 'samples');
+    const samples = await getCollection(this.db, 'Specimen');
     const candidates = await samples.find({
       $and: [
         { $or: [{ barcode: searchRegex }, { participantId: searchRegex }, { specimenId: searchRegex }] },

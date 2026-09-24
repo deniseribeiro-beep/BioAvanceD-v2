@@ -25,34 +25,34 @@ describe('resolveCollectionName', () => {
   });
 
   it('returns preferred name when collection exists in DB', async () => {
-    const db = makeDb(['patients']);
-    const name = await resolveCollectionName(db, 'patients');
-    expect(name).toBe('patients');
+    const db = makeDb(['participants']);
+    const name = await resolveCollectionName(db, 'Participant');
+    expect(name).toBe('participants');
   });
 
   it('returns preferred name when db has no listCollections method', async () => {
     const db = { collection: vi.fn() }; // no listCollections
-    const name = await resolveCollectionName(db, 'patients');
-    expect(name).toBe('patients');
+    const name = await resolveCollectionName(db, 'Participant');
+    expect(name).toBe('participants');
   });
 
   it('returns preferred name even when only an alias-like collection exists (no alias fallback)', async () => {
     const db = makeDb(['pacientes']); // legacy alias name; alias subsystem was removed
-    const name = await resolveCollectionName(db, 'patients');
-    expect(name).toBe('patients');
+    const name = await resolveCollectionName(db, 'Participant');
+    expect(name).toBe('participants');
   });
 
   it('returns preferred name when neither preferred nor any other collection is found', async () => {
     const db = makeDb([]); // empty db
-    const name = await resolveCollectionName(db, 'patients');
-    expect(name).toBe('patients');
+    const name = await resolveCollectionName(db, 'Participant');
+    expect(name).toBe('participants');
   });
 });
 
 describe('getCollection', () => {
   it('returns collection for valid key', async () => {
-    const db = makeDb(['patients']);
-    const coll = await getCollection(db, 'patients');
+    const db = makeDb(['participants']);
+    const coll = await getCollection(db, 'Participant');
     expect(coll).toBeDefined();
   });
 
@@ -80,7 +80,7 @@ describe('getCollection', () => {
   it('returns collection even when no listCollections available on db', async () => {
     const db = {
       collection: vi.fn().mockReturnValue({
-        collectionName: 'patients',
+        collectionName: 'participants',
         createIndex: vi.fn().mockResolvedValue(null),
         updateOne: vi.fn(),
         deleteOne: vi.fn(),
@@ -88,7 +88,7 @@ describe('getCollection', () => {
         insertOne: vi.fn().mockResolvedValue({ insertedId: 'mock' }),
       })
     };
-    const coll = await getCollection(db, 'patients');
+    const coll = await getCollection(db, 'Participant');
     expect(coll).toBeDefined();
   });
 });

@@ -57,7 +57,7 @@ class UploadController {
         });
       }
 
-      const uploadedBy = req.user?.id || req.user?._id?.toString() || null;
+      const uploadedBy = req.user?.userID || null;
       const storedPath = getRelativePath(file.path);
 
       const payload = {

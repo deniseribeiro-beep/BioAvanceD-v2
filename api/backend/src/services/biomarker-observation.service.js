@@ -1,7 +1,7 @@
 const logger = require('../utils/logger');
 const BiomarkerObservationModel = require('../models/BiomarkerObservation');
 const { encryptValue, decryptValue, assertFieldEncryptionConfigured } = require('../utils/fieldEncryption');
-const { getCollection } = require('../utils/collectionResolver');
+const { getCollection, resolveCollectionName } = require('../utils/collectionResolver');
 
 const indexedObservationCollections = new Set();
 
@@ -30,7 +30,7 @@ class BiomarkerObservationService {
 
   async getObservationsCollection(db) {
     const collection = await getCollection(db, 'biomarkerObservations');
-    const collectionName = collection?.collectionName || 'biomarker_observations';
+    const collectionName = collection?.collectionName || resolveCollectionName(db, 'biomarkerObservations');
     await this.ensureIndexes(collection, collectionName);
     return collection;
   }

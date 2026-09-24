@@ -12,7 +12,7 @@
 
 const { MongoClient } = require('mongodb');
 const OrganizationModel = require('../models/Organization');
-const { CANONICAL_COLLECTIONS } = require('../config/collections');
+const { getCanonicalCollectionName } = require('../config/canonicalEntityCollections.v2');
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '../../.env') });
 
@@ -36,7 +36,7 @@ async function migrateUserOrganizations() {
 
     const db = client.db(dbName);
     const usersCollection = db.collection('users');
-    const organizationsCollection = db.collection(CANONICAL_COLLECTIONS.organizations);
+    const organizationsCollection = db.collection(getCanonicalCollectionName('Organization'));
 
     const usersToMigrate = await usersCollection.find({
       $or: [

@@ -54,7 +54,9 @@ describe('AuthService.issueAccessToken', () => {
   const { buildRbacCollections } = require('../factories/rbac.factory');
 
   const fakeUser = {
-    _id: { toString: () => 'user-id-123' },
+    _id: { toString: () => '507f1f77bcf86cd799439011' },
+    userAccountId: '550e8400-e29b-41d4-a716-446655440002',
+    actorId: '550e8400-e29b-41d4-a716-446655440001',
     email: 'qa@example.com',
     accessType: 2,
     roleName: 'Técnico',
@@ -66,7 +68,7 @@ describe('AuthService.issueAccessToken', () => {
   // (rbac-assignment.service.resolveUserHierarchyLevel), not read off
   // `user.accessType` — `db` now stands in for the stale field, keyed by
   // whatever userAccountId/accessType pairs the test needs granted.
-  function makeDb(grants = [{ userAccountId: 'user-id-123', accessType: 2 }]) {
+  function makeDb(grants = [{ userAccountId: '550e8400-e29b-41d4-a716-446655440002', accessType: 2 }]) {
     const rbac = buildRbacCollections(grants);
     return { collection: (name) => rbac[name] };
   }
@@ -80,7 +82,7 @@ describe('AuthService.issueAccessToken', () => {
   it('encodes userID in payload', async () => {
     const token = await authService.issueAccessToken(makeDb(), fakeUser);
     const payload = jwt.decode(token);
-    expect(payload.userID).toBe('user-id-123');
+    expect(payload.userID).toBe('550e8400-e29b-41d4-a716-446655440002');
   });
 
   it('encodes accessType resolved from the RBAC assignment in payload', async () => {
@@ -92,7 +94,7 @@ describe('AuthService.issueAccessToken', () => {
   it('resolves accessType from the live assignment, not the stale user.accessType field', async () => {
     // fakeUser.accessType is 2, but the granted assignment is 4 (Administrador)
     // — the claim must follow the RBAC grant, not the User document field.
-    const db = makeDb([{ userAccountId: 'user-id-123', accessType: 4 }]);
+    const db = makeDb([{ userAccountId: '550e8400-e29b-41d4-a716-446655440002', accessType: 4 }]);
     const token = await authService.issueAccessToken(db, fakeUser);
     const payload = jwt.decode(token);
     expect(payload.accessType).toBe(4);
@@ -111,10 +113,10 @@ describe('AuthService.issueAccessToken', () => {
   });
 
   it('produces different tokens for different users', async () => {
-    const user2 = { ...fakeUser, _id: { toString: () => 'other-user-456' } };
+    const user2 = { ...fakeUser, userAccountId: '550e8400-e29b-41d4-a716-446655440003' };
     const db = makeDb([
-      { userAccountId: 'user-id-123', accessType: 2 },
-      { userAccountId: 'other-user-456', accessType: 2 },
+      { userAccountId: '550e8400-e29b-41d4-a716-446655440002', accessType: 2 },
+      { userAccountId: '550e8400-e29b-41d4-a716-446655440003', accessType: 2 },
     ]);
     const t1 = await authService.issueAccessToken(db, fakeUser);
     const t2 = await authService.issueAccessToken(db, user2);
@@ -146,7 +148,9 @@ describe('AuthService.issueRefreshToken', () => {
   const jwt = require('jsonwebtoken');
 
   const fakeUser = {
-    _id: { toString: () => 'user-id-123' },
+    _id: { toString: () => '507f1f77bcf86cd799439011' },
+    userAccountId: '550e8400-e29b-41d4-a716-446655440002',
+    actorId: '550e8400-e29b-41d4-a716-446655440001',
     email: 'qa@example.com',
     accessType: 2,
   };
@@ -160,7 +164,7 @@ describe('AuthService.issueRefreshToken', () => {
   it('encodes userID in payload', () => {
     const token = authService.issueRefreshToken(fakeUser);
     const payload = jwt.decode(token);
-    expect(payload.userID).toBe('user-id-123');
+    expect(payload.userID).toBe('550e8400-e29b-41d4-a716-446655440002');
   });
 
   it('includes sessionID when provided', () => {
@@ -175,7 +179,7 @@ describe('AuthService.issueRefreshToken', () => {
 
   it('has longer expiry than access token', async () => {
     const { buildRbacCollections } = require('../factories/rbac.factory');
-    const rbac = buildRbacCollections([{ userAccountId: 'user-id-123', accessType: 2 }]);
+    const rbac = buildRbacCollections([{ userAccountId: '550e8400-e29b-41d4-a716-446655440002', accessType: 2 }]);
     const db = { collection: (name) => rbac[name] };
     const access = await authService.issueAccessToken(db, fakeUser);
     const refresh = authService.issueRefreshToken(fakeUser);

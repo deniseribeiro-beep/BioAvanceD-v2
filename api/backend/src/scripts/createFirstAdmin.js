@@ -1,10 +1,12 @@
 const dotenv = require('dotenv');
 const bcrypt = require('bcryptjs');
+const { randomUUID } = require('crypto');
 const { connectDB, closeConnection } = require('../database/mongo');
 const { validateStrength } = require('../services/password.service');
 const { generateAnonId } = require('../utils/userAnonymization');
 const { grantRoleForAccessType } = require('../services/rbac-assignment.service');
 const { seedRolesAndPermissions } = require('../services/rbac-catalog-seed.service');
+const { BIOAVANCED_SYSTEM_ACTOR_ID, ensureSystemActor } = require('../foundation/systemActorSeedV2');
 
 dotenv.config();
 
@@ -39,7 +41,7 @@ async function createFirstAdmin(options = {}) {
   const shouldClose = !options.db;
 
   try {
-    const users = db.collection('users');
+    const users = db.collection('userAccounts');
     const systemBootstrap = db.collection('systemBootstrap');
 
     await users.createIndex({ email: 1 }, { unique: true });
@@ -53,6 +55,8 @@ async function createFirstAdmin(options = {}) {
 
     const now = new Date();
     const passwordHash = await bcrypt.hash(config.password, 10);
+    const userAccountId = randomUUID();
+    const actorId = randomUUID();
     // #427: accessType is only used below to grant the matching
     // UserRoleAssignment — no longer persisted on the User document.
     const ADMIN_ACCESS_TYPE = 4;
@@ -66,6 +70,8 @@ async function createFirstAdmin(options = {}) {
     // forceReset:true unless it explicitly opts out too.
     const forceReset = String(env.BOOTSTRAP_ADMIN_FORCE_RESET ?? 'true').toLowerCase() !== 'false';
     const adminUser = {
+      userAccountId,
+      actorId,
       name: config.name,
       email: config.email,
       username: config.username,
@@ -80,7 +86,7 @@ async function createFirstAdmin(options = {}) {
       createdAt: now,
       updatedAt: now,
       lastPasswordChange: now,
-      createdBy: 'BOOTSTRAP_SYSTEM',
+      createdBy: BIOAVANCED_SYSTEM_ACTOR_ID,
       bootstrapSource: 'admin:create-first',
     };
 
@@ -96,15 +102,22 @@ async function createFirstAdmin(options = {}) {
     // derived from the insert -- userId and anonId are both computed and used
     // after it. This is the same pre-write-guard shape registerUser now uses.
     await seedRolesAndPermissions(db);
+    await ensureSystemActor(db);
+    await db.collection('actors').insertOne({
+      actorId,
+      actorType: 'user',
+      displayName: config.name,
+      actorStatus: 'active',
+      createdAt: now,
+    });
 
     const result = await users.insertOne(adminUser);
-    const userId = result.insertedId.toString();
-    const anonId = generateAnonId(userId);
+    const anonId = generateAnonId(userAccountId);
 
     await grantRoleForAccessType(db, {
-      userAccountId: userId,
+      userAccountId,
       accessType: ADMIN_ACCESS_TYPE,
-      grantedBy: 'BOOTSTRAP_SYSTEM',
+      grantedBy: BIOAVANCED_SYSTEM_ACTOR_ID,
     });
 
     await users.updateOne(
@@ -117,7 +130,7 @@ async function createFirstAdmin(options = {}) {
       {
         $set: {
           status: 'created',
-          userId,
+          userId: userAccountId,
           anonId,
           forceReset,
           completedAt: new Date(),
@@ -127,7 +140,7 @@ async function createFirstAdmin(options = {}) {
     );
 
     logger.info(`[ADMIN_BOOTSTRAP] First admin created with forceReset=${forceReset}.`);
-    return { status: 'created', userId, anonId, forceReset };
+    return { status: 'created', userId: userAccountId, anonId, forceReset };
   } finally {
     if (shouldClose) {
       await closeConnection();

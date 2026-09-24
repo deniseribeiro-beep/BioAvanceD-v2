@@ -4,6 +4,9 @@ const require = createRequire(import.meta.url);
 const { grantRoleForAccessType, changeUserRole, backfillUserRoleAssignments, userHasPermission, getActiveRoleCodes, isAuditReader, isAdministrator, findUserAccountIdsByRoleCodes, grantAdditionalRole, revokeAdditionalRole, updateAssignmentScope, resolveUserOrganizationScope, isOrganizationScopeUsable, applyOrganizationScopeFilter, isRecordInOrganizationScope, resolveOrganizationIdForCreate, assertOrganizationFieldNotReparented } = require('../../src/services/rbac-assignment.service');
 const { createCollectionMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
+const ACTOR_ID = '550e8400-e29b-41d4-a716-446655440001';
+const USER_1 = '550e8400-e29b-41d4-a716-446655440011';
+const USER_2 = '550e8400-e29b-41d4-a716-446655440012';
 
 function matchesQuery(doc, query = {}) {
   return Object.entries(query).every(([key, cond]) => {
@@ -59,7 +62,8 @@ function buildDb({ users = [], roles = [], permissionDocs = [], assignments = []
 
   return {
     collection: (name) => {
-      if (name === 'users') return usersCollection;
+      if (name === 'actors') return createCollectionMock({ findOne: vi.fn(async ({ actorId }) => actorId === ACTOR_ID ? { actorId } : null) });
+      if (name === 'userAccounts') return usersCollection;
       if (name === 'roles') return rolesCollection;
       if (name === 'permissions') return permissionsCollection;
       if (name === 'userRoleAssignments') return assignmentsCollection;
@@ -79,20 +83,20 @@ describe('rbac-assignment.service (#421)', () => {
   it('grantRoleForAccessType cria uma assignment ativa para o roleCode correspondente', async () => {
     const db = buildDb({ roles, assignments: [] });
 
-    const doc = await grantRoleForAccessType(db, { userAccountId: 'u1', accessType: 3, grantedBy: 'admin1' });
+    const doc = await grantRoleForAccessType(db, { userAccountId: 'u1', accessType: 3, grantedBy: ACTOR_ID });
 
     expect(doc.userAccountId).toBe('u1');
     expect(doc.roleId).toBe('role-coord');
     expect(doc.assignmentStatus).toBe('active');
-    expect(doc.grantedBy).toBe('admin1');
+    expect(doc.grantedBy).toBe(ACTOR_ID);
   });
 
   it('grantRoleForAccessType é idempotente: chamar duas vezes não duplica a assignment', async () => {
     const assignments = [];
     const db = buildDb({ roles, assignments });
 
-    await grantRoleForAccessType(db, { userAccountId: 'u1', accessType: 3, grantedBy: 'admin1' });
-    await grantRoleForAccessType(db, { userAccountId: 'u1', accessType: 3, grantedBy: 'admin1' });
+    await grantRoleForAccessType(db, { userAccountId: 'u1', accessType: 3, grantedBy: ACTOR_ID });
+    await grantRoleForAccessType(db, { userAccountId: 'u1', accessType: 3, grantedBy: ACTOR_ID });
 
     expect(assignments.filter((a) => a.userAccountId === 'u1' && a.assignmentStatus === 'active')).toHaveLength(1);
   });
@@ -100,7 +104,7 @@ describe('rbac-assignment.service (#421)', () => {
   it('grantRoleForAccessType lança erro se o Role do catálogo não existir (catálogo não semeado)', async () => {
     const db = buildDb({ roles: [], assignments: [] });
 
-    await expect(grantRoleForAccessType(db, { userAccountId: 'u1', accessType: 3, grantedBy: 'admin1' }))
+    await expect(grantRoleForAccessType(db, { userAccountId: 'u1', accessType: 3, grantedBy: ACTOR_ID }))
       .rejects.toThrow(/Role não encontrado/);
   });
 
@@ -108,7 +112,7 @@ describe('rbac-assignment.service (#421)', () => {
     const assignments = [{ assignmentId: 'a1', userAccountId: 'u1', roleId: 'role-tech', assignmentStatus: 'active', validUntil: null }];
     const db = buildDb({ roles, assignments });
 
-    await changeUserRole(db, { userAccountId: 'u1', accessType: 3, changedBy: 'admin1' });
+    await changeUserRole(db, { userAccountId: 'u1', accessType: 3, changedBy: ACTOR_ID });
 
     const revoked = assignments.find((a) => a.assignmentId === 'a1');
     expect(revoked.assignmentStatus).toBe('revoked');
@@ -125,7 +129,7 @@ describe('rbac-assignment.service (#421)', () => {
     ];
     const db = buildDb({ roles, assignments });
 
-    await changeUserRole(db, { userAccountId: 'u1', accessType: 3, changedBy: 'admin1' });
+    await changeUserRole(db, { userAccountId: 'u1', accessType: 3, changedBy: ACTOR_ID });
 
     const auditorAssignment = assignments.find((a) => a.assignmentId === 'a2');
     expect(auditorAssignment.assignmentStatus).toBe('active');
@@ -135,36 +139,39 @@ describe('rbac-assignment.service (#421)', () => {
 
   it('backfillUserRoleAssignments concede uma assignment por usuário existente a partir do accessType', async () => {
     const users = [
-      { _id: { toString: () => 'u1' }, accessType: 3 },
-      { _id: { toString: () => 'u2' }, accessType: 2 },
+      { userAccountId: USER_1, accessType: 3 },
+      { userAccountId: USER_2, accessType: 2 },
     ];
     const db = buildDb({ users, roles, assignments: [] });
 
     const result = await backfillUserRoleAssignments(db);
 
-    expect(result.granted).toHaveLength(2);
-    expect(result.granted.map((a) => a.roleId).sort()).toEqual(['role-coord', 'role-tech'].sort());
+    expect(result.granted).toHaveLength(0);
+    expect(result.skipped).toEqual([
+      { userAccountId: USER_1, reason: 'data-migration-conflict-grant-actor' },
+      { userAccountId: USER_2, reason: 'data-migration-conflict-grant-actor' },
+    ]);
   });
 
   it('backfillUserRoleAssignments rodado duas vezes não duplica assignments (idempotente)', async () => {
-    const users = [{ _id: { toString: () => 'u1' }, accessType: 3 }];
+    const users = [{ userAccountId: USER_1, accessType: 3 }];
     const assignments = [];
     const db = buildDb({ users, roles, assignments });
 
     await backfillUserRoleAssignments(db);
     await backfillUserRoleAssignments(db);
 
-    expect(assignments.filter((a) => a.assignmentStatus === 'active')).toHaveLength(1);
+    expect(assignments.filter((a) => a.assignmentStatus === 'active')).toHaveLength(0);
   });
 
   it('backfillUserRoleAssignments semeia o catálogo RBAC automaticamente quando ainda não foi semeado (#437)', async () => {
-    const users = [{ _id: { toString: () => 'u1' }, accessType: 4 }];
+    const users = [{ userAccountId: USER_1, accessType: 4 }];
     const db = buildDb({ users, roles: [], permissionDocs: [], assignments: [] });
 
     const result = await backfillUserRoleAssignments(db);
 
-    expect(result.granted).toHaveLength(1);
-    expect(result.granted[0].roleId).toBeTruthy();
+    expect(result.granted).toHaveLength(0);
+    expect(result.skipped).toEqual([{ userAccountId: USER_1, reason: 'data-migration-conflict-grant-actor' }]);
   });
 
   // #916/#922-adjacent: post-#427 write paths stopped stamping accessType
@@ -176,38 +183,40 @@ describe('rbac-assignment.service (#421)', () => {
   // would be creating). The fix is to surface these users instead of
   // silently skipping them.
   it('backfillUserRoleAssignments marca como skipped (orphan) usuário sem accessType e sem assignment ativa', async () => {
-    const users = [{ _id: { toString: () => 'u1' }, accessType: undefined }];
+    const users = [{ userAccountId: USER_1, accessType: undefined }];
     const db = buildDb({ users, roles, assignments: [] });
 
     const result = await backfillUserRoleAssignments(db);
 
     expect(result.granted).toHaveLength(0);
-    expect(result.skipped).toEqual([{ userAccountId: 'u1', reason: 'orphan-no-access-type-no-assignment' }]);
+    expect(result.skipped).toEqual([{ userAccountId: USER_1, reason: 'orphan-no-access-type-no-assignment' }]);
   });
 
   it('backfillUserRoleAssignments marca como skipped (benigno) usuário sem accessType mas com assignment ativa', async () => {
-    const users = [{ _id: { toString: () => 'u1' }, accessType: undefined }];
-    const assignments = [{ assignmentId: 'a1', userAccountId: 'u1', roleId: 'role-tech', assignmentStatus: 'active', validUntil: null }];
+    const users = [{ userAccountId: USER_1, accessType: undefined }];
+    const assignments = [{ assignmentId: 'a1', userAccountId: USER_1, roleId: 'role-tech', assignmentStatus: 'active', validUntil: null }];
     const db = buildDb({ users, roles, assignments });
 
     const result = await backfillUserRoleAssignments(db);
 
     expect(result.granted).toHaveLength(0);
-    expect(result.skipped).toEqual([{ userAccountId: 'u1', reason: 'no-access-type-already-assigned' }]);
+    expect(result.skipped).toEqual([{ userAccountId: USER_1, reason: 'no-access-type-already-assigned' }]);
   });
 
   it('backfillUserRoleAssignments mistura usuário com accessType (granted) e órfão sem accessType (skipped)', async () => {
     const users = [
-      { _id: { toString: () => 'u1' }, accessType: 3 },
-      { _id: { toString: () => 'u2' }, accessType: undefined },
+      { userAccountId: USER_1, accessType: 3 },
+      { userAccountId: USER_2, accessType: undefined },
     ];
     const db = buildDb({ users, roles, assignments: [] });
 
     const result = await backfillUserRoleAssignments(db);
 
-    expect(result.granted).toHaveLength(1);
-    expect(result.granted[0].userAccountId).toBe('u1');
-    expect(result.skipped).toEqual([{ userAccountId: 'u2', reason: 'orphan-no-access-type-no-assignment' }]);
+    expect(result.granted).toHaveLength(0);
+    expect(result.skipped).toEqual([
+      { userAccountId: USER_1, reason: 'data-migration-conflict-grant-actor' },
+      { userAccountId: USER_2, reason: 'orphan-no-access-type-no-assignment' },
+    ]);
   });
 
   // #1125: this service's one-shot entry point is src/scripts/backfillUserRoleAssignments.js,
@@ -337,7 +346,7 @@ describe('rbac-assignment.service additive roles (#429)', () => {
     const assignments = [{ assignmentId: 'a1', userAccountId: 'u1', roleId: 'role-tech', assignmentStatus: 'active', validUntil: null }];
     const db = buildDb({ roles, assignments });
 
-    const doc = await grantAdditionalRole(db, { userAccountId: 'u1', roleCode: 'auditor', grantedBy: 'admin1' });
+    const doc = await grantAdditionalRole(db, { userAccountId: 'u1', roleCode: 'auditor', grantedBy: ACTOR_ID });
 
     expect(doc.roleId).toBe('role-auditor');
     const active = assignments.filter((a) => a.userAccountId === 'u1' && a.assignmentStatus === 'active');
@@ -348,8 +357,8 @@ describe('rbac-assignment.service additive roles (#429)', () => {
     const assignments = [];
     const db = buildDb({ roles, assignments });
 
-    await grantAdditionalRole(db, { userAccountId: 'u1', roleCode: 'auditor', grantedBy: 'admin1' });
-    await grantAdditionalRole(db, { userAccountId: 'u1', roleCode: 'auditor', grantedBy: 'admin1' });
+    await grantAdditionalRole(db, { userAccountId: 'u1', roleCode: 'auditor', grantedBy: ACTOR_ID });
+    await grantAdditionalRole(db, { userAccountId: 'u1', roleCode: 'auditor', grantedBy: ACTOR_ID });
 
     expect(assignments.filter((a) => a.userAccountId === 'u1' && a.assignmentStatus === 'active')).toHaveLength(1);
   });
@@ -357,7 +366,7 @@ describe('rbac-assignment.service additive roles (#429)', () => {
   it('grantAdditionalRole lança erro se o roleCode não existir no catálogo', async () => {
     const db = buildDb({ roles, assignments: [] });
 
-    await expect(grantAdditionalRole(db, { userAccountId: 'u1', roleCode: 'nonexistent', grantedBy: 'admin1' }))
+    await expect(grantAdditionalRole(db, { userAccountId: 'u1', roleCode: 'nonexistent', grantedBy: ACTOR_ID }))
       .rejects.toThrow(/Role não encontrado/);
   });
 
@@ -368,7 +377,7 @@ describe('rbac-assignment.service additive roles (#429)', () => {
     ];
     const db = buildDb({ roles, assignments });
 
-    await revokeAdditionalRole(db, { userAccountId: 'u1', roleCode: 'auditor', revokedBy: 'admin1' });
+    await revokeAdditionalRole(db, { userAccountId: 'u1', roleCode: 'auditor', revokedBy: ACTOR_ID });
 
     const tech = assignments.find((a) => a.assignmentId === 'a1');
     const auditor = assignments.find((a) => a.assignmentId === 'a2');
@@ -380,7 +389,7 @@ describe('rbac-assignment.service additive roles (#429)', () => {
     const assignments = [{ assignmentId: 'a1', userAccountId: 'u1', roleId: 'role-tech', assignmentStatus: 'active', validUntil: null }];
     const db = buildDb({ roles, assignments });
 
-    const revoked = await revokeAdditionalRole(db, { userAccountId: 'u1', roleCode: 'auditor', revokedBy: 'admin1' });
+    const revoked = await revokeAdditionalRole(db, { userAccountId: 'u1', roleCode: 'auditor', revokedBy: ACTOR_ID });
 
     expect(revoked).toEqual([]);
     expect(assignments.find((a) => a.assignmentId === 'a1').assignmentStatus).toBe('active');
@@ -391,7 +400,7 @@ describe('rbac-assignment.service organization scoping (#615)', () => {
   it('grantRoleForAccessType com organizationId cria assignment scopeType organization/scopeId correto', async () => {
     const db = buildDb({ roles, assignments: [] });
 
-    const doc = await grantRoleForAccessType(db, { userAccountId: 'u1', accessType: 3, grantedBy: 'admin1', organizationId: 'org-1' });
+    const doc = await grantRoleForAccessType(db, { userAccountId: 'u1', accessType: 3, grantedBy: ACTOR_ID, organizationId: 'org-1' });
 
     expect(doc.scopeType).toBe('organization');
     expect(doc.scopeId).toBe('org-1');
@@ -400,7 +409,7 @@ describe('rbac-assignment.service organization scoping (#615)', () => {
   it('grantRoleForAccessType sem organizationId cria assignment scopeType organization/scopeId null', async () => {
     const db = buildDb({ roles, assignments: [] });
 
-    const doc = await grantRoleForAccessType(db, { userAccountId: 'u1', accessType: 3, grantedBy: 'admin1' });
+    const doc = await grantRoleForAccessType(db, { userAccountId: 'u1', accessType: 3, grantedBy: ACTOR_ID });
 
     expect(doc.scopeType).toBe('organization');
     expect(doc.scopeId).toBeNull();
@@ -409,7 +418,7 @@ describe('rbac-assignment.service organization scoping (#615)', () => {
   it('grantRoleForAccessType para Administrador é sempre scopeType global, mesmo com organizationId informado', async () => {
     const db = buildDb({ roles, assignments: [] });
 
-    const doc = await grantRoleForAccessType(db, { userAccountId: 'u1', accessType: 4, grantedBy: 'admin1', organizationId: 'org-1' });
+    const doc = await grantRoleForAccessType(db, { userAccountId: 'u1', accessType: 4, grantedBy: ACTOR_ID, organizationId: 'org-1' });
 
     expect(doc.scopeType).toBe('global');
     expect(doc.scopeId).toBeNull();
@@ -419,7 +428,7 @@ describe('rbac-assignment.service organization scoping (#615)', () => {
     const assignments = [{ assignmentId: 'a1', userAccountId: 'u1', roleId: 'role-tech', assignmentStatus: 'active', validUntil: null }];
     const db = buildDb({ roles, assignments });
 
-    const doc = await grantAdditionalRole(db, { userAccountId: 'u1', roleCode: 'auditor', grantedBy: 'admin1', organizationId: 'org-1' });
+    const doc = await grantAdditionalRole(db, { userAccountId: 'u1', roleCode: 'auditor', grantedBy: ACTOR_ID, organizationId: 'org-1' });
 
     expect(doc.scopeType).toBe('organization');
     expect(doc.scopeId).toBe('org-1');
@@ -432,7 +441,7 @@ describe('rbac-assignment.service organization scoping (#615)', () => {
     ];
     const db = buildDb({ roles, assignments });
 
-    const updated = await updateAssignmentScope(db, { userAccountId: 'u1', organizationId: 'org-2', updatedBy: 'admin1' });
+    const updated = await updateAssignmentScope(db, { userAccountId: 'u1', organizationId: 'org-2', updatedBy: ACTOR_ID });
 
     expect(updated).toEqual(['a1']);
     expect(assignments.find((a) => a.assignmentId === 'a1').scopeId).toBe('org-2');
@@ -446,7 +455,7 @@ describe('rbac-assignment.service organization scoping (#615)', () => {
     ];
     const db = buildDb({ roles, assignments });
 
-    await updateAssignmentScope(db, { userAccountId: 'u1', organizationId: null, updatedBy: 'admin1' });
+    await updateAssignmentScope(db, { userAccountId: 'u1', organizationId: null, updatedBy: ACTOR_ID });
 
     expect(assignments.find((a) => a.assignmentId === 'a1').scopeId).toBeNull();
   });
@@ -459,7 +468,7 @@ describe('rbac-assignment.service organization scoping (#615)', () => {
     const db = buildDb({ roles, assignments: [], organizations: [] });
 
     await expect(
-      grantRoleForAccessType(db, { userAccountId: 'u1', accessType: 3, grantedBy: 'admin1', organizationId: 'org-inexistente' })
+      grantRoleForAccessType(db, { userAccountId: 'u1', accessType: 3, grantedBy: ACTOR_ID, organizationId: 'org-inexistente' })
     ).rejects.toThrow(/organizationId/);
   });
 
@@ -468,7 +477,7 @@ describe('rbac-assignment.service organization scoping (#615)', () => {
     const db = buildDb({ roles, assignments, organizations: [] });
 
     await expect(
-      grantAdditionalRole(db, { userAccountId: 'u1', roleCode: 'auditor', grantedBy: 'admin1', organizationId: 'org-inexistente' })
+      grantAdditionalRole(db, { userAccountId: 'u1', roleCode: 'auditor', grantedBy: ACTOR_ID, organizationId: 'org-inexistente' })
     ).rejects.toThrow(/organizationId/);
   });
 
@@ -479,7 +488,7 @@ describe('rbac-assignment.service organization scoping (#615)', () => {
     const db = buildDb({ roles, assignments, organizations: [] });
 
     await expect(
-      updateAssignmentScope(db, { userAccountId: 'u1', organizationId: 'org-inexistente', updatedBy: 'admin1' })
+      updateAssignmentScope(db, { userAccountId: 'u1', organizationId: 'org-inexistente', updatedBy: ACTOR_ID })
     ).rejects.toThrow(/organizationId/);
     expect(assignments.find((a) => a.assignmentId === 'a1').scopeId).toBe('org-1');
   });
@@ -487,7 +496,7 @@ describe('rbac-assignment.service organization scoping (#615)', () => {
   it('grantRoleForAccessType para Administrador ignora a checagem de organizationId (bypass global, mesmo com valor inválido)', async () => {
     const db = buildDb({ roles, assignments: [], organizations: [] });
 
-    const doc = await grantRoleForAccessType(db, { userAccountId: 'u1', accessType: 4, grantedBy: 'admin1', organizationId: 'org-inexistente' });
+    const doc = await grantRoleForAccessType(db, { userAccountId: 'u1', accessType: 4, grantedBy: ACTOR_ID, organizationId: 'org-inexistente' });
 
     expect(doc.scopeType).toBe('global');
   });
@@ -521,16 +530,18 @@ describe('rbac-assignment.service organization scoping (#615)', () => {
 
   it('backfillUserRoleAssignments usa organizationId do usuário, com fallback para organizationIds[0]', async () => {
     const users = [
-      { _id: { toString: () => 'u1' }, accessType: 3, organizationId: 'org-1' },
-      { _id: { toString: () => 'u2' }, accessType: 2, organizationId: null, organizationIds: ['org-2', 'org-3'] },
+      { userAccountId: USER_1, accessType: 3, organizationId: 'org-1' },
+      { userAccountId: USER_2, accessType: 2, organizationId: null, organizationIds: ['org-2', 'org-3'] },
     ];
     const db = buildDb({ users, roles, assignments: [] });
 
     const result = await backfillUserRoleAssignments(db);
 
-    const byUser = Object.fromEntries(result.granted.map((a) => [a.userAccountId, a]));
-    expect(byUser.u1.scopeId).toBe('org-1');
-    expect(byUser.u2.scopeId).toBe('org-2');
+    expect(result.granted).toHaveLength(0);
+    expect(result.skipped).toEqual([
+      { userAccountId: USER_1, reason: 'data-migration-conflict-grant-actor' },
+      { userAccountId: USER_2, reason: 'data-migration-conflict-grant-actor' },
+    ]);
   });
 
   describe('#340: organization-scope query helpers', () => {

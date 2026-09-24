@@ -219,7 +219,7 @@ class ImportService {
   async importPatients(db, file) {
     try {
       const ext = path.extname(file.originalname).toLowerCase();
-      const patientsCollection = await getCollection(db, 'patients');
+      const patientsCollection = await getCollection(db, 'Participant');
       const results = { success: 0, errors: [], total: 0 };
 
       // Função de merge inteligente
@@ -517,7 +517,7 @@ class ImportService {
   async importSamples(db, file) {
     try {
       const ext = path.extname(file.originalname).toLowerCase();
-      const samplesCollection = await getCollection(db, 'samples');
+      const samplesCollection = await getCollection(db, 'Specimen');
       const validator = new SampleGraphValidator(db);
       const results = { success: 0, errors: [], total: 0 };
 
@@ -530,7 +530,7 @@ class ImportService {
             // Normalize legacy quality fields to canonical names (non-destructive)
             const sampleData = qualityCompatibility.normalizeSample(sampleDataRaw || {});
             if (!sampleData.specimenId) {
-              sampleData.specimenId = await generateUniqueSpecimenId(db, 'samples');
+              sampleData.specimenId = await generateUniqueSpecimenId(db, 'specimens');
             }
             const validation = SampleModel.validate(sampleData);
             if (!validation.isValid) {
@@ -630,7 +630,7 @@ class ImportService {
             }
 
             if (!sampleData.specimenId) {
-              sampleData.specimenId = await generateUniqueSpecimenId(db, 'samples');
+              sampleData.specimenId = await generateUniqueSpecimenId(db, 'specimens');
             }
 
             const validation = SampleModel.validate(sampleData);
@@ -970,4 +970,3 @@ class ImportService {
 }
 
 module.exports = new ImportService();
-

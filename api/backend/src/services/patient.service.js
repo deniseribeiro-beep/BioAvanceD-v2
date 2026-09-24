@@ -7,6 +7,7 @@ const { generateUniqueParticipantId, sanitizePatientForLogs } = require('../util
 const { encryptValue, decryptValue, assertFieldEncryptionConfigured } = require('../utils/fieldEncryption');
 const notificationService = require('./notification.service');
 const { getCollection } = require('../utils/collectionResolver');
+const { getCanonicalCollectionName } = require('../config/canonicalEntityCollections.v2');
 const { omitParticipantIdentityFields } = require('../utils/participantIdentityFields');
 const { applyOrganizationScopeFilter } = require('./rbac-assignment.service');
 
@@ -159,10 +160,10 @@ class PatientService {
   }
 
   async getPatientsCollection(db) {
-    const patientsCollection = await getCollection(db, 'patients');
+    const patientsCollection = await getCollection(db, 'Participant');
     const collectionName = patientsCollection && patientsCollection.collectionName
       ? patientsCollection.collectionName
-      : 'patients';
+      : getCanonicalCollectionName('Participant');
     await this.ensurePatientIndexes(patientsCollection, collectionName);
     return patientsCollection;
   }
@@ -1314,6 +1315,5 @@ class PatientService {
 }
 
 module.exports = new PatientService();
-
 
 

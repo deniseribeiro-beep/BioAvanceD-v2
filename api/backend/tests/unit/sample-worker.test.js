@@ -7,7 +7,7 @@ const sampleWorker = require('../../src/workers/workers/sample-worker');
 function makeDb(user = null) {
   return {
     collection: vi.fn((name) => {
-      if (name === 'users') {
+      if (name === 'userAccounts') {
         return { findOne: vi.fn().mockResolvedValue(user) };
       }
       throw new Error(`unexpected collection: ${name}`);
@@ -28,8 +28,8 @@ describe('SampleWorker.process — actor attribution and Neo4j lineage threading
       errors: [],
     });
 
-    const userId = '507f1f77bcf86cd799439011';
-    const db = makeDb({ _id: userId, name: 'Dennis Pedersen', email: 'dennis@example.com', role: 'admin' });
+    const userId = '11111111-1111-4111-8111-111111111111';
+    const db = makeDb({ userAccountId: userId, name: 'Dennis Pedersen', email: 'dennis@example.com', role: 'admin' });
     const neo4jDriver = { marker: 'fake-driver' };
 
     await sampleWorker.process(db, 'job-1', '/tmp/samples.csv', {
@@ -83,7 +83,7 @@ describe('SampleWorker.process — actor attribution and Neo4j lineage threading
       errors: [],
     });
 
-    const userId = '507f1f77bcf86cd799439011';
+    const userId = '11111111-1111-4111-8111-111111111111';
     const db = makeDb(null);
 
     await sampleWorker.process(db, 'job-3', '/tmp/samples.csv', { userID: userId });
@@ -113,7 +113,7 @@ describe('SampleWorker.process — actor attribution and Neo4j lineage threading
       db,
       expect.anything(),
       expect.objectContaining({
-        actor: { userId: 'not-an-object-id', userName: 'IMPORT_WORKER' },
+        actor: { userId: null, userName: 'IMPORT_WORKER' },
       })
     );
   });

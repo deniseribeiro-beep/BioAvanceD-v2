@@ -29,7 +29,9 @@ function matchesMongoQuery(doc, query) {
 
 function buildDb(collections) {
   return {
-    collection: vi.fn((name) => collections[name])
+    collection: vi.fn((name) => name === 'actors'
+      ? { findOne: vi.fn(async ({ actorId }) => actorId === ACTOR_ID ? { actorId } : null) }
+      : collections[name])
   };
 }
 
@@ -43,7 +45,8 @@ function buildCollection(overrides = {}) {
   };
 }
 
-const USER_ID = '507f1f77bcf86cd799439011';
+const USER_ID = '11111111-1111-4111-8111-111111111111';
+const ACTOR_ID = '550e8400-e29b-41d4-a716-446655440001';
 
 describe('UserSecurityService DB-backed methods', () => {
   beforeEach(() => {
@@ -59,7 +62,7 @@ describe('UserSecurityService DB-backed methods', () => {
       const recoveryCodes = buildCollection({
         findOne: vi.fn().mockResolvedValue({ remaining: 3 })
       });
-      const db = buildDb({ users, recovery_codes: recoveryCodes });
+      const db = buildDb({ userAccounts: users, recoveryCodeSets: recoveryCodes });
 
       const result = await userSecurityService.getMFAStatus(db, USER_ID);
 
@@ -73,7 +76,7 @@ describe('UserSecurityService DB-backed methods', () => {
     it('defaults recovery codes to 0 when none found', async () => {
       const users = buildCollection({ findOne: vi.fn().mockResolvedValue({ _id: USER_ID }) });
       const recoveryCodes = buildCollection({ findOne: vi.fn().mockResolvedValue(null) });
-      const db = buildDb({ users, recovery_codes: recoveryCodes });
+      const db = buildDb({ userAccounts: users, recoveryCodeSets: recoveryCodes });
 
       const result = await userSecurityService.getMFAStatus(db, USER_ID);
 
@@ -83,7 +86,7 @@ describe('UserSecurityService DB-backed methods', () => {
 
     it('throws when user not found', async () => {
       const users = buildCollection({ findOne: vi.fn().mockResolvedValue(null) });
-      const db = buildDb({ users });
+      const db = buildDb({ userAccounts: users });
 
       await expect(userSecurityService.getMFAStatus(db, USER_ID)).rejects.toThrow('Usuário não encontrado');
     });
@@ -99,7 +102,7 @@ describe('UserSecurityService DB-backed methods', () => {
           passwordChangedAt: new Date('2026-01-01T00:00:00.000Z')
         })
       });
-      const db = buildDb({ users });
+      const db = buildDb({ userAccounts: users });
 
       const result = await userSecurityService.getPasswordStatus(db, USER_ID);
 
@@ -115,7 +118,7 @@ describe('UserSecurityService DB-backed methods', () => {
       const users = buildCollection({
         findOne: vi.fn().mockResolvedValue({ _id: USER_ID, password: 'short' })
       });
-      const db = buildDb({ users });
+      const db = buildDb({ userAccounts: users });
 
       const result = await userSecurityService.getPasswordStatus(db, USER_ID);
 
@@ -125,7 +128,7 @@ describe('UserSecurityService DB-backed methods', () => {
 
     it('throws when user not found', async () => {
       const users = buildCollection({ findOne: vi.fn().mockResolvedValue(null) });
-      const db = buildDb({ users });
+      const db = buildDb({ userAccounts: users });
 
       await expect(userSecurityService.getPasswordStatus(db, USER_ID)).rejects.toThrow('Usuário não encontrado');
     });
@@ -138,7 +141,7 @@ describe('UserSecurityService DB-backed methods', () => {
           passwordChangedAt: '2026-01-01T00:00:00.000Z'
         })
       });
-      const db = buildDb({ users });
+      const db = buildDb({ userAccounts: users });
 
       const result = await userSecurityService.getPasswordStatus(db, USER_ID);
 
@@ -160,7 +163,7 @@ describe('UserSecurityService DB-backed methods', () => {
         })
       });
       const recoveryCodes = buildCollection({ findOne: vi.fn().mockResolvedValue({ remaining: 10 }) });
-      const db = buildDb({ users, recovery_codes: recoveryCodes });
+      const db = buildDb({ userAccounts: users, recoveryCodeSets: recoveryCodes });
 
       const result = await userSecurityService.getSecurityStatus(db, USER_ID);
 
@@ -174,7 +177,7 @@ describe('UserSecurityService DB-backed methods', () => {
         findOne: vi.fn().mockResolvedValue({ _id: USER_ID, mfaEnabled: false, password: null })
       });
       const recoveryCodes = buildCollection({ findOne: vi.fn().mockResolvedValue(null) });
-      const db = buildDb({ users, recovery_codes: recoveryCodes });
+      const db = buildDb({ userAccounts: users, recoveryCodeSets: recoveryCodes });
 
       const result = await userSecurityService.getSecurityStatus(db, USER_ID);
 
@@ -184,7 +187,7 @@ describe('UserSecurityService DB-backed methods', () => {
 
     it('throws when user not found', async () => {
       const users = buildCollection({ findOne: vi.fn().mockResolvedValue(null) });
-      const db = buildDb({ users });
+      const db = buildDb({ userAccounts: users });
 
       await expect(userSecurityService.getSecurityStatus(db, USER_ID)).rejects.toThrow('Usuário não encontrado');
     });
@@ -194,7 +197,7 @@ describe('UserSecurityService DB-backed methods', () => {
         findOne: vi.fn().mockResolvedValue({ _id: USER_ID, mfaEnabled: true, password: null })
       });
       const recoveryCodes = buildCollection({ findOne: vi.fn().mockResolvedValue(null) });
-      const db = buildDb({ users, recovery_codes: recoveryCodes });
+      const db = buildDb({ userAccounts: users, recoveryCodeSets: recoveryCodes });
 
       const result = await userSecurityService.getSecurityStatus(db, USER_ID);
 
@@ -209,7 +212,7 @@ describe('UserSecurityService DB-backed methods', () => {
       const users = buildCollection({
         findOne: vi.fn().mockResolvedValue({ _id: USER_ID, password: await bcrypt.hash('correct-pass', 10) })
       });
-      const db = buildDb({ users });
+      const db = buildDb({ userAccounts: users });
 
       await expect(
         userSecurityService.updatePassword(db, USER_ID, 'wrong-pass', 'NewPassw0rd!123')
@@ -219,7 +222,7 @@ describe('UserSecurityService DB-backed methods', () => {
     it('rejects a new password that fails complexity validation', async () => {
       const currentHash = await bcrypt.hash('correct-pass', 10);
       const users = buildCollection({ findOne: vi.fn().mockResolvedValue({ _id: USER_ID, password: currentHash }) });
-      const db = buildDb({ users });
+      const db = buildDb({ userAccounts: users });
 
       await expect(
         userSecurityService.updatePassword(db, USER_ID, 'correct-pass', 'weak')
@@ -236,7 +239,7 @@ describe('UserSecurityService DB-backed methods', () => {
           passwordHistory: [reusedHash]
         })
       });
-      const db = buildDb({ users });
+      const db = buildDb({ userAccounts: users });
 
       await expect(
         userSecurityService.updatePassword(db, USER_ID, 'correct-pass', 'NewPassw0rd!123')
@@ -248,7 +251,7 @@ describe('UserSecurityService DB-backed methods', () => {
       const users = buildCollection({
         findOne: vi.fn().mockResolvedValue({ _id: USER_ID, password: currentHash, passwordHistory: [] })
       });
-      const db = buildDb({ users });
+      const db = buildDb({ userAccounts: users });
 
       await userSecurityService.updatePassword(db, USER_ID, 'correct-pass', 'NewPassw0rd!123');
 
@@ -275,7 +278,7 @@ describe('UserSecurityService DB-backed methods', () => {
           failedLoginAttempts: 1
         })
       });
-      const db = buildDb({ users });
+      const db = buildDb({ userAccounts: users });
 
       await expect(
         userSecurityService.updatePassword(db, USER_ID, 'wrong-pass', 'NewPassw0rd!123')
@@ -299,7 +302,7 @@ describe('UserSecurityService DB-backed methods', () => {
           accountLockedUntil: lockedUntil
         })
       });
-      const db = buildDb({ users });
+      const db = buildDb({ userAccounts: users });
       const compareSpy = vi.spyOn(bcrypt, 'compare');
 
       await expect(
@@ -323,7 +326,7 @@ describe('UserSecurityService DB-backed methods', () => {
           accountLockedUntil: expired
         })
       });
-      const db = buildDb({ users });
+      const db = buildDb({ userAccounts: users });
 
       await userSecurityService.updatePassword(db, USER_ID, 'correct-pass', 'NewPassw0rd!123');
 
@@ -334,7 +337,7 @@ describe('UserSecurityService DB-backed methods', () => {
 
     it('throws when user not found', async () => {
       const users = buildCollection({ findOne: vi.fn().mockResolvedValue(null) });
-      const db = buildDb({ users });
+      const db = buildDb({ userAccounts: users });
 
       await expect(
         userSecurityService.updatePassword(db, USER_ID, 'a', 'NewPassw0rd!123')
@@ -345,7 +348,7 @@ describe('UserSecurityService DB-backed methods', () => {
   describe('generateRecoveryCodes', () => {
     it('generates and persists 10 hashed recovery codes', async () => {
       const recoveryCodes = buildCollection();
-      const db = buildDb({ recovery_codes: recoveryCodes });
+      const db = buildDb({ recoveryCodeSets: recoveryCodes });
 
       const codes = await userSecurityService.generateRecoveryCodes(db, USER_ID);
 
@@ -365,7 +368,7 @@ describe('UserSecurityService DB-backed methods', () => {
       const db = buildDb({ sessions });
       sessionService.sessions.set('sess-1', { sessionID: 'sess-1', userID: USER_ID });
 
-      await userSecurityService.revokeSession(db, USER_ID, 'sess-1');
+      await userSecurityService.revokeSession(db, USER_ID, 'sess-1', ACTOR_ID);
 
       expect(sessions.updateOne).toHaveBeenCalledTimes(1);
       expect(sessionService.sessions.has('sess-1')).toBe(false);
@@ -375,14 +378,14 @@ describe('UserSecurityService DB-backed methods', () => {
       const sessions = buildCollection({ updateOne: vi.fn().mockResolvedValue({ matchedCount: 0 }) });
       const db = buildDb({ sessions });
 
-      await expect(userSecurityService.revokeSession(db, USER_ID, 'missing')).rejects.toThrow('Sessão não encontrada');
+      await expect(userSecurityService.revokeSession(db, USER_ID, 'missing', ACTOR_ID)).rejects.toThrow('Sessão não encontrada');
     });
 
     it('#974: matches the isRevoked/revocationReason/revokedBy shape the other revoke routes write', async () => {
       const sessions = buildCollection({ updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) });
       const db = buildDb({ sessions });
 
-      await userSecurityService.revokeSession(db, USER_ID, 'sess-1');
+      await userSecurityService.revokeSession(db, USER_ID, 'sess-1', ACTOR_ID);
 
       const [, update] = sessions.updateOne.mock.calls[0];
       expect(update.$set).toEqual(
@@ -390,7 +393,7 @@ describe('UserSecurityService DB-backed methods', () => {
           isActive: false,
           isRevoked: true,
           revocationReason: 'user_request',
-          revokedBy: String(USER_ID)
+          revokedBy: ACTOR_ID
         })
       );
       // #974: objectContaining above cannot catch an ABSENT key, and this was
@@ -405,9 +408,10 @@ describe('UserSecurityService DB-backed methods', () => {
       const sessions = buildCollection({ updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) });
       const db = buildDb({ sessions });
 
-      await userSecurityService.revokeSession(db, USER_ID, validObjectId);
+      await userSecurityService.revokeSession(db, USER_ID, validObjectId, ACTOR_ID);
 
       const [query] = sessions.updateOne.mock.calls[0];
+      expect(query).toMatchObject({ userAccountId: USER_ID, $or: expect.any(Array) });
       expect(query.$or).toHaveLength(2);
     });
 
@@ -416,7 +420,7 @@ describe('UserSecurityService DB-backed methods', () => {
       const db = buildDb({ sessions });
       sessionService.sessions.set('cache-key', { sessionID: 'sess-1', userID: USER_ID });
 
-      await userSecurityService.revokeSession(db, USER_ID, 'sess-1');
+      await userSecurityService.revokeSession(db, USER_ID, 'sess-1', ACTOR_ID);
 
       expect(sessionService.sessions.has('cache-key')).toBe(false);
     });
@@ -430,7 +434,7 @@ describe('UserSecurityService DB-backed methods', () => {
         _id: { toString: () => validObjectId }
       });
 
-      await userSecurityService.revokeSession(db, USER_ID, validObjectId);
+      await userSecurityService.revokeSession(db, USER_ID, validObjectId, ACTOR_ID);
 
       expect(sessionService.sessions.has('cache-key')).toBe(false);
     });
@@ -440,10 +444,10 @@ describe('UserSecurityService DB-backed methods', () => {
     it('revokes all other sessions and clears them from the cache, keeping the current one', async () => {
       const sessions = buildCollection();
       const db = buildDb({ sessions });
-      sessionService.sessions.set('other', { userID: USER_ID, token: 'old-token' });
-      sessionService.sessions.set('current', { userID: USER_ID, token: 'current-token' });
+      sessionService.sessions.set('other', { userAccountId: USER_ID, token: 'old-token' });
+      sessionService.sessions.set('current', { userAccountId: USER_ID, token: 'current-token' });
 
-      await userSecurityService.revokeAllSessions(db, USER_ID, 'current-token');
+      await userSecurityService.revokeAllSessions(db, USER_ID, 'current-token', ACTOR_ID);
 
       expect(sessions.updateMany).toHaveBeenCalledTimes(1);
       expect(sessionService.sessions.has('other')).toBe(false);
@@ -458,8 +462,8 @@ describe('UserSecurityService DB-backed methods', () => {
       // tokenHash only, no plaintext token field. doc2 is another session,
       // still on legacy plaintext token.
       const docs = [
-        { _id: '1', userID: USER_ID, tokenHash: currentHash, isActive: true },
-        { _id: '2', userID: USER_ID, token: 'other-token', isActive: true }
+        { _id: '1', userAccountId: USER_ID, tokenHash: currentHash, isActive: true },
+        { _id: '2', userAccountId: USER_ID, token: 'other-token', isActive: true }
       ];
 
       const sessions = buildCollection({
@@ -471,7 +475,7 @@ describe('UserSecurityService DB-backed methods', () => {
       });
       const db = buildDb({ sessions });
 
-      await userSecurityService.revokeAllSessions(db, USER_ID, currentToken);
+      await userSecurityService.revokeAllSessions(db, USER_ID, currentToken, ACTOR_ID);
 
       // Session matched only by tokenHash must NOT be revoked -- proves the
       // exclusion isn't plaintext-`token`-only.
@@ -493,7 +497,7 @@ describe('UserSecurityService DB-backed methods', () => {
       const users = buildCollection({
         findOne: vi.fn().mockResolvedValue({ _id: USER_ID, email: 'user@example.com' })
       });
-      const db = buildDb({ users });
+      const db = buildDb({ userAccounts: users });
 
       const result = await userSecurityService.requestPasswordReset(db, USER_ID, 2);
 
@@ -505,7 +509,7 @@ describe('UserSecurityService DB-backed methods', () => {
 
     it('throws when user not found', async () => {
       const users = buildCollection({ findOne: vi.fn().mockResolvedValue(null) });
-      const db = buildDb({ users });
+      const db = buildDb({ userAccounts: users });
 
       await expect(userSecurityService.requestPasswordReset(db, USER_ID)).rejects.toThrow('Usuário não encontrado');
     });
@@ -536,7 +540,7 @@ describe('UserSecurityService DB-backed methods', () => {
         })
       });
       const users = buildCollection({ findOne: vi.fn().mockResolvedValue({ _id: USER_ID, anonId: 'USR-TEST' }) });
-      const db = buildDb({ audit_logs: auditLogs, users });
+      const db = buildDb({ audit_logs: auditLogs, userAccounts: users });
 
       const activities = await userSecurityService.getActivities(db, USER_ID, 5);
 
@@ -563,7 +567,7 @@ describe('UserSecurityService DB-backed methods', () => {
         })
       });
       const users = buildCollection({ findOne: vi.fn().mockResolvedValue({ _id: USER_ID, anonId: 'USR-TEST' }) });
-      const db = buildDb({ audit_logs: auditLogs, users });
+      const db = buildDb({ audit_logs: auditLogs, userAccounts: users });
 
       const activities = await userSecurityService.getActivities(db, USER_ID, 5);
 

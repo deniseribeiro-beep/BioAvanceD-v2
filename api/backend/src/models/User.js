@@ -2,6 +2,8 @@
  * Modelo de validação e estrutura para User
  * Inclui suporte a MFA (RF001) e RBAC (RNF008)
  */
+const { randomUUID } = require('crypto');
+
 class UserModel {
   static validate(data) {
     const errors = [];
@@ -112,6 +114,8 @@ class UserModel {
 
   static create(data) {
     return {
+      userAccountId: randomUUID(),
+      actorId: data.actorId,
       name: data.name,
       email: data.email,
       phone: data.phone || null,
@@ -245,6 +249,7 @@ UserModel.stripSecrets = function stripSecrets(user) {
   // response. It costs one destructured key and removes a whole class of
   // regression; the reverse (dropping it and being wrong) re-opens #1068.
   const {
+    _id,
     password,
     mfaSecret,
     mfaSecretCiphertext,
@@ -256,4 +261,3 @@ UserModel.stripSecrets = function stripSecrets(user) {
 };
 
 module.exports = UserModel;
-

@@ -187,7 +187,7 @@ class SampleGraphValidator {
   }
 
   async _loadSample(specimenId) {
-    const samplesCollection = await getCollection(this.db, 'samples');
+    const samplesCollection = await getCollection(this.db, 'Specimen');
     const sample = await samplesCollection.findOne(normalizeSpecimenIdFilter(specimenId));
     return { samplesCollection, sample };
   }

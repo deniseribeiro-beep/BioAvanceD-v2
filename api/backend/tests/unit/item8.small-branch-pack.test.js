@@ -278,14 +278,14 @@ describe('item 8 compact legitimate branch pack', () => {
     expect(generateAnonId(null)).toBe('USR-SYSTEM');
     expect(await getUserAnonId(null)).toBe('USR-SYSTEM');
     expect(await getUserAnonId({ name: 'no-id' })).toBe('USR-SYSTEM');
-    expect(await getUserAnonId({ _id: 'u1', anonId: 'USR-STORED' })).toBe('USR-STORED');
+    expect(await getUserAnonId({ userAccountId: '11111111-1111-4111-8111-111111111111', anonId: 'USR-STORED' })).toBe('USR-STORED');
 
     const db = {
       collection: vi.fn(() => ({
         findOne: vi.fn().mockResolvedValue({ anonId: 'USR-DB' }),
       })),
     };
-    expect(await getUserAnonId({ _id: 'u2' }, db)).toBe('USR-DB');
+    expect(await getUserAnonId({ userAccountId: '22222222-2222-4222-8222-222222222222' }, db)).toBe('USR-DB');
 
     const failingDb = {
       collection: vi.fn(() => ({
@@ -293,7 +293,7 @@ describe('item 8 compact legitimate branch pack', () => {
       })),
     };
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    expect(await getUserAnonId({ _id: 'u3' }, failingDb)).toMatch(/^USR-/);
+    expect(await getUserAnonId({ userAccountId: '33333333-3333-4333-8333-333333333333' }, failingDb)).toMatch(/^USR-/);
     expect(warn).toHaveBeenCalled();
 
     const sanitizedPayload = sanitizePayload({
@@ -310,7 +310,7 @@ describe('item 8 compact legitimate branch pack', () => {
     expect(sanitizeMessage(null)).toBeNull();
 
     const log = await anonymizeLogUser({
-      userID: 'u4',
+      userID: '44444444-4444-4444-8444-444444444444',
       userName: 'Ana',
       metadata: { user: { userName: 'Ana', userRole: 'Curador' } },
       payload: { email: 'ana@example.test', keep: true },
@@ -329,7 +329,7 @@ describe('item 8 compact legitimate branch pack', () => {
     expect(maskUser(null)).toBe('USR-SYSTEM');
     expect(maskUser({ anonId: 'USR-CACHED' })).toBe('USR-CACHED');
     expect(maskUser({ name: 'no-id' })).toBe('USR-SYSTEM');
-    expect(maskUser({ id: 'u5' })).toMatch(/^USR-/);
+    expect(maskUser({ userAccountId: '55555555-5555-4555-8555-555555555555' })).toMatch(/^USR-/);
   });
 
   it('covers AllocateSampleUseCase fail-open lineage and optional placement/actor branches', async () => {

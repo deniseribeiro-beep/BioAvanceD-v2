@@ -105,7 +105,7 @@ const SampleSchema = new Schema({
   linkedFiles: { type: [Schema.Types.Mixed], default: [] },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
-}, { collection: 'samples' });
+}, { collection: 'specimens' });
 
 const Sample = mongoose.models.Sample || mongoose.model('Sample', SampleSchema);
 

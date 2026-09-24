@@ -79,7 +79,7 @@ function makeLoginDb(findOneImpl) {
   const RBAC_COLLECTIONS = new Set(['roles', 'permissions', 'userRoleAssignments']);
 
   const collection = vi.fn((name) => {
-    if (name === 'users') return usersCollectionApi;
+    if (name === 'userAccounts') return usersCollectionApi;
     if (RBAC_COLLECTIONS.has(name)) return rbacCollectionApi;
     if (name === 'sessions') return sessionsCollectionApi;
     return defaultCollectionApi;
@@ -92,7 +92,9 @@ const HASHED = 'a'.repeat(60); // 20+ chars to pass processLogin's password-fiel
 
 function makeUser(overrides = {}) {
   return {
-    _id: { toString: () => 'user-1' },
+    _id: { toString: () => '507f1f77bcf86cd799439011' },
+    userAccountId: '550e8400-e29b-41d4-a716-446655440002',
+    actorId: '550e8400-e29b-41d4-a716-446655440001',
     email: 'user@test.com',
     username: 'user1',
     name: 'User One',

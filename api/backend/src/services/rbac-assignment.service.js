@@ -1,6 +1,8 @@
 const { getCollection } = require('../utils/collectionResolver');
 const UserRoleAssignmentModel = require('../models/UserRoleAssignment');
 const { seedRolesAndPermissions } = require('./rbac-catalog-seed.service');
+const { isUuid } = require('../foundation/userAccountIdentityMigrationV2');
+const { assertActorReference } = require('../foundation/systemActorSeedV2');
 
 /**
  * #421: atomic cutover of `requirePermission`/`requireRole` from
@@ -240,13 +242,14 @@ async function grantRoleForAccessType(db, { userAccountId, accessType, grantedBy
   // an already-assigned user/role would have it silently discarded.
   if (existing) return existing;
 
+  await assertActorReference(db, grantedBy);
   const { scopeType, scopeId } = await resolveScopeForRole(db, roleDoc, organizationId);
   const doc = UserRoleAssignmentModel.create({
     userAccountId: String(userAccountId),
     roleId: roleDoc.roleId,
     scopeType,
     scopeId,
-    grantedBy: String(grantedBy || 'system'),
+    grantedBy,
   });
   await assignments.insertOne(doc);
   return doc;
@@ -265,13 +268,17 @@ async function grantRoleForAccessType(db, { userAccountId, accessType, grantedBy
  */
 async function backfillUserRoleAssignments(db) {
   await seedRolesAndPermissions(db);
-  const users = db.collection('users');
+  const users = db.collection('userAccounts');
   const userDocs = await users.find({}).toArray();
 
   const granted = [];
   const skipped = [];
   for (const user of userDocs) {
-    const userAccountId = user._id.toString();
+    const userAccountId = user.userAccountId;
+    if (!isUuid(userAccountId)) {
+      skipped.push({ reason: 'data-migration-conflict-account-identity' });
+      continue;
+    }
     if (!user.accessType) {
       // Can't guess a role for a user with no accessType: roleName was
       // dropped from the User document in the same #427 change that
@@ -292,16 +299,10 @@ async function backfillUserRoleAssignments(db) {
       });
       continue;
     }
-    const organizationId = user.organizationId
-      || (Array.isArray(user.organizationIds) ? user.organizationIds[0] : null)
-      || null;
-    const assignment = await grantRoleForAccessType(db, {
-      userAccountId,
-      accessType: user.accessType,
-      grantedBy: 'system-backfill',
-      organizationId,
-    });
-    granted.push(assignment);
+    // Historical accessType does not identify the Actor who granted it.
+    // A backfill must not invent grant provenance to make the RBAC table look
+    // complete; an explicit migration decision is required for such rows.
+    skipped.push({ userAccountId, reason: 'data-migration-conflict-grant-actor' });
   }
   return { granted, skipped };
 }
@@ -332,11 +333,12 @@ async function changeUserRole(db, { userAccountId, accessType, changedBy, organi
   );
   const docsToRevoke = activeDocs.filter((doc) => primaryRoleIds.has(doc.roleId));
 
+  await assertActorReference(db, changedBy);
   const now = new Date();
   for (const doc of docsToRevoke) {
     await assignments.updateOne(
       { assignmentId: doc.assignmentId },
-      { $set: { assignmentStatus: 'revoked', revokedBy: String(changedBy || 'system'), revokedAt: now, revocationReason: 'role_changed' } }
+      { $set: { assignmentStatus: 'revoked', revokedBy: changedBy, revokedAt: now, revocationReason: 'role_changed' } }
     );
   }
 
@@ -365,13 +367,14 @@ async function grantAdditionalRole(db, { userAccountId, roleCode, grantedBy, org
   });
   if (existing) return existing;
 
+  await assertActorReference(db, grantedBy);
   const { scopeType, scopeId } = await resolveScopeForRole(db, roleDoc, organizationId);
   const doc = UserRoleAssignmentModel.create({
     userAccountId: String(userAccountId),
     roleId: roleDoc.roleId,
     scopeType,
     scopeId,
-    grantedBy: String(grantedBy || 'system'),
+    grantedBy,
   });
   await assignments.insertOne(doc);
   return doc;
@@ -391,11 +394,12 @@ async function revokeAdditionalRole(db, { userAccountId, roleCode, revokedBy }) 
   const activeDocs = await getActiveAssignments(db, userAccountId);
   const toRevoke = activeDocs.filter((doc) => doc.roleId === roleDoc.roleId);
 
+  if (toRevoke.length) await assertActorReference(db, revokedBy);
   const now = new Date();
   for (const doc of toRevoke) {
     await assignments.updateOne(
       { assignmentId: doc.assignmentId },
-      { $set: { assignmentStatus: 'revoked', revokedBy: String(revokedBy || 'system'), revokedAt: now, revocationReason: 'role_changed' } }
+      { $set: { assignmentStatus: 'revoked', revokedBy, revokedAt: now, revocationReason: 'role_changed' } }
     );
   }
   return toRevoke;

@@ -2,6 +2,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const securityService = require('../../src/services/security.service');
 const logger = require('../../src/utils/logger');
 const auditLogger = require('../../src/utils/auditLogger');
+const { BIOAVANCED_SYSTEM_ACTOR_ID } = require('../../src/foundation/systemActorSeedV2');
+const ACTOR_ID = '550e8400-e29b-41d4-a716-446655440001';
+function securityDb(updateOne) {
+  return { collection: vi.fn((name) => name === 'actors'
+    ? { findOne: vi.fn(async ({ actorId }) => [ACTOR_ID, BIOAVANCED_SYSTEM_ACTOR_ID].includes(actorId) ? { actorId } : null) }
+    : { updateOne }) };
+}
 
 describe('SecurityService.getDefaultConfig', () => {
   it('returns object with authentication section', () => {
@@ -209,15 +216,28 @@ describe('SecurityService.getConfig', () => {
   it('creates and returns default config when none exists in db', async () => {
     const findOne = vi.fn().mockResolvedValue(null);
     const insertOne = vi.fn().mockResolvedValue({});
-    const db = { collection: vi.fn(() => ({ findOne, insertOne })) };
+    const db = { collection: vi.fn((name) => name === 'actors'
+      ? { findOne: vi.fn().mockResolvedValue({ actorId: BIOAVANCED_SYSTEM_ACTOR_ID }) }
+      : { findOne, insertOne }) };
 
     const result = await securityService.getConfig(db);
 
     expect(insertOne).toHaveBeenCalledTimes(1);
     const insertedArg = insertOne.mock.calls[0][0];
     expect(insertedArg._id).toBe('main');
+    expect(insertedArg.lastUpdatedBy).toBe(BIOAVANCED_SYSTEM_ACTOR_ID);
     expect(result).toHaveProperty('authentication');
     expect(result).not.toHaveProperty('_id');
+  });
+
+  it('does not persist default config when the system Actor is absent', async () => {
+    const insertOne = vi.fn();
+    const db = { collection: vi.fn((name) => name === 'actors'
+      ? { findOne: vi.fn().mockResolvedValue(null) }
+      : { findOne: vi.fn().mockResolvedValue(null), insertOne }) };
+
+    await expect(securityService.getConfig(db)).rejects.toThrow('Reference(Actor)');
+    expect(insertOne).not.toHaveBeenCalled();
   });
 
   it('logs and rethrows when db access fails', async () => {
@@ -236,22 +256,30 @@ describe('SecurityService.updateConfig', () => {
     vi.restoreAllMocks();
   });
 
+  it('fails closed before writing when an authenticated human has no Actor', async () => {
+    const updateOne = vi.fn();
+    const db = securityDb(updateOne);
+    await expect(securityService.updateConfig(db, {}, {}, { user: { userID: 'account-only' } }))
+      .rejects.toThrow(/actorId UUID/);
+    expect(updateOne).not.toHaveBeenCalled();
+  });
+
   it('merges config, persists it and logs audit entries for each change', async () => {
     const updateOne = vi.fn().mockResolvedValue({});
-    const db = { collection: vi.fn(() => ({ updateOne })) };
+    const db = securityDb(updateOne);
     vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
     const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue({});
 
     const currentConfig = { authentication: { requireMFA: false }, configVersion: 1 };
     const newConfig = { authentication: { requireMFA: true } };
-    const req = { user: { userID: 'u1' } };
+    const req = { user: { userID: 'u1', actorId: ACTOR_ID } };
 
     const result = await securityService.updateConfig(db, newConfig, currentConfig, req);
 
     expect(updateOne).toHaveBeenCalledTimes(1);
     expect(result.authentication.requireMFA).toBe(true);
     expect(result.configVersion).toBe(2);
-    expect(result.lastUpdatedBy).toBe('u1');
+    expect(result.lastUpdatedBy).toBe(ACTOR_ID);
     expect(logSpy).toHaveBeenCalledTimes(1);
     expect(logSpy.mock.calls[0][0].severity).toBe('critical');
   });
@@ -264,13 +292,13 @@ describe('SecurityService.updateConfig', () => {
   // resourceType values in the same collection.
   it('audits a security-config change under the canonical SecurityConfiguration entity', async () => {
     const updateOne = vi.fn().mockResolvedValue({});
-    const db = { collection: vi.fn(() => ({ updateOne })) };
+    const db = securityDb(updateOne);
     vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
     const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue({});
 
     const currentConfig = { authentication: { requireMFA: false }, configVersion: 1 };
     const newConfig = { authentication: { requireMFA: true } };
-    const req = { user: { userID: 'u1' } };
+    const req = { user: { userID: 'u1', actorId: ACTOR_ID } };
 
     await securityService.updateConfig(db, newConfig, currentConfig, req);
 
@@ -278,20 +306,20 @@ describe('SecurityService.updateConfig', () => {
     expect(logSpy.mock.calls[0][0].resourceType).toBe('SecurityConfiguration');
   });
 
-  it('uses SYSTEM as lastUpdatedBy when req has no user', async () => {
+  it('uses the service Actor when req has no authenticated user', async () => {
     const updateOne = vi.fn().mockResolvedValue({});
-    const db = { collection: vi.fn(() => ({ updateOne })) };
+    const db = securityDb(updateOne);
     vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
     vi.spyOn(auditLogger, 'log').mockResolvedValue({});
 
     const result = await securityService.updateConfig(db, {}, {}, {});
 
-    expect(result.lastUpdatedBy).toBe('SYSTEM');
+    expect(result.lastUpdatedBy).toBe(BIOAVANCED_SYSTEM_ACTOR_ID);
   });
 
   it('rejects and does not write to db when newConfig fails validation', async () => {
     const updateOne = vi.fn().mockResolvedValue({});
-    const db = { collection: vi.fn(() => ({ updateOne })) };
+    const db = securityDb(updateOne);
     const errSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
 
     const currentConfig = { authentication: { maxLoginAttempts: 5 } };
@@ -304,7 +332,7 @@ describe('SecurityService.updateConfig', () => {
 
   it('deep-merges a partial group update, preserving sibling flags in that group (#904)', async () => {
     const updateOne = vi.fn().mockResolvedValue({});
-    const db = { collection: vi.fn(() => ({ updateOne })) };
+    const db = securityDb(updateOne);
     vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
     vi.spyOn(auditLogger, 'log').mockResolvedValue({});
 
@@ -336,18 +364,18 @@ describe('SecurityService.updateConfig', () => {
 
   it('#953: ignores caller-supplied server-owned fields and rewrites them itself', async () => {
     const updateOne = vi.fn().mockResolvedValue({});
-    const db = { collection: vi.fn(() => ({ updateOne })) };
+    const db = securityDb(updateOne);
     vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
     vi.spyOn(auditLogger, 'log').mockResolvedValue({});
 
     const currentConfig = { configVersion: 3, lastUpdatedBy: 'admin1' };
     const newConfig = { configVersion: 999, lastUpdatedBy: 'attacker', extra: 'x' };
 
-    const result = await securityService.updateConfig(db, newConfig, currentConfig, { user: { userID: 'admin2' } });
+    const result = await securityService.updateConfig(db, newConfig, currentConfig, { user: { userID: 'admin2', actorId: ACTOR_ID } });
 
     // Server-owned: derived from the STORED value, never from the caller's.
     expect(result.configVersion).toBe(4);
-    expect(result.lastUpdatedBy).toBe('admin2');
+    expect(result.lastUpdatedBy).toBe(ACTOR_ID);
     // And an unrecognised top-level key from the caller does not survive the merge.
     expect(result.extra).toBeUndefined();
   });
@@ -504,14 +532,14 @@ describe('SecurityService.updatePermissions', () => {
 
   it('normalizes numeric profile keys to strings, persists and logs audit per changed permission', async () => {
     const updateOne = vi.fn().mockResolvedValue({});
-    const db = { collection: vi.fn(() => ({ updateOne })) };
+    const db = securityDb(updateOne);
     vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
     const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue({});
 
     const newPermissions = { 2: { createSample: false } };
     const currentPermissions = { '2': { createSample: true } };
 
-    const result = await securityService.updatePermissions(db, newPermissions, currentPermissions, { user: { userID: 'admin1' } });
+    const result = await securityService.updatePermissions(db, newPermissions, currentPermissions, { user: { userID: 'admin1', actorId: ACTOR_ID } });
 
     expect(Object.keys(result)).toEqual(['2']);
     expect(updateOne).toHaveBeenCalledTimes(1);
@@ -519,21 +547,21 @@ describe('SecurityService.updatePermissions', () => {
     expect(logSpy.mock.calls[0][0].severity).toBe('critical');
   });
 
-  it('uses SYSTEM as lastUpdatedBy when req has no user', async () => {
+  it('uses the service Actor when req has no authenticated user', async () => {
     const updateOne = vi.fn().mockResolvedValue({});
-    const db = { collection: vi.fn(() => ({ updateOne })) };
+    const db = securityDb(updateOne);
     vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
     vi.spyOn(auditLogger, 'log').mockResolvedValue({});
 
     await securityService.updatePermissions(db, { '2': { createSample: true } }, {}, {});
 
     const setArg = updateOne.mock.calls[0][1].$set;
-    expect(setArg.lastUpdatedBy).toBe('SYSTEM');
+    expect(setArg.lastUpdatedBy).toBe(BIOAVANCED_SYSTEM_ACTOR_ID);
   });
 
   it('rejects with invalid profile and does not write to db', async () => {
     const updateOne = vi.fn().mockResolvedValue({});
-    const db = { collection: vi.fn(() => ({ updateOne })) };
+    const db = securityDb(updateOne);
     const errSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
 
     await expect(securityService.updatePermissions(db, { '9': { viewReports: true } }, {}, {}))
@@ -544,7 +572,7 @@ describe('SecurityService.updatePermissions', () => {
 
   it('rejects with invalid permission key even though profile is valid', async () => {
     const updateOne = vi.fn().mockResolvedValue({});
-    const db = { collection: vi.fn(() => ({ updateOne })) };
+    const db = securityDb(updateOne);
     vi.spyOn(logger, 'error').mockImplementation(() => {});
 
     await expect(securityService.updatePermissions(db, { '1': { notARealPermission: true } }, {}, {}))
@@ -554,7 +582,7 @@ describe('SecurityService.updatePermissions', () => {
 
   it('rejects with non-boolean permission value', async () => {
     const updateOne = vi.fn().mockResolvedValue({});
-    const db = { collection: vi.fn(() => ({ updateOne })) };
+    const db = securityDb(updateOne);
     vi.spyOn(logger, 'error').mockImplementation(() => {});
 
     await expect(securityService.updatePermissions(db, { '1': { viewReports: 'yes' } }, {}, {}))
@@ -629,11 +657,13 @@ describe('SecurityService.updateConfig session revocation (#649)', () => {
     return {
       sessions,
       config,
-      db: { collection: vi.fn((name) => (name === 'sessions' ? sessions : config)) },
+      db: { collection: vi.fn((name) => name === 'sessions' ? sessions : name === 'actors'
+        ? { findOne: vi.fn(async ({ actorId }) => actorId === ACTOR_ID ? { actorId } : null) }
+        : config) },
     };
   }
 
-  const req = { user: { userID: 'admin-1' }, headers: { authorization: 'Bearer admin-token' } };
+  const req = { user: { userID: 'admin-1', actorId: ACTOR_ID }, headers: { authorization: 'Bearer admin-token' } };
 
   it('revokes when the session timeout is TIGHTENED', async () => {
     const { db, sessions } = makeDb();
@@ -648,7 +678,7 @@ describe('SecurityService.updateConfig session revocation (#649)', () => {
     expect(sessions.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({ isActive: true }),
       expect.objectContaining({
-        $set: expect.objectContaining({ isRevoked: true, revocationReason: 'admin_action', revokedBy: 'admin-1' }),
+        $set: expect.objectContaining({ isRevoked: true, revocationReason: 'admin_action', revokedBy: ACTOR_ID }),
       })
     );
   });

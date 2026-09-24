@@ -17,7 +17,7 @@ async function getCollections() {
     const db = await connectMongoDB();
     CachedDb = db;
     TemperatureIncidentCollection = db.collection('temperatureIncidents');
-    UserCollection = db.collection('users');
+    UserCollection = db.collection('userAccounts');
   }
   return { db: CachedDb, TemperatureIncidentCollection, UserCollection };
 }
@@ -28,14 +28,8 @@ async function getAlertRecipients() {
     // #426: resolve via UserRoleAssignment -> Role, não accessType direto.
     const userAccountIds = await findUserAccountIdsByRoleCodes(db, NOTIFIABLE_ROLE_CODES);
     if (!userAccountIds.length) return [];
-    // #651: same fix as the other four ObjectId sites in this file -- db
-    // here is the mongoose connection, and mongoose bundles its own bson
-    // (major-version-diverged from the top-level `mongodb` package's
-    // bson), so ObjectId must come from mongoose.Types, not `require('mongodb')`.
-    const { ObjectId } = mongoose.Types;
-    const objectIds = userAccountIds.filter((id) => ObjectId.isValid(id)).map((id) => new ObjectId(id));
     const recipients = await UserCollection
-      .find({ _id: { $in: objectIds }, status: 'active' })
+      .find({ userAccountId: { $in: userAccountIds }, status: 'active' })
       .project({ email: 1, username: 1 })
       .toArray();
     return recipients.map(u => u.email).filter(e => e);

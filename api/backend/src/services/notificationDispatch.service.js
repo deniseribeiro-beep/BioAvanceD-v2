@@ -20,25 +20,17 @@ const { findUserAccountIdsByRoleCodes } = require('./rbac-assignment.service');
 const notificationServiceV2 = require('./NotificationService');
 const { getCollection } = require('../utils/collectionResolver');
 const logger = require('../utils/logger');
+const { getCanonicalCollectionName } = require('../config/canonicalEntityCollections.v2');
 
 async function resolveRecipientEmails(db, rule) {
   if (!rule.recipientRoleCodes?.length) return [];
   const userIds = await findUserAccountIdsByRoleCodes(db, rule.recipientRoleCodes);
   if (!userIds.length) return [];
-  // userAccountId (rbac-assignment.service.js) is user._id.toString() --
-  // match on _id, not a separate userID field the users collection doesn't
-  // have. This runs against two different db connections depending on the
-  // caller (app.locals.db's native MongoClient for the admin routes,
-  // vs. iot.controller.js's mongoose connection() for the telemetry
-  // trigger path) -- constructing an ObjectId from the top-level `mongodb`
-  // package and handing it to a query executed on a mongoose-sourced
-  // collection throws "Unsupported BSON version" (the two packages' bson
-  // codecs don't recognize each other's instances). $toString sidesteps
-  // it entirely by never constructing an ObjectId at all.
-  const usersCollection = db.collection('users');
+  // RBAC retorna o UUID canônico da conta; _id permanece físico no MongoDB.
+  const usersCollection = db.collection(getCanonicalCollectionName('UserAccount'));
   const docs = await usersCollection
     .aggregate([
-      { $match: { $expr: { $in: [{ $toString: '$_id' }, userIds] } } },
+      { $match: { userAccountId: { $in: userIds } } },
       { $project: { email: 1 } }
     ])
     .toArray();

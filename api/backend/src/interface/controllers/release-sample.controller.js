@@ -37,7 +37,7 @@ function createReleaseSampleController({
       const result = await useCase.execute({
         specimenId,
         actor: {
-          userId: req.user?.id || req.user?._id?.toString() || req.user?.userID || null,
+          userId: req.user?.userID || null,
           userName: req.user?.name || req.user?.username || null,
           userRole: req.user?.roleName || req.user?.role || null,
           ipAddress: req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress || null,

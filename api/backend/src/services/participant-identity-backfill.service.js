@@ -12,7 +12,7 @@ const participantIdentityService = require('./participantIdentity.service');
  * left untouched.
  */
 async function backfillParticipantIdentities(db) {
-  const patientsCollection = await getCollection(db, 'patients');
+  const patientsCollection = await getCollection(db, 'Participant');
   const identityCollection = await getCollection(db, 'participantIdentities');
 
   const patients = await patientsCollection.find({}).toArray();
@@ -84,7 +84,7 @@ const IDENTITY_FIELDS = ['patientName', 'birthDate', 'identityDocument'];
  * mirror, rather than trusting record existence alone.
  */
 async function checkParticipantIdentityParity(db) {
-  const patientsCollection = await getCollection(db, 'patients');
+  const patientsCollection = await getCollection(db, 'Participant');
   const identityCollection = await getCollection(db, 'participantIdentities');
 
   const patients = await patientsCollection.find({}).toArray();

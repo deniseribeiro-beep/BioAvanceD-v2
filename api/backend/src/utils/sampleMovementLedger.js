@@ -84,7 +84,7 @@ function guardBulkWrite(operationList = []) {
   }
 }
 
-function enforceAppendOnlyCollection(collection, collectionName = 'sample_movements') {
+function enforceAppendOnlyCollection(collection, collectionName = 'sampleMovements') {
   if (!collection || typeof collection !== 'object') {
     return collection;
   }

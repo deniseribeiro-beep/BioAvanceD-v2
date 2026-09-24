@@ -12,7 +12,7 @@ const require = createRequire(import.meta.url);
 const express = require('express');
 const request = require('supertest');
 const jwt = require('jsonwebtoken');
-const { ObjectId } = require('mongodb');
+const { randomUUID } = require('crypto');
 
 const authRoutesPath = require.resolve('../../src/interface/routes/auth.routes.js');
 const authController = require('../../src/controllers/auth.controller');
@@ -22,6 +22,7 @@ const logger = require('../../src/utils/logger');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'test-jwt-secret';
 const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'test-refresh-jwt-secret';
+const ACTOR_ID = '550e8400-e29b-41d4-a716-446655440001';
 
 function loadAuthRoutes() {
   // auth.routes.js `.bind()`s several authController methods at require time,
@@ -40,19 +41,19 @@ function buildApp(authRoutes, db) {
 }
 
 function makeUserId() {
-  return new ObjectId().toHexString();
+  return randomUUID();
 }
 
 function signAccessToken(overrides = {}) {
   return jwt.sign(
-    { userID: makeUserId(), email: 'user@example.com', accessType: 2, mfaVerified: true, ...overrides },
+    { userID: makeUserId(), actorId: ACTOR_ID, email: 'user@example.com', accessType: 2, mfaVerified: true, ...overrides },
     JWT_SECRET,
     { expiresIn: '15m' }
   );
 }
 
 function makeDb(userDoc) {
-  const findOne = vi.fn(async () => userDoc);
+  const findOne = vi.fn(async () => userDoc && { actorId: ACTOR_ID, ...userDoc });
   return {
     collection: vi.fn(() => ({ findOne })),
     __findOne: findOne
@@ -69,7 +70,7 @@ function makeDb(userDoc) {
 function makeDbWithRbac(userDoc, rbacUsers = []) {
   const { buildRbacCollections } = require('../factories/rbac.factory');
   const rbac = buildRbacCollections(rbacUsers);
-  const findOne = vi.fn(async () => userDoc);
+  const findOne = vi.fn(async () => userDoc && { actorId: ACTOR_ID, ...userDoc });
   return {
     collection: vi.fn((name) => rbac[name] || { findOne }),
     __findOne: findOne
@@ -215,7 +216,12 @@ describe('auth.routes.js (integration, real router mounted)', () => {
       function rbacDb(users) {
         const { buildRbacCollections } = require('../factories/rbac.factory');
         const collections = buildRbacCollections(users);
-        return { collection: vi.fn((name) => collections[name] || { findOne: vi.fn(async () => null), find: vi.fn(() => ({ toArray: vi.fn(async () => []) })) }) };
+        return { collection: vi.fn((name) => name === 'userAccounts'
+          ? { findOne: vi.fn(async ({ userAccountId }) => {
+            const user = users.find((entry) => entry.userAccountId === userAccountId);
+            return user ? { ...user, actorId: ACTOR_ID } : null;
+          }) }
+          : collections[name] || { findOne: vi.fn(async () => null), find: vi.fn(() => ({ toArray: vi.fn(async () => []) })) }) };
       }
 
       it('refuses an authenticated caller who lacks createUser, without reaching the controller', async () => {
@@ -399,7 +405,7 @@ describe('auth.routes.js (integration, real router mounted)', () => {
       expect(res.status).toBe(503);
     });
 
-    it('returns 404 when the authenticated user is not found in the db', async () => {
+    it('returns 401 when the authenticated account no longer exists', async () => {
       vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
       vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
       const authRoutes = loadAuthRoutes();
@@ -410,7 +416,7 @@ describe('auth.routes.js (integration, real router mounted)', () => {
         .get('/api/auth/two-factor/status')
         .set('Authorization', `Bearer ${token}`);
 
-      expect(res.status).toBe(404);
+      expect(res.status).toBe(401);
     });
 
     it('returns 200 with mfaEnabled/mfaLocked flags on success', async () => {
@@ -439,7 +445,7 @@ describe('auth.routes.js (integration, real router mounted)', () => {
         collection: () => ({
           findOne: vi.fn(async () => {
             calls += 1;
-            if (calls === 1) return {};
+            if (calls === 1) return { actorId: ACTOR_ID };
             throw new Error('db-down');
           })
         })
@@ -533,7 +539,7 @@ describe('auth.routes.js (integration, real router mounted)', () => {
       // #974: an explicit logout is 'user_request' by the session's own owner,
       // so it is distinguishable from the 'expiration'/'system' pair the clock
       // writes and from an admin's 'admin_action'.
-      expect(invalidateSpy).toHaveBeenCalledWith(expect.anything(), 's1', 'user_request', 'u1');
+      expect(invalidateSpy).toHaveBeenCalledWith(expect.anything(), 's1', 'user_request', ACTOR_ID);
       expect(logLogoutSpy).toHaveBeenCalledTimes(1);
       expect(res.headers['set-cookie']?.some((c) => c.startsWith('refresh_token=;'))).toBe(true);
     });
@@ -570,7 +576,7 @@ describe('auth.routes.js (integration, real router mounted)', () => {
       expect(res.status).toBe(503);
     });
 
-    it('returns 404 and logs TOKEN_VERIFY_FAILED when the user is not found', async () => {
+    it('returns 401 before route verification when the account no longer exists', async () => {
       vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
       vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
       const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
@@ -579,8 +585,8 @@ describe('auth.routes.js (integration, real router mounted)', () => {
       const token = signAccessToken();
 
       const res = await request(app).get('/api/auth/verify').set('Authorization', `Bearer ${token}`);
-      expect(res.status).toBe(404);
-      expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({ action: 'TOKEN_VERIFY_FAILED' }));
+      expect(res.status).toBe(401);
+      expect(logSpy).not.toHaveBeenCalled();
     });
 
     it.each([
@@ -615,7 +621,7 @@ describe('auth.routes.js (integration, real router mounted)', () => {
         collection: () => ({
           findOne: vi.fn(async () => {
             calls += 1;
-            if (calls === 1) return {};
+            if (calls === 1) return { actorId: ACTOR_ID };
             throw new Error('verify-db-boom');
           })
         })
@@ -740,7 +746,7 @@ describe('auth.routes.js (integration, real router mounted)', () => {
     });
 
     it('returns 401 when the session userID does not match the token userID', async () => {
-      vi.spyOn(sessionService, 'getSessionByRefreshToken').mockResolvedValue({ userID: 'someone-else', sessionID: 's9' });
+      vi.spyOn(sessionService, 'getSessionByRefreshToken').mockResolvedValue({ userAccountId: randomUUID(), sessionID: 's9' });
       const app = appWithDb(makeDb({}));
       const userID = makeUserId();
       const refreshToken = jwt.sign({ userID, type: 'refresh' }, JWT_REFRESH_SECRET, { expiresIn: '7d' });
@@ -753,7 +759,7 @@ describe('auth.routes.js (integration, real router mounted)', () => {
 
     it('returns 401 when the user behind a valid session is no longer in the db', async () => {
       const userID = makeUserId();
-      vi.spyOn(sessionService, 'getSessionByRefreshToken').mockResolvedValue({ userID: String(userID), sessionID: 's9' });
+      vi.spyOn(sessionService, 'getSessionByRefreshToken').mockResolvedValue({ userAccountId: userID, sessionID: 's9' });
       const app = appWithDb(makeDb(null));
       const refreshToken = jwt.sign({ userID, type: 'refresh' }, JWT_REFRESH_SECRET, { expiresIn: '7d' });
 
@@ -764,17 +770,17 @@ describe('auth.routes.js (integration, real router mounted)', () => {
     });
 
     it('rotates tokens and returns a new access token on the happy path', async () => {
-      const userId = new ObjectId();
-      vi.spyOn(sessionService, 'getSessionByRefreshToken').mockResolvedValue({ userID: userId.toString(), sessionID: 's9' });
+      const userId = randomUUID();
+      vi.spyOn(sessionService, 'getSessionByRefreshToken').mockResolvedValue({ userAccountId: userId, sessionID: 's9' });
       const rotateSpy = vi.spyOn(sessionService, 'rotateSessionTokens').mockResolvedValue(true);
       // #431: the new access token's accessType is resolved from the RBAC
       // assignment, not the User document's (no-longer-populated) field.
       const db = makeDbWithRbac(
-        { _id: userId, email: 'a@b.com', username: 'u', accessType: 2, name: 'A' },
-        [{ userAccountId: userId.toString(), accessType: 3 }]
+        { _id: '507f1f77bcf86cd799439011', userAccountId: userId, email: 'a@b.com', username: 'u', accessType: 2, name: 'A' },
+        [{ userAccountId: userId, accessType: 3 }]
       );
       const app = appWithDb(db);
-      const refreshToken = jwt.sign({ userID: userId.toString(), type: 'refresh' }, JWT_REFRESH_SECRET, { expiresIn: '7d' });
+      const refreshToken = jwt.sign({ userID: userId, type: 'refresh' }, JWT_REFRESH_SECRET, { expiresIn: '7d' });
 
       const res = await request(app)
         .post('/api/auth/refresh')
@@ -783,7 +789,7 @@ describe('auth.routes.js (integration, real router mounted)', () => {
       expect(res.status).toBe(200);
       expect(typeof res.body.data.token).toBe('string');
       const decodedAccess = jwt.verify(res.body.data.token, JWT_SECRET);
-      expect(decodedAccess.userID).toBe(userId.toString());
+      expect(decodedAccess.userID).toBe(userId);
       expect(decodedAccess.accessType).toBe(3);
       expect(rotateSpy).toHaveBeenCalledTimes(1);
       expect(res.headers['set-cookie']?.some((c) => c.startsWith('refresh_token='))).toBe(true);

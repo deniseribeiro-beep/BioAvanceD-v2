@@ -10,6 +10,7 @@ const { requireRole, requirePermission } = require('../infrastructure/middleware
 const consentController = require('../controllers/consent.controller');
 const participantIdentityService = require('../services/participantIdentity.service');
 const logger = require('../utils/logger');
+const { getCanonicalCollectionName } = require('../config/canonicalEntityCollections.v2');
 const CONSENT_EXPIRATION = 60 * 60 * 2; // 2h
 
 /**
@@ -75,7 +76,7 @@ router.post('/generate-link', authenticate, requirePermission('createPatient'), 
   if (!participantId || !email) return res.status(400).json({ error: 'participantId e email obrigatórios' });
 
   const db = req.app.locals.db;
-  const patient = await db.collection('patients').findOne({ participantId });
+  const patient = await db.collection(getCanonicalCollectionName('Participant')).findOne({ participantId });
   if (!patient) return res.status(404).json({ error: 'Paciente não encontrado' });
   if (patient.email !== email) {
     return res.status(403).json({ error: 'Email não corresponde ao paciente' });
@@ -121,7 +122,7 @@ router.get('/validate/:token', async (req, res) => {
     const { token } = req.params;
     const payload = jwt.verify(token, consentSecret);
     const db = req.app.locals.db;
-    const patient = await db.collection('patients').findOne({ participantId: payload.participantId });
+    const patient = await db.collection(getCanonicalCollectionName('Participant')).findOne({ participantId: payload.participantId });
     if (!patient) return res.status(404).json({ error: 'Paciente não encontrado' });
 
     // RF005/RNF007 (#562/#574): patientName/birthDate/identityDocument are civil
@@ -218,7 +219,7 @@ router.post('/update', async (req, res) => {
         const { SampleModel } = require('../models/Sample');
         const { getCollection } = require('../utils/collectionResolver');
         const quarantineActionService = require('../services/quarantine-action.service');
-        const samplesCollection = await getCollection(db, 'samples');
+        const samplesCollection = await getCollection(db, 'Specimen');
         const specimenStatus = 'quarantined';
         const samples = await samplesCollection.find({ participantId }).toArray();
 
@@ -246,7 +247,7 @@ router.post('/update', async (req, res) => {
         const { SampleModel } = require('../models/Sample');
         const { getCollection } = require('../utils/collectionResolver');
         const quarantineActionService = require('../services/quarantine-action.service');
-        const samplesCollection = await getCollection(db, 'samples');
+        const samplesCollection = await getCollection(db, 'Specimen');
         const specimenStatus = 'available';
         // #540: filters on the canonical specimenStatus field, not the
         // legacy status field (no longer written above either — a

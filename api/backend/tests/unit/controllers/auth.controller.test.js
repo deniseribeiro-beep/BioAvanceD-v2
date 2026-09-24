@@ -64,26 +64,26 @@ describe('AuthController.register', () => {
   // anywhere. The route now requires authenticate + createUser, so the
   // caller's id is always available and is forwarded.
   it('returns 201, forwards the caller as grantedBy, and writes the CREATE audit row', async () => {
-    const fakeUser = { userID: 'u1', username: 'alice', _id: { toString: () => 'oid-1' } };
+    const fakeUser = { userAccountId: '11111111-1111-4111-8111-111111111111', username: 'alice' };
     vi.spyOn(authService, 'registerUser').mockResolvedValue(fakeUser);
     vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
     const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
     const req = createReq({
       body: { username: 'alice', password: 'Str0ng!Pass' },
-      user: { userID: 'caller-1' },
+      user: { userID: '22222222-2222-4222-8222-222222222222', actorId: '33333333-3333-4333-8333-333333333333' },
     });
     const res = createRes();
 
     await authController.register(req, res);
 
-    expect(authService.registerUser).toHaveBeenCalledWith(req.app.locals.db, req.body, 'caller-1');
+    expect(authService.registerUser).toHaveBeenCalledWith(req.app.locals.db, req.body, '33333333-3333-4333-8333-333333333333');
     // RF003 AC#6 requires auditing account creation; RF012 AC#1 and RNF009
     // AC#2 (Critica) make the actor mandatory on the event.
     expect(logSpy).toHaveBeenCalledTimes(1);
     expect(logSpy.mock.calls[0][0]).toMatchObject({
       action: 'CREATE',
       resourceType: 'User',
-      resourceId: 'oid-1',
+      resourceId: '11111111-1111-4111-8111-111111111111',
       status: 'success',
     });
     expect(res.status).toHaveBeenCalledWith(201);
@@ -742,7 +742,7 @@ describe('AuthController.changePassword', () => {
     const db = { collection: vi.fn().mockReturnValue(usersCollection) };
     const req = createReq({
       app: { locals: { db } },
-      user: { userID: '507f1f77bcf86cd799439011' },
+      user: { userID: '44444444-4444-4444-8444-444444444444' },
       body: { oldPassword: 'a', newPassword: 'b' },
     });
     const res = createRes();
@@ -763,7 +763,7 @@ describe('AuthController.changePassword', () => {
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(false);
     const req = createReq({
       app: { locals: { db } },
-      user: { userID: '507f1f77bcf86cd799439011' },
+      user: { userID: '44444444-4444-4444-8444-444444444444' },
       body: { oldPassword: 'wrong', newPassword: 'NewStr0ng!' },
     });
     const res = createRes();
@@ -789,7 +789,7 @@ describe('AuthController.changePassword', () => {
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(false);
     const req = createReq({
       app: { locals: { db } },
-      user: { userID: '507f1f77bcf86cd799439011' },
+      user: { userID: '44444444-4444-4444-8444-444444444444' },
       body: { oldPassword: 'wrong', newPassword: 'NewStr0ng!' },
     });
     const res = createRes();
@@ -815,7 +815,7 @@ describe('AuthController.changePassword', () => {
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
     const req = createReq({
       app: { locals: { db } },
-      user: { userID: '507f1f77bcf86cd799439011' },
+      user: { userID: '44444444-4444-4444-8444-444444444444' },
       body: { oldPassword: 'correct', newPassword: 'NewStr0ng!' },
     });
     const res = createRes();
@@ -835,14 +835,15 @@ describe('AuthController.changePassword', () => {
     const user = { _id: 'u1', password: 'hashed-old', passwordHistory: [], accountLockedUntil: expired };
     const usersCollection = createUsersCollection(user);
     const sessionsCollection = { updateMany: vi.fn().mockResolvedValue({ modifiedCount: 0 }) };
-    const db = { collection: vi.fn((name) => (name === 'sessions' ? sessionsCollection : usersCollection)) };
+    const actorId = '33333333-3333-4333-8333-333333333333';
+    const db = { collection: vi.fn((name) => name === 'sessions' ? sessionsCollection : name === 'actors' ? { findOne: vi.fn().mockResolvedValue({ actorId }) } : usersCollection) };
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
     vi.spyOn(bcrypt, 'hash').mockResolvedValue('hashed-new');
     vi.spyOn(passwordService, 'validateStrength').mockReturnValue(true);
     vi.spyOn(passwordService, 'validateReuse').mockResolvedValue(true);
     const req = createReq({
       app: { locals: { db } },
-      user: { userID: '507f1f77bcf86cd799439011' },
+      user: { userID: '44444444-4444-4444-8444-444444444444', actorId },
       body: { oldPassword: 'correct', newPassword: 'NewStr0ng!' },
     });
     const res = createRes();
@@ -861,14 +862,15 @@ describe('AuthController.changePassword', () => {
     // sessions, and a mock without updateMany would throw into changePassword's
     // catch and turn a 200 into a 400.
     const sessionsCollection = { updateMany: vi.fn().mockResolvedValue({ modifiedCount: 2 }) };
-    const db = { collection: vi.fn((name) => (name === 'sessions' ? sessionsCollection : usersCollection)) };
+    const actorId = '33333333-3333-4333-8333-333333333333';
+    const db = { collection: vi.fn((name) => name === 'sessions' ? sessionsCollection : name === 'actors' ? { findOne: vi.fn().mockResolvedValue({ actorId }) } : usersCollection) };
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
     vi.spyOn(bcrypt, 'hash').mockResolvedValue('hashed-new');
     vi.spyOn(passwordService, 'validateStrength').mockReturnValue(true);
     vi.spyOn(passwordService, 'validateReuse').mockResolvedValue(true);
     const req = createReq({
       app: { locals: { db } },
-      user: { userID: '507f1f77bcf86cd799439011' },
+      user: { userID: '44444444-4444-4444-8444-444444444444', actorId },
       body: { oldPassword: 'correct', newPassword: 'NewStr0ng!' },
     });
     const res = createRes();
@@ -899,12 +901,12 @@ describe('AuthController.changePassword', () => {
     // All-but-current: the session making this request just proved knowledge of
     // BOTH the old and the new password, so it is not an affected session.
     expect(sessionsCollection.updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({ userID: '507f1f77bcf86cd799439011', isActive: true }),
+      expect.objectContaining({ userAccountId: '44444444-4444-4444-8444-444444444444', isActive: true }),
       expect.objectContaining({
         $set: expect.objectContaining({
           isRevoked: true,
           revocationReason: 'password_change',
-          revokedBy: '507f1f77bcf86cd799439011',
+          revokedBy: actorId,
         }),
       })
     );
@@ -942,7 +944,7 @@ describe('AuthController.changePassword', () => {
     });
     const req = createReq({
       app: { locals: { db } },
-      user: { userID: '507f1f77bcf86cd799439011' },
+      user: { userID: '44444444-4444-4444-8444-444444444444' },
       body: { oldPassword: 'correct', newPassword: 'weak' },
     });
     const res = createRes();

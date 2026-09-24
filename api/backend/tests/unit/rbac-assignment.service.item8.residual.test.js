@@ -11,6 +11,7 @@ const {
   grantAdditionalRole,
   revokeAdditionalRole,
 } = require('../../src/services/rbac-assignment.service');
+const ACTOR_ID = '550e8400-e29b-41d4-a716-446655440001';
 
 function matches(doc, query = {}) {
   return Object.entries(query).every(([key, condition]) => {
@@ -52,6 +53,7 @@ function buildDb({ roles = [], assignments = [], organizations = [] } = {}) {
       if (name === 'roles') return rolesCollection;
       if (name === 'userRoleAssignments') return assignmentsCollection;
       if (name === 'organizations') return organizationsCollection;
+      if (name === 'actors') return { findOne: async ({ actorId }) => actorId === ACTOR_ID ? { actorId } : null };
       throw new Error(`unexpected collection: ${name}`);
     },
   };
@@ -145,7 +147,7 @@ describe('rbac-assignment.service item 8 residual branches', () => {
     expect(ids).toEqual(['tech-active']);
   });
 
-  it('defaults grantedBy to system and normalizes blank organizationId to null', async () => {
+  it('uses a resolved Actor and normalizes blank organizationId to null', async () => {
     const assignments = [];
     const doc = await grantRoleForAccessType(
       buildDb({ roles, assignments }),
@@ -153,15 +155,16 @@ describe('rbac-assignment.service item 8 residual branches', () => {
         userAccountId: 'u-default',
         accessType: 3,
         organizationId: '   ',
+        grantedBy: ACTOR_ID,
       }
     );
 
-    expect(doc.grantedBy).toBe('system');
+    expect(doc.grantedBy).toBe(ACTOR_ID);
     expect(doc.scopeType).toBe('organization');
     expect(doc.scopeId).toBeNull();
   });
 
-  it('defaults change-role revocation and replacement grant actors to system', async () => {
+  it('attributes role change and replacement grant to the same resolved Actor', async () => {
     const assignments = [{
       assignmentId: 'a-old',
       userAccountId: 'u-change',
@@ -174,21 +177,23 @@ describe('rbac-assignment.service item 8 residual branches', () => {
     const replacement = await changeUserRole(db, {
       userAccountId: 'u-change',
       accessType: 3,
+      changedBy: ACTOR_ID,
     });
 
-    expect(assignments.find((item) => item.assignmentId === 'a-old').revokedBy).toBe('system');
-    expect(replacement.grantedBy).toBe('system');
+    expect(assignments.find((item) => item.assignmentId === 'a-old').revokedBy).toBe(ACTOR_ID);
+    expect(replacement.grantedBy).toBe(ACTOR_ID);
   });
 
-  it('covers additive-role system actor defaults and unknown-role no-op revocation', async () => {
+  it('attributes additive-role changes to Actor and preserves unknown-role no-op', async () => {
     const assignments = [];
     const db = buildDb({ roles, assignments });
 
     const added = await grantAdditionalRole(db, {
       userAccountId: 'u-additive',
       roleCode: 'auditor',
+      grantedBy: ACTOR_ID,
     });
-    expect(added.grantedBy).toBe('system');
+    expect(added.grantedBy).toBe(ACTOR_ID);
 
     const missing = await revokeAdditionalRole(db, {
       userAccountId: 'u-additive',
@@ -199,7 +204,16 @@ describe('rbac-assignment.service item 8 residual branches', () => {
     await revokeAdditionalRole(db, {
       userAccountId: 'u-additive',
       roleCode: 'auditor',
+      revokedBy: ACTOR_ID,
     });
-    expect(assignments.find((item) => item.assignmentId === added.assignmentId).revokedBy).toBe('system');
+    expect(assignments.find((item) => item.assignmentId === added.assignmentId).revokedBy).toBe(ACTOR_ID);
+  });
+
+  it('refuses a system string as a grant Actor reference', async () => {
+    const assignments = [];
+    await expect(grantRoleForAccessType(buildDb({ roles, assignments }), {
+      userAccountId: 'u-default', accessType: 3, grantedBy: 'system',
+    })).rejects.toThrow(/actorId UUID/);
+    expect(assignments).toEqual([]);
   });
 });

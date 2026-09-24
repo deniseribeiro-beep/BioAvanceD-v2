@@ -27,9 +27,9 @@ describe('clinical-observation.service', () => {
       expect(db.collections.clinicalObservations.docs).toHaveLength(1);
     });
 
-    it('persists an observation whose specimenId/deviceId resolve to real samples/devices', async () => {
+    it('persists an observation whose specimenId/deviceId resolve to real specimens/devices', async () => {
       const db = createFakeDb({
-        samples: [{ specimenId: 'SPEC-1' }],
+        specimens: [{ specimenId: 'SPEC-1' }],
         devices: [{ deviceId: 'dev-1' }],
       });
 
@@ -46,8 +46,8 @@ describe('clinical-observation.service', () => {
       expect(stored.deviceId).toBe('dev-1');
     });
 
-    it('rejects (RF005/#691) a specimenId that does not resolve to a real sample, without persisting anything', async () => {
-      const db = createFakeDb({ samples: [], devices: [] });
+    it('rejects (RF005/#691) a specimenId that does not resolve to a real specimen, without persisting anything', async () => {
+      const db = createFakeDb({ specimens: [], devices: [] });
 
       await expect(
         createClinicalObservation(db, {
@@ -62,7 +62,7 @@ describe('clinical-observation.service', () => {
     });
 
     it('rejects a deviceId that does not resolve to a real device', async () => {
-      const db = createFakeDb({ samples: [], devices: [] });
+      const db = createFakeDb({ specimens: [], devices: [] });
 
       await expect(
         createClinicalObservation(db, {

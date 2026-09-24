@@ -12,6 +12,7 @@ const logger = require('../../utils/logger');
 const specimenPreanalyticsService = require('../../services/specimen-preanalytics.service');
 const rcsAssessmentService = require('../../services/rcs-assessment.service');
 const NormalizedPhysicalStorageStore = require('../../infrastructure/persistence/mongo/NormalizedPhysicalStorageStore');
+const { getCanonicalCollection } = require('../../config/canonicalEntityCollections.v2');
 const { resolveUserOrganizationScope, isOrganizationScopeUsable, applyOrganizationScopeFilter, isRecordInOrganizationScope, isAuditReader } = require('../../services/rbac-assignment.service');
 
 function normalizeReport(report) {
@@ -408,8 +409,8 @@ async function buildPreviewData(db, rawType, filters = {}) {
 }
 
 async function handleSamplesByPatient(db, filters) {
-  const patientsCollection = resolveCollection(db, ['patients', 'pacientes']);
-  const samplesCollection = resolveCollection(db, ['samples']);
+  const patientsCollection = getCanonicalCollection(db, 'Participant');
+  const samplesCollection = getCanonicalCollection(db, 'Specimen');
   const sampleQuery = await buildSampleQuery(db, filters);
   const matchingPatientIds = await getMatchingPatientIds(samplesCollection, sampleQuery);
 
@@ -510,8 +511,8 @@ async function handleSamplesByPatient(db, filters) {
 }
 
 async function handlePatient(db, filters) {
-  const collection = resolveCollection(db, ['patients', 'pacientes']);
-  const samplesCollection = resolveCollection(db, ['samples', 'amostras']);
+  const collection = getCanonicalCollection(db, 'Participant');
+  const samplesCollection = getCanonicalCollection(db, 'Specimen');
   const sampleQuery = await buildSampleQuery(db, filters);
   const matchingPatientIds = await getMatchingPatientIds(samplesCollection, sampleQuery);
 
@@ -564,7 +565,7 @@ async function handlePatient(db, filters) {
 }
 
 async function handleSampleAnalysis(db, filters) {
-  const samplesCollection = resolveCollection(db, ['samples', 'amostras']);
+  const samplesCollection = getCanonicalCollection(db, 'Specimen');
   const resultsCollection = resolveCollection(db, ['results']);
   const sampleAnalysisQuery =
     filters.organizationScope && filters.organizationScope.scope === 'organization'
@@ -619,7 +620,7 @@ async function handleSampleAnalysis(db, filters) {
 }
 
 async function handleSample(db, filters) {
-  const collection = resolveCollection(db, ['samples', 'amostras']);
+  const collection = getCanonicalCollection(db, 'Specimen');
   const sampleQuery = await buildSampleQuery(db, filters);
   const samples = await collection.find(sampleQuery).limit(100).toArray();
   const total = await collection.countDocuments(sampleQuery);
@@ -738,7 +739,7 @@ async function handleResult(db, filters) {
     // write path writes it, and the #628 migration backfilled existing
     // documents) — a single-shape match, not the dual _id/specimenId
     // check #621 originally needed while the field was still stale.
-    const samplesCollection = resolveCollection(db, ['samples', 'amostras']);
+    const samplesCollection = getCanonicalCollection(db, 'Specimen');
     const scopedSamples = await samplesCollection
       .find({ collectionSite: { $in: filters.organizationScope.organizationIds } })
       .toArray();
@@ -758,7 +759,7 @@ async function handleWithdrawalHistory(db, filters) {
   // path — the real withdrawal record lives in the sample movement
   // ledger (sample.service.js#withdrawSample writes type: 'withdraw'),
   // the same source GET /:id/movements already surfaces per-sample.
-  const collection = resolveCollection(db, ['sample_movements', 'sampleMovements']);
+  const collection = resolveCollection(db, ['sampleMovements']);
   const dateRange = buildDateQuery(filters);
   const query = dateRange
     ? { type: 'withdraw', createdAt: dateRange }
@@ -770,7 +771,7 @@ async function handleWithdrawalHistory(db, filters) {
 }
 
 async function handleTissueOriginHistory(db, filters) {
-  const collection = resolveCollection(db, ['samples', 'amostras']);
+  const collection = getCanonicalCollection(db, 'Specimen');
   const baseQuery = {
     $or: [{ sampleOrigin: { $exists: true, $ne: null } }, { linkedProject: { $exists: true, $ne: null } }],
   };
@@ -785,7 +786,7 @@ async function handleTissueOriginHistory(db, filters) {
 }
 
 async function handleExtracellularNetwork(db, filters) {
-  const collection = resolveCollection(db, ['samples', 'amostras']);
+  const collection = getCanonicalCollection(db, 'Specimen');
   const baseQuery = {
     $or: [
       { linkedProject: { $regex: 'extracel', $options: 'i' } },
@@ -1056,7 +1057,7 @@ router.get('/', authenticate, requirePermission('viewReports'), async (req, res)
     // already uses for scoped report types -- not requireOrganizationScope
     // middleware, since this router resolves org scope by hand throughout
     // (see buildPreviewData's own SCOPED_HANDLER_KEYS check).
-    const organizationScope = await resolveUserOrganizationScope(db, req.user?.userID || req.user?._id);
+    const organizationScope = await resolveUserOrganizationScope(db, req.user?.userID);
     if (!isOrganizationScopeUsable(organizationScope)) {
       return res.status(403).json({ error: 'Sem organização atribuída', message: 'Seu usuário não possui organização atribuída para acessar este recurso' });
     }
@@ -1078,7 +1079,7 @@ router.get('/:id', authenticate, requirePermission('viewReports'), async (req, r
     }
 
     // #637: see GET /'s identical inline pattern.
-    const organizationScope = await resolveUserOrganizationScope(db, req.user?.userID || req.user?._id);
+    const organizationScope = await resolveUserOrganizationScope(db, req.user?.userID);
     if (!isOrganizationScopeUsable(organizationScope)) {
       return res.status(403).json({ error: 'Sem organização atribuída', message: 'Seu usuário não possui organização atribuída para acessar este recurso' });
     }
@@ -1127,7 +1128,7 @@ router.post('/generate', authenticate, requirePermission('viewReports'), async (
     }
 
     const reportsCollection = db.collection('reports');
-    const previewData = await buildPreviewData(db, reportType, { ...filters, userAccountId: req.user?.userID || req.user?._id });
+    const previewData = await buildPreviewData(db, reportType, { ...filters, userAccountId: req.user?.userID });
     const reportID = await nextReportId(reportsCollection);
 
     // #637: stamp the requesting user's own resolved organization scope
@@ -1139,14 +1140,14 @@ router.post('/generate', authenticate, requirePermission('viewReports'), async (
     // result) -- generation itself stays permissive for unscoped types,
     // same as before; buildPreviewData's own hard-403 already covers an
     // unusable scope requesting one of the scoped types.
-    const organizationScope = await resolveUserOrganizationScope(db, req.user?.userID || req.user?._id);
+    const organizationScope = await resolveUserOrganizationScope(db, req.user?.userID);
     const organizationIds = organizationScope.scope === 'organization' ? organizationScope.organizationIds : [];
 
     const report = ReportsModel.create({
       reportID,
       reportType,
       filters,
-      generatedBy: req.user?.userID || req.user?._id || null,
+      generatedBy: req.user?.userID || null,
       status: 'completed',
       generatedAt: new Date(),
       reportData: JSON.stringify(previewData),
@@ -1227,7 +1228,7 @@ router.post('/:type/preview', authenticate, requirePermission('viewReports'), as
       return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
     }
 
-    const previewData = await buildPreviewData(db, req.params.type, { ...(req.body?.filters || {}), userAccountId: req.user?.userID || req.user?._id });
+    const previewData = await buildPreviewData(db, req.params.type, { ...(req.body?.filters || {}), userAccountId: req.user?.userID });
     return res.status(200).json({
       success: true,
       reportType: req.params.type,
@@ -1250,7 +1251,7 @@ router.get('/:type/export', authenticate, requirePermission('viewReports'), asyn
       return res.status(503).json({ error: 'Banco de dados não disponível' });
     }
 
-    const previewData = await buildPreviewData(db, req.params.type, { ...(req.query || {}), userAccountId: req.user?.userID || req.user?._id });
+    const previewData = await buildPreviewData(db, req.params.type, { ...(req.query || {}), userAccountId: req.user?.userID });
     // #1058: the export needs the handlerKey the template resolves to,
     // the same second lookup GET /:type/filters already does for
     // FILTER_CATALOG -- buildPreviewData resolves it internally and
@@ -1281,7 +1282,7 @@ router.get('/:type/export/pdf', authenticate, requirePermission('viewReports'), 
       return res.status(503).json({ error: 'Banco de dados não disponível' });
     }
 
-    const previewData = await buildPreviewData(db, req.params.type, { ...(req.query || {}), userAccountId: req.user?.userID || req.user?._id });
+    const previewData = await buildPreviewData(db, req.params.type, { ...(req.query || {}), userAccountId: req.user?.userID });
     return res.status(200).json({ success: true, format: 'pdf', data: previewData });
   } catch (error) {
     if (error.statusCode === 403) {

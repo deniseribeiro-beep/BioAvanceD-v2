@@ -2,7 +2,6 @@
  * Repositório de auditoria imutável em MongoDB.
  */
 const sampleMovementLedger = require('../../../utils/sampleMovementLedger');
-const { CANONICAL_COLLECTIONS } = require('../../../config/collections');
 
 function createIsolatedCollectionView(collection) {
   const overrides = new Map();
@@ -47,7 +46,7 @@ class MongoAuditRepository {
    * @returns {Promise<{ movementID: number }>}
    */
   async appendImmutableAudit(input, session) {
-    const movementsCollectionName = CANONICAL_COLLECTIONS.sampleMovements;
+    const movementsCollectionName = 'sampleMovements';
     const movementsCollection = createIsolatedCollectionView(this.db.collection(movementsCollectionName));
     sampleMovementLedger.enforceAppendOnlyCollection(movementsCollection, movementsCollectionName);
     await sampleMovementLedger.ensureSampleMovementIndexes(movementsCollection);

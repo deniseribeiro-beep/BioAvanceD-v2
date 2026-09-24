@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 const { runSeed } = require('../../../scripts/seed-essential-reference-data');
 const canonicalDictionary = require('../../../src/reference-data/canonical-dictionary');
-const { CANONICAL_COLLECTIONS } = require('../../../src/config/collections');
+const { getCanonicalCollectionName } = require('../../../src/config/canonicalEntityCollections.v2');
 
 function createFakeCollection() {
   const docs = [];
@@ -51,7 +51,7 @@ describe('seed-essential-reference-data canonical v2 gate', () => {
 
     await runSeed({ db: fakeDb, args: { dryRun: false, list: false, only: null }, environment: 'test', deploymentId: 'test-host' });
 
-    const runDoc = fakeDb.collections[CANONICAL_COLLECTIONS.foundationDataRuns].docs[0];
+    const runDoc = fakeDb.collections[getCanonicalCollectionName('FoundationDataRun')].docs[0];
     expect(runDoc.runStatus).toBe('completed');
     expect(runDoc.dictionaryVersion).toBe('2.0.0');
     expect(runDoc.dictionaryVersion).toBe(canonicalDictionary.DICTIONARY_VERSION);
@@ -63,7 +63,7 @@ describe('seed-essential-reference-data canonical v2 gate', () => {
 
     await runSeed({ db: fakeDb, args: { dryRun: false, list: false, only: null }, environment: 'test', deploymentId: 'test-host' });
 
-    const runDoc = fakeDb.collections[CANONICAL_COLLECTIONS.foundationDataRuns].docs[0];
+    const runDoc = fakeDb.collections[getCanonicalCollectionName('FoundationDataRun')].docs[0];
     expect(runDoc.validationSummary.dictionaryCompleteness).toMatchObject({
       expectedTotal: 1644,
       loadedTotal: 1644,

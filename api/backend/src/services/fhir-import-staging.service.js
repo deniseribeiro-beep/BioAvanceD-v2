@@ -11,6 +11,7 @@ const quarantineActionService = require('./quarantine-action.service');
 const { withMongoTransaction, isTransactionCapable } = require('../utils/mongoTransaction');
 const rcsAssessmentService = require('./rcs-assessment.service');
 const specimenPreanalyticsService = require('./specimen-preanalytics.service');
+const { getCanonicalCollection } = require('../config/canonicalEntityCollections.v2');
 
 const STATUS = Object.freeze({
   VALID: 'VALID',
@@ -943,8 +944,8 @@ async function getConsentStatus(db, batchIdRaw) {
 async function commitBatch(db, batchIdRaw) {
   const batchId = toObjectId(batchIdRaw);
   const { records } = await validateBatch(db, batchId);
-  const patients = collection(db, 'patients');
-  const samples = collection(db, 'samples');
+  const patients = getCanonicalCollection(db, 'Participant');
+  const samples = getCanonicalCollection(db, 'Specimen');
   const staging = collection(db, 'import_staging_records');
   // #838: route through findFhirBatch rather than a bare `{ _id: batchId }`
   // findOne, so this file's `type: FHIR_BATCH_TYPE` discriminator (#799) does
@@ -1124,7 +1125,7 @@ async function attachExternalDocument(db, batchIdRaw, recordIdRaw, options = {})
   const batchId = toObjectId(batchIdRaw);
   const recordId = toObjectId(recordIdRaw);
   const staging = collection(db, 'import_staging_records');
-  const samples = collection(db, 'samples');
+  const samples = getCanonicalCollection(db, 'Specimen');
 
   // #799: this is the one entry point that never resolves through getBatch, so
   // it needs the discriminator itself. It is also the most damaging one to

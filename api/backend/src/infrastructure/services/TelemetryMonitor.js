@@ -330,7 +330,7 @@ class TelemetryMonitor {
   }
 
   async findSpecimenByAnyId(specimenId, session) {
-    const samples = await getCollection(this.db, 'samples');
+    const samples = await getCollection(this.db, 'Specimen');
     const normalized = this.normalizeSpecimenLookupId(specimenId);
     return samples.findOne({
       $or: [
@@ -341,7 +341,7 @@ class TelemetryMonitor {
   }
 
   async resolveDescendantSpecimens(rootSampleId, session) {
-    const samples = await getCollection(this.db, 'samples');
+    const samples = await getCollection(this.db, 'Specimen');
     const root = await this.findSpecimenByAnyId(rootSampleId, session);
     if (!root) return [];
 

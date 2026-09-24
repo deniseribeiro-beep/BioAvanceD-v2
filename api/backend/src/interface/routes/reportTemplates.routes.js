@@ -19,7 +19,7 @@ function resolveTemplateQuery(id) {
 }
 
 function actingUserRef(req) {
-  const userId = req.user?.userID || req.user?._id;
+  const userId = req.user?.userID;
   return userId ? `User/${userId}` : null;
 }
 

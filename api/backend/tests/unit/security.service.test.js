@@ -3,6 +3,7 @@ import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 const securityService = require('../../src/services/security.service');
+const ACTOR_ID = '550e8400-e29b-41d4-a716-446655440001';
 
 describe('SecurityService', () => {
   beforeEach(() => {
@@ -77,6 +78,7 @@ describe('SecurityService', () => {
         if (name === 'security_permissions') {
           return { updateOne };
         }
+        if (name === 'actors') return { findOne: vi.fn(async ({ actorId }) => actorId === ACTOR_ID ? { actorId } : null) };
 
         if (name === 'logs') {
           return {
@@ -100,7 +102,7 @@ describe('SecurityService', () => {
     };
 
     const req = {
-      user: { userID: 'admin-1' },
+      user: { userID: 'admin-1', actorId: ACTOR_ID },
       headers: {
         'x-forwarded-for': '127.0.0.1',
         'user-agent': 'vitest',

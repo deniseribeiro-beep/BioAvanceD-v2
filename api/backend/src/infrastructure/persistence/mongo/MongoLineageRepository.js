@@ -42,7 +42,7 @@ class MongoLineageRepository {
 
   async findSpecimen(specimenId, session) {
     this.ensureDb();
-    const samples = await getCollection(this.db, 'samples');
+    const samples = await getCollection(this.db, 'Specimen');
     const normalized = this.toObjectId(specimenId);
     return samples.findOne({
       $or: [

@@ -16,7 +16,7 @@ const specimenPreanalyticsService = require('./specimen-preanalytics.service');
  * samples and samples with no snapshot are left untouched.
  */
 async function backfillSealedSnapshotPins(db) {
-  const samplesCollection = await getCollection(db, 'samples');
+  const samplesCollection = await getCollection(db, 'Specimen');
   const samples = await samplesCollection.find({}).toArray();
 
   const summary = { samplesProcessed: 0, rcsPinned: 0, sprecPinned: 0 };

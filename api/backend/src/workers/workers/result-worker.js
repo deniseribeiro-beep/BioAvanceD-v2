@@ -238,7 +238,7 @@ class ResultWorker {
       }
 
       // Busca amostra
-      const samplesCollection = db.collection('amostras');
+      const samplesCollection = db.collection('specimens');
       const sample = await samplesCollection.findOne({
         $or: [
           { specimenId: row.specimenId },

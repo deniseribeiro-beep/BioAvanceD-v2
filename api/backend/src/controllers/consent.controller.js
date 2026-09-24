@@ -2,6 +2,7 @@ const consentService = require('../services/consent.service');
 const patientService = require('../services/patient.service');
 const participantIdentityService = require('../services/participantIdentity.service');
 const logger = require('../utils/logger');
+const { getCanonicalCollectionName } = require('../config/canonicalEntityCollections.v2');
 
 const RETIRED_PARTICIPANT_ALIASES = Object.freeze(['patientID', 'patientId']);
 
@@ -39,7 +40,7 @@ class ConsentController {
             error: 'policyId é obrigatório'
           });
         }
-        const patientsCollection = db.collection('patients');
+        const patientsCollection = db.collection(getCanonicalCollectionName('Participant'));
         const pendingPatients = await patientsCollection.find({
           status: 'PENDING_CONSENT',
           consentTemplateId: policyId

@@ -194,7 +194,7 @@ class PacienteController {
           applyOrganizationScopeFilter(scopeQuery, req.organizationScope, 'clinicalUnitId');
         }
 
-        const patientsCollection = await getCollection(db, 'patients');
+        const patientsCollection = await getCollection(db, 'Participant');
         const patients = await patientsCollection
           .find(scopeQuery, { projection: { participantId: 1, status: 1, consentNotifiedAt: 1, consentTokenExpiresAt: 1, _id: 0 } })
           .limit(filters.limit)
@@ -813,7 +813,7 @@ class PacienteController {
       const participantIdTerm = participantId.trim();
 
       const { getCollection } = require('../utils/collectionResolver');
-      const patientsCollection = await getCollection(db, 'patients');
+      const patientsCollection = await getCollection(db, 'Participant');
       const patient = await patientsCollection.findOne({ participantId: participantIdTerm });
 
       if (!patient) {

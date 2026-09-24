@@ -15,7 +15,7 @@
  * (#670-673) quarantines through this module, not a new one of its own.
  */
 const IngestionQuarantineRecordModel = require('../models/IngestionQuarantineRecord');
-const { CANONICAL_COLLECTIONS } = require('../config/collections');
+const QUARANTINE_COLLECTION = 'ingestionQuarantineRecords';
 
 const { RESOLUTION_STATUSES } = IngestionQuarantineRecordModel;
 const TERMINAL_STATUSES = RESOLUTION_STATUSES.filter((status) => status !== 'open');
@@ -28,7 +28,7 @@ async function quarantineRecord(db, data = {}) {
     throw new Error(`IngestionQuarantineRecord inválido: ${errors.join('; ')}`);
   }
 
-  const collection = db.collection(CANONICAL_COLLECTIONS.ingestionQuarantineRecords);
+  const collection = db.collection(QUARANTINE_COLLECTION);
   await collection.insertOne(record);
   return record;
 }
@@ -50,7 +50,7 @@ async function resolveQuarantineRecord({ db, ingestionQuarantineRecordId, resolu
     throw new Error('resolvedBy é obrigatório');
   }
 
-  const records = db.collection(CANONICAL_COLLECTIONS.ingestionQuarantineRecords);
+  const records = db.collection(QUARANTINE_COLLECTION);
   const existing = await records.findOne({ ingestionQuarantineRecordId });
   if (!existing) {
     throw new Error(`IngestionQuarantineRecord não encontrado: ${ingestionQuarantineRecordId}`);

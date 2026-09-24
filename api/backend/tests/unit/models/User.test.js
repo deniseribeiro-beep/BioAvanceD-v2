@@ -481,7 +481,8 @@ describe('UserModel item 8 residual canonical account-governance branches', () =
 
   it('strips credentials from single users and arrays without removing non-secret security state', () => {
     const input = {
-      _id: 'u1',
+      _id: '507f1f77bcf86cd799439011',
+      userAccountId: '11111111-1111-4111-8111-111111111111',
       username: 'user',
       password: 'hash',
       mfaSecret: 'legacy-secret',
@@ -496,7 +497,7 @@ describe('UserModel item 8 residual canonical account-governance branches', () =
 
     const [safe] = UserModel.stripSecrets([input]);
     expect(safe).toEqual({
-      _id: 'u1',
+      userAccountId: '11111111-1111-4111-8111-111111111111',
       username: 'user',
       mfaEnabled: true,
       mfaLocked: false,
@@ -504,4 +505,3 @@ describe('UserModel item 8 residual canonical account-governance branches', () =
     expect(UserModel.stripSecrets(input)).toEqual(safe);
   });
 });
-

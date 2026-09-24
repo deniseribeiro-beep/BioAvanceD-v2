@@ -116,7 +116,7 @@ class BackupPolicyService {
         encryptionEnabled: newPolicy.encryptionEnabled !== undefined ? newPolicy.encryptionEnabled : currentPolicy.encryptionEnabled,
         rpoHours: newPolicy.rpoHours !== undefined ? Number(newPolicy.rpoHours) : currentPolicy.rpoHours,
         rtoHours: newPolicy.rtoHours !== undefined ? Number(newPolicy.rtoHours) : currentPolicy.rtoHours,
-        updatedBy: req.user?.userID || req.user?._id || 'SYSTEM',
+        updatedBy: req.user?.userID || 'SYSTEM',
         updatedAt: new Date(),
       };
 

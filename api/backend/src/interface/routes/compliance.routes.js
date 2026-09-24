@@ -155,7 +155,7 @@ router.post('/alerts/:id/acknowledge', authenticate, requireRole(4), async (req,
 
     await securityAlertsService.acknowledgeAlert(
       new ObjectId(req.params.id),
-      req.user._id.toString()
+      req.user.userID
     );
 
     return res.status(200).json({
@@ -200,7 +200,7 @@ router.post('/alerts/:id/resolve', authenticate, requireRole(4), async (req, res
     await securityAlertsService.resolveAlert(
       new ObjectId(req.params.id),
       resolution,
-      req.user._id.toString()
+      req.user.userID
     );
 
     return res.status(200).json({

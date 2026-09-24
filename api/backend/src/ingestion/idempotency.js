@@ -10,7 +10,7 @@
  * entity type string) so the same key value can't collide across unrelated
  * entity kinds.
  */
-const { CANONICAL_COLLECTIONS } = require('../config/collections');
+const IDEMPOTENCY_COLLECTION = 'ingestionIdempotencyKeys';
 
 /**
  * Atomically claims (idempotencyKey, scope) via an upsert — the
@@ -30,7 +30,7 @@ async function claimIdempotencyKey(db, { idempotencyKey, scope }) {
     throw new Error('claimIdempotencyKey: idempotencyKey e scope são obrigatórios');
   }
 
-  const keys = db.collection(CANONICAL_COLLECTIONS.ingestionIdempotencyKeys);
+  const keys = db.collection(IDEMPOTENCY_COLLECTION);
   const now = new Date();
   const result = await keys.updateOne(
     { idempotencyKey, scope },
@@ -61,7 +61,7 @@ async function recordIdempotentResult(db, { idempotencyKey, scope, resultRef = n
     throw new Error('recordIdempotentResult: idempotencyKey e scope são obrigatórios');
   }
 
-  const keys = db.collection(CANONICAL_COLLECTIONS.ingestionIdempotencyKeys);
+  const keys = db.collection(IDEMPOTENCY_COLLECTION);
   await keys.updateOne(
     { idempotencyKey, scope },
     { $set: { status: 'completed', resultRef, completedAt: new Date() } },

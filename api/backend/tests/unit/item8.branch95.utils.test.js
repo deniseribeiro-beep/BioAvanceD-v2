@@ -130,8 +130,8 @@ describe('item 8 branch-95 utility behaviors', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('staging-index-refused'));
   });
 
-  it('keeps null log input unchanged and includes numeric userID lookup for numeric identifiers', async () => {
+  it('keeps null log input unchanged and rejects numeric legacy account identifiers', async () => {
     await expect(anonymizeLogUser(null)).resolves.toBeNull();
-    expect(buildUserFilterById('42').$or).toContainEqual({ userID: 42 });
+    expect(buildUserFilterById('42')).toEqual({ userAccountId: { $in: [] } });
   });
 });

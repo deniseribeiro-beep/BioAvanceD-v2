@@ -198,7 +198,7 @@ class MongoStorageTopologyReadRepository {
    */
   async checkBoxIntegrity(input) {
     const storageBoxesCollection = this.db.collection('storageBoxes');
-    const samplesCollection = await getCollection(this.db, 'samples');
+    const samplesCollection = await getCollection(this.db, 'Specimen');
     const physicalStore = new NormalizedPhysicalStorageStore(this.db);
 
     const boxObjId = this.toObjectId(input.boxId);

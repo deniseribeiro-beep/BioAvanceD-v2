@@ -585,7 +585,7 @@ class ImportLGPDService {
       // the loop below was unreachable for exactly this reason and is gone --
       // the readers are now the only place a blank row is detected or counted.
       results.skipped = rows.skippedCount || 0;
-      const patientsCollection = await getCollection(db, 'patients');
+      const patientsCollection = await getCollection(db, 'Participant');
 
       // Verifica se o arquivo está vazio
       if (!rows || rows.length === 0) {
@@ -749,7 +749,7 @@ class ImportLGPDService {
           
           // GERA ID ÚNICO DE 8 DÍGITOS AUTOMATICAMENTE (LGPD) - antes da
           // validação, pois PatientModel.validate() exige participantId
-          const participantId = await generateUniqueParticipantId(db, 'pacientes');
+          const participantId = await generateUniqueParticipantId(db);
           patientData.participantId = participantId;
 
           // Valida dados
@@ -1357,8 +1357,8 @@ class ImportLGPDService {
       // drop blank rows before this array exists. #1012: the unreachable
       // per-row backstop below is gone for that same reason.
       results.skipped = rows.skippedCount || 0;
-      const samplesCollection = await getCollection(db, 'samples');
-      const patientsCollection = await getCollection(db, 'patients');
+      const samplesCollection = await getCollection(db, 'Specimen');
+      const patientsCollection = await getCollection(db, 'Participant');
       const validator = new SampleGraphValidator(db);
       const drugService = new DrugService(db);
       // #477: samples are inserted unallocated, then AllocateSampleUseCase
@@ -1425,7 +1425,7 @@ class ImportLGPDService {
 
           if (!sampleData.specimenId) {
             const { generateUniqueSpecimenId } = require('../utils/specimenIdGenerator');
-            sampleData.specimenId = await generateUniqueSpecimenId(db, 'samples');
+            sampleData.specimenId = await generateUniqueSpecimenId(db, 'specimens');
           } else { void 0; }
 
           if (!sampleData.sampleType && groupFields?.sampleType) {
@@ -2340,7 +2340,7 @@ class ImportLGPDService {
     // #1001: same seeding as importPatients/importSamples -- readCSV/readExcel
     // already drop blank rows before this array exists.
     results.skipped = rows.skippedCount || 0;
-    const patientsCollection = await getCollection(db, 'patients');
+    const patientsCollection = await getCollection(db, 'Participant');
     const { ObjectId } = require('mongodb');
 
     for (let i = 0; i < rows.length; i += 1) {
@@ -2438,7 +2438,7 @@ class ImportLGPDService {
         // parsePatientRow/esta função ainda geram mas que ParticipantModel
         // não aceita mais como top-level (decisão de #142: fluxo de
         // criação de paciente é disease-agnostic).
-        const participantId = await generateUniqueParticipantId(db, 'pacientes');
+        const participantId = await generateUniqueParticipantId(db);
         patientData.participantId = participantId;
         delete patientData.cpf;
         delete patientData.height;
@@ -2641,4 +2641,3 @@ module.exports = new ImportLGPDService();
 // #915: os leitores de quarentena recebem o conjunto de tipos legiveis, e
 // quem monta esse conjunto (o controller) precisa dos nomes.
 module.exports.QUARANTINE_BATCH_TYPES = QUARANTINE_BATCH_TYPES;
-

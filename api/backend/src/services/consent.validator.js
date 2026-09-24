@@ -20,7 +20,7 @@ class ConsentValidator {
       throw new Error('specimenId é obrigatório para validar consentimento');
     }
 
-    const samplesCollection = await getCollection(this.db, 'samples');
+    const samplesCollection = await getCollection(this.db, 'Specimen');
     let sample = null;
 
     if (ObjectId.isValid(String(specimenId))) {

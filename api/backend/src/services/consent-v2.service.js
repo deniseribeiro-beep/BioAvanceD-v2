@@ -259,7 +259,7 @@ class ConsentV2Service {
       }
       if (!lineageIds.size) return outcome;
 
-      const patients = await getCollection(db, 'patients').find({
+      const patients = await getCollection(db, 'Participant').find({
         status: 'PENDING_CONSENT',
         consentTemplateId: { $in: [...lineageIds] }
       }).toArray();
@@ -274,14 +274,14 @@ class ConsentV2Service {
           const patientWithIdentity = identity ? { ...patient, patientName: identity.patientName } : patient;
           const metadata = notificationService.buildConsentMetadata();
           const link = notificationService.buildConsentLink(patientWithIdentity, metadata.token);
-          await getCollection(db, 'patients').updateOne({ _id: patient._id }, { $set: {
+          await getCollection(db, 'Participant').updateOne({ _id: patient._id }, { $set: {
             consentToken: metadata.token,
             consentTokenCreatedAt: metadata.createdAt,
             consentTokenExpiresAt: metadata.expiresAt,
             updatedAt: new Date()
           } });
           await notificationService.enqueueConsentNotification(patientWithIdentity, link);
-          await getCollection(db, 'patients').updateOne({ _id: patient._id }, { $set: { consentNotifiedAt: new Date(), updatedAt: new Date() } });
+          await getCollection(db, 'Participant').updateOne({ _id: patient._id }, { $set: { consentNotifiedAt: new Date(), updatedAt: new Date() } });
           outcome.notified += 1;
         } catch (error) {
           outcome.failed += 1;

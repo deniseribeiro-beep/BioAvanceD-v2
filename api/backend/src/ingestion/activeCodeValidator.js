@@ -8,7 +8,7 @@
  * reference-import pipeline's inserts, not a downstream entity referencing
  * an already-promoted code.
  */
-const { CANONICAL_COLLECTIONS } = require('../config/collections');
+const { getCanonicalCollection } = require('../config/canonicalEntityCollections.v2');
 
 function buildResult(concept, release) {
   if (!concept) {
@@ -51,8 +51,8 @@ async function checkActiveCode(db, { systemUri, code, version = null }) {
     throw new Error('checkActiveCode: systemUri e code são obrigatórios');
   }
 
-  const concepts = db.collection(CANONICAL_COLLECTIONS.terminologyConcepts);
-  const releases = db.collection(CANONICAL_COLLECTIONS.referenceDatasetReleases);
+  const concepts = getCanonicalCollection(db, 'TerminologyConcept');
+  const releases = getCanonicalCollection(db, 'ReferenceDatasetRelease');
 
   if (version) {
     const concept = await concepts.findOne({ systemUri, code, version });

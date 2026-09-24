@@ -1,0 +1,1729 @@
+{
+  "canonicalRelease": "2.0.0",
+  "canonicalSource": "docs/BioAvanceD_Dicionario_Dados_Consolidado_v2.0.0.xlsx",
+  "constraints": [
+    {
+      "constraintId": "canonical-index:AIReadinessAssessment:aiReadinessAssessmentId",
+      "entity": "AIReadinessAssessment",
+      "canonicalFields": [
+        "aiReadinessAssessmentId"
+      ],
+      "collection": "aiReadinessAssessments",
+      "physicalKeys": {
+        "aiReadinessAssessmentId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0369"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:AlgorithmicDecisionReview:algorithmicDecisionReviewId",
+      "entity": "AlgorithmicDecisionReview",
+      "canonicalFields": [
+        "algorithmicDecisionReviewId"
+      ],
+      "collection": "algorithmicDecisionReviews",
+      "physicalKeys": {
+        "algorithmicDecisionReviewId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0402"
+      ],
+      "applyNow": false,
+      "requiredForReadiness": false,
+      "deferredReason": "conditional future project",
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:BiobankGovernanceContext:biobankGovernanceContextId",
+      "entity": "BiobankGovernanceContext",
+      "canonicalFields": [
+        "biobankGovernanceContextId"
+      ],
+      "collection": "biobankGovernanceContexts",
+      "physicalKeys": {
+        "biobankGovernanceContextId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0088"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:BiorepositoryContext:biorepositoryContextId",
+      "entity": "BiorepositoryContext",
+      "canonicalFields": [
+        "biorepositoryContextId"
+      ],
+      "collection": "biorepositoryContexts",
+      "physicalKeys": {
+        "biorepositoryContextId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0076"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:CanonicalModelRelease:canonicalModelReleaseId",
+      "entity": "CanonicalModelRelease",
+      "canonicalFields": [
+        "canonicalModelReleaseId"
+      ],
+      "collection": "canonicalModelReleases",
+      "physicalKeys": {
+        "canonicalModelReleaseId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0001"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:CanonicalModelRelease:semanticVersion",
+      "entity": "CanonicalModelRelease",
+      "canonicalFields": [
+        "semanticVersion"
+      ],
+      "collection": "canonicalModelReleases",
+      "physicalKeys": {
+        "semanticVersion": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0002"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:CohortDefinition:cohortDefinitionId",
+      "entity": "CohortDefinition",
+      "canonicalFields": [
+        "cohortDefinitionId"
+      ],
+      "collection": "cohortDefinitions",
+      "physicalKeys": {
+        "cohortDefinitionId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0314"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:CollectionGovernanceApproval:approvalId",
+      "entity": "CollectionGovernanceApproval",
+      "canonicalFields": [
+        "approvalId"
+      ],
+      "collection": "collectionGovernanceApprovals",
+      "physicalKeys": {
+        "approvalId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0067"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:CollectionGovernanceEvent:collectionGovernanceEventId",
+      "entity": "CollectionGovernanceEvent",
+      "canonicalFields": [
+        "collectionGovernanceEventId"
+      ],
+      "collection": "collectionGovernanceEvents",
+      "physicalKeys": {
+        "collectionGovernanceEventId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0097"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:ConfigurationChangeEvent:configurationChangeEventId",
+      "entity": "ConfigurationChangeEvent",
+      "canonicalFields": [
+        "configurationChangeEventId"
+      ],
+      "collection": "configurationChangeEvents",
+      "physicalKeys": {
+        "configurationChangeEventId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0052"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:ConfigurationProfile:profileId",
+      "entity": "ConfigurationProfile",
+      "canonicalFields": [
+        "profileId"
+      ],
+      "collection": "configurationProfiles",
+      "physicalKeys": {
+        "profileId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0011"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:ConfigurationRelease:configurationReleaseId",
+      "entity": "ConfigurationRelease",
+      "canonicalFields": [
+        "configurationReleaseId"
+      ],
+      "collection": "configurationReleases",
+      "physicalKeys": {
+        "configurationReleaseId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0032"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:ConfigurationRelease:profileId+semanticVersion",
+      "entity": "ConfigurationRelease",
+      "canonicalFields": [
+        "profileId",
+        "semanticVersion"
+      ],
+      "collection": "configurationReleases",
+      "physicalKeys": {
+        "profileId": 1,
+        "semanticVersion": 1
+      },
+      "indexType": "COMPOUND_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0034"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:ConfigurationValidationRun:configurationValidationRunId",
+      "entity": "ConfigurationValidationRun",
+      "canonicalFields": [
+        "configurationValidationRunId"
+      ],
+      "collection": "configurationValidationRuns",
+      "physicalKeys": {
+        "configurationValidationRunId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0042"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:ConsentAuthorizationDecision:consentAuthorizationDecisionId",
+      "entity": "ConsentAuthorizationDecision",
+      "canonicalFields": [
+        "consentAuthorizationDecisionId"
+      ],
+      "collection": "consentAuthorizationDecisions",
+      "physicalKeys": {
+        "consentAuthorizationDecisionId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0140"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:ConsentCommunicationEvent:consentCommunicationEventId",
+      "entity": "ConsentCommunicationEvent",
+      "canonicalFields": [
+        "consentCommunicationEventId"
+      ],
+      "collection": "consentCommunicationEvents",
+      "physicalKeys": {
+        "consentCommunicationEventId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0151"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:ConsentDecisionEvent:consentDecisionEventId",
+      "entity": "ConsentDecisionEvent",
+      "canonicalFields": [
+        "consentDecisionEventId"
+      ],
+      "collection": "consentDecisionEvents",
+      "physicalKeys": {
+        "consentDecisionEventId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0121"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:ConsentPermission:consentPermissionId",
+      "entity": "ConsentPermission",
+      "canonicalFields": [
+        "consentPermissionId"
+      ],
+      "collection": "consentPermissions",
+      "physicalKeys": {
+        "consentPermissionId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0113"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:ConsentRevocation:consentRevocationId",
+      "entity": "ConsentRevocation",
+      "canonicalFields": [
+        "consentRevocationId"
+      ],
+      "collection": "consentRevocations",
+      "physicalKeys": {
+        "consentRevocationId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0132"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:ConsentTemplate:versionGroupId+semanticVersion",
+      "entity": "ConsentTemplate",
+      "canonicalFields": [
+        "versionGroupId",
+        "semanticVersion"
+      ],
+      "collection": "consentTemplates",
+      "physicalKeys": {
+        "versionGroupId": 1,
+        "semanticVersion": 1
+      },
+      "indexType": "COMPOUND_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0429"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:Container:containerId",
+      "entity": "Container",
+      "canonicalFields": [
+        "containerId"
+      ],
+      "collection": "containers",
+      "physicalKeys": {
+        "containerId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0646"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:ContainerPositionAssignment:containerPositionAssignmentId",
+      "entity": "ContainerPositionAssignment",
+      "canonicalFields": [
+        "containerPositionAssignmentId"
+      ],
+      "collection": "containerPositionAssignments",
+      "physicalKeys": {
+        "containerPositionAssignmentId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0670"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:CustodianshipAssignment:custodianshipAssignmentId",
+      "entity": "CustodianshipAssignment",
+      "canonicalFields": [
+        "custodianshipAssignmentId"
+      ],
+      "collection": "custodianshipAssignments",
+      "physicalKeys": {
+        "custodianshipAssignmentId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0105"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:DataFileVersion:dataFileVersionId",
+      "entity": "DataFileVersion",
+      "canonicalFields": [
+        "dataFileVersionId"
+      ],
+      "collection": "dataFileVersions",
+      "physicalKeys": {
+        "dataFileVersionId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0346"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:DataQualityAssessment:dataQualityAssessmentId",
+      "entity": "DataQualityAssessment",
+      "canonicalFields": [
+        "dataQualityAssessmentId"
+      ],
+      "collection": "dataQualityAssessments",
+      "physicalKeys": {
+        "dataQualityAssessmentId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0270"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:DatasetPartition:datasetPartitionId",
+      "entity": "DatasetPartition",
+      "canonicalFields": [
+        "datasetPartitionId"
+      ],
+      "collection": "datasetPartitions",
+      "physicalKeys": {
+        "datasetPartitionId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0322"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:DatasetRepresentativenessAssessment:representativenessAssessmentId",
+      "entity": "DatasetRepresentativenessAssessment",
+      "canonicalFields": [
+        "representativenessAssessmentId"
+      ],
+      "collection": "datasetRepresentativenessAssessments",
+      "physicalKeys": {
+        "representativenessAssessmentId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0330"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:DatasetSnapshot:datasetSnapshotId",
+      "entity": "DatasetSnapshot",
+      "canonicalFields": [
+        "datasetSnapshotId"
+      ],
+      "collection": "datasetSnapshots",
+      "physicalKeys": {
+        "datasetSnapshotId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0287"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:DeidentificationProcess:deidentificationProcessId",
+      "entity": "DeidentificationProcess",
+      "canonicalFields": [
+        "deidentificationProcessId"
+      ],
+      "collection": "deidentificationProcesses",
+      "physicalKeys": {
+        "deidentificationProcessId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0338"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:DeviceCommunicationProfile:deviceCommunicationProfileId",
+      "entity": "DeviceCommunicationProfile",
+      "canonicalFields": [
+        "deviceCommunicationProfileId"
+      ],
+      "collection": "deviceCommunicationProfiles",
+      "physicalKeys": {
+        "deviceCommunicationProfileId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0611"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:DeviceProfile:deviceProfileId",
+      "entity": "DeviceProfile",
+      "canonicalFields": [
+        "deviceProfileId"
+      ],
+      "collection": "deviceProfiles",
+      "physicalKeys": {
+        "deviceProfileId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0192"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:DeviceRegistration:deviceRegistrationId",
+      "entity": "DeviceRegistration",
+      "canonicalFields": [
+        "deviceRegistrationId"
+      ],
+      "collection": "deviceRegistrations",
+      "physicalKeys": {
+        "deviceRegistrationId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0618"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:DispositionAction:dispositionActionId",
+      "entity": "DispositionAction",
+      "canonicalFields": [
+        "dispositionActionId"
+      ],
+      "collection": "dispositionActions",
+      "physicalKeys": {
+        "dispositionActionId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0451"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:FeatureDefinition:featureDefinitionId",
+      "entity": "FeatureDefinition",
+      "canonicalFields": [
+        "featureDefinitionId"
+      ],
+      "collection": "featureDefinitions",
+      "physicalKeys": {
+        "featureDefinitionId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0304"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:FeatureDefinition:featureName+semanticVersion",
+      "entity": "FeatureDefinition",
+      "canonicalFields": [
+        "featureName",
+        "semanticVersion"
+      ],
+      "collection": "featureDefinitions",
+      "physicalKeys": {
+        "featureName": 1,
+        "semanticVersion": 1
+      },
+      "indexType": "COMPOUND_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0311"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:FHIRProfileRegistry:fhirProfileRegistryId",
+      "entity": "FHIRProfileRegistry",
+      "canonicalFields": [
+        "fhirProfileRegistryId"
+      ],
+      "collection": "fhirProfileRegistries",
+      "physicalKeys": {
+        "fhirProfileRegistryId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0253"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:GovernanceInvariantCatalog:canonicalModelReleaseId+semanticVersion",
+      "entity": "GovernanceInvariantCatalog",
+      "canonicalFields": [
+        "canonicalModelReleaseId",
+        "semanticVersion"
+      ],
+      "collection": "governanceInvariantCatalogs",
+      "physicalKeys": {
+        "canonicalModelReleaseId": 1,
+        "semanticVersion": 1
+      },
+      "indexType": "COMPOUND_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0021"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:GovernanceInvariantCatalog:catalogId",
+      "entity": "GovernanceInvariantCatalog",
+      "canonicalFields": [
+        "catalogId"
+      ],
+      "collection": "governanceInvariantCatalogs",
+      "physicalKeys": {
+        "catalogId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0020"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:GraphProjectionCheckpoint:graphProjectionCheckpointId",
+      "entity": "GraphProjectionCheckpoint",
+      "canonicalFields": [
+        "graphProjectionCheckpointId"
+      ],
+      "collection": "graphProjectionCheckpoints",
+      "physicalKeys": {
+        "graphProjectionCheckpointId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0604"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:IdentificationPolicy:configurationReleaseId+semanticVersion",
+      "entity": "IdentificationPolicy",
+      "canonicalFields": [
+        "configurationReleaseId",
+        "semanticVersion"
+      ],
+      "collection": "identificationPolicies",
+      "physicalKeys": {
+        "configurationReleaseId": 1,
+        "semanticVersion": 1
+      },
+      "indexType": "COMPOUND_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0201"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:IdentificationPolicy:identificationPolicyId",
+      "entity": "IdentificationPolicy",
+      "canonicalFields": [
+        "identificationPolicyId"
+      ],
+      "collection": "identificationPolicies",
+      "physicalKeys": {
+        "identificationPolicyId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0200"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:IdentifierNamespaceRegistry:identifierNamespaceRegistryId",
+      "entity": "IdentifierNamespaceRegistry",
+      "canonicalFields": [
+        "identifierNamespaceRegistryId"
+      ],
+      "collection": "identifierNamespaceRegistries",
+      "physicalKeys": {
+        "identifierNamespaceRegistryId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0691"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:InteroperabilityMappingRelease:interoperabilityMappingReleaseId",
+      "entity": "InteroperabilityMappingRelease",
+      "canonicalFields": [
+        "interoperabilityMappingReleaseId"
+      ],
+      "collection": "interoperabilityMappingReleases",
+      "physicalKeys": {
+        "interoperabilityMappingReleaseId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0244"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:InteroperabilityMappingRelease:standard+profile+mappingVersion",
+      "entity": "InteroperabilityMappingRelease",
+      "canonicalFields": [
+        "standard",
+        "profile",
+        "mappingVersion"
+      ],
+      "collection": "interoperabilityMappingReleases",
+      "physicalKeys": {
+        "standard": 1,
+        "profile": 1,
+        "mappingVersion": 1
+      },
+      "indexType": "COMPOUND_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0247"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:InvariantViolation:invariantViolationId",
+      "entity": "InvariantViolation",
+      "canonicalFields": [
+        "invariantViolationId"
+      ],
+      "collection": "invariantViolations",
+      "physicalKeys": {
+        "invariantViolationId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0060"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:LabelDefinition:labelDefinitionId",
+      "entity": "LabelDefinition",
+      "canonicalFields": [
+        "labelDefinitionId"
+      ],
+      "collection": "labelDefinitions",
+      "physicalKeys": {
+        "labelDefinitionId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0296"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:LabelIdentifier:labelIdentifierId",
+      "entity": "LabelIdentifier",
+      "canonicalFields": [
+        "labelIdentifierId"
+      ],
+      "collection": "labelIdentifiers",
+      "physicalKeys": {
+        "labelIdentifierId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0168"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:LabelPrintEvent:labelPrintEventId",
+      "entity": "LabelPrintEvent",
+      "canonicalFields": [
+        "labelPrintEventId"
+      ],
+      "collection": "labelPrintEvents",
+      "physicalKeys": {
+        "labelPrintEventId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0208"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:LabelTemplate:labelTemplateId",
+      "entity": "LabelTemplate",
+      "canonicalFields": [
+        "labelTemplateId"
+      ],
+      "collection": "labelTemplates",
+      "physicalKeys": {
+        "labelTemplateId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0180"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:MissingDataReason:missingDataReasonId",
+      "entity": "MissingDataReason",
+      "canonicalFields": [
+        "missingDataReasonId"
+      ],
+      "collection": "missingDataReasons",
+      "physicalKeys": {
+        "missingDataReasonId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0280"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:ModelArtifact:modelArtifactId",
+      "entity": "ModelArtifact",
+      "canonicalFields": [
+        "modelArtifactId"
+      ],
+      "collection": "modelArtifacts",
+      "physicalKeys": {
+        "modelArtifactId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0377"
+      ],
+      "applyNow": false,
+      "requiredForReadiness": false,
+      "deferredReason": "conditional future project",
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:ModelArtifact:semanticVersion",
+      "entity": "ModelArtifact",
+      "canonicalFields": [
+        "semanticVersion"
+      ],
+      "collection": "modelArtifacts",
+      "physicalKeys": {
+        "semanticVersion": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0379"
+      ],
+      "applyNow": false,
+      "requiredForReadiness": false,
+      "deferredReason": "conditional future project",
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:ModelCard:modelCardId",
+      "entity": "ModelCard",
+      "canonicalFields": [
+        "modelCardId"
+      ],
+      "collection": "modelCards",
+      "physicalKeys": {
+        "modelCardId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0385"
+      ],
+      "applyNow": false,
+      "requiredForReadiness": false,
+      "deferredReason": "conditional future project",
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:ModelEvaluationRun:modelEvaluationRunId",
+      "entity": "ModelEvaluationRun",
+      "canonicalFields": [
+        "modelEvaluationRunId"
+      ],
+      "collection": "modelEvaluationRuns",
+      "physicalKeys": {
+        "modelEvaluationRunId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0394"
+      ],
+      "applyNow": false,
+      "requiredForReadiness": false,
+      "deferredReason": "conditional future project",
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:ModelMonitoringEvent:modelMonitoringEventId",
+      "entity": "ModelMonitoringEvent",
+      "canonicalFields": [
+        "modelMonitoringEventId"
+      ],
+      "collection": "modelMonitoringEvents",
+      "physicalKeys": {
+        "modelMonitoringEventId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0410"
+      ],
+      "applyNow": false,
+      "requiredForReadiness": false,
+      "deferredReason": "conditional future project",
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:OperationalStateDecision:operationalStateDecisionId",
+      "entity": "OperationalStateDecision",
+      "canonicalFields": [
+        "operationalStateDecisionId"
+      ],
+      "collection": "operationalStateDecisions",
+      "physicalKeys": {
+        "operationalStateDecisionId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0159"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:PhysicalIdentificationValidationProtocol:physicalIdentificationValidationProtocolId",
+      "entity": "PhysicalIdentificationValidationProtocol",
+      "canonicalFields": [
+        "physicalIdentificationValidationProtocolId"
+      ],
+      "collection": "physicalIdentificationValidationProtocols",
+      "physicalKeys": {
+        "physicalIdentificationValidationProtocolId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0700"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:RackLocationAssignment:rackLocationAssignmentId",
+      "entity": "RackLocationAssignment",
+      "canonicalFields": [
+        "rackLocationAssignmentId"
+      ],
+      "collection": "rackLocationAssignments",
+      "physicalKeys": {
+        "rackLocationAssignmentId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0684"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:RCSGovernanceEvidenceSnapshot:governanceEvidenceSnapshotId",
+      "entity": "RCSGovernanceEvidenceSnapshot",
+      "canonicalFields": [
+        "governanceEvidenceSnapshotId"
+      ],
+      "collection": "rcsGovernanceEvidenceSnapshots",
+      "physicalKeys": {
+        "governanceEvidenceSnapshotId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0524"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:RCSInputSnapshot:rcsInputSnapshotId",
+      "entity": "RCSInputSnapshot",
+      "canonicalFields": [
+        "rcsInputSnapshotId"
+      ],
+      "collection": "rcsInputSnapshots",
+      "physicalKeys": {
+        "rcsInputSnapshotId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0497"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:RCSPreanalyticalAxisInput:axisInputId",
+      "entity": "RCSPreanalyticalAxisInput",
+      "canonicalFields": [
+        "axisInputId"
+      ],
+      "collection": "rcsPreanalyticalAxisInputs",
+      "physicalKeys": {
+        "axisInputId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0513"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:RCSRulePackage:rcsRulePackageId",
+      "entity": "RCSRulePackage",
+      "canonicalFields": [
+        "rcsRulePackageId"
+      ],
+      "collection": "rcsRulePackages",
+      "physicalKeys": {
+        "rcsRulePackageId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0354"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:RCSRulePackage:sprecMappingReleaseId+semanticVersion",
+      "entity": "RCSRulePackage",
+      "canonicalFields": [
+        "sprecMappingReleaseId",
+        "semanticVersion"
+      ],
+      "collection": "rcsRulePackages",
+      "physicalKeys": {
+        "sprecMappingReleaseId": 1,
+        "semanticVersion": 1
+      },
+      "indexType": "COMPOUND_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0355"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:RCSValidationStudy:rcsValidationStudyId",
+      "entity": "RCSValidationStudy",
+      "canonicalFields": [
+        "rcsValidationStudyId"
+      ],
+      "collection": "rcsValidationStudies",
+      "physicalKeys": {
+        "rcsValidationStudyId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0361"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:ReadinessReport:readinessReportId",
+      "entity": "ReadinessReport",
+      "canonicalFields": [
+        "readinessReportId"
+      ],
+      "collection": "readinessReports",
+      "physicalKeys": {
+        "readinessReportId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0418"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:ReferenceCoverageManifest:referenceCoverageManifestId",
+      "entity": "ReferenceCoverageManifest",
+      "canonicalFields": [
+        "referenceCoverageManifestId"
+      ],
+      "collection": "referenceCoverageManifests",
+      "physicalKeys": {
+        "referenceCoverageManifestId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0261"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:ScanEvent:scanEventId",
+      "entity": "ScanEvent",
+      "canonicalFields": [
+        "scanEventId"
+      ],
+      "collection": "scanEvents",
+      "physicalKeys": {
+        "scanEventId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0217"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:SpecimenContainerAssignment:specimenContainerAssignmentId",
+      "entity": "SpecimenContainerAssignment",
+      "canonicalFields": [
+        "specimenContainerAssignmentId"
+      ],
+      "collection": "specimenContainerAssignments",
+      "physicalKeys": {
+        "specimenContainerAssignmentId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0677"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:SPRECMappingRelease:sprecMappingReleaseId",
+      "entity": "SPRECMappingRelease",
+      "canonicalFields": [
+        "sprecMappingReleaseId"
+      ],
+      "collection": "sprecMappingReleases",
+      "physicalKeys": {
+        "sprecMappingReleaseId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0236"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:SPRECMappingRelease:sprecVersion+mappingVersion",
+      "entity": "SPRECMappingRelease",
+      "canonicalFields": [
+        "sprecVersion",
+        "mappingVersion"
+      ],
+      "collection": "sprecMappingReleases",
+      "physicalKeys": {
+        "sprecVersion": 1,
+        "mappingVersion": 1
+      },
+      "indexType": "COMPOUND_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0238"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:StoragePosition:storagePositionId",
+      "entity": "StoragePosition",
+      "canonicalFields": [
+        "storagePositionId"
+      ],
+      "collection": "storagePositions",
+      "physicalKeys": {
+        "storagePositionId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0664"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:StoragePosition:storageRackId+positionCode",
+      "entity": "StoragePosition",
+      "canonicalFields": [
+        "storageRackId",
+        "positionCode"
+      ],
+      "collection": "storagePositions",
+      "physicalKeys": {
+        "storageRackId": 1,
+        "positionCode": 1
+      },
+      "indexType": "COMPOUND_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0668"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:StorageRack:storageRackId",
+      "entity": "StorageRack",
+      "canonicalFields": [
+        "storageRackId"
+      ],
+      "collection": "storageRacks",
+      "physicalKeys": {
+        "storageRackId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0655"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:TelemetryDatastream:telemetryDatastreamId",
+      "entity": "TelemetryDatastream",
+      "canonicalFields": [
+        "telemetryDatastreamId"
+      ],
+      "collection": "telemetryDatastreams",
+      "physicalKeys": {
+        "telemetryDatastreamId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0562"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:TelemetryExposureSummary:telemetryExposureSummaryId",
+      "entity": "TelemetryExposureSummary",
+      "canonicalFields": [
+        "telemetryExposureSummaryId"
+      ],
+      "collection": "telemetryExposureSummaries",
+      "physicalKeys": {
+        "telemetryExposureSummaryId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0572"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:TelemetryIngestionEvent:telemetryIngestionEventId",
+      "entity": "TelemetryIngestionEvent",
+      "canonicalFields": [
+        "telemetryIngestionEventId"
+      ],
+      "collection": "telemetryIngestionEvents",
+      "physicalKeys": {
+        "telemetryIngestionEventId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0589"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:TelemetryValidationIssue:telemetryValidationIssueId",
+      "entity": "TelemetryValidationIssue",
+      "canonicalFields": [
+        "telemetryValidationIssueId"
+      ],
+      "collection": "telemetryValidationIssues",
+      "physicalKeys": {
+        "telemetryValidationIssueId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0597"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:UnifiedIdentifierResolverContract:resolverContractId",
+      "entity": "UnifiedIdentifierResolverContract",
+      "canonicalFields": [
+        "resolverContractId"
+      ],
+      "collection": "unifiedIdentifierResolverContracts",
+      "physicalKeys": {
+        "resolverContractId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0230"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:UnifiedIdentifierResolverContract:semanticVersion",
+      "entity": "UnifiedIdentifierResolverContract",
+      "canonicalFields": [
+        "semanticVersion"
+      ],
+      "collection": "unifiedIdentifierResolverContracts",
+      "physicalKeys": {
+        "semanticVersion": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "V2E-0231"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    },
+    {
+      "constraintId": "canonical-index:UserAccount:userAccountId",
+      "entity": "UserAccount",
+      "canonicalFields": [
+        "userAccountId"
+      ],
+      "collection": "userAccounts",
+      "physicalKeys": {
+        "userAccountId": 1
+      },
+      "indexType": "SINGLE_UNIQUE",
+      "options": {
+        "unique": true
+      },
+      "canonicalEvidence": [
+        "P1X-0182",
+        "STAGE-2E-USERACCOUNT-IDENTITY-DECISION"
+      ],
+      "applyNow": true,
+      "requiredForReadiness": true,
+      "currentState": "TO_DISCOVER"
+    }
+  ],
+  "nonIndexInvariants": [
+    {
+      "entity": "GovernanceInvariant",
+      "field": "invariantId",
+      "evidence": [
+        "V2E-0026"
+      ],
+      "reason": "Embedded in versioned GovernanceInvariantCatalog; unique multikey index does not enforce intra-document uniqueness."
+    }
+  ],
+  "excluded": [
+    "LabelTemplate.semanticVersion",
+    "LabelDefinition.semanticVersion",
+    "RCSGovernanceEvidenceSnapshot.terminologyValid",
+    "TelemetryExposureSummary.storageAssignmentId"
+  ]
+}

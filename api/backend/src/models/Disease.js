@@ -31,7 +31,7 @@ const DiseaseSchema = new mongoose.Schema(
     active: { type: Boolean, default: true },
   },
   {
-    collection: 'disease_dictionary',
+    collection: 'diseaseDictionary',
     timestamps: true,
   }
 );

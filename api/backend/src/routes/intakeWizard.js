@@ -694,7 +694,7 @@ async function handleIntakeWizard(req, res) {
 
     const createdSample = await sampleService.createSample(db, sampleToPersist, {
       auditInfo: {
-        userId: req.user?.id || req.user?._id || null,
+        userId: req.user?.userID || null,
         userName: req.user?.name || req.user?.email || 'INTAKE_WIZARD',
         userRole: req.user?.role || null,
         ipAddress: req.ip || null,
@@ -704,7 +704,7 @@ async function handleIntakeWizard(req, res) {
     });
 
     const currentStoragePlacement = createdSample.currentStoragePlacement || null;
-    const samplesCollection = await getCollection(db, 'samples');
+    const samplesCollection = await getCollection(db, 'Specimen');
     const allocatedSample = await samplesCollection.findOne({ _id: createdSample._id }) || createdSample;
 
     try {
@@ -722,7 +722,7 @@ async function handleIntakeWizard(req, res) {
       registeredAt: sampleToPersist.registeredAt,
     });
 
-    const patientsCollection = await getCollection(db, 'patients');
+    const patientsCollection = await getCollection(db, 'Participant');
     await patientsCollection.updateOne(
       { _id: matchOutcome.patient._id },
       { $set: { lastClinicalData: sampleToPersist.clinicalData || {}, updatedAt: new Date() }, $addToSet: { linkedSampleIds: String(createdSample._id) } }
@@ -794,7 +794,7 @@ router.get('/patient-match', async (req, res) => {
 
     let patientStatus = 'ACTIVE';
     if (identity?.participantId) {
-      const patientsCollection = await getCollection(db, 'patients');
+      const patientsCollection = await getCollection(db, 'Participant');
       const patientRecord = await patientsCollection.findOne({ participantId: identity.participantId }, { projection: { status: 1 } });
       patientStatus = normalizeString(patientRecord?.status) || 'ACTIVE';
     }

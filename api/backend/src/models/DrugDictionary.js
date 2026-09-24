@@ -16,7 +16,7 @@ const DrugDictionarySchema = new Schema(
     active: { type: Boolean, default: true },
   },
   {
-    collection: 'medication_dictionary',
+    collection: 'medicationDictionary',
     timestamps: true,
   }
 );

@@ -40,7 +40,7 @@ function parseBirthDate(value) {
 
 class participantIdentityService {
   async matchOrUpsertParticipant(db, payload = {}) {
-    const participants = await getCollection(db, 'patients');
+    const participants = await getCollection(db, 'Participant');
     const identities = await getCollection(db, 'participantIdentities');
     const participantId = normalizeString(payload.participantId);
     const patientName = normalizeString(payload.patientName);

@@ -131,7 +131,7 @@ class ComplianceReportService {
    */
   async _getConsentMetrics(dateFilter) {
     try {
-      const consentsCollection = this.db.collection('patient_consents');
+      const consentsCollection = this.db.collection('consents');
 
       const total = await consentsCollection.countDocuments(dateFilter);
 

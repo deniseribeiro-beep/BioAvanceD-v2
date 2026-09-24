@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 const sessionService = require('../../src/services/session.service');
+const { BIOAVANCED_SYSTEM_ACTOR_ID } = require('../../src/foundation/systemActorSeedV2');
+const ACTOR_ID = '550e8400-e29b-41d4-a716-446655440001';
 
 function makeCollection(overrides = {}) {
   return {
@@ -13,7 +15,9 @@ function makeCollection(overrides = {}) {
 }
 
 function makeDb(collection) {
-  return { collection: vi.fn().mockReturnValue(collection) };
+  return { collection: vi.fn((name) => name === 'actors'
+    ? { findOne: vi.fn(async ({ actorId }) => [ACTOR_ID, BIOAVANCED_SYSTEM_ACTOR_ID].includes(actorId) ? { actorId } : null) }
+    : collection) };
 }
 
 describe('SessionService.getTokenHash', () => {
@@ -157,7 +161,7 @@ describe('#914: session.timeoutMinutes drives inactiveTimeout', () => {
     const collection = makeCollection();
     const db = dbWith({ _id: 'main', session: { timeoutMinutes: 45 } }, collection);
 
-    const session = await sessionService.createSession(db, 'user-1', 'a', 'r', null);
+    const session = await sessionService.createSession(db, '550e8400-e29b-41d4-a716-446655440002', 'a', 'r', null);
 
     expect(session.inactiveTimeout).toBe(45 * 60 * 1000);
   });
@@ -170,7 +174,7 @@ describe('#914: session.timeoutMinutes drives inactiveTimeout', () => {
         : collection)),
     };
 
-    const session = await sessionService.createSession(db, 'user-1', 'a', 'r', null);
+    const session = await sessionService.createSession(db, '550e8400-e29b-41d4-a716-446655440002', 'a', 'r', null);
 
     expect(session.inactiveTimeout).toBe(30 * 60 * 1000);
   });
@@ -200,9 +204,9 @@ describe('SessionService.createSession', () => {
     const collection = makeCollection();
     const db = makeDb(collection);
 
-    const session = await sessionService.createSession(db, 'user-1', 'access-tok', 'refresh-tok', null);
+    const session = await sessionService.createSession(db, '550e8400-e29b-41d4-a716-446655440002', 'access-tok', 'refresh-tok', null);
 
-    expect(session.userID).toBe('user-1');
+    expect(session.userAccountId).toBe('550e8400-e29b-41d4-a716-446655440002');
     expect(session.tokenHash).toBe(sessionService.getTokenHash('access-tok'));
     expect(session.refreshTokenHash).toBe(sessionService.getTokenHash('refresh-tok'));
     expect(sessionService.sessions.get(session.sessionID)).toBe(session);
@@ -212,7 +216,7 @@ describe('SessionService.createSession', () => {
   it('propagates and logs errors from db.collection', async () => {
     const db = { collection: vi.fn(() => { throw new Error('db down'); }) };
 
-    await expect(sessionService.createSession(db, 'user-1', 'a', 'r')).rejects.toThrow('db down');
+    await expect(sessionService.createSession(db, '550e8400-e29b-41d4-a716-446655440002', 'a', 'r')).rejects.toThrow('db down');
   });
 });
 
@@ -303,7 +307,7 @@ describe('SessionService.updateActivity', () => {
           isActive: false,
           isRevoked: true,
           revocationReason: 'expiration',
-          revokedBy: 'system'
+          revokedBy: BIOAVANCED_SYSTEM_ACTOR_ID
         })
       })
     );
@@ -382,7 +386,7 @@ describe('SessionService.verifySession', () => {
           isActive: false,
           isRevoked: true,
           revocationReason: 'expiration',
-          revokedBy: 'system'
+          revokedBy: BIOAVANCED_SYSTEM_ACTOR_ID
         })
       })
     );
@@ -424,7 +428,7 @@ describe('SessionService.invalidateSession', () => {
     const collection = makeCollection();
     const db = makeDb(collection);
 
-    await sessionService.invalidateSession(db, 'sess-1');
+    await sessionService.invalidateSession(db, 'sess-1', 'user_request', ACTOR_ID);
 
     expect(sessionService.sessions.has('sess-1')).toBe(false);
     expect(collection.updateOne).toHaveBeenCalledWith(
@@ -438,38 +442,26 @@ describe('SessionService.invalidateSession', () => {
     const collection = makeCollection({ updateOne: vi.fn().mockRejectedValue(new Error('fail')) });
     const db = makeDb(collection);
 
-    await expect(sessionService.invalidateSession(db, 'sess-1')).resolves.toBeUndefined();
+    await expect(sessionService.invalidateSession(db, 'sess-1', 'user_request', ACTOR_ID)).resolves.toBeUndefined();
   });
 
-  it('#974: writes the passed revocationReason and coerces a non-string revokedBy to String', async () => {
+  it('rejects a non-canonical actor reference before changing a session', async () => {
     sessionService.sessions.set('sess-1', { sessionID: 'sess-1' });
     const collection = makeCollection();
     const db = makeDb(collection);
     const objectIdLike = { toString: () => 'admin-1' };
 
-    await sessionService.invalidateSession(db, 'sess-1', 'admin_action', objectIdLike);
-
-    expect(collection.updateOne).toHaveBeenCalledWith(
-      { sessionID: 'sess-1' },
-      expect.objectContaining({
-        $set: expect.objectContaining({ revocationReason: 'admin_action', revokedBy: 'admin-1' })
-      })
-    );
+    await expect(sessionService.invalidateSession(db, 'sess-1', 'admin_action', objectIdLike)).rejects.toThrow(/actorId UUID/);
+    expect(collection.updateOne).not.toHaveBeenCalled();
   });
 
-  it('#974: default-argument call still writes revocationReason and revokedBy as null', async () => {
+  it('requires an Actor for an explicit revocation', async () => {
     sessionService.sessions.set('sess-1', { sessionID: 'sess-1' });
     const collection = makeCollection();
     const db = makeDb(collection);
 
-    await sessionService.invalidateSession(db, 'sess-1');
-
-    expect(collection.updateOne).toHaveBeenCalledWith(
-      { sessionID: 'sess-1' },
-      expect.objectContaining({
-        $set: expect.objectContaining({ revocationReason: null, revokedBy: null })
-      })
-    );
+    await expect(sessionService.invalidateSession(db, 'sess-1')).rejects.toThrow(/actorId UUID/);
+    expect(collection.updateOne).not.toHaveBeenCalled();
   });
 });
 
@@ -479,17 +471,17 @@ describe('SessionService.invalidateUserSessions', () => {
   });
 
   it('removes only the matching user sessions from cache and updates db', async () => {
-    sessionService.sessions.set('s1', { sessionID: 's1', userID: 'u1' });
-    sessionService.sessions.set('s2', { sessionID: 's2', userID: 'u2' });
+    sessionService.sessions.set('s1', { sessionID: 's1', userAccountId: 'u1' });
+    sessionService.sessions.set('s2', { sessionID: 's2', userAccountId: 'u2' });
     const collection = makeCollection();
     const db = makeDb(collection);
 
-    await sessionService.invalidateUserSessions(db, 'u1');
+    await sessionService.invalidateUserSessions(db, 'u1', 'user_request', ACTOR_ID);
 
     expect(sessionService.sessions.has('s1')).toBe(false);
     expect(sessionService.sessions.has('s2')).toBe(true);
     expect(collection.updateMany).toHaveBeenCalledWith(
-      { userID: 'u1', isActive: true },
+      { userAccountId: 'u1', isActive: true },
       expect.objectContaining({ $set: expect.objectContaining({ isActive: false }) })
     );
   });
@@ -497,21 +489,21 @@ describe('SessionService.invalidateUserSessions', () => {
   // #963: this was the ONLY one of the five session-write helpers that did
   // not coerce its argument -- listUserSessions:340, revokeSessionById:366
   // and revokeAllOtherSessions:391 all filter on String(userID). The stored
-  // field is always a string (Session.js:8 does String(data.userID), fed
+  // field is always a string (Session.js:8 does String(data.userAccountId), fed
   // from auth.service.js's user._id.toString()), so being handed an ObjectId
   // matched nothing, threw nothing, and let the caller return 200 -- a
   // silent no-op, and exactly the shape a caller passing targetUser._id
   // rather than targetUser._id.toString() would produce.
   it('#963: coerces a non-string userID, so an ObjectId-like id is not a silent no-op', async () => {
     const objectIdLike = { toString: () => 'u1' };
-    sessionService.sessions.set('s1', { sessionID: 's1', userID: 'u1' });
+    sessionService.sessions.set('s1', { sessionID: 's1', userAccountId: 'u1' });
     const collection = makeCollection();
     const db = makeDb(collection);
 
-    await sessionService.invalidateUserSessions(db, objectIdLike);
+    await sessionService.invalidateUserSessions(db, objectIdLike, 'user_request', ACTOR_ID);
 
     expect(collection.updateMany).toHaveBeenCalledWith(
-      { userID: 'u1', isActive: true },
+      { userAccountId: 'u1', isActive: true },
       expect.objectContaining({ $set: expect.objectContaining({ isActive: false }) })
     );
     // The in-memory cache used a strict === against the raw argument, so it
@@ -519,19 +511,13 @@ describe('SessionService.invalidateUserSessions', () => {
     expect(sessionService.sessions.has('s1')).toBe(false);
   });
 
-  it('#974: writes the passed revocationReason and coerces a non-string revokedBy to String', async () => {
+  it('rejects non-canonical revokedBy before updating user sessions', async () => {
     const collection = makeCollection();
     const db = makeDb(collection);
     const objectIdLike = { toString: () => 'admin-1' };
 
-    await sessionService.invalidateUserSessions(db, 'u1', 'admin_action', objectIdLike);
-
-    expect(collection.updateMany).toHaveBeenCalledWith(
-      { userID: 'u1', isActive: true },
-      expect.objectContaining({
-        $set: expect.objectContaining({ revocationReason: 'admin_action', revokedBy: 'admin-1' })
-      })
-    );
+    await expect(sessionService.invalidateUserSessions(db, 'u1', 'admin_action', objectIdLike)).rejects.toThrow(/actorId UUID/);
+    expect(collection.updateMany).not.toHaveBeenCalled();
   });
 });
 
@@ -572,7 +558,7 @@ describe('SessionService.cleanupExpiredSessions', () => {
     expect(collection.updateMany).toHaveBeenCalled();
   });
 
-  it('#974: writes revocationReason "expiration" and revokedBy "system"', async () => {
+  it('writes the service Actor for automatic expiration', async () => {
     const collection = makeCollection();
     const db = makeDb(collection);
 
@@ -581,7 +567,7 @@ describe('SessionService.cleanupExpiredSessions', () => {
     expect(collection.updateMany).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
-        $set: expect.objectContaining({ revocationReason: 'expiration', revokedBy: 'system' })
+        $set: expect.objectContaining({ revocationReason: 'expiration', revokedBy: BIOAVANCED_SYSTEM_ACTOR_ID })
       })
     );
   });
@@ -617,7 +603,7 @@ describe('SessionService.listUserSessions', () => {
 
     const result = await sessionService.listUserSessions(db, 'u1', 'current-tok');
 
-    expect(collection.find).toHaveBeenCalledWith({ userID: 'u1', isActive: true, isRevoked: { $ne: true } });
+    expect(collection.find).toHaveBeenCalledWith({ userAccountId: 'u1', isActive: true, isRevoked: { $ne: true } });
     expect(result).toHaveLength(2);
     expect(result[0].isCurrent).toBe(true);
     expect(result[0].browser).toBe('Chrome');
@@ -650,7 +636,7 @@ describe('SessionService.revokeSessionById', () => {
     const collection = makeCollection({ updateOne: vi.fn().mockResolvedValue({ matchedCount: 0 }) });
     const db = makeDb(collection);
 
-    const result = await sessionService.revokeSessionById(db, 'u1', 'sess-missing');
+    const result = await sessionService.revokeSessionById(db, 'u1', 'sess-missing', 'user_request', ACTOR_ID);
     expect(result).toBe(false);
   });
 
@@ -659,26 +645,22 @@ describe('SessionService.revokeSessionById', () => {
     const collection = makeCollection({ updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) });
     const db = makeDb(collection);
 
-    const result = await sessionService.revokeSessionById(db, 'u1', 'sess-1');
+    const result = await sessionService.revokeSessionById(db, 'u1', 'sess-1', 'user_request', ACTOR_ID);
 
     expect(result).toBe(true);
     expect(sessionService.sessions.has('sess-1')).toBe(false);
     expect(collection.updateOne).toHaveBeenCalledWith(
-      { userID: 'u1', sessionID: 'sess-1', isActive: true },
+      { userAccountId: 'u1', sessionID: 'sess-1', isActive: true },
       expect.objectContaining({ $set: expect.objectContaining({ isActive: false, isRevoked: true }) })
     );
   });
 
-  it('#974: default-argument call still writes revocationReason and revokedBy as null', async () => {
+  it('requires an Actor for revokeSessionById', async () => {
     const collection = makeCollection({ updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) });
     const db = makeDb(collection);
 
-    await sessionService.revokeSessionById(db, 'u1', 'sess-1');
-
-    expect(collection.updateOne).toHaveBeenCalledWith(
-      { userID: 'u1', sessionID: 'sess-1', isActive: true },
-      expect.objectContaining({ $set: expect.objectContaining({ revocationReason: null, revokedBy: null }) })
-    );
+    await expect(sessionService.revokeSessionById(db, 'u1', 'sess-1')).rejects.toThrow(/actorId UUID/);
+    expect(collection.updateOne).not.toHaveBeenCalled();
   });
 });
 
@@ -689,13 +671,13 @@ describe('SessionService.revokeAllOtherSessions', () => {
 
   it('updates db and evicts only other-session cache entries for the user', async () => {
     const currentHash = sessionService.getTokenHash('current-tok');
-    sessionService.sessions.set('s-current', { sessionID: 's-current', userID: 'u1', tokenHash: currentHash });
-    sessionService.sessions.set('s-other', { sessionID: 's-other', userID: 'u1', tokenHash: 'different-hash' });
-    sessionService.sessions.set('s-otheruser', { sessionID: 's-otheruser', userID: 'u2', tokenHash: 'different-hash' });
+    sessionService.sessions.set('s-current', { sessionID: 's-current', userAccountId: 'u1', tokenHash: currentHash });
+    sessionService.sessions.set('s-other', { sessionID: 's-other', userAccountId: 'u1', tokenHash: 'different-hash' });
+    sessionService.sessions.set('s-otheruser', { sessionID: 's-otheruser', userAccountId: 'u2', tokenHash: 'different-hash' });
     const collection = makeCollection();
     const db = makeDb(collection);
 
-    await sessionService.revokeAllOtherSessions(db, 'u1', 'current-tok');
+    await sessionService.revokeAllOtherSessions(db, 'u1', 'current-tok', 'user_request', ACTOR_ID);
 
     expect(collection.updateMany).toHaveBeenCalled();
     expect(sessionService.sessions.has('s-current')).toBe(true);
@@ -707,12 +689,12 @@ describe('SessionService.revokeAllOtherSessions', () => {
     const collection = makeCollection();
     const db = makeDb(collection);
 
-    await sessionService.revokeAllOtherSessions(db, 'u1', 'current-tok');
+    await sessionService.revokeAllOtherSessions(db, 'u1', 'current-tok', 'user_request', ACTOR_ID);
 
     expect(collection.updateMany).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
-        $set: expect.objectContaining({ revocationReason: 'user_request', revokedBy: 'u1' })
+        $set: expect.objectContaining({ revocationReason: 'user_request', revokedBy: ACTOR_ID })
       })
     );
   });
@@ -742,7 +724,7 @@ describe('SessionService.rotateSessionTokens', () => {
   });
 
   it('updates db and merges rotated fields into the cached session', async () => {
-    sessionService.sessions.set('sess-1', { sessionID: 'sess-1', userID: 'u1', stale: true });
+    sessionService.sessions.set('sess-1', { sessionID: 'sess-1', userAccountId: 'u1', stale: true });
     const collection = makeCollection();
     const db = makeDb(collection);
 
@@ -760,7 +742,7 @@ describe('SessionService.rotateSessionTokens', () => {
       })
     );
     const cached = sessionService.sessions.get('sess-1');
-    expect(cached.userID).toBe('u1');
+    expect(cached.userAccountId).toBe('u1');
     expect(cached.stale).toBe(true);
     expect(cached.tokenHash).toBe(sessionService.getTokenHash('new-access'));
   });

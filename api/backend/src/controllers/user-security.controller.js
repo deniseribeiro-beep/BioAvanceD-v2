@@ -198,7 +198,7 @@ class UserSecurityController {
       // the current access token stays in the controller where it already is.
       const currentToken = (req.headers && req.headers.authorization || '').replace('Bearer ', '');
       await sessionService.revokeAllOtherSessions(
-        db, req.user.userID, currentToken, 'password_change', req.user.userID
+        db, req.user.userID, currentToken, 'password_change', req.user.actorId
       );
 
       // Registra auditoria
@@ -291,7 +291,7 @@ class UserSecurityController {
 
       const { id } = req.params;
 
-      await userSecurityService.revokeSession(db, req.user.userID, id);
+      await userSecurityService.revokeSession(db, req.user.userID, id, req.user.actorId);
 
       // Registra auditoria
       auditLogger.init(db);
@@ -335,7 +335,7 @@ class UserSecurityController {
       }
 
       const token = req.headers.authorization?.replace('Bearer ', '');
-      await userSecurityService.revokeAllSessions(db, req.user.userID, token);
+      await userSecurityService.revokeAllSessions(db, req.user.userID, token, req.user.actorId);
 
       // Registra auditoria
       auditLogger.init(db);
@@ -427,4 +427,3 @@ class UserSecurityController {
 }
 
 module.exports = new UserSecurityController();
-

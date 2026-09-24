@@ -1,16 +1,16 @@
 const importLGPDService = require('../../services/import-lgpd.service');
 const logger = require('../../utils/logger');
 const fs = require('fs');
-const { ObjectId } = require('mongodb');
+const { isUuid } = require('../../foundation/userAccountIdentityMigrationV2');
 
 async function resolveActor(db, userID) {
-  if (!userID) {
+  if (!isUuid(userID)) {
     return { userId: null, userName: 'IMPORT_WORKER' };
   }
 
   try {
-    const usersCollection = db.collection('users');
-    const user = await usersCollection.findOne({ _id: new ObjectId(userID) });
+    const usersCollection = db.collection('userAccounts');
+    const user = await usersCollection.findOne({ userAccountId: userID });
     return {
       userId: userID,
       userName: user?.name || user?.email || 'IMPORT_WORKER',
@@ -76,4 +76,3 @@ class SampleWorker {
 }
 
 module.exports = new SampleWorker();
-

@@ -42,7 +42,7 @@ function consentBlockAlertWrapper(middleware) {
             securityAlertsService.init(db);
             
             const participantId = req.body?.participantId || req.params?.participantId || 'unknown';
-            const userID = req.user?._id?.toString() || req.user?.id || 'anomino';
+            const userID = req.user?.userID || 'anomino';
             
             // Registra alerta
             securityAlertsService.alertConsentBlocked(

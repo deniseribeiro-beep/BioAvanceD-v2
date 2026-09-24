@@ -1,4 +1,5 @@
 const { ObjectId } = require('mongodb');
+const { isUuid } = require('../foundation/userAccountIdentityMigrationV2');
 
 function toObjectId(value) {
   if (value instanceof ObjectId) return value;
@@ -19,7 +20,8 @@ function createReferenceError(message) {
 /**
  * RF025 AC#1 (#664, dict-02 ELM-0286..0297): Assay's specimen/protocol/
  * operator/laboratory/reagentLot/equipment links are Reference fields
- * (dict-02 types operatorId as Practitioner/uuid, laboratoryId as
+ * (operatorId resolves Actor.actorId internally; Practitioner is only an
+ * interoperability representation, laboratoryId as
  * Organization/uuid) -- AssayModel.validate() only checked they're
  * well-formed strings, never that they resolve to a real record. Mirrors
  * sample.service.js's own studyId/protocolId/collectionId checks
@@ -29,7 +31,7 @@ function createReferenceError(message) {
  * @param {object} payload
  */
 async function validateAssayReferences(db, payload) {
-  const samplesCollection = db.collection('samples');
+  const samplesCollection = db.collection('specimens');
   for (const specimenId of payload.specimenIds || []) {
     const sample = await samplesCollection.findOne({ _id: toObjectId(specimenId) });
     if (!sample) {
@@ -45,7 +47,10 @@ async function validateAssayReferences(db, payload) {
   }
 
   if (payload.operatorId) {
-    const operator = await db.collection('users').findOne({ _id: toObjectId(payload.operatorId) });
+    if (!isUuid(payload.operatorId)) {
+      throw createReferenceError(`operatorId ${payload.operatorId} não é Actor.actorId canônico`);
+    }
+    const operator = await db.collection('actors').findOne({ actorId: String(payload.operatorId) });
     if (!operator) {
       throw createReferenceError(`operatorId ${payload.operatorId} não encontrado`);
     }

@@ -1,6 +1,7 @@
 const logger = require('../utils/logger');
 const auditLogger = require('../utils/auditLogger');
 const sessionService = require('./session.service');
+const { BIOAVANCED_SYSTEM_ACTOR_ID, assertActorReference } = require('../foundation/systemActorSeedV2');
 
 /**
  * Service de Configurações de Segurança
@@ -141,7 +142,7 @@ class SecurityService {
       // appears nowhere in the dictionary, and renamed two of its three members.
       configVersion: 1,
       lastUpdatedAt: new Date(),
-      lastUpdatedBy: null
+      lastUpdatedBy: BIOAVANCED_SYSTEM_ACTOR_ID
     };
   }
 
@@ -155,6 +156,7 @@ class SecurityService {
 
       if (!config) {
         // Se não existe, cria com valores padrão
+        await assertActorReference(db, BIOAVANCED_SYSTEM_ACTOR_ID);
         const defaultConfig = this.getDefaultConfig();
         await configCollection.insertOne({
           _id: 'main',
@@ -186,6 +188,8 @@ class SecurityService {
       
       // Valida configurações
       this.validateConfig(newConfig);
+      const actorId = req?.user ? req.user.actorId : BIOAVANCED_SYSTEM_ACTOR_ID;
+      await assertActorReference(db, actorId);
       
       // Mescla com configuração atual, grupo a grupo (um nível de profundidade),
       // para não apagar flags do grupo que o chamador não enviou (#904)
@@ -218,7 +222,7 @@ class SecurityService {
       // a different reason, which is why it is stated here.
       mergedConfig.configVersion = (currentConfig.configVersion || 1) + 1;
       mergedConfig.lastUpdatedAt = new Date();
-      mergedConfig.lastUpdatedBy = req.user?.userID || 'SYSTEM';
+      mergedConfig.lastUpdatedBy = actorId;
 
       // Atualiza no banco
       await configCollection.updateOne(
@@ -269,7 +273,7 @@ class SecurityService {
           const revoked = await sessionService.revokeAllSessionsForPolicyChange(
             db,
             actingToken,
-            req && req.user && req.user.userID || 'SYSTEM'
+            req?.user?.actorId
           );
           logger.info(`#649: política de sessão restringida, ${revoked} sessão(ões) revogada(s)`);
         } catch (revokeError) {
@@ -539,6 +543,8 @@ class SecurityService {
       
       // Valida permissões
       this.validatePermissions(normalizedPermissions);
+      const actorId = req?.user ? req.user.actorId : BIOAVANCED_SYSTEM_ACTOR_ID;
+      await assertActorReference(db, actorId);
       
       // Atualiza no banco
       await permissionsCollection.updateOne(
@@ -547,7 +553,7 @@ class SecurityService {
           $set: {
             permissions: normalizedPermissions,
             updatedAt: new Date(),
-            lastUpdatedBy: req.user?.userID || 'SYSTEM'
+            lastUpdatedBy: actorId
           }
         },
         { upsert: true }
@@ -647,4 +653,3 @@ class SecurityService {
 }
 
 module.exports = new SecurityService();
-

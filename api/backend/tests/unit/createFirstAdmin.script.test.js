@@ -5,6 +5,7 @@ const { buildMutableRbacCollections } = require('../factories/rbac.factory');
 
 const bcrypt = require('bcryptjs');
 const { createFirstAdmin, requireBootstrapEnv } = require('../../src/scripts/createFirstAdmin');
+const { BIOAVANCED_SYSTEM_ACTOR_ID } = require('../../src/foundation/systemActorSeedV2');
 
 function createMockDb(usersCount = 0) {
   const users = {
@@ -16,6 +17,14 @@ function createMockDb(usersCount = 0) {
   const systemBootstrap = {
     updateOne: vi.fn().mockResolvedValue({ upsertedCount: 1 }),
   };
+  const actorDocs = [];
+  const actors = {
+    updateOne: vi.fn(async (_filter, update) => {
+      if (!actorDocs.some((actor) => actor.actorId === update.$setOnInsert.actorId)) actorDocs.push(update.$setOnInsert);
+    }),
+    insertOne: vi.fn(async (actor) => { actorDocs.push(actor); }),
+    findOne: vi.fn(async ({ actorId }) => actorDocs.find((actor) => actor.actorId === actorId) || null),
+  };
   // #421: createFirstAdmin now seeds the RBAC catalog (idempotent) and
   // grants the admin's UserRoleAssignment atomically with user creation —
   // both need a mutable roles/permissions/userRoleAssignments backing.
@@ -24,11 +33,13 @@ function createMockDb(usersCount = 0) {
   return {
     users,
     systemBootstrap,
+    actors,
     rbacCollections,
     db: {
       collection: vi.fn((name) => {
-        if (name === 'users') return users;
+        if (name === 'userAccounts') return users;
         if (name === 'systemBootstrap') return systemBootstrap;
+        if (name === 'actors') return actors;
         if (rbacCollections[name]) return rbacCollections[name];
         throw new Error(`Unexpected collection ${name}`);
       }),
@@ -57,8 +68,9 @@ function createMockDbWithFailingSeed() {
     ...parts,
     db: {
       collection: vi.fn((name) => {
-        if (name === 'users') return parts.users;
+        if (name === 'userAccounts') return parts.users;
         if (name === 'systemBootstrap') return parts.systemBootstrap;
+        if (name === 'actors') return parts.actors;
         if (name === 'roles') return failing;
         if (parts.rbacCollections[name]) return parts.rbacCollections[name];
         throw new Error(`Unexpected collection ${name}`);
@@ -86,7 +98,7 @@ describe('createFirstAdmin', () => {
   });
 
   it('cria admin com senha hasheada quando users esta vazia', async () => {
-    const { db, users, systemBootstrap } = createMockDb(0);
+    const { db, users, systemBootstrap, actors } = createMockDb(0);
 
     const result = await createFirstAdmin({ db, env: validEnv, logger: { info: vi.fn() } });
 
@@ -94,6 +106,8 @@ describe('createFirstAdmin', () => {
     expect(users.insertOne).toHaveBeenCalledTimes(1);
     const inserted = users.insertOne.mock.calls[0][0];
     expect(inserted.email).toBe('admin.seguro@bioavanced.test');
+    expect(inserted.actorId).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(actors.insertOne).toHaveBeenCalledWith(expect.objectContaining({ actorId: inserted.actorId, actorType: 'user' }));
     expect(inserted.forceReset).toBe(true);
     expect(inserted.password).not.toBe(validEnv.BOOTSTRAP_ADMIN_TEMP_PASSWORD);
     await expect(bcrypt.compare(validEnv.BOOTSTRAP_ADMIN_TEMP_PASSWORD, inserted.password)).resolves.toBe(true);
@@ -140,7 +154,7 @@ describe('createFirstAdmin', () => {
   // #427: accessType/roleName are no longer written to the User document —
   // only used transiently to grant the matching UserRoleAssignment (#421).
   it('nao persiste accessType/roleName no documento do usuario, mas concede a UserRoleAssignment de administrator', async () => {
-    const { db, users, rbacCollections } = createMockDb(0);
+    const { db, users, rbacCollections, actors } = createMockDb(0);
 
     await createFirstAdmin({ db, env: validEnv, logger: { info: vi.fn() } });
 
@@ -151,7 +165,10 @@ describe('createFirstAdmin', () => {
     const assignments = await rbacCollections.userRoleAssignments.find({}).toArray();
     const roles = await rbacCollections.roles.find({}).toArray();
     const adminRole = roles.find((r) => r.roleCode === 'administrator');
-    expect(assignments.some((a) => a.userAccountId === 'admin-user-id' && a.roleId === adminRole.roleId && a.assignmentStatus === 'active')).toBe(true);
+    expect(assignments.some((a) => /^[0-9a-f-]{36}$/i.test(a.userAccountId) && a.roleId === adminRole.roleId && a.assignmentStatus === 'active')).toBe(true);
+    expect(assignments[0].grantedBy).toBe(BIOAVANCED_SYSTEM_ACTOR_ID);
+    expect(actors.updateOne.mock.invocationCallOrder[0]).toBeLessThan(users.insertOne.mock.invocationCallOrder[0]);
+    expect(actors.insertOne.mock.invocationCallOrder[0]).toBeLessThan(users.insertOne.mock.invocationCallOrder[0]);
   });
 
   it('falha se faltar variavel obrigatoria', async () => {

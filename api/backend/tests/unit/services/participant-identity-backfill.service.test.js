@@ -40,12 +40,15 @@ function createFakeCollection(name) {
 }
 
 function createFakeDb(seed = {}) {
+  const participantCollection = createFakeCollection('participants');
   const collections = {
-    patients: createFakeCollection('patients'),
+    participants: participantCollection,
     participantIdentities: createFakeCollection('participantIdentities')
   };
   for (const [key, docs] of Object.entries(seed)) {
-    for (const doc of docs) collections[key].docs.push(doc);
+    const target = collections[key] || (key === 'patients' ? participantCollection : null);
+    if (!target) throw new Error(`unexpected seed collection: ${key}`);
+    for (const doc of docs) target.docs.push(doc);
   }
   return {
     collections,

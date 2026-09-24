@@ -1,0 +1,106 @@
+import { describe, expect, it, vi } from 'vitest';
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
+const migration = require('../../../src/foundation/userAccountIdentityMigrationV2');
+
+const oldId = '507f1f77bcf86cd799439011';
+const actorId = '550e8400-e29b-41d4-a716-446655440001';
+
+function fakeDb(initial) {
+  const tables = new Map(Object.entries(initial).map(([name, rows]) => [name, structuredClone(rows)]));
+  const updateOne = vi.fn(async (name, query, update) => {
+    const row = (tables.get(name) || []).find((item) =>
+      String(item._id) === String(query._id) &&
+      (!Object.hasOwn(query, 'userAccountId') || item.userAccountId == null));
+    if (!row) return { matchedCount: 0 };
+    Object.assign(row, update.$set);
+    return { matchedCount: 1 };
+  });
+  return {
+    tables,
+    updateOne,
+    db: {
+      listCollections: () => ({ toArray: async () => [...tables.keys()].map((name) => ({ name })) }),
+      collection: (name) => ({
+        find: () => ({ toArray: async () => structuredClone(tables.get(name) || []) }),
+        updateOne: (query, update) => updateOne(name, query, update),
+      }),
+    },
+  };
+}
+
+function records(overrides = {}) {
+  return {
+    users: [{ _id: oldId, actorId, ...overrides }],
+    actors: [{ actorId }],
+    userRoleAssignments: [{ _id: 'assignment', userAccountId: oldId, grantedBy: oldId }],
+    accessGrants: [{ _id: 'grant', userAccountId: oldId, grantedBy: actorId }],
+    sessions: [{ _id: 'session', userID: oldId, tokenHash: 'opaque', isActive: true, isRevoked: false }],
+    recoveryCodeSets: [{ _id: 'recovery', userAccountId: oldId }],
+  };
+}
+
+describe('UserAccount canonical identity migration', () => {
+  it('inventories all four Reference(UserAccount) fields', () => {
+    expect(migration.USER_REFERENCES.map(({ collection, field }) => `${collection}.${field}`)).toEqual([
+      'userRoleAssignments.userAccountId', 'accessGrants.userAccountId',
+      'sessions.userAccountId', 'recoveryCodeSets.userAccountId',
+    ]);
+  });
+
+  it('dry-run reports missing UUID and legacy links without changing data', async () => {
+    const state = fakeDb(records());
+    const result = await migration.runAccountIdentityMigration(state.db, { mode: 'dry-run' });
+    expect(result.plan).toMatchObject({ totalAccounts: 1, missingUuid: 1, legacyReferences: 4, wouldBlock: false });
+    expect(state.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('generates UUID once, migrates references, maps Actor separately, and revokes old session', async () => {
+    const state = fakeDb(records());
+    const first = await migration.runAccountIdentityMigration(state.db);
+    const uuid = state.tables.get('users')[0].userAccountId;
+    expect(migration.isUuid(uuid)).toBe(true);
+    expect(uuid).not.toBe(oldId);
+    expect(first.revokedLegacySessions).toBe(1);
+    expect(state.tables.get('userRoleAssignments')[0]).toMatchObject({ userAccountId: uuid, grantedBy: actorId });
+    expect(state.tables.get('accessGrants')[0].userAccountId).toBe(uuid);
+    expect(state.tables.get('recoveryCodeSets')[0].userAccountId).toBe(uuid);
+    expect(state.tables.get('sessions')[0]).toMatchObject({ userAccountId: uuid, isActive: false, isRevoked: true });
+    const count = state.updateOne.mock.calls.length;
+    const second = await migration.runAccountIdentityMigration(state.db);
+    expect(state.tables.get('users')[0].userAccountId).toBe(uuid);
+    expect(second.revokedLegacySessions).toBe(0);
+    expect(state.updateOne).toHaveBeenCalledTimes(count);
+  });
+
+  it('preserves an existing valid UUID', async () => {
+    const uuid = '550e8400-e29b-41d4-a716-446655440002';
+    const state = fakeDb(records({ userAccountId: uuid }));
+    await migration.runAccountIdentityMigration(state.db);
+    expect(state.tables.get('users')[0].userAccountId).toBe(uuid);
+  });
+
+  it('blocks invalid or duplicated UUIDs before writes', async () => {
+    const invalid = fakeDb(records({ userAccountId: 'not-a-uuid' }));
+    await expect(migration.runAccountIdentityMigration(invalid.db)).rejects.toMatchObject({ code: 'DATA_MIGRATION_CONFLICT' });
+    expect(invalid.updateOne).not.toHaveBeenCalled();
+    const duplicate = records({ userAccountId: '550e8400-e29b-41d4-a716-446655440002' });
+    duplicate.users.push({ _id: '507f1f77bcf86cd799439012', userAccountId: duplicate.users[0].userAccountId, actorId });
+    const state = fakeDb(duplicate);
+    await expect(migration.runAccountIdentityMigration(state.db)).rejects.toMatchObject({ code: 'DATA_MIGRATION_CONFLICT' });
+  });
+
+  it('blocks orphan UserAccount references and unresolved Actor references without inventing links', async () => {
+    const orphan = records();
+    orphan.userRoleAssignments[0].userAccountId = '507f1f77bcf86cd799439099';
+    const state = fakeDb(orphan);
+    await expect(migration.runAccountIdentityMigration(state.db)).rejects.toMatchObject({ code: 'DATA_MIGRATION_CONFLICT' });
+    expect(state.updateOne).not.toHaveBeenCalled();
+    const conflated = records();
+    conflated.userRoleAssignments[0].grantedBy = 'system';
+    const second = fakeDb(conflated);
+    await expect(migration.runAccountIdentityMigration(second.db)).rejects.toMatchObject({ code: 'DATA_MIGRATION_CONFLICT' });
+    expect(second.updateOne).not.toHaveBeenCalled();
+  });
+});

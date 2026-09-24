@@ -1,5 +1,5 @@
 const ReferenceImportIssueModel = require('../../models/ReferenceImportIssue');
-const { CANONICAL_COLLECTIONS } = require('../../config/collections');
+const { getCanonicalCollectionName } = require('../../config/canonicalEntityCollections.v2');
 
 const { RESOLUTION_STATUSES } = ReferenceImportIssueModel;
 const TERMINAL_STATUSES = RESOLUTION_STATUSES.filter((status) => status !== 'open');
@@ -22,7 +22,7 @@ async function resolveImportIssue({ db, referenceImportIssueId, resolutionStatus
     throw new Error('resolvedBy é obrigatório');
   }
 
-  const issues = db.collection(CANONICAL_COLLECTIONS.referenceImportIssues);
+  const issues = db.collection(getCanonicalCollectionName('ReferenceImportIssue'));
   const existing = await issues.findOne({ referenceImportIssueId });
   if (!existing) {
     throw new Error(`ReferenceImportIssue não encontrado: ${referenceImportIssueId}`);

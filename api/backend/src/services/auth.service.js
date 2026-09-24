@@ -13,6 +13,13 @@ const { encryptValue, decryptValue, assertFieldEncryptionConfigured } = require(
 const passwordService = require('./password.service');
 const { grantRoleForAccessType, assertGrantPreconditions, isAdministrator, resolveRoleDisplayName, resolveUserHierarchyLevel, ROLE_CODE_BY_ACCESS_TYPE } = require('./rbac-assignment.service');
 const notificationDispatchService = require('./notificationDispatch.service');
+const { isUuid } = require('../foundation/userAccountIdentityMigrationV2');
+const { BIOAVANCED_SYSTEM_ACTOR_ID } = require('../foundation/systemActorSeedV2');
+
+function requireCanonicalAccountId(user) {
+  if (!isUuid(user?.userAccountId)) throw new Error('Identidade canônica UserAccount indisponível');
+  return user.userAccountId;
+}
 
 /**
  * #1072: the ONE place that turns a stored MFA envelope back into a TOTP seed.
@@ -182,10 +189,13 @@ class AuthService {
   // stale field, same pattern #427/#428 used for display reads. Keeps the
   // `accessType` claim key name; only its source changed.
   async issueAccessToken(db, user) {
-    const accessType = await resolveUserHierarchyLevel(db, user._id.toString());
+    requireCanonicalAccountId(user);
+    if (!isUuid(user.actorId)) throw new Error('Actor canônico indisponível para autenticação');
+    const accessType = await resolveUserHierarchyLevel(db, user.userAccountId);
     return jwt.sign(
       {
-        userID: user._id.toString(),
+        userID: user.userAccountId,
+        actorId: user.actorId,
         email: user.email,
         username: user.username,
         accessType,
@@ -199,8 +209,9 @@ class AuthService {
   }
 
   issueRefreshToken(user, sessionID = null) {
+    requireCanonicalAccountId(user);
     const payload = {
-      userID: user._id.toString(),
+      userID: user.userAccountId,
       type: 'refresh',
       jti: crypto.randomUUID()
     };
@@ -222,7 +233,7 @@ class AuthService {
 
     const session = await sessionService.createSession(
       db,
-      user._id.toString(),
+      user.userAccountId,
       accessToken,
       refreshToken,
       req
@@ -263,14 +274,14 @@ class AuthService {
   /**
    * Registra um novo usuário
    */
-  async registerUser(db, userData, grantedBy = 'system') {
+  async registerUser(db, userData, grantedBy) {
     try {
       const validation = UserModel.validate(userData);
       if (!validation.isValid) {
         throw new Error(validation.errors.join(', '));
       }
 
-      const usersCollection = db.collection('users');
+      const usersCollection = db.collection('userAccounts');
 
       // Verifica se usuário já existe
       const existingUser = await usersCollection.findOne({
@@ -297,6 +308,18 @@ class AuthService {
         ...userData,
         password: hashedPassword
       });
+
+      // Both references are Actor, not UserAccount. Do not infer an Actor
+      // from a MongoDB _id or a caller's account UUID.
+      if (!isUuid(user.actorId) || !isUuid(grantedBy)) {
+        throw new Error('actorId e grantedBy devem referenciar Actor canônico');
+      }
+      const actors = db.collection('actors');
+      const [accountActor, grantActor] = await Promise.all([
+        actors.findOne({ actorId: user.actorId }),
+        actors.findOne({ actorId: grantedBy }),
+      ]);
+      if (!accountActor || !grantActor) throw new Error('Referência Actor não resolvida');
 
       // #427/#432: accessType/roleName resolved only to grant the matching
       // UserRoleAssignment (#421) below — never persisted on the User
@@ -352,7 +375,7 @@ class AuthService {
       // method-wide compensating delete would be wrong here even if one were
       // added.
       await grantRoleForAccessType(db, {
-        userAccountId: result.insertedId.toString(),
+        userAccountId: user.userAccountId,
         accessType: resolvedAccessType,
         grantedBy,
         organizationId: user.organizationId ?? null,
@@ -360,7 +383,7 @@ class AuthService {
 
       // Gera e salva identificador anonimizado para LGPD
       const { generateAnonId } = require('../utils/userAnonymization');
-      const anonId = generateAnonId(result.insertedId.toString());
+      const anonId = generateAnonId(user.userAccountId);
       
       // Atualiza usuário com anonId
       await usersCollection.updateOne(
@@ -368,19 +391,18 @@ class AuthService {
         { $set: { anonId } }
       );
 
-      logger.info('Usuário registrado:', { userID: result.insertedId, anonId });
+      logger.info('Usuário registrado:', { userAccountId: user.userAccountId, anonId });
 
       // #427: roleName resolved from the granted RBAC assignment for the
       // response, since it's no longer a field on the User document.
-      const roleName = await resolveRoleDisplayName(db, result.insertedId.toString());
+      const roleName = await resolveRoleDisplayName(db, user.userAccountId);
 
       return {
-        _id: result.insertedId,
         ...user,
         anonId,
         roleName,
         password: undefined, // Remove senha do retorno
-        id: result.insertedId.toString() // Adiciona id para compatibilidade com frontend
+        id: user.userAccountId // Adiciona id para compatibilidade com frontend
       };
     } catch (error) {
       logger.error('Erro ao registrar usuário:', error.message);
@@ -410,7 +432,7 @@ class AuthService {
       // happened is what an operator needs; the payload is not.
       logger.info('Tentativa de login recebida');
 
-      const usersCollection = db.collection('users');
+      const usersCollection = db.collection('userAccounts');
       
       // Busca por email ou username
       // Tenta busca exata primeiro (mais rápida)
@@ -539,6 +561,8 @@ class AuthService {
         throw new Error('Credenciais inválidas');
       }
 
+      requireCanonicalAccountId(user);
+
       // Verifica status do usuário - impede login se não estiver ativo
       const normalizedStatus = UserModel.normalizeStatus(user.status);
       if (normalizedStatus !== 'active') {
@@ -573,7 +597,7 @@ class AuthService {
       // Verifica se é admin
       // #426: resolve via UserRoleAssignment -> Role, não accessType/roleName
       // direto (a fonte de verdade desde #421).
-      const isAdmin = await isAdministrator(db, user._id.toString());
+      const isAdmin = await isAdministrator(db, user.userAccountId);
       
       // Para admin, MFA é opcional - se estiver habilitado, verifica; se não, pula
       // Para não-admin, MFA é obrigatório no primeiro login
@@ -591,10 +615,11 @@ class AuthService {
         // #431 used for issueAccessToken.
         const tempToken = jwt.sign(
           {
-            userID: user._id.toString(),
+            userID: user.userAccountId,
+            actorId: user.actorId,
             email: user.email,
             username: user.username,
-            accessType: await resolveUserHierarchyLevel(db, user._id.toString()),
+            accessType: await resolveUserHierarchyLevel(db, user.userAccountId),
             name: user.name,
             mfaSetupRequired: true // Flag para indicar que MFA é obrigatório
           },
@@ -607,17 +632,17 @@ class AuthService {
           message: 'Configuração de MFA obrigatória no primeiro acesso',
           tempToken: tempToken, // Token temporário apenas para configurar MFA
           user: {
-            _id: user._id,
+            userAccountId: user.userAccountId,
             name: user.name,
             email: user.email,
             username: user.username,
             // #434: resolved from the live RBAC assignment, not the stale
             // unpopulated user.accessType field (#427) — same pattern as
             // #433's tempToken fix, applied to the response body.
-            accessType: await resolveUserHierarchyLevel(db, user._id.toString()),
+            accessType: await resolveUserHierarchyLevel(db, user.userAccountId),
             // #427: resolved from the RBAC assignment — roleName is no
             // longer persisted on the User document for new/edited users.
-            roleName: await resolveRoleDisplayName(db, user._id.toString())
+            roleName: await resolveRoleDisplayName(db, user.userAccountId)
           }
         };
       }
@@ -664,9 +689,9 @@ class AuthService {
             void notificationDispatchService.dispatchNotification(db, {
               eventType: 'mfa_brute_force_lockout',
               sourceEventType: 'User',
-              sourceEventId: user._id,
+              sourceEventId: user.userAccountId,
               payload: {
-                userId: user._id.toString(),
+                userId: user.userAccountId,
                 username: user.username,
                 failedAttempts
               }
@@ -727,7 +752,7 @@ class AuthService {
         // this below the token issue would revoke the session the caller is about
         // to be handed. All sessions, for the same reason as the token reset --
         // the caller has no session yet, so there is nothing to preserve.
-        await sessionService.invalidateUserSessions(db, user._id.toString(), 'password_change', user._id.toString());
+        await sessionService.invalidateUserSessions(db, user.userAccountId, 'password_change', user.actorId);
       }
 
       // Atualiza último login
@@ -752,17 +777,17 @@ class AuthService {
         refreshToken: tokenBundle.refreshToken,
         sessionID: tokenBundle.sessionID,
         user: {
-          _id: user._id,
+          userAccountId: user.userAccountId,
           name: user.name,
           email: user.email,
           username: user.username,
           // #434: resolved from the live RBAC assignment, not the stale
           // unpopulated user.accessType field (#427) — same pattern as
           // #433's tempToken fix, applied to the response body.
-          accessType: await resolveUserHierarchyLevel(db, user._id.toString()),
+          accessType: await resolveUserHierarchyLevel(db, user.userAccountId),
           // #427: resolved from the RBAC assignment — roleName is no
           // longer persisted on the User document for new/edited users.
-          roleName: await resolveRoleDisplayName(db, user._id.toString()),
+          roleName: await resolveRoleDisplayName(db, user.userAccountId),
           mfaEnabled: user.mfaEnabled
         }
       };
@@ -792,7 +817,7 @@ class AuthService {
       }
       const usernameTerm = username.trim();
 
-      const usersCollection = db.collection('users');
+      const usersCollection = db.collection('userAccounts');
       const user = await usersCollection.findOne({
         $or: [
           { email: usernameTerm },
@@ -906,7 +931,7 @@ class AuthService {
       );
 
       logger.info('MFA secret gerado e salvo para primeiro login:', { 
-        userID: user._id.toString(),
+        userID: user.userAccountId,
         email: user.email 
       });
 
@@ -945,7 +970,7 @@ class AuthService {
         throw new Error('Código MFA é obrigatório');
       }
 
-      const usersCollection = db.collection('users');
+      const usersCollection = db.collection('userAccounts');
       const { ObjectId } = require('mongodb');
       
       const user = await usersCollection.findOne({
@@ -1059,17 +1084,17 @@ class AuthService {
         refreshToken: tokenBundle.refreshToken,
         sessionID: tokenBundle.sessionID,
         user: {
-          _id: user._id,
+          userAccountId: user.userAccountId,
           name: user.name,
           email: user.email,
           username: user.username,
           // #434: resolved from the live RBAC assignment, not the stale
           // unpopulated user.accessType field (#427) — same pattern as
           // #433's tempToken fix, applied to the response body.
-          accessType: await resolveUserHierarchyLevel(db, user._id.toString()),
+          accessType: await resolveUserHierarchyLevel(db, user.userAccountId),
           // #427: resolved from the RBAC assignment — roleName is no
           // longer persisted on the User document for new/edited users.
-          roleName: await resolveRoleDisplayName(db, user._id.toString()),
+          roleName: await resolveRoleDisplayName(db, user.userAccountId),
           mfaEnabled: true
         }
       };
@@ -1084,9 +1109,9 @@ class AuthService {
    */
   async setupMFA(db, userID) {
     try {
-      const usersCollection = db.collection('users');
+      const usersCollection = db.collection('userAccounts');
       const { ObjectId } = require('mongodb');
-      const user = await usersCollection.findOne({ _id: new ObjectId(userID) });
+      const user = await usersCollection.findOne({ userAccountId: userID });
 
       if (!user) {
         throw new Error('Usuário não encontrado');
@@ -1106,7 +1131,7 @@ class AuthService {
 
       // Salva secret temporariamente (usuário precisa confirmar)
       await usersCollection.updateOne(
-        { _id: new ObjectId(userID) },
+        { userAccountId: userID },
         { $set: { mfaSecretCiphertext: encryptValue(secret.base32), mfaActivationDate: null } }
       );
 
@@ -1126,9 +1151,9 @@ class AuthService {
    */
   async enableMFA(db, userID, mfaCode) {
     try {
-      const usersCollection = db.collection('users');
+      const usersCollection = db.collection('userAccounts');
       const { ObjectId } = require('mongodb');
-      const user = await usersCollection.findOne({ _id: new ObjectId(userID) });
+      const user = await usersCollection.findOne({ userAccountId: userID });
 
       // #1072: ciphertext presence, not a decrypted value.
       if (!user || !user.mfaSecretCiphertext) {
@@ -1159,7 +1184,7 @@ class AuthService {
       }
 
       await usersCollection.updateOne(
-        { _id: new ObjectId(userID) },
+        { userAccountId: userID },
         { $set: updateData }
       );
 
@@ -1173,17 +1198,17 @@ class AuthService {
           refreshToken: tokenBundle.refreshToken,
           sessionID: tokenBundle.sessionID,
           user: {
-            _id: user._id,
+            userAccountId: user.userAccountId,
             name: user.name,
             email: user.email,
             username: user.username,
             // #434: resolved from the live RBAC assignment, not the stale
             // unpopulated user.accessType field (#427) — same pattern as
             // #433's tempToken fix, applied to the response body.
-            accessType: await resolveUserHierarchyLevel(db, user._id.toString()),
+            accessType: await resolveUserHierarchyLevel(db, user.userAccountId),
             // #427: resolved from the RBAC assignment — roleName is no
             // longer persisted on the User document for new/edited users.
-            roleName: await resolveRoleDisplayName(db, user._id.toString()),
+            roleName: await resolveRoleDisplayName(db, user.userAccountId),
             mfaEnabled: true
           }
         };
@@ -1201,7 +1226,7 @@ class AuthService {
    */
   async requestPasswordReset(db, email, req) {
     try {
-      const usersCollection = db.collection('users');
+      const usersCollection = db.collection('userAccounts');
       const { ObjectId } = require('mongodb');
 
       // #887: same coercion as login() and the MFA-first-login siblings.
@@ -1244,7 +1269,7 @@ class AuthService {
       // Gera token de recuperação (JWT com expiração de 1 hora)
       const resetToken = jwt.sign(
         {
-          userID: user._id.toString(),
+          userID: requireCanonicalAccountId(user),
           email: user.email,
           type: 'password-reset'
         },
@@ -1308,7 +1333,7 @@ class AuthService {
    */
   async resetPassword(db, token, newPassword, req) {
     try {
-      const usersCollection = db.collection('users');
+      const usersCollection = db.collection('userAccounts');
       const { ObjectId } = require('mongodb');
 
       if (!token) {
@@ -1338,10 +1363,11 @@ class AuthService {
       if (decoded.type !== 'password-reset') {
         throw new Error('Token inválido');
       }
+      if (!isUuid(decoded.userID)) throw new Error('Token inválido');
 
       // Busca usuário
       const user = await usersCollection.findOne({
-        _id: new ObjectId(decoded.userID)
+        userAccountId: decoded.userID
       });
 
       if (!user) {
@@ -1397,9 +1423,9 @@ class AuthService {
 
       // #958 / RNF021 AC#2. No fork here: this route is unauthenticated, so
       // there is no current session to preserve and every live session was
-      // authenticated with the password just replaced. revokedBy 'system'
-      // mirrors cleanupExpiredSessions -- there is no acting user on this route.
-      await sessionService.invalidateUserSessions(db, user._id.toString(), 'password_change', 'system');
+      // authenticated with the password just replaced. No human is authenticated
+      // on this route, so revocation is attributed to the service Actor.
+      await sessionService.invalidateUserSessions(db, user.userAccountId, 'password_change', BIOAVANCED_SYSTEM_ACTOR_ID);
 
       // Registra log (anonimizado via auditLogger)
       const auditLogger = require('../utils/auditLogger');
@@ -1444,4 +1470,3 @@ module.exports = new AuthService();
 module.exports.isAccountLocked = isAccountLocked;
 module.exports.recordFailedPasswordAttempt = recordFailedPasswordAttempt;
 module.exports.clearedLockoutFields = clearedLockoutFields;
-

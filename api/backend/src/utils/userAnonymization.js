@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const { isUuid } = require('../foundation/userAccountIdentityMigrationV2');
 
 /**
  * Utilitário de Anonimização de Usuários para LGPD
@@ -64,9 +65,9 @@ async function getUserAnonId(user, db = null) {
   }
 
   // Tenta obter userID do objeto
-  const userID = user._id?.toString() || user.userID || user.id || null;
+  const userID = user.userAccountId || user.userID || null;
   
-  if (!userID) {
+  if (!isUuid(userID)) {
     return 'USR-SYSTEM';
   }
 
@@ -78,9 +79,9 @@ async function getUserAnonId(user, db = null) {
   // Se temos acesso ao banco, tenta buscar o anonId existente
   if (db) {
     try {
-      const usersCollection = db.collection('users');
+      const usersCollection = db.collection('userAccounts');
       const existingUser = await usersCollection.findOne(
-        { _id: userID },
+        { userAccountId: userID },
         { projection: { anonId: 1 } }
       );
       
@@ -111,11 +112,11 @@ async function anonymizeLogUser(logData, db = null) {
   const anonymized = { ...logData };
 
   // Se temos userID, obtém o identificador anonimizado
-  const userID = anonymized.userID || anonymized.userId || anonymized.user?._id?.toString();
+  const userID = anonymized.userAccountId || anonymized.userID || anonymized.userId || anonymized.user?.userAccountId;
   
-  if (userID && userID !== 'system') {
+  if (isUuid(userID)) {
     // Obtém identificador anonimizado
-    const anonId = await getUserAnonId({ _id: userID }, db);
+    const anonId = await getUserAnonId({ userAccountId: userID }, db);
     
     // Substitui userName pelo identificador anonimizado
     anonymized.userName = anonId;
@@ -240,8 +241,8 @@ function maskUser(user) {
   }
 
   // Gera baseado no ID disponível
-  const userID = user._id?.toString() || user.userID || user.id;
-  if (!userID) return 'USR-SYSTEM';
+  const userID = user.userAccountId || user.userID;
+  if (!isUuid(userID)) return 'USR-SYSTEM';
 
   return generateAnonId(userID);
 }
@@ -255,4 +256,3 @@ module.exports = {
   sanitizePayload,
   sanitizeMessage
 };
-

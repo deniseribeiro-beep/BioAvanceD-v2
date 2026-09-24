@@ -1,74 +1,61 @@
-const { CANONICAL_COLLECTIONS } = require('../config/collections');
-const { enforceAppendOnlyCollection, ensureSampleMovementIndexes } = require('./sampleMovementLedger');
-const { ensureSampleIndexes } = require('./sampleIndexes');
-const { ensureParticipantIdentityIndexes } = require('./participantIdentityIndexes');
+const { getCanonicalCollectionName } = require('../config/canonicalEntityCollections.v2');
+const { enforceAppendOnlyCollection } = require('./sampleMovementLedger');
 
-// #936: collection names whose indexes have already been ensured this
-// process. Keyed by resolved name, so a COLL_SAMPLES override gets its own
-// entry rather than being shadowed by the default.
-const samplesIndexed = new Set();
+const LOCAL_COLLECTIONS = Object.freeze({
+  consents: 'consents',
+  consentTemplates: 'consentTemplates',
+  sampleMovements: 'sampleMovements',
+  clinicalUnits: 'clinicalUnits',
+  organizations: 'organizations',
+  roles: 'roles',
+  permissions: 'permissions',
+  userRoleAssignments: 'userRoleAssignments',
+  participantIdentities: 'participantIdentities',
+  terminologyConcepts: 'terminologyConcepts',
+  referenceDatasetReleases: 'referenceDatasetReleases',
+  referenceImportRuns: 'referenceImportRuns',
+  referenceImportIssues: 'referenceImportIssues',
+  referenceImportStaging: 'referenceImportStaging',
+  nonconformances: 'nonconformances',
+  phenotypeObservations: 'phenotypeObservations',
+  procedures: 'procedures',
+  quarantineActions: 'quarantineActions',
+  retentionPolicies: 'retentionPolicies',
+  specimenPreanalytics: 'specimenPreanalytics',
+  clinicalObservations: 'clinicalObservations',
+  clinicalOutcomes: 'clinicalOutcomes',
+  conditions: 'conditions',
+  encounters: 'encounters',
+  allergyIntolerances: 'allergyIntolerances',
+  familyHistories: 'familyHistories',
+  medicationExposures: 'medicationExposures',
+  derivedScores: 'derivedScores',
+  rcsAssessments: 'rcsAssessments',
+  accessRequests: 'accessRequests',
+  reagentLots: 'reagentLots',
+  dispositionActions: 'dispositionActions',
+  notificationRules: 'notificationRules',
+  notifications: 'notifications',
+  labelGenerations: 'labelGenerations',
+  legalHolds: 'legalHolds',
+  cids: 'cids',
+  referenceSeedRuns: 'referenceSeedRuns',
+  ingestionIdempotencyKeys: 'ingestionIdempotencyKeys',
+  ingestionQuarantineRecords: 'ingestionQuarantineRecords',
+});
 
-// #1102: same latch, for participantIdentities -- a collection that had no
-// declared index of any kind (absent from create-db.js, no model file), so
-// every identity query was a collection scan.
-const participantIdentitiesIndexed = new Set();
-
-function resolveCollectionName(db, key) {
-  const preferred = CANONICAL_COLLECTIONS[key];
-  if (!preferred) {
-    throw new Error(`Collection key inválida: ${key}`);
-  }
-
-  return preferred;
+function resolveCollectionName(_db, key) {
+  if (key === 'Participant' || key === 'Specimen') return getCanonicalCollectionName(key);
+  const name = LOCAL_COLLECTIONS[key];
+  if (!name) throw new Error(`Collection key inválida: ${key}`);
+  return name;
 }
 
-// Deliberately not `async`: an invalid key must throw synchronously so a
-// caller that chains `getCollection(db, key).find(...)` without `await`
-// (#306) fails loud at the chained call, instead of leaving an unawaited
-// rejected promise dangling that crashes the process later via
-// unhandledRejection. Only the sampleMovements path does real async work,
-// so it's the only branch that returns a promise; every other key resolves
-// synchronously (which `await` on the caller side still handles fine).
-function getCollection(db, key, requiredMethod) {
+function getCollection(db, key) {
   const name = resolveCollectionName(db, key);
   const collection = db.collection(name);
-
-  if (key === 'sampleMovements') {
-    enforceAppendOnlyCollection(collection, name);
-    return ensureSampleMovementIndexes(collection).then(() => collection);
-  }
-
-  // #936: the barcode unique index, once per process per resolved name.
-  //
-  // Deliberately NOT returned as a promise the way sampleMovements is. The
-  // comment above is the reason: `samples` is this module's most-called key
-  // and several call sites chain off the result, so turning it into a
-  // thenable would convert a documented loud-failure design into a silent
-  // one across a much larger surface. `ensureSampleIndexes` never rejects
-  // (it logs instead), so nothing is lost by not awaiting it here, and
-  // index creation is idempotent — the first insert may race the build, but
-  // the application-level uniqueness check is still the primary guard and
-  // the index is the backstop, not the mechanism.
-  if (key === 'samples' && !samplesIndexed.has(name)) {
-    samplesIndexed.add(name);
-    ensureSampleIndexes(collection);
-  }
-
-  // #1102: the participantIdentities indexes, on the same terms and for the
-  // same reason the comment above gives. Staying synchronous is load-bearing
-  // here too, and more sharply than for `samples`: import.service.js:319 and
-  // import-lgpd.service.js:847/2463 all do `const c = getCollection(db,
-  // 'participantIdentities')` with NO await and then call `c.findOne(...)`,
-  // so returning a thenable would break them outright.
-  if (key === 'participantIdentities' && !participantIdentitiesIndexed.has(name)) {
-    participantIdentitiesIndexed.add(name);
-    ensureParticipantIdentityIndexes(collection);
-  }
-
+  if (key === 'sampleMovements') enforceAppendOnlyCollection(collection, name);
   return collection;
 }
 
-module.exports = {
-  resolveCollectionName,
-  getCollection
-};
+module.exports = { resolveCollectionName, getCollection };

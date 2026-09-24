@@ -271,7 +271,7 @@ class StorageService {
   async verifyBoxIntegrity(boxId) {
     try {
       const storageBoxesCollection = this.db.collection('storageBoxes');
-      const samplesCollection = await getCollection(this.db, 'samples');
+      const samplesCollection = await getCollection(this.db, 'Specimen');
       const boxObjId = this._normalizeObjectId(boxId);
       const box = await storageBoxesCollection.findOne({ _id: boxObjId });
 

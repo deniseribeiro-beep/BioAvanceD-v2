@@ -16,7 +16,7 @@
  */
 
 const { MongoClient, ObjectId } = require('mongodb');
-const { CANONICAL_COLLECTIONS } = require('../config/collections');
+const { getCanonicalCollectionName } = require('../config/canonicalEntityCollections.v2');
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '../../.env') });
 
@@ -40,9 +40,9 @@ async function migrateRoleAssignmentScopes() {
 
     const db = client.db(dbName);
     const usersCollection = db.collection('users');
-    const rolesCollection = db.collection(CANONICAL_COLLECTIONS.roles);
-    const assignmentsCollection = db.collection(CANONICAL_COLLECTIONS.userRoleAssignments);
-    const organizationsCollection = db.collection(CANONICAL_COLLECTIONS.organizations);
+    const rolesCollection = db.collection(getCanonicalCollectionName('Role'));
+    const assignmentsCollection = db.collection(getCanonicalCollectionName('UserRoleAssignment'));
+    const organizationsCollection = db.collection(getCanonicalCollectionName('Organization'));
 
     const roleDocs = await rolesCollection.find({}).toArray();
     const nonAdminRoleIds = roleDocs.filter((role) => Number(role.hierarchyLevel) !== 4).map((role) => role.roleId);

@@ -151,7 +151,7 @@ class SampleFileController {
 
       // Resolve a amostra pelo identificador canônico; _id é aceito apenas
       // como identificador interno de transporte e nunca é persistido no vínculo.
-      const samplesCollection = db.collection('samples');
+      const samplesCollection = db.collection('specimens');
       const sample = await findSampleByIdentifier(samplesCollection, specimenId);
 
       if (!sample) {
@@ -377,7 +377,7 @@ class SampleFileController {
       const { specimenId } = req.params;
 
       // Valida se a amostra existe e normaliza o vínculo para specimenId.
-      const samplesCollection = db.collection('samples');
+      const samplesCollection = db.collection('specimens');
       const sample = await findSampleByIdentifier(samplesCollection, specimenId);
 
       if (!sample) {
@@ -509,7 +509,7 @@ class SampleFileController {
       // the sample no longer exists) is treated as "can't determine
       // scope" and doesn't block the download on its own.
       if (req.organizationScope) {
-        const samplesCollection = db.collection('samples');
+        const samplesCollection = db.collection('specimens');
         let sampleForScope = null;
         try {
           sampleForScope = await samplesCollection.findOne({ specimenId: specimenIdString });
@@ -637,7 +637,7 @@ class SampleFileController {
       // downloadFile's identical check for why the lookup is scoped to
       // just this check and tolerant of a failed/missing lookup.
       if (req.organizationScope) {
-        const samplesCollection = db.collection('samples');
+        const samplesCollection = db.collection('specimens');
         let sampleForScope = null;
         try {
           sampleForScope = await samplesCollection.findOne({ specimenId: specimenIdString });
@@ -774,7 +774,7 @@ class SampleFileController {
       // #625: mirrors sample.routes.js's own out-of-scope 403 pattern —
       // checked before the mutation, same as deleteFile.
       if (req.organizationScope) {
-        const samplesCollection = db.collection('samples');
+        const samplesCollection = db.collection('specimens');
         let sampleForScope = null;
         try {
           sampleForScope = await samplesCollection.findOne({ specimenId: specimenIdString });
@@ -978,7 +978,7 @@ class SampleFileController {
       }
 
       // Busca amostra
-      const samplesCollection = db.collection('samples');
+      const samplesCollection = db.collection('specimens');
       const sample = await samplesCollection.findOne({ specimenId: specimenIdString });
 
       if (!sample) {
@@ -1079,7 +1079,7 @@ class SampleFileController {
       }
 
       // Busca amostra
-      const samplesCollection = db.collection('samples');
+      const samplesCollection = db.collection('specimens');
       const sample = await samplesCollection.findOne({ specimenId: specimenIdString });
 
       if (!sample) {
@@ -1179,7 +1179,7 @@ class SampleFileController {
       }
 
       // Busca amostra
-      const samplesCollection = db.collection('samples');
+      const samplesCollection = db.collection('specimens');
       const sample = await samplesCollection.findOne({ specimenId: specimenIdString });
 
       if (!sample) {

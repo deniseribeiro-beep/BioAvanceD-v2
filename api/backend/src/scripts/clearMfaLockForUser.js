@@ -88,7 +88,7 @@ async function clearMfaLockForUser(userIdentifier) {
     console.log('Conectado ao MongoDB');
 
     const db = client.db(dbName);
-    const usersCollection = db.collection('users');
+    const usersCollection = db.collection('userAccounts');
 
     const userFilter = buildUserFilterById(rawIdentifier);
     const targetUser = await usersCollection.findOne(userFilter);
@@ -102,11 +102,11 @@ async function clearMfaLockForUser(userIdentifier) {
       { $set: { mfaLocked: false, mfaFailedAttempts: 0 } }
     );
 
-    const label = targetUser.email || targetUser.username || targetUser._id.toString();
-    console.log(`Desbloqueado: usuário ${targetUser._id.toString()} (${label}) -- mfaLocked=false, mfaFailedAttempts=0`);
+    const label = targetUser.email || targetUser.username || targetUser.userAccountId;
+    console.log(`Desbloqueado: usuário ${targetUser.userAccountId} (${label}) -- mfaLocked=false, mfaFailedAttempts=0`);
 
     return {
-      userId: targetUser._id.toString(),
+      userId: targetUser.userAccountId,
       email: targetUser.email || null,
       username: targetUser.username || null,
     };

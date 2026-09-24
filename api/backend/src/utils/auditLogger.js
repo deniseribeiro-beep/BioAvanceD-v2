@@ -110,7 +110,7 @@ class AuditLogger {
   async extractUserInfo(req, db = null) {
     if (!req || !req.user) return {};
 
-    const userID = req.user.userID || req.user._id?.toString() || null;
+    const userID = req.user.userID || null;
 
     // Obtém identificador anonimizado
     const anonId = await getUserAnonId(req.user, db);

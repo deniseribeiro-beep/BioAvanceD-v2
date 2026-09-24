@@ -7,6 +7,7 @@ const userSecurityService = require('../../src/services/user-security.service');
 const sessionService = require('../../src/services/session.service');
 const auditLogger = require('../../src/utils/auditLogger');
 const logger = require('../../src/utils/logger');
+const ACTOR_ID = '550e8400-e29b-41d4-a716-446655440001';
 
 function makeRes() {
   const res = {};
@@ -24,7 +25,7 @@ function makeRes() {
 function makeReq(overrides = {}) {
   return {
     app: { locals: { db: { marker: 'db' } } },
-    user: { userID: 'user-1' },
+    user: { userID: 'user-1', actorId: ACTOR_ID },
     headers: {},
     query: {},
     params: {},
@@ -205,7 +206,7 @@ describe('user-security.controller item 8 coverage', () => {
       expect(res.statusCode).toBe(200);
       expect(res.body.message).toBe('Senha alterada com sucesso');
       expect(sessionService.revokeAllOtherSessions).toHaveBeenCalledWith(
-        req.app.locals.db, 'user-1', 'current-token', 'password_change', 'user-1'
+        req.app.locals.db, 'user-1', 'current-token', 'password_change', ACTOR_ID
       );
       expect(auditLogger.log).toHaveBeenCalledWith(expect.objectContaining({
         action: 'UPDATE',
@@ -283,7 +284,7 @@ describe('user-security.controller item 8 coverage', () => {
       res = await invoke('revokeSession', req);
       expect(res.statusCode).toBe(200);
       expect(res.body.message).toBe('Sessão revogada com sucesso');
-      expect(userSecurityService.revokeSession).toHaveBeenCalledWith(req.app.locals.db, 'user-1', 'session-1');
+      expect(userSecurityService.revokeSession).toHaveBeenCalledWith(req.app.locals.db, 'user-1', 'session-1', ACTOR_ID);
 
       userSecurityService.revokeSession.mockRejectedValueOnce(new Error('revoke failed'));
       res = await invoke('revokeSession', makeReq({
@@ -323,7 +324,7 @@ describe('user-security.controller item 8 coverage', () => {
       let req = makeReq({ headers: { authorization: 'Bearer keep-me' } });
       res = await invoke('revokeAllSessions', req);
       expect(res.statusCode).toBe(200);
-      expect(userSecurityService.revokeAllSessions).toHaveBeenLastCalledWith(req.app.locals.db, 'user-1', 'keep-me');
+      expect(userSecurityService.revokeAllSessions).toHaveBeenLastCalledWith(req.app.locals.db, 'user-1', 'keep-me', ACTOR_ID);
 
       req = makeReq({ headers: {} });
       await invoke('revokeAllSessions', req);

@@ -69,7 +69,7 @@ class AccessRequestService {
       throw new Error('Solicitação de acesso não encontrada');
     }
 
-    const samples = await getCollection(db, 'samples');
+    const samples = await getCollection(db, 'Specimen');
     const consents = await getCollection(db, 'consents');
     const terminologyConcepts = await getCollection(db, 'terminologyConcepts');
     // Study/SampleFile have no CANONICAL_COLLECTIONS entry — master-data.routes.js

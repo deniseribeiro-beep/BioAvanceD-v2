@@ -38,7 +38,7 @@ class FhirImportStagingController {
       const payload = parseJsonFile(req.file) || req.body;
       const result = await fhirImportStagingService.stageBundle(db, payload, {
         fileName: req.file?.originalname,
-        userID: req.user?.userID || req.user?.id || null,
+        userID: req.user?.userID || null,
       });
 
       return res.status(201).json({
@@ -72,7 +72,7 @@ class FhirImportStagingController {
   async sendConsents(req, res) {
     try {
       const result = await fhirImportStagingService.sendConsents(req.app.locals.db, req.params.id, {
-        userID: req.user?.userID || req.user?.id || null,
+        userID: req.user?.userID || null,
       });
       return res.status(200).json({ success: true, ...result });
     } catch (error) {
@@ -101,7 +101,7 @@ class FhirImportStagingController {
   async attachExternalDocument(req, res) {
     try {
       const result = await fhirImportStagingService.attachExternalDocument(req.app.locals.db, req.params.id, req.params.recordId, {
-        userID: req.user?.userID || req.user?.id || null,
+        userID: req.user?.userID || null,
         note: req.body?.note,
       });
       return res.status(200).json({ success: true, ...result });

@@ -1,11 +1,14 @@
 /**
  * Modelo de Sessão para controle de atividade do usuário
  */
+const { isUuid } = require('../foundation/userAccountIdentityMigrationV2');
+
 class SessionModel {
   static create(data) {
+    if (!isUuid(data.userAccountId)) throw new Error('userAccountId deve ser UUID canônico');
     return {
       sessionID: data.sessionID || null,
-      userID: String(data.userID),
+      userAccountId: String(data.userAccountId),
       tokenHash: data.tokenHash,
       refreshTokenHash: data.refreshTokenHash,
       userAgent: data.userAgent || null,
@@ -28,8 +31,10 @@ class SessionModel {
   static validate(data) {
     const errors = [];
 
-    if (!data.userID) {
-      errors.push('userID é obrigatório');
+    if (!data.userAccountId) {
+      errors.push('userAccountId é obrigatório');
+    } else if (!isUuid(data.userAccountId)) {
+      errors.push('userAccountId deve ser UUID canônico');
     }
 
     if (!data.tokenHash) {
@@ -76,4 +81,3 @@ class SessionModel {
 }
 
 module.exports = SessionModel;
-

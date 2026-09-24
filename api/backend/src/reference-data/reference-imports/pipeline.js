@@ -5,7 +5,7 @@ const ReferenceImportRunModel = require('../../models/ReferenceImportRun');
 const ReferenceImportIssueModel = require('../../models/ReferenceImportIssue');
 const TerminologyConceptModel = require('../../models/TerminologyConcept');
 const TerminologyRelationModel = require('../../models/TerminologyRelation');
-const { CANONICAL_COLLECTIONS } = require('../../config/collections');
+const { getCanonicalCollectionName } = require('../../config/canonicalEntityCollections.v2');
 const { GraphProjectionService } = require('../../services/graphProjection.service');
 
 // AC 10-style gate: a batch this bad blocks promotion outright rather than
@@ -35,12 +35,12 @@ async function runImport({
   batchSize = DEFAULT_BATCH_SIZE,
   graphProjection = new GraphProjectionService(),
 }) {
-  const releases = db.collection(CANONICAL_COLLECTIONS.referenceDatasetReleases);
-  const runs = db.collection(CANONICAL_COLLECTIONS.referenceImportRuns);
-  const issuesCollection = db.collection(CANONICAL_COLLECTIONS.referenceImportIssues);
-  const staging = db.collection(CANONICAL_COLLECTIONS.referenceImportStaging);
-  const concepts = db.collection(CANONICAL_COLLECTIONS.terminologyConcepts);
-  const relations = db.collection(CANONICAL_COLLECTIONS.terminologyRelations);
+  const releases = db.collection(getCanonicalCollectionName('ReferenceDatasetRelease'));
+  const runs = db.collection(getCanonicalCollectionName('ReferenceImportRun'));
+  const issuesCollection = db.collection(getCanonicalCollectionName('ReferenceImportIssue'));
+  const staging = db.collection('referenceImportStaging');
+  const concepts = db.collection(getCanonicalCollectionName('TerminologyConcept'));
+  const relations = db.collection(getCanonicalCollectionName('TerminologyRelation'));
 
   // 7.2 step 2 "Acquire" + step 3 "Integrity"
   const { checksum, fileSize } = await checksumFile(source.fixturePath);
@@ -372,8 +372,8 @@ async function promote({ db, releases, concepts, relations, source, stagedConcep
  * nothing about them needs to change for a release-status rollback.
  */
 async function rollbackRelease({ db, datasetCode, initiatedBy = 'system:reference-data-bootstrap' }) {
-  const releases = db.collection(CANONICAL_COLLECTIONS.referenceDatasetReleases);
-  const runs = db.collection(CANONICAL_COLLECTIONS.referenceImportRuns);
+  const releases = db.collection(getCanonicalCollectionName('ReferenceDatasetRelease'));
+  const runs = db.collection(getCanonicalCollectionName('ReferenceImportRun'));
 
   const activeRelease = await releases.findOne({ datasetCode, releaseStatus: 'active' });
   if (!activeRelease) {

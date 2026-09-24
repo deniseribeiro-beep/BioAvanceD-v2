@@ -296,7 +296,7 @@ router.post('/',
       const sampleRepository = {
         create: async (sampleData, options = {}) => sampleService.createSample(db, sampleData, options),
         deleteById: async (sampleObjectId) => {
-          const samplesCollection = await getCollection(db, 'samples');
+          const samplesCollection = await getCollection(db, 'Specimen');
           const filter = ObjectId.isValid(sampleObjectId)
             ? { _id: new ObjectId(sampleObjectId) }
             : { _id: sampleObjectId };
@@ -311,7 +311,7 @@ router.post('/',
       const result = await registerSampleUseCase.execute({
         sampleData: req.body,
         actor: {
-          userId: req.user?.id || req.user?._id?.toString() || req.user?.userID || null,
+          userId: req.user?.userID || null,
           userName: req.user?.name || req.user?.username || null,
           userRole: req.user?.roleName || req.user?.role || null,
           ipAddress: req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress || null,
@@ -474,7 +474,7 @@ router.get('/', authenticate, requireOrganizationScope, async (req, res) => {
     ]);
 
     const patientConsentsCollection = await getCollection(db, 'consents');
-    const patientsCollection = await getCollection(db, 'patients');
+    const patientsCollection = await getCollection(db, 'Participant');
 
     const enrichedSamples = await Promise.all(result.samples.map(async (sample) => {
       let consentValid = false;
@@ -562,7 +562,7 @@ router.get('/:id/label/print-job', authenticate, requireOrganizationScope, async
       });
     }
 
-    const samplesCollection = await getCollection(db, 'samples');
+    const samplesCollection = await getCollection(db, 'Specimen');
     const rawId = String(req.params.id);
     const sample = await samplesCollection.findOne({
       $or: [
@@ -642,7 +642,7 @@ router.post('/labels/batch', authenticate, requireOrganizationScope, async (req,
       });
     }
 
-    const samplesCollection = await getCollection(db, 'samples');
+    const samplesCollection = await getCollection(db, 'Specimen');
     const results = await Promise.all(specimenIds.map(async (rawId) => {
       const id = String(rawId);
       try {
@@ -800,7 +800,7 @@ router.post('/:id/withdraw',
       );
 
       const auditInfo = {
-        userId: req.user?.id || req.user?._id?.toString(),
+        userId: req.user?.userID,
         userName: req.user?.name || req.user?.username,
         userRole: req.user?.roleName || req.user?.role,
         ipAddress: req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress,
@@ -1001,7 +1001,7 @@ router.get('/search/by-term', authenticate, async (req, res) => {
       });
     }
 
-    const samplesCollection = db.collection('samples');
+    const samplesCollection = db.collection('specimens');
     const query = {
       $or: [
         { barcode: { $regex: term, $options: 'i' } },
@@ -1224,7 +1224,7 @@ router.post('/:id/return', authenticate, requirePermission('withdrawSample', 'UP
     }
 
     const auditInfo = {
-      userId: req.user?.id || req.user?._id?.toString(),
+      userId: req.user?.userID,
       userName: req.user?.name || req.user?.username,
       userRole: req.user?.roleName || req.user?.role,
       ipAddress: req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress,

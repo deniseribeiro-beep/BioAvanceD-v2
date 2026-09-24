@@ -116,7 +116,7 @@ async function enforcePersistedGovernanceStatus(req, body) {
   const governanceStatus = resolveGovernanceStatus(body);
   const { specimenStatus } = governanceStatus;
 
-  const samplesCollection = await getCollection(db, 'samples');
+  const samplesCollection = await getCollection(db, 'Specimen');
   const existingSample = await samplesCollection.findOne(query);
   const wasQuarantined = existingSample ? SampleModel.resolveSpecimenStatus(existingSample) === 'quarantined' : false;
 

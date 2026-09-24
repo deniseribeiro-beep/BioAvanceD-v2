@@ -1,4 +1,3 @@
-const mongoose = require('mongoose');
 const logger = require('../utils/logger');
 const { connectMongoDB } = require('../infrastructure/database/mongodb/connection');
 const SensorMetadata = require('../models/SensorMetadata.schema');
@@ -104,18 +103,10 @@ async function upsertTemperatureIncidentAndQuarantine(policyData, normalizedSens
 
   // #426: resolve via UserRoleAssignment -> Role, não accessType direto.
   const { findUserAccountIdsByRoleCodes } = require('../services/rbac-assignment.service');
-  // #651: db here is the mongoose connection (via connectMongoDB), and
-  // mongoose bundles its own bson (major-version-diverged from the
-  // top-level `mongodb` package's bson). An ObjectId instance built from
-  // `require('mongodb')` and handed to a query run through the mongoose
-  // connection throws "Unsupported BSON version, bson types must be from
-  // bson 7.x.x" -- so ObjectId must come from mongoose.Types here.
-  const { ObjectId } = mongoose.Types;
   const userAccountIds = await findUserAccountIdsByRoleCodes(db, ['technician', 'coordinator', 'administrator']);
-  const objectIds = userAccountIds.filter((id) => ObjectId.isValid(id)).map((id) => new ObjectId(id));
-  const UserCollection = db.collection('users');
-  const recipientsCursor = UserCollection.find({ _id: { $in: objectIds }, status: 'active' });
-  const recipients = objectIds.length === 0
+  const UserCollection = db.collection('userAccounts');
+  const recipientsCursor = UserCollection.find({ userAccountId: { $in: userAccountIds }, status: 'active' });
+  const recipients = userAccountIds.length === 0
     ? []
     : typeof recipientsCursor.project === 'function'
       ? await recipientsCursor.project({ email: 1 }).toArray()

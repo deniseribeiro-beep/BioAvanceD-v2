@@ -87,13 +87,13 @@ describe('maskUser', () => {
     expect(maskUser({})).toBe('USR-SYSTEM');
   });
 
-  it('generates anonId from _id', () => {
-    const result = maskUser({ _id: { toString: () => 'abc123' } });
+  it('generates anonId from canonical userAccountId', () => {
+    const result = maskUser({ userAccountId: '11111111-1111-4111-8111-111111111111' });
     expect(result).toMatch(/^USR-[0-9A-F]{8}$/);
   });
 
-  it('generates anonId from userID fallback', () => {
-    const result = maskUser({ userID: 'uid-999' });
+  it('accepts a verified UUID userID claim', () => {
+    const result = maskUser({ userID: '11111111-1111-4111-8111-111111111111' });
     expect(result).toMatch(/^USR-[0-9A-F]{8}$/);
   });
 });

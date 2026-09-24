@@ -1,7 +1,7 @@
 const crypto = require('crypto');
 const logger = require('./logger');
 
-async function generateUniqueSpecimenId(db, collectionName = 'samples') {
+async function generateUniqueSpecimenId(db, collectionName = 'specimens') {
   const maxAttempts = 100;
   let attempts = 0;
 

@@ -138,12 +138,12 @@ class SampleService {
       const { boxId, positionCode } = normalizeRequiredStorageBoxAssignment(sampleData.boxId, sampleData.positionCode);
       delete sampleData.locationID;
 
-      const samplesCollection = await getCollection(db, 'samples');
+      const samplesCollection = await getCollection(db, 'Specimen');
 
       // Gera ID único para a amostra antes da validação, já que é gerado
       // pelo servidor e nunca é fornecido pelo cliente no cadastro
       if (!sampleData.specimenId) {
-        sampleData.specimenId = await generateUniqueSpecimenId(db, 'samples');
+        sampleData.specimenId = await generateUniqueSpecimenId(db, 'specimens');
         logger.info(`ID único de espécime gerado automaticamente: ${sampleData.specimenId}`);
       } else {
         const existingSpecimen = await samplesCollection.findOne({ specimenId: sampleData.specimenId });
@@ -441,7 +441,7 @@ class SampleService {
 
   async withdrawSample(db, specimenId, withdrawalData, auditInfo = {}) {
     try {
-      const samplesCollection = await getCollection(db, 'samples');
+      const samplesCollection = await getCollection(db, 'Specimen');
       const movementsCollection = await getCollection(db, 'sampleMovements');
       
       // O contrato operacional recebe specimenId (ou o _id interno já
@@ -574,7 +574,7 @@ class SampleService {
 
   async getSample(db, specimenId) {
     try {
-      const samplesCollection = await getCollection(db, 'samples');
+      const samplesCollection = await getCollection(db, 'Specimen');
       const sample = await findSampleByAnyId(samplesCollection, specimenId);
       if (!sample) return null;
       // Guarantee specimenStatus is populated even for legacy documents
@@ -590,7 +590,7 @@ class SampleService {
 
   async listSamples(db, filters = {}) {
     try {
-      const samplesCollection = await getCollection(db, 'samples');
+      const samplesCollection = await getCollection(db, 'Specimen');
       const query = {};
 
       if (filters.participantId) {
@@ -646,7 +646,7 @@ class SampleService {
 
   async updateSample(db, specimenId, updateData) {
     try {
-      const samplesCollection = await getCollection(db, 'samples');
+      const samplesCollection = await getCollection(db, 'Specimen');
       const existing = await findSampleByAnyId(samplesCollection, specimenId);
       if (!existing) {
         return null;
@@ -752,7 +752,7 @@ class SampleService {
 
   async deleteSample(db, specimenId) {
     try {
-      const samplesCollection = await getCollection(db, 'samples');
+      const samplesCollection = await getCollection(db, 'Specimen');
       const result = await samplesCollection.deleteOne({ specimenId });
       return result.deletedCount > 0;
     } catch (error) {
@@ -763,8 +763,8 @@ class SampleService {
 
   async getSampleByBarcode(db, barcode) {
     try {
-      const samplesCollection = await getCollection(db, 'samples');
-      const patientsCollection = await getCollection(db, 'patients');
+      const samplesCollection = await getCollection(db, 'Specimen');
+      const patientsCollection = await getCollection(db, 'Participant');
       
       const parsedBarcode = parseScannedBarcode(barcode);
       const barcodeStr = parsedBarcode.normalizedValue;
@@ -856,7 +856,7 @@ class SampleService {
 
   async returnSample(db, specimenId, returnData, auditInfo = {}) {
     try {
-      const samplesCollection = await getCollection(db, 'samples');
+      const samplesCollection = await getCollection(db, 'Specimen');
       const movementsCollection = await getCollection(db, 'sampleMovements');
       
       // Devolução opera por identidade canônica do espécime. O Data Matrix
@@ -995,7 +995,7 @@ class SampleService {
    */
   async getSampleMovements(db, specimenId) {
     try {
-      const samplesCollection = await getCollection(db, 'samples');
+      const samplesCollection = await getCollection(db, 'Specimen');
       const movementsCollection = await getCollection(db, 'sampleMovements');
 
       // Movements are keyed by canonical specimenId. The physical
@@ -1025,7 +1025,7 @@ class SampleService {
    */
   async getRcsAssessments(db, specimenId) {
     try {
-      const samplesCollection = await getCollection(db, 'samples');
+      const samplesCollection = await getCollection(db, 'Specimen');
       const sample = await findSampleByAnyId(samplesCollection, specimenId);
       const specimenIdStr = sample
         ? sample.specimenId
@@ -1045,7 +1045,7 @@ class SampleService {
    */
   async getSprecProfiles(db, specimenId) {
     try {
-      const samplesCollection = await getCollection(db, 'samples');
+      const samplesCollection = await getCollection(db, 'Specimen');
       const sample = await findSampleByAnyId(samplesCollection, specimenId);
       const specimenIdStr = sample
         ? sample.specimenId
@@ -1066,7 +1066,7 @@ class SampleService {
    */
   async getQuarantineActions(db, specimenId) {
     try {
-      const samplesCollection = await getCollection(db, 'samples');
+      const samplesCollection = await getCollection(db, 'Specimen');
       const sample = await findSampleByAnyId(samplesCollection, specimenId);
       const specimenIdStr = sample
         ? sample.specimenId
@@ -1083,7 +1083,7 @@ class SampleService {
    * Garante que amostras com status QUARANTINED não sejam retornadas para pesquisadores.
    */
   async findAvailableSamplesForResearch(db, query = {}) {
-    const samplesCollection = await getCollection(db, 'samples');
+    const samplesCollection = await getCollection(db, 'Specimen');
     // Garante que só retorna amostras AVAILABLE
     const finalQuery = { ...query, specimenStatus: 'available' };
     return samplesCollection.find(finalQuery).toArray();

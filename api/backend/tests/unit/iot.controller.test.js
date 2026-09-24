@@ -121,7 +121,7 @@ describe('iot.controller', () => {
     // string) an active `technician` assignment by default so tests that
     // only configure `usersCollection.find` (the final email projection)
     // keep exercising the recipient-notification path unchanged.
-    const NOTIFIABLE_USER_ID = '507f1f77bcf86cd799439011';
+    const NOTIFIABLE_USER_ID = '11111111-1111-4111-8111-111111111111';
     const rolesCollection = {
       find: vi.fn().mockReturnValue({
         toArray: vi.fn().mockResolvedValue([{ roleId: 'role-tech', roleCode: 'technician', roleStatus: 'active' }]),
@@ -138,7 +138,7 @@ describe('iot.controller', () => {
     const fakeConnection = {
       collection: vi.fn().mockImplementation((name) => {
         if (name === 'temperatureIncidents') return temperatureIncidentsCollection;
-        if (name === 'users') return usersCollection;
+        if (name === 'userAccounts') return usersCollection;
         if (name === 'roles') return rolesCollection;
         if (name === 'userRoleAssignments') return assignmentsCollection;
         return {

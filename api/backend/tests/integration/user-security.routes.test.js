@@ -81,13 +81,17 @@ function createResponse() {
   return response;
 }
 
-function createRequest({ body = {}, params = {}, query = {}, userID = '507f1f77bcf86cd799439011' } = {}) {
+const ACTOR_ID = '550e8400-e29b-41d4-a716-446655440001';
+const USER_ID = '550e8400-e29b-41d4-a716-446655440002';
+
+function createRequest({ body = {}, params = {}, query = {}, userID = USER_ID } = {}) {
   return {
     body,
     params,
     query,
     user: {
       userID,
+      actorId: ACTOR_ID,
       accessType: 4,
       roleName: 'Administrador',
     },
@@ -162,9 +166,10 @@ describe('User security routes', () => {
 
     db = {
       collection: vi.fn((name) => {
-        if (name === 'users') return usersCollection;
+        if (name === 'userAccounts') return usersCollection;
+        if (name === 'actors') return { findOne: vi.fn(async ({ actorId }) => actorId === ACTOR_ID ? { actorId } : null) };
         if (name === 'sessions') return sessionsCollection;
-        if (name === 'recovery_codes') return recoveryCodesCollection;
+        if (name === 'recoveryCodeSets') return recoveryCodesCollection;
         if (name === 'user_activities') return activityCollection;
         if (name === 'logs') return { insertOne: vi.fn().mockResolvedValue({ insertedId: 'log-1' }) };
         return {
@@ -184,7 +189,7 @@ describe('User security routes', () => {
   it('GET /api/user/security/status deve retornar status de segurança', async () => {
     const req = createRequest();
     req.app.locals.db = db;
-    req.user.userID = '507f1f77bcf86cd799439011';
+    req.user.userID = USER_ID;
     usersCollection.findOne.mockResolvedValue({
       _id: '507f1f77bcf86cd799439011',
       mfaEnabled: true,

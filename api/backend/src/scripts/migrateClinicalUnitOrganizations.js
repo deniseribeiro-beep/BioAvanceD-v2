@@ -15,7 +15,7 @@
 const { MongoClient, ObjectId } = require('mongodb');
 const OrganizationModel = require('../models/Organization');
 const ClinicalUnitModel = require('../models/ClinicalUnit');
-const { CANONICAL_COLLECTIONS } = require('../config/collections');
+const { getCanonicalCollectionName } = require('../config/canonicalEntityCollections.v2');
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '../../.env') });
 
@@ -38,9 +38,9 @@ async function migrateClinicalUnitOrganizations() {
     console.log('Conectado ao MongoDB');
 
     const db = client.db(dbName);
-    const patientsCollection = db.collection(CANONICAL_COLLECTIONS.patients);
-    const clinicalUnitsCollection = db.collection(CANONICAL_COLLECTIONS.clinicalUnits);
-    const organizationsCollection = db.collection(CANONICAL_COLLECTIONS.organizations);
+    const patientsCollection = db.collection('patients');
+    const clinicalUnitsCollection = db.collection('clinical_units');
+    const organizationsCollection = db.collection(getCanonicalCollectionName('Organization'));
 
     const patientsToMigrate = await patientsCollection.find({
       $or: [

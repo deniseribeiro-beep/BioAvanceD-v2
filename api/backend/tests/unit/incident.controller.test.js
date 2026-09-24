@@ -71,12 +71,12 @@ const rolesCollection = {
 const assignmentsCollection = {
   find: vi.fn(),
 };
-const NOTIFIABLE_USER_ID = '507f1f77bcf86cd799439011';
+const NOTIFIABLE_USER_ID = '11111111-1111-4111-8111-111111111111';
 
 const fakeDb = {
   collection: vi.fn((name) => {
     if (name === 'temperatureIncidents') return tempCollection;
-    if (name === 'users') return userCollection;
+    if (name === 'userAccounts') return userCollection;
     if (name === 'sensorMetadata') return sensorMetadataCollection;
     if (name === 'devices') return deviceCollection;
     if (name === 'environmentalExcursions') return excursionCollection;
@@ -146,7 +146,7 @@ describe('incident.controller.getAlertRecipients', () => {
     // `technician` assignment) rather than an accessType $in query.
     const [userQuery] = userCollection.find.mock.calls[0];
     expect(userQuery.status).toBe('active');
-    expect(userQuery._id.$in.map((id) => id.toString())).toEqual([NOTIFIABLE_USER_ID]);
+    expect(userQuery.userAccountId.$in).toEqual([NOTIFIABLE_USER_ID]);
     expect(result).toEqual(['a@x.com', 'b@x.com']);
   });
 
