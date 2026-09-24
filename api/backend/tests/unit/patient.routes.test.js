@@ -164,6 +164,9 @@ describe('patient.routes authorization gates (issue #921)', () => {
       { label: 'POST /:id/reidentify', method: 'post', path: '/p1/reidentify' },
       { label: 'PUT /:id', method: 'put', path: '/p1' },
       { label: 'DELETE /:id', method: 'delete', path: '/p1' },
+      // #1185: find-for-edit returns a full patient for editing, so it
+      // takes the same scope gate as GET /:id rather than none.
+      { label: 'POST /find-for-edit', method: 'post', path: '/find-for-edit' },
     ];
 
     for (const { label, method, path } of GATED_CASES) {
@@ -196,7 +199,6 @@ describe('patient.routes authorization gates (issue #921)', () => {
     // through to the (stubbed) controller instead.
     const UNGATED_CASES = [
       { label: 'POST /', method: 'post', path: '/', expectedStub: 'cadastrar' },
-      { label: 'POST /find-for-edit', method: 'post', path: '/find-for-edit', expectedStub: 'findForEdit' },
     ];
 
     for (const { label, method, path, expectedStub } of UNGATED_CASES) {

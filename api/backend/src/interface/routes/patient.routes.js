@@ -50,7 +50,7 @@ router.delete('/:id', authenticate, requirePermission('createPatient'), requireO
 router.post('/validate-id', authenticate, patientController.validateID.bind(patientController));
 
 // Buscar paciente para edição (apenas módulo de cadastro)
-router.post('/find-for-edit', authenticate, requirePermission('createPatient'), patientController.findForEdit.bind(patientController));
+router.post('/find-for-edit', authenticate, requirePermission('createPatient'), requireOrganizationScope, patientController.findForEdit.bind(patientController));
 
 
 module.exports = router;

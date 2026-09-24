@@ -819,6 +819,42 @@ describe('paciente.controller', () => {
 
       expect(res.status).toHaveBeenCalledWith(500);
     });
+
+    // #1185: buscar/atualizar/deletar all 403 a patient outside the caller's
+    // organization scope (#340/#626); findForEdit returned it for editing.
+    it('returns 403 when the patient belongs to a different organization', async () => {
+      const patientsCollection = { findOne: vi.fn().mockResolvedValue({ participantId: '12345678', clinicalUnitId: 'org-9' }) };
+      const db = { collection: vi.fn().mockReturnValue(patientsCollection) };
+      vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+      vi.spyOn(auditLogger, 'log').mockResolvedValue();
+      const req = createReq({
+        app: { locals: { db } },
+        body: { participantId: '12345678' },
+        organizationScope: { scope: 'organization', organizationIds: ['org-1'] }
+      });
+      const res = createRes();
+
+      await controller.findForEdit(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+    });
+
+    it('CONTROL: returns a patient in the caller organization', async () => {
+      const patientsCollection = { findOne: vi.fn().mockResolvedValue({ participantId: '12345678', clinicalUnitId: 'org-1' }) };
+      const db = { collection: vi.fn().mockReturnValue(patientsCollection) };
+      vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+      vi.spyOn(auditLogger, 'log').mockResolvedValue();
+      const req = createReq({
+        app: { locals: { db } },
+        body: { participantId: '12345678' },
+        organizationScope: { scope: 'organization', organizationIds: ['org-1'] }
+      });
+      const res = createRes();
+
+      await controller.findForEdit(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+    });
   });
 
   describe('search', () => {

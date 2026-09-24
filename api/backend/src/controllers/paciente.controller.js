@@ -850,6 +850,17 @@ class PacienteController {
         });
       }
 
+      // #1185: buscar's #340 check. This handler returns the full patient
+      // for editing and had no scope test at all.
+      const { isRecordInOrganizationScope } = require('../services/rbac-assignment.service');
+      if (!isRecordInOrganizationScope(patient, req.organizationScope, 'clinicalUnitId')) {
+        return res.status(403).json({
+          success: false,
+          error: 'Acesso negado',
+          message: 'Este paciente pertence a outra organização'
+        });
+      }
+
       // Registra log de busca para edição (sanitizado)
       const auditLogger = require('../utils/auditLogger');
       auditLogger.init(db);
