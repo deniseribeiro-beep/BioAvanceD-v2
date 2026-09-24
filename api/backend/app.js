@@ -377,7 +377,9 @@ app.use("/api/assays", createMasterDataRouter({
   collectionName: "assays",
   idField: "assayId",
   model: require("./src/models/Assay"),
-  validateReferences: require("./src/services/assayReferenceValidator").validateAssayReferences
+  validateReferences: require("./src/services/assayReferenceValidator").validateAssayReferences,
+  // #1182: Assay is the one mount with an organization field of its own.
+  scopeField: "laboratoryId"
 }));
 app.use("/api/reagent-lots", createMasterDataRouter({
   collectionName: "reagentLots",
