@@ -18,11 +18,12 @@
 // The result was an import queue that silently did nothing. ALLOWED_ORIGINS
 // and FRONTEND_URL were missing on the same terms.
 //
-// This guard turns that class into a test failure. It runs on CI: the pipeline
-// is ubuntu-latest and already invokes `npm --prefix api/backend run
-// test:architecture`, so bash, openssl and python3 are all present.
+// This guard turns that class into a test failure. It does NOT run on CI,
+// and skips there by design (#1190): CI runs test:architecture inside
+// backend-unit-runner, whose image holds only api/backend and is
+// node:22-alpine (no bash, openssl or python3). It runs natively.
 
-const { test } = require('node:test');
+const { test: nodeTest } = require('node:test');
 const assert = require('node:assert/strict');
 
 const fs = require('fs');
@@ -33,6 +34,14 @@ const { execFileSync } = require('child_process');
 const REPO_ROOT = path.resolve(__dirname, '../../../..');
 const GENERATOR = path.resolve(REPO_ROOT, 'generate-env-docker-secrets.sh');
 const EXAMPLE = path.resolve(REPO_ROOT, '.env.docker.example');
+
+// #1190, #1059's class: in backend-unit-runner REPO_ROOT clamps at `/`.
+// Keyed on the repo tree, not the generator, so the existsSync asserts below
+// still fail natively on a deleted or renamed generator.
+const IN_REPO_TREE = fs.existsSync(path.join(REPO_ROOT, 'api', 'backend', 'package.json'));
+const test = IN_REPO_TREE
+  ? nodeTest
+  : (name, fn) => nodeTest(name, { skip: '#1190: repo tree not reachable (expected inside backend-unit-runner)' }, fn);
 
 // The digit-bearing class is mandatory, not stylistic: ^[A-Z_]+= silently
 // drops every name containing a digit (NEO4J_*, INFLUXDB_*, AUDIT_RFC3161_*,

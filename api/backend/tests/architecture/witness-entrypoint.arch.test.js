@@ -10,9 +10,11 @@
 // The entrypoint is run on the HOST here, not in a container: with the key path
 // pointed into a temp dir it touches nothing else (its only mkdir is the key's
 // own directory), and `exec "$@"` hands off to a harmless `node -e` stand-in
-// for the witness server. Runs on CI's ubuntu-latest via test:architecture.
+// for the witness server. Skips on CI by design (#1190): CI runs
+// test:architecture inside backend-unit-runner, whose image holds only
+// api/backend, so infra/ is absent. It runs natively.
 
-const { test } = require('node:test');
+const { test: nodeTest } = require('node:test');
 const assert = require('node:assert/strict');
 
 const fs = require('fs');
@@ -23,6 +25,14 @@ const { spawnSync } = require('child_process');
 
 const REPO_ROOT = path.resolve(__dirname, '../../../..');
 const ENTRYPOINT = path.resolve(REPO_ROOT, 'infra/witness/entrypoint.sh');
+
+// #1190, #1059's class: in backend-unit-runner REPO_ROOT clamps at `/`.
+// Keyed on the repo tree, not the entrypoint, so a moved entrypoint still
+// fails natively rather than skipping.
+const IN_REPO_TREE = fs.existsSync(path.join(REPO_ROOT, 'api', 'backend', 'package.json'));
+const test = IN_REPO_TREE
+  ? nodeTest
+  : (name, fn) => nodeTest(name, { skip: '#1190: repo tree not reachable (expected inside backend-unit-runner)' }, fn);
 
 function start(keyPath) {
   // sh explicitly rather than relying on the executable bit. Forward slashes

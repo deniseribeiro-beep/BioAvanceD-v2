@@ -17,11 +17,12 @@
 // verify previously-signed audit roots is never read, minted over, or
 // deleted by anything in this file.
 //
-// Runs on CI: the pipeline is ubuntu-latest and already invokes
-// `npm --prefix api/backend run test:architecture`, so bash, openssl and
-// python3 are all present.
+// Does NOT run on CI, and skips there by design (#1190): CI runs
+// test:architecture inside backend-unit-runner, whose image holds only
+// api/backend (no generator, no example) and is node:22-alpine (no bash,
+// openssl or python3). It runs natively, wherever the repo tree is present.
 
-const { test } = require('node:test');
+const { test: nodeTest } = require('node:test');
 const assert = require('node:assert/strict');
 
 const fs = require('fs');
@@ -33,6 +34,14 @@ const { spawnSync } = require('child_process');
 const REPO_ROOT = path.resolve(__dirname, '../../../..');
 const GENERATOR = path.resolve(REPO_ROOT, 'generate-env-docker-secrets.sh');
 const EXAMPLE = path.resolve(REPO_ROOT, '.env.docker.example');
+
+// #1190, #1059's class: in backend-unit-runner REPO_ROOT clamps at `/`.
+// Keyed on the repo tree being present, not on the generator, so a deleted
+// or renamed generator still fails natively rather than skipping.
+const IN_REPO_TREE = fs.existsSync(path.join(REPO_ROOT, 'api', 'backend', 'package.json'));
+const test = IN_REPO_TREE
+  ? nodeTest
+  : (name, fn) => nodeTest(name, { skip: '#1190: repo tree not reachable (expected inside backend-unit-runner)' }, fn);
 
 const CONTAINER_KEY_PATH = 'AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE=/run/secrets/merkle_signing_key.pem';
 
