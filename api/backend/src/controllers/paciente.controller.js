@@ -83,6 +83,15 @@ class PacienteController {
       const pacienteData = this.sanitizePatientPayload(req.body);
       this.validateDeceasedRepresentative(pacienteData);
 
+      // #1185: #1071's create rule. An organization-scoped caller registers
+      // into its own organization whatever unit the body names -- by id or
+      // by clinicalUnit name, since createPatient resolves the id first. A
+      // global caller keeps the body's value, name-only lookup included.
+      if (req.organizationScope?.scope !== 'global') {
+        const { resolveOrganizationIdForCreate } = require('../services/rbac-assignment.service');
+        pacienteData.clinicalUnitId = resolveOrganizationIdForCreate(req.organizationScope, pacienteData.clinicalUnitId);
+      }
+
       // Validação básica
       if (!pacienteData || Object.keys(pacienteData).length === 0) {
         return res.status(400).json({

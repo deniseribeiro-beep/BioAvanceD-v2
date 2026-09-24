@@ -6,7 +6,7 @@ const { authenticate } = require('../../infrastructure/middleware/auth');
 const { requirePermission, requireOrganizationScope } = require('../../infrastructure/middleware/rbac');
 
 // RF005 - Cadastro de paciente (Coordenador, Administrador)
-router.post('/', authenticate, requirePermission('createPatient'), patientController.cadastrar.bind(patientController));
+router.post('/', authenticate, requirePermission('createPatient'), requireOrganizationScope, patientController.cadastrar.bind(patientController));
 
 // Listar pacientes
 router.get('/', authenticate, requireOrganizationScope, patientController.listar.bind(patientController));
