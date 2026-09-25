@@ -16,8 +16,8 @@ const { buildRbacCollections } = require('../factories/rbac.factory');
 // StorageContainer or a StorageBox -- location-storage-backfill.service.js
 // held the only insertOne calls, and it reads legacy `locations`. Ported
 // from Denise's stabilize/v2.0.0-prototype (12b2f889, dd75ae70, 4dad2186,
-// 23e17a1c); adapted to this branch's factories and to #1164's
-// `$gt: ''` containerID partial filter.
+// 23e17a1c); adapted to this branch's factories and to #1209's
+// `$exists: true` containerID partial filter.
 
 function makeToken(accessType = 3) {
   return jwt.sign(
@@ -85,7 +85,7 @@ describe('governed storage topology authoring (#1124)', () => {
     expect(res.body.data.containerID).toBe(4201);
     expect(storageContainers.createIndex).toHaveBeenCalledWith(
       { containerID: 1 },
-      expect.objectContaining({ unique: true, partialFilterExpression: { containerID: { $gt: '' } } })
+      expect.objectContaining({ unique: true, partialFilterExpression: { containerID: { $exists: true } } })
     );
     expect(storageInsert).toHaveBeenCalledWith(expect.objectContaining({
       name: 'Ultra-Freezer 01',
@@ -131,10 +131,9 @@ describe('governed storage topology authoring (#1124)', () => {
     expect(res.body.error).toBe('STORAGE_CONTAINER_CONFLICT');
   });
 
-  // The E11000 path above cannot fire for the canonical numeric containerID
-  // (#757): the unique index's `$gt: ''` filter admits strings only. This is
-  // the check that actually stops a second FREEZER claiming one Equipment,
-  // including across number/string variants.
+  // The unique index treats 4201 and '4201' as different keys, while every
+  // consumer joins on both variants. This check is what stops a second
+  // FREEZER claiming one Equipment across the two types.
   it('answers 409 when a FREEZER already holds that equipment under the other id type, without inserting', async () => {
     const storageContainers = createCollectionMock({
       findOne: vi.fn().mockImplementation(async (filter) => (

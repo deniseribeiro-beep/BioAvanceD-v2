@@ -17,14 +17,15 @@ const { dropLegacyIndex } = require('./legacyIndex');
  * equivalent, wired at the write path -- see `utils/sampleIndexes.js` for
  * the precedent this copies.
  *
- * ## Why `storageContainers.containerID` needs `$type: 'string'`
+ * ## Why `storageContainers.containerID` needs `$exists: true`
  *
- * `findOrCreateFreezer` in `location-storage-backfill.service.js` writes a
- * real `containerID`, but the SHELF/RACK/DRAWER path in `findOrCreateContainer`
- * in the same file never sets the field at all. A plain unique index would
- * collide on the second container created without one. `$type: 'string'`
- * indexes only the rows that carry a real `containerID`, the same shape
- * `sampleIndexes.js` uses on `samples.barcode` and for the same reason.
+ * A FREEZER carries a real `containerID` (`findOrCreateFreezer` in
+ * `location-storage-backfill.service.js`, and the topology authoring API),
+ * but SHELF/RACK/DRAWER rows never set the field at all. A plain unique index
+ * would collide on the second container created without one, so the index is
+ * partial. The filter must admit NUMBERS: `containerID` is a Number (#757),
+ * which is why `$type: 'string'` (v1) and `$gt: ''` (v2) were both wrong
+ * (#1209); see the comment at the build site for the measured choice.
  *
  * ## Why `sensorMetadata.sensorId` needs no partial filter
  *
@@ -88,26 +89,38 @@ async function ensureStorageContainerIndexes(collection) {
   if (storageContainersIndexed.has(name)) return;
   storageContainersIndexed.add(name);
 
-  // #1164: `$gt: ''`, not `$type: 'string'`. Both keep missing/null rows
-  // out (comparisons are type-bracketed, so `$gt: ''` means "a non-empty
-  // string"), but the planner cannot prove a plain equality implies a
-  // `$type` filter, so the `$type` version enforced uniqueness while never
-  // serving a single lookup. The new name is built FIRST, then the
-  // superseded one dropped, so the constraint never has a gap.
+  // #1164 replaced v1's `$type: 'string'` with `$gt: ''` so the planner
+  // could serve an equality lookup. #1209: both admit STRINGS only
+  // (comparisons are type-bracketed), and containerID is a Number
+  // (StorageContainer.js; #757 made it the Equipment's plain-number
+  // equipmentID), so v2 enforced nothing on a real freezer -- two numeric
+  // duplicates were both accepted on the test stack.
+  //
+  // `$exists: true` keeps the SHELF/RACK/DRAWER rows, which carry no
+  // containerID, out of the constraint, and covers every value type. Measured
+  // on mongo:7 against three alternatives (an `$or` of the two ranges, two
+  // partial indexes, a `$type` array): it is the only one that also serves
+  // the `{ containerID: { $in: variants } }` lookup every consumer issues;
+  // the others, and v2, COLLSCAN it. Its one cost: two rows with an EXPLICIT
+  // `containerID: null` collide, and no writer writes one.
+  //
+  // The new name is built FIRST, then both superseded ones dropped, so the
+  // constraint never has a gap.
   try {
     await collection.createIndex(
       { containerID: 1 },
       {
-        name: 'storage_containers_containerid_unique_v2',
+        name: 'storage_containers_containerid_unique_v3',
         unique: true,
-        partialFilterExpression: { containerID: { $gt: '' } }
+        partialFilterExpression: { containerID: { $exists: true } }
       }
     );
     // Only once the replacement exists: a failed build keeps the old constraint.
+    await dropLegacyIndex(collection, 'storage_containers_containerid_unique_v2', 'STORAGE');
     await dropLegacyIndex(collection, 'storage_containers_containerid_unique_v1', 'STORAGE');
   } catch (error) {
     logger.warn(
-      '[STORAGE][INDEX] Não foi possível criar storage_containers_containerid_unique_v2 (#941). '
+      '[STORAGE][INDEX] Não foi possível criar storage_containers_containerid_unique_v3 (#941, #1209). '
         + 'Um E11000 aqui significa containerID duplicados já gravados -- '
         + 'a unicidade segue apenas em nível de aplicação até que sejam corrigidos: '
         + (error?.message || error)

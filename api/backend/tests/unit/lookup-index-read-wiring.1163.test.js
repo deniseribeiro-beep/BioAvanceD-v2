@@ -110,7 +110,7 @@ describe('#1163: storage lookup indexes are ensured on their read paths', () => 
     await resolveFreezersByEquipmentIdentifiers(makeDb({ storageContainers }), ['EQ-1']);
     await settle();
 
-    expect(indexNames(storageContainers)).toContain('storage_containers_containerid_unique_v2');
+    expect(indexNames(storageContainers)).toContain('storage_containers_containerid_unique_v3');
   });
 
   it('equipment-sensor-quarantine findBoxIdsUnderFreezer ensures both parent_id lookups', async () => {

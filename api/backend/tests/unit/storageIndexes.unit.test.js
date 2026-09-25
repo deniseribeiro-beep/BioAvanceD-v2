@@ -49,7 +49,7 @@ describe('#941 ensureStorageContainerIndexes', () => {
     const [keys, options] = containerIdCall;
     expect(keys).toEqual({ containerID: 1 });
     expect(options.unique).toBe(true);
-    expect(options.name).toBe('storage_containers_containerid_unique_v2');
+    expect(options.name).toBe('storage_containers_containerid_unique_v3');
   });
 
   // The filter is the whole design decision, so it is pinned by value.
@@ -58,28 +58,43 @@ describe('#941 ensureStorageContainerIndexes', () => {
   // container; `$type: 'string'` indexes only the rows with a real value.
   // #1164: `$gt: ''`, not `$type: 'string'` -- the planner cannot use a
   // `$type` partial index for `{ containerID: 'X' }`, so v1 never served a
-  // lookup. `$gt: ''` excludes the same missing/null rows.
-  it("filters on $gt ''", async () => {
+  // lookup.
+  // #1209: `$exists: true`, not `$gt: ''` -- containerID is a Number
+  // (StorageContainer.js, #757) and `$gt: ''` admits strings only, so v2
+  // enforced nothing on a real freezer. Measured on mongo:7 (#1209):
+  // `$exists: true` is the only candidate that rejects a numeric AND a
+  // string duplicate, still admits any number of SHELF/RACK rows with no
+  // containerID, AND serves the `{ containerID: { $in: variants } }` lookup
+  // every consumer issues (an `$or` filter, two partial indexes and a
+  // `$type` array all COLLSCAN it; so did v2). Its one cost: two rows with
+  // an EXPLICIT `containerID: null` collide, and no writer writes one.
+  it('filters on $exists: true', async () => {
     const { ensureStorageContainerIndexes } = freshStorageIndexes();
     const collection = makeCollection('storageContainers');
 
     await ensureStorageContainerIndexes(collection);
 
     const [, options] = collection.createIndex.mock.calls[0];
-    expect(options.partialFilterExpression).toEqual({ containerID: { $gt: '' } });
+    expect(options.partialFilterExpression).toEqual({ containerID: { $exists: true } });
   });
 
-  it('drops the superseded storage_containers_containerid_unique_v1 only AFTER building v2', async () => {
+  it('drops the superseded v2 and v1 containerID indexes only AFTER building v3', async () => {
     const { ensureStorageContainerIndexes } = freshStorageIndexes();
-    const collection = makeCollection('storageContainers-1164-drop');
+    const collection = makeCollection('storageContainers-1209-drop');
     collection.dropIndex = vi.fn(async () => {});
 
     await ensureStorageContainerIndexes(collection);
 
-    expect(collection.dropIndex).toHaveBeenCalledWith('storage_containers_containerid_unique_v1');
-    const buildV2 = collection.createIndex.mock.calls.findIndex(([, o]) => o.name === 'storage_containers_containerid_unique_v2');
-    expect(collection.createIndex.mock.invocationCallOrder[buildV2])
-      .toBeLessThan(collection.dropIndex.mock.invocationCallOrder[0]);
+    const dropped = collection.dropIndex.mock.calls.map(([name]) => name);
+    expect(dropped).toEqual(expect.arrayContaining([
+      'storage_containers_containerid_unique_v2',
+      'storage_containers_containerid_unique_v1',
+    ]));
+    const buildV3 = collection.createIndex.mock.calls.findIndex(([, o]) => o.name === 'storage_containers_containerid_unique_v3');
+    expect(buildV3).toBeGreaterThanOrEqual(0);
+    collection.dropIndex.mock.invocationCallOrder.forEach((order) => {
+      expect(collection.createIndex.mock.invocationCallOrder[buildV3]).toBeLessThan(order);
+    });
   });
 
   it('logs and does not throw when the index cannot be built', async () => {
@@ -100,7 +115,7 @@ describe('#941 ensureStorageContainerIndexes', () => {
     });
 
     const warned = warn.mock.calls.map(([message]) => message);
-    const uniqueWarning = warned.find((m) => m.includes('storage_containers_containerid_unique_v2'));
+    const uniqueWarning = warned.find((m) => m.includes('storage_containers_containerid_unique_v3'));
     expect(uniqueWarning).toContain('E11000');
 
     // A lookup-index failure costs performance and nothing else, so its

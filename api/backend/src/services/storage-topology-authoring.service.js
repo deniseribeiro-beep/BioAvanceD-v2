@@ -116,11 +116,11 @@ class StorageTopologyAuthoringService {
       // the Equipment's own value so the two stay one type.
       containerID = equipment.equipmentID;
 
-      // The containerID unique index's `$gt: ''` filter (#1164) admits
-      // strings only, so it cannot see a duplicate numeric containerID --
-      // the canonical type. Check across the id variants the consumers
-      // join on, so neither type can double-claim one Equipment. The E11000
-      // mapping below still covers a string race.
+      // The containerID unique index (#1209) rejects a same-type duplicate,
+      // but 4201 and '4201' are different keys to it, while every consumer
+      // joins on both variants. Check across the variants so neither type
+      // can double-claim one Equipment; the E11000 mapping below covers a
+      // same-type race.
       const existingFreezer = await storageContainers.findOne({
         containerID: { $in: buildIdVariants(containerID) },
         deletedAt: null,
