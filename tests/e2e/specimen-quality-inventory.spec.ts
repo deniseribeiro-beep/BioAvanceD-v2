@@ -10,6 +10,8 @@ import {
   seedStudy,
   seedProtocol,
   seedCollectionEntity,
+  seedQuarantineAction,
+  cleanupQuarantineActions,
   closeSeedDb,
   type SeededStorageBox,
 } from './helpers/seedParticipant';
@@ -713,11 +715,13 @@ test.describe('Specimen quarantine (RF019) — real backend', () => {
   // quarantine route exists — release, like RF006's blocked-status
   // seeding, goes through the generic update route.
   const seededStorageBoxes: SeededStorageBox[] = [];
+  const seededQuarantineActionIds: string[] = [];
 
   test.afterAll(async () => {
     await Promise.all(
       seededStorageBoxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {}))
     );
+    await cleanupQuarantineActions(seededQuarantineActionIds).catch(() => {});
     await closeSeedDb();
   });
 
@@ -810,6 +814,31 @@ test.describe('Specimen quarantine (RF019) — real backend', () => {
     expect(releaseBody.specimenStatus).toBe('available');
 
     await assertAuditEventRecorded(request, apiBaseURL!, admin.token, watch);
+  });
+  // #1219: every QuarantineAction writer recorded the sample's Mongo _id, and
+  // this read queried the canonical specimenId, so it could not return a
+  // single real action. New actions carry the specimenId. The read matches
+  // both, because every row written before #1219 carries the _id.
+  test('#1219: GET /:id/quarantine-actions returns an action recorded under the sample _id and one under its specimenId', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const { sampleID: specimenId } = await seedQuarantinableSample(request, admin);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+
+    const sampleDoc = await request.get(`${apiBaseURL}/api/samples/${specimenId}`, { headers: auth });
+    expect(sampleDoc.status()).toBe(200);
+    const mongoId = String((await sampleDoc.json()).data._id);
+    expect(mongoId).not.toBe(specimenId);
+
+    const legacyId = await seedQuarantineAction([mongoId], 'E2E_1219_LEGACY');
+    const canonicalId = await seedQuarantineAction([specimenId], 'E2E_1219_CANONICAL');
+    seededQuarantineActionIds.push(legacyId, canonicalId);
+
+    const res = await request.get(`${apiBaseURL}/api/samples/${specimenId}/quarantine-actions`, { headers: auth });
+    expect(res.status()).toBe(200);
+    const ids = ((await res.json()).data as Array<{ quarantineActionId: string }>).map((a) => a.quarantineActionId);
+    expect(ids).toEqual(expect.arrayContaining([legacyId, canonicalId]));
   });
 });
 

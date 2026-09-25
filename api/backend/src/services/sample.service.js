@@ -1107,11 +1107,12 @@ class SampleService {
     try {
       const samplesCollection = await getCollection(db, 'samples');
       const sample = await findSampleByAnyId(samplesCollection, specimenId);
-      const specimenIdStr = sample
-        ? sample.specimenId
-        : (specimenId.toString ? specimenId.toString() : specimenId);
-
-      return await quarantineActionService.getActionsForSpecimen(db, specimenIdStr);
+      // #1219: handed the sample, the lookup matches its specimenId and the
+      // _id every action recorded before #1219 carries.
+      return await quarantineActionService.getActionsForSpecimen(
+        db,
+        sample || (specimenId.toString ? specimenId.toString() : specimenId)
+      );
     } catch (error) {
       logger.error('Erro ao buscar ações de quarentena:', error.message);
       throw error;

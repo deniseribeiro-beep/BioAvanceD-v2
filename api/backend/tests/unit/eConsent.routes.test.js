@@ -622,7 +622,8 @@ describe('eConsent.routes POST /update', () => {
       }
     );
     expect(db.samplesCollection.updateOne.mock.calls[0][1].$set.status).toBeUndefined();
-    expect(releaseSpy).toHaveBeenCalledWith(db, 'sample-1', 'SYSTEM');
+    // #1219: handed the sample, so the release matches its specimenId and its _id.
+    expect(releaseSpy).toHaveBeenCalledWith(db, expect.objectContaining({ _id: 'sample-1' }), 'SYSTEM');
     expect(io.to).toHaveBeenCalledWith('patient-12345678');
     expect(emit).toHaveBeenCalledWith('sample-released', { participantId: '12345678' });
   });

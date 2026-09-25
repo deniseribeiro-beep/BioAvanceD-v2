@@ -1279,6 +1279,35 @@ describe('sample.service', () => {
   });
 
   // -------------------------------------------------------------------
+  // #1219: every QuarantineAction writer recorded the sample's _id, and
+  // this read queried the canonical specimenId, so it found nothing. The
+  // find double honours the filter, so a read keyed on one form only
+  // misses the other row.
+  describe('getQuarantineActions', () => {
+    it('returns both the legacy _id-keyed and the canonical action for a sample', async () => {
+      const _id = new ObjectId();
+      const actions = [
+        { quarantineActionId: 'legacy', specimenIds: [String(_id)] },
+        { quarantineActionId: 'canonical', specimenIds: ['3116768'] },
+        { quarantineActionId: 'other', specimenIds: ['someone-else'] },
+      ];
+      const matches = (value, doc) => (value && Array.isArray(value.$in)
+        ? value.$in.some((v) => doc.specimenIds.includes(v))
+        : doc.specimenIds.includes(value));
+      const quarantineActions = makeCollection('quarantineActions');
+      quarantineActions.find.mockImplementation((filter) => makeCursor(actions.filter((doc) => matches(filter.specimenIds, doc))));
+      const db = makeDb({ quarantineActions });
+      db.collections.samples.findOne.mockImplementation(async (filter) => (
+        filter.specimenId === '3116768' ? { _id, specimenId: '3116768' } : null
+      ));
+
+      const result = await sampleService.getQuarantineActions(db, '3116768');
+
+      expect(result.map((a) => a.quarantineActionId).sort()).toEqual(['canonical', 'legacy']);
+    });
+  });
+
+  // -------------------------------------------------------------------
   describe('getSampleByBarcode', () => {
     it('returns the sample and an anonymized participant on exact match, resolving patientName via ParticipantIdentity (#561/#564)', async () => {
       const db = makeDb();

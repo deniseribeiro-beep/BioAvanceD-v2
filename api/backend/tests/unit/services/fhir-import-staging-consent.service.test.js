@@ -21,6 +21,21 @@ function createCursor(items) {
   };
 }
 
+// Mongo's semantics for the two shapes these services query with: a scalar
+// matches an array field by membership, and { $in } matches any listed value.
+// #1219 releases a QuarantineAction by { specimenIds: { $in: [...] } }.
+function fieldMatches(docValue, value) {
+  if (value && typeof value === 'object' && Array.isArray(value.$in)) {
+    return value.$in.some((candidate) => fieldMatches(docValue, candidate));
+  }
+  if (Array.isArray(docValue)) return docValue.some((item) => String(item) === String(value));
+  return String(docValue) === String(value);
+}
+
+function matchesFilter(doc, filter) {
+  return Object.entries(filter).every(([key, value]) => fieldMatches(doc[key], value));
+}
+
 function createCollection() {
   const docs = [];
   return {
@@ -34,10 +49,10 @@ function createCollection() {
       items.forEach((doc) => docs.push({ _id: doc._id || `id-${docs.length + 1}`, ...doc }));
       return { insertedCount: items.length };
     }),
-    findOne: vi.fn(async (filter = {}) => docs.find((doc) => Object.entries(filter).every(([key, value]) => String(doc[key]) === String(value))) || null),
-    find: vi.fn((filter = {}) => createCursor(docs.filter((doc) => Object.entries(filter).every(([key, value]) => String(doc[key]) === String(value))))),
+    findOne: vi.fn(async (filter = {}) => docs.find((doc) => matchesFilter(doc, filter)) || null),
+    find: vi.fn((filter = {}) => createCursor(docs.filter((doc) => matchesFilter(doc, filter)))),
     updateOne: vi.fn(async (filter = {}, update = {}, options = {}) => {
-      let doc = docs.find((item) => Object.entries(filter).every(([key, value]) => String(item[key]) === String(value)));
+      let doc = docs.find((item) => matchesFilter(item, filter));
       if (!doc && options.upsert) {
         doc = { _id: `id-${docs.length + 1}`, ...filter };
         docs.push(doc);

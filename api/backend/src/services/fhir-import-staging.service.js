@@ -1128,12 +1128,12 @@ async function commitBatch(db, batchIdRaw) {
     if (committedSample) {
       if (specimenStatus === 'quarantined' && !wasQuarantined) {
         await quarantineActionService.recordAction(db, {
-          specimenIds: [String(committedSample._id)],
+          specimenIds: [quarantineActionService.canonicalSpecimenId(committedSample)],
           reasonCodes: [workflow.quarantineReason || 'FHIR_IMPORT_REVIEW_REQUIRED'],
           authorizedBy: importedBy || 'SYSTEM',
         });
       } else if (specimenStatus === 'available' && wasQuarantined) {
-        await quarantineActionService.releaseActiveAction(db, String(committedSample._id), importedBy || 'SYSTEM');
+        await quarantineActionService.releaseActiveAction(db, committedSample, importedBy || 'SYSTEM');
       }
     }
 
@@ -1254,7 +1254,7 @@ async function attachExternalDocument(db, batchIdRaw, recordIdRaw, options = {})
     await staging.updateOne({ _id: recordId, batchId }, { $set: updatedRecord }, dbOptions);
 
     if (existingSample && wasQuarantined) {
-      await quarantineActionService.releaseActiveAction(db, String(existingSample._id), options.userID || 'SYSTEM', undefined, session);
+      await quarantineActionService.releaseActiveAction(db, existingSample, options.userID || 'SYSTEM', undefined, session);
     }
   };
 

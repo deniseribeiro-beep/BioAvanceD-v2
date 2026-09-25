@@ -625,3 +625,32 @@ export async function seedMedicationDictionaryEntry(options: {
     createdAt: new Date(),
   });
 }
+
+/**
+ * #1219 fixture: one QuarantineAction row naming the given specimen ids,
+ * in QuarantineAction.create()'s full field shape. There is no route that
+ * records an action with a chosen key, and the point of the fixture is to
+ * write the legacy _id-keyed form that code no longer produces.
+ */
+export async function seedQuarantineAction(specimenIds: string[], reasonCode: string): Promise<string> {
+  const db = await getDb();
+  const now = new Date();
+  const quarantineActionId = `e2e-1219-${reasonCode}-${now.getTime()}-${Math.random().toString(36).slice(2, 8)}`;
+  await db.collection('quarantineActions').insertOne({
+    quarantineActionId,
+    specimenIds,
+    reasonCodes: [reasonCode],
+    actionStatus: 'active',
+    authorizedBy: null,
+    startedAt: now,
+    releasedAt: null,
+    createdAt: now,
+  });
+  return quarantineActionId;
+}
+
+export async function cleanupQuarantineActions(quarantineActionIds: string[]): Promise<void> {
+  if (quarantineActionIds.length === 0) return;
+  const db = await getDb();
+  await db.collection('quarantineActions').deleteMany({ quarantineActionId: { $in: quarantineActionIds } });
+}
