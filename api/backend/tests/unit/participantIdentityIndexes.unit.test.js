@@ -3,7 +3,7 @@
  *
  * `identityDocumentHash`/`birthDateHash` exist so the three identity-matching
  * sites can stop querying plaintext, and `participantIdentities` carries no
- * declared index of any kind -- it is absent from `scripts/create-db.js`, it
+ * declared index of any kind -- it was absent from the retired `create-db.js`, it
  * has no model file (it is reached through the raw driver via
  * `getCollection(db, 'participantIdentities')`), and nothing anywhere calls
  * `createIndex` on it. A deterministic blind index whose entire purpose is to
@@ -110,7 +110,7 @@ describe('#1102 ensureParticipantIdentityIndexes', () => {
     expect(collection.createIndex).toHaveBeenCalledTimes(5);
   });
 
-  // One catch PER index, per create-db.js:99 (#1027): a single failure must
+  // One catch PER index, per docs/historical/create-db.js:119 (#1027): a single failure must
   // not take the rest of the build down with it. There is no E11000 case
   // here since nothing is unique, so the failure that matters is the quiet
   // one -- the build not happening, leaving the query a scan.

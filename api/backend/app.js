@@ -283,7 +283,7 @@ app.use("/api/measurement-units", createMasterDataRouter({
 // identifier, settled by #902, is the string MIABIS code the seed writes
 // on `id` -- src/reference-data/essential/manifest.js:12 declares
 // uniqueKeys: ['id'] and the seed uses it verbatim as the upsert filter;
-// scripts/create-db.js indexes `id` only; every KEYED backend lookup
+// every KEYED backend lookup
 // resolves on `id` (import-lgpd.service.js:1376 findOne({ id }), plus
 // master-data.routes.js:24's additive $or branch). idField is now 'id',
 // and the numeric generateId override (Date.now()) is removed so the
@@ -298,7 +298,7 @@ app.use("/api/quality-descriptions", createMasterDataRouter({
 // identifier, settled by #902, is the string MIABIS code the seed writes
 // on `id` -- src/reference-data/essential/manifest.js:12 declares
 // uniqueKeys: ['id'] and the seed uses it verbatim as the upsert filter;
-// scripts/create-db.js indexes `id` only; every KEYED backend lookup
+// every KEYED backend lookup
 // resolves on `id` (import-lgpd.service.js:1376 findOne({ id }), plus
 // master-data.routes.js:24's additive $or branch). idField is now 'id',
 // and the numeric generateId override (Date.now()) is removed so the
@@ -313,7 +313,7 @@ app.use("/api/sample-types", createMasterDataRouter({
 // identifier, settled by #902, is the string MIABIS code the seed writes
 // on `id` -- src/reference-data/essential/manifest.js:12 declares
 // uniqueKeys: ['id'] and the seed uses it verbatim as the upsert filter;
-// scripts/create-db.js indexes `id` only; every KEYED backend lookup
+// every KEYED backend lookup
 // resolves on `id` (import-lgpd.service.js:1376 findOne({ id }), plus
 // master-data.routes.js:24's additive $or branch). idField is now 'id',
 // and the numeric generateId override (Date.now()) is removed so the
@@ -328,7 +328,7 @@ app.use("/api/sample-origins", createMasterDataRouter({
 // identifier, settled by #902, is the string MIABIS code the seed writes
 // on `id` -- src/reference-data/essential/manifest.js:12 declares
 // uniqueKeys: ['id'] and the seed uses it verbatim as the upsert filter;
-// scripts/create-db.js indexes `id` only; every KEYED backend lookup
+// every KEYED backend lookup
 // resolves on `id` (import-lgpd.service.js:1376 findOne({ id }), plus
 // master-data.routes.js:24's additive $or branch). idField is now 'id',
 // and the numeric generateId override (Date.now()) is removed so the

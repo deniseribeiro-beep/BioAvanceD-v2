@@ -1,3 +1,23 @@
+/*
+ * HISTORICAL -- NOT RUNNABLE, NOT A DESIGN AUTHORITY (#1055).
+ *
+ * This was api/backend/scripts/create-db.js, a manual index-seeding script
+ * that no stack, Dockerfile, CI job or boot path ever ran. It was retired
+ * because the canonical Foundation Data Pipeline plan (v2.0.0) supersedes
+ * its shape: provisioning is a one-shot service run after healthchecks
+ * that gates application release on a successful schema bootstrap, not a
+ * seed script separate from startup.
+ *
+ * What provisions indexes today is each collection's owning module
+ * (the lazily-latched ensure*Indexes helpers under api/backend/src/utils),
+ * and unique business keys for reference data are declared in
+ * api/backend/src/reference-data/essential/manifest.js (uniqueKeys).
+ *
+ * Kept only because comments elsewhere cite the per-index catch below
+ * (#1027) as the origin of a lesson. Its requires are relative to its old
+ * location and will not resolve from here.
+ */
+
 require('dotenv').config();
 const { connectNewDB, closeConnection } = require('../src/database/mongo');
 const { CANONICAL_COLLECTIONS } = require('../src/config/collections');
