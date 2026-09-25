@@ -169,6 +169,35 @@ function clearedLockoutFields() {
   return { failedLoginAttempts: 0, accountLockedUntil: null };
 }
 
+/**
+ * #914 / RF001 ("aplicar autenticação multifator conforme a política de
+ * segurança"), RF014 AC#3. authentication.requireMFA (dict-02 P1X-0278,
+ * "Exige MFA segundo a política global") was one of the SecurityConfiguration
+ * keys nothing read: the mandatory first-login enrolment below ran for every
+ * non-admin whatever the Administrador had configured.
+ *
+ * Reads the collection directly, not through securityService.getConfig, which
+ * INSERTS a default document when none exists -- the same reason
+ * session.service.js gives for its own policy read.
+ *
+ * Fails CLOSED, to the canonical default `true`: an unreadable policy keeps MFA
+ * mandatory, which is also exactly the behaviour before this read existed.
+ * Only an explicit boolean `false` relaxes it.
+ *
+ * enhancedSecurity.requireMFAForAll is deliberately NOT read here. Its default
+ * is `true` and it would extend the enrolment to Administrador, which #1011's
+ * decision (2026-09-25) keeps optional until that posture is revisited.
+ */
+async function isMfaEnrolmentRequired(db) {
+  try {
+    const config = await db.collection('security_config').findOne({ _id: 'main' });
+    return !(config && config.authentication && config.authentication.requireMFA === false);
+  } catch (error) {
+    logger.warn('#914: política de MFA ilegível, mantendo MFA obrigatório:', error.message);
+    return true;
+  }
+}
+
 const ACCESS_TOKEN_TTL = '15m';
 const REFRESH_TOKEN_TTL = '7d';
 
@@ -583,7 +612,8 @@ class AuthService {
 
       // MFA obrigatório apenas para não-admin no primeiro login
       // Admin com MFA habilitado também precisa configurar no primeiro login se não estiver configurado
-      if (!isAdmin && isFirstLogin && mfaNotConfigured) {
+      // #914: and only while the policy requires it (authentication.requireMFA).
+      if (!isAdmin && isFirstLogin && mfaNotConfigured && await isMfaEnrolmentRequired(db)) {
         // Primeiro login - MFA obrigatório
         // Gera token temporário apenas para setup MFA
         // #433: accessType resolved from the live RBAC assignment, not the

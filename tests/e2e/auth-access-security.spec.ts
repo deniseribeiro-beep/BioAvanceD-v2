@@ -3,6 +3,7 @@ import { realLogin, realAuthLogin } from './helpers/realAuth';
 import { watchAuditTrail, assertAuditEventRecorded } from './helpers/assertAuditEvent';
 import { completeFirstLoginMfa } from './helpers/completeFirstLoginMfa';
 import { computeTotp } from './helpers/totp';
+import { findLatestSession, closeSessionsDb } from './helpers/querySessions';
 
 // Real backend + real frontend only — see backend-integration.spec.ts for the
 // same skip rationale. Run via `npm run test:e2e:docker` against the compose
@@ -647,6 +648,97 @@ test.describe('Security policy management (RF014) — real backend', () => {
           passwordRules: { minLength: originalConfig.passwordRules.minLength },
         },
       }).catch(() => {});
+    }
+  });
+
+  // #914: the test above proves the policy is STORED. This one proves two of
+  // its keys are ENFORCED on a live login, which is what RF014 AC#1/AC#3 and
+  // RNF021 AC#3 ask for:
+  //   - authentication.requireMFA decides whether a non-admin's first login
+  //     must enrol MFA (control: a second fixture under requireMFA=true);
+  //   - session.maxSessionDurationHours caps the session absolutely: the new
+  //     session's refreshExpiresAt is sessionStartedAt + the cap, and a real
+  //     token refresh does not slide it forward.
+  // Same capture-and-restore as above: the policy is one global singleton.
+  test('#914: requireMFA and maxSessionDurationHours are enforced on a live login, not just stored (criteria 1, 3)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+
+    const before = await request.get(`${apiBaseURL}/api/security/config`, { headers: auth });
+    expect(before.ok()).toBeTruthy();
+    const originalConfig = (await before.json()).data;
+
+    async function registerTecnico(label: string) {
+      const username = `tecnico.914.${label}.${Date.now()}`;
+      const password = 'Tecnico@123456';
+      const response = await request.post(`${apiBaseURL}/api/users/register`, {
+        headers: auth,
+        data: { name: `#914 ${label} Fixture`, email: `${username}@example.com`, username, password, accessType: 2, roleName: 'Técnico' },
+      });
+      expect(response.ok(), await response.text()).toBeTruthy();
+      return { username, password };
+    }
+
+    try {
+      const relax = await request.put(`${apiBaseURL}/api/security/config`, {
+        headers: auth,
+        data: { authentication: { requireMFA: false }, session: { maxSessionDurationHours: 2 } },
+      });
+      expect(relax.ok(), await relax.text()).toBeTruthy();
+
+      // requireMFA=false: a Técnico's FIRST login gets a session, no enrolment step.
+      const relaxed = await registerTecnico('relaxed');
+      const relaxedLogin = await request.post(`${apiBaseURL}/api/auth/login`, {
+        data: { username: relaxed.username, password: relaxed.password },
+      });
+      expect(relaxedLogin.ok(), await relaxedLogin.text()).toBeTruthy();
+      const relaxedBody = await relaxedLogin.json();
+      expect(relaxedBody.requiresMFASetup).toBeFalsy();
+      expect(relaxedBody.data?.token).toBeTruthy();
+
+      // maxSessionDurationHours=2: the cap is on the session document itself.
+      const userID = relaxedBody.data.user._id || relaxedBody.data.user.id;
+      const session = await findLatestSession(userID);
+      expect(session).toBeTruthy();
+      const capMs = 2 * 60 * 60 * 1000;
+      expect(new Date(session!.refreshExpiresAt).getTime() - new Date(session!.createdAt).getTime()).toBe(capMs);
+
+      // A real refresh rotates the tokens but keeps the ceiling. Before #914 it
+      // reset refreshExpiresAt to now + 7 days on every call.
+      const setCookie = relaxedLogin.headers()['set-cookie'] || '';
+      const refreshCookie = /refresh_token=[^;]+/.exec(setCookie)?.[0];
+      expect(refreshCookie, 'login must set the refresh cookie').toBeTruthy();
+      const refreshed = await request.post(`${apiBaseURL}/api/auth/refresh`, { headers: { Cookie: refreshCookie! } });
+      expect(refreshed.ok(), await refreshed.text()).toBeTruthy();
+      const rotated = await findLatestSession(userID);
+      expect(rotated!.sessionID).toBe(session!.sessionID);
+      expect(rotated!.tokenHash).not.toBe(session!.tokenHash);
+      expect(new Date(rotated!.refreshExpiresAt).getTime()).toBe(new Date(session!.refreshExpiresAt).getTime());
+
+      // Control: requireMFA=true, and the same first login is sent to enrolment.
+      const strict = await request.put(`${apiBaseURL}/api/security/config`, {
+        headers: auth,
+        data: { authentication: { requireMFA: true } },
+      });
+      expect(strict.ok(), await strict.text()).toBeTruthy();
+      const strictUser = await registerTecnico('strict');
+      const strictLogin = await request.post(`${apiBaseURL}/api/auth/login`, {
+        data: { username: strictUser.username, password: strictUser.password },
+      });
+      const strictBody = await strictLogin.json();
+      expect(strictBody.requiresMFASetup).toBe(true);
+      expect(strictBody.data?.token).toBeFalsy();
+    } finally {
+      await request.put(`${apiBaseURL}/api/security/config`, {
+        headers: auth,
+        data: {
+          authentication: { requireMFA: originalConfig.authentication.requireMFA },
+          session: { maxSessionDurationHours: originalConfig.session.maxSessionDurationHours },
+        },
+      }).catch(() => {});
+      await closeSessionsDb();
     }
   });
 

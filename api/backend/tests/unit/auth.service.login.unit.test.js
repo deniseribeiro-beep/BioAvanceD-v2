@@ -350,3 +350,66 @@ describe('AuthService.login -- #1052 no account identifiers in the application l
     expect(result.user.email).toBe(user.email);
   });
 });
+
+// #914 / RF001, RF014 AC#3: authentication.requireMFA (dict-02 P1X-0278) decides
+// whether a non-admin's first login must enrol MFA. It was never read, so the
+// enrolment ran whatever the Administrador had configured.
+describe('AuthService.login -- #914 authentication.requireMFA', () => {
+  function withSecurityConfig(db, config) {
+    const base = db.collection;
+    db.collection = vi.fn((name) => (name === 'security_config'
+      ? { findOne: vi.fn().mockResolvedValue(config) }
+      : base(name)));
+    return db;
+  }
+
+  function firstLoginUser() {
+    return makeUser({ lastLogin: null, mfaEnabled: false });
+  }
+
+  it('requireMFA: false lets a non-admin first login through without the enrolment step', async () => {
+    const db = withSecurityConfig(makeLoginDb(vi.fn().mockResolvedValue(firstLoginUser())), {
+      _id: 'main', authentication: { requireMFA: false },
+    });
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+
+    const result = await authService.login(db, { email: 'user@test.com', password: 'pw' }, {});
+
+    expect(result.requiresMFASetup).toBeUndefined();
+    expect(result.token).toBeTruthy();
+  });
+
+  it('requireMFA: true keeps the mandatory first-login enrolment', async () => {
+    const db = withSecurityConfig(makeLoginDb(vi.fn().mockResolvedValue(firstLoginUser())), {
+      _id: 'main', authentication: { requireMFA: true },
+    });
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+
+    const result = await authService.login(db, { email: 'user@test.com', password: 'pw' }, {});
+
+    expect(result.requiresMFASetup).toBe(true);
+    expect(result.token).toBeUndefined();
+  });
+
+  it('no policy document keeps MFA mandatory -- the canonical default, and the behaviour before the read existed', async () => {
+    const db = withSecurityConfig(makeLoginDb(vi.fn().mockResolvedValue(firstLoginUser())), null);
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+
+    const result = await authService.login(db, { email: 'user@test.com', password: 'pw' }, {});
+
+    expect(result.requiresMFASetup).toBe(true);
+  });
+
+  it('an unreadable policy fails CLOSED, keeping MFA mandatory', async () => {
+    const db = makeLoginDb(vi.fn().mockResolvedValue(firstLoginUser()));
+    const base = db.collection;
+    db.collection = vi.fn((name) => (name === 'security_config'
+      ? { findOne: vi.fn().mockRejectedValue(new Error('config unavailable')) }
+      : base(name)));
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+
+    const result = await authService.login(db, { email: 'user@test.com', password: 'pw' }, {});
+
+    expect(result.requiresMFASetup).toBe(true);
+  });
+});

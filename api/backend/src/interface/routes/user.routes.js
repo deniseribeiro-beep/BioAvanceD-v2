@@ -703,7 +703,24 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
       // Atualização geral
       await auditLogger.logUpdate(req, 'User', req.params.id);
     }
-    
+
+    // #914, carrying #1011's decision (2026-09-25): the promotion clear above
+    // destroys an enrolled second factor, and until now the trail recorded it
+    // only as a generic User update. Same helper, and so the same 'MFA' action
+    // and row shape, as reset-mfa and disable-mfa -- `operation` is the
+    // discriminator. Written only when there WAS an enrolment to clear: a
+    // promotion of a user with no second factor changes nothing about MFA.
+    if (isBecomingAdmin && (targetUser.mfaEnabled || targetUser.mfaSecretCiphertext)) {
+      await writeMfaResetAudit(db, req, targetUser, {
+        operation: 'promotion_clear',
+        enrolmentPreserved: false,
+        secondFactorActive: false,
+        fieldsCleared: ['mfaEnabled', 'mfaSecretCiphertext', 'mfaActivationDate'],
+        sessionsRevoked: false,
+        message: 'MFA removido na promoção a Administrador (cadastro do segundo fator apagado)'
+      });
+    }
+
     // #1068: strips mfaSecretCiphertext and passwordResetTokenHash too -- see
     // UserModel.stripSecrets for the dictionary entries that require it.
     // (UserModel is already required earlier in this handler -- #566.)

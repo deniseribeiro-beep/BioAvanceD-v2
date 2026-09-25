@@ -1167,6 +1167,56 @@ describe('Users and Access routes', () => {
     // #993's own point: the caller's value must not survive anywhere in the
     // write, not merely differ from it.
     expect(JSON.stringify(setPayload)).not.toContain('SEGREDO-DO-ATACANTE');
+    // #914 / #1011: the destroyed enrolment is on the trail as an MFA row, not
+    // only as a generic User update.
+    const mfaRows = auditSpies.log.mock.calls.filter(([entry]) => entry && entry.action === 'MFA');
+    expect(mfaRows).toHaveLength(1);
+    expect(mfaRows[0][0]).toMatchObject({
+      resourceId: 'user-target-12',
+      severity: 'critical',
+      payload: { operation: 'promotion_clear', enrolmentPreserved: false, secondFactorActive: false },
+    });
+  });
+
+  it('#914/#1011: promoting a user with NO enrolment writes no MFA row -- there was nothing to clear', async () => {
+    const handler = getHandler(userRoutes, 'put', '/:id');
+    const targetUser = {
+      _id: 'user-target-13',
+      name: 'Alvo Sem MFA',
+      email: 'alvo-sem-mfa@bioavanced.com.br',
+      username: 'alvosemmfa',
+      status: 'active',
+      accessType: 3,
+      roleName: 'Coordenador',
+      mfaEnabled: false,
+      mfaSecretCiphertext: null,
+    };
+    usersCollection.findOne
+      .mockResolvedValueOnce(targetUser)
+      .mockResolvedValueOnce(targetUser);
+    usersCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
+
+    const rbacCollections = buildRbacCollections([
+      { userAccountId: '507f1f77bcf86cd799439011', accessType: 4 },
+      { userAccountId: 'user-target-13', accessType: 3 },
+    ]);
+    const dbWithTarget = {
+      collection: vi.fn((name) => {
+        if (name === 'users') return usersCollection;
+        if (rbacCollections[name]) return rbacCollections[name];
+        return db.collection(name);
+      }),
+    };
+
+    const req = createRequest({ params: { id: 'user-target-13' }, body: { accessType: 4 } });
+    req.app.locals.db = dbWithTarget;
+    const res = createResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    const mfaRows = auditSpies.log.mock.calls.filter(([entry]) => entry && entry.action === 'MFA');
+    expect(mfaRows).toHaveLength(0);
   });
 
   // #1021: a PUT that merely OMITS mfaEnabled destroyed an Administrador's
