@@ -28,6 +28,7 @@ const participantIdentityService = require('./PatientIdentityService');
 const { generateSampleHash } = require('./MerkleService');
 const qualityDomain = require('./quality-domain.service');
 const rcsAssessmentService = require('./rcs-assessment.service');
+const { recordSpecimenProjection } = require('./graphProjection.service');
 const specimenPreanalyticsService = require('./specimen-preanalytics.service');
 const AllocateSampleUseCase = require('../core/use-cases/AllocateSampleUseCase');
 const MongoStorageRepository = require('../infrastructure/persistence/mongo/MongoStorageRepository');
@@ -1715,6 +1716,11 @@ class ImportLGPDService {
           // Insere no banco (sem storageLocation — a amostra entra não alocada)
           const insertResult = await samplesCollection.insertOne(sample);
           results.importedSampleIds.push(insertResult.insertedId);
+          await recordSpecimenProjection(db, {
+            specimenId: String(insertResult.insertedId),
+            participantId: sample.participantId,
+            sourceService: 'import-lgpd.service'
+          });
 
           // #499: mirrors import.service.js's CSV/XLSX branch — records the
           // canonical, referenced RcsAssessment snapshot alongside the

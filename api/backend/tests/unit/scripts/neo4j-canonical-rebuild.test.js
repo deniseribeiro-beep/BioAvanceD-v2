@@ -131,6 +131,22 @@ describe('neo4j-canonical-rebuild#seedCanonicalOutbox', () => {
     expect(qualityEvent.payload.score).toBe(62);
   });
 
+  it('emits SPECIMEN_UPSERTED with the donor for each sample, and never a CONSENT_UPSERTED keyed by a sample (#1225)', async () => {
+    const db = createFakeDb({
+      samples: [
+        { _id: 's4', participantId: 'P4', specimenId: 'SPEC-4' },
+      ],
+    });
+
+    await seedCanonicalOutbox(db, fakeOutbox());
+
+    const events = db.collections.graph_projection_outbox.docs;
+    const specimenEvent = events.find((e) => e.eventType === 'SPECIMEN_UPSERTED');
+    expect(specimenEvent.aggregateId).toBe('s4');
+    expect(specimenEvent.payload).toEqual({ specimenId: 's4', participantId: 'P4' });
+    expect(events.filter((e) => e.eventType === 'CONSENT_UPSERTED' && e.aggregateType === 'Sample')).toHaveLength(0);
+  });
+
   it('does not emit a QUALITY_ASSESSED event for a sample with no quality field at all', async () => {
     const db = createFakeDb({
       samples: [

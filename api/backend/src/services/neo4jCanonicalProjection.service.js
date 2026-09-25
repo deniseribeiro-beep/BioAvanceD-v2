@@ -49,6 +49,9 @@ class Neo4jCanonicalProjectionService {
     if (type === 'CONSENT_UPSERTED' || type === 'CONSENT_REVOKED') {
       return this.applyConsentProjection(session, event);
     }
+    if (type === 'SPECIMEN_UPSERTED') {
+      return this.applySpecimenProjection(session, event);
+    }
     if (type === 'LINEAGE_REGISTERED') {
       return this.applyLineageProjection(session, event);
     }
@@ -76,8 +79,12 @@ class Neo4jCanonicalProjectionService {
   async applyConsentProjection(session, event) {
     const payload = event.payload || {};
     const donorId = this.pseudonymizeDonorId(payload.participantId || event.aggregateId);
-    const specimenId = normalizeText(payload.specimenId || event.aggregateId);
-    const consentId = normalizeText(payload.consentId || event.aggregateId);
+    // #1225: no fallback to event.aggregateId. That is the consent's own id, so
+    // the fallback put every GOVERNED_BY edge on a phantom Sample keyed by the
+    // consent id, and no real sample was ever governed. The donor's samples are
+    // governed below through DONATED, which SPECIMEN_UPSERTED writes.
+    const specimenId = normalizeText(payload.specimenId);
+    const consentId = normalizeText(payload.consentId || payload.ethicalConsentId || event.aggregateId);
     const consentStatus = normalizeText(payload.status || 'ACTIVE').toUpperCase();
     const consentAt = normalizeIso(payload.signedAt || event.occurredAt);
 
@@ -114,6 +121,15 @@ class Neo4jCanonicalProjectionService {
         SET r3.updatedAt = datetime(), r3.schemaVersion = $schemaVersion, r3.eventId = $eventId
       )
 
+      WITH donor, consent
+      OPTIONAL MATCH (donor)-[:DONATED]->(donated:Sample)
+      WITH donor, consent, collect(donated) AS donatedSamples
+      FOREACH (owned IN donatedSamples |
+        MERGE (owned)-[r4:GOVERNED_BY]->(consent)
+        ON CREATE SET r4.createdAt = datetime(), r4.source = $sourceService
+        SET r4.updatedAt = datetime(), r4.schemaVersion = $schemaVersion, r4.eventId = $eventId
+      )
+
       RETURN donor.id AS donorId, consent.id AS consentId
     `;
 
@@ -129,6 +145,60 @@ class Neo4jCanonicalProjectionService {
     });
 
     return { projected: true, eventType: event.eventType, donorId, consentId };
+  }
+
+  // #1225: a sample joins the graph under the key LineageRepository's consent
+  // gate MERGEs it by, linked to its donor and governed by every consent that
+  // donor already has. Consents projected later reach it through
+  // applyConsentProjection's DONATED traversal, so either order converges.
+  async applySpecimenProjection(session, event) {
+    const payload = event.payload || {};
+    const specimenId = normalizeText(payload.specimenId || event.aggregateId);
+    const participantId = normalizeText(payload.participantId);
+    const params = {
+      specimenId,
+      schemaVersion: Number(event.schemaVersion || 1),
+      sourceService: normalizeText(event.sourceService) || 'unknown',
+      eventId: normalizeText(event.eventId),
+    };
+
+    const mergeSample = `
+      MERGE (sample:Sample {id: $specimenId})
+      ON CREATE SET sample.createdAt = datetime(), sample.source = $sourceService
+      SET sample.updatedAt = datetime(),
+          sample.lastProjectionEventId = $eventId,
+          sample.lastProjectionAt = datetime()
+    `;
+
+    if (!participantId) {
+      await session.run(`${mergeSample}
+      RETURN sample.id AS specimenId`, params);
+      return { projected: true, eventType: event.eventType, specimenId, donorId: null };
+    }
+
+    const donorId = this.pseudonymizeDonorId(participantId);
+    await session.run(`${mergeSample}
+      MERGE (donor:Donor {id: $donorId})
+      ON CREATE SET donor.createdAt = datetime(), donor.source = $sourceService
+      SET donor.updatedAt = datetime(), donor.lastProjectionEventId = $eventId, donor.lastProjectionAt = datetime()
+
+      MERGE (donor)-[r1:DONATED]->(sample)
+      ON CREATE SET r1.createdAt = datetime(), r1.source = $sourceService
+      SET r1.updatedAt = datetime(), r1.schemaVersion = $schemaVersion, r1.eventId = $eventId
+
+      WITH donor, sample
+      OPTIONAL MATCH (donor)-[:CONSENTED_UNDER]->(consent:EthicalConsent)
+      WITH donor, sample, collect(consent) AS consents
+      FOREACH (governing IN consents |
+        MERGE (sample)-[r2:GOVERNED_BY]->(governing)
+        ON CREATE SET r2.createdAt = datetime(), r2.source = $sourceService
+        SET r2.updatedAt = datetime(), r2.schemaVersion = $schemaVersion, r2.eventId = $eventId
+      )
+
+      RETURN sample.id AS specimenId, donor.id AS donorId
+    `, { ...params, donorId });
+
+    return { projected: true, eventType: event.eventType, specimenId, donorId };
   }
 
   async applyLineageProjection(session, event) {

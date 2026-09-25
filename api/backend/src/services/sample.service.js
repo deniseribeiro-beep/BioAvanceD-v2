@@ -22,6 +22,7 @@ const AllocateSampleUseCase = require('../core/use-cases/AllocateSampleUseCase')
 const MongoStorageRepository = require('../infrastructure/persistence/mongo/MongoStorageRepository');
 const MongoAuditRepository = require('../infrastructure/persistence/mongo/MongoAuditRepository');
 const LineageRepository = require('../infrastructure/database/neo4j/LineageRepository');
+const { recordSpecimenProjection } = require('./graphProjection.service');
 const { ObjectId } = require('mongodb');
 
 const { CRITICAL_SENSOR_STATUSES, isEquipmentBlocked } = require('../models/equipmentStatus');
@@ -377,6 +378,12 @@ class SampleService {
       }
 
       sample.storageLocation = { boxId, position: positionCode };
+
+      await recordSpecimenProjection(db, {
+        specimenId: String(result.insertedId),
+        participantId: sample.participantId,
+        sourceService: 'sample.service'
+      });
 
       // #510: expose the canonical StorageAssignment (dict-02 ELM-0167-0178)
       // the allocation above just opened, alongside the legacy storageLocation

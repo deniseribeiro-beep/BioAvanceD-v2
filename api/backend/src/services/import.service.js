@@ -21,6 +21,7 @@ const SampleGraphValidator = require('./SampleGraphValidator');
 const qualityDomain = require('./quality-domain.service');
 const qualityCompatibility = require('./quality-compatibility.service');
 const rcsAssessmentService = require('./rcs-assessment.service');
+const { recordSpecimenProjection } = require('./graphProjection.service');
 const specimenPreanalyticsService = require('./specimen-preanalytics.service');
 const { generateUniqueSpecimenId } = require('../utils/sampleIDGenerator');
 const { generateUniqueParticipantId } = require('../utils/patientAnonymization');
@@ -569,6 +570,11 @@ class ImportService {
 
             const sample = SampleModel.create(sampleData);
             const insertResult = await samplesCollection.insertOne(sample);
+            await recordSpecimenProjection(db, {
+              specimenId: String(insertResult.insertedId),
+              participantId: sample.participantId,
+              sourceService: 'import.service'
+            });
             if (sample.rcsEvaluation) {
               try {
                 const assessment = await rcsAssessmentService.recordAssessment(db, sample.specimenId, sample.rcsEvaluation);
@@ -672,6 +678,11 @@ class ImportService {
 
             const sample = SampleModel.create(sampleData);
             const insertResult = await samplesCollection.insertOne(sample);
+            await recordSpecimenProjection(db, {
+              specimenId: String(insertResult.insertedId),
+              participantId: sample.participantId,
+              sourceService: 'import.service'
+            });
             if (sample.rcsEvaluation) {
               try {
                 const assessment = await rcsAssessmentService.recordAssessment(db, sample.specimenId, sample.rcsEvaluation);

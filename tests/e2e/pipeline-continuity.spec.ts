@@ -3,8 +3,24 @@ import { MongoClient } from 'mongodb';
 import { realLogin, seedRealAuth } from './helpers/realAuth';
 import { completeFirstLoginMfa } from './helpers/completeFirstLoginMfa';
 import { watchAuditTrail, assertAuditEventRecorded } from './helpers/assertAuditEvent';
-import { createRealParticipant, seedRawSpecimen, seedStudy, seedAssay, closeSeedDb } from './helpers/seedParticipant';
-import { waitForEthicalConsentStatus, waitForTerminologyConceptNode, waitForTerminologyRelation, closeNeo4jDriver } from './helpers/queryNeo4j';
+import {
+  createRealParticipant,
+  seedRawSpecimen,
+  seedStudy,
+  seedAssay,
+  seedStorageBoxLocation,
+  cleanupStorageBoxLocation,
+  closeSeedDb,
+  type SeededStorageBox,
+} from './helpers/seedParticipant';
+import {
+  waitForEthicalConsentStatus,
+  waitForTerminologyConceptNode,
+  waitForTerminologyRelation,
+  waitForSampleGovernedBy,
+  countSampleNodes,
+  closeNeo4jDriver,
+} from './helpers/queryNeo4j';
 import {
   countEssentialReferenceDocs,
   countFoundationDataRuns,
@@ -103,6 +119,83 @@ test.describe('Outbox → Neo4j projection (RF023) — real backend', () => {
     expect(revoke.ok()).toBe(true);
 
     await waitForEthicalConsentStatus(consentId, 'REVOKED');
+  });
+
+  // #1225: LineageRepository's consent gate reads
+  // (sample)-[:GOVERNED_BY]->(consent), MERGEing the sample under its Mongo
+  // _id. The consent projection used to fall back to the consent's own id for
+  // the missing specimenId, so every GOVERNED_BY edge landed on a phantom
+  // Sample keyed by the consent id and no real sample was ever governed.
+  // Both orders are covered: consent first, then sample, and the reverse.
+  const seededBoxes: SeededStorageBox[] = [];
+  test.afterAll(async () => {
+    await Promise.all(seededBoxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {})));
+  });
+
+  async function signConsent(request: any, token: string, participant: { participantId: string; consentTemplateId: string }) {
+    const response = await request.post(`${apiBaseURL}/api/e-consent/consents`, {
+      headers: { Authorization: `Bearer ${token}` },
+      data: {
+        participantId: participant.participantId,
+        consentTemplateId: participant.consentTemplateId,
+        responses: {},
+        ...signatureFields(),
+      },
+    });
+    expect(response.ok()).toBe(true);
+    const consentId = String((await response.json())?.data?._id || '');
+    expect(consentId).toBeTruthy();
+    return consentId;
+  }
+
+  async function createSampleMongoId(request: any, token: string, participantId: string) {
+    const box = await seedStorageBoxLocation();
+    seededBoxes.push(box);
+    const create = await request.post(`${apiBaseURL}/api/samples`, {
+      headers: { Authorization: `Bearer ${token}` },
+      data: {
+        participantId,
+        sampleType: 'PLASMA',
+        sampleOrigin: 'VENOUS_BLOOD',
+        extractionProtocol: 'TUBE_EDTA',
+        quantity: 5,
+        quality: 'GOOD',
+        linkedProject: 'RF023 #1225 consent-governance e2e fixture',
+        registeredAt: new Date().toISOString(),
+        boxId: box.boxId,
+        positionCode: box.positionCode,
+      },
+    });
+    expect([201, 202]).toContain(create.status());
+    const specimenId = (await create.json()).data.specimenId;
+    const read = await request.get(`${apiBaseURL}/api/samples/${specimenId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(read.status()).toBe(200);
+    return String((await read.json()).data._id);
+  }
+
+  test('a sample created after its donor consented is GOVERNED_BY that consent, and no phantom Sample carries the consent id (#1225)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const consentId = await signConsent(request, admin.token, participant);
+    await waitForEthicalConsentStatus(consentId, 'ACTIVE');
+
+    const sampleMongoId = await createSampleMongoId(request, admin.token, participant.participantId);
+
+    await waitForSampleGovernedBy(sampleMongoId, consentId);
+    expect(await countSampleNodes(consentId)).toBe(0);
+  });
+
+  test('a sample created before its donor consented becomes GOVERNED_BY the consent once it is signed (#1225)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const sampleMongoId = await createSampleMongoId(request, admin.token, participant.participantId);
+
+    const consentId = await signConsent(request, admin.token, participant);
+
+    await waitForSampleGovernedBy(sampleMongoId, consentId);
+    expect(await countSampleNodes(consentId)).toBe(0);
   });
 });
 
