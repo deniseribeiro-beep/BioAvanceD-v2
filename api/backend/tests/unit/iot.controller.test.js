@@ -84,6 +84,8 @@ function sustainedIncident(overrides = {}) {
 
 function createResponse() {
   return {
+    // Express always supplies res.locals; #1120's audit reason is written there.
+    locals: {},
     statusCode: 200,
     body: null,
     status(code) {

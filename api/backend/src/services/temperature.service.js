@@ -24,7 +24,10 @@ async function assertOrganizationIdResolves(db, organizationId) {
   }
   const organization = await db.collection('organizations').findOne({ organizationId: String(organizationId) });
   if (!organization) {
-    throw createTemperatureValidationError(`organizationId ${organizationId} não encontrado`, 404);
+    const error = createTemperatureValidationError(`organizationId ${organizationId} não encontrado`, 404);
+    // #1120: named for the machine-ingest rejection audit row.
+    error.auditReason = 'unknown_organization';
+    throw error;
   }
 }
 
@@ -37,7 +40,10 @@ class TemperatureService {
     try {
       const validation = TemperatureModel.validate(temperatureData);
       if (!validation.isValid) {
-        throw new Error(validation.errors.join(', '));
+        const error = new Error(validation.errors.join(', '));
+        // #1120: the MQTT sibling's token for the same condition.
+        error.auditReason = 'invalid_payload';
+        throw error;
       }
       await assertOrganizationIdResolves(db, temperatureData.organizationId);
 

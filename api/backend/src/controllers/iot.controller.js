@@ -237,6 +237,12 @@ async function ingestTelemetry(req, res) {
     const normalizedTimestamp = timestamp ? new Date(timestamp) : new Date();
 
     if (!normalizedSensorId || !Number.isFinite(normalizedTemperature)) {
+      // #1120 (Axis E E3): the audit row names which condition refused the
+      // reading -- a misconfigured gateway and a failing sensor mean
+      // different things operationally. Tokens follow the MQTT sibling's
+      // snake_case reasons. sensorId is checked first, so a body failing
+      // both records missing_sensor_id.
+      res.locals.auditReason = !normalizedSensorId ? 'missing_sensor_id' : 'invalid_temperature';
       return res.status(400).json({ success: false, error: 'sensorId e temperature são obrigatórios' });
     }
 
@@ -318,10 +324,9 @@ async function ingestTelemetry(req, res) {
     // the reading's only persistence here is the fire-and-forget InfluxDB
     // write above, so there is no document id to name.
     //
-    // Only the ACCEPTED ingest is audited, matching the #1080 sibling. The
-    // MQTT transport additionally audits its rejections; both HTTP machine
-    // routes diverge from it there, which is #1095 rather than something
-    // widened into this fix.
+    // Only the ACCEPTED ingest is audited here, matching the #1080 sibling.
+    // A rejection's row is the global audit.middleware.js one, which since
+    // #1120 carries the res.locals.auditReason set at the 400 above.
     try {
       const auditDb = policyData?.db || await connectMongoDB();
       const auditLogger = require('../utils/auditLogger');
@@ -340,8 +345,11 @@ async function ingestTelemetry(req, res) {
       // AUDIT_TRAIL_WRITE_FAILURE alert when the audit row cannot be written,
       // so a failed ingest audit is no longer silent. This catch guards the
       // connection lookup above it, so an unavailable audit trail cannot turn
-      // an accepted ingest into a 500 -- that fail-open trade is deliberate and
-      // is direction 2 of #1096, which was not taken.
+      // an accepted ingest into a 500. That fail-open posture is DECIDED:
+      // Denise's Axis E decision on #1106 (Session E1, 2026-09-25) is that
+      // cold-chain availability wins over refusing an unauditable reading.
+      // The alert's validation/infrastructure split (7d9fa26b) is the rest
+      // of that decision. Do not fail closed here without reopening it.
       logger.error('[ISO20387][IOT] Falha ao registrar trilha de auditoria da telemetria:', error.message || error);
     }
 

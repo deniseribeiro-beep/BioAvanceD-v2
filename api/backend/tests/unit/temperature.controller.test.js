@@ -5,7 +5,8 @@ const temperatureService = require('../../src/services/temperature.service');
 const auditLogger = require('../../src/utils/auditLogger');
 
 function buildRes() {
-  const res = {};
+  // Express always supplies res.locals; #1120's audit reason is written there.
+  const res = { locals: {} };
   res.status = vi.fn().mockReturnValue(res);
   res.json = vi.fn().mockReturnValue(res);
   return res;
