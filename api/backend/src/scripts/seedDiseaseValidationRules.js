@@ -1,3 +1,9 @@
+// disease_dictionary is a legacy store: neither the v2.0.0 data dictionary
+// nor the v4.0.0 requirements declare it, and v2.0.0 models
+// biomarker-condition knowledge as BiomarkerAssociation instead. This seed
+// is therefore manual only (npm run seed:disease-validation-rules), never
+// on the boot path (#1200). Running it switches on enforcement: a required
+// biomarker with no value makes SampleGraphValidator block the sample.
 const { connectDB, closeConnection } = require('../database/mongo');
 
 const DEFAULT_RULES = {

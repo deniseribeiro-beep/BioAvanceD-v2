@@ -356,6 +356,9 @@ router.get('/disease-profile', async (req, res) => {
   try {
     const collection = db.collection('disease_dictionary');
     const disease = await collection.findOne({ orpha_code: orphaCode, active: { $ne: false } });
+    // No stack seeds disease_dictionary (a legacy store, seeded only by
+    // hand, #1200), so this 404 is the expected answer. The intake wizard
+    // treats it as "no disease profile".
     if (!disease) {
       return res.status(404).json({ error: 'Disease profile not found' });
     }
