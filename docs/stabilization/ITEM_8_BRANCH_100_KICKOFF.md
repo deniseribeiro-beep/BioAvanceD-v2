@@ -1,48 +1,58 @@
-# Item 8 — kickoff marco 100% backend
+# Item 8 — marco 100% backend (Stage 2F)
 
-Status: **aberto após fechamento do marco 95%** (Stage 2E-4).
+Status: **`BLOCKED_BY_COVERAGE_INSTRUMENTATION`** — checkbox **100%** na [#228](https://github.com/deniseribeiro-beep/BioAvanceD-v2/issues/228) **não** marcado.
 
-## Pré-condição
+## Pré-condição (marco 95% fechado)
 
-Marco **95%** fechado na issue [#228](https://github.com/deniseribeiro-beep/BioAvanceD-v2/issues/228):
-
-| Métrica | Gate 95% (HEAD `446b061e`) |
+| Métrica | Gate 95% (`446b061e`) |
 | --- | --- |
-| Statements | 97,75% |
-| Branches | 95,13% |
-| Functions | 96,13% |
-| Lines | 97,79% |
+| Statements / Branches / Functions / Lines | 97,75% / **95,13%** / 96,13% / 97,79% |
 | Full Vitest | 591 / 10347 verdes |
 | Docker `current-state:ci` | exit 0 |
 
-## Inventário inicial do 100%
+## Stage 2F — baseline A
 
-Fonte: [`logs/item8-stage2/stage2e4-gate-inventory.tsv`](../../logs/item8-stage2/stage2e4-gate-inventory.tsv)
+HEAD de medição: pós–wave G + timeouts. Log: `logs/item8-stage2/stage2f-baseline-cov-run.log`. Inventário: `stage2f-inventory.tsv`.
 
-- Source-located zero-hit: **304** braços / **108** arquivos
-- Locations V8 vazias (não fila TEST_V2): **757**
+| Métrica | Baseline 2F |
+| --- | --- |
+| Statements | 97,77% (27.013 / 27.627) |
+| Branches | 95,18% (22.790 / 23.943) |
+| Functions | 96,13% (3.255 / 3.386) |
+| Lines | 97,81% (25.600 / 26.171) |
+| Source-located zeros | 293 / 101 arquivos |
+| Empty-location zeros (V8) | **757** |
+| Gap branches → 100% | **1.153** |
 
-Concentração residual (muitos já classificados DEFENSIVE/MERGE no Stage 2B–2E):
+Triagem bulk (`triage-stage2f-inventory.js`): DEFENSIVE 160 · CLI 18 · MERGE 10 · **TEST_V2_CANDIDATE 105** (`stage2f-test-v2-candidates.tsv`).
 
-1. `orphanet.js`, `SampleGraphValidator.js`
-2. `terminologies.routes.js`, `batch-validation-engine.service.js`
-3. `fhir-import-staging.service.js`, `intakeWizard.js`, `sample.service.js`
-4. `backup.service.js`, `equipment-sensor-quarantine.service.js`
-5. `mongo.js`, `terminologySync.service.js`, `redis.js`
-6. `createLinkedFileController.js`, `daily-merkle.job.js`, `storage.routes.js`, `user.routes.js`
+## Stage 2F — colheita + gate B
 
-## Política proposta para o marco 100%
+- Harvest: `tests/unit/item8.waveH.stage2f.residual.test.js` (59 TEST_V2); timeouts de carga em auth-rate-limiter / wave G.
+- Commit harvest: `d9c10790`.
+- Full Vitest+coverage B: `logs/item8-stage2/stage2f-final-cov-run.log` — **exit 0**.
 
-1. Continuar **só** `TEST_V2` legítimo (sem fabricar estado impossível).
-2. Para cada residual DEFENSIVE/MERGE/UNREACHABLE: documentar no inventário com evidência (teste isolado vs merge global, contrato interno).
-3. Se após esgotar TEST_V2 o numerador V8 global ainda for &lt; 100%: registrar bloqueio `BLOCKED_BY_COVERAGE_INSTRUMENTATION` / contrato e decidir com o time se a issue #228 aceita exclusão explícita documentada (não “skip” oportunista).
-4. Protocolo operacional: lotes + `[skip ci]` + Full Vitest local + Docker `current-state:ci` antes de reconciliar na #228.
+| Métrica | Gate final 2F |
+| --- | --- |
+| Test Files / Tests | 593 / 10.456 verdes |
+| Statements | 97,79% (27.017 / 27.627) |
+| Branches | **95,25%** (22.806 / 23.943) |
+| Functions | 96,13% (3.255 / 3.386) |
+| Lines | 97,82% (25.603 / 26.171) |
+| Gap branches → 100% | **1.137** |
 
-## Próximo passo de execução
+Docker: `logs/item8-stage2/docker-stage2f.log` (`current-state:ci`).
 
-Abrir Stage **2F / Item 8-100** com:
+## Por que 100% branches é bloqueado
 
-1. Remedir Full+coverage no HEAD pós–wave G (`4ed47b0d`+) e regenerar inventário.
-2. Classificar os 304 zeros (não chase cego dos tops DEFENSIVE).
-3. Lotes TEST_V2 nos arquivos ainda com yield real.
-4. Reconcile na #228 ao atingir 100% nas quatro métricas **ou** ao fechar a política de braços instrumentais.
+Mesmo cobrindo **todos** os source-located zeros restantes (~280 após harvest), o denominador V8 ainda inclui **~757** braços com `locations[i]` vazio (implicit else / instrumentação). Item 8 **proíbe** fabricar estados só para o contador. Teto realista de branches com a config atual ≪ 100%.
+
+## Decisão
+
+1. **Não** marcar checkbox **100%** na #228.
+2. Status Stage 2F: `BLOCKED_BY_COVERAGE_INSTRUMENTATION`.
+3. Próximo passo **humano** (fora desta stage de testes): emenda na #228 (carve-out documentado de empty-loc / DEFENSIVE) **ou** ajuste de provedor/config de coverage — depois reabrir colheita se o denominador mudar.
+
+## Política mantida
+
+Só `TEST_V2`; inventário classificado; `[skip ci]` intermediário; no máximo 2 Full+coverage + 1 Docker nesta stage.
