@@ -420,16 +420,21 @@ async function quarantineSamplesByFilter(db, filter, context = {}) {
       queryOptions
     );
 
+    // #883: a sample counts as quarantined -- and gets a QuarantineAction and
+    // a ledger movement -- only when this update actually changed it. The
+    // find above already skips quarantined samples, so modifiedCount 0 means
+    // a concurrent writer got there first and recorded its own action and
+    // movement; writing them again would duplicate the audit trail. The
+    // reported count used to be a loop counter.
+    if (!(updateResult?.modifiedCount > 0)) {
+      continue;
+    }
+    quarantined += 1;
+
     await quarantineActionService.recordAction(db, {
       specimenIds: [quarantineActionService.canonicalSpecimenId(sample)],
       reasonCodes: [context.coldChainIncidentId ? 'COLD_CHAIN_INCIDENT' : (context.source || 'AUTOMATIC')],
     }, context.session);
-
-    // #883: only count a sample as quarantined when the update actually
-    // changed it; the reported count used to be a loop counter.
-    if (updateResult?.modifiedCount > 0) {
-      quarantined += 1;
-    }
 
     const quantitySnapshot = Number(sample.currentQuantity ?? sample.quantity ?? 0);
     const movementID = await SampleMovementModel.generateMovementID(db);

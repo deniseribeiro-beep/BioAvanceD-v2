@@ -204,7 +204,7 @@ describe('equipment-sensor-quarantine.service', () => {
 
     // #883: `quarantined` reflects whether the update actually changed the
     // document, not just that a matching sample was found.
-    it('does not count a sample toward `quarantined` when its update reports modifiedCount 0', async () => {
+    it('records nothing for a sample whose update reports modifiedCount 0', async () => {
       const freezerId = 'FRZ-2';
       const shelfId = 'SHF-2';
       const rackId = 'RCK-2';
@@ -267,10 +267,11 @@ describe('equipment-sensor-quarantine.service', () => {
 
       expect(result.matched).toBe(1);
       expect(result.quarantined).toBe(0);
-      // The ledger/action-recording side is unconditional today (#883):
-      // it is not gated on modifiedCount, only on the sample having matched.
-      expect(result.movements).toBe(1);
-      expect(quarantineActionsCollection.insertOne).toHaveBeenCalledTimes(1);
+      // #883: a no-op update (a concurrent writer already quarantined it)
+      // records no second QuarantineAction and no second ledger movement.
+      expect(result.movements).toBe(0);
+      expect(quarantineActionsCollection.insertOne).not.toHaveBeenCalled();
+      expect(movementsCollection.insertOne).not.toHaveBeenCalled();
     });
 
     it('resolves equipment identifiers from the bare `id` field when `_id`/`equipmentID` are absent', async () => {
