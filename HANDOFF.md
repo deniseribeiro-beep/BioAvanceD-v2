@@ -10,8 +10,7 @@ vehicles, all with the direction already decided by Denise: **#1106, #1120,
 
 ## Repo state
 
-`feature/docker-e2e-backend-integration`, pushed. The last substantive
-commit is `e063d98b` (#961).
+`feature/docker-e2e-backend-integration`, pushed.
 
 ## What shipped
 
@@ -35,17 +34,19 @@ commit is `e063d98b` (#961).
 Proof: every slice ran targeted tests plus a stash-the-fix control (see each
 close comment). Architecture 159/159, and `api/backend/scripts/lint.js`
 clean (the old note said `scripts/lint.js`, but it lives under
-`api/backend/`). **No e2e or Docker run this sitting.** None of the four
+`api/backend/`). The last substantive commit is `db0192ac` (#1230).
+**No e2e or Docker run this sitting.** None of the four
 changes touches a flow the e2e suite drives, but that is `[inference]`,
 unverified.
 
-## Filed this sitting
+## Filed and closed this sitting
 
-- **#1230**: every rejected request writes a permanent chained audit row,
-  and `globalLimiter`'s own 429s do too, because it mounts after
-  `auditRequest` (`app.js:194` against `:244`). The 429 half is
-  `[inference]` from mount order and was not probed. It has three remedies,
-  none chosen, and no deployment exists.
+- **#1230**, closed, `db0192ac`. Rejected requests and the limiter's own
+  429s each get an audit row, deliberately. RF012 plus the binding
+  principle (`docs/extracted-v2.0.0/requisitos.md:405`, `:19`) rule out
+  both aggregating and skipping. Volume is RF026 retention's job, which
+  #667 tracks. The 429 behaviour is pinned by
+  `rateLimitAudit.composition.test.js`, which has an order control.
 
 ## Still open from the Axis E batch (workable without asking)
 
