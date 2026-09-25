@@ -185,11 +185,11 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
   const diseaseLabel = `RF005 e2e Marfan-like disease ${Date.now()}`;
   const phenotypeLabel = 'Seizure';
   const medicationName = `rf005-e2e-captopril-${Date.now()}`;
-  // #708: AllergyIntolerance's allergenCoding is DCB-coded but, unlike
-  // Condition/PhenotypeObservation, allergy-intolerance.service.js doesn't
-  // gate on activeCodeValidator (#708's own scope note) -- no
-  // TerminologyConcept fixture is needed for this to persist, only a
-  // uniquely-named display value so this test's own assertion doesn't pick
+  // #714: AllergyIntolerance's allergenCoding is DCB-coded and, like
+  // Condition/PhenotypeObservation, allergy-intolerance.service.js now gates
+  // it on activeCodeValidator -- a DCB TerminologyConcept/
+  // ReferenceDatasetRelease fixture for this code is seeded below, alongside
+  // a uniquely-named display value so this test's own assertion doesn't pick
   // up a prior run's fixture from the persistent test-stack Mongo volume.
   const allergenCode = '03730';
   const allergenName = `RF005 e2e allergen #708 ${Date.now()}`;
@@ -287,6 +287,13 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
     await seedActiveTerminologyConcept('http://hl7.org/fhir/sid/icd-10', cidCode, 'malignant neoplasm of breast', { datasetCode: 'ICD10' });
     await seedActiveTerminologyConcept('https://www.omim.org', omimCodeAsImported, 'marfan syndrome', { datasetCode: 'OMIM' });
     await seedActiveTerminologyConcept('http://purl.obolibrary.org/obo/hp.owl', hpoCode, phenotypeLabel, { datasetCode: 'HPO' });
+    // #714: AllergyIntolerance's allergenCoding is now gated the same way.
+    await seedActiveTerminologyConcept(
+      'https://www.gov.br/anvisa/pt-br/assuntos/farmacopeia/dcb',
+      allergenCode,
+      allergenName,
+      { datasetCode: 'DCB' }
+    );
   });
 
   test.afterAll(async () => {

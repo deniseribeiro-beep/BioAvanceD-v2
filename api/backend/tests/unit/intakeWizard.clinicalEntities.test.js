@@ -70,6 +70,7 @@ function clearCache() {
 const ORPHA_SYSTEM_URI = 'http://www.orpha.net';
 const HPO_SYSTEM_URI = 'http://purl.obolibrary.org/obo/hp.owl';
 const OMIM_SYSTEM_URI = 'https://www.omim.org';
+const DCB_SYSTEM_URI = 'https://www.gov.br/anvisa/pt-br/assuntos/farmacopeia/dcb';
 
 /**
  * Real query-matching fake for the two RF029 active-code-check collections
@@ -83,11 +84,15 @@ function makeActiveCodeCollections() {
     { systemUri: HPO_SYSTEM_URI, code: 'HP:0000822', version: '2026-01', conceptStatus: 'active', referenceDatasetReleaseId: 'release-hpo' },
     // #698: RF028's real OMIM importer stores bare digits, no "OMIM:" prefix.
     { systemUri: OMIM_SYSTEM_URI, code: '154700', version: '2026-01', conceptStatus: 'active', referenceDatasetReleaseId: 'release-omim' },
+    // #714: AllergyIntolerance's allergenCoding now goes through the same
+    // active-release gate as Condition/PhenotypeObservation above.
+    { systemUri: DCB_SYSTEM_URI, code: '03730', version: '2026-01', conceptStatus: 'active', referenceDatasetReleaseId: 'release-dcb' },
   ];
   const referenceDatasetReleases = [
     { referenceDatasetReleaseId: 'release-orpha', datasetCode: 'ORPHA', releaseStatus: 'active' },
     { referenceDatasetReleaseId: 'release-hpo', datasetCode: 'HPO', releaseStatus: 'active' },
     { referenceDatasetReleaseId: 'release-omim', datasetCode: 'OMIM', releaseStatus: 'active' },
+    { referenceDatasetReleaseId: 'release-dcb', datasetCode: 'DCB', releaseStatus: 'active' },
   ];
   return {
     terminologyConcepts: {
