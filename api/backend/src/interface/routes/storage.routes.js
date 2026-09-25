@@ -21,6 +21,7 @@ const { authenticate } = require('../../infrastructure/middleware/auth');
 const { requirePermission } = require('../../infrastructure/middleware/rbac');
 const { ObjectId } = require('mongodb');
 const logger = require('../../utils/logger');
+const { StorageTopologyAuthoringService } = require('../../services/storage-topology-authoring.service');
 
 /**
  * Storage Routes - Gerenciamento de Armazenagem Física (ISO 20387)
@@ -57,7 +58,8 @@ router.use((req, res, next) => {
 //     old MUTATION_ROLES [2, 3, 4] exactly, so the swap is behaviour-
 //     preserving rather than a re-authorization.
 //   manageStorageTopology (StorageContainer) -- WHAT the container tree is:
-//     PATCH /freezer/:freezerId/room. Granted to Coordenador +
+//     PATCH /freezer/:freezerId/room, and (#1124) POST /topology/containers
+//     and /topology/boxes. Granted to Coordenador +
 //     Administrador, which is both RF017's stated actor and, conveniently,
 //     'createPatient''s existing grant -- so that swap is a runtime no-op
 //     and stops recording a Patient-domain authorization for a freezer
@@ -561,6 +563,91 @@ router.patch('/freezer/:freezerId/room', authenticate, requirePermission('manage
       error: 'INTERNAL_ERROR',
       message: error.message
     });
+  }
+});
+
+// ==================== AUTORIA DE TOPOLOGIA (#1124) ====================
+// Until these, no request could create a StorageContainer or a StorageBox:
+// the legacy location-storage backfill held the only insertOne calls. Ported
+// from Denise's stabilize/v2.0.0-prototype (dd75ae70). They author the
+// container tree only; placing a specimen stays on POST /allocate under
+// manageStorageAllocation.
+
+function topologyActorId(req) {
+  return req.user?.userID || req.user?.userId || req.user?._id || null;
+}
+
+function sendTopologyError(res, error) {
+  const status = Number(error?.statusCode) || 500;
+  if (status >= 500) logger.error('[StorageTopology] Erro não tratado:', error);
+  return res.status(status).json({
+    success: false,
+    error: error?.code || 'INTERNAL_ERROR',
+    message: error?.message || 'Erro interno'
+  });
+}
+
+async function auditTopologyCreate(req, resourceType, resourceId, payload) {
+  const auditLogger = require('../../utils/auditLogger');
+  auditLogger.init(req.app.locals.db);
+  await auditLogger.log({
+    action: 'CREATE',
+    resourceType,
+    resourceId: String(resourceId),
+    status: 'success',
+    severity: 'info',
+    message: `${resourceType} criado pela superfície de autoria de topologia`,
+    payload,
+    req,
+    module: 'Armazenamento'
+  });
+}
+
+/**
+ * POST /api/storage/topology/containers
+ *
+ * Body: { name, containerType: FREEZER|SHELF|RACK|DRAWER, parentId?,
+ *         equipmentId? (FREEZER), roomId? (FREEZER), temperature? (FREEZER),
+ *         temperatureUnit?, capacity?, status?, description? }
+ *
+ * 201 { success, data }; 400 INVALID_INPUT | INVALID_HIERARCHY | ...;
+ * 404 PARENT_NOT_FOUND | EQUIPMENT_NOT_FOUND | ROOM_NOT_FOUND;
+ * 409 STORAGE_CONTAINER_CONFLICT (a FREEZER already holds that equipment).
+ */
+router.post('/topology/containers', requirePermission('manageStorageTopology'), async (req, res) => {
+  try {
+    const service = new StorageTopologyAuthoringService(req.app.locals.db);
+    const created = await service.createContainer(req.body || {}, topologyActorId(req));
+    await auditTopologyCreate(req, 'StorageContainerLayout', created._id, {
+      containerType: created.containerType,
+      parentId: created.parent_id ? String(created.parent_id) : null,
+      roomId: created.roomId ? String(created.roomId) : null,
+      equipmentId: created.containerID || null
+    });
+    return res.status(201).json({ success: true, data: created });
+  } catch (error) {
+    return sendTopologyError(res, error);
+  }
+});
+
+/**
+ * POST /api/storage/topology/boxes
+ *
+ * Body: { name, parentId (a RACK or DRAWER), dimension: { rows 1-26, cols 1-100 },
+ *         boxID?, status?, description? }
+ */
+router.post('/topology/boxes', requirePermission('manageStorageTopology'), async (req, res) => {
+  try {
+    const service = new StorageTopologyAuthoringService(req.app.locals.db);
+    const created = await service.createBox(req.body || {}, topologyActorId(req));
+    await auditTopologyCreate(req, 'StorageBoxLayout', created._id, {
+      parentId: String(created.parent_id),
+      dimension: created.dimension,
+      capacity: created.capacity
+    });
+    return res.status(201).json({ success: true, data: created });
+  } catch (error) {
+    return sendTopologyError(res, error);
   }
 });
 
