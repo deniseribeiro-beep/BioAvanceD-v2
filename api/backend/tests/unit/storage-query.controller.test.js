@@ -27,8 +27,12 @@ function buildRes() {
   return res;
 }
 
+// #1211: in the app, requireOrganizationScope runs ahead of these
+// controllers and sets req.organizationScope; the list reads fail closed
+// without it. A global scope keeps these tests about the controllers -- the
+// scoped filters are covered in storage-query-scope.api.test.js.
 function buildReq(overrides = {}) {
-  return { app: { locals: { db: {} } }, params: {}, query: {}, ...overrides };
+  return { app: { locals: { db: {} } }, params: {}, query: {}, organizationScope: { scope: 'global', organizationIds: [] }, ...overrides };
 }
 
 afterEach(() => {
@@ -92,7 +96,7 @@ describe('storage-query.controller.searchSamplesController', () => {
 
     await controller(req, res);
 
-    expect(executeSpy).toHaveBeenCalledWith({ query: 'blood' });
+    expect(executeSpy).toHaveBeenCalledWith({ query: 'blood', scopeFilter: {} });
     expect(res.status).toHaveBeenCalledWith(200);
     expect(res.json).toHaveBeenCalledWith({ success: true, data: [{ sampleId: 'S1' }] });
   });
@@ -104,7 +108,7 @@ describe('storage-query.controller.searchSamplesController', () => {
 
     await controller(req, res);
 
-    expect(executeSpy).toHaveBeenCalledWith({ query: '' });
+    expect(executeSpy).toHaveBeenCalledWith({ query: '', scopeFilter: {} });
   });
 
   it('returns 500 with error message when the use case throws', async () => {

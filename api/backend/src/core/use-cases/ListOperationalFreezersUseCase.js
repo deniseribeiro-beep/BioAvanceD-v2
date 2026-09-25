@@ -6,8 +6,11 @@ class ListOperationalFreezersUseCase {
     this.topologyReadRepository = topologyReadRepository;
   }
 
-  async execute() {
-    return this.topologyReadRepository.listOperationalFreezers();
+  /**
+   * @param {{ scopeFilter?: object }} [query] - #1211: extra query terms bounding the list to the caller's organizations
+   */
+  async execute({ scopeFilter = {} } = {}) {
+    return this.topologyReadRepository.listOperationalFreezers(scopeFilter);
   }
 }
 

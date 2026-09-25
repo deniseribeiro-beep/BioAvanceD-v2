@@ -56,17 +56,9 @@ const EXEMPT = new Map([
 // #1210 scoped storage.routes.js's two topology creates, which made the file
 // visible to this sweep for the first time; the rest of it checks no tenancy
 // at all, the mutations included (#1211).
-// The five mutations were scoped under #1211 and left this list; the reads
-// below are what remains of it.
+// #1211 scoped all thirteen, mutations and reads, and emptied this list. It
+// stays, with its stale check, as the place the next known gap is recorded.
 const TRACKED_UNSCOPED = new Map([
-  ['storage.routes.js GET /freezers', '#1211'],
-  ['storage.routes.js GET /samples/search', '#1211'],
-  ['storage.routes.js GET /sample/:sampleId', '#1211'],
-  ['storage.routes.js GET /box/:boxId/available', '#1211'],
-  ['storage.routes.js GET /validate/:boxId/:position', '#1211'],
-  ['storage.routes.js GET /freezer/:freezerId/stats', '#1211'],
-  ['storage.routes.js GET /box/:boxId/integrity', '#1211'],
-  ['storage.routes.js GET /freezer/:freezerId/tree', '#1211'],
 ]);
 
 function routeFiles() {
@@ -168,6 +160,26 @@ test('#1211: the storage allocation mutations and the freezer room PATCH carry t
   const { registrations } = sweep();
   const byKey = new Map(registrations.map((r) => [r.key, r]));
   for (const route of ['POST /allocate', 'POST /allocate/auto', 'POST /move', 'DELETE /release/:sampleId', 'PATCH /freezer/:freezerId/room']) {
+    const key = `storage.routes.js ${route}`;
+    assert.ok(byKey.has(key), `${key} not found by the sweep`);
+    assert.equal(byKey.get(key).gated, true, `${key} is not organization-scoped`);
+    assert.equal(EXEMPT.has(key) || TRACKED_UNSCOPED.has(key), false, `${key} must not be listed as unscoped`);
+  }
+});
+
+test('#1211: the eight storage reads carry the organization gate', () => {
+  const { registrations } = sweep();
+  const byKey = new Map(registrations.map((r) => [r.key, r]));
+  for (const route of [
+    'GET /freezers',
+    'GET /samples/search',
+    'GET /sample/:sampleId',
+    'GET /box/:boxId/available',
+    'GET /validate/:boxId/:position',
+    'GET /freezer/:freezerId/stats',
+    'GET /box/:boxId/integrity',
+    'GET /freezer/:freezerId/tree',
+  ]) {
     const key = `storage.routes.js ${route}`;
     assert.ok(byKey.has(key), `${key} not found by the sweep`);
     assert.equal(byKey.get(key).gated, true, `${key} is not organization-scoped`);

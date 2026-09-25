@@ -21,7 +21,17 @@ describe('ListOperationalFreezersUseCase', () => {
 
     expect(result).toBe(freezers);
     expect(topologyReadRepository.listOperationalFreezers).toHaveBeenCalledTimes(1);
-    expect(topologyReadRepository.listOperationalFreezers).toHaveBeenCalledWith();
+    // #1211: no scope filter means an empty one, the global caller's.
+    expect(topologyReadRepository.listOperationalFreezers).toHaveBeenCalledWith({});
+  });
+
+  it('passes the organization scope filter through to the repository (#1211)', async () => {
+    const { useCase, topologyReadRepository } = makeUseCase(() => Promise.resolve([]));
+    const scopeFilter = { containerID: { $in: [4201, '4201'] } };
+
+    await useCase.execute({ scopeFilter });
+
+    expect(topologyReadRepository.listOperationalFreezers).toHaveBeenCalledWith(scopeFilter);
   });
 
   it('propagates errors thrown by the repository', async () => {

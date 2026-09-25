@@ -9,6 +9,7 @@ const SearchAllocatableSamplesUseCase = require('../../core/use-cases/SearchAllo
 const GetFreezerOccupancyStatsUseCase = require('../../core/use-cases/GetFreezerOccupancyStatsUseCase');
 const CheckStorageBoxIntegrityUseCase = require('../../core/use-cases/CheckStorageBoxIntegrityUseCase');
 const GetFreezerTreeUseCase = require('../../core/use-cases/GetFreezerTreeUseCase');
+const { sampleScopeFilter, freezerScopeFilter } = require('../../services/storage-scope.service');
 const logger = require('../../utils/logger');
 
 function createListFreezersController() {
@@ -19,7 +20,7 @@ function createListFreezersController() {
         topologyReadRepository: new MongoStorageTopologyReadRepository(db)
       });
 
-      const data = await useCase.execute();
+      const data = await useCase.execute({ scopeFilter: await freezerScopeFilter(db, req.organizationScope) });
       return res.status(200).json({ success: true, data });
     } catch (error) {
       logger.error('[StorageQueryController] Erro em listFreezers:', error.message || error);
@@ -41,7 +42,10 @@ function createSearchSamplesController() {
         patientConsentReadRepository: new MongoPatientConsentReadRepository(db)
       });
 
-      const data = await useCase.execute({ query: req.query?.q || '' });
+      const data = await useCase.execute({
+        query: req.query?.q || '',
+        scopeFilter: sampleScopeFilter(req.organizationScope)
+      });
       return res.status(200).json({ success: true, data });
     } catch (error) {
       logger.error('[StorageQueryController] Erro em searchSamples:', error.message || error);

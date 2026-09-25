@@ -84,6 +84,10 @@ router.use((req, res, next) => {
 // organization's box. Runs after the organization-scope middleware and
 // before the controller, so a refusal never opens a transaction. See
 // storage-scope.service.js for the two scope keys.
+//
+// The reads carry it too: the six that name one specimen, box or freezer
+// answer 403 out of scope, and GET /freezers and /samples/search filter
+// their queries through the same service instead.
 function requireStorageTargetsInScope({ sample, box, container } = {}) {
   return async (req, res, next) => {
     const db = req.app.locals.db;
@@ -125,7 +129,7 @@ function requireStorageTargetsInScope({ sample, box, container } = {}) {
  *   ]
  * }
  */
-router.get('/freezers', createListFreezersController());
+router.get('/freezers', requireOrganizationScope, createListFreezersController());
 
 /**
  * GET /api/storage/samples/search?q=termo
@@ -156,7 +160,7 @@ router.get('/freezers', createListFreezersController());
  *   ]
  * }
  */
-router.get('/samples/search', createSearchSamplesController());
+router.get('/samples/search', requireOrganizationScope, createSearchSamplesController());
 
 /**
  * POST /api/storage/allocate
@@ -299,7 +303,9 @@ router.delete('/release/:sampleId', requirePermission('manageStorageAllocation')
  *   }
  * }
  */
-router.get('/sample/:sampleId', createGetSampleLocationController());
+router.get('/sample/:sampleId', requireOrganizationScope,
+  requireStorageTargetsInScope({ sample: (req) => req.params.sampleId }),
+  createGetSampleLocationController());
 
 /**
  * GET /api/storage/box/:boxId/available
@@ -323,7 +329,9 @@ router.get('/sample/:sampleId', createGetSampleLocationController());
  *   }
  * }
  */
-router.get('/box/:boxId/available', createGetAvailablePositionsController());
+router.get('/box/:boxId/available', requireOrganizationScope,
+  requireStorageTargetsInScope({ box: (req) => req.params.boxId }),
+  createGetAvailablePositionsController());
 
 /**
  * GET /api/storage/validate/:boxId/:position
@@ -352,7 +360,9 @@ router.get('/box/:boxId/available', createGetAvailablePositionsController());
  *   "occupiedBySampleId": "507f..."
  * }
  */
-router.get('/validate/:boxId/:position', createValidatePositionController());
+router.get('/validate/:boxId/:position', requireOrganizationScope,
+  requireStorageTargetsInScope({ box: (req) => req.params.boxId }),
+  createValidatePositionController());
 
 /**
  * GET /api/storage/freezer/:freezerId/stats
@@ -383,7 +393,9 @@ router.get('/validate/:boxId/:position', createValidatePositionController());
  *   }
  * }
  */
-router.get('/freezer/:freezerId/stats', createGetFreezerStatsController());
+router.get('/freezer/:freezerId/stats', requireOrganizationScope,
+  requireStorageTargetsInScope({ container: (req) => req.params.freezerId }),
+  createGetFreezerStatsController());
 
 /**
  * GET /api/storage/box/:boxId/integrity
@@ -431,7 +443,9 @@ router.get('/freezer/:freezerId/stats', createGetFreezerStatsController());
  * tabela de codigos de `docs/STORAGE_API_EXAMPLES.js`, que lista
  * BOX_NOT_FOUND em "404 - Nao encontrado".
  */
-router.get('/box/:boxId/integrity', createCheckBoxIntegrityController());
+router.get('/box/:boxId/integrity', requireOrganizationScope,
+  requireStorageTargetsInScope({ box: (req) => req.params.boxId }),
+  createCheckBoxIntegrityController());
 
 /**
  * GET /api/storage/freezer/:freezerId/tree
@@ -498,7 +512,9 @@ router.get('/box/:boxId/integrity', createCheckBoxIntegrityController());
  *   }
  * }
  */
-router.get('/freezer/:freezerId/tree', createGetFreezerTreeController());
+router.get('/freezer/:freezerId/tree', requireOrganizationScope,
+  requireStorageTargetsInScope({ container: (req) => req.params.freezerId }),
+  createGetFreezerTreeController());
 
 /**
  * PATCH /api/storage/freezer/:freezerId/room

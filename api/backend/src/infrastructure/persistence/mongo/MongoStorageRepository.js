@@ -1025,7 +1025,7 @@ class MongoStorageRepository {
   }
 
   /**
-   * @param {{ query: string }} input
+   * @param {{ query: string, scopeFilter?: object }} input - scopeFilter: #1211's organization terms
    */
   async searchAllocatableSampleCandidates(input) {
     const searchTerm = String(input.query || '').trim();
@@ -1049,7 +1049,8 @@ class MongoStorageRepository {
             { 'storageLocation.boxId': { $exists: false } },
             { 'storageLocation.boxId': null }
           ]
-        }
+        },
+        ...(input.scopeFilter && Object.keys(input.scopeFilter).length > 0 ? [input.scopeFilter] : [])
       ]
     }).limit(20).toArray();
   }

@@ -10,13 +10,17 @@ class MongoStorageTopologyReadRepository {
     this.db = db;
   }
 
-  async listOperationalFreezers() {
+  /**
+   * @param {object} [scopeFilter] - #1211: organization terms from storage-scope.service
+   */
+  async listOperationalFreezers(scopeFilter = {}) {
     const storageContainersCollection = this.db.collection('storageContainers');
     // #1163: this query is what storage_containers_type_status_idx_v1 exists
     // for, so it is ensured here, where the read runs (utils/lookupIndex.js).
     ensureStorageContainerIndexes(storageContainersCollection);
     return storageContainersCollection
       .find({
+        ...scopeFilter,
         containerType: 'FREEZER',
         status: 'OPERATIONAL'
       })

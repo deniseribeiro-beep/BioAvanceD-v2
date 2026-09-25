@@ -94,10 +94,10 @@ test.describe('Storage allocation is bounded by the caller organization (#1211) 
       },
     });
     expect(sensorRes.ok(), await sensorRes.text()).toBeTruthy();
-    return { boxId: box._id as string };
+    return { boxId: box._id as string, freezerId: freezer._id as string };
   }
 
-  test('a Tecnico scoped to one organization cannot release or move across organizations, and still can within its own', async ({ request }) => {
+  test('a Tecnico scoped to one organization cannot release, move or read across organizations, and still can within its own', async ({ request }) => {
     const admin = await realLogin(request);
     const adminAuth = { Authorization: `Bearer ${admin.token}` };
     const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -175,5 +175,29 @@ test.describe('Storage allocation is bounded by the caller organization (#1211) 
       data: { sampleId: ownSample, boxId: ownTree.boxId, position: 'C3' },
     });
     expect(ownAllocate.status(), await ownAllocate.text()).toBe(201);
+
+    // The reads: another organization's specimen and freezer are refused by
+    // id, and the freezer list names only the caller's own.
+    const foreignLocation = await request.get(`${apiBaseURL}/api/storage/sample/${foreignSample}`, { headers: tecAuth });
+    expect(foreignLocation.status(), await foreignLocation.text()).toBe(403);
+    expect((await foreignLocation.json()).error).toBe('SAMPLE_OUT_OF_SCOPE');
+
+    const foreignTree = await request.get(`${apiBaseURL}/api/storage/freezer/${otherTree.freezerId}/tree`, { headers: tecAuth });
+    expect(foreignTree.status(), await foreignTree.text()).toBe(403);
+    expect((await foreignTree.json()).error).toBe('EQUIPMENT_OUT_OF_SCOPE');
+
+    const ownAvailable = await request.get(`${apiBaseURL}/api/storage/box/${ownTree.boxId}/available`, { headers: tecAuth });
+    expect(ownAvailable.status(), await ownAvailable.text()).toBe(200);
+
+    const freezersRes = await request.get(`${apiBaseURL}/api/storage/freezers`, { headers: tecAuth });
+    expect(freezersRes.status(), await freezersRes.text()).toBe(200);
+    const freezerIds = ((await freezersRes.json()).data as Array<{ _id: string }>).map((f) => String(f._id));
+    expect(freezerIds).toContain(ownTree.freezerId);
+    expect(freezerIds).not.toContain(otherTree.freezerId);
+
+    // Control for the list filter: the Administrador still sees both.
+    const adminFreezers = await request.get(`${apiBaseURL}/api/storage/freezers`, { headers: adminAuth });
+    const adminIds = ((await adminFreezers.json()).data as Array<{ _id: string }>).map((f) => String(f._id));
+    expect(adminIds).toEqual(expect.arrayContaining([ownTree.freezerId, otherTree.freezerId]));
   });
 });

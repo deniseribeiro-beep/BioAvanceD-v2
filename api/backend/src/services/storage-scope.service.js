@@ -1,6 +1,6 @@
 const { ObjectId } = require('mongodb');
 const { getCollection } = require('../utils/collectionResolver');
-const { isRecordInOrganizationScope } = require('./rbac-assignment.service');
+const { isRecordInOrganizationScope, applyOrganizationScopeFilter } = require('./rbac-assignment.service');
 const { StorageTopologyAuthoringService, topologyError } = require('./storage-topology-authoring.service');
 
 /**
@@ -59,7 +59,37 @@ async function assertContainerInScope(db, containerId, organizationScope) {
   await new StorageTopologyAuthoringService(db).assertTreeInScope(container, organizationScope);
 }
 
+/**
+ * #1211, the list reads: the query terms that bound GET /samples/search and
+ * GET /freezers to the caller's organizations. {} for a global scope. A
+ * freezer is in scope when its containerID names an in-scope Equipment
+ * (#757's join, matched as number and string like the topology walk does);
+ * a freezer with no such Equipment is listed to nobody but a global caller.
+ */
+function sampleScopeFilter(organizationScope) {
+  assertScopePresent(organizationScope);
+  return applyOrganizationScopeFilter({}, organizationScope, 'collectionSite');
+}
+
+async function freezerScopeFilter(db, organizationScope) {
+  assertScopePresent(organizationScope);
+  if (organizationScope.scope === 'global') return {};
+  const inScope = await db.collection('equipment')
+    .find({ organizationId: { $in: organizationScope.organizationIds }, deletedAt: null }, { projection: { equipmentID: 1 } })
+    .toArray();
+  const ids = [];
+  for (const { equipmentID } of inScope) {
+    if (equipmentID === undefined || equipmentID === null) continue;
+    ids.push(equipmentID, String(equipmentID));
+    const asNumber = Number(equipmentID);
+    if (Number.isFinite(asNumber)) ids.push(asNumber);
+  }
+  return { containerID: { $in: [...new Set(ids)] } };
+}
+
 module.exports = {
+  sampleScopeFilter,
+  freezerScopeFilter,
   assertSampleInScope,
   assertBoxInScope,
   assertContainerInScope,
