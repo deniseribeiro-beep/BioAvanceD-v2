@@ -23,6 +23,8 @@ const { ObjectId } = require('mongodb');
 const logger = require('../../utils/logger');
 const { StorageTopologyAuthoringService } = require('../../services/storage-topology-authoring.service');
 const { assertSampleInScope, assertBoxInScope, assertContainerInScope } = require('../../services/storage-scope.service');
+const { getCollection } = require('../../utils/collectionResolver');
+const { findSampleByAnyId } = require('../../utils/sampleLookup');
 
 /**
  * Storage Routes - Gerenciamento de Armazenagem Física (ISO 20387)
@@ -76,6 +78,29 @@ router.use((req, res, next) => {
 // facility.routes.js, room.routes.js, routes/eConsent.js) are deliberately
 // left alone here -- see #888 for why folding them in would bury the
 // catalog change, which is the actually-risky part.
+
+// ==================== IDENTIFICADOR DA AMOSTRA (#1216) ====================
+// The create response names a specimen by its canonical specimenId, and the
+// storage repository looks samples up by _id. This rewrites a specimenId in
+// req.body.sampleId or req.params.sampleId to that sample's _id, ahead of
+// the scope check, so a specimenId is scoped as strictly as an _id. An
+// unknown id is left as sent, and the controller answers its own 404.
+function resolveSampleIdentifier(source) {
+  return async (req, res, next) => {
+    const db = req.app.locals.db;
+    const holder = source === 'params' ? req.params : req.body;
+    const raw = holder?.sampleId;
+    if (!db || raw === undefined || raw === null || raw === '') return next();
+    if (typeof raw === 'string' && raw.length === 24 && ObjectId.isValid(raw)) return next();
+    try {
+      const sample = await findSampleByAnyId(await getCollection(db, 'samples'), raw);
+      if (sample) holder.sampleId = sample._id.toString();
+      return next();
+    } catch (error) {
+      return next(error);
+    }
+  };
+}
 
 // ==================== ESCOPO ORGANIZACIONAL (#1211) ====================
 // The permission gate says WHO may allocate, move or release; it never said
@@ -193,6 +218,7 @@ router.get('/samples/search', requireOrganizationScope, createSearchSamplesContr
  * }
  */
 router.post('/allocate', requirePermission('manageStorageAllocation'), requireOrganizationScope,
+  resolveSampleIdentifier('body'),
   requireStorageTargetsInScope({ sample: (req) => req.body?.sampleId, box: (req) => req.body?.boxId }),
   createAllocateSampleController());
 
@@ -240,6 +266,7 @@ router.post('/allocate', requirePermission('manageStorageAllocation'), requireOr
  * }
  */
 router.post('/allocate/auto', requirePermission('manageStorageAllocation'), requireOrganizationScope,
+  resolveSampleIdentifier('body'),
   requireStorageTargetsInScope({ sample: (req) => req.body?.sampleId, box: (req) => req.body?.boxId }),
   createAutoAssignSampleController());
 
@@ -257,6 +284,7 @@ router.post('/allocate/auto', requirePermission('manageStorageAllocation'), requ
  * }
  */
 router.post('/move', requirePermission('manageStorageAllocation'), requireOrganizationScope,
+  resolveSampleIdentifier('body'),
   requireStorageTargetsInScope({ sample: (req) => req.body?.sampleId, box: (req) => req.body?.targetBoxId }),
   createMoveSampleController());
 
@@ -276,6 +304,7 @@ router.post('/move', requirePermission('manageStorageAllocation'), requireOrgani
  * }
  */
 router.delete('/release/:sampleId', requirePermission('manageStorageAllocation'), requireOrganizationScope,
+  resolveSampleIdentifier('params'),
   requireStorageTargetsInScope({ sample: (req) => req.params.sampleId }),
   createReleaseSampleController());
 
@@ -304,6 +333,7 @@ router.delete('/release/:sampleId', requirePermission('manageStorageAllocation')
  * }
  */
 router.get('/sample/:sampleId', requireOrganizationScope,
+  resolveSampleIdentifier('params'),
   requireStorageTargetsInScope({ sample: (req) => req.params.sampleId }),
   createGetSampleLocationController());
 

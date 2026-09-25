@@ -30,20 +30,10 @@ const LOCATION_REQUIRED_MESSAGE = 'Localização física obrigatória para cadas
 // #470: imports the shared equipment-readiness constants (#774) — the
 // equipment-readiness half of RF004's gate, missing here until now.
 
-/**
- * Every caller (sample.routes.js) passes an already-cast ObjectId as
- * `specimenId` — but that field on Sample is a separate, server-generated
- * string (see sampleIDGenerator.js), so a bare `{ specimenId }` query never
- * matched it. Looks up by _id first (the real intent), falling back to the
- * specimenId field for any caller that does pass the string form.
- */
-async function findSampleByAnyId(samplesCollection, id) {
-  if (id instanceof ObjectId || (typeof id === 'string' && ObjectId.isValid(id) && String(id).length === 24)) {
-    const sample = await samplesCollection.findOne({ _id: new ObjectId(id) });
-    if (sample) return sample;
-  }
-  return samplesCollection.findOne({ specimenId: id });
-}
+// The route id may be the Mongo _id or the server-generated specimenId
+// string (see sampleIDGenerator.js). #1216 moved this lookup to a util so
+// the sample-file controller and the storage routes resolve it the same way.
+const { findSampleByAnyId } = require('../utils/sampleLookup');
 
 function createSampleValidationError(message, statusCode = 422) {
   const error = new Error(message);
@@ -749,7 +739,11 @@ class SampleService {
   async deleteSample(db, specimenId) {
     try {
       const samplesCollection = await getCollection(db, 'samples');
-      const result = await samplesCollection.deleteOne({ specimenId });
+      // #1216: a bare { specimenId } filter never matched the ObjectId the
+      // route passed, so DELETE answered 404 for a sample that exists.
+      const sample = await findSampleByAnyId(samplesCollection, specimenId);
+      if (!sample) return false;
+      const result = await samplesCollection.deleteOne({ _id: sample._id });
       return result.deletedCount > 0;
     } catch (error) {
       logger.error('Erro ao deletar amostra:', error.message);

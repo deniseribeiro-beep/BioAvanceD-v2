@@ -2705,6 +2705,35 @@ describe('sample.routes', () => {
     });
   });
 
+  // #1216: the create response names a specimen by its specimenId, and these
+  // six handlers wrapped the URL id in new ObjectId(), which throws on
+  // anything but 24 hex characters. The service resolves either form, so
+  // the route must hand it the id as sent.
+  describe('#1216: id-taking handlers pass a specimenId through as sent', () => {
+    const SPECIMEN_ID = '3116768';
+    const cases = [
+      { name: 'GET /:id', service: 'getSample', value: { _id: 'x', specimenId: SPECIMEN_ID }, call: (app) => request(app).get(`/api/samples/${SPECIMEN_ID}`) },
+      { name: 'PUT /:id', service: 'updateSample', value: { _id: 'x', specimenId: SPECIMEN_ID }, call: (app) => request(app).put(`/api/samples/${SPECIMEN_ID}`).send({ quantity: 1 }) },
+      { name: 'DELETE /:id', service: 'deleteSample', value: true, call: (app) => request(app).delete(`/api/samples/${SPECIMEN_ID}`) },
+      { name: 'POST /:id/withdraw', service: 'withdrawSample', value: { withdrawnQuantity: 2, remainingQuantity: 3, movementID: 'm1' }, call: (app) => request(app).post(`/api/samples/${SPECIMEN_ID}/withdraw`).send({ withdrawalType: 'DISPOSAL', withdrawalResponsible: 'Dr. X' }) },
+      { name: 'POST /:id/return', service: 'returnSample', value: { returnedQuantity: 1, condition: 'OK', newAvailableQuantity: 4, movementID: 'm2' }, call: (app) => request(app).post(`/api/samples/${SPECIMEN_ID}/return`).send({}) },
+      { name: 'GET /:id/results', service: 'getSampleResults', value: [], call: (app) => request(app).get(`/api/samples/${SPECIMEN_ID}/results`) },
+    ];
+
+    it.each(cases)('$name', async ({ service, value, call }) => {
+      const serviceFn = vi.fn().mockResolvedValue(value);
+      const overrides = { [service]: serviceFn };
+      if (service !== 'getSample') overrides.getSample = vi.fn().mockResolvedValue(null);
+      const { router } = loadRoute({ sampleServiceOverrides: overrides });
+      const app = buildApp(router, {});
+
+      const res = await call(app);
+
+      expect(res.status).toBe(200);
+      expect(serviceFn.mock.calls.some(([, id]) => id === SPECIMEN_ID)).toBe(true);
+    });
+  });
+
   describe('GET /:id/label/print-job', () => {
     it('returns 503 when db is unavailable', async () => {
       const { router } = loadRoute();

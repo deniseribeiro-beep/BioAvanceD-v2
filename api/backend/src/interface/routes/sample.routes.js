@@ -401,7 +401,6 @@ router.post('/',
           // so an audit row written wrong stays wrong.
           message: `Amostra criada - Participante ID: ${sample.participantId}`, // Apenas ID, sem dados sensíveis
           payload: {
-            sampleID: sample._id.toString(),
             specimenId: sample.specimenId || null,
             participantId: sample.participantId, // Apenas ID anonimizado
             sampleType: sample.sampleType,
@@ -420,9 +419,10 @@ router.post('/',
           ? (req.t('samples.createSuccess') || 'Amostra criada com sucesso') + ' (integração topológica em quarentena)'
           : req.t('samples.createSuccess') || 'Amostra criada com sucesso',
         data: {
-          sampleID: sample._id.toString(),
           // #1216: the canonical business id every report, ledger row and
-          // export carries. sampleID (the Mongo _id) stays for its callers.
+          // export carries, and every id-taking sample, file and storage
+          // route resolves. The Mongo _id left the response under its
+          // prohibited legacy name, sampleID.
           specimenId: sample.specimenId || null,
           // #795: canonical name on the way out, matching the way in --
           // validateCreateSamplePayload already 422s a request carrying
@@ -935,8 +935,7 @@ router.get('/:id', authenticate, requireOrganizationScope, async (req, res) => {
       });
     }
 
-    const { ObjectId } = require('mongodb');
-    const sample = await sampleService.getSample(db, new ObjectId(req.params.id));
+    const sample = await sampleService.getSample(db, req.params.id);
 
     // #340: an existing sample outside the caller's organization scope
     // 403s rather than 404s, matching sample-file.controller.js's
@@ -1030,7 +1029,6 @@ router.post('/:id/withdraw',
         req.body?.requiredScope || req.body?.consentScope || null
       );
 
-      const { ObjectId } = require('mongodb');
       
       // Preparar informações de auditoria
       const auditInfo = {
@@ -1041,7 +1039,7 @@ router.post('/:id/withdraw',
         userAgent: req.headers['user-agent']
       };
       
-      const result = await sampleService.withdrawSample(db, new ObjectId(req.params.id), req.body, auditInfo);
+      const result = await sampleService.withdrawSample(db, req.params.id, req.body, auditInfo);
 
       // Registra log de alta severidade (RF006)
       if (req.user) {
@@ -1114,8 +1112,7 @@ router.put('/:id', authenticate, requirePermission('editSample'), requireOrganiz
       assertOrganizationFieldNotReparented(req.organizationScope, sampleForScope.collectionSite, req.body?.collectionSite, 'collectionSite');
     }
 
-    const { ObjectId } = require('mongodb');
-    const result = await sampleService.updateSample(db, new ObjectId(req.params.id), req.body);
+    const result = await sampleService.updateSample(db, req.params.id, req.body);
 
     if (!result) {
       return res.status(404).json({
@@ -1207,8 +1204,7 @@ router.delete('/:id', authenticate, requirePermission('deleteSample'), requireOr
       });
     }
 
-    const { ObjectId } = require('mongodb');
-    const result = await sampleService.deleteSample(db, new ObjectId(req.params.id));
+    const result = await sampleService.deleteSample(db, req.params.id);
 
     if (!result) {
       return res.status(404).json({
@@ -1468,8 +1464,7 @@ router.get('/:id/results', authenticate, requireOrganizationScope, async (req, r
       });
     }
 
-    const { ObjectId } = require('mongodb');
-    const results = await sampleService.getSampleResults(db, new ObjectId(req.params.id));
+    const results = await sampleService.getSampleResults(db, req.params.id);
 
     // Registra log de consulta de arquivos de analise da amostra
     const auditLogger = require('../../utils/auditLogger');
@@ -1481,7 +1476,7 @@ router.get('/:id/results', authenticate, requireOrganizationScope, async (req, r
       status: 'success',
       severity: 'info',
       message: `Arquivos de analise da amostra consultados - ${results.length || 0} registros`,
-      payload: { sampleID: req.params.id, resultsCount: results.length || 0 },
+      payload: { specimenId: sampleForScope?.specimenId || req.params.id, resultsCount: results.length || 0 },
       req: req,
       module: 'Amostras'
     });
@@ -1522,7 +1517,6 @@ router.post('/:id/return', authenticate, requirePermission('withdrawSample', 'UP
       });
     }
 
-    const { ObjectId } = require('mongodb');
 
     // Preparar informações de auditoria
     const auditInfo = {
@@ -1533,7 +1527,7 @@ router.post('/:id/return', authenticate, requirePermission('withdrawSample', 'UP
       userAgent: req.headers['user-agent']
     };
     
-    const result = await sampleService.returnSample(db, new ObjectId(req.params.id), req.body, auditInfo);
+    const result = await sampleService.returnSample(db, req.params.id, req.body, auditInfo);
 
     // Registra log (anonimizado via auditLogger)
     if (req.user) {

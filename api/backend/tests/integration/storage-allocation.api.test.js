@@ -417,6 +417,52 @@ describe('storage mutations are bounded by the caller organization (#1211)', () 
     expect(storageAssignments.updateOne).not.toHaveBeenCalled();
   });
 
+  // #1216: the create response names a specimen by its specimenId, and the
+  // scope lookup is by _id and passes quietly on a miss. These findOne doubles
+  // honour the filter, so a specimenId the boundary did not resolve would
+  // miss, sail past the scope check, and never reach the 403.
+  const SPECIMEN_ID = '3116768';
+  function samplesBySpecimenId(sample) {
+    return createCollectionMock({
+      findOne: vi.fn(async (filter = {}) => {
+        if (filter.specimenId === SPECIMEN_ID) return sample;
+        if (filter._id && String(filter._id) === String(SAMPLE_ID)) return sample;
+        return null;
+      }),
+    });
+  }
+
+  it('#1216: POST /allocate by specimenId refuses another organization\'s sample', async () => {
+    const samples = samplesBySpecimenId({ ...foreignSample(), specimenId: SPECIMEN_ID });
+    const storageBoxes = createCollectionMock({ findOne: vi.fn().mockResolvedValue(boxUnder(HOME_TREE)) });
+    const db = dbWithRbac({ samples, storageBoxes, ...treeInOrg(HOME_ORG), ...ledgerCollections() }, 2);
+    app.locals.db = db;
+
+    const res = await request(app)
+      .post('/api/storage/allocate')
+      .set('Authorization', `Bearer ${makeToken(2)}`)
+      .send({ sampleId: SPECIMEN_ID, boxId: BOX_ID.toString(), position: 'A1' });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe('SAMPLE_OUT_OF_SCOPE');
+    expect(db.client.startSession).not.toHaveBeenCalled();
+  });
+
+  it('#1216: DELETE /release/:sampleId by specimenId refuses another organization\'s sample', async () => {
+    const openAssignment = { specimenId: String(SAMPLE_ID), boxId: BOX_ID, positionCode: 'A1', removedAt: null };
+    const samples = samplesBySpecimenId({ ...foreignSample({ boxId: BOX_ID, position: 'A1' }), specimenId: SPECIMEN_ID });
+    const storageAssignments = createCollectionMock({ findOne: vi.fn().mockResolvedValue(openAssignment) });
+    app.locals.db = dbWithRbac({ samples, storageAssignments, ...ledgerCollections() }, 2);
+
+    const res = await request(app)
+      .delete(`/api/storage/release/${SPECIMEN_ID}`)
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe('SAMPLE_OUT_OF_SCOPE');
+    expect(storageAssignments.updateOne).not.toHaveBeenCalled();
+  });
+
   it('PATCH /freezer/:freezerId/room refuses a freezer on another organization\'s Equipment', async () => {
     const tree = treeInOrg('org-other', FOREIGN_TREE);
     const rooms = createCollectionMock({ findOne: vi.fn().mockResolvedValue({ _id: new ObjectId(), deletedAt: null }) });

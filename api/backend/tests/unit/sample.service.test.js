@@ -1234,22 +1234,44 @@ describe('sample.service', () => {
 
   // -------------------------------------------------------------------
   describe('deleteSample', () => {
-    it('returns true when a sample was deleted', async () => {
+    // #1216: the route passes the URL id, an _id or a specimenId. These
+    // doubles once ignored the delete filter, which hid that a bare
+    // { specimenId: <ObjectId> } filter could never match a real sample.
+    it('resolves a specimenId and deletes that sample by its _id', async () => {
       const db = makeDb();
+      const _id = new ObjectId();
+      db.collections.samples.findOne.mockImplementation(async (filter) => (
+        filter.specimenId === '3116768' ? { _id, specimenId: '3116768' } : null
+      ));
       db.collections.samples.deleteOne.mockResolvedValue({ deletedCount: 1 });
 
-      expect(await sampleService.deleteSample(db, 'sample-1')).toBe(true);
+      expect(await sampleService.deleteSample(db, '3116768')).toBe(true);
+      expect(db.collections.samples.deleteOne).toHaveBeenCalledWith({ _id });
     });
 
-    it('returns false when nothing matched', async () => {
+    it('resolves a Mongo _id string and deletes that sample by its _id', async () => {
       const db = makeDb();
-      db.collections.samples.deleteOne.mockResolvedValue({ deletedCount: 0 });
+      const _id = new ObjectId();
+      db.collections.samples.findOne.mockImplementation(async (filter) => (
+        filter._id && String(filter._id) === String(_id) ? { _id, specimenId: '3116768' } : null
+      ));
+      db.collections.samples.deleteOne.mockResolvedValue({ deletedCount: 1 });
+
+      expect(await sampleService.deleteSample(db, String(_id))).toBe(true);
+      expect(db.collections.samples.deleteOne).toHaveBeenCalledWith({ _id });
+    });
+
+    it('returns false without deleting when no sample resolves', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(null);
 
       expect(await sampleService.deleteSample(db, 'missing')).toBe(false);
+      expect(db.collections.samples.deleteOne).not.toHaveBeenCalled();
     });
 
     it('propagates an error from the collection delete', async () => {
       const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue({ _id: new ObjectId(), specimenId: 'sample-1' });
       db.collections.samples.deleteOne.mockRejectedValue(new Error('mongo down'));
 
       await expect(sampleService.deleteSample(db, 'sample-1')).rejects.toThrow('mongo down');
