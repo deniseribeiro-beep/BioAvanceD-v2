@@ -1,89 +1,108 @@
 # HANDOFF
 
-**Written 2026-09-25, sixty-third queue sitting. INTERIM: the sitting may
+**Written 2026-09-25, sixty-fourth queue sitting. INTERIM: the sitting may
 continue. It has not been told it is over.**
 
 The instruction was "Read handoff. Pick next group of issues. Docker is on."
-The group was the RF008 reports cluster: **#1077** (report data bounded at
-the CSV only) and **#748** (filter UI). Working them surfaced **#1213**,
-**#1214**, **#1215** and **#1216**.
+The group was the rest of the RF008 reports cluster: **#733**, **#735** and
+**#1215**, plus **#941**, which Dennis put back in scope mid-sitting. Working
+them surfaced **#1217** and **#1218**.
 
 ## Repo state
 
 `feature/docker-e2e-backend-integration`, pushed. The last substantive
-commit is `de852105` (#1216 slice 1).
+commit is `8fe19c40` (#1217).
 
 ## What shipped
 
-- **#1077**, `c2a20c43`, closed: `buildPreviewData` applies `EXPORT_CATALOG`
-  to every handler's result. The preview, the CSV, `/export/pdf` and the
-  stored Report now share one allow-list.
-- **#1213**, `bc4b6be5`, closed: ReportViewPage reads `participantId`,
-  `specimenId` and `registeredAt`.
-- **#748**, `86483343`, closed: ReportQueryPage renders an "Inventário"
-  section built from `GET /reports/:type/filters`.
-- **#1214**, `1c0e563f`, closed: once the catalog has loaded, a filter
-  renders only if the type's handler reads it. The grade select sends
-  `qualityCategory`; `final_grade` was never read.
-- **#1216** slice 1, `de852105`: `POST /api/samples` returns `specimenId`
-  alongside `sampleID`.
+- **#733**, `bde77f88`, closed: the Auditoria report reads the AuditEvent
+  trail (`audit_events`) through a new `auditEvents` handler. Logs de acesso
+  keeps `logs`. RF008 in requisitos v4.0.0 names AuditEvent.
+- **#735**, `76c0b146`, closed: custom report templates are cards on the
+  report menu. The query page labels them and groups their filters by the
+  handler that `GET /:type/filters` now names.
+- **#1215**, `9362ffd5`, closed: the location filter is a freezer-then-box
+  picker (`type: 'storageBox'` in the catalog).
+- **#1217**, `8fe19c40`, closed: ReportViewPage titles a custom-template
+  report by the template's name.
+- `d0429eb5`, Refs #1202: `access.api.test.js` realigned with #1202's grant
+  contract. It had been red since `33ccf1a6`/`1caaf538`.
 
-Proof is in each close or progress comment. The live proof is
-`tests/e2e/report-inventory-filters.spec.ts`, 3 passed against
-`compose.test.yml`.
+Proof is in each close comment.
+
+## The gate this sitting ran
+
+The first full gate since `5fc5c843`, run on tip `d0429eb5`:
+- Backend vitest 9,205/9,205, after the access fix.
+- Architecture 155/155.
+- seed/dictionary/compliance steps exit 0.
+- Frontend 328/328.
+- **Playwright 251/251, 0 skipped**, on a fresh-volume stack
+  (`-p bioavanced-fresh`, so the accumulated `bioavanced-test` volume was
+  untouched), with the admin bootstrap and the 17-service chain.
+
+`8fe19c40` came after the gate; it was proven by its own component test.
 
 ## Open, touched this sitting
 
-- **#1216**, open: retiring `sampleID` (the Mongo `_id`) from the create
-  response. The progress comment scopes it at 19 e2e reads and 25 frontend
-  files. The id-taking routes already resolve `specimenId`. Denise fixed
-  this on her branch as #804; on ours it is re-implementation work, not a
-  port.
-- **#1215**, open, not started: a StorageBox picker for the report
-  location filter. Its body names two directions.
-- **#803** (commented only): one more mock-fidelity instance, fixed inline.
+- **#941**, open, Denise reopened it on 09-23. Our-branch live proof is
+  posted: 0/23 declared indexes at boot, 23/23 after our own read/write
+  paths on fresh volumes. Re-closing over her reopen is Dennis's call.
+- **#1202**, open: progress comment only (the test alignment above).
+- **#1218**, open (question): decision record for the audit-trail export
+  surface. Column set, and a name-derived pseudonym for pre-anonymization
+  rows.
+- **#1216** (carried from the last sitting, untouched): retiring
+  `sampleID` from the create response.
 
 ## For Dennis
 
+- Whether to re-close #941 (proof posted; she reopened it), and #1218.
 - Still yours from before: #956, #979, whether `0d87f73b` (#1124's port of
-  Denise's service file) stands, whether to mirror Denise's `docs/mestrado/`
-  and `docs/planning/bioavanced-v3/` deletions, and the go for a PR into
-  `main`.
+  Denise's service file) stands, whether to mirror Denise's
+  `docs/mestrado/` and `docs/planning/bioavanced-v3/` deletions, and the go
+  for a PR into `main`.
 
 ## Docker and the machine
 
 - **Gate:** Dennis, 2026-09-25: "Docker is on." It closes at the next `/clear`.
-- **The test stack is down** (`compose down`). `mongodb-test-data` persists.
-  The `backend-app-test` and `frontend-app-test` images were built from
-  `de852105`'s and `1c0e563f`'s trees. The build cache was pruned.
-- Influx needs `INFLUXDB_HOST_PORT=18086` on this machine (reserved-port range).
+- **Nothing is running.** The `bioavanced-fresh` project was taken down with
+  `-v`, and its 24 images and the build cache were removed. The
+  `bioavanced-test` images and `mongodb-test-data` predate `bde77f88`, so
+  the next bring-up needs `--build`.
+- The reserved-port ranges moved: 8086 was free today
+  (`netsh interface ipv4 show excludedportrange protocol=tcp`), so check
+  before reaching for `INFLUXDB_HOST_PORT`.
 
 ## Things a next session must not undo
 
 Earlier notes' items still hold. Plus:
-- **Report data is bounded where `buildPreviewData` returns, not per
-  surface.** A new handler needs an `EXPORT_CATALOG` entry, or its preview,
-  PDF and stored Report keep no rows (deny by default). Pinned by the
-  `#1077` describe in `reports.api.test.js`.
-- **ReportQueryPage's filters come from the backend catalog.** A filter a
-  handler reads must be listed in `FILTER_CATALOG`, or the page will not
-  render it.
-- **Find a new specimen by `data.specimenId`, not `data.sampleID`.**
-  Reports and exports carry only `specimenId`.
+- **`audit` and `access_logs` are different reports.** `audit` →
+  `auditEvents` → `audit_events`. A new audit-reading handler joins
+  `AUDIT_READER_HANDLER_KEYS` and `EXPORT_CATALOG`.
+- **A custom template renders through its handler's system type.**
+  `resolveSectionKey`'s map must gain an entry for any new handlerKey.
+- **`storageBoxId` is a `storageBox` catalog type**, not text. Its e2e
+  drives the picker by freezer and box `_id`.
 
 ## Standing context: re-measure, don't copy
 
+- **The project phase (Dennis, 2026-09-25):** we are working down the issues
+  the e2e plan surfaced (Wave 3 tracker #646). CI comes only after they are
+  all resolved and the whole plan passes on Docker, so it is far off. The
+  proof bar now is our tests plus our Docker e2e on this branch. A
+  collaborator's "resolved" proves nothing here until that bar is met.
 - Denise's newest live branch, 2026-09-25: `stabilize/v2.0.0-prototype`,
   last commit 2026-09-24
   (`git for-each-ref refs/remotes/origin --sort=-committerdate`).
-- Divergence, 2026-09-25: 914 commits on hers only, 164 on ours only
+- Divergence, 2026-09-25: 914 commits on hers only, 173 on ours only
   (`git rev-list --left-right --count origin/stabilize/v2.0.0-prototype...HEAD`),
-  measured before this sitting's last three commits.
-- Her tip's CI, runs of 2026-09-24 23:29 (none newer): current-state validation,
-  Full Vitest diagnostic and Coverage diagnostic passed. Release manifest
-  integrity failed (`gh run list --branch stabilize/v2.0.0-prototype --limit 4`).
+  measured before `8fe19c40`.
+- Her tip's CI, runs of 2026-09-24 23:29 (none newer): current-state
+  validation, Full Vitest diagnostic and Coverage diagnostic passed. Release
+  manifest integrity failed
+  (`gh run list --branch stabilize/v2.0.0-prototype --limit 4`).
 
 ## Recommended next
 
-None queued by Dennis. The branch has not passed the full gate since
-`5fc5c843`.
+None queued by Dennis.
