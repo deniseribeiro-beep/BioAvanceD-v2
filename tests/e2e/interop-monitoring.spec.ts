@@ -142,6 +142,45 @@ test.describe('Telemetria e monitoramento ambiental (RF009) — real backend, in
     const incident = await findTemperatureIncident(sensor.sensorId);
     expect(incident).toBeNull();
   });
+
+  // #1207: the cold-chain quarantine waits until an excursion has lasted the
+  // policy's minimumDuration, timed from the incident's excursionStartedAt.
+  // This proves the clock against real Mongo: an out-of-range reading starts
+  // it, and an in-range reading's `excursionStartedAt: { $ne: null }` update
+  // actually matches and clears it.
+  test('#1207: an out-of-range reading starts the incident excursion clock and an in-range reading stops it', async ({
+    request,
+  }) => {
+    const sensor = await seedSensorWithPolicy(2, 8);
+    try {
+      const breachAt = new Date(Date.now() - 60_000);
+      const breach = await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+        headers: ingestHeaders(),
+        data: { sensorId: sensor.sensorId, temperature: 25, timestamp: breachAt.toISOString() },
+      });
+      expect(breach.status()).toBe(200);
+
+      await expect
+        .poll(async () => (await findTemperatureIncident(sensor.sensorId))?.excursionStartedAt?.toISOString() ?? null, {
+          timeout: 15_000,
+        })
+        .toBe(breachAt.toISOString());
+
+      const recovery = await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+        headers: ingestHeaders(),
+        data: { sensorId: sensor.sensorId, temperature: 5, timestamp: new Date().toISOString() },
+      });
+      expect(recovery.status()).toBe(200);
+
+      await expect
+        .poll(async () => (await findTemperatureIncident(sensor.sensorId))?.excursionStartedAt, { timeout: 15_000 })
+        .toBeNull();
+      // The incident itself stays open: only a person resolves it.
+      expect((await findTemperatureIncident(sensor.sensorId)).status).toBe('open');
+    } finally {
+      await removeSeededSensor(sensor);
+    }
+  });
 });
 
 test.describe('Telemetria e monitoramento ambiental (RF009) — EnvironmentalExcursion (#298)', () => {

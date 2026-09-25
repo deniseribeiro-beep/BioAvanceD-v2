@@ -272,15 +272,60 @@ describe('IoT API integration', () => {
     await vi.waitFor(() => {
       expect(saveTelemetryPoint).toHaveBeenCalledTimes(1);
       expect(mockDb.incidentCollection.insertOne).toHaveBeenCalledTimes(1);
-      expect(mockDb.samplesCollection.updateOne).toHaveBeenCalledTimes(1);
-      expect(mockDb.sampleMovementsCollection.insertOne).toHaveBeenCalledTimes(1);
       expect(sendCriticalAlertEmail).toHaveBeenCalledTimes(1);
       expect(mockDb.environmentalExcursionsCollection.insertOne).toHaveBeenCalledTimes(1);
+      // Sent after the point where the incident path used to quarantine.
+      expect(sendIncidentAlertEmail).toHaveBeenCalledTimes(1);
     });
 
     expect(mockDb.incidents).toHaveLength(1);
     expect(mockDb.incidents[0].sensorKey).toBe('sensor-1');
     expect(mockDb.incidents[0].status).toBe('open');
+    // #1207: the first out-of-range reading starts the excursion clock and
+    // quarantines nothing. The policy's minimumDuration (or the 2-hour
+    // TELEMETRY_CRITICAL_DURATION_HOURS fallback) has to elapse first.
+    expect(mockDb.incidents[0].excursionStartedAt).toEqual(new Date('2026-04-10T10:00:00.000Z'));
+    expect(mockDb.samplesCollection.updateOne).not.toHaveBeenCalled();
+    expect(mockDb.sampleMovementsCollection.insertOne).not.toHaveBeenCalled();
+
+    expect(mockDb.excursions).toHaveLength(1);
+    expect(mockDb.excursions[0]).toMatchObject({
+      minimumValue: 12.5,
+      maximumValue: 12.5,
+      excursionStatus: 'open',
+    });
+  });
+
+  it('#1207: POST /api/iot/telemetry quarantines the sensor samples once the excursion has outlasted its threshold', async () => {
+    mockDb.incidentCollection.findOne.mockResolvedValue({
+      _id: '507f1f77bcf86cd799439044',
+      sensorKey: 'sensor-1',
+      sensorName: 'Sensor 1',
+      status: 'open',
+      openedAt: new Date('2026-04-10T07:00:00.000Z'),
+      excursionStartedAt: new Date('2026-04-10T07:00:00.000Z'),
+      currentTemperature: 12,
+      maxTemperature: 12,
+      minTemperature: 12,
+      samplesOutOfRange: 30,
+    });
+
+    const response = await request(app).post('/api/iot/telemetry')
+      .set('x-telemetry-ingest-secret', 'iot-test-secret')
+      .send({
+      sensorId: 'sensor-1',
+      temperature: 12.5,
+      timestamp: '2026-04-10T10:00:00.000Z',
+    });
+
+    expect(response.status).toBe(200);
+
+    await vi.waitFor(() => {
+      expect(mockDb.samplesCollection.updateOne).toHaveBeenCalledTimes(1);
+      expect(mockDb.sampleMovementsCollection.insertOne).toHaveBeenCalledTimes(1);
+    });
+    expect(mockDb.incidentCollection.insertOne).not.toHaveBeenCalled();
+
     const update = mockDb.samplesCollection.updateOne.mock.calls[0][1].$set;
     // #408 retired the legacy availabilityStatus field from Sample writes
     // (specimenStatus is the sole source of truth now) -- this assertion
@@ -301,13 +346,6 @@ describe('IoT API integration', () => {
       purpose: 'cold_chain_incident_quarantine',
       destination: 'Quarentena',
       responsible: 'SYSTEM',
-    });
-
-    expect(mockDb.excursions).toHaveLength(1);
-    expect(mockDb.excursions[0]).toMatchObject({
-      minimumValue: 12.5,
-      maximumValue: 12.5,
-      excursionStatus: 'open',
     });
   });
 

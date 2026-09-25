@@ -56,6 +56,10 @@ class TemperatureIncidentModel {
       sensorName: String(data.sensorName).trim(),
       openedAt: new Date(data.openedAt),
       closedAt: data.closedAt ? new Date(data.closedAt) : null,
+      // #1207: first reading of the current unbroken out-of-range run; null
+      // once a reading comes back in range. Not openedAt: an incident stays
+      // open until someone resolves it, across any number of excursions.
+      excursionStartedAt: data.excursionStartedAt ? new Date(data.excursionStartedAt) : null,
       acknowledgedAt: data.acknowledgedAt ? new Date(data.acknowledgedAt) : null,
       acknowledgedBy: data.acknowledgedBy || null, // userId
       currentTemperature: Number(data.currentTemperature),
