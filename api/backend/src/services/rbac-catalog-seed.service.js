@@ -43,7 +43,7 @@ const LEGACY_ROLES_SEED = {
     {
       accessType: 3,
       roleName: 'Coordenador',
-      permissions: ['createUser', 'createSample', 'editSample', 'createPatient', 'requestConsent', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageTemperaturePolicy', 'manageSensor', 'recordTemperature', 'viewReports', 'createResult', 'editResult', 'deleteResult', 'manageAccessRequests', 'manageReportTemplates', 'viewEquipment', 'viewStorageTopology', 'manageStorageAllocation', 'manageStorageTopology'],
+      permissions: ['createUser', 'createSample', 'editSample', 'createPatient', 'requestConsent', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageTemperaturePolicy', 'manageSensor', 'recordTemperature', 'viewReports', 'createResult', 'editResult', 'deleteResult', 'manageReportTemplates', 'viewEquipment', 'viewStorageTopology', 'manageStorageAllocation', 'manageStorageTopology'],
     },
     {
       accessType: 4,
@@ -267,10 +267,32 @@ const PERMISSION_CATALOG = {
   // RF024 (#646 Wave 3): create/evaluate/decide/distribute/revoke all live
   // behind this one code — see accessRequest.js's own comment for why no
   // dedicated researcher/committee role exists to split it across.
+  // Administrador-only (#662, Denise 2026-09-25): the committee decision is
+  // at least as sensitive as reidentifyParticipant above, so it takes the
+  // same posture until a real multi-approver committee workflow exists.
+  // RETIRED_SEED_GRANTS below pulls the old Coordenador grant off
+  // already-seeded databases.
   manageAccessRequests: { resourceType: 'AccessRequest', allowedActions: ['CREATE', 'READ', 'UPDATE'], displayName: 'Gerenciar solicitações de acesso' },
   // RF008 AC#6 (#726): Coordenador/Administrador-only -- lets a report
   // template be created/edited without a code change to reports.routes.js.
   manageReportTemplates: { resourceType: 'ReportTemplate', allowedActions: ['CREATE', 'READ', 'UPDATE', 'DELETE'], displayName: 'Gerenciar modelos de relatório' },
+};
+
+/**
+ * #662: grants the seed once gave and has deliberately withdrawn, by
+ * roleCode. upsertRole merges a role's seeded permissions INTO what it
+ * already holds, so deleting a code from LEGACY_ROLES_SEED alone never
+ * reaches a database seeded before the deletion: the old grant would stay
+ * enforced there forever, because userHasPermission reads the stored role
+ * document. Listing it here makes every seed run pull it.
+ *
+ * The cost is deliberate: an operator who re-grants one of these by hand
+ * loses it on the next boot. A withdrawn grant is a policy decision, and a
+ * restart must not quietly undo it. Everything else an operator added to a
+ * role is still left alone.
+ */
+const RETIRED_SEED_GRANTS = {
+  coordinator: ['manageAccessRequests'],
 };
 
 function allSeedRoles() {
@@ -401,7 +423,7 @@ async function upsertPermission(collection, doc) {
  * stays untouched, preserving the idempotency contract
  * rbac-catalog-seed.service.test.js already asserts on it.
  */
-async function upsertRole(collection, doc) {
+async function upsertRole(collection, doc, retiredPermissionIds = []) {
   const filter = { roleCode: doc.roleCode };
   const existing = await collection.findOne(filter);
   if (!existing) {
@@ -409,9 +431,15 @@ async function upsertRole(collection, doc) {
     return doc;
   }
 
-  const mergedPermissionIds = Array.from(new Set([...(existing.permissionIds || []), ...doc.permissionIds]));
-  const gainedNewPermissions = mergedPermissionIds.length !== (existing.permissionIds || []).length;
-  if (!gainedNewPermissions) return existing;
+  // #662: a retired grant is removed AFTER the merge, so it cannot come back
+  // through either side of the union.
+  const retired = new Set(retiredPermissionIds);
+  const existingIds = existing.permissionIds || [];
+  const mergedPermissionIds = Array.from(new Set([...existingIds, ...doc.permissionIds]))
+    .filter((id) => !retired.has(id));
+  const unchanged = mergedPermissionIds.length === existingIds.length
+    && mergedPermissionIds.every((id) => existingIds.includes(id));
+  if (unchanged) return existing;
 
   await collection.updateOne(filter, { $set: { permissionIds: mergedPermissionIds, updatedAt: new Date() } });
   return { ...existing, permissionIds: mergedPermissionIds };
@@ -431,7 +459,12 @@ async function seedRolesAndPermissions(db) {
   const roleDocs = buildRoleDocs(permissionIdByCode);
   const storedRoles = [];
   for (const doc of roleDocs) {
-    storedRoles.push(await upsertRole(rolesCollection, doc));
+    // A retired code the catalogue no longer seeds anywhere has no stored
+    // permission row, so it maps to no id and has nothing to pull.
+    const retiredPermissionIds = (RETIRED_SEED_GRANTS[doc.roleCode] || [])
+      .map((code) => permissionIdByCode[code])
+      .filter(Boolean);
+    storedRoles.push(await upsertRole(rolesCollection, doc, retiredPermissionIds));
   }
 
   return { roles: storedRoles, permissions: storedPermissions };
@@ -443,4 +476,5 @@ module.exports = {
   PERMISSION_CATALOG,
   LEGACY_ROLES_SEED,
   ADDITIONAL_ROLES_SEED,
+  RETIRED_SEED_GRANTS,
 };

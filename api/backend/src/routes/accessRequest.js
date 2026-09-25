@@ -8,7 +8,7 @@ const accessRequestController = require('../controllers/accessRequest.controller
 // RF024's "Pesquisador" (requester) nor "comitê responsável" (decision)
 // actor maps to an existing role in this repo's 4-role RBAC model, so the
 // whole lifecycle is gated behind one governance-level permission
-// (coordinator/administrator) rather than inventing new roles this slice
+// (Administrador-only since #662) rather than inventing new roles this slice
 // doesn't otherwise need -- same scope precedent as RF014's requireRole(4).
 router.post('/', authenticate, requirePermission('manageAccessRequests'), accessRequestController.createAccessRequest.bind(accessRequestController));
 router.post('/:id/evaluate', authenticate, requirePermission('manageAccessRequests', 'UPDATE'), accessRequestController.evaluateCompatibility.bind(accessRequestController));

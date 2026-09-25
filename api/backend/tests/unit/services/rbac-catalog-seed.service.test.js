@@ -117,15 +117,55 @@ describe('rbac-catalog-seed.service', () => {
     const permissionIdByCode = Object.fromEntries(first.permissions.map((p) => [p.permissionCode, p.permissionId]));
     const coordinatorDoc = db.collections.roles.docs.find((r) => r.roleCode === 'coordinator');
     const staleRoleId = coordinatorDoc.roleId;
-    coordinatorDoc.permissionIds = coordinatorDoc.permissionIds.filter((id) => id !== permissionIdByCode.manageAccessRequests);
-    expect(coordinatorDoc.permissionIds).not.toContain(permissionIdByCode.manageAccessRequests);
+    // #662: was manageAccessRequests, which the Coordenador no longer holds.
+    coordinatorDoc.permissionIds = coordinatorDoc.permissionIds.filter((id) => id !== permissionIdByCode.manageReportTemplates);
+    expect(coordinatorDoc.permissionIds).not.toContain(permissionIdByCode.manageReportTemplates);
 
     const second = await seedRolesAndPermissions(db);
 
     const coordinator = second.roles.find((r) => r.roleCode === 'coordinator');
-    expect(coordinator.permissionIds).toContain(permissionIdByCode.manageAccessRequests);
+    expect(coordinator.permissionIds).toContain(permissionIdByCode.manageReportTemplates);
     expect(coordinator.roleId).toBe(staleRoleId);
     expect(db.collections.roles.docs).toHaveLength(5);
+  });
+
+  // #662 (Denise, 2026-09-25): manageAccessRequests is Administrador-only
+  // until a real multi-approver committee workflow exists.
+  it('#662: seeds manageAccessRequests on the Administrador only, not the Coordenador', async () => {
+    const db = createFakeDb();
+    const { roles, permissions } = await seedRolesAndPermissions(db);
+    const manageAccessRequestsId = permissions.find((p) => p.permissionCode === 'manageAccessRequests').permissionId;
+
+    const holders = roles.filter((r) => r.permissionIds.includes(manageAccessRequestsId)).map((r) => r.roleCode);
+    expect(holders).toEqual(['administrator']);
+  });
+
+  // upsertRole merges, so deleting the code from the seed alone would leave
+  // every database seeded before #662 enforcing the old grant, since
+  // userHasPermission reads the stored role document.
+  it('#662: pulls the retired Coordenador grant off an already-seeded role, keeping its roleId and every other grant', async () => {
+    const db = createFakeDb();
+    const first = await seedRolesAndPermissions(db);
+    const permissionIdByCode = Object.fromEntries(first.permissions.map((p) => [p.permissionCode, p.permissionId]));
+
+    // A database seeded before #662: the Coordenador still holds the grant,
+    // plus one an operator added by hand.
+    const coordinatorDoc = db.collections.roles.docs.find((r) => r.roleCode === 'coordinator');
+    const roleId = coordinatorDoc.roleId;
+    coordinatorDoc.permissionIds = [...coordinatorDoc.permissionIds, permissionIdByCode.manageAccessRequests, permissionIdByCode.manageBackup];
+
+    const second = await seedRolesAndPermissions(db);
+
+    const coordinator = second.roles.find((r) => r.roleCode === 'coordinator');
+    expect(coordinator.permissionIds).not.toContain(permissionIdByCode.manageAccessRequests);
+    expect(coordinator.permissionIds).toContain(permissionIdByCode.manageBackup);
+    expect(coordinator.permissionIds).toContain(permissionIdByCode.createUser);
+    expect(coordinator.roleId).toBe(roleId);
+    const stored = db.collections.roles.docs.find((r) => r.roleCode === 'coordinator');
+    expect(stored.permissionIds).not.toContain(permissionIdByCode.manageAccessRequests);
+
+    const administrator = second.roles.find((r) => r.roleCode === 'administrator');
+    expect(administrator.permissionIds).toContain(permissionIdByCode.manageAccessRequests);
   });
   // #1075: `permissions` was the last collection still seeded through the
   // skip-on-existing `upsertByKey` -- the same defect #646 Wave 3 fixed for
