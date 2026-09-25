@@ -1,6 +1,6 @@
 # Item 8 — marco 100% backend (Stage 2G fechado sob emenda)
 
-Status: **FECHADO sob emenda source-located** — checkbox **100%** na [#228](https://github.com/deniseribeiro-beep/BioAvanceD-v2/issues/228) a marcar (critério emenda Stage 2G). Relatório V8 bruto de branches permanece **&lt; 100%** por empty-loc (~757).
+Status: **FECHADO sob emenda source-located** — checkbox **100%** na [#228](https://github.com/deniseribeiro-beep/BioAvanceD-v2/issues/228) a marcar (critério emenda Stage 2G). Relatório V8 bruto de branches permanece **&lt; 100%** por empty-loc (~756). Stage 2H formalizou o ledger empty-loc e o residual com racional — ver [`ITEM_8_STAGE_2H_CERTAINTY_AUDIT.md`](ITEM_8_STAGE_2H_CERTAINTY_AUDIT.md).
 
 ## Pré-condição (marco 95% fechado)
 
@@ -49,6 +49,7 @@ Log: `logs/item8-stage2/stage2g-baseline-cov-run.log`. Inventário: `stage2g-inv
 1. Checkbox **100%** — marcar sob **emenda source-located** (candidates=0 + Full/Docker verdes + residual classificado).
 2. Relatório V8 bruto **não** é 100% branches/S/F/L — teto instrumental documentado; sem chase adicional.
 3. Marco **95%** permanece fechado.
+4. Stage 2H (certeza): empty-loc **756** `INSTRUMENTATION_ONLY` (ledger + spot-check top 12); residual final **257** com racional, **0** `TEST_V2_CANDIDATE`; Full 596/10536; branches **95,33%**; `current-state:ci` exit 0.
 
 ## Política
 
