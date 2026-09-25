@@ -3,6 +3,7 @@ const { Server } = require("socket.io");
 const app = require("./app");
 const logger = require("./src/utils/logger");
 const { connectDB } = require("./src/database/mongo");
+const { connectMongoDB } = require("./src/infrastructure/database/mongodb/connection");
 const { connectNeo4j } = require("./src/infrastructure/database/neo4j/connection");
 const LineageRepository = require("./src/infrastructure/database/neo4j/LineageRepository");
 const TopologicalQuarantine = require("./src/infrastructure/queue/TopologicalQuarantine");
@@ -110,6 +111,14 @@ async function startServer() {
     // Conecta banco
     const db = await connectDB();
     app.locals.db = db;
+
+    // #830/#826: modelos Mongoose ainda são consultados pela API (p.ex.
+    // Sample.findById em miabisValidator, e os modelos de hierarquia de
+    // armazenamento). Sem conexão o Mongoose enfileira a operação e a rejeita
+    // após 10s, em silêncio. A conexão existia só como efeito colateral de
+    // rotas como o upload de lote -- que #830 levou para o driver nativo --,
+    // então passa a ser aberta aqui, explicitamente, no boot.
+    await connectMongoDB();
 
     // Conecta Neo4j para validação e trilha de cadeia de custódia
     try {

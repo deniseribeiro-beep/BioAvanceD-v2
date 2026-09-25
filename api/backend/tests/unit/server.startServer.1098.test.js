@@ -34,6 +34,7 @@ const appPath = require.resolve('../../app');
 const loggerPath = require.resolve('../../src/utils/logger');
 const mongoPath = require.resolve('../../src/database/mongo');
 const neo4jConnectionPath = require.resolve('../../src/infrastructure/database/neo4j/connection');
+const mongooseConnectionPath = require.resolve('../../src/infrastructure/database/mongodb/connection');
 const lineageRepositoryPath = require.resolve('../../src/infrastructure/database/neo4j/LineageRepository');
 const topologicalQuarantinePath = require.resolve('../../src/infrastructure/queue/TopologicalQuarantine');
 const telemetryMonitorPath = require.resolve('../../src/infrastructure/services/TelemetryMonitor');
@@ -60,6 +61,7 @@ const STUBBED_PATHS = [
   appPath,
   loggerPath,
   mongoPath,
+  mongooseConnectionPath,
   neo4jConnectionPath,
   lineageRepositoryPath,
   topologicalQuarantinePath,
@@ -97,6 +99,7 @@ let listenSpy;
 let fakeLogger;
 let fakeApp;
 let fakeConnectDB;
+let fakeConnectMongoDB;
 let fakeConnectNeo4j;
 let fakePortManager;
 let fakeValidateEncryptionAndHalt;
@@ -117,6 +120,7 @@ function stubHappyPathCollaborators() {
   fakeLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
   fakeApp = { locals: {}, get: vi.fn(() => undefined) };
   fakeConnectDB = vi.fn().mockResolvedValue({ fakeDb: true });
+  fakeConnectMongoDB = vi.fn().mockResolvedValue({ readyState: 1 });
   fakeConnectNeo4j = vi.fn().mockResolvedValue({ fakeNeo4jDriver: true });
   fakePortManager = { getAvailablePort: vi.fn().mockResolvedValue(4321) };
   fakeValidateEncryptionAndHalt = vi.fn();
@@ -154,6 +158,7 @@ function stubHappyPathCollaborators() {
   stub(appPath, fakeApp);
   stub(loggerPath, fakeLogger);
   stub(mongoPath, { connectDB: fakeConnectDB, connectNewDB: vi.fn(), closeConnection: vi.fn() });
+  stub(mongooseConnectionPath, { connectMongoDB: fakeConnectMongoDB, getMongoDBConnection: vi.fn(), closeMongoDBConnection: vi.fn() });
   stub(neo4jConnectionPath, {
     connectNeo4j: fakeConnectNeo4j,
     getNeo4jDriver: vi.fn(),
@@ -358,6 +363,16 @@ describe('#1098 server.js startServer() -- pinning the pre-I/O boot prologue', (
       expect(listenSpy).toHaveBeenCalledTimes(1);
       expect(fakeConnectDB).toHaveBeenCalled();
       expect(fakePortManager.getAvailablePort).toHaveBeenCalled();
+    });
+
+    // #830: Mongoose-model reads in the API no longer depend on some other
+    // route having connected Mongoose first.
+    it('opens the Mongoose connection during boot, after the native connectDB()', async () => {
+      await loadServerAndStart();
+
+      expect(fakeConnectMongoDB).toHaveBeenCalledTimes(1);
+      expect(fakeConnectDB.mock.invocationCallOrder[0])
+        .toBeLessThan(fakeConnectMongoDB.mock.invocationCallOrder[0]);
     });
   });
 });
