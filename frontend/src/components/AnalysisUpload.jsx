@@ -236,7 +236,7 @@ export default function AnalysisUpload({ sampleId: initialSampleId = '' }) {
               <>
                 <CheckCircle size={18} style={{ color: '#22c55e' }} />
                 <div style={{ fontSize: '14px', color: '#16a34a' }}>
-                  <strong>✓ Amostra válida:</strong> {validated.sample.sampleID} ({validated.sample.barcode})
+                  <strong>✓ Amostra válida:</strong> {validated.sample.specimenId || validated.sample._id} ({validated.sample.barcode})
                   <br />
                   <small>Paciente com consentimento assinado</small>
                 </div>

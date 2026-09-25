@@ -136,7 +136,7 @@ export default function SampleDetailsPage() {
       const searchId = String(id || '').trim();
       const foundSample = samples.find(s => {
         const sampleId = String(s._id || '').trim();
-        const specimenIdStr = String((s as any).specimenId || s.sampleID || '').trim();
+        const specimenIdStr = String(s.specimenId || '').trim();
         
         return sampleId === searchId || 
                specimenIdStr === searchId ||
@@ -157,7 +157,7 @@ export default function SampleDetailsPage() {
         // Se carregou mas não encontrou, define como null
         console.warn('Amostra não encontrada:', { 
           searchId: id, 
-          availableIds: samples.map(s => ({ _id: s._id, sampleID: s.sampleID }))
+          availableIds: samples.map(s => ({ _id: s._id, specimenId: s.specimenId }))
         });
         setSample(null);
       }
@@ -198,7 +198,7 @@ export default function SampleDetailsPage() {
     return () => {
       active = false;
     };
-  }, [sample?._id, sample?.sampleID, id]);
+  }, [sample?._id, sample?.specimenId, id]);
 
   const getStorageInfo = (location: SampleStorageLocationDTO | null): { summary: string; details: string } => {
     const boxName = location?.box?.boxName ? String(location.box.boxName) : '';
@@ -231,7 +231,7 @@ export default function SampleDetailsPage() {
       return;
     }
     void loadStorageLocation(String(targetId));
-  }, [sample?._id, sample?.sampleID, id]);
+  }, [sample?._id, sample?.specimenId, id]);
 
   const effectiveSample = useMemo(() => {
     if (!isEditing) return sample;

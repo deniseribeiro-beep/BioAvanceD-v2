@@ -277,7 +277,7 @@ export default function InlineStorageMovementPanel({ sample, t, onCancel, onComp
             <Layers3 size={16} />
             <span>{t('samples.storageInline.title')}</span>
           </div>
-          <h3>{sample.barcode || sample.sampleID || sample.id}</h3>
+          <h3>{sample.barcode || sample.specimenId || sample.id}</h3>
           <p>{t('samples.storageInline.subtitle')}</p>
           <div className="samples-inline-storage-summary__meta">
             <span>{t('samples.participantIdColumn')}: {sample.participantId || 'N/A'}</span>

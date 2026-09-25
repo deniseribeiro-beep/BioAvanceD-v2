@@ -242,7 +242,9 @@ export interface SpecimenPreanalyticsProfile {
 export interface Sample {
   _id?: string; // MongoDB ID
   participantId: string;
-  sampleID?: number | null; // ID da amostra (pode ser null, usar _id como fallback)
+  // #1216: the canonical business id the API names every specimen by. The
+  // legacy sampleID field is prohibited on the wire and no writer sets it.
+  specimenId?: string;
   sampleType: string;
   sampleOrigin?: string;
   extractionProtocol?: string;
