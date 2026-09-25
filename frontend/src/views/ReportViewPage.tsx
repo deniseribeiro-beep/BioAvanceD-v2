@@ -22,10 +22,32 @@ export default function ReportViewPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const reportDefinition = getReportTypeDefinition(report?.reportType || '');
+  // #1217: a custom template (#735) has no definition; GET /:type/filters
+  // names it, as ReportQueryPage reads it.
+  const [templateName, setTemplateName] = useState<string | null>(null);
 
   useEffect(() => {
     loadReport();
   }, [id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setTemplateName(null);
+    if (!report?.reportType || reportDefinition) {
+      return undefined;
+    }
+    reportsService
+      .getFilters(report.reportType)
+      .then((response) => {
+        if (!cancelled && typeof response?.data?.name === 'string') {
+          setTemplateName(response.data.name);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [report?.reportType, reportDefinition]);
 
   const loadReport = async () => {
     if (!id) {
@@ -533,7 +555,7 @@ export default function ReportViewPage() {
             <FileText size={32} className="report-icon-header" />
             <div>
               <p className="report-view-eyebrow">{reportDefinition ? reportDefinition.fallbackType : 'Relatório'}</p>
-              <h1 className="page-title">{reportDefinition ? reportDefinition.fallbackType : report.reportType}</h1>
+              <h1 className="page-title">{reportDefinition ? reportDefinition.fallbackType : templateName || report.reportType}</h1>
               <p className="page-subtitle">
                 <Calendar size={16} style={{ marginRight: '0.5rem', verticalAlign: 'middle' }} />
                 Gerado em: {formatDate(report.generatedAt || report.createdAt)}

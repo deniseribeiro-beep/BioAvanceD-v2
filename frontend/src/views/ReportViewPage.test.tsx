@@ -4,10 +4,12 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import ReportViewPage from './ReportViewPage';
 
 const getById = vi.fn();
+const getFilters = vi.fn();
 
 vi.mock('../services/api', () => ({
   reportsService: {
     getById: (...args: unknown[]) => getById(...args),
+    getFilters: (...args: unknown[]) => getFilters(...args),
     delete: vi.fn(),
   },
 }));
@@ -16,9 +18,9 @@ vi.mock('../contexts/AuthContext', () => ({
   useAuth: () => ({ user: null }),
 }));
 
-function renderSavedReport(reportData: Record<string, unknown>) {
+function renderSavedReport(reportData: Record<string, unknown>, reportType = 'samples') {
   getById.mockResolvedValue({
-    data: { reportID: 7, reportType: 'samples', generatedAt: '2026-09-25T00:00:00Z', reportData: JSON.stringify(reportData) },
+    data: { reportID: 7, reportType, generatedAt: '2026-09-25T00:00:00Z', reportData: JSON.stringify(reportData) },
   });
   return render(
     <MemoryRouter initialEntries={['/reports/7']}>
@@ -58,5 +60,28 @@ describe('ReportViewPage renders the canonical row fields', () => {
     renderSavedReport({ total: 1, samples: [{ specimenId: 'S-REPORT-1', sampleType: 'plasma-control' }] });
 
     expect(await screen.findByText('plasma-control')).toBeInTheDocument();
+  });
+});
+
+// #1217: a report generated from a custom template (#735) has no
+// REPORT_TYPE_DEFINITIONS entry, so the page titled it with the raw code.
+// GET /reports/:type/filters names the template, as ReportQueryPage uses.
+describe('#1217: ReportViewPage titles a custom-template report by its name', () => {
+  beforeEach(() => {
+    getById.mockReset();
+    getFilters.mockReset();
+    getFilters.mockResolvedValue({ data: { filters: [], handlerKey: 'sample', name: 'Inventário mensal', description: null } });
+  });
+
+  it('shows the template name, not the code', async () => {
+    renderSavedReport({ total: 0, samples: [] }, 'inventario_mensal');
+
+    expect(await screen.findByRole('heading', { level: 1, name: 'Inventário mensal' })).toBeInTheDocument();
+  });
+
+  it('CONTROL: a system report keeps its definition label', async () => {
+    renderSavedReport({ total: 0, samples: [] }, 'samples');
+
+    expect(await screen.findByRole('heading', { level: 1, name: 'Amostras' })).toBeInTheDocument();
   });
 });
