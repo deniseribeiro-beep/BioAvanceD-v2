@@ -210,4 +210,52 @@ describe('fhir-import-staging.service item 8 executable residual branches', () =
       }),
     ]);
   });
+
+  it('counts WARNING and NEEDS_EMAIL statuses through sendConsents refresh without rewriting them', async () => {
+    const db = createDb();
+    const { batchId } = await seedBatch(db, {
+      status: service.STATUS.WARNING,
+      errors: [{ code: 'SYNTHETIC_BLOCK', message: 'blocking' }],
+      normalized: { participantId: 'P-WARN' },
+    });
+    await db.collection('import_staging_records').insertOne({
+      _id: new ObjectId(),
+      batchId,
+      rowNumber: 2,
+      status: service.STATUS.NEEDS_EMAIL,
+      errors: [{ code: 'OTHER_BLOCK', message: 'blocking' }],
+      warnings: [],
+      normalized: { participantId: 'P-NEEDS-EMAIL' },
+    });
+
+    const result = await service.sendConsents(db, batchId);
+
+    expect(result.counts.warnings).toBeGreaterThanOrEqual(1);
+    expect(result.counts.errors).toBeGreaterThanOrEqual(1);
+    expect(result.consentResults).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ skipped: true, reason: 'validation_errors' }),
+      ])
+    );
+  });
+
+  it('falls back to an empty normalized object when sendConsents receives a VALID record without normalized', async () => {
+    const db = createDb();
+    const { batchId, record } = await seedBatch(db, {
+      status: service.STATUS.VALID,
+      errors: [],
+      // intentionally omit normalized → record.normalized || {}
+    });
+
+    const result = await service.sendConsents(db, batchId);
+
+    expect(result.consentResults).toEqual([
+      expect.objectContaining({
+        recordId: record._id,
+        status: service.STATUS.NEEDS_REVIEW,
+        sent: false,
+      }),
+    ]);
+    expect(db.collection('import_staging_records').docs[0].status).toBe(service.STATUS.NEEDS_REVIEW);
+  });
 });

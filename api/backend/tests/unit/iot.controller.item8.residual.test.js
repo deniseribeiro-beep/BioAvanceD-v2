@@ -10,7 +10,9 @@ const {
   dispatchNotificationMock,
   saveTelemetryPointMock,
   sendCriticalAlertEmailMock,
+  sendIncidentAlertEmailMock,
   quarantineByColdChainIncidentMock,
+  findUserAccountIdsByRoleCodesMock,
   auditInitMock,
   auditLogMock,
   loggerErrorMock,
@@ -22,7 +24,9 @@ const {
   dispatchNotificationMock: vi.fn(),
   saveTelemetryPointMock: vi.fn(),
   sendCriticalAlertEmailMock: vi.fn(),
+  sendIncidentAlertEmailMock: vi.fn(),
   quarantineByColdChainIncidentMock: vi.fn(),
+  findUserAccountIdsByRoleCodesMock: vi.fn(),
   auditInitMock: vi.fn(),
   auditLogMock: vi.fn(),
   loggerErrorMock: vi.fn(),
@@ -41,8 +45,18 @@ const notificationDispatchService = require('../../src/services/notificationDisp
 const telemetryPointService = require('../../src/services/saveTelemetryPoint');
 const criticalAlertService = require('../../src/services/sendCriticalAlertEmail');
 const quarantineService = require('../../src/services/equipment-sensor-quarantine.service');
+const rbacAssignmentService = require('../../src/services/rbac-assignment.service');
 const auditLogger = require('../../src/utils/auditLogger');
 const logger = require('../../src/utils/logger');
+
+const sendIncidentAlertEmailPath = require.resolve('../../src/services/sendIncidentAlertEmail');
+const originalSendIncidentCache = require.cache[sendIncidentAlertEmailPath];
+require.cache[sendIncidentAlertEmailPath] = {
+  id: sendIncidentAlertEmailPath,
+  filename: sendIncidentAlertEmailPath,
+  loaded: true,
+  exports: { sendIncidentAlertEmail: sendIncidentAlertEmailMock },
+};
 
 const originals = {
   connectMongoDB: mongodbConnection.connectMongoDB,
@@ -52,6 +66,7 @@ const originals = {
   saveTelemetryPoint: telemetryPointService.saveTelemetryPoint,
   sendCriticalAlertEmail: criticalAlertService.sendCriticalAlertEmail,
   quarantineByColdChainIncident: quarantineService.quarantineByColdChainIncident,
+  findUserAccountIdsByRoleCodes: rbacAssignmentService.findUserAccountIdsByRoleCodes,
   auditInit: auditLogger.init,
   auditLog: auditLogger.log,
   loggerError: logger.error,
@@ -65,6 +80,7 @@ notificationDispatchService.dispatchNotification = dispatchNotificationMock;
 telemetryPointService.saveTelemetryPoint = saveTelemetryPointMock;
 criticalAlertService.sendCriticalAlertEmail = sendCriticalAlertEmailMock;
 quarantineService.quarantineByColdChainIncident = quarantineByColdChainIncidentMock;
+rbacAssignmentService.findUserAccountIdsByRoleCodes = findUserAccountIdsByRoleCodesMock;
 auditLogger.init = auditInitMock;
 auditLogger.log = auditLogMock;
 logger.error = loggerErrorMock;
@@ -84,10 +100,13 @@ afterAll(() => {
   telemetryPointService.saveTelemetryPoint = originals.saveTelemetryPoint;
   criticalAlertService.sendCriticalAlertEmail = originals.sendCriticalAlertEmail;
   quarantineService.quarantineByColdChainIncident = originals.quarantineByColdChainIncident;
+  rbacAssignmentService.findUserAccountIdsByRoleCodes = originals.findUserAccountIdsByRoleCodes;
   auditLogger.init = originals.auditInit;
   auditLogger.log = originals.auditLog;
   logger.error = originals.loggerError;
   logger.warn = originals.loggerWarn;
+  if (originalSendIncidentCache) require.cache[sendIncidentAlertEmailPath] = originalSendIncidentCache;
+  else delete require.cache[sendIncidentAlertEmailPath];
 });
 
 function createResponse() {
@@ -126,9 +145,12 @@ describe('iot.controller.js item 8 residual branches', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     sensorPolicyCache.clear();
+    process.env.NODE_ENV = 'test';
     saveTelemetryPointMock.mockResolvedValue(true);
     sendCriticalAlertEmailMock.mockResolvedValue({ id: 'mail-1' });
+    sendIncidentAlertEmailMock.mockResolvedValue({ id: 'incident-mail-1' });
     quarantineByColdChainIncidentMock.mockResolvedValue({ triggered: false });
+    findUserAccountIdsByRoleCodesMock.mockResolvedValue(['user-account-1']);
     dispatchNotificationMock.mockResolvedValue(null);
     auditLogMock.mockResolvedValue(undefined);
     excursionCreateMock.mockImplementation((payload) => ({ ...payload }));
@@ -264,5 +286,124 @@ describe('iot.controller.js item 8 residual branches', () => {
       '[ISO20387][IOT] Falha ao registrar trilha de auditoria da telemetria:',
       'audit raw failure'
     );
+  });
+
+  function outOfRangeDb({ usersCursor, excursionsFindOne = null } = {}) {
+    const temperatureIncidents = {
+      findOne: vi.fn().mockResolvedValue(null),
+      insertOne: vi.fn().mockResolvedValue({ insertedId: 'incident-new' }),
+      updateOne: vi.fn().mockResolvedValue({ modifiedCount: 1 }),
+    };
+    const environmentalExcursions = {
+      findOne: typeof excursionsFindOne === 'function'
+        ? excursionsFindOne
+        : vi.fn().mockResolvedValue(excursionsFindOne),
+      insertOne: vi.fn().mockResolvedValue({ insertedId: 'exc-new' }),
+      updateOne: vi.fn().mockResolvedValue({ modifiedCount: 1 }),
+    };
+    const userAccounts = {
+      find: vi.fn().mockReturnValue(usersCursor),
+    };
+    return {
+      db: {
+        collection: vi.fn((name) => {
+          if (name === 'temperatureIncidents') return temperatureIncidents;
+          if (name === 'environmentalExcursions') return environmentalExcursions;
+          if (name === 'userAccounts') return userAccounts;
+          return {
+            findOne: vi.fn().mockResolvedValue(null),
+            insertOne: vi.fn().mockResolvedValue({ insertedId: 'x' }),
+            updateOne: vi.fn().mockResolvedValue({ modifiedCount: 0 }),
+            find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
+          };
+        }),
+      },
+      temperatureIncidents,
+      environmentalExcursions,
+      userAccounts,
+    };
+  }
+
+  it('creates a new temperature incident and emails recipients when the users cursor has no .project', async () => {
+    const { db, temperatureIncidents, userAccounts } = outOfRangeDb({
+      usersCursor: {
+        toArray: vi.fn().mockResolvedValue([
+          { email: 'tech@example.test' },
+          { email: null },
+          { email: 'coord@example.test' },
+        ]),
+      },
+    });
+    connectMongoDBMock.mockResolvedValue(db);
+
+    const res = createResponse();
+    await ingestTelemetry({ body: { sensorId: 'sensor-1', temperature: 12.5 } }, res);
+
+    expect(res.statusCode).toBe(200);
+    await vi.waitFor(() => {
+      expect(sendIncidentAlertEmailMock).toHaveBeenCalledWith(
+        expect.objectContaining({ _id: 'incident-new' }),
+        ['tech@example.test', 'coord@example.test'],
+        0
+      );
+    });
+    expect(userAccounts.find).toHaveBeenCalled();
+    expect(temperatureIncidents.insertOne).toHaveBeenCalled();
+  });
+
+  it('logs IOT_EXCURSION failures with and without error.message', async () => {
+    const { db } = outOfRangeDb({
+      usersCursor: { toArray: vi.fn().mockResolvedValue([]) },
+      excursionsFindOne: vi.fn()
+        .mockRejectedValueOnce(new Error('excursion persistence failed'))
+        .mockRejectedValueOnce('raw excursion failure'),
+    });
+    connectMongoDBMock.mockResolvedValue(db);
+    findUserAccountIdsByRoleCodesMock.mockResolvedValue([]);
+
+    await ingestTelemetry({ body: { sensorId: 'sensor-1', temperature: 12.5 } }, createResponse());
+    await vi.waitFor(() => {
+      expect(loggerErrorMock).toHaveBeenCalledWith(
+        '[IOT_EXCURSION] Falha ao registrar excursão ambiental:',
+        'excursion persistence failed'
+      );
+    });
+
+    sensorPolicyCache.clear();
+    await ingestTelemetry({ body: { sensorId: 'sensor-1', temperature: 12.5 } }, createResponse());
+    await vi.waitFor(() => {
+      expect(loggerErrorMock).toHaveBeenCalledWith(
+        '[IOT_EXCURSION] Falha ao registrar excursão ambiental:',
+        'raw excursion failure'
+      );
+    });
+  });
+
+  it('logs critical alert email failures with and without error.message', async () => {
+    const { db } = outOfRangeDb({
+      usersCursor: { toArray: vi.fn().mockResolvedValue([]) },
+    });
+    connectMongoDBMock.mockResolvedValue(db);
+    findUserAccountIdsByRoleCodesMock.mockResolvedValue([]);
+    sendCriticalAlertEmailMock
+      .mockRejectedValueOnce(new Error('resend unavailable'))
+      .mockRejectedValueOnce('raw resend failure');
+
+    await ingestTelemetry({ body: { sensorId: 'sensor-1', temperature: 12.5 } }, createResponse());
+    await vi.waitFor(() => {
+      expect(loggerErrorMock).toHaveBeenCalledWith(
+        '[ISO20387][IOT] Falha ao enviar e-mail crítico via Resend:',
+        'resend unavailable'
+      );
+    });
+
+    sensorPolicyCache.clear();
+    await ingestTelemetry({ body: { sensorId: 'sensor-1', temperature: 12.5 } }, createResponse());
+    await vi.waitFor(() => {
+      expect(loggerErrorMock).toHaveBeenCalledWith(
+        '[ISO20387][IOT] Falha ao enviar e-mail crítico via Resend:',
+        'raw resend failure'
+      );
+    });
   });
 });

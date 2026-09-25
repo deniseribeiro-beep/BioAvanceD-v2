@@ -260,6 +260,100 @@ describe('auth middleware', () => {
       expect(next).toHaveBeenCalled();
     });
 
+    it('skips session validation for /user/security/.../two-factor/qr', async () => {
+      const req = createReq({
+        headers: { authorization: 'Bearer good-token' },
+        path: '/api/user/security/two-factor/qr'
+      });
+      const res = createRes();
+      verifyMock.mockReturnValue({ userID: '550e8400-e29b-41d4-a716-446655440002', actorId: ACTOR_ID });
+      vi.spyOn(sessionService, 'verifySession');
+
+      await authenticate(req, res, next);
+
+      expect(sessionService.verifySession).not.toHaveBeenCalled();
+      expect(next).toHaveBeenCalled();
+    });
+
+    it('skips session validation for /user/security/.../two-factor/enable', async () => {
+      const req = createReq({
+        headers: { authorization: 'Bearer good-token' },
+        path: '/api/user/security/two-factor/enable'
+      });
+      const res = createRes();
+      verifyMock.mockReturnValue({ userID: '550e8400-e29b-41d4-a716-446655440002', actorId: ACTOR_ID });
+      vi.spyOn(sessionService, 'verifySession');
+
+      await authenticate(req, res, next);
+
+      expect(sessionService.verifySession).not.toHaveBeenCalled();
+      expect(next).toHaveBeenCalled();
+    });
+
+    it('returns 401 when the persisted actorId does not match the token claim', async () => {
+      const findOne = vi.fn().mockResolvedValue({ actorId: '550e8400-e29b-41d4-a716-446655440099' });
+      const req = createReq({
+        headers: { authorization: 'Bearer good-token' },
+        app: { locals: { db: { collection: () => ({ findOne }) } } },
+      });
+      const res = createRes();
+      verifyMock.mockReturnValue({ userID: '550e8400-e29b-41d4-a716-446655440002', actorId: ACTOR_ID });
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({});
+
+      await authenticate(req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ error: 'Token inválido' })
+      );
+      expect(next).not.toHaveBeenCalled();
+    });
+
+    it('returns 403 when roleValidUntil is in the past', async () => {
+      const findOne = vi.fn().mockResolvedValue({
+        actorId: ACTOR_ID,
+        roleValidUntil: '2020-01-01T00:00:00.000Z',
+      });
+      const req = createReq({
+        headers: { authorization: 'Bearer good-token' },
+        app: { locals: { db: { collection: () => ({ findOne }) } } },
+      });
+      const res = createRes();
+      verifyMock.mockReturnValue({ userID: '550e8400-e29b-41d4-a716-446655440002', actorId: ACTOR_ID, mfaVerified: true });
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({});
+
+      await authenticate(req, res, next);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ roleExpired: true, error: 'Papel expirado' })
+      );
+      expect(next).not.toHaveBeenCalled();
+    });
+
+    it('allows access when roleValidUntil is still in the future', async () => {
+      const future = new Date(Date.now() + 86400000).toISOString();
+      const findOne = vi.fn().mockResolvedValue({
+        actorId: ACTOR_ID,
+        roleValidUntil: future,
+      });
+      const req = createReq({
+        headers: { authorization: 'Bearer good-token' },
+        app: { locals: { db: { collection: () => ({ findOne }) } } },
+      });
+      const res = createRes();
+      verifyMock.mockReturnValue({ userID: '550e8400-e29b-41d4-a716-446655440002', actorId: ACTOR_ID, mfaVerified: true });
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({});
+
+      await authenticate(req, res, next);
+
+      expect(next).toHaveBeenCalled();
+      expect(res.status).not.toHaveBeenCalled();
+    });
+
     it('returns 403 requiring MFA setup when mfaSetupRequired and not mfaVerified', async () => {
       const req = createReq({ headers: { authorization: 'Bearer good-token' } });
       const res = createRes();

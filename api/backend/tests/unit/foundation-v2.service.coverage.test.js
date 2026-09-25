@@ -440,4 +440,162 @@ describe('foundation-v2.service item 8 coverage', () => {
     expect(foundation.checksum(a)).toBe(foundation.checksum(b));
     expect(foundation.checksum(a)).toMatch(/^[0-9a-f]{64}$/);
   });
+
+  it('falls back to the package storage directory when STORAGE_DIR is unset', async () => {
+    env.STORAGE_DIR = undefined;
+    const defaultRoot = path.join(path.dirname(require.resolve('../../src/foundation/foundation-v2.service')), '../../storage');
+    const { db, collections } = makeFoundationDb();
+
+    const result = await foundation.runFoundationV2({
+      db,
+      environment: 'test',
+      deploymentId: 'dep-storage-default',
+      pipelineVersion: '2.0.0',
+    });
+
+    const reportFile = path.join(
+      defaultRoot,
+      'foundation',
+      'runs',
+      `${result.run.foundationDataRunId}.json`,
+    );
+    expect(fs.existsSync(reportFile)).toBe(true);
+    expect(collections.foundationDataRuns.insertOne).toHaveBeenCalled();
+    await fs.promises.rm(path.join(defaultRoot, 'foundation'), { recursive: true, force: true });
+  });
+
+  it('rejects a canonical release that has approvedAt without approvedBy', async () => {
+    const { db, collections } = makeFoundationDb({
+      existingRelease: {
+        canonicalModelReleaseId: 'release-xor',
+        approvedAt: new Date('2026-01-01T00:00:00.000Z'),
+      },
+    });
+
+    await expect(foundation.runFoundationV2({
+      db,
+      environment: 'test',
+      deploymentId: 'dep-xor',
+      pipelineVersion: '2.0.0',
+    })).rejects.toMatchObject({
+      code: 'DATA_MIGRATION_CONFLICT',
+      message: expect.stringMatching(/incomplete Actor provenance/),
+    });
+    expect(collections.canonicalModelReleases.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('maps topology dry-run account conflicts to DATA_MIGRATION_CONFLICT', async () => {
+    const { db, collections } = makeFoundationDb();
+    collections.users = makeCollection({
+      find: vi.fn(() => ({
+        toArray: vi.fn().mockResolvedValue([{ _id: '507f1f77bcf86cd799439011' }]),
+      })),
+    });
+
+    await expect(foundation.runFoundationV2({
+      db,
+      environment: 'test',
+      deploymentId: 'dep-account-block',
+      pipelineVersion: '2.0.0',
+    })).rejects.toMatchObject({ code: 'DATA_MIGRATION_CONFLICT' });
+
+    expect(collections.canonicalModelReleases.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('records DATA_CONFLICT blockers when index readiness fails after a data conflict', async () => {
+    const indexPath = require.resolve('../../src/foundation/mongoIndexLifecycleV2');
+    const foundationPath = require.resolve('../../src/foundation/foundation-v2.service');
+    const indexMod = require('../../src/foundation/mongoIndexLifecycleV2');
+    const originalRun = indexMod.runIndexLifecycle;
+    indexMod.runIndexLifecycle = vi.fn(async (_db, opts = {}) => {
+      if (opts.mode === 'dry-run') {
+        return {
+          mode: 'dry-run',
+          wouldCreate: [],
+          preflight: { conflicts: [] },
+          migrationRequired: false,
+          wouldBlock: false,
+          verified: false,
+          planned: [],
+          created: [],
+        };
+      }
+      return {
+        mode: 'apply',
+        ready: false,
+        created: [],
+        verified: 0,
+        blocked: [{ constraintId: 'canonical-index:UserAccount:userAccountId', state: 'DATA_CONFLICT' }],
+        errors: [],
+        planned: [],
+        preflight: { conflicts: [{ constraintId: 'canonical-index:UserAccount:userAccountId' }] },
+        migrationRequired: true,
+      };
+    });
+    delete require.cache[foundationPath];
+    const freshFoundation = require('../../src/foundation/foundation-v2.service');
+    const { db, collections } = makeFoundationDb();
+
+    try {
+      await expect(freshFoundation.runFoundationV2({
+        db,
+        environment: 'test',
+        deploymentId: 'dep-data-conflict',
+        pipelineVersion: '2.0.0',
+      })).rejects.toMatchObject({ code: 'CANONICAL_INDEX_NOT_READY' });
+
+      expect(collections.readinessReports.insertOne).toHaveBeenCalled();
+      const blocked = collections.readinessReports.insertOne.mock.calls[0][0];
+      expect(blocked.blockers).toEqual([{
+        code: 'DATA_CONFLICT',
+        constraintId: 'canonical-index:UserAccount:userAccountId',
+        state: 'DATA_CONFLICT',
+      }]);
+    } finally {
+      indexMod.runIndexLifecycle = originalRun;
+      delete require.cache[foundationPath];
+      delete require.cache[indexPath];
+      require('../../src/foundation/foundation-v2.service');
+    }
+  });
+
+  it('uses FOUNDATION_APPLY_FAILED when the caught error has no code and indexes never blocked', async () => {
+    const { db, collections } = makeFoundationDb();
+    db.createCollection = vi.fn(async () => {
+      throw new Error('createCollection failed');
+    });
+
+    await expect(foundation.runFoundationV2({
+      db,
+      environment: 'test',
+      deploymentId: 'dep-foundation-apply-failed',
+      pipelineVersion: '2.0.0',
+    })).rejects.toThrow('createCollection failed');
+
+    const blocked = collections.readinessReports.insertOne.mock.calls[0][0];
+    expect(blocked.blockers).toEqual([{ code: 'FOUNDATION_APPLY_FAILED' }]);
+  });
+
+  it('marks dryRunResult as fail when the pipeline aborts before the dry-run checkpoint', async () => {
+    const { db, collections } = makeFoundationDb();
+    const RealDate = Date;
+    let dateCalls = 0;
+    vi.spyOn(global, 'Date').mockImplementation(function DateMock(...args) {
+      dateCalls += 1;
+      if (dateCalls === 3) throw new Error('clock failure before dry-run marker');
+      if (new.target) return Reflect.construct(RealDate, args);
+      return RealDate(...args);
+    });
+
+    await expect(foundation.runFoundationV2({
+      db,
+      environment: 'test',
+      deploymentId: 'dep-dry-run-fail',
+      pipelineVersion: '2.0.0',
+    })).rejects.toThrow('clock failure before dry-run marker');
+
+    const failedRun = collections.foundationDataRuns.insertOne.mock.calls[0][0];
+    expect(failedRun.dryRunResult).toBe('fail');
+    expect(failedRun.applyResult).toBe('fail');
+  });
 });

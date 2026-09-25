@@ -293,4 +293,66 @@ describe('AuthController item 8 residual branches', () => {
       },
     });
   });
+
+  it('uses the default password-reset error string when req.t is absent on service failure', async () => {
+    vi.spyOn(authService, 'requestPasswordReset').mockRejectedValue(new Error('smtp down'));
+    const req = createReq({ body: { email: 'alice@example.test' } });
+    const res = createRes();
+
+    await authController.requestPasswordReset(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'Erro ao solicitar recuperação de senha',
+      message: 'smtp down',
+    });
+  });
+
+  it('rejects enableMFAFirstLogin when only username or only password is supplied', async () => {
+    const usernameOnly = createRes();
+    await authController.enableMFAFirstLogin(
+      createReq({ body: { username: 'alice', code: '123456' } }),
+      usernameOnly
+    );
+    expect(usernameOnly.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'Usuário e senha são obrigatórios',
+    });
+
+    const passwordOnly = createRes();
+    await authController.enableMFAFirstLogin(
+      createReq({ body: { password: 'secret', code: '123456' } }),
+      passwordOnly
+    );
+    expect(passwordOnly.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'Usuário e senha são obrigatórios',
+    });
+  });
+
+  it('covers missing MFA code with and without req.t on enableMFAFirstLogin', async () => {
+    const withT = createRes();
+    await authController.enableMFAFirstLogin(
+      createReq({
+        body: { username: 'alice', password: 'secret' },
+        t: vi.fn((key) => (key === 'mfa.codeRequired' ? 'Código traduzido' : key)),
+      }),
+      withT
+    );
+    expect(withT.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'Código traduzido',
+    });
+
+    const withoutT = createRes();
+    await authController.enableMFAFirstLogin(
+      createReq({ body: { username: 'alice', password: 'secret' } }),
+      withoutT
+    );
+    expect(withoutT.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'Código MFA é obrigatório',
+    });
+  });
 });

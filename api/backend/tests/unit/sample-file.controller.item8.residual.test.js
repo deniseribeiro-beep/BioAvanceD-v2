@@ -4,7 +4,9 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 
 const controller = require('../../src/controllers/sample-file.controller');
+const SampleFileModel = require('../../src/models/SampleFile');
 const auditLogger = require('../../src/utils/auditLogger');
+const keyRegistry = require('../../src/config/keyRegistry');
 const fs = require('fs');
 const crypto = require('crypto');
 const { ObjectId } = require('mongodb');
@@ -326,5 +328,47 @@ describe('sample-file.controller item 8 residual branches', () => {
       message: 'database handle failed',
     }));
     expect(unlink).not.toHaveBeenCalled();
+  });
+
+  it('uploadFile stores null encryption envelope fields when ALLOW_UNENCRYPTED_FILE_STORAGE opts out', async () => {
+    const previousOptOut = process.env.ALLOW_UNENCRYPTED_FILE_STORAGE;
+    process.env.ALLOW_UNENCRYPTED_FILE_STORAGE = 'true';
+    vi.spyOn(keyRegistry, 'getActiveKey').mockReturnValue(null);
+    vi.spyOn(keyRegistry, 'getActiveKeyId').mockReturnValue(null);
+
+    const specimenId = new ObjectId().toString();
+    const sample = { _id: new ObjectId(specimenId), specimenId };
+    const insertOne = vi.fn().mockResolvedValue({ insertedId: new ObjectId() });
+    const db = createDb({
+      specimens: { findOne: vi.fn().mockResolvedValue(sample) },
+      sample_files: { insertOne },
+    });
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('plaintext'));
+    const writeSpy = vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+    vi.spyOn(SampleFileModel, 'getFileTypeFromExtension').mockReturnValue('CSV');
+    vi.spyOn(SampleFileModel, 'validate').mockReturnValue({ isValid: true, errors: [] });
+    const res = createRes();
+
+    try {
+      await controller.uploadFile({
+        app: { locals: { db } },
+        params: { specimenId },
+        file: { path: '/tmp/plain.csv', originalname: 'plain.csv', size: 9 },
+        user: null,
+      }, res);
+
+      expect(res.status).toHaveBeenCalledWith(201);
+      expect(writeSpy).not.toHaveBeenCalled();
+      expect(insertOne).toHaveBeenCalledWith(expect.objectContaining({
+        encryptionAlgorithm: null,
+        encryptionKeyId: null,
+        encryptionIv: null,
+        encryptionTag: null,
+      }));
+    } finally {
+      if (previousOptOut === undefined) delete process.env.ALLOW_UNENCRYPTED_FILE_STORAGE;
+      else process.env.ALLOW_UNENCRYPTED_FILE_STORAGE = previousOptOut;
+    }
   });
 });

@@ -102,4 +102,28 @@ describe('mqtt-ingestion-audit.service item 8 residual branches', () => {
       'primitive mqtt persistence failure'
     );
   });
+
+  it('persists null chain/document fields when topic/status/timestamp inputs are omitted', async () => {
+    const collection = makeCollection();
+    const before = Date.now();
+
+    const result = await service.append(makeDb(collection), {
+      payloadHash: 'only-hash',
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      _id: 'mqtt-audit-1',
+      chainHash: expect.any(String),
+    }));
+
+    const inserted = collection.insertOne.mock.calls[0][0];
+    expect(inserted.topic).toBeNull();
+    expect(inserted.payloadHash).toBe('only-hash');
+    expect(inserted.status).toBe('processed');
+    expect(inserted.timestamp.getTime()).toBeGreaterThanOrEqual(before);
+    expect(inserted.reason).toBeNull();
+    expect(inserted.sensorId).toBeNull();
+    expect(inserted.temperatureValue).toBeNull();
+    expect(inserted.readingTimestamp).toBeNull();
+  });
 });

@@ -210,4 +210,69 @@ describe('paciente.controller item 8 residual canonical branches', () => {
       message: 'invalid observation',
     }));
   });
+
+  it('audits UPDATE with sanitizedID N/A when participant id is not eight digits', async () => {
+    vi.spyOn(patientService, 'getPatient').mockResolvedValue({
+      participantId: 'legacy-id',
+      clinicalUnitId: 'org-1',
+    });
+    vi.spyOn(rbacAssignmentService, 'isRecordInOrganizationScope').mockReturnValue(true);
+    vi.spyOn(patientService, 'updatePatient').mockResolvedValue({ participantId: 'legacy-id' });
+
+    const db = {
+      collection: vi.fn(() => ({
+        find: vi.fn(() => ({ toArray: vi.fn(async () => []) })),
+        updateMany: vi.fn(async () => ({ modifiedCount: 0 })),
+        findOne: vi.fn(async () => null),
+      })),
+    };
+    const req = baseReq(db);
+    req.params.id = 'legacy-id';
+    req.body = { clinicalUnit: 'LAB' };
+    req.user = { userID: 'user-1' };
+    const res = responseMock();
+
+    await controller.atualizar(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(auditLogger.log).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'UPDATE',
+      resourceId: 'N/A',
+    }));
+  });
+
+  it('audits DELETE not-found and success with sanitizedID N/A for noncanonical ids', async () => {
+    vi.spyOn(rbacAssignmentService, 'isRecordInOrganizationScope').mockReturnValue(true);
+    vi.spyOn(patientService, 'getPatient').mockResolvedValue({
+      participantId: 'ABC',
+      clinicalUnitId: 'org-1',
+    });
+    vi.spyOn(patientService, 'deletePatient')
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(true);
+
+    const reqMissing = baseReq({});
+    reqMissing.params.id = 'ABC';
+    reqMissing.user = { userID: 'user-1' };
+    const resMissing = responseMock();
+    await controller.deletar(reqMissing, resMissing);
+    expect(resMissing.status).toHaveBeenCalledWith(404);
+    expect(auditLogger.log).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'DELETE',
+      resourceId: 'N/A',
+      status: 'error',
+    }));
+
+    const reqOk = baseReq({});
+    reqOk.params.id = 'ABC';
+    reqOk.user = { userID: 'user-1' };
+    const resOk = responseMock();
+    await controller.deletar(reqOk, resOk);
+    expect(resOk.status).toHaveBeenCalledWith(200);
+    expect(auditLogger.log).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'DELETE',
+      resourceId: 'N/A',
+      status: 'success',
+    }));
+  });
 });

@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import fs from 'fs';
 
 const express = require('express');
 const request = require('supertest');
+const ResultModel = require('../../src/models/Result');
 
 const modulePaths = {
   auth: require.resolve('../../src/infrastructure/middleware/auth'),
@@ -259,5 +261,74 @@ describe('result.routes item 8 residual canonical branches', () => {
 
     expect(res.status).toBe(404);
     expect(resultsCollection.deleteOne).not.toHaveBeenCalled();
+  });
+
+  function getUploadHandler() {
+    const router = require(modulePaths.route);
+    const layer = router.stack.find((entry) => entry.route?.path === '/upload' && entry.route.methods?.post);
+    if (!layer) throw new Error('POST /upload not found');
+    return layer.route.stack.at(-1).handle;
+  }
+
+  function makeUploadRes() {
+    const res = { status: vi.fn(), json: vi.fn() };
+    res.status.mockReturnValue(res);
+    res.json.mockReturnValue(res);
+    return res;
+  }
+
+  it('rejects an invalid upload extension and unlinks the temp file', async () => {
+    const { db } = buildDb({ samples: [{ specimenId: 'SPEC-1', collectionSite: 'org-1' }] });
+    const unlink = vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+
+    const handler = getUploadHandler();
+    const req = {
+      app: { locals: { db } },
+      body: { specimenId: 'SPEC-1' },
+      file: { path: '/tmp/bad.exe', originalname: 'bad.exe', size: 10 },
+      organizationScope: { scope: 'global', organizationIds: [] },
+      user: { userID: 'user-1' },
+    };
+    const res = makeUploadRes();
+
+    await handler(req, res);
+
+    expect(unlink).toHaveBeenCalledWith('/tmp/bad.exe');
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'Tipo de arquivo inválido',
+    });
+  });
+
+  it('rejects ResultModel.validate failure and unlinks the temp file', async () => {
+    const { db } = buildDb({ samples: [{ specimenId: 'SPEC-1', collectionSite: 'org-1' }] });
+    const unlink = vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(ResultModel, 'validate').mockReturnValue({
+      isValid: false,
+      errors: ['resultFilePath é obrigatório e deve ser string'],
+    });
+
+    const handler = getUploadHandler();
+    const req = {
+      app: { locals: { db } },
+      body: { specimenId: 'SPEC-1' },
+      file: { path: '/tmp/ok.pdf', originalname: 'ok.pdf', size: 10 },
+      organizationScope: { scope: 'global', organizationIds: [] },
+      user: { userID: 'user-1' },
+    };
+    const res = makeUploadRes();
+
+    await handler(req, res);
+
+    expect(unlink).toHaveBeenCalledWith('/tmp/ok.pdf');
+    expect(res.status).toHaveBeenCalledWith(422);
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'Dados inválidos',
+      message: 'resultFilePath é obrigatório e deve ser string',
+    });
   });
 });

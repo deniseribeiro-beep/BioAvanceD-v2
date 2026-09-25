@@ -129,4 +129,128 @@ describe('Foundation canonical MongoDB index lifecycle', () => {
     expect(result.ready).toBe(true);
     expect(state.catalog.get('canonicalModelReleases').some((item) => item.name === 'local_release_status')).toBe(true);
   });
+
+  it('stable()-normalizes nested option objects and arrays when comparing indexes', () => {
+    const expected = {
+      physicalKeys: { userAccountId: 1 },
+      options: {
+        unique: true,
+        collation: { locale: 'en', strength: 2, alternate: ['non-ignorable', 'shifted'] },
+        partialFilterExpression: { status: { $in: ['active', 'pending'] } },
+      },
+    };
+    const actual = {
+      key: { userAccountId: 1 },
+      unique: true,
+      collation: { strength: 2, alternate: ['non-ignorable', 'shifted'], locale: 'en' },
+      partialFilterExpression: { status: { $in: ['active', 'pending'] } },
+    };
+    expect(lifecycle.equivalent(expected, actual)).toBe(true);
+  });
+
+  it('rejects indexes whose physical keys do not match', () => {
+    expect(lifecycle.equivalent(
+      { physicalKeys: { userAccountId: 1 }, options: { unique: true } },
+      { key: { email: 1 }, unique: true },
+    )).toBe(false);
+  });
+
+  it('rejects option mismatches that are not MongoDB false-flag omissions', () => {
+    expect(lifecycle.equivalent(
+      { physicalKeys: { userAccountId: 1 }, options: { unique: true, sparse: true } },
+      { key: { userAccountId: 1 }, unique: true, sparse: false },
+    )).toBe(false);
+  });
+
+  it('remaps a missing canonical collection to a single legacy source when topologyPlan is provided', async () => {
+    const indexes = [{ key: { _id: 1 }, name: '_id_' }, { key: { userAccountId: 1 }, name: 'legacy_uuid', unique: true }];
+    const db = {
+      listCollections: () => ({ toArray: async () => [{ name: 'users' }] }),
+      collection: (name) => ({
+        listIndexes: () => ({
+          toArray: async () => {
+            if (name !== 'users') throw new Error(`unexpected collection ${name}`);
+            return indexes;
+          },
+        }),
+      }),
+    };
+    const catalog = await lifecycle.discoverIndexes(db, { remapped: true });
+    expect(catalog.get('userAccounts')).toEqual({ physical: 'users', indexes });
+  });
+
+  it('leaves physical null when topologyPlan is set but no single legacy source is present', async () => {
+    const db = {
+      listCollections: () => ({ toArray: async () => [{ name: 'unrelated' }] }),
+      collection: () => ({ listIndexes: () => ({ toArray: async () => [] }) }),
+    };
+    const catalog = await lifecycle.discoverIndexes(db, {});
+    expect(catalog.get('userAccounts')).toEqual({ physical: null, indexes: [] });
+  });
+
+  it('skips unique preflight and records REQUIRED_COLLECTION_MISSING when physical is absent', async () => {
+    const db = {
+      listCollections: () => ({ toArray: async () => [] }),
+      collection: () => ({
+        listIndexes: () => ({ toArray: async () => [] }),
+        aggregate: () => ({ toArray: async () => { throw new Error('aggregate should not run'); } }),
+        createIndex: async () => { throw new Error('createIndex should not run'); },
+      }),
+    };
+    const catalog = await lifecycle.discoverIndexes(db);
+    expect([...catalog.values()].every((entry) => entry.physical === null)).toBe(true);
+    const plan = lifecycle.planIndexes(catalog);
+    const preflight = await lifecycle.preflightIndexes(db, plan, catalog);
+    expect(preflight.passed).toBe(true);
+    expect(preflight.conflicts).toEqual([]);
+    const result = await lifecycle.runIndexLifecycle(db);
+    expect(result.errors.some((item) => item.code === 'REQUIRED_COLLECTION_MISSING')).toBe(true);
+  });
+
+  it('preflight applies partialFilterExpression and sparse stages before duplicate grouping', async () => {
+    const pipelines = [];
+    const db = {
+      collection: () => ({
+        aggregate: (pipeline) => {
+          pipelines.push(pipeline);
+          return { toArray: async () => [] };
+        },
+      }),
+    };
+    const constraint = {
+      constraintId: 'synthetic-sparse-partial',
+      collection: 'userAccounts',
+      physicalKeys: { userAccountId: 1 },
+      options: {
+        unique: true,
+        sparse: true,
+        partialFilterExpression: { status: 'active' },
+      },
+    };
+    const plan = { entries: [{ constraint, state: 'MISSING' }] };
+    const catalog = new Map([['userAccounts', { physical: 'userAccounts', indexes: [] }]]);
+    const preflight = await lifecycle.preflightIndexes(db, plan, catalog);
+    expect(preflight.passed).toBe(true);
+    expect(pipelines).toHaveLength(1);
+    expect(pipelines[0][0]).toEqual({ $match: { status: 'active' } });
+    expect(pipelines[0][1]).toEqual({
+      $match: { $or: [{ userAccountId: { $exists: true } }] },
+    });
+  });
+
+  it('rejects an invalid index lifecycle mode', async () => {
+    const state = fakeDb();
+    await expect(lifecycle.runIndexLifecycle(state.db, { mode: 'wipe' }))
+      .rejects.toThrow('Invalid index lifecycle mode');
+  });
+
+  it('records INDEX_APPLY_FAILED when createIndex throws without a driver code', async () => {
+    const state = fakeDb();
+    state.createIndex.mockImplementation(async () => {
+      throw new Error('catalog write denied');
+    });
+    const result = await lifecycle.runIndexLifecycle(state.db);
+    expect(result.ready).toBe(false);
+    expect(result.errors.some((item) => item.code === 'INDEX_APPLY_FAILED')).toBe(true);
+  });
 });

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
@@ -10,8 +10,15 @@ const {
   changeUserRole,
   grantAdditionalRole,
   revokeAdditionalRole,
+  userHasPermission,
+  assertGrantPreconditions,
+  resolveUserOrganizationScope,
 } = require('../../src/services/rbac-assignment.service');
 const ACTOR_ID = '550e8400-e29b-41d4-a716-446655440001';
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 function matches(doc, query = {}) {
   return Object.entries(query).every(([key, condition]) => {
@@ -22,7 +29,13 @@ function matches(doc, query = {}) {
   });
 }
 
-function buildDb({ roles = [], assignments = [], organizations = [] } = {}) {
+function buildDb({
+  roles = [],
+  assignments = [],
+  organizations = [],
+  permissions = [],
+  users = [],
+} = {}) {
   const rolesCollection = {
     findOne: async (query = {}) => roles.find((doc) => matches(doc, query)) || null,
     find: (query = {}) => ({
@@ -47,12 +60,22 @@ function buildDb({ roles = [], assignments = [], organizations = [] } = {}) {
   const organizationsCollection = {
     findOne: async (query = {}) => organizations.find((doc) => matches(doc, query)) || null,
   };
+  const permissionsCollection = {
+    findOne: async (query = {}) => permissions.find((doc) => matches(doc, query)) || null,
+  };
+  const usersCollection = {
+    find: () => ({
+      toArray: async () => users,
+    }),
+  };
 
   return {
     collection(name) {
       if (name === 'roles') return rolesCollection;
       if (name === 'userRoleAssignments') return assignmentsCollection;
       if (name === 'organizations') return organizationsCollection;
+      if (name === 'permissions') return permissionsCollection;
+      if (name === 'userAccounts') return usersCollection;
       if (name === 'actors') return { findOne: async ({ actorId }) => actorId === ACTOR_ID ? { actorId } : null };
       throw new Error(`unexpected collection: ${name}`);
     },
@@ -215,5 +238,95 @@ describe('rbac-assignment.service item 8 residual branches', () => {
       userAccountId: 'u-default', accessType: 3, grantedBy: 'system',
     })).rejects.toThrow(/actorId UUID/);
     expect(assignments).toEqual([]);
+  });
+
+  it('returns false when the permission catalog has no matching permissionCode', async () => {
+    const assignments = [{
+      assignmentId: 'a-tech',
+      userAccountId: 'u-perm',
+      roleId: 'role-tech',
+      assignmentStatus: 'active',
+      validUntil: null,
+    }];
+
+    await expect(userHasPermission(
+      buildDb({ roles, assignments, permissions: [] }),
+      'u-perm',
+      'missing.permission'
+    )).resolves.toBe(false);
+  });
+
+  it('rejects an accessType with no mapped roleCode before and during grant', async () => {
+    const assignments = [];
+    const db = buildDb({ roles, assignments });
+
+    await expect(assertGrantPreconditions(db, { accessType: 99 }))
+      .rejects.toThrow(/accessType sem roleCode correspondente: 99/);
+    await expect(grantRoleForAccessType(db, {
+      userAccountId: 'u-bad-access',
+      accessType: 0,
+      grantedBy: ACTOR_ID,
+    })).rejects.toThrow(/accessType sem roleCode correspondente: 0/);
+    expect(assignments).toEqual([]);
+  });
+
+  it('skips non-UUID account identities during role-assignment backfill', async () => {
+    const seedPath = require.resolve('../../src/services/rbac-catalog-seed.service');
+    const rbacPath = require.resolve('../../src/services/rbac-assignment.service');
+    const originalSeed = require.cache[seedPath];
+    require.cache[seedPath] = {
+      id: seedPath,
+      filename: seedPath,
+      loaded: true,
+      exports: {
+        ...(originalSeed?.exports || {}),
+        seedRolesAndPermissions: async () => undefined,
+      },
+    };
+    delete require.cache[rbacPath];
+    const { backfillUserRoleAssignments: backfill } = require('../../src/services/rbac-assignment.service');
+
+    try {
+      const assignments = [];
+      const result = await backfill(buildDb({
+        roles,
+        assignments,
+        users: [
+          { userAccountId: 'legacy-not-a-uuid', accessType: 2 },
+          { userAccountId: '550e8400-e29b-41d4-a716-446655440099', accessType: 2 },
+        ],
+      }));
+
+      expect(result.skipped).toEqual(expect.arrayContaining([
+        { reason: 'data-migration-conflict-account-identity' },
+        {
+          userAccountId: '550e8400-e29b-41d4-a716-446655440099',
+          reason: 'data-migration-conflict-grant-actor',
+        },
+      ]));
+      expect(result.granted).toEqual([]);
+      expect(assignments).toEqual([]);
+    } finally {
+      require.cache[seedPath] = originalSeed;
+      delete require.cache[rbacPath];
+      require('../../src/services/rbac-assignment.service');
+    }
+  });
+
+  it('reports organization scope none when active assignments lack organization scopeType', async () => {
+    const assignments = [{
+      assignmentId: 'a-globalish',
+      userAccountId: 'u-scope',
+      roleId: 'role-tech',
+      assignmentStatus: 'active',
+      validUntil: null,
+      scopeType: 'global',
+      scopeId: null,
+    }];
+
+    await expect(resolveUserOrganizationScope(
+      buildDb({ roles, assignments }),
+      'u-scope'
+    )).resolves.toEqual({ scope: 'none', organizationIds: [] });
   });
 });

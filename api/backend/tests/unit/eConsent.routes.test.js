@@ -323,6 +323,25 @@ describe('eConsent.routes GET /validate/:token', () => {
     expect(res.body.patient).toEqual(patient);
   });
 
+  it('returns empty responses when ACTIVE consent has null responses', async () => {
+    const patient = { participantId: '12345678', name: 'Jane Doe' };
+    const db = buildPatientDb({ patient });
+    const template = { _id: 'tmpl-1', title: 'TCLE v1', permissions: [{ key: 'general', label: 'Aceito participar' }] };
+    vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue(template);
+    vi.spyOn(consentService, 'getPatientConsent').mockResolvedValue({
+      _id: 'consent-active-null',
+      status: 'ACTIVE',
+      responses: null,
+    });
+    const app = buildApp(loadRealAuthRouter(), db);
+    const token = signToken({ participantId: '12345678' });
+
+    const res = await request(app).get(`/e-consent/validate/${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.responses).toEqual({});
+  });
+
   it('returns empty responses when the patient has no active consent', async () => {
     const patient = { participantId: '12345678', name: 'Jane Doe' };
     const db = buildPatientDb({ patient });
@@ -436,6 +455,80 @@ describe('eConsent.routes POST /update', () => {
       responses: { general: true },
     }));
     expect(consentService.revokeConsent).not.toHaveBeenCalled();
+  });
+
+  it('resolves ipAddress from x-forwarded-for when req.ip is absent', async () => {
+    const db = buildMockDb();
+    clearRouteCache();
+    const authModule = require(authPath);
+    authModule.authenticate = (req, res, next) => next();
+    const rbacModule = require(rbacPath);
+    rbacModule.requirePermission = () => (req, res, next) => next();
+    const router = require(routePath);
+
+    const updateLayer = router.stack.find(
+      (layer) => layer.route && layer.route.path === '/update' && layer.route.methods.post
+    );
+    const handler = updateLayer.route.stack[updateLayer.route.stack.length - 1].handle;
+
+    const req = {
+      body: { token: signToken({ participantId: '12345678' }), consents: [{ key: 'general', status: 'ACCEPTED' }] },
+      headers: { 'x-forwarded-for': '203.0.113.10', 'user-agent': 'item8-residual' },
+      app: { locals: { db }, get: () => null },
+    };
+    const res = {
+      statusCode: 200,
+      body: null,
+      status(code) { this.statusCode = code; return this; },
+      json(payload) { this.body = payload; return this; },
+    };
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(consentService.createPatientConsent).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({ ipAddress: '203.0.113.10' })
+    );
+  });
+
+  it('resolves ipAddress from connection.remoteAddress when req.ip and x-forwarded-for are absent', async () => {
+    const db = buildMockDb();
+    clearRouteCache();
+    const authModule = require(authPath);
+    authModule.authenticate = (req, res, next) => next();
+    const rbacModule = require(rbacPath);
+    rbacModule.requirePermission = () => (req, res, next) => next();
+    const router = require(routePath);
+
+    // Drive the handler directly so we can omit Express's default req.ip
+    // while still exposing connection.remoteAddress.
+    const updateLayer = router.stack.find(
+      (layer) => layer.route && layer.route.path === '/update' && layer.route.methods.post
+    );
+    expect(updateLayer).toBeTruthy();
+    const handler = updateLayer.route.stack[updateLayer.route.stack.length - 1].handle;
+
+    const req = {
+      body: { token: signToken({ participantId: '12345678' }), consents: [{ key: 'general', status: 'ACCEPTED' }] },
+      headers: { 'user-agent': 'item8-residual' },
+      connection: { remoteAddress: '198.51.100.20' },
+      app: { locals: { db }, get: () => null },
+    };
+    const res = {
+      statusCode: 200,
+      body: null,
+      status(code) { this.statusCode = code; return this; },
+      json(payload) { this.body = payload; return this; },
+    };
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(consentService.createPatientConsent).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({ ipAddress: '198.51.100.20' })
+    );
   });
 
   it('revokes the patient\'s active consent instead of creating a new one when every permission is revoked', async () => {
@@ -963,6 +1056,36 @@ describe('eConsent.routes item 8 residual branches', () => {
     const accepted = await request(app).post('/e-consent/import/fhir/consent/token-quarantined/accept');
     expect(accepted.status).toBe(409);
     expect(accepted.body).toEqual({ error: 'record quarantined' });
+  });
+
+  it('defaults catch responses when thrown values lack message and statusCode', async () => {
+    const db = { collection: vi.fn() };
+    vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue({
+      _id: 'tmpl-1',
+      title: 'TCLE',
+      permissions: [],
+    });
+    vi.spyOn(consentService, 'createPatientConsent').mockRejectedValueOnce({});
+    const app = buildApp(loadRealAuthRouter(), db);
+    const token = signToken({ participantId: '12345678' });
+
+    const updateRes = await request(app)
+      .post('/e-consent/update')
+      .send({ token, consents: [{ key: 'general', status: 'ACCEPTED' }] });
+    expect(updateRes.status).toBe(400);
+    expect(updateRes.body).toEqual({ error: 'Erro ao atualizar consentimento' });
+
+    const stagingService = require('../../src/services/fhir-import-staging.service');
+    vi.spyOn(stagingService, 'validateImportConsentToken').mockRejectedValueOnce({});
+    vi.spyOn(stagingService, 'acceptImportConsentToken').mockRejectedValueOnce('raw accept failure');
+
+    const validateRes = await request(app).get('/e-consent/import/fhir/consent/no-message');
+    expect(validateRes.status).toBe(500);
+    expect(validateRes.body).toEqual({ error: 'Erro ao validar consentimento de importação' });
+
+    const acceptRes = await request(app).post('/e-consent/import/fhir/consent/no-message/accept');
+    expect(acceptRes.status).toBe(500);
+    expect(acceptRes.body).toEqual({ error: 'Erro ao aceitar consentimento de importação' });
   });
 });
 

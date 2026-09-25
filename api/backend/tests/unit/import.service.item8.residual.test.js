@@ -312,4 +312,157 @@ describe('import.service item 8 residual parser branches', () => {
     unlink.mockImplementationOnce(() => { throw new Error('unlink failed'); });
     expect(() => importService.cleanupFile('/tmp/file')).not.toThrow();
   });
+
+  it('readSpreadsheetRows maps a null excel cell to empty string and skips fully empty rows', async () => {
+    const ExcelJS = require('exceljs');
+    vi.spyOn(ExcelJS, 'Workbook').mockImplementation(function WorkbookMock() {
+      this.xlsx = { readFile: vi.fn().mockResolvedValue(undefined) };
+      this.worksheets = [{
+        eachRow(callback) {
+          callback({ values: [undefined, 'Name', 'Note'] }, 1);
+          callback({ values: [undefined, 'Ana', null] }, 2);
+          callback({ values: [undefined, '', ''] }, 3);
+          callback({ values: [undefined, null, null] }, 4);
+        },
+      }];
+    });
+
+    const rows = await importService.readSpreadsheetRows('/tmp/item8-null-cell.xlsx');
+
+    expect(rows).toEqual([{ Name: 'Ana', Note: '' }]);
+  });
+
+  it('defaults axisPenalties to [] when the quality resolver omits axis_penalties', () => {
+    const qualityDomain = require('../../src/services/quality-domain.service');
+    vi.spyOn(qualityDomain, 'resolveMethodologicalQuality').mockReturnValue({
+      model_version: 'RCS-GOV-ITEM8',
+      matrix_type: 'fluid',
+      governance_status: 1,
+      governance_failure_reasons: [],
+      governance_rule_codes: [],
+      rcs_score: 90,
+      score_based_grade: 'A',
+      final_grade: 'A',
+      grade_route: 'score',
+      calculation_trace: {},
+    });
+
+    const { data } = importService.parseSampleCSV({
+      participantId: '12345678',
+      sampleType: 'PLASMA',
+    });
+
+    expect(data.axisPenalties).toEqual([]);
+  });
+
+  it('syncs ParticipantIdentity on merge when only birthDate changes among civil fields already on the patient', async () => {
+    const os = require('os');
+    const patientsPath = path.join(os.tmpdir(), `import-birthdate-only-${Date.now()}.json`);
+    fs.writeFileSync(patientsPath, JSON.stringify({
+      patientName: 'Maria Silva',
+      birthDate: '1985-05-20',
+      sex: 'F',
+      email: 'maria@example.com',
+      consentTemplateId: 'tcle-1',
+      cpf: '12345678900',
+      recordNumber: 'RN-BIRTH',
+    }));
+
+    const patients = {
+      findOne: vi.fn().mockResolvedValue({
+        _id: 'existing-birth',
+        participantId: '11223344',
+        recordNumber: 'RN-BIRTH',
+        birthDate: '1985-05-20',
+        sex: 'F',
+      }),
+      insertOne: vi.fn(),
+      updateOne: vi.fn().mockResolvedValue({ modifiedCount: 1 }),
+    };
+    const identityUpdates = [];
+    const participantIdentities = {
+      findOne: vi.fn().mockResolvedValue({ participantId: '11223344', identityDocument: '12345678900' }),
+      insertOne: vi.fn(),
+      updateOne: vi.fn(async (query, update) => {
+        identityUpdates.push({ query, update });
+        return { modifiedCount: 1 };
+      }),
+    };
+    const db = {
+      collection: vi.fn((name) => {
+        if (name === 'participants') return patients;
+        if (name === 'participantIdentities') return participantIdentities;
+        throw new Error(`unexpected collection: ${name}`);
+      }),
+    };
+
+    try {
+      const result = await importService.importPatients(db, {
+        path: patientsPath,
+        originalname: 'birthdate-only.json',
+      });
+      expect(result.success).toBe(1);
+      expect(identityUpdates).toHaveLength(1);
+      expect(identityUpdates[0].update.$set).toEqual(expect.objectContaining({
+        birthDateEncrypted: expect.objectContaining({ alg: 'aes-256-gcm' }),
+        birthDateHash: expect.any(String),
+      }));
+    } finally {
+      fs.unlinkSync(patientsPath);
+    }
+  });
+
+  it('syncs ParticipantIdentity on merge when identityDocument is present without inventing other civil fields', async () => {
+    const os = require('os');
+    const patientsPath = path.join(os.tmpdir(), `import-identity-only-${Date.now()}.json`);
+    fs.writeFileSync(patientsPath, JSON.stringify({
+      patientName: 'Maria Silva',
+      birthDate: '1985-05-20',
+      sex: 'F',
+      email: 'maria@example.com',
+      consentTemplateId: 'tcle-1',
+      cpf: '12345678900',
+    }));
+
+    const patients = {
+      findOne: vi.fn().mockResolvedValue({
+        _id: 'existing-id-doc',
+        participantId: '55667788',
+        sex: 'F',
+      }),
+      insertOne: vi.fn(),
+      updateOne: vi.fn().mockResolvedValue({ modifiedCount: 1 }),
+    };
+    const identityUpdates = [];
+    const participantIdentities = {
+      findOne: vi.fn().mockResolvedValue({ participantId: '55667788', identityDocument: '12345678900' }),
+      insertOne: vi.fn(),
+      updateOne: vi.fn(async (query, update) => {
+        identityUpdates.push({ query, update });
+        return { modifiedCount: 1 };
+      }),
+    };
+    const db = {
+      collection: vi.fn((name) => {
+        if (name === 'participants') return patients;
+        if (name === 'participantIdentities') return participantIdentities;
+        throw new Error(`unexpected collection: ${name}`);
+      }),
+    };
+
+    try {
+      const result = await importService.importPatients(db, {
+        path: patientsPath,
+        originalname: 'identity-only.json',
+      });
+      expect(result.success).toBe(1);
+      expect(identityUpdates).toHaveLength(1);
+      expect(identityUpdates[0].update.$set).toEqual(expect.objectContaining({
+        identityDocumentEncrypted: expect.objectContaining({ alg: 'aes-256-gcm' }),
+        identityDocumentHash: expect.any(String),
+      }));
+    } finally {
+      fs.unlinkSync(patientsPath);
+    }
+  });
 });

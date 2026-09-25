@@ -189,6 +189,37 @@ describe('createFirstAdmin', () => {
     expect(logs).not.toContain(validEnv.BOOTSTRAP_ADMIN_TEMP_PASSWORD);
   });
 
+  it('usa process.env quando options.env e omitido', async () => {
+    const { db, users } = createMockDb(0);
+    const previous = {};
+    for (const [key, value] of Object.entries(validEnv)) {
+      previous[key] = process.env[key];
+      process.env[key] = value;
+    }
+    try {
+      const result = await createFirstAdmin({ db, logger: { info: vi.fn() } });
+      expect(result.status).toBe('created');
+      expect(users.insertOne).toHaveBeenCalledTimes(1);
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  it('usa console como logger quando options.logger e omitido', async () => {
+    const { db } = createMockDb(1);
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    try {
+      const result = await createFirstAdmin({ db, env: validEnv });
+      expect(result.status).toBe('skipped');
+      expect(info).toHaveBeenCalledWith(expect.stringContaining('[ADMIN_BOOTSTRAP]'));
+    } finally {
+      info.mockRestore();
+    }
+  });
+
   it('rejeita senha temporaria fraca antes de tocar o banco', async () => {
     const { db, users } = createMockDb(0);
     const env = { ...validEnv, BOOTSTRAP_ADMIN_TEMP_PASSWORD: 'fraca' };

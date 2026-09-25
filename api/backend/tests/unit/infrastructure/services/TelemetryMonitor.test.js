@@ -817,6 +817,114 @@ describe('TelemetryMonitor', () => {
       expect(monitor.upsertMissingReadingExcursion).toHaveBeenCalledWith(expect.objectContaining({ sensorId: 'S2' }));
     });
 
+    it('logs quarantineByColdChainIncident rejection in runCycle with and without error.message', async () => {
+      const quarantinePath = require.resolve('../../../../src/services/equipment-sensor-quarantine.service');
+      const monitorPath = require.resolve('../../../../src/infrastructure/services/TelemetryMonitor');
+      const quarantineMock = vi.fn()
+        .mockRejectedValueOnce(new Error('cold-chain quarantine failed'))
+        .mockRejectedValueOnce('raw cold-chain quarantine failure');
+      const previousQuarantine = require.cache[quarantinePath];
+      const previousMonitor = require.cache[monitorPath];
+
+      require.cache[quarantinePath] = {
+        id: quarantinePath,
+        filename: quarantinePath,
+        loaded: true,
+        exports: { quarantineByColdChainIncident: quarantineMock },
+      };
+      delete require.cache[monitorPath];
+      const ReloadedMonitor = require('../../../../src/infrastructure/services/TelemetryMonitor');
+
+      try {
+        const monitor = new ReloadedMonitor({ db: {} });
+        monitor.checkMissingReadings = vi.fn().mockResolvedValue([]);
+        monitor.findCriticalFreezers = vi.fn().mockResolvedValue([
+          { freezerKey: 'F1', rootSampleIds: ['SPEC-1'] },
+        ]);
+        monitor.shouldTrigger = vi.fn().mockReturnValue(true);
+        monitor.propagateCompromise = vi.fn().mockResolvedValue({ summarized: 1 });
+
+        await monitor.runCycle();
+        expect(loggerErrorSpy).toHaveBeenCalledWith(
+          '[ISO20387][TELEMETRY] Falha ao avaliar quarentena após excursão:',
+          'cold-chain quarantine failed'
+        );
+
+        await monitor.runCycle();
+        expect(loggerErrorSpy).toHaveBeenCalledWith(
+          '[ISO20387][TELEMETRY] Falha ao avaliar quarentena após excursão:',
+          'raw cold-chain quarantine failure'
+        );
+      } finally {
+        if (previousQuarantine) require.cache[quarantinePath] = previousQuarantine;
+        else delete require.cache[quarantinePath];
+        delete require.cache[monitorPath];
+        require('../../../../src/infrastructure/services/TelemetryMonitor');
+        void previousMonitor;
+      }
+    });
+
+    it('logs upsertMissingReadingExcursion quarantine rejection with and without error.message', async () => {
+      const quarantinePath = require.resolve('../../../../src/services/equipment-sensor-quarantine.service');
+      const monitorPath = require.resolve('../../../../src/infrastructure/services/TelemetryMonitor');
+      const quarantineMock = vi.fn()
+        .mockRejectedValueOnce(new Error('missing-reading quarantine failed'))
+        .mockRejectedValueOnce('raw missing-reading quarantine failure');
+      const previousQuarantine = require.cache[quarantinePath];
+
+      require.cache[quarantinePath] = {
+        id: quarantinePath,
+        filename: quarantinePath,
+        loaded: true,
+        exports: { quarantineByColdChainIncident: quarantineMock },
+      };
+      delete require.cache[monitorPath];
+      const ReloadedMonitor = require('../../../../src/infrastructure/services/TelemetryMonitor');
+
+      try {
+        const excursions = {
+          findOne: vi.fn().mockResolvedValue(null),
+          insertOne: vi.fn().mockResolvedValue({ insertedId: 'EX-Q' }),
+        };
+        const empty = { find: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([]) })) };
+        const db = {
+          collection: vi.fn((name) => {
+            if (name === 'environmentalExcursions') return excursions;
+            if (name === 'sensors' || name === 'sensorMetadata') return empty;
+            if (name === 'storageContainers' || name === 'storageBoxes') return empty;
+            if (name === 'equipment') return { findOne: vi.fn().mockResolvedValue(null) };
+            throw new Error(`unexpected collection ${name}`);
+          }),
+        };
+        const monitor = new ReloadedMonitor({ db, expectedReadingIntervalMinutes: 15 });
+
+        await monitor.upsertMissingReadingExcursion({
+          sensorId: 'S-Q1',
+          deviceId: 'D-Q1',
+          lastReadingAt: new Date('2026-09-19T19:00:00.000Z'),
+        });
+        expect(loggerErrorSpy).toHaveBeenCalledWith(
+          '[ISO20387][TELEMETRY] Falha ao avaliar quarentena por leitura ausente:',
+          'missing-reading quarantine failed'
+        );
+
+        await monitor.upsertMissingReadingExcursion({
+          sensorId: 'S-Q2',
+          deviceId: 'D-Q2',
+          lastReadingAt: null,
+        });
+        expect(loggerErrorSpy).toHaveBeenCalledWith(
+          '[ISO20387][TELEMETRY] Falha ao avaliar quarentena por leitura ausente:',
+          'raw missing-reading quarantine failure'
+        );
+      } finally {
+        if (previousQuarantine) require.cache[quarantinePath] = previousQuarantine;
+        else delete require.cache[quarantinePath];
+        delete require.cache[monitorPath];
+        require('../../../../src/infrastructure/services/TelemetryMonitor');
+      }
+    });
+
     it('normalizes ObjectId, ObjectId string, arbitrary string and numeric specimen identifiers', () => {
       const { ObjectId } = require('mongodb');
       const monitor = new TelemetryMonitor({});
