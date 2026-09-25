@@ -344,3 +344,31 @@ O lote 1 adicionou **4** `TEST_V2` pontuais; a maior parte dos 54 braços revisa
 **Decisão:** continuar a fila (próximos: `fhir-import-staging.service.js`, `batch-validation-engine.service.js`, `sample.service.js`, …) em ondas seguintes; **não** chase cego do contador global nem declarar Item 8 fechado. Re-medição Full+coverage só após lote(s) com volume material de `TEST_V2` executável.
 
 Docker espelho (`backend-unit-runner` / `current-state:ci`): exit 0 — `logs/item8-stage2/docker-stage2e3.log`.
+
+### Stage 2E-4 — marco Item 8 ≥95% (fechado)
+
+HEAD de evidência do gate (Full Vitest + coverage): `446b061e` (wave F). Commits da onda: `07746da5` (lotes A–E + wave C), `5c97290a` (wave D), `8448a4a2` (wave E), `446b061e` (wave F), `4ed47b0d` (wave G buffer pós-gate).
+
+Comando (backend): `node ./node_modules/vitest/vitest.mjs run --coverage --reporter=dot --testTimeout=15000`. Log: `logs/item8-stage2/stage2e4c-cov-run.log`. Artefatos: `coverage-final-stage2e4-gate.json`, `coverage-summary-stage2e4-gate.json`, inventário `stage2e4-gate-inventory.tsv`. Duração: **~809 s**. Exit **0**.
+
+| Métrica | Valor |
+| --- | --- |
+| Test Files | 591 passed (591) |
+| Tests | 10347 passed (10347) |
+| Statements | 97,75% (27.007 / 27.627) |
+| Branches | **95,13%** (22.779 / 23.943) |
+| Functions | 96,13% (3.255 / 3.386) |
+| Lines | 97,79% (25.594 / 26.171) |
+
+Déficit branches vs 95% (`ceil(0,95 × 23.943) = 22.746`): **−33** (acima do piso). Source-located zero-hit remanescentes no inventário gate: **304** braços / **108** arquivos (757 locations V8 vazias excluídas) — fila para o marco **100%**, não bloqueiam o 95%.
+
+Docker espelho (`compose.test.yml` `backend-unit-runner` / `current-state:ci`): exit 0 — `logs/item8-stage2/docker-stage2e4-gate.log`.
+
+**Marco 95% Item 8 (#228): FECHADO.** Próximo: marco **100%** (inventário residual + política para DEFENSIVE/MERGE).
+
+STAGE_2E_4_CURSOR
+
+last_file=item8.waveG.residual.test.js
+last_branch=(gate closed)
+reviewed_this_session=lots-A-E+waves-C-G
+remaining_estimate=304 (100% backlog)
