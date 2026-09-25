@@ -72,6 +72,18 @@ rbacModule.requirePermission = (...args) => (req, res, next) =>
 // swappable.
 rbacModule.requireRole = (...args) => (req, res, next) =>
   currentRequireRole(...args)(req, res, next);
+// #1211: the mutations now carry requireOrganizationScope too, destructured
+// at require-time like the two above. The default mirrors defaultAuth's
+// Administrador: a global scope, which the storage scope checks pass without
+// a lookup -- the cross-organization cases live in
+// tests/integration/storage-allocation.api.test.js, against the real gate.
+let currentRequireOrganizationScope = globalScope;
+function globalScope(req, res, next) {
+  req.organizationScope = { scope: 'global', organizationIds: [] };
+  next();
+}
+rbacModule.requireOrganizationScope = (req, res, next) =>
+  currentRequireOrganizationScope(req, res, next);
 
 // #856 slice 2: the mutation controllers (allocate/move/release) and the
 // auto-assign controller each construct their use case / StorageService

@@ -22,6 +22,7 @@ const { requirePermission, requireOrganizationScope } = require('../../infrastru
 const { ObjectId } = require('mongodb');
 const logger = require('../../utils/logger');
 const { StorageTopologyAuthoringService } = require('../../services/storage-topology-authoring.service');
+const { assertSampleInScope, assertBoxInScope, assertContainerInScope } = require('../../services/storage-scope.service');
 
 /**
  * Storage Routes - Gerenciamento de Armazenagem Física (ISO 20387)
@@ -75,6 +76,32 @@ router.use((req, res, next) => {
 // facility.routes.js, room.routes.js, routes/eConsent.js) are deliberately
 // left alone here -- see #888 for why folding them in would bury the
 // catalog change, which is the actually-risky part.
+
+// ==================== ESCOPO ORGANIZACIONAL (#1211) ====================
+// The permission gate says WHO may allocate, move or release; it never said
+// WHOSE. Until #1211 a Tecnico of one organization could act on another
+// organization's specimen given its id, or place their own into another
+// organization's box. Runs after the organization-scope middleware and
+// before the controller, so a refusal never opens a transaction. See
+// storage-scope.service.js for the two scope keys.
+function requireStorageTargetsInScope({ sample, box, container } = {}) {
+  return async (req, res, next) => {
+    const db = req.app.locals.db;
+    // No db: the controller answers its own 503 and writes nothing.
+    if (!db) return next();
+    try {
+      if (sample) await assertSampleInScope(db, sample(req), req.organizationScope);
+      if (box) await assertBoxInScope(db, box(req), req.organizationScope);
+      if (container) await assertContainerInScope(db, container(req), req.organizationScope);
+      return next();
+    } catch (error) {
+      if (error?.statusCode === 403) {
+        return res.status(403).json({ success: false, error: error.code, message: error.message });
+      }
+      return next(error);
+    }
+  };
+}
 
 // ==================== ENDPOINTS ====================
 
@@ -161,7 +188,9 @@ router.get('/samples/search', createSearchSamplesController());
  *   "occupiedBySampleId": "507f..."
  * }
  */
-router.post('/allocate', requirePermission('manageStorageAllocation'), createAllocateSampleController());
+router.post('/allocate', requirePermission('manageStorageAllocation'), requireOrganizationScope,
+  requireStorageTargetsInScope({ sample: (req) => req.body?.sampleId, box: (req) => req.body?.boxId }),
+  createAllocateSampleController());
 
 /**
  * POST /api/storage/allocate/auto
@@ -206,7 +235,9 @@ router.post('/allocate', requirePermission('manageStorageAllocation'), createAll
  *   "message": "..."
  * }
  */
-router.post('/allocate/auto', requirePermission('manageStorageAllocation'), createAutoAssignSampleController());
+router.post('/allocate/auto', requirePermission('manageStorageAllocation'), requireOrganizationScope,
+  requireStorageTargetsInScope({ sample: (req) => req.body?.sampleId, box: (req) => req.body?.boxId }),
+  createAutoAssignSampleController());
 
 /**
  * POST /api/storage/move
@@ -221,7 +252,9 @@ router.post('/allocate/auto', requirePermission('manageStorageAllocation'), crea
  *   "notes": "Movido durante inventário"
  * }
  */
-router.post('/move', requirePermission('manageStorageAllocation'), createMoveSampleController());
+router.post('/move', requirePermission('manageStorageAllocation'), requireOrganizationScope,
+  requireStorageTargetsInScope({ sample: (req) => req.body?.sampleId, box: (req) => req.body?.targetBoxId }),
+  createMoveSampleController());
 
 /**
  * DELETE /api/storage/release/:sampleId
@@ -238,7 +271,9 @@ router.post('/move', requirePermission('manageStorageAllocation'), createMoveSam
  *   "message": "Amostra liberada de A1"
  * }
  */
-router.delete('/release/:sampleId', requirePermission('manageStorageAllocation'), createReleaseSampleController());
+router.delete('/release/:sampleId', requirePermission('manageStorageAllocation'), requireOrganizationScope,
+  requireStorageTargetsInScope({ sample: (req) => req.params.sampleId }),
+  createReleaseSampleController());
 
 /**
  * GET /api/storage/sample/:sampleId
@@ -494,7 +529,8 @@ router.get('/freezer/:freezerId/tree', createGetFreezerTreeController());
  *   "error": "NOT_A_FREEZER"
  * }
  */
-router.patch('/freezer/:freezerId/room', authenticate, requirePermission('manageStorageTopology'), async (req, res) => {
+router.patch('/freezer/:freezerId/room', authenticate, requirePermission('manageStorageTopology'), requireOrganizationScope,
+  requireStorageTargetsInScope({ container: (req) => req.params.freezerId }), async (req, res) => {
   try {
     const db = req.app.locals.db;
 

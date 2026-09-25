@@ -56,20 +56,17 @@ const EXEMPT = new Map([
 // #1210 scoped storage.routes.js's two topology creates, which made the file
 // visible to this sweep for the first time; the rest of it checks no tenancy
 // at all, the mutations included (#1211).
+// The five mutations were scoped under #1211 and left this list; the reads
+// below are what remains of it.
 const TRACKED_UNSCOPED = new Map([
   ['storage.routes.js GET /freezers', '#1211'],
   ['storage.routes.js GET /samples/search', '#1211'],
-  ['storage.routes.js POST /allocate', '#1211'],
-  ['storage.routes.js POST /allocate/auto', '#1211'],
-  ['storage.routes.js POST /move', '#1211'],
-  ['storage.routes.js DELETE /release/:sampleId', '#1211'],
   ['storage.routes.js GET /sample/:sampleId', '#1211'],
   ['storage.routes.js GET /box/:boxId/available', '#1211'],
   ['storage.routes.js GET /validate/:boxId/:position', '#1211'],
   ['storage.routes.js GET /freezer/:freezerId/stats', '#1211'],
   ['storage.routes.js GET /box/:boxId/integrity', '#1211'],
   ['storage.routes.js GET /freezer/:freezerId/tree', '#1211'],
-  ['storage.routes.js PATCH /freezer/:freezerId/room', '#1211'],
 ]);
 
 function routeFiles() {
@@ -159,6 +156,19 @@ test('#1210: the storage topology creates carry the organization gate', () => {
   const { registrations } = sweep();
   const byKey = new Map(registrations.map((r) => [r.key, r]));
   for (const key of ['storage.routes.js POST /topology/containers', 'storage.routes.js POST /topology/boxes']) {
+    assert.ok(byKey.has(key), `${key} not found by the sweep`);
+    assert.equal(byKey.get(key).gated, true, `${key} is not organization-scoped`);
+    assert.equal(EXEMPT.has(key) || TRACKED_UNSCOPED.has(key), false, `${key} must not be listed as unscoped`);
+  }
+});
+
+// #1211: the storage mutations are scoped. Pinned by name, for the same
+// reason as the #1210 test above.
+test('#1211: the storage allocation mutations and the freezer room PATCH carry the organization gate', () => {
+  const { registrations } = sweep();
+  const byKey = new Map(registrations.map((r) => [r.key, r]));
+  for (const route of ['POST /allocate', 'POST /allocate/auto', 'POST /move', 'DELETE /release/:sampleId', 'PATCH /freezer/:freezerId/room']) {
+    const key = `storage.routes.js ${route}`;
     assert.ok(byKey.has(key), `${key} not found by the sweep`);
     assert.equal(byKey.get(key).gated, true, `${key} is not organization-scoped`);
     assert.equal(EXEMPT.has(key) || TRACKED_UNSCOPED.has(key), false, `${key} must not be listed as unscoped`);
