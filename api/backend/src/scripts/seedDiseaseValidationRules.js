@@ -28,7 +28,7 @@ const DISEASE_RULES = {
       },
     },
   },
-  '79258': {
+  '355': {
     name: 'Doenca de Gaucher',
     disease_category: 'Erros Inatos do Metabolismo',
     drug_classes: ['enzyme_replacement_therapy', 'substrate_reduction_therapy'],
@@ -40,7 +40,7 @@ const DISEASE_RULES = {
       },
     },
   },
-  '58': {
+  '98896': {
     name: 'Distrofia Muscular de Duchenne',
     disease_category: 'Doencas Neurologicas',
     drug_classes: ['corticosteroid', 'exon_skipping_therapy'],
