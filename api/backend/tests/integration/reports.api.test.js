@@ -286,6 +286,19 @@ describe('Reports API integration', () => {
     ]);
   });
 
+  // #1215: the page renders a freezer-then-box picker for this type, not a
+  // free-text field for a 24-hex id.
+  it('GET /api/reports/samples/filters declares storageBoxId as a storageBox picker', async () => {
+    const response = await request(app).get('/api/reports/samples/filters');
+
+    expect(response.status).toBe(200);
+    expect(response.body.filters.find((entry) => entry.name === 'storageBoxId')).toEqual({
+      name: 'storageBoxId',
+      label: 'Caixa de armazenamento',
+      type: 'storageBox',
+    });
+  });
+
   // #735: a custom template has no frontend definition, so the query page
   // takes its title and description from here.
   it('GET /api/reports/:type/filters names the template, for a page that has no definition of it', async () => {

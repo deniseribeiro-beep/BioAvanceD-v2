@@ -91,8 +91,15 @@ test.describe('RF008 report filters and bounded report data (#748, #1077) — re
       return readFile((await download.path())!, 'utf-8');
     };
 
+    // #1215: the location filter is a freezer-then-box picker built from
+    // GET /storage/freezers and the freezer's tree, not a text box for an id.
+    const pickBox = async (box: SeededStorageBox) => {
+      await inventory.getByLabel('Caixa de armazenamento — freezer', { exact: true }).selectOption(box.freezerId);
+      await inventory.getByLabel('Caixa de armazenamento', { exact: true }).selectOption(box.boxId);
+    };
+
     // The box filter narrows the export to the one box's specimen.
-    await inventory.getByLabel('Caixa de armazenamento').fill(plasmaBox.boxId);
+    await pickBox(plasmaBox);
     const byBox = await exportCsv();
     expect(byBox).toContain(plasmaSample);
     expect(byBox).not.toContain(serumSample);
@@ -106,7 +113,7 @@ test.describe('RF008 report filters and bounded report data (#748, #1077) — re
 
     // Control: the serum box with the serum type exports its specimen, so the
     // empty result above is the filter, not a broken export.
-    await inventory.getByLabel('Caixa de armazenamento').fill(serumBox.boxId);
+    await pickBox(serumBox);
     const serumExport = await exportCsv();
     expect(serumExport).toContain(serumSample);
   });

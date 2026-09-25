@@ -907,7 +907,9 @@ const SAMPLE_QUERY_FILTERS = [
   // #531: the public vocabulary normalizeReleaseStatus accepts, which it
   // then maps onto canonical specimenStatus values.
   { name: 'status', label: 'Estado', type: 'select', options: ['AVAILABLE', 'QUARANTINE', 'BLOCKED'] },
-  { name: 'storageBoxId', label: 'Caixa de armazenamento', type: 'text' },
+  // #1215: `storageBox`, so the page offers a freezer-then-box picker
+  // instead of a free-text field for a 24-hex id.
+  { name: 'storageBoxId', label: 'Caixa de armazenamento', type: 'storageBox' },
   { name: 'storagePosition', label: 'Posição na caixa', type: 'text' },
   { name: 'orphaCode', label: 'Código ORPHA', type: 'text' },
   { name: 'atcCode', label: 'Código ATC', type: 'text' },

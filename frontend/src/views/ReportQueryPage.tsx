@@ -5,6 +5,7 @@ import Button from '../components/UI/Button';
 import Input from '../components/UI/Input';
 import { apiClient } from '../api/client';
 import { reportsService } from '../services/api';
+import { storageApi } from '../services/storageApi';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { getReportTypeDefinition } from '../config/constants/report.constants';
@@ -21,7 +22,7 @@ type LookupOption = {
 
 type FilterValue = string | boolean | LookupOption | null;
 
-type FilterKind = 'autocomplete' | 'select' | 'date' | 'checkbox' | 'text';
+type FilterKind = 'autocomplete' | 'select' | 'date' | 'checkbox' | 'text' | 'storageBox';
 
 type FilterFieldBase = {
   name: string;
@@ -53,7 +54,12 @@ type TextField = FilterFieldBase & {
   kind: 'text';
 };
 
-type ReportFilterField = AutocompleteField | SelectField | DateField | CheckboxField | TextField;
+// #1215: a freezer, then a box inside it; the value sent is the box id.
+type StorageBoxField = FilterFieldBase & {
+  kind: 'storageBox';
+};
+
+type ReportFilterField = AutocompleteField | SelectField | DateField | CheckboxField | TextField | StorageBoxField;
 
 // One entry of GET /reports/:type/filters (#732), the per-handler catalog of
 // the filters the backend actually reads for that report type.
@@ -315,6 +321,38 @@ export function buildQualityFields(dictionary: SprecDictionary): ReportFilterFie
   ];
 }
 
+// #1215: GET /storage/freezers and GET /storage/freezer/:id/tree, the
+// shapes StorageHierarchy and InlineStorageMovementPanel already read.
+type FreezerListEntry = { _id?: string; freezerName?: string; name?: string };
+type StorageTree = {
+  shelves?: Array<{ shelfName?: string; racks?: Array<{ rackName?: string; boxes?: Array<{ boxId?: string; boxName?: string }> }> }>;
+};
+
+export function buildFreezerOptions(freezers: FreezerListEntry[] | null | undefined): Array<{ label: string; value: string }> {
+  if (!Array.isArray(freezers)) {
+    return [];
+  }
+  return freezers
+    .filter((freezer) => freezer?._id)
+    .map((freezer) => ({ value: String(freezer._id), label: freezer.freezerName || freezer.name || String(freezer._id) }));
+}
+
+export function flattenTreeBoxes(tree: StorageTree | null | undefined): Array<{ label: string; value: string }> {
+  const options: Array<{ label: string; value: string }> = [];
+  (tree?.shelves || []).forEach((shelf, shelfIndex) => {
+    (shelf.racks || []).forEach((rack, rackIndex) => {
+      (rack.boxes || []).forEach((box) => {
+        if (!box?.boxId) {
+          return;
+        }
+        const path = [shelf.shelfName || `Prateleira ${shelfIndex + 1}`, rack.rackName || `Rack ${rackIndex + 1}`, box.boxName || String(box.boxId)];
+        options.push({ value: String(box.boxId), label: path.join(' / ') });
+      });
+    });
+  });
+  return options;
+}
+
 export function buildInventoryFields(catalog: CatalogFilter[], alreadyRendered: ReadonlySet<string>): ReportFilterField[] {
   const byName = new Map(catalog.map((entry) => [entry.name, entry]));
   const fields: ReportFilterField[] = [];
@@ -328,6 +366,8 @@ export function buildInventoryFields(catalog: CatalogFilter[], alreadyRendered: 
     const label = entry.label || name;
     if (entry.type === 'date') {
       fields.push({ name, label, kind: 'date' });
+    } else if (entry.type === 'storageBox') {
+      fields.push({ name, label, kind: 'storageBox' });
     } else if (entry.type === 'select' && Array.isArray(entry.options)) {
       const optionLabels = INVENTORY_OPTION_LABELS[name] || {};
       fields.push({
@@ -617,6 +657,89 @@ function ReportTextField({
   );
 }
 
+function ReportStorageBoxField({
+  label,
+  helperText,
+  value,
+  onChange,
+}: {
+  label: string;
+  helperText?: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const [freezerOptions, setFreezerOptions] = useState<Array<{ label: string; value: string }>>([]);
+  const [freezerId, setFreezerId] = useState('');
+  const [boxOptions, setBoxOptions] = useState<Array<{ label: string; value: string }>>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    storageApi.listFreezers().then((response) => {
+      if (!cancelled) {
+        setFreezerOptions(response?.success ? buildFreezerOptions(response.data) : []);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setBoxOptions([]);
+    if (!freezerId) {
+      return undefined;
+    }
+    storageApi.getFreezerTree(freezerId).then((response) => {
+      if (!cancelled) {
+        setBoxOptions(response?.success ? flattenTreeBoxes(response.data) : []);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [freezerId]);
+
+  const freezerLabel = `${label} — freezer`;
+
+  return (
+    <div className="report-field-stack">
+      <label className="report-field-label">{label}</label>
+      <select
+        className="report-select"
+        value={freezerId}
+        aria-label={freezerLabel}
+        onChange={(event) => {
+          setFreezerId(event.target.value);
+          onChange('');
+        }}
+      >
+        <option value="">Todos os freezers</option>
+        {freezerOptions.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+      <select
+        className="report-select"
+        value={value}
+        aria-label={label}
+        disabled={!freezerId}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        <option value="">Todas as caixas</option>
+        {boxOptions.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+      {helperText && <p className="report-field-help">{helperText}</p>}
+    </div>
+  );
+}
+
 function ReportCheckboxField({
   label,
   helperText,
@@ -686,6 +809,15 @@ function ReportField({
     case 'text':
       return (
         <ReportTextField
+          label={field.label}
+          helperText={field.helperText}
+          value={String(values[field.name] || '')}
+          onChange={(nextValue) => onChange(field.name, nextValue)}
+        />
+      );
+    case 'storageBox':
+      return (
+        <ReportStorageBoxField
           label={field.label}
           helperText={field.helperText}
           value={String(values[field.name] || '')}

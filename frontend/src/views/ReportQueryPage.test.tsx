@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { buildInventoryFields, buildQualityFields, buildSections, resolveSectionKey, type CatalogFilter } from './ReportQueryPage';
+import {
+  buildFreezerOptions,
+  buildInventoryFields,
+  buildQualityFields,
+  buildSections,
+  flattenTreeBoxes,
+  resolveSectionKey,
+  type CatalogFilter,
+} from './ReportQueryPage';
 import { SPREC_FLUID_DICTIONARY } from '../constants/sprecDictionary';
 
 // The shape GET /reports/samples/filters answers (reports.routes.js
@@ -12,7 +20,7 @@ const SAMPLE_CATALOG: CatalogFilter[] = [
   { name: 'sampleType', label: 'Tipo de amostra', type: 'select', options: ['PLASMA', 'SERUM'] },
   { name: 'sampleOrigin', label: 'Origem', type: 'select', options: ['VENOUS_BLOOD'] },
   { name: 'status', label: 'Estado', type: 'select', options: ['AVAILABLE', 'QUARANTINE', 'BLOCKED'] },
-  { name: 'storageBoxId', label: 'Caixa de armazenamento', type: 'text' },
+  { name: 'storageBoxId', label: 'Caixa de armazenamento', type: 'storageBox' },
   { name: 'storagePosition', label: 'Posição na caixa', type: 'text' },
   { name: 'sprecSampleType', label: 'SPREC — tipo de amostra', type: 'text' },
 ];
@@ -33,7 +41,7 @@ describe('buildInventoryFields', () => {
     expect(fields.map((field) => field.name)).toEqual([
       'startDate', 'endDate', 'collectionId', 'sampleType', 'sampleOrigin', 'storageBoxId', 'storagePosition',
     ]);
-    expect(fields.map((field) => field.kind)).toEqual(['date', 'date', 'text', 'select', 'select', 'text', 'text']);
+    expect(fields.map((field) => field.kind)).toEqual(['date', 'date', 'text', 'select', 'select', 'storageBox', 'text']);
   });
 
   it('#748: labels the MIABIS options from the specimen vocabulary, sending the ID', () => {
@@ -182,5 +190,48 @@ describe('#735: resolveSectionKey', () => {
   it('CONTROL: an unknown handler, or none yet, keeps the key', () => {
     expect(resolveSectionKey('inventario_mensal', false, null)).toBe('inventario_mensal');
     expect(resolveSectionKey('inventario_mensal', false, 'noSuchHandler')).toBe('inventario_mensal');
+  });
+});
+
+// #1215: the location filter was a free-text box for a 24-hex ObjectId no
+// operator can know. The catalog now declares it `storageBox`, and the page
+// picks a freezer, then a box from that freezer's tree.
+describe('#1215: storage box picker', () => {
+  const TREE = {
+    shelves: [
+      {
+        shelfName: 'Prateleira 1',
+        racks: [
+          { rackName: 'Rack A', boxes: [{ boxId: '65f0000000000000000000c1', boxName: 'Caixa 1' }, { boxId: '65f0000000000000000000c2' }] },
+          { rackName: 'Rack B', boxes: [] },
+        ],
+      },
+      { shelfName: 'Prateleira 2' },
+    ],
+  };
+
+  it('flattens every box of the tree into an option labelled by its path, valued by its id', () => {
+    expect(flattenTreeBoxes(TREE)).toEqual([
+      { value: '65f0000000000000000000c1', label: 'Prateleira 1 / Rack A / Caixa 1' },
+      { value: '65f0000000000000000000c2', label: 'Prateleira 1 / Rack A / 65f0000000000000000000c2' },
+    ]);
+  });
+
+  it('lists freezers by name, valued by their id', () => {
+    expect(buildFreezerOptions([{ _id: 'f1', freezerName: 'Freezer -80' }, { _id: 'f2', name: 'Freezer B' }, { name: 'sem id' }])).toEqual([
+      { value: 'f1', label: 'Freezer -80' },
+      { value: 'f2', label: 'Freezer B' },
+    ]);
+  });
+
+  it("renders the catalog's storageBox entry as the picker kind", () => {
+    const fields = buildInventoryFields([{ name: 'storageBoxId', label: 'Caixa de armazenamento', type: 'storageBox' }], new Set());
+
+    expect(fields).toEqual([{ name: 'storageBoxId', label: 'Caixa de armazenamento', kind: 'storageBox' }]);
+  });
+
+  it('CONTROL: a missing tree or freezer list yields no options', () => {
+    expect(flattenTreeBoxes(null)).toEqual([]);
+    expect(buildFreezerOptions(undefined)).toEqual([]);
   });
 });
