@@ -5,7 +5,7 @@ const ExcelJS = require('exceljs');
 const csvParser = require('csv-parser');
 const { ObjectId } = require('mongodb');
 
-const StagingImport = require('../models/StagingImport');
+const StagingImport = require('./stagingImport.store');
 const importLGPDService = require('./import-lgpd.service');
 const patientService = require('./patient.service');
 const sampleService = require('./sample.service');
@@ -1096,7 +1096,7 @@ class BatchValidationEngine {
   }
 
   async processBatchImport(db, stagingImportId, job = null) {
-    const stagingImport = await StagingImport.findOne({ jobId: stagingImportId });
+    const stagingImport = await StagingImport.findOne({ jobId: stagingImportId }, db);
 
     if (!stagingImport) {
       throw new Error(`StagingImport não encontrado para jobId ${stagingImportId}`);
@@ -1212,7 +1212,8 @@ class BatchValidationEngine {
           });
           await StagingImport.updateOne(
             { jobId: stagingImportId },
-            { $push: { importErrors: errorEntry } }
+            { $push: { importErrors: errorEntry } },
+            db
           );
         }
 

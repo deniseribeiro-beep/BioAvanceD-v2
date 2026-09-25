@@ -3,6 +3,12 @@ const logger = require('./logger');
 /**
  * #941: the `stagingImports.jobId` unique index.
  *
+ * #830: the Mongoose model this header describes (`StagingImport.js`) is
+ * retired. The collection is reached through `services/stagingImport.store.js`
+ * on the native driver, which calls this helper on every collection handle it
+ * resolves, so every reader and writer requests the index, not only
+ * `createStagingImport`. The #941 reasoning below is kept as recorded.
+ *
  * `StagingImport.js` has declared `jobId: { unique: true }` since the model was
  * written, and that declaration never reaches Mongo:
  * `infrastructure/database/mongodb/connection.js:26` connects with

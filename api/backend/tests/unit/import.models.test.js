@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 
 const ImportJob = require('../../src/models/ImportJob');
-const StagingImport = require('../../src/models/StagingImport');
+const StagingImport = require('../../src/services/stagingImport.store');
 
 describe('ImportJob', () => {
   it('valida dataType e arquivo obrigatórios', () => {
@@ -48,9 +48,11 @@ describe('ImportJob', () => {
   });
 });
 
+// #830: StagingImport is a native-driver store now; buildDocument is what the
+// Mongoose schema's defaults and validators used to do.
 describe('StagingImport', () => {
   it('cria documento com status staged por padrão', () => {
-    const staging = new StagingImport({
+    const staging = StagingImport.buildDocument({
       jobId: 'job-1',
       fileName: 'import.csv',
       rawData: [{ a: 1 }],
@@ -60,18 +62,16 @@ describe('StagingImport', () => {
     expect(staging.totalRows).toBe(0);
     expect(staging.processedRows).toBe(0);
     expect(staging.importErrors).toEqual([]);
+    expect(staging.createdAt).toBeInstanceOf(Date);
+    expect(staging.updatedAt).toBeInstanceOf(Date);
   });
 
-  it('valida status inválido no schema', () => {
-    const staging = new StagingImport({
+  it('rejeita status inválido', () => {
+    expect(() => StagingImport.buildDocument({
       jobId: 'job-1',
       fileName: 'import.csv',
       status: 'invalid',
       rawData: [{ a: 1 }],
-    });
-
-    const validationError = staging.validateSync();
-    expect(validationError).toBeDefined();
-    expect(validationError.errors.status).toBeDefined();
+    })).toThrow(/status 'invalid'/);
   });
 });

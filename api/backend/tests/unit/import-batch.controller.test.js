@@ -272,24 +272,28 @@ describe('import-batch.controller', () => {
   });
 
   describe('getBatchImportStatus', () => {
-    // #826: the handler now opens the Mongoose connection before touching
-    // StagingImport, instead of relying on the upload path having done it as a
-    // side effect earlier in the same process. Stub it -- the real one throws
-    // without MONGO_URI, which is not what these tests are about.
+    // #826 made this handler open a Mongoose connection before touching
+    // StagingImport; #830 moved StagingImport to the native driver, so it must
+    // not need one. Stubbed so an accidental call is observable rather than a
+    // throw on the missing MONGO_URI.
     beforeEach(() => {
       vi.spyOn(mongooseConnection, 'connectMongoDB').mockResolvedValue({ readyState: 1 });
     });
 
-    it('connects Mongoose before querying StagingImport', async () => {
-      const req = { params: { jobId: 'job-xyz' } };
+    // #830: StagingImport is on the native driver, reached with the API's own
+    // db handle, so the status read no longer depends on a Mongoose connection.
+    it('queries StagingImport through the native store with the app db, opening no Mongoose connection', async () => {
+      const appDb = { name: 'app-db' };
+      const req = { params: { jobId: 'job-xyz' }, app: { locals: { db: appDb } } };
       const res = createRes();
 
-      const StagingImport = require('../../src/models/StagingImport');
+      const StagingImport = require('../../src/services/stagingImport.store');
       vi.spyOn(StagingImport, 'findOne').mockResolvedValue(null);
 
       await controller.getBatchImportStatus(req, res);
 
-      expect(mongooseConnection.connectMongoDB).toHaveBeenCalled();
+      expect(StagingImport.findOne).toHaveBeenCalledWith({ jobId: 'job-xyz' }, appDb);
+      expect(mongooseConnection.connectMongoDB).not.toHaveBeenCalled();
     });
 
     it('returns 400 when jobId param is missing', async () => {
@@ -309,12 +313,12 @@ describe('import-batch.controller', () => {
       const req = { params: { jobId: 'job-xyz' } };
       const res = createRes();
 
-      const StagingImport = require('../../src/models/StagingImport');
+      const StagingImport = require('../../src/services/stagingImport.store');
       vi.spyOn(StagingImport, 'findOne').mockResolvedValue(null);
 
       await controller.getBatchImportStatus(req, res);
 
-      expect(StagingImport.findOne).toHaveBeenCalledWith({ jobId: 'job-xyz' });
+      expect(StagingImport.findOne).toHaveBeenCalledWith({ jobId: 'job-xyz' }, null);
       expect(res.status).toHaveBeenCalledWith(404);
       expect(res.json).toHaveBeenCalledWith({
         success: false,
@@ -338,7 +342,7 @@ describe('import-batch.controller', () => {
         updatedAt: 'u1'
       };
 
-      const StagingImport = require('../../src/models/StagingImport');
+      const StagingImport = require('../../src/services/stagingImport.store');
       vi.spyOn(StagingImport, 'findOne').mockResolvedValue(stagingImport);
 
       await controller.getBatchImportStatus(req, res);
@@ -378,7 +382,7 @@ describe('import-batch.controller', () => {
         updatedAt: 'u2'
       };
 
-      const StagingImport = require('../../src/models/StagingImport');
+      const StagingImport = require('../../src/services/stagingImport.store');
       vi.spyOn(StagingImport, 'findOne').mockResolvedValue(stagingImport);
 
       await controller.getBatchImportStatus(req, res);
@@ -408,7 +412,7 @@ describe('import-batch.controller', () => {
       const res = createRes();
 
       const error = new Error('db unreachable');
-      const StagingImport = require('../../src/models/StagingImport');
+      const StagingImport = require('../../src/services/stagingImport.store');
       vi.spyOn(StagingImport, 'findOne').mockRejectedValue(error);
       const loggerSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
 

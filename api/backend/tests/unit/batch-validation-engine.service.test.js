@@ -10,7 +10,7 @@ const { sealStagedRecord, revealStagedRecord } = require('../../src/utils/staged
 const patientService = require('../../src/services/patient.service');
 const sampleService = require('../../src/services/sample.service');
 const biomarkerObservationService = require('../../src/services/biomarker-observation.service');
-const StagingImport = require('../../src/models/StagingImport');
+const StagingImport = require('../../src/services/stagingImport.store');
 
 function createDb(patientsByFilter = {}) {
   // #853: `patients` never writes a `patientID` key (that's the
@@ -420,16 +420,13 @@ describe('batch-validation-engine.service processBatchImport', () => {
   });
 
   // #900: every other test in this file spies over StagingImport.updateOne,
-  // so a rename of the persisted field to a name the schema does not declare
-  // would stay green here forever -- the schema never runs. This one goes
-  // through the real model instead (mirrors
-  // tests/unit/staging-import.service.test.js:179-192, which pins the same
-  // failure mode for the sibling service): errors/errorEntry must land on
-  // `importErrors`, the field the StagingImport schema (strict: true)
-  // actually declares, or Mongoose silently strips the whole $push.
-  it('writes to a field that actually exists on the StagingImport schema (#900)', () => {
+  // so a rename of the persisted field to a name the document does not
+  // declare would stay green here forever. errors/errorEntry must land on
+  // `importErrors`. Under the Mongoose schema (strict) a write elsewhere was
+  // silently stripped; the #830 native store throws on it instead.
+  it('writes to a field that actually exists on the StagingImport document (#900)', () => {
     const entry = { row: 4, classification: 'INVALID', errors: ['sampleType é obrigatório'] };
-    const doc = new StagingImport({
+    const doc = StagingImport.buildDocument({
       jobId: 'schema-check-batch-validation',
       fileName: 'data.csv',
       status: 'processing',
@@ -439,8 +436,15 @@ describe('batch-validation-engine.service processBatchImport', () => {
       rawData: { storagePath: '/tmp/data.csv' },
     });
 
-    expect(doc.toObject().importErrors).toHaveLength(1);
-    expect(doc.toObject().importErrors[0]).toMatchObject(entry);
+    expect(doc.importErrors).toHaveLength(1);
+    expect(doc.importErrors[0]).toMatchObject(entry);
+    expect(StagingImport.FIELDS).toContain('importErrors');
+  });
+
+  it('refuses an update to an undeclared field instead of stripping it (#830)', async () => {
+    await expect(
+      StagingImport.updateOne({ jobId: 'x' }, { $push: { errors: { row: 1 } } }, { collection: () => ({}) })
+    ).rejects.toThrow(/não declarado/);
   });
 
   // The wiring, not the writer: a quarantine helper nothing calls is exactly

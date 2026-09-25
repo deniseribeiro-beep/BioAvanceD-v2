@@ -74,11 +74,12 @@ async function initWorker() {
     // Conecta ao banco
     db = await connectDB();
 
-    // #826: connectDB() abre apenas a conexão do driver nativo. Os modelos
-    // Mongoose alcançados por este worker (StagingImport, via
-    // batch-validation-engine) precisam da conexão do Mongoose -- sem ela o
-    // Mongoose enfileira cada operação e a rejeita após 10s, o job falha,
-    // retenta indefinidamente e o documento nunca sai de `status: queued`.
+    // #826: connectDB() abre apenas a conexão do driver nativo. Um modelo
+    // Mongoose sem conexão enfileira cada operação e a rejeita após 10s, em
+    // silêncio. #830 levou StagingImport para o driver nativo; o único modelo
+    // Mongoose que este worker ainda alcança é o registrado em
+    // models/Sample.js, que nada consulta. A conexão fica enquanto esse
+    // registro existir -- worker-mongoose-connection.arch.test.js exige isso.
     await connectMongoDB();
 
     // Inicializa Redis (usa instância comum)

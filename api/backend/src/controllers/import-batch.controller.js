@@ -120,15 +120,11 @@ class ImportBatchController {
         });
       }
 
-      // #826: mesma causa-raiz do worker. Esta leitura só funcionava porque o
-      // upload (`createStagingImport`) conecta o Mongoose como efeito colateral
-      // -- consultar o status antes de qualquer upload neste processo (após um
-      // restart da API, por exemplo) enfileirava a query e a rejeitava após 10s.
-      const { connectMongoDB } = require('../infrastructure/database/mongodb/connection');
-      await connectMongoDB();
-
-      const StagingImport = require('../models/StagingImport');
-      const stagingImport = await StagingImport.findOne({ jobId });
+      // #826/#830: esta leitura dependia de o upload ter conectado o Mongoose
+      // como efeito colateral. StagingImport agora usa o driver nativo, pela
+      // mesma conexão do resto da API, então não há conexão extra a abrir.
+      const StagingImport = require('../services/stagingImport.store');
+      const stagingImport = await StagingImport.findOne({ jobId }, req.app?.locals?.db || null);
 
       if (!stagingImport) {
         return res.status(404).json({

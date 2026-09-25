@@ -5,11 +5,10 @@ const require = createRequire(import.meta.url);
 
 const fs = require('fs');
 const path = require('path');
-const StagingImport = require('../../src/models/StagingImport');
+const StagingImport = require('../../src/services/stagingImport.store');
 const connectionModule = require('../../src/infrastructure/database/mongodb/connection');
 const queueModule = require('../../src/config/queue');
 const logger = require('../../src/utils/logger');
-const stagingImportIndexes = require('../../src/utils/stagingImportIndexes');
 
 const SERVICE_PATH = require.resolve('../../src/services/staging-import.service');
 
@@ -140,15 +139,13 @@ describe('staging-import.service', () => {
   });
 
   describe('createStagingImport', () => {
-    it('connects to mongo, persists the raw file, and creates the StagingImport doc', async () => {
+    it('persists the raw file and creates the StagingImport doc through the native store (#830)', async () => {
       vi.spyOn(fs, 'existsSync').mockReturnValue(true);
       vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
       vi.spyOn(fs, 'copyFileSync').mockImplementation(() => {});
 
-      const toObjectResult = { jobId: 'fixed-uuid', fileName: 'data.csv', status: 'staged' };
-      const createSpy = vi.spyOn(StagingImport, 'create').mockResolvedValue({
-        toObject: () => toObjectResult,
-      });
+      const storedDoc = { jobId: 'fixed-uuid', fileName: 'data.csv', status: 'staged' };
+      const createSpy = vi.spyOn(StagingImport, 'create').mockResolvedValue(storedDoc);
 
       const file = {
         path: '/tmp/upload-2',
@@ -159,7 +156,8 @@ describe('staging-import.service', () => {
 
       const result = await stagingImportService.createStagingImport(file);
 
-      expect(connectionModule.connectMongoDB).toHaveBeenCalledTimes(1);
+      // #830: no Mongoose connection is involved any more.
+      expect(connectionModule.connectMongoDB).not.toHaveBeenCalled();
       expect(createSpy).toHaveBeenCalledTimes(1);
       const createArg = createSpy.mock.calls[0][0];
       expect(createArg).toMatchObject({
@@ -174,53 +172,14 @@ describe('staging-import.service', () => {
         storageType: 'filesystem',
         originalName: 'data.csv',
       });
-      expect(result).toBe(toObjectResult);
+      expect(result).toBe(storedDoc);
     });
 
-    // #941: `jobId: { unique: true }` on StagingImport.js never reaches Mongo --
-    // the connection is opened with `autoIndex: false` and nothing anywhere
-    // calls syncIndexes()/createIndexes(). createStagingImport is this
-    // collection's ONLY writer, so an ensure call not made here is made
-    // nowhere, and the four keyed jobId operations
-    // (import-batch.controller.js:131, batch-validation-engine.service.js:890,
-    // :923, :1076) stay collection scans.
-    //
-    // This pins the WIRING deliberately. The sibling storageIndexes helpers
-    // have their own behaviour pinned but nothing asserts they are ever
-    // called, which is #941's own failure mode one level up: a helper that is
-    // never invoked reads as a fix exactly the way an unbuilt declaration did.
-    it('ensures the stagingImports.jobId index on the write path (#941)', async () => {
-      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-      vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
-      vi.spyOn(fs, 'copyFileSync').mockImplementation(() => {});
+    // #941's index-wiring pin now lives in stagingImport.store.830.test.js:
+    // the store ensures the jobId index on every collection it resolves.
 
-      // Spy BEFORE reloading: the service destructures the helper at require
-      // time, so a spy installed after load would not be seen. Same order the
-      // suite's own beforeEach uses for connectMongoDB/getQueue.
-      const ensureSpy = vi
-        .spyOn(stagingImportIndexes, 'ensureStagingImportIndexes')
-        .mockResolvedValue(undefined);
-      stagingImportService = reloadService();
-
-      vi.spyOn(StagingImport, 'create').mockResolvedValue({
-        toObject: () => ({ jobId: 'fixed-uuid', fileName: 'data.csv', status: 'staged' }),
-      });
-
-      await stagingImportService.createStagingImport({
-        path: '/tmp/upload-2',
-        originalname: 'data.csv',
-        mimetype: 'text/csv',
-        size: 99,
-      });
-
-      expect(ensureSpy).toHaveBeenCalledTimes(1);
-      // The native driver handle, not the model: createIndex lives on the
-      // collection, and the helper's guard tests for it by duck-typing.
-      expect(ensureSpy.mock.calls[0][0]).toBe(StagingImport.collection);
-    });
-
-    it('writes to a field that actually exists on the StagingImport schema (#43)', () => {
-      const doc = new StagingImport({
+    it('writes to a field that actually exists on the StagingImport document (#43)', () => {
+      const doc = StagingImport.buildDocument({
         jobId: 'schema-check',
         fileName: 'data.csv',
         status: 'staged',
@@ -230,8 +189,8 @@ describe('staging-import.service', () => {
         rawData: { storageType: 'filesystem' },
       });
 
-      expect(doc.toObject().importErrors).toHaveLength(1);
-      expect(doc.toObject().importErrors[0].message).toBe('boom');
+      expect(doc.importErrors).toHaveLength(1);
+      expect(doc.importErrors[0].message).toBe('boom');
     });
   });
 
