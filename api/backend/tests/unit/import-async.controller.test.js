@@ -303,10 +303,39 @@ describe('import-async.controller', () => {
 
       expect(cleanupSpy).toHaveBeenCalledWith(file.path);
       expect(res.status).toHaveBeenCalledWith(400);
-      const body = res.json.mock.calls[0][0];
-      expect(body.success).toBe(false);
-      expect(body.error).toBe('Formato inválido para groupFields. Use JSON válido.');
-      expect(typeof body.message).toBe('string');
+      // #840: the full body, not just typeof message -- asserting only the
+      // type is exactly what let this endpoint's body drift from its three
+      // siblings unnoticed.
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'groupFields inválido',
+        reason: 'malformed',
+        message: 'groupFields deve ser um JSON válido',
+      });
+    });
+
+    it('cleans up and returns 400 with the "value" reason when groupFields has an operator-shaped key (#840)', async () => {
+      const file = { path: '/tmp/f.csv', originalname: 'f.csv' };
+      const req = {
+        app: { locals: { db: {} } },
+        body: { dataType: 'patients', groupFields: '{"$ne": null}' },
+        file,
+      };
+      const res = createRes();
+      const cleanupSpy = vi
+        .spyOn(importAsyncService, 'cleanupFile')
+        .mockImplementation(() => {});
+
+      await controller.createImportJob(req, res);
+
+      expect(cleanupSpy).toHaveBeenCalledWith(file.path);
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'groupFields inválido',
+        reason: 'value',
+        message: 'groupFields aceita apenas chaves simples com valores texto, número ou booleano',
+      });
     });
 
     it('derives userID from req.user.userID when present', async () => {
