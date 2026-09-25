@@ -158,7 +158,7 @@ describe('mqtt telemetry item 8 residual canonical branches', () => {
 
     expect(audit).toHaveBeenCalledWith({}, expect.objectContaining({
       status: 'rejected',
-      reason: 'invalid_payload',
+      reason: 'empty_sensorId',
       signatureVerified: true,
     }));
   });

@@ -57,4 +57,29 @@ function parseGroupFields(raw) {
   return { ok: true, value };
 }
 
-module.exports = { parseGroupFields };
+/**
+ * #840: one reason-token response shape across import-lgpd and import-async
+ * groupFields rejection sites. `reason` is the machine token from
+ * parseGroupFields (`malformed` | `shape` | `value`); `error`/`message` stay
+ * human-readable for operators.
+ *
+ * @param {'malformed'|'shape'|'value'|string} reason
+ * @returns {{ success: false, error: string, reason: string, message: string }}
+ */
+const GROUP_FIELDS_REASON_MESSAGES = Object.freeze({
+  malformed: 'groupFields deve ser um JSON válido',
+  shape: 'groupFields deve ser um objeto JSON (não array nem escalar)',
+  value: 'groupFields contém chaves ou valores não permitidos',
+});
+
+function formatGroupFieldsError(reason) {
+  const token = typeof reason === 'string' && reason ? reason : 'malformed';
+  return {
+    success: false,
+    error: 'groupFields inválido',
+    reason: token,
+    message: GROUP_FIELDS_REASON_MESSAGES[token] || `groupFields inválido (${token})`,
+  };
+}
+
+module.exports = { parseGroupFields, formatGroupFieldsError, GROUP_FIELDS_REASON_MESSAGES };

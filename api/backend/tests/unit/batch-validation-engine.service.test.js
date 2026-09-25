@@ -821,6 +821,7 @@ describe('#813 quarantine of rejected rows', () => {
       fileName: 'amostras.csv',
       jobId: 'job-813',
       counts: { total: 10, success: 8, errors: 2 },
+      organizationId: null,
     });
     // #799: import_batches is shared with the LGPD and FHIR importers, whose
     // readers filter on `type`. A batch from this importer must be

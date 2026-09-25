@@ -161,6 +161,7 @@ function validSampleData(overrides = {}) {
     quantity: 10,
     quality: 'GOOD',
     linkedProject: 'ProjectX',
+    collectionSite: 'org-test-1',
     barcode: 'BR-TEST-001',
     specimenId: 555001,
     boxId: BOX_ID.toString(),
@@ -182,6 +183,14 @@ function mockOperationalStorage(db) {
     [String(FREEZER_ID), { _id: FREEZER_ID, containerType: 'FREEZER', containerID: 'EQ-1', parent_id: null }]
   ]);
 
+  // #1092: collectionSite must resolve to an Organization on every create.
+  if (!db.collections.organizations) {
+    db.collections.organizations = makeCollection('organizations');
+  }
+  db.collections.organizations.findOne.mockImplementation(async (query) => (
+    query?.organizationId ? { organizationId: query.organizationId } : null
+  ));
+
   const mocked = {
     // dimension is required by MongoStorageRepository.allocateSamplePosition's
     // in-bounds check (#474) — a box without it always fails "posição fora dos
@@ -194,6 +203,7 @@ function mockOperationalStorage(db) {
     storageContainers: { findOne: vi.fn((query) => Promise.resolve(containersById.get(String(query._id)) || null)) },
     equipment: { findOne: vi.fn().mockResolvedValue({ equipmentID: 'EQ-1' }) },
     sensors: { findOne: vi.fn().mockResolvedValue({ status: 'ok' }) },
+    organizations: db.collections.organizations,
     // The allocation use case resolves governed layout hierarchy from
     // storagePaths while physical custody itself is persisted by the normalized v2 chain.
     storagePaths: {
@@ -384,6 +394,8 @@ describe('sample.service', () => {
       const db = makeDb();
       db.collections.participants.findOne.mockResolvedValue({ participantId: '12345678' });
       db.collections.storageBoxes.findOne.mockResolvedValue(null);
+      db.collections.organizations = makeCollection('organizations');
+      db.collections.organizations.findOne.mockResolvedValue({ organizationId: 'org-test-1' });
 
       await expect(
         sampleService.createSample(db, validSampleData())
@@ -409,6 +421,18 @@ describe('sample.service', () => {
       await expect(
         sampleService.createSample(db, validSampleData({ collectionSite: 'org-does-not-exist' }))
       ).rejects.toMatchObject({ statusCode: 404 });
+    });
+
+    it('rejects with 422 when collectionSite is missing (#1092)', async () => {
+      const db = makeDb();
+      mockOperationalStorage(db);
+
+      await expect(
+        sampleService.createSample(db, validSampleData({ collectionSite: undefined }))
+      ).rejects.toMatchObject({
+        statusCode: 422,
+        message: expect.stringMatching(/collectionSite é obrigatório/),
+      });
     });
 
     it('accepts an active study and an approved protocol (RF021 AC#5, #591)', async () => {
@@ -2736,12 +2760,18 @@ describe('sample.service item 8 residual branch coverage', () => {
       const sensors = {
         findOne: vi.fn().mockResolvedValue({ maintenanceStatus: 'active' }),
       };
+      const organizations = {
+        findOne: vi.fn(async (query) => (
+          query?.organizationId ? { organizationId: query.organizationId } : null
+        )),
+      };
 
       db.collection.mockImplementation((name) => {
         if (name === 'storageBoxes') return storageBoxes;
         if (name === 'storageContainers') return storageContainers;
         if (name === 'equipment') return equipment;
         if (name === 'sensors') return sensors;
+        if (name === 'organizations') return organizations;
         return db.collections[name] || (db.collections[name] = makeCollection(name));
       });
       db.collections.specimens.findOne.mockImplementation((query) => {

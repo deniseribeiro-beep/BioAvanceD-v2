@@ -17,6 +17,7 @@ describe('SampleModel', () => {
       quantity: 10,
       quality: 'GOOD',
       linkedProject: 'Projeto QA',
+      collectionSite: 'org-test-1',
     });
 
     expect(result.isValid).toBe(true);
@@ -42,6 +43,7 @@ describe('SampleModel', () => {
       'quantity deve ser maior que zero',
       'quality deve estar na escala MIABIS: GOOD, COMPROMISED ou UNKNOWN',
       'registeredAt é obrigatório',
+      'collectionSite é obrigatório',
     ]));
   });
 
@@ -62,6 +64,7 @@ describe('SampleModel', () => {
       quantity: 12,
       quality: 'GOOD',
       linkedProject: 'Projeto QA',
+      collectionSite: 'org-test-1',
       registeredAt: '2026-04-13T12:00:00.000Z',
       sprec: { matrixType: 'fluid' },
       pharmacologyData: { treatment_status: 'NAIVE' },

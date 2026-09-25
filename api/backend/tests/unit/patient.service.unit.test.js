@@ -589,8 +589,11 @@ describe('PatientService.resendConsentNotification', () => {
     expect(result.reusedToken).toBe(false);
     expect(patientsCollection.updateOne).toHaveBeenCalledWith(
       { _id: 'p1' },
-      { $set: expect.objectContaining({ consentToken: 'new-token' }) }
+      { $set: expect.objectContaining({ consentToken: expect.any(String) }) }
     );
+    const stored = patientsCollection.updateOne.mock.calls[0][1].$set.consentToken;
+    expect(stored).not.toBe('new-token');
+    expect(stored).toHaveLength(64);
   });
 
   it('resolves patientName via ParticipantIdentity before building/sending the notification (#561/#564)', async () => {
@@ -609,7 +612,7 @@ describe('PatientService.resendConsentNotification', () => {
     expect(enqueueSpy).toHaveBeenCalledWith(expect.objectContaining({ patientName: 'Maria Silva' }), expect.any(String));
   });
 
-  it('reuses the existing token when it is still valid', async () => {
+  it('always mints a fresh token even when a prior one is still valid (#1049)', async () => {
     const patientsCollection = makeFakeCollection({
       findOne: vi.fn().mockResolvedValue({
         _id: 'p1',
@@ -624,10 +627,12 @@ describe('PatientService.resendConsentNotification', () => {
 
     const result = await patientService.resendConsentNotification(db, '12345678');
 
-    expect(result.reusedToken).toBe(true);
-    expect(buildMetaSpy).not.toHaveBeenCalled();
-    expect(buildLinkSpy).toHaveBeenCalledWith(expect.objectContaining({ patientID: '12345678' }), 'still-valid');
+    expect(result.reusedToken).toBe(false);
+    expect(buildMetaSpy).toHaveBeenCalled();
+    expect(buildLinkSpy).toHaveBeenCalledWith(expect.objectContaining({ patientID: '12345678' }), 'new-token');
     const updatePayload = patientsCollection.updateOne.mock.calls[0][1].$set;
-    expect(updatePayload.consentToken).toBeUndefined();
+    expect(updatePayload.consentToken).toHaveLength(64);
+    expect(updatePayload.consentToken).not.toBe('still-valid');
+    expect(updatePayload.consentToken).not.toBe('new-token');
   });
 });

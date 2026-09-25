@@ -302,4 +302,25 @@ describe('ImportLGPDService.getQuarantineBatch', () => {
     });
     expect(db._batches.findOne).not.toHaveBeenCalled();
   });
+
+  // #800: legacy/unstamped batches are Administrador-only; org scope 403s.
+  it('403s an out-of-scope or unstamped batch for an organization caller (#800)', async () => {
+    const db = makeDb([{ ...LGPD_BATCH, organizationId: null }]);
+
+    await expect(
+      service.getQuarantineBatch(db, LGPD_BATCH._id, {
+        organizationScope: { scope: 'organization', organizationIds: ['org-1'] },
+      })
+    ).rejects.toMatchObject({ statusCode: 403 });
+  });
+
+  it('allows a global caller to read an unstamped legacy batch (#800)', async () => {
+    const db = makeDb([{ ...LGPD_BATCH, organizationId: null }]);
+
+    const result = await service.getQuarantineBatch(db, LGPD_BATCH._id, {
+      organizationScope: { scope: 'global', organizationIds: [] },
+    });
+
+    expect(result.batch._id).toBe(LGPD_BATCH._id);
+  });
 });

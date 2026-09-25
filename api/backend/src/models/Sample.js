@@ -56,7 +56,9 @@ const SampleSchema = new Schema({
   locationId: { type: Number, default: null },
   location: { type: Object, default: null },
   linkedProject: { type: String, required: true },
-  collectionSite: { type: String, default: null },
+  // #1092: required on create — samples without collectionSite are unwritable
+  // for non-Admin under org scope (#1082 fail-closed).
+  collectionSite: { type: String, required: true },
   sprec: { type: Schema.Types.Mixed, default: null },
   merkleRoot: { type: String, default: null },
   // #502: pins integrity verification to the RcsAssessment/SpecimenPreanalytics
@@ -155,6 +157,10 @@ class SampleModel {
     if (!this.validateSampleOrigin(data.sampleOrigin)) errors.push('sampleOrigin inválido conforme MIABIS');
     if (!this.validateExtractionType(data.extractionProtocol)) errors.push('extractionProtocol inválido conforme MIABIS');
     if (!data.registeredAt) errors.push('registeredAt é obrigatório');
+    // #1092: collectionSite (Reference(Organization)) is required on create.
+    if (!data.collectionSite || typeof data.collectionSite !== 'string' || data.collectionSite.trim() === '') {
+      errors.push('collectionSite é obrigatório');
+    }
     if (
       data.barcode !== undefined &&
       data.barcode !== null &&
@@ -213,7 +219,8 @@ class SampleModel {
       externalQualityAssessment: data.externalQualityAssessment ?? null,
       locationID: data.locationID ?? null,
       linkedProject: data.linkedProject,
-      collectionSite: data.collectionSite || null,
+      // #1092: no null happy-path default — callers must supply a real org.
+      collectionSite: data.collectionSite,
       sprec: data.sprec ?? null,
       merkleRoot: data.merkleRoot || null,
       sealedRcsAssessmentId: data.sealedRcsAssessmentId ?? null,

@@ -97,9 +97,8 @@ api/backend/uploads/quarantine/
 # storage/, so the ignore has to follow. The three siblings were never
 # ignored at all.
 #
-# Already-tracked files are unaffected by a gitignore rule, which matters
-# here: api/backend/storage/samples/<id>/files/ holds one committed PDF and
-# it stays tracked and versioned.
+# Already-tracked files are unaffected by a gitignore rule until untracked
+# (#961: personal CV under storage/samples/ removed from the index).
 api/backend/src/storage/
 api/backend/storage/
 

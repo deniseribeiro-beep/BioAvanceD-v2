@@ -37,6 +37,8 @@ function buildPayload(overrides = {}) {
     boxId: '507f1f77bcf86cd799439011',
     positionCode: 'A1',
     linkedProject: 'Projeto QA Modos',
+    // #1092: required by validateCreateSamplePayload.
+    collectionSite: 'org-test-1',
     ...overrides,
   };
 }

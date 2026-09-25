@@ -110,6 +110,9 @@ describe('rbac-catalog-seed.service', () => {
   // before the grant, on any later re-run. Simulates that staleness
   // directly (strip a real permissionId back off an already-seeded
   // role), then asserts a re-seed heals it without re-minting roleId.
+  //
+  // #662: manageAccessRequests is no longer on Coordenador, so the merge
+  // probe uses manageReportTemplates (still granted to coordinator).
   it('merges a newly-granted permission into an already-seeded role on re-seed, without minting a new roleId', async () => {
     const db = createFakeDb();
 
@@ -117,15 +120,38 @@ describe('rbac-catalog-seed.service', () => {
     const permissionIdByCode = Object.fromEntries(first.permissions.map((p) => [p.permissionCode, p.permissionId]));
     const coordinatorDoc = db.collections.roles.docs.find((r) => r.roleCode === 'coordinator');
     const staleRoleId = coordinatorDoc.roleId;
-    coordinatorDoc.permissionIds = coordinatorDoc.permissionIds.filter((id) => id !== permissionIdByCode.manageAccessRequests);
-    expect(coordinatorDoc.permissionIds).not.toContain(permissionIdByCode.manageAccessRequests);
+    coordinatorDoc.permissionIds = coordinatorDoc.permissionIds.filter((id) => id !== permissionIdByCode.manageReportTemplates);
+    expect(coordinatorDoc.permissionIds).not.toContain(permissionIdByCode.manageReportTemplates);
 
     const second = await seedRolesAndPermissions(db);
 
     const coordinator = second.roles.find((r) => r.roleCode === 'coordinator');
-    expect(coordinator.permissionIds).toContain(permissionIdByCode.manageAccessRequests);
+    expect(coordinator.permissionIds).toContain(permissionIdByCode.manageReportTemplates);
     expect(coordinator.roleId).toBe(staleRoleId);
     expect(db.collections.roles.docs).toHaveLength(5);
+  });
+
+  // #662: manageAccessRequests is Administrador-only until a committee workflow exists.
+  it('#662: does not grant manageAccessRequests to Coordenador; Administrador keeps it', async () => {
+    const db = createFakeDb();
+    const { roles, permissions } = await seedRolesAndPermissions(db);
+    const permissionIdByCode = Object.fromEntries(permissions.map((p) => [p.permissionCode, p.permissionId]));
+    const coordinator = roles.find((r) => r.roleCode === 'coordinator');
+    const administrator = roles.find((r) => r.roleCode === 'administrator');
+    expect(coordinator.permissionIds).not.toContain(permissionIdByCode.manageAccessRequests);
+    expect(administrator.permissionIds).toContain(permissionIdByCode.manageAccessRequests);
+  });
+
+  // #1008: assignRole is Administrador-only (distinct from createUser).
+  it('#1008: grants assignRole only to Administrador', async () => {
+    const db = createFakeDb();
+    const { roles, permissions } = await seedRolesAndPermissions(db);
+    const permissionIdByCode = Object.fromEntries(permissions.map((p) => [p.permissionCode, p.permissionId]));
+    const coordinator = roles.find((r) => r.roleCode === 'coordinator');
+    const administrator = roles.find((r) => r.roleCode === 'administrator');
+    expect(permissionIdByCode.assignRole).toBeTruthy();
+    expect(coordinator.permissionIds).not.toContain(permissionIdByCode.assignRole);
+    expect(administrator.permissionIds).toContain(permissionIdByCode.assignRole);
   });
   // #1075: `permissions` was the last collection still seeded through the
   // skip-on-existing `upsertByKey` -- the same defect #646 Wave 3 fixed for
@@ -264,6 +290,7 @@ describe('rbac-catalog-seed.service', () => {
       ['deleteResult', ['DELETE']],
       ['reidentifyParticipant', ['READ']],
       ['manageAccessRequests', ['CREATE', 'READ', 'UPDATE']],
+      ['assignRole', ['UPDATE']],
       // #929: both storage codes were absent from this table, so #888 could
       // introduce manageStorageTopology with a READ/UPDATE-only set and
       // nothing here would have objected when #929 pointed POST/PUT/DELETE

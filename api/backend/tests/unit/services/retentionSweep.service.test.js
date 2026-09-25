@@ -184,4 +184,129 @@ describe('retentionSweep.service', () => {
     expect(archiveCollection.insertMany).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('não é suportado para AuditEvent'));
   });
+
+  it('#793/#667 deletes expired import batches, staging rows, and source files', async () => {
+    const now = Date.now();
+    const day = 24 * 60 * 60 * 1000;
+    const oldBatch = {
+      _id: 'batch-old',
+      createdAt: new Date(now - 100 * day),
+      sourceFile: { storedPath: 'C:\\tmp\\quarantine-old.csv' },
+    };
+    const recentBatch = {
+      _id: 'batch-recent',
+      createdAt: new Date(now - 1 * day),
+      sourceFile: { storedPath: 'C:\\tmp\\quarantine-recent.csv' },
+    };
+
+    const batchesDocs = [oldBatch, recentBatch];
+    const stagingDocs = [
+      { _id: 'row-1', batchId: 'batch-old' },
+      { _id: 'row-2', batchId: 'batch-recent' },
+    ];
+
+    const rmSpy = vi.spyOn(require('fs').promises, 'rm').mockResolvedValue();
+
+    const batchesCollection = createCollectionMock({
+      find: vi.fn().mockImplementation((query = {}) => {
+        const cutoff = query.createdAt?.$lt;
+        const filtered = cutoff
+          ? batchesDocs.filter((d) => matchesLt(d, 'createdAt', cutoff))
+          : batchesDocs.slice();
+        return { toArray: vi.fn().mockResolvedValue(filtered) };
+      }),
+      deleteMany: vi.fn(async (query) => {
+        const ids = query._id.$in.map(String);
+        let deleted = 0;
+        for (let i = batchesDocs.length - 1; i >= 0; i -= 1) {
+          if (ids.includes(String(batchesDocs[i]._id))) {
+            batchesDocs.splice(i, 1);
+            deleted += 1;
+          }
+        }
+        return { deletedCount: deleted };
+      }),
+    });
+
+    const stagingCollection = createCollectionMock({
+      deleteMany: vi.fn(async (query) => {
+        const ids = query.batchId.$in.map(String);
+        let deleted = 0;
+        for (let i = stagingDocs.length - 1; i >= 0; i -= 1) {
+          if (ids.includes(String(stagingDocs[i].batchId))) {
+            stagingDocs.splice(i, 1);
+            deleted += 1;
+          }
+        }
+        return { deletedCount: deleted };
+      }),
+    });
+
+    const activePolicy = {
+      _id: 'policy-import',
+      version: 'v4',
+      active: true,
+      applicableEntityTypes: ['ImportStagingRecord'],
+      postRetentionAction: 'destroy',
+      retentionPeriod: 'P30D',
+    };
+
+    const db = createDbMock({
+      retentionPolicies: statefulPoliciesMock(activePolicy),
+      import_batches: batchesCollection,
+      import_staging_records: stagingCollection,
+    });
+
+    const result = await retentionSweepService.runSweep(db);
+
+    expect(result.importStaging).toEqual({
+      batchesDeleted: 1,
+      stagingDeleted: 1,
+      filesRemoved: 1,
+    });
+    expect(rmSpy).toHaveBeenCalledWith('C:\\tmp\\quarantine-old.csv', { force: true });
+    expect(batchesDocs.map((d) => d._id)).toEqual(['batch-recent']);
+    expect(stagingDocs.map((d) => d._id)).toEqual(['row-2']);
+
+    rmSpy.mockRestore();
+  });
+
+  it('#812 deletes notification_compliance_logs older than P30D', async () => {
+    const now = Date.now();
+    const day = 24 * 60 * 60 * 1000;
+    const docs = [
+      { _id: 'n-old', createdAt: new Date(now - 40 * day), to: 'a@example.com' },
+      { _id: 'n-recent', createdAt: new Date(now - 1 * day), to: 'b@example.com' },
+    ];
+
+    const complianceCollection = createCollectionMock({
+      deleteMany: vi.fn(async (query) => {
+        const cutoff = query.createdAt.$lt;
+        const before = docs.length;
+        for (let i = docs.length - 1; i >= 0; i -= 1) {
+          if (matchesLt(docs[i], 'createdAt', cutoff)) docs.splice(i, 1);
+        }
+        return { deletedCount: before - docs.length };
+      }),
+    });
+
+    const activePolicy = {
+      _id: 'policy-notify',
+      version: 'v5',
+      active: true,
+      applicableEntityTypes: ['NotificationComplianceLog'],
+      postRetentionAction: 'destroy',
+      retentionPeriod: 'P365D',
+    };
+
+    const db = createDbMock({
+      retentionPolicies: statefulPoliciesMock(activePolicy),
+      notification_compliance_logs: complianceCollection,
+    });
+
+    const result = await retentionSweepService.runSweep(db);
+
+    expect(result.notificationComplianceLogs).toEqual({ deleted: 1 });
+    expect(docs.map((d) => d._id)).toEqual(['n-recent']);
+  });
 });

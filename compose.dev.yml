@@ -62,6 +62,10 @@ services:
     environment:
       CHOKIDAR_USEPOLLING: "true"
       CHOKIDAR_INTERVAL: "300"
+      # #1162: explicit opt-in for the controlled compose suite (e2e logins /
+      # consent traffic). Not inherited as true from .env.docker(.example).
+      AUTH_RATE_LIMIT_RELAXED: "true"
+      CONSENT_RATE_LIMIT_RELAXED: "true"
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 10s

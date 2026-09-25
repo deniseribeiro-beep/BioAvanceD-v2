@@ -3,8 +3,9 @@ const logger = require('./logger');
 /**
  * #1102: indexes for `participantIdentities`, which had none of any kind.
  *
- * The collection is absent from `scripts/create-db.js` (this repo's index
- * list) and has no model file -- it is reached through the raw driver via
+ * The collection is absent from the foundation pipeline index list (historical
+ * `create-db.js` is retired — #1055) and has no model file -- it is reached
+ * through the raw driver via
  * `getCollection(db, 'participantIdentities')` -- so unlike #936/#941 there
  * was not even an inert `Schema.index(...)` declaration to build. Every
  * query against it is a collection scan today.
@@ -79,8 +80,9 @@ const logger = require('./logger');
  * happening at all, leaving every query a scan. A silent catch would make
  * that invisible, which is the whole defect this closes.
  *
- * One catch PER index, not one around the batch: `scripts/create-db.js:99`
- * records that lesson (#1027) after a single failure took the rest of a
+ * One catch PER index, not one around the batch: the historical
+ * `create-db.js` (#1027 / #1055) recorded that lesson after a single failure
+ * took the rest of a
  * build down with it. `Promise.all` over per-index `try`/`catch` gives that
  * and one other thing the resolver depends on -- every `createIndex` is
  * ISSUED synchronously, before the first `await` yields. The resolver calls

@@ -206,5 +206,44 @@ describe('ingestion/activeCodeValidator (RF029 AC 4)', () => {
       expect(result.valid).toBe(true);
       expect(result.results).toEqual([]);
     });
+
+    it('#714: rejects a systemUri outside the RF005 AC#4 allow-list as UNSUPPORTED_CODING_SYSTEM', async () => {
+      const db = createFakeDb({
+        terminologyConcepts: [
+          {
+            systemUri: 'http://example.test/not-allowed',
+            code: 'X1',
+            conceptStatus: 'active',
+            referenceDatasetReleaseId: 'release-1',
+          },
+        ],
+        referenceDatasetReleases: [activeRelease()],
+      });
+      const result = await validateActiveCodes(db, [
+        { systemUri: 'http://example.test/not-allowed', code: 'X1', label: 'allergenCoding' },
+      ]);
+      expect(result.valid).toBe(false);
+      expect(result.violations[0]).toMatchObject({
+        code: 'UNSUPPORTED_CODING_SYSTEM',
+        field: 'allergenCoding',
+      });
+    });
+
+    it('#714: admits DCB on the expanded allergen allow-list when the release is active', async () => {
+      const dcbUri = 'https://www.gov.br/anvisa/pt-br/assuntos/farmacopeia/dcb';
+      const db = createFakeDb({
+        terminologyConcepts: [
+          {
+            systemUri: dcbUri,
+            code: '03730',
+            conceptStatus: 'active',
+            referenceDatasetReleaseId: 'release-1',
+          },
+        ],
+        referenceDatasetReleases: [activeRelease()],
+      });
+      const result = await validateActiveCodes(db, [{ systemUri: dcbUri, code: '03730', label: 'allergenCoding' }]);
+      expect(result.valid).toBe(true);
+    });
   });
 });

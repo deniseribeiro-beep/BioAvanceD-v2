@@ -11,6 +11,7 @@ const fhirValidator = require('./fhir-validator.service');
 const notificationService = require('./notification.service');
 const { getCollection } = require('../utils/collectionResolver');
 const { omitParticipantIdentityFields } = require('../utils/participantIdentityFields');
+const { hashToken } = require('../utils/tokenHash');
 const ParticipantIdentityModel = require('../models/ParticipantIdentity');
 const participantIdentityService = require('./participantIdentity.service');
 const SampleGraphValidator = require('./SampleGraphValidator');
@@ -349,7 +350,7 @@ class ImportService {
           // Novo cadastro
           const consentMetadata = notificationService.buildConsentMetadata();
           patientData.status = 'PENDING_CONSENT';
-          patientData.consentToken = consentMetadata.token;
+          patientData.consentToken = hashToken(consentMetadata.token);
           patientData.consentTokenCreatedAt = consentMetadata.createdAt;
           patientData.consentTokenExpiresAt = consentMetadata.expiresAt;
           const patient = PatientModel.create(omitParticipantIdentityFields(patientData));
@@ -849,6 +850,7 @@ class ImportService {
     const registrationRaw = this.getRowValue(row, ['registeredAt', 'dataRegistro']);
     const locationRaw = this.getRowValue(row, ['locationID', 'locationId']);
     const linkedProjectRaw = this.getRowValue(row, ['linkedProject', 'projeto']);
+    const collectionSiteRaw = this.getRowValue(row, ['collectionSite', 'collection_site']);
     const tcleRaw = this.getRowValue(row, ['consentTemplateId']);
     const merkleRaw = this.getRowValue(row, ['merkleRoot']);
 
@@ -924,6 +926,8 @@ class ImportService {
       // this write path.
       locationID: toInt(locationRaw, 'locationID'),
       linkedProject: normalizeString(linkedProjectRaw),
+      // #1092: required Organization reference — pass through from CSV/XLSX.
+      collectionSite: normalizeString(collectionSiteRaw),
       specimenStatus: SampleModel.mapLegacyLifecycleStatusToSpecimenStatus(
         this.getRowValue(row, ['specimenStatus', 'lifecycleStatus', 'statusAtual'])
       ),

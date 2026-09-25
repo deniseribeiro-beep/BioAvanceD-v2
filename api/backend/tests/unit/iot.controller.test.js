@@ -70,6 +70,7 @@ function createResponse() {
   return {
     statusCode: 200,
     body: null,
+    locals: {},
     status(code) {
       this.statusCode = code;
       return this;
@@ -414,9 +415,9 @@ describe('iot.controller', () => {
   // the request's. The composition is pinned in
   // tests/integration/machineIngestRejectionAudit.api.test.js.
   //
-  // What actually survives of #1095 is #1120: the middleware row carries no
-  // `reason`, so one 400 covers both an empty sensorId and a non-finite
-  // temperature, where MQTT names three reasons.
+  // What actually survives of #1095 is #1120: the middleware row now carries
+  // `payload.reason` (empty_sensorId vs non_finite_temperature), set via
+  // res.locals.auditReason from this controller. MQTT names the same tokens.
   it('#1093: an invalid payload is refused before anything is audited', async () => {
     const req = { body: { sensorId: '', temperature: 'abc' } };
     const res = createResponse();
@@ -424,6 +425,7 @@ describe('iot.controller', () => {
     await ingestTelemetry(req, res);
 
     expect(res.statusCode).toBe(400);
+    expect(res.body.reason).toBe('empty_sensorId');
     expect(auditLogSpy).not.toHaveBeenCalled();
   });
 

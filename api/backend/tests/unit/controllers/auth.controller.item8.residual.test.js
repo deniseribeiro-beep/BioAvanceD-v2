@@ -35,31 +35,7 @@ afterEach(() => {
 });
 
 describe('AuthController item 8 residual branches', () => {
-  it('uses the public id fallback for the register audit resource and translated success message', async () => {
-    vi.spyOn(authService, 'registerUser').mockResolvedValue({
-      userAccountId: '550e8400-e29b-41d4-a716-446655440001',
-      username: 'alice',
-    });
-    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
-    const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
-    const req = createReq({
-      body: { username: 'alice', password: 'StrongPass1!' },
-      t: vi.fn((key) => key === 'users.registerSuccess' ? 'Registro traduzido' : key),
-    });
-    const res = createRes();
-
-    await authController.register(req, res);
-
-    expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({
-      resourceId: '550e8400-e29b-41d4-a716-446655440001',
-      action: 'CREATE',
-      resourceType: 'User',
-    }));
-    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
-      success: true,
-      message: 'Registro traduzido',
-    }));
-  });
+  // #1057: AuthController.register removed — register audit coverage lives on POST /api/users/register.
 
   it('uses secure strict refresh-cookie options in production and logs asynchronous audit failures without failing login', async () => {
     process.env.NODE_ENV = 'production';

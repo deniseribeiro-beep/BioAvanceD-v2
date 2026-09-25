@@ -305,6 +305,7 @@ describe('import-lgpd.controller', () => {
       expect(res.json).toHaveBeenCalledWith({
         success: false,
         error: 'groupFields inválido',
+        reason: 'malformed',
         message: 'groupFields deve ser um JSON válido'
       });
     });
@@ -544,6 +545,7 @@ describe('import-lgpd.controller', () => {
       expect(res.json).toHaveBeenCalledWith({
         success: false,
         error: 'groupFields inválido',
+        reason: 'malformed',
         message: 'groupFields deve ser um JSON válido'
       });
     });

@@ -1142,6 +1142,7 @@ describe('BatchValidationEngine item 8 remaining behavior branches', () => {
     expect(importBatches.insertOne).toHaveBeenCalledWith(expect.objectContaining({
       jobId: null,
       fileName: null,
+      organizationId: null,
       counts: {
         total: null,
         success: null,

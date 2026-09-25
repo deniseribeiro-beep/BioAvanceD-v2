@@ -12,6 +12,7 @@ const validData = {
   unit: 'mL',
   quality: 'GOOD',
   linkedProject: 'PROJ-001',
+  collectionSite: 'org-test-1',
   registeredAt: new Date().toISOString(),
 };
 

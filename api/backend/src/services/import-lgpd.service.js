@@ -15,6 +15,7 @@ const notificationService = require('./notification.service');
 const { generateUniqueParticipantId } = require('../utils/patientAnonymization');
 const { getCollection } = require('../utils/collectionResolver');
 const { omitParticipantIdentityFields } = require('../utils/participantIdentityFields');
+const { hashToken } = require('../utils/tokenHash');
 const {
   SPECIMEN_TYPES,
   SAMPLE_ORIGINS,
@@ -31,8 +32,29 @@ const AllocateSampleUseCase = require('../core/use-cases/AllocateSampleUseCase')
 const MongoStorageRepository = require('../infrastructure/persistence/mongo/MongoStorageRepository');
 const MongoAuditRepository = require('../infrastructure/persistence/mongo/MongoAuditRepository');
 const MongoLineageRepository = require('../infrastructure/persistence/mongo/MongoLineageRepository');
+const {
+  applyOrganizationScopeFilter,
+  isRecordInOrganizationScope,
+  resolveOrganizationIdForBatchWrite,
+} = require('./rbac-assignment.service');
 
 const { CRITICAL_SENSOR_STATUSES, isEquipmentBlocked } = require('../models/equipmentStatus');
+
+/**
+ * #1092: collectionSite from the CSV row, else the caller's org (scope/actor).
+ */
+function resolveCollectionSiteForImport({ rowValue, organizationScope, actor } = {}) {
+  const fromRow = rowValue != null && String(rowValue).trim() !== '' ? String(rowValue).trim() : null;
+  if (fromRow) return fromRow;
+  if (organizationScope?.scope === 'organization' && organizationScope.organizationIds?.length) {
+    return String(organizationScope.organizationIds[0]);
+  }
+  if (actor?.organizationId) return String(actor.organizationId);
+  if (Array.isArray(actor?.organizationIds) && actor.organizationIds.length) {
+    return String(actor.organizationIds[0]);
+  }
+  return null;
+}
 
 /**
  * Os dois tipos de lote de quarentena que a importacao LGPD escreve em
@@ -562,6 +584,7 @@ class ImportLGPDService {
   async importPatients(db, file, options = {}) {
     const groupFields = options?.groupFields || {};
     const actor = options?.actor || {};
+    const organizationScope = options?.organizationScope;
     const results = {
       total: 0,
       success: 0,
@@ -769,7 +792,7 @@ class ImportLGPDService {
 
           const consentMetadata = notificationService.buildConsentMetadata();
           patientData.status = 'PENDING_CONSENT';
-          patientData.consentToken = consentMetadata.token;
+          patientData.consentToken = hashToken(consentMetadata.token);
           patientData.consentTokenCreatedAt = consentMetadata.createdAt;
           patientData.consentTokenExpiresAt = consentMetadata.expiresAt;
 
@@ -870,6 +893,7 @@ class ImportLGPDService {
         rows,
         results,
         actor,
+        organizationScope,
       });
 
       // Log sanitizado (sem dados sensíveis)
@@ -1094,7 +1118,7 @@ class ImportLGPDService {
    *
    * Um id malformado e 400, nao um cast de BSON estourando como 500.
    */
-  async getQuarantineBatch(db, batchIdRaw, { types } = {}) {
+  async getQuarantineBatch(db, batchIdRaw, { types, organizationScope } = {}) {
     // ObjectId e exigido inline neste arquivo (ver linhas 503/803), nao no topo.
     const { ObjectId } = require('mongodb');
     const raw = String(batchIdRaw || '').trim();
@@ -1117,6 +1141,14 @@ class ImportLGPDService {
       error.statusCode = 404;
       throw error;
     } else { void 0; }
+
+    // #800: org-scoped callers only see batches stamped with their org.
+    // Legacy batches without organizationId are Administrador/global only.
+    if (organizationScope && !isRecordInOrganizationScope(batch, organizationScope, 'organizationId')) {
+      const error = new Error('Acesso negado ao lote de quarentena');
+      error.statusCode = 403;
+      throw error;
+    }
 
     const records = await db
       .collection('import_staging_records')
@@ -1149,12 +1181,17 @@ class ImportLGPDService {
    * deles, e transformar "um lote" em "todos os lotes" seria ampliar a
    * exposicao na direcao errada.
    */
-  async listQuarantineBatches(db, { limit = 20, page = 1, types } = {}) {
+  async listQuarantineBatches(db, { limit = 20, page = 1, types, organizationScope } = {}) {
     const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
     const safePage = Math.max(parseInt(page, 10) || 1, 1);
     const skip = (safePage - 1) * safeLimit;
 
     const filter = { type: { $in: normalizeQuarantineTypes(types) } };
+    // #800: restrict to the caller's organizations; no-op for global.
+    // Unstamped (legacy) batches are excluded for organization scope.
+    if (organizationScope) {
+      applyOrganizationScopeFilter(filter, organizationScope, 'organizationId');
+    }
     const collection = db.collection('import_batches');
 
     const [batches, total] = await Promise.all([
@@ -1202,7 +1239,7 @@ class ImportLGPDService {
 
   async quarantineRejectedSampleRows(
     db,
-    { fileName = null, rows = [], results, actor = {}, importOptions = {}, type = 'LGPD_SAMPLE_CSV' } = {}
+    { fileName = null, rows = [], results, actor = {}, importOptions = {}, type = 'LGPD_SAMPLE_CSV', organizationScope } = {}
   ) {
     const rejected = Array.isArray(results?.errors) ? results.errors : [];
     if (rejected.length === 0) { return null; } else { void 0; }
@@ -1230,6 +1267,8 @@ class ImportLGPDService {
         // exists anywhere once the request ends. `counts.success` above is
         // the matching cursor.
         importOptions: this.sanitizeImportOptions(importOptions),
+        // #800: stamp organizationId so quarantine readers can org-scope.
+        organizationId: resolveOrganizationIdForBatchWrite({ organizationScope, actor }),
         createdBy: actor?.userID || actor?.userId || null,
         createdAt: now,
         updatedAt: now,
@@ -1309,7 +1348,7 @@ class ImportLGPDService {
    * falhar, o erro sobe para o controller decidir o fallback (apagar o
    * arquivo como antes) em vez de mascarar silenciosamente a perda do lote.
    */
-  async recordFailedImportBatch(db, { fileName = null, error, actor = {}, importOptions = {}, type = 'LGPD_SAMPLE_CSV' } = {}) {
+  async recordFailedImportBatch(db, { fileName = null, error, actor = {}, importOptions = {}, type = 'LGPD_SAMPLE_CSV', organizationScope } = {}) {
     const now = new Date();
     const errorMessage = (error && error.message) ? error.message : String(error || 'Erro desconhecido');
 
@@ -1325,6 +1364,8 @@ class ImportLGPDService {
       },
       error: errorMessage,
       importOptions: this.sanitizeImportOptions(importOptions),
+      // #800: stamp organizationId so quarantine readers can org-scope.
+      organizationId: resolveOrganizationIdForBatchWrite({ organizationScope, actor }),
       createdBy: actor?.userID || actor?.userId || null,
       createdAt: now,
       updatedAt: now,
@@ -1341,7 +1382,7 @@ class ImportLGPDService {
   }
 
   async importSamples(db, file, options = {}) {
-    const { startBoxId = null, autoIncrement = false, groupFields = {}, actor = {} } = options;
+    const { startBoxId = null, autoIncrement = false, groupFields = {}, actor = {}, organizationScope } = options;
     const results = {
       total: 0,
       success: 0,
@@ -1690,6 +1731,13 @@ class ImportLGPDService {
             sampleData.barcode = sampleData.barcode.trim();
           }
 
+          // #1092: stamp collectionSite from the row or the caller's org before create.
+          sampleData.collectionSite = resolveCollectionSiteForImport({
+            rowValue: sampleData.collectionSite,
+            organizationScope,
+            actor,
+          });
+
           // Cria amostra
           const sample = SampleModel.create(sampleData);
           sample.patientName = sampleData.patientName || matchedPatient?.patient?.patientName || null;
@@ -1809,6 +1857,7 @@ class ImportLGPDService {
         rows,
         results,
         actor,
+        organizationScope,
       });
 
       // Log sanitizado (sem dados sensíveis)
@@ -2123,6 +2172,8 @@ class ImportLGPDService {
       boxId: row.boxId || row.boxID || null,
       positionCode: row.positionCode || row.position || row.wellPosition || null,
       linkedProject: row.linkedProject?.trim() || null,
+      // #1092: optional on the CSV; stamped from caller org when missing.
+      collectionSite: row.collectionSite?.trim() || row.collection_site?.trim() || null,
       specimenStatus: SampleModel.mapLegacyLifecycleStatusToSpecimenStatus(row.specimenStatus?.trim() || row.lifecycleStatus?.trim()),
       consentTemplateId: tcleId ? String(tcleId).trim() : null,
       merkleRoot: row.merkleRoot ? String(row.merkleRoot).trim() : null,
@@ -2323,6 +2374,7 @@ class ImportLGPDService {
     const groupFields = options?.groupFields || {};
     const mapping = options?.mapping || {};
     const actor = options?.actor || {};
+    const organizationScope = options?.organizationScope;
 
     if (!mapping || Object.keys(mapping).length === 0) {
       throw new Error('Mapeamento inteligente é obrigatório para importação em lote');
@@ -2469,7 +2521,7 @@ class ImportLGPDService {
 
         const consentMetadata = notificationService.buildConsentMetadata();
         patientData.status = 'PENDING_CONSENT';
-        patientData.consentToken = consentMetadata.token;
+        patientData.consentToken = hashToken(consentMetadata.token);
         patientData.consentTokenCreatedAt = consentMetadata.createdAt;
         patientData.consentTokenExpiresAt = consentMetadata.expiresAt;
 
@@ -2513,6 +2565,7 @@ class ImportLGPDService {
       rows,
       results,
       actor,
+      organizationScope,
     });
 
     logger.info(`Smart import de pacientes concluído: ${results.success}/${results.total}`);

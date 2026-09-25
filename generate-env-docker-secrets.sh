@@ -73,6 +73,11 @@ cat > "$OUT" <<EOF
 NODE_ENV=development
 PORT=3000
 
+# #1162: leave blank — opt-in must be explicit. compose.dev.yml sets these
+# for the controlled suite; do not inherit true from .env.docker.example.
+AUTH_RATE_LIMIT_RELAXED=
+CONSENT_RATE_LIMIT_RELAXED=
+
 MONGO_ROOT_USERNAME=$MONGO_USER
 MONGO_ROOT_PASSWORD=$MONGO_PASSWORD
 MONGO_DB=bioavanced_dev

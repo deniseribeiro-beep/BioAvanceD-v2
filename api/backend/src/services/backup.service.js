@@ -163,6 +163,35 @@ async function cleanupDecryptedRestoreCopy(scratchDir) {
   }
 }
 
+// #957: a crash/kill mid-restore can leave a decrypted dump under
+// `.restore-scratch` on the backups volume. Best-effort boot sweep so an
+// orphaned tree cannot outlive the process that created it. Never throws.
+async function sweepRestoreScratch() {
+  const scratchBase = getRestoreScratchBaseDir();
+  if (!fs.existsSync(scratchBase)) {
+    return { removed: 0, skipped: true };
+  }
+  let entries = [];
+  try {
+    entries = await fs.promises.readdir(scratchBase, { withFileTypes: true });
+  } catch (error) {
+    logger.error(`Erro ao listar scratch de restore ${scratchBase}:`, error?.message || String(error));
+    return { removed: 0, skipped: true, error: error?.message || String(error) };
+  }
+  let removed = 0;
+  for (const entry of entries) {
+    const target = path.join(scratchBase, entry.name);
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      await fs.promises.rm(target, { recursive: true, force: true });
+      removed += 1;
+    } catch (error) {
+      logger.error(`Erro ao limpar órfão de restore ${target}:`, error?.message || String(error));
+    }
+  }
+  return { removed, skipped: false };
+}
+
 function isEncryptedMongodumpManifest(manifest) {
   return !!(manifest && manifest.type === 'mongodump' && manifest.encrypted && Array.isArray(manifest.encryptedFiles));
 }
@@ -1182,6 +1211,7 @@ module.exports = {
   cleanupOldBackups,
   getBackupBaseDir,
   getRestoreScratchBaseDir,
+  sweepRestoreScratch,
   getLatestBackupPath,
   serializeBackupDocs,
   parseBackupDocs,

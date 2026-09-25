@@ -162,4 +162,32 @@ describe('ImportLGPDService.listQuarantineBatches (#794 item 2)', () => {
     expect(db._calls.limit).toBeLessThanOrEqual(100);
     expect(db._calls.skip).toBe(0);
   });
+
+  // #800: org-scoped listing filters on organizationId; unstamped legacy
+  // batches are excluded (Administrador/global only).
+  it('filters by organizationId for an organization scope (#800)', async () => {
+    const scoped = { ...LGPD_NEWER, organizationId: 'org-1' };
+    const otherOrg = { ...LGPD_OLDER, organizationId: 'org-2' };
+    const legacy = { ...LGPD_OLDER, _id: 'batch-legacy', organizationId: null };
+    const db = makeDb([scoped, otherOrg, legacy]);
+
+    const result = await service.listQuarantineBatches(db, {
+      organizationScope: { scope: 'organization', organizationIds: ['org-1'] },
+    });
+
+    expect(result.batches.map((b) => b._id)).toEqual(['batch-newer']);
+    expect(db._calls.filter).toMatchObject({
+      organizationId: { $in: ['org-1'] },
+    });
+  });
+
+  it('does not filter organizationId for a global scope (#800)', async () => {
+    const db = makeDb([LGPD_NEWER, LGPD_OLDER]);
+
+    await service.listQuarantineBatches(db, {
+      organizationScope: { scope: 'global', organizationIds: [] },
+    });
+
+    expect(db._calls.filter.organizationId).toBeUndefined();
+  });
 });

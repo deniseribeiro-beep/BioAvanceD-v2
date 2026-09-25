@@ -38,57 +38,8 @@ function sanitizeAuthPayload(result) {
  * RF001 - Login com MFA
  */
 class AuthController {
-  async register(req, res) {
-    try {
-      const db = req.app.locals.db;
-      if (!db) {
-        return res.status(503).json({
-          success: false,
-          error: (req.t && req.t('errors.databaseUnavailable')) || 'Banco de dados não disponível'
-        });
-      }
-
-      // Attribute the grant to the authenticated account's Actor.
-      const user = await authService.registerUser(db, req.body, req.user?.actorId);
-
-      // #1037: RF003 AC#6 requires auditing account creation, and RF012 AC#1
-      // / RNF009 AC#2 (Crítica) both make the actor a mandatory element of
-      // the event. This route previously wrote no audit row at all. Mirrors
-      // the block in user.routes.js's sibling register handler.
-      //
-      // Audit failure must not fail a successful creation -- auditLogger.log
-      // swallows its own errors, and this try/catch is belt-and-braces so a
-      // logging fault cannot turn a 201 into a 400 via the outer catch.
-      try {
-        auditLogger.init(db);
-        await auditLogger.log({
-          action: 'CREATE',
-          resourceType: 'User',
-          resourceId: user.userAccountId,
-          status: 'success',
-          severity: 'info',
-          message: 'Usuário registrado com sucesso',
-          req: req,
-          module: 'Usuários'
-        });
-      } catch (auditError) {
-        logger.error('Falha ao auditar criação de usuário:', auditError.message);
-      }
-
-      return res.status(201).json({
-        success: true,
-        message: (req.t && req.t('users.registerSuccess')) || 'Usuário registrado com sucesso',
-        data: user
-      });
-    } catch (error) {
-      logger.error('Erro no registro:', error.message);
-      return res.status(400).json({
-        success: false,
-        error: (req.t && req.t('users.registerError')) || 'Erro ao registrar usuário',
-        message: error.message
-      });
-    }
-  }
+  // #1057: register handler removed with POST /api/auth/register.
+  // Account creation is POST /api/users/register only.
 
   async login(req, res) {
     try {

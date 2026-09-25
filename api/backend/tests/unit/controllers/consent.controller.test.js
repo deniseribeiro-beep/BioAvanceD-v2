@@ -1107,7 +1107,7 @@ describe('ConsentController.validateConsentToken', () => {
     expect(res.status).toHaveBeenCalledWith(400);
     expect(res.json).toHaveBeenCalledWith({
       success: false,
-      error: 'Link inválido ou expirado',
+      error: 'Link inválido, expirado ou substituído',
     });
   });
 
@@ -1168,7 +1168,7 @@ describe('ConsentController.acceptConsentToken', () => {
     expect(res.status).toHaveBeenCalledWith(400);
     expect(res.json).toHaveBeenCalledWith({
       success: false,
-      error: 'Link inválido ou expirado',
+      error: 'Link inválido, expirado ou substituído',
     });
   });
 

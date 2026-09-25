@@ -220,7 +220,9 @@ describe('ImportLGPDService.importPatients', () => {
     const insertedPatient = patientsCollection.insertOne.mock.calls[0][0];
     expect(insertedPatient.participantId).toMatch(/^\d{8}$/);
     expect(insertedPatient.status).toBe('PENDING_CONSENT');
-    expect(insertedPatient.consentToken).toBe('tok-1');
+    // #1049: consent tokens are hashed at rest — the plaintext never lands on Patient.
+    expect(insertedPatient.consentToken).not.toBe('tok-1');
+    expect(insertedPatient.consentToken).toMatch(/^[a-f0-9]{64}$/);
 
     expect(notificationService.enqueueConsentNotification).toHaveBeenCalledTimes(1);
     expect(patientsCollection.updateOne).toHaveBeenCalledWith(
@@ -524,6 +526,7 @@ describe('ImportLGPDService.importPatients', () => {
       );
 
       expect(importBatchesCollection.insertOne.mock.calls[0][0].createdBy).toBe('user-123');
+      expect(importBatchesCollection.insertOne.mock.calls[0][0].organizationId).toBeNull();
     });
   });
 });

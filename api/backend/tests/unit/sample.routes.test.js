@@ -25,7 +25,7 @@ const routePath = require.resolve('../../src/interface/routes/sample.routes.js')
 // are destructured at require-time in sample.routes.js, and
 // RegisterSampleUseCase/MongoLineageRepository/SampleGraphValidator are captured
 // as constructor references. Re-requiring this ~1100-line route file fresh
-// per test (as label.routes.test.js/hpo.routes.test.js do for their much
+// per test (as label.routes.test.js does for its much
 // smaller files) makes V8's per-file branch coverage undercount here -
 // confirmed empirically: routes with both a true- and false-path test (e.g.
 // GET /:id's 404 vs 200) still reported the false branch as 0 hits despite
@@ -303,6 +303,7 @@ const VALID_PAYLOAD = {
   quantity: 5,
   quality: 'GOOD',
   linkedProject: 'Projeto X',
+  collectionSite: 'org-test-1',
   registeredAt: '2026-01-01',
   boxId: '507f1f77bcf86cd799439011',
   positionCode: 'A1',
@@ -430,6 +431,17 @@ describe('sample.routes', () => {
 
       expect(res.status).toBe(422);
       expect(res.body.details).toContain('linkedProject é obrigatório');
+    });
+
+    it('rejects a missing collectionSite (#1092)', async () => {
+      const { router } = loadRoute({ registerSampleUseCaseExecute: vi.fn() });
+      const app = buildApp(router, {});
+      const { collectionSite, ...withoutCollectionSite } = VALID_PAYLOAD;
+
+      const res = await request(app).post('/api/samples').send(withoutCollectionSite);
+
+      expect(res.status).toBe(422);
+      expect(res.body.details).toContain('collectionSite é obrigatório');
     });
 
     it('rejects a non-string linkedProject', async () => {

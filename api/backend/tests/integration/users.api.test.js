@@ -194,7 +194,7 @@ describe('RF003 - POST /api/users/register', () => {
       insertOne: vi.fn().mockResolvedValue({ insertedId: 'new-user-1' }),
       updateOne: vi.fn(),
     });
-    const rbacCollections = buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[3], accessType: 3 }]);
+    const rbacCollections = buildRbacCollections([{ userAccountId: TEST_USER_ACCOUNT_IDS[4], accessType: 4 }]);
     const organizationsCollection = createCollectionMock({
       findOne: vi.fn().mockResolvedValue({ organizationId: 'org-1' }),
     });
@@ -204,11 +204,11 @@ describe('RF003 - POST /api/users/register', () => {
       organizations: organizationsCollection,
       userAccounts: createCollectionMock({
         findOne: vi.fn(async (query = {}) => {
-          if (query.userAccountId === TEST_USER_ACCOUNT_IDS[3]) {
+          if (query.userAccountId === TEST_USER_ACCOUNT_IDS[4]) {
             return {
-              userAccountId: TEST_USER_ACCOUNT_IDS[3],
-              actorId: TEST_ACTOR_IDS[3],
-              accessType: 3,
+              userAccountId: TEST_USER_ACCOUNT_IDS[4],
+              actorId: TEST_ACTOR_IDS[4],
+              accessType: 4,
               userStatus: 'active',
             };
           }
@@ -219,16 +219,19 @@ describe('RF003 - POST /api/users/register', () => {
       }),
     });
 
-    // When
-    const response = await whenRegisterUser(
-      buildUserRegistrationPayload({
-        name: 'Usuário Escopo',
-        email: 'escopo.qa@example.com',
-        username: 'escopo.qa',
-        accessType: 2,
-        organizationId: 'org-1',
-      })
-    );
+    // When — #1008: role assignment requires Administrador assignRole (accessType 4).
+    const response = await request(app)
+      .post('/api/users/register')
+      .set('Authorization', `Bearer ${makeAuthToken(4)}`)
+      .send(
+        buildUserRegistrationPayload({
+          name: 'Usuário Escopo',
+          email: 'escopo.qa@example.com',
+          username: 'escopo.qa',
+          accessType: 2,
+          organizationId: 'org-1',
+        })
+      );
 
     // Then
     expect(response.status).toBe(201);

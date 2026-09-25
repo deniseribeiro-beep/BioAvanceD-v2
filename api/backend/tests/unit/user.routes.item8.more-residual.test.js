@@ -60,11 +60,10 @@ afterEach(() => {
 describe('user.routes item 8 legitimate residual branches', () => {
   it('rejects unknown organizations and hierarchy escalation during registration', async () => {
     const authService = require('../../src/services/auth.service');
-    const rbacAssignment = require('../../src/services/rbac-assignment.service');
-    const registerUser = vi.spyOn(authService, 'registerUser');
-
     const organizations = { findOne: vi.fn().mockResolvedValue(null) };
     let app = buildApp({ collection: (name) => name === 'organizations' ? organizations : {} });
+
+    const registerUser = vi.spyOn(authService, 'registerUser');
 
     const missingOrg = await request(app).post('/api/users/register').send({
       username: 'synthetic',
@@ -74,9 +73,11 @@ describe('user.routes item 8 legitimate residual branches', () => {
     expect(missingOrg.body.message).toContain('organizationId ORG-MISSING não encontrado');
     expect(registerUser).not.toHaveBeenCalled();
 
+    // #1057: hierarchy floor lives in registerUser; route maps statusCode 403.
     organizations.findOne.mockResolvedValue({ organizationId: 'ORG-1' });
-    vi.spyOn(authService, 'getAccessTypeForRole').mockReturnValue(5);
-    vi.spyOn(rbacAssignment, 'resolveUserHierarchyLevel').mockResolvedValue(3);
+    const err = new Error('Não é possível criar um usuário com nível de acesso superior ao seu.');
+    err.statusCode = 403;
+    registerUser.mockRejectedValue(err);
 
     app = buildApp({ collection: (name) => name === 'organizations' ? organizations : {} });
     const escalation = await request(app).post('/api/users/register').send({
@@ -87,12 +88,11 @@ describe('user.routes item 8 legitimate residual branches', () => {
 
     expect(escalation.status).toBe(403);
     expect(escalation.body.message).toContain('nível de acesso superior');
-    expect(registerUser).not.toHaveBeenCalled();
+    expect(registerUser).toHaveBeenCalled();
   });
 
   it('registers a user with an existing organization and writes the explicit audit record', async () => {
     const authService = require('../../src/services/auth.service');
-    const rbacAssignment = require('../../src/services/rbac-assignment.service');
     const auditLogger = require('../../src/utils/auditLogger');
 
     vi.spyOn(authService, 'registerUser').mockResolvedValue({
@@ -100,7 +100,6 @@ describe('user.routes item 8 legitimate residual branches', () => {
       userAccountId: NEW_USER_ACCOUNT_ID,
       username: 'synthetic',
     });
-    vi.spyOn(rbacAssignment, 'resolveUserHierarchyLevel').mockResolvedValue(5);
     vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
     const log = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
 

@@ -125,35 +125,10 @@ router.post('/register',
         }
       }
 
-      // #998 (RF003, RNF008 AC#1): a caller may not create a user at a level
-      // above their own. requirePermission('createUser') is the only gate on
-      // this route, and rbac-catalog-seed grants 'createUser' to the seeded
-      // Coordenador -- so without this, every Coordenador in a default
-      // deployment could POST a working Administrador account, with a password
-      // of their choosing, in one request. That needs no existing target and
-      // no role change, which makes it strictly cheaper to exploit than the
-      // PUT leg #998 was written around.
-      //
-      // A floor rather than an Administrador-only check, deliberately: it
-      // closes the escalation without deciding whether Coordenador should hold
-      // 'createUser' at all. RF003 names Administrador as the actor for role
-      // assignment, which points at a distinct assignRole permission -- that is
-      // #998 direction 2 and a larger change than a security fix should carry.
-      const requestedLevel = req.body.accessType
-        || (req.body.roleName ? authService.getAccessTypeForRole(req.body.roleName) : null);
-      if (requestedLevel) {
-        const { resolveUserHierarchyLevel } = require('../../services/rbac-assignment.service');
-        const callerLevel = await resolveUserHierarchyLevel(db, req.user?.userID);
-        if (Number(requestedLevel) > Number(callerLevel || 0)) {
-          return res.status(403).json({
-            success: false,
-            error: req.t('errors.forbidden'),
-            message: 'Não é possível criar um usuário com nível de acesso superior ao seu.'
-          });
-        }
-      }
-
-      const user = await authService.registerUser(db, req.body, req.user?.actorId);
+      // #1057/#1008: hierarchy floor + assignRole gate live in
+      // auth.service.registerUser (durable across every writer). Pass the
+      // caller's account id so privilege fields are checked there.
+      const user = await authService.registerUser(db, req.body, req.user?.actorId, req.user?.userID);
 
       // Registra log de criação de usuário
       if (req.user) {
@@ -178,9 +153,10 @@ router.post('/register',
       });
     } catch (error) {
       logger.error('Erro ao registrar usuário:', error.message);
-      return res.status(400).json({
+      const status = error.statusCode === 403 ? 403 : 400;
+      return res.status(status).json({
         success: false,
-        error: req.t('users.registerError'),
+        error: status === 403 ? req.t('errors.forbidden') : req.t('users.registerError'),
         message: error.message
       });
     }
@@ -438,13 +414,9 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
     }
     const isBecomingAdmin = requestedAccessType === 4 || req.body.roleName === 'Administrador';
 
-    // #998 (RF003, RNF008 AC#1): a caller may not raise anyone -- including
-    // themselves -- above their own level. requirePermission('createUser') was
-    // the only gate here, requirePermission has no administrator bypass and no
-    // hierarchy floor, and changeUserRole reads `changedBy` for attribution
-    // only, never for authorization. rbac-catalog-seed grants 'createUser' to
-    // the seeded Coordenador, so every Coordenador in a default deployment
-    // could PUT { roleName: 'Administrador' } at any user, themselves included.
+    // #998/#1008 (RF003, RNF008 AC#1): role CHANGES require assignRole
+    // (Administrador-only). createUser alone is not enough — Coordenador may
+    // still edit users without touching their role.
     //
     // Compared against the target's RESOLVED level, not targetUser.accessType:
     // that field was dropped from the User document by #427/#432 and is
@@ -457,10 +429,18 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
     // the two comparisons in this handler disagreed until now.
     let targetLevel = null;
     if (requestedAccessType) {
-      const { resolveUserHierarchyLevel } = require('../../services/rbac-assignment.service');
+      const { resolveUserHierarchyLevel, userHasPermission } = require('../../services/rbac-assignment.service');
       targetLevel = await resolveUserHierarchyLevel(db, targetUser.userAccountId);
       const isRoleChange = Number(requestedAccessType) !== Number(targetLevel);
       if (isRoleChange) {
+        const canAssign = await userHasPermission(db, req.user?.userID, 'assignRole');
+        if (!canAssign) {
+          return res.status(403).json({
+            success: false,
+            error: req.t('errors.forbidden'),
+            message: 'Não é possível atribuir papel sem a permissão assignRole.'
+          });
+        }
         const callerLevel = await resolveUserHierarchyLevel(db, req.user?.userID);
         if (Number(requestedAccessType) > Number(callerLevel || 0)) {
           return res.status(403).json({

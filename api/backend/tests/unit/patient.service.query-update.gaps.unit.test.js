@@ -449,7 +449,7 @@ describe('PatientService.resendConsentNotification', () => {
     );
   });
 
-  it('reuses an existing unexpired token instead of generating a new one', async () => {
+  it('always mints a fresh hashed token even when a prior one is unexpired (#1049)', async () => {
     const futureExpiry = new Date(Date.now() + 60000);
     const patientsCollection = makeFakeCollection({
       findOne: vi.fn().mockResolvedValue({
@@ -463,17 +463,22 @@ describe('PatientService.resendConsentNotification', () => {
     });
     const db = makeFakeDb({ participants: patientsCollection });
 
-    const buildMetadataSpy = vi.spyOn(notificationService, 'buildConsentMetadata');
+    const buildMetadataSpy = vi.spyOn(notificationService, 'buildConsentMetadata').mockReturnValue({
+      token: 'fresh-token',
+      createdAt: new Date(),
+      expiresAt: new Date(Date.now() + 120000),
+    });
     vi.spyOn(notificationService, 'buildConsentLink').mockReturnValue('http://link');
     vi.spyOn(notificationService, 'enqueueConsentNotification').mockResolvedValue(undefined);
 
     const result = await patientService.resendConsentNotification(db, '12345678');
 
-    expect(buildMetadataSpy).not.toHaveBeenCalled();
-    expect(result.reusedToken).toBe(true);
-    expect(result.consentTokenExpiresAt).toEqual(futureExpiry);
+    expect(buildMetadataSpy).toHaveBeenCalled();
+    expect(result.reusedToken).toBe(false);
     const setPayload = patientsCollection.updateOne.mock.calls[0][1].$set;
-    expect(setPayload).not.toHaveProperty('consentToken');
+    expect(setPayload.consentToken).toHaveLength(64);
+    expect(setPayload.consentToken).not.toBe('existing-token');
+    expect(setPayload.consentToken).not.toBe('fresh-token');
   });
 
   // #1104: this read went straight to identity.patientName off a raw
@@ -539,7 +544,8 @@ describe('PatientService.resendConsentNotification', () => {
     expect(result.reusedToken).toBe(false);
     expect(result.consentTokenExpiresAt).toEqual(newExpiry);
     const setPayload = patientsCollection.updateOne.mock.calls[0][1].$set;
-    expect(setPayload.consentToken).toBe('new-token');
+    expect(setPayload.consentToken).toHaveLength(64);
+    expect(setPayload.consentToken).not.toBe('new-token');
   });
 
   it('generates a new token when the existing token has expired', async () => {
@@ -569,7 +575,8 @@ describe('PatientService.resendConsentNotification', () => {
 
     expect(result.reusedToken).toBe(false);
     const setPayload = patientsCollection.updateOne.mock.calls[0][1].$set;
-    expect(setPayload.consentToken).toBe('fresh-token');
+    expect(setPayload.consentToken).toHaveLength(64);
+    expect(setPayload.consentToken).not.toBe('fresh-token');
   });
 });
 

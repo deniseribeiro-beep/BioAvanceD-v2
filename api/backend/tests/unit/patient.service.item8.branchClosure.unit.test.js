@@ -344,7 +344,7 @@ describe('PatientService item 8 branch closure - consent and deletion', () => {
       .resolves.toEqual({ valid: true, participantId: '1' });
   });
 
-  it('resends using a valid existing token and no ParticipantIdentity row', async () => {
+  it('always mints a fresh hashed token when resending (#1049)', async () => {
     const expires = new Date(Date.now() + 60_000);
     const patient = {
       _id: 'p1',
@@ -359,13 +359,64 @@ describe('PatientService item 8 branch closure - consent and deletion', () => {
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 })
     });
     const identities = makeCollection({ findOne: vi.fn().mockResolvedValue(null) });
+    vi.spyOn(notificationService, 'buildConsentMetadata').mockReturnValue({
+      token: 'fresh-token',
+      createdAt: new Date(),
+      expiresAt: new Date(Date.now() + 60_000)
+    });
     vi.spyOn(notificationService, 'buildConsentLink').mockReturnValue('http://consent');
     vi.spyOn(notificationService, 'enqueueConsentNotification').mockResolvedValue(undefined);
 
     const result = await patientService.resendConsentNotification(makeDb({ participants: patients, participantIdentities: identities }), '1');
-    expect(result.reusedToken).toBe(true);
+    expect(result.reusedToken).toBe(false);
     const updatePayload = patients.updateOne.mock.calls[0][1].$set;
-    expect(updatePayload).not.toHaveProperty('consentToken');
+    expect(updatePayload.consentToken).toHaveLength(64);
+    expect(updatePayload.consentToken).not.toBe('reuse-me');
+  });
+
+  // #836: delivery failure must restore the prior token so the outstanding
+  // emailed link still works (participant must not be left worse off).
+  it('restores the prior consent token when resend delivery fails (#836)', async () => {
+    const priorCreatedAt = new Date(Date.now() - 10_000);
+    const priorExpiresAt = new Date(Date.now() + 120_000);
+    const patient = {
+      _id: 'p1-restore',
+      participantId: '1',
+      status: 'PENDING_CONSENT',
+      consentToken: 'prior-hash',
+      consentTokenCreatedAt: priorCreatedAt,
+      consentTokenExpiresAt: priorExpiresAt
+    };
+    const patients = makeCollection({
+      findOne: vi.fn().mockResolvedValue(patient),
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 })
+    });
+    const identities = makeCollection({ findOne: vi.fn().mockResolvedValue(null) });
+    vi.spyOn(notificationService, 'buildConsentMetadata').mockReturnValue({
+      token: 'fresh-token',
+      createdAt: new Date(),
+      expiresAt: new Date(Date.now() + 60_000)
+    });
+    vi.spyOn(notificationService, 'buildConsentLink').mockReturnValue('http://consent');
+    vi.spyOn(notificationService, 'enqueueConsentNotification').mockRejectedValue(new Error('smtp-down'));
+
+    await expect(
+      patientService.resendConsentNotification(
+        makeDb({ participants: patients, participantIdentities: identities }),
+        '1'
+      )
+    ).rejects.toThrow(/smtp-down/);
+
+    const tokenUpdates = patients.updateOne.mock.calls
+      .map(([, update]) => update?.$set)
+      .filter((set) => set && Object.prototype.hasOwnProperty.call(set, 'consentToken'));
+    expect(tokenUpdates.length).toBeGreaterThanOrEqual(2);
+    expect(tokenUpdates[0].consentToken).toHaveLength(64);
+    expect(tokenUpdates[0].consentToken).not.toBe('prior-hash');
+    const finalTokenSet = tokenUpdates[tokenUpdates.length - 1];
+    expect(finalTokenSet.consentToken).toBe('prior-hash');
+    expect(finalTokenSet.consentTokenCreatedAt).toEqual(priorCreatedAt);
+    expect(finalTokenSet.consentTokenExpiresAt).toEqual(priorExpiresAt);
   });
 
   it('regenerates an expired token and decrypts a ParticipantIdentity row', async () => {
@@ -393,7 +444,8 @@ describe('PatientService item 8 branch closure - consent and deletion', () => {
 
     const result = await patientService.resendConsentNotification(makeDb({ participants: patients, participantIdentities: identities }), '2');
     expect(result.reusedToken).toBe(false);
-    expect(patients.updateOne.mock.calls[0][1].$set.consentToken).toBe('new-token');
+    expect(patients.updateOne.mock.calls[0][1].$set.consentToken).toHaveLength(64);
+    expect(patients.updateOne.mock.calls[0][1].$set.consentToken).not.toBe('new-token');
   });
 
   it('covers resend missing participant and wrong status', async () => {

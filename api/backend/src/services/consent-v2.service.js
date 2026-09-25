@@ -12,6 +12,7 @@ const { withMongoTransaction } = require('../utils/mongoTransaction');
 const ConsentGovernanceV2Repository = require('../infrastructure/persistence/mongo/ConsentGovernanceV2Repository');
 const participantIdentityService = require('./participantIdentity.service');
 const notificationDispatchService = require('./notificationDispatch.service');
+const { hashToken } = require('../utils/tokenHash');
 
 const ajv = new Ajv({ allErrors: true, strict: false, removeAdditional: 'failing' });
 addFormats(ajv);
@@ -268,19 +269,34 @@ class ConsentV2Service {
       const identities = await getCollection(db, 'participantIdentities');
 
       for (const patient of patients) {
+        const previousToken = patient.consentToken || null;
+        const previousCreatedAt = patient.consentTokenCreatedAt || null;
+        const previousExpiresAt = patient.consentTokenExpiresAt || null;
         try {
           const rawIdentity = await identities.findOne({ participantId: patient.participantId });
           const identity = rawIdentity ? participantIdentityService.decryptIdentity(rawIdentity) : null;
           const patientWithIdentity = identity ? { ...patient, patientName: identity.patientName } : patient;
           const metadata = notificationService.buildConsentMetadata();
           const link = notificationService.buildConsentLink(patientWithIdentity, metadata.token);
+          // #1049: store hash at rest; plaintext only lives in the emailed link.
           await getCollection(db, 'Participant').updateOne({ _id: patient._id }, { $set: {
-            consentToken: metadata.token,
+            consentToken: hashToken(metadata.token),
             consentTokenCreatedAt: metadata.createdAt,
             consentTokenExpiresAt: metadata.expiresAt,
             updatedAt: new Date()
           } });
-          await notificationService.enqueueConsentNotification(patientWithIdentity, link);
+          try {
+            await notificationService.enqueueConsentNotification(patientWithIdentity, link);
+          } catch (notifyError) {
+            // #836: restore prior token so the old link still works if send fails.
+            await getCollection(db, 'Participant').updateOne({ _id: patient._id }, { $set: {
+              consentToken: previousToken,
+              consentTokenCreatedAt: previousCreatedAt,
+              consentTokenExpiresAt: previousExpiresAt,
+              updatedAt: new Date()
+            } });
+            throw notifyError;
+          }
           await getCollection(db, 'Participant').updateOne({ _id: patient._id }, { $set: { consentNotifiedAt: new Date(), updatedAt: new Date() } });
           outcome.notified += 1;
         } catch (error) {

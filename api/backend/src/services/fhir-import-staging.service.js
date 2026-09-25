@@ -12,6 +12,10 @@ const { withMongoTransaction, isTransactionCapable } = require('../utils/mongoTr
 const rcsAssessmentService = require('./rcs-assessment.service');
 const specimenPreanalyticsService = require('./specimen-preanalytics.service');
 const { getCanonicalCollection } = require('../config/canonicalEntityCollections.v2');
+const {
+  isRecordInOrganizationScope,
+  resolveOrganizationIdForBatchWrite,
+} = require('./rbac-assignment.service');
 
 const STATUS = Object.freeze({
   VALID: 'VALID',
@@ -622,6 +626,14 @@ async function stageBundle(db, payload, metadata = {}) {
     fileName: String(metadata.fileName || 'fhir-bundle.json'),
     source: 'FHIR',
     counts: summarize(records),
+    // #800: stamp organizationId so quarantine/batch readers can org-scope.
+    organizationId: resolveOrganizationIdForBatchWrite({
+      organizationScope: metadata.organizationScope,
+      actor: {
+        organizationId: metadata.organizationId,
+        organizationIds: metadata.organizationIds,
+      },
+    }),
     createdBy: metadata.userID || null,
     createdAt: now,
     updatedAt: now,
@@ -660,9 +672,16 @@ async function findFhirBatch(db, batchId) {
   return batch;
 }
 
-async function getBatch(db, batchIdRaw) {
+async function getBatch(db, batchIdRaw, { organizationScope } = {}) {
   const batchId = toObjectId(batchIdRaw);
   const batch = await findFhirBatch(db, batchId);
+  // #800: org-scoped callers only see batches stamped with their org.
+  // Legacy batches without organizationId are Administrador/global only.
+  if (organizationScope && !isRecordInOrganizationScope(batch, organizationScope, 'organizationId')) {
+    const error = new Error('Acesso negado ao lote de importação FHIR');
+    error.statusCode = 403;
+    throw error;
+  }
   const records = await collection(db, 'import_staging_records').find({ batchId }).sort({ rowNumber: 1 }).toArray();
   return { batch, records };
 }
@@ -1025,6 +1044,8 @@ async function commitBatch(db, batchIdRaw) {
           participantId: normalized.participantId,
           sampleType: normalized.sampleType,
           collectionDate: normalized.collectionDate,
+          // #1092: stamp collectionSite from the batch org when creating.
+          ...(batchInfo.organizationId ? { collectionSite: batchInfo.organizationId } : {}),
           sprec: normalized.rcsPreview?.sprec || {},
           rcs_score: normalized.rcsPreview?.rcs_score ?? null,
           final_grade: normalized.rcsPreview?.final_grade || '',

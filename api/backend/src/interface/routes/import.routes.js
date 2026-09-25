@@ -5,7 +5,7 @@ const importAsyncController = require('../../controllers/import-async.controller
 const importBatchController = require('../../controllers/import-batch.controller');
 const fhirImportStagingController = require('../../controllers/fhir-import-staging.controller');
 const { authenticate } = require('../../infrastructure/middleware/auth');
-const { requirePermission } = require('../../infrastructure/middleware/rbac');
+const { requirePermission, requireOrganizationScope } = require('../../infrastructure/middleware/rbac');
 
 // RF007 - Upload e Importação de Dados
 // Requer autenticação e permissão de upload
@@ -52,6 +52,7 @@ router.post('/fhir/stage',
 router.get('/fhir/batches/:id',
   authenticate,
   requirePermission('uploadFiles'),
+  requireOrganizationScope,
   fhirImportStagingController.getBatch.bind(fhirImportStagingController)
 );
 

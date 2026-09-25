@@ -166,6 +166,11 @@ function validateCreateSamplePayload(req, res, next) {
     errors.push('linkedProject é obrigatório');
   }
 
+  // #1092: collectionSite required so org-scoped callers can write the sample.
+  if (!payload.collectionSite || typeof payload.collectionSite !== 'string' || payload.collectionSite.trim() === '') {
+    errors.push('collectionSite é obrigatório');
+  }
+
   if (payload.isRareDisease !== undefined && typeof payload.isRareDisease !== 'boolean') {
     errors.push('isRareDisease deve ser boolean');
   }

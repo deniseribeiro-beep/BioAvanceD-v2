@@ -77,6 +77,7 @@ describe('POST /api/samples - modo de risco e projeção assíncrona v2', () => 
         boxId: '507f1f77bcf86cd799439011',
         positionCode: 'A1',
         linkedProject: 'Projeto QA',
+        collectionSite: 'org-test-1',
         isRareDisease: true,
         pharmacology_data: {
           treatment_status: 'ON_TREATMENT',
@@ -111,6 +112,7 @@ describe('POST /api/samples - modo de risco e projeção assíncrona v2', () => 
         boxId: '507f1f77bcf86cd799439011',
         positionCode: 'A1',
         linkedProject: 'Projeto QA',
+        collectionSite: 'org-test-1',
         isRareDisease: false,
         pharmacology_data: {
           treatment_status: 'NAIVE',
@@ -146,6 +148,7 @@ describe('POST /api/samples - modo de risco e projeção assíncrona v2', () => 
         boxId: '507f1f77bcf86cd799439011',
         positionCode: 'A1',
         linkedProject: 'Projeto QA',
+        collectionSite: 'org-test-1',
         isRareDisease: true,
         pharmacology_data: {
           treatment_status: 'TREATED',
@@ -192,6 +195,7 @@ describe('POST /api/samples - modo de risco e projeção assíncrona v2', () => 
           boxId: '507f1f77bcf86cd799439011',
           positionCode: 'A1',
           linkedProject: 'Projeto QA',
+          collectionSite: 'org-test-1',
         });
     }
 

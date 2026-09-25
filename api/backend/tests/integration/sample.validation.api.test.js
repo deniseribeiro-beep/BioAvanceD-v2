@@ -36,6 +36,8 @@ function buildValidSamplePayload(overrides = {}) {
     registeredAt: new Date().toISOString(),
     boxId: '507f1f77bcf86cd799439011',
     positionCode: 'A1',
+    // #1092: required before createSample is reached.
+    collectionSite: 'org-test-1',
     ...overrides,
   };
 }

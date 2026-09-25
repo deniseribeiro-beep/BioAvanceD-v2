@@ -282,8 +282,16 @@ class AuthService {
   }
   /**
    * Registra um novo usuário
+   *
+   * @param {object} db
+   * @param {object} userData
+   * @param {string} grantedBy - Actor UUID attributing the grant
+   * @param {string} [callerUserAccountId] - authenticated caller's account id;
+   *   when present, enforces #1008 assignRole + #998/#1057 hierarchy floor for
+   *   any caller-supplied accessType/roleName. Omitted for bootstrap paths
+   *   that mint accounts without an interactive caller.
    */
-  async registerUser(db, userData, grantedBy) {
+  async registerUser(db, userData, grantedBy, callerUserAccountId) {
     try {
       const validation = UserModel.validate(userData);
       if (!validation.isValid) {
@@ -307,9 +315,42 @@ class AuthService {
       // Hash da senha
       const hashedPassword = await bcrypt.hash(userData.password, 10);
 
+      // Caller-supplied privilege fields (before defaulting accessType).
+      // #1057: hierarchy floor lives here so every writer shares it — the
+      // deleted POST /api/auth/register used to skip the route-level #998
+      // check that only lived on POST /api/users/register.
+      const privilegeSupplied = userData.accessType != null || userData.roleName != null;
+
       // Mapeia roleName para accessType se necessário
       if (userData.roleName && !userData.accessType) {
         userData.accessType = this.getAccessTypeForRole(userData.roleName);
+      }
+
+      if (privilegeSupplied && callerUserAccountId) {
+        // #1008: role assignment is a distinct Administrador-only permission.
+        // createUser alone must not let Coordenador choose a level.
+        // Look up via the module object (not a top-level destructure) so
+        // tests can spy these and so the durable service-level gate stays
+        // the single source of truth (#1057).
+        const rbacAssignment = require('./rbac-assignment.service');
+        const canAssign = await rbacAssignment.userHasPermission(db, callerUserAccountId, 'assignRole');
+        if (!canAssign) {
+          const err = new Error('Não é possível atribuir papel sem a permissão assignRole.');
+          err.statusCode = 403;
+          throw err;
+        }
+
+        // #998/#1057: a caller may not create a user above their own level.
+        const requestedLevel = userData.accessType
+          || (userData.roleName ? this.getAccessTypeForRole(userData.roleName) : null);
+        if (requestedLevel) {
+          const callerLevel = await rbacAssignment.resolveUserHierarchyLevel(db, callerUserAccountId);
+          if (Number(requestedLevel) > Number(callerLevel || 0)) {
+            const err = new Error('Não é possível criar um usuário com nível de acesso superior ao seu.');
+            err.statusCode = 403;
+            throw err;
+          }
+        }
       }
       
       // Cria usuário
@@ -358,11 +399,7 @@ class AuthService {
       // #1028: widens #435's pre-write guard to the OTHER two throw sites
       // reachable from grantRoleForAccessType below. #435 closed the
       // accessType trigger; an unseeded RBAC catalogue and an unknown
-      // organizationId were still reachable AFTER the insert, and the
-      // organizationId one is reachable by an UNAUTHENTICATED caller --
-      // auth.routes.js registers POST /register with no `authenticate`, and
-      // #1037's rejectCallerSuppliedPrivilege inspects only accessType and
-      // roleName, so a bogus organizationId passes straight through.
+      // organizationId were still reachable AFTER the insert.
       //
       // Fail-fast, not atomic: only compose.test.yml runs a replica set, so a
       // transaction here would break user creation on dev and prod while the

@@ -6,9 +6,8 @@ const { validateActiveCodes } = require('../ingestion/activeCodeValidator');
  * Persists one FamilyHistory (dict-02 ELM-0249..0251, #692). RF005 AC#4
  * ("permitir codificação... somente quando houver ReferenceDatasetRelease
  * ativa e validada") -- reuses activeCodeValidator.validateActiveCodes the
- * same way condition.service.js's createCondition does (#714's
- * FamilyHistory half; AllergyIntolerance/MedicationExposure/Procedure stay
- * unguarded, blocked on a requirements decision outside this slice).
+ * same way condition.service.js's createCondition does. #714 also gates
+ * AllergyIntolerance/MedicationExposure/Procedure the same way.
  *
  * familyCondition entries carry an uncoded free-text branch (the intake
  * wizard's own display-only path, no `condition.systemUri`/`condition.code`)

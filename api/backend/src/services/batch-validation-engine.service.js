@@ -10,6 +10,7 @@ const patientService = require('./patient.service');
 const sampleService = require('./sample.service');
 const biomarkerObservationService = require('./biomarker-observation.service');
 const logger = require('../utils/logger');
+const { resolveOrganizationIdForBatchWrite } = require('./rbac-assignment.service');
 
 const CHUNK_SIZE = 100;
 
@@ -383,6 +384,8 @@ class BatchValidationEngine {
       // they just no longer feed a dead target field here.
       linkedproject: 'linkedProject',
       projetovinculado: 'linkedProject',
+      collectionsite: 'collectionSite',
+      localdecoleta: 'collectionSite',
       currentstatus: 'currentStatus',
       statusatual: 'currentStatus',
       quantity: 'quantity',
@@ -763,6 +766,17 @@ class BatchValidationEngine {
     sampleData.quantity = sampleData.quantity === null || sampleData.quantity === undefined ? null : Number(sampleData.quantity);
     sampleData.quality = sampleData.quality === null || sampleData.quality === undefined ? sampleData.quality : Number(sampleData.quality);
 
+    // #1092: stamp collectionSite from row/context/actor when creating samples.
+    if (!sampleData.collectionSite) {
+      sampleData.collectionSite = context.organizationId
+        || context.actor?.organizationId
+        || (Array.isArray(context.organizationIds) && context.organizationIds[0])
+        || (Array.isArray(context.actor?.organizationIds) && context.actor.organizationIds[0])
+        || null;
+    } else {
+      sampleData.collectionSite = String(sampleData.collectionSite).trim();
+    }
+
     const semanticCascade = this.extractSemanticCascadeFromRow(rawRow);
 
     const validationErrors = [];
@@ -954,7 +968,7 @@ class BatchValidationEngine {
    * e do FHIR filtram por `type` e nao podem passar a listar lotes deste
    * importador por acidente (#799 foi exatamente esse defeito).
    */
-  async quarantineRejectedRows(db, { jobId, dataType, fileName = null, rejected = [], counts = {} } = {}) {
+  async quarantineRejectedRows(db, { jobId, dataType, fileName = null, rejected = [], counts = {}, organizationScope, actor } = {}) {
     if (!Array.isArray(rejected) || rejected.length === 0) return null;
     if (!db) return null;
 
@@ -988,6 +1002,9 @@ class BatchValidationEngine {
           success: counts.success ?? null,
           errors: rejected.length,
         },
+        // #800: stamp organizationId so quarantine readers can org-scope.
+        // Async path has no req — first org from actor, else null.
+        organizationId: resolveOrganizationIdForBatchWrite({ organizationScope, actor }),
         createdAt: now,
         updatedAt: now,
       });
@@ -1124,6 +1141,24 @@ class BatchValidationEngine {
       },
     });
 
+    // #800/#1092: async path has no req — org from the staging job when present.
+    const importOrgContext = {
+      organizationId: stagingImport.organizationId
+        || stagingImport.rawData?.organizationId
+        || null,
+      organizationIds: stagingImport.organizationIds
+        || stagingImport.rawData?.organizationIds
+        || [],
+      actor: {
+        organizationId: stagingImport.organizationId
+          || stagingImport.rawData?.organizationId
+          || null,
+        organizationIds: stagingImport.organizationIds
+          || stagingImport.rawData?.organizationIds
+          || [],
+      },
+    };
+
     // #813: rejected rows, kept with their original data for quarantine.
     const rejectedRows = [];
 
@@ -1147,8 +1182,8 @@ class BatchValidationEngine {
         const rowNumber = sourceLine !== undefined ? sourceLine : absoluteIndex + rowBaseNumber;
 
         const rowResult = dataType === 'samples'
-          ? await this.persistSample(db, rawRow, rowNumber)
-          : await this.persistPatient(db, rawRow, rowNumber);
+          ? await this.persistSample(db, rawRow, rowNumber, importOrgContext)
+          : await this.persistPatient(db, rawRow, rowNumber, importOrgContext);
 
         result.processedRows += 1;
 
@@ -1218,6 +1253,7 @@ class BatchValidationEngine {
       fileName,
       rejected: rejectedRows,
       counts: { total: result.totalRows, success: result.validRows },
+      actor: importOrgContext.actor,
     });
     if (quarantineBatchId) {
       result.quarantineBatchId = String(quarantineBatchId);

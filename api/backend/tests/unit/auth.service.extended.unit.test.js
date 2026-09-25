@@ -127,20 +127,11 @@ describe('AuthService.registerUser', () => {
 
   // #1028: #435 closed the accessType trigger above and left the WINDOW open.
   // Two throw sites inside grantRoleForAccessType are still reachable after
-  // insertOne, and this is the one an UNAUTHENTICATED caller can reach:
-  // #1037's rejectCallerSuppliedPrivilege filters only accessType and
-  // roleName -- organizationId passes through untouched, and User.js only
-  // trims it. So a bogus organizationId inserts the user, then throws in
-  // validateOrganizationId, leaving an orphan able to authenticate with every
-  // permission check returning false and nothing explaining why.
+  // insertOne without the pre-write guard. organizationId is the one a
+  // createUser holder can still hit if the guard regresses.
   //
-  // NOTE, updated when #1037 was resolved: this comment used to say the
-  // orphan window was reachable ANONYMOUSLY, because auth.routes.js
-  // registered POST /api/auth/register with no `authenticate`. That is no
-  // longer true -- the route now carries authenticate +
-  // requirePermission('createUser'). The window itself is unchanged and this
-  // test still pins it; only its reachability narrowed, from any anonymous
-  // caller to a holder of createUser.
+  // #1057 deleted POST /api/auth/register; creation is POST /api/users/register
+  // only. The window itself is unchanged and this test still pins it.
   //
   // The fixture reaches it because buildRbacCollections() seeds no
   // `organizations` collection, so makeDb falls through to usersCollection,
@@ -196,6 +187,63 @@ describe('AuthService.registerUser', () => {
 
     expect(result.anonId).toBeTruthy();
     expect(insertOne).toHaveBeenCalled();
+  });
+
+  // #1008/#1057: when a callerUserAccountId is supplied with privilege fields,
+  // assignRole + hierarchy floor run inside registerUser.
+  it('#1008: refuses role assignment when the caller lacks assignRole', async () => {
+    const insertOne = vi.fn();
+    const callerId = '550e8400-e29b-41d4-a716-446655440003';
+    const rbac = buildRbacCollections([{ userAccountId: callerId, accessType: 3 }]);
+    const actors = makeActorsCollection();
+    const dbWithCaller = {
+      collection: vi.fn((name) => {
+        if (name === 'actors') return actors;
+        if (name === 'userAccounts') {
+          return {
+            findOne: vi.fn().mockResolvedValue(null),
+            insertOne,
+            updateOne: vi.fn(),
+          };
+        }
+        return rbac[name];
+      }),
+    };
+
+    await expect(
+      authService.registerUser(
+        dbWithCaller,
+        { ...VALID_USER, accessType: 2 },
+        BIOAVANCED_SYSTEM_ACTOR_ID,
+        callerId
+      )
+    ).rejects.toMatchObject({
+      message: expect.stringContaining('assignRole'),
+      statusCode: 403,
+    });
+    expect(insertOne).not.toHaveBeenCalled();
+  });
+
+  it('#1057: refuses creating a user above the caller hierarchy when assignRole is held', async () => {
+    const insertOne = vi.fn();
+    const rbacAssignment = require('../../src/services/rbac-assignment.service');
+    vi.spyOn(rbacAssignment, 'userHasPermission').mockResolvedValue(true);
+    vi.spyOn(rbacAssignment, 'resolveUserHierarchyLevel').mockResolvedValue(3);
+    const db = makeDb({ insertOne });
+    const callerId = '550e8400-e29b-41d4-a716-446655440003';
+
+    await expect(
+      authService.registerUser(
+        db,
+        { ...VALID_USER, accessType: 4, roleName: 'Administrador' },
+        BIOAVANCED_SYSTEM_ACTOR_ID,
+        callerId
+      )
+    ).rejects.toMatchObject({
+      message: expect.stringContaining('nível de acesso superior'),
+      statusCode: 403,
+    });
+    expect(insertOne).not.toHaveBeenCalled();
   });
 });
 

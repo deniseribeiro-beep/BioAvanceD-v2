@@ -84,7 +84,9 @@ async function hammer(app, target, count) {
 
 describe('#832: consentLimiter covers the unauthenticated e-consent token routes', () => {
   // Same inherent cost as auth-rate-limiter.test.js's strict cases: proving a
-  // budget is enforced means actually exceeding it. 15000ms matches that file.
+  // budget is enforced means actually exceeding it. Docker bind-mount runs are
+  // slower than host — 60s matches the suite --testTimeout used in compose.
+  const hammerTimeoutMs = 60_000;
   for (const target of LIMITED) {
     it(`429s ${target.method.toUpperCase()} ${target.path} past the strict budget`, async () => {
       const app = loadAppWithEnv('development', { relaxed: false });
@@ -93,7 +95,7 @@ describe('#832: consentLimiter covers the unauthenticated e-consent token routes
 
       const rateLimited = responses.filter((res) => res.status === 429);
       expect(rateLimited.length).toBeGreaterThan(0);
-    }, 15000);
+    }, hammerTimeoutMs);
   }
 
   it('allows the relaxed budget when the explicit opt-in is set (real Docker dev stack)', async () => {
@@ -102,7 +104,7 @@ describe('#832: consentLimiter covers the unauthenticated e-consent token routes
     const responses = await hammer(app, LIMITED[2], 15);
 
     expect(responses.filter((res) => res.status === 429)).toHaveLength(0);
-  }, 15000);
+  }, hammerTimeoutMs);
 
   it('stays strict in production even if the opt-in is set', async () => {
     const app = loadAppWithEnv('production', { relaxed: true });
@@ -110,7 +112,7 @@ describe('#832: consentLimiter covers the unauthenticated e-consent token routes
     const responses = await hammer(app, LIMITED[2], 12);
 
     expect(responses.filter((res) => res.status === 429).length).toBeGreaterThan(0);
-  }, 15000);
+  }, hammerTimeoutMs);
 
   // The flag-separation pin. Without it, wiring consentLimiter to
   // env.AUTH_RATE_LIMIT_RELAXED would satisfy every test above.
@@ -120,7 +122,7 @@ describe('#832: consentLimiter covers the unauthenticated e-consent token routes
     const responses = await hammer(app, LIMITED[2], 12);
 
     expect(responses.filter((res) => res.status === 429).length).toBeGreaterThan(0);
-  }, 15000);
+  }, hammerTimeoutMs);
 
   // CONTROL. The authenticated operator surface on the same router must NOT
   // share this budget -- a coordinator doing bulk consent work would 429.
@@ -137,5 +139,5 @@ describe('#832: consentLimiter covers the unauthenticated e-consent token routes
 
     expect(responses.filter((res) => res.status === 429)).toHaveLength(0);
     expect(responses.every((res) => res.status === 401)).toBe(true);
-  }, 15000);
+  }, hammerTimeoutMs);
 });

@@ -5,7 +5,7 @@ const temperatureService = require('../../src/services/temperature.service');
 const auditLogger = require('../../src/utils/auditLogger');
 
 function buildRes() {
-  const res = {};
+  const res = { locals: {} };
   res.status = vi.fn().mockReturnValue(res);
   res.json = vi.fn().mockReturnValue(res);
   return res;
@@ -54,6 +54,7 @@ describe('temperature.controller.createReading', () => {
       success: false,
       error: 'Erro ao registrar temperatura',
       message: 'invalid payload',
+      reason: 'empty_sensorId',
     });
   });
 
@@ -68,6 +69,10 @@ describe('temperature.controller.createReading', () => {
     await temperatureController.createReading(req, res);
 
     expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      success: false,
+      reason: 'empty_sensorId',
+    }));
   });
 
   // #1080: POST /system/reading is machine ingest -- no session, so no

@@ -189,6 +189,8 @@ describe('simple governance service branches for item 8', () => {
 
     expect(() => retentionPolicyService.validateEntityTypes(['AuditEvent', 'Unknown']))
       .toThrow('valores não suportados');
+    expect(() => retentionPolicyService.validateEntityTypes(['ImportStagingRecord', 'NotificationComplianceLog']))
+      .not.toThrow();
     expect(() => retentionPolicyService.validateEntityTypes())
       .not.toThrow();
     expect(() => retentionPolicyService.validateAuditEventRetentionAction(['AuditEvent'], 'destroy'))

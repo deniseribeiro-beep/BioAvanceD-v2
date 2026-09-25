@@ -553,6 +553,7 @@ describe('ImportLGPDService.importPatientsSmart', () => {
       );
 
       expect(importBatchesCollection.insertOne.mock.calls[0][0].createdBy).toBe('user-123');
+      expect(importBatchesCollection.insertOne.mock.calls[0][0].organizationId).toBeNull();
     });
   });
 });

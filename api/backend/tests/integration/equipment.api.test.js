@@ -801,7 +801,33 @@ describe('PUT /api/equipment/:id with a non-ObjectId, non-numeric id', () => {
     expect(res.status).toBe(404);
   });
 
-  it('triggers quarantine service when the new status is a quarantine-trigger status', async () => {
+  // #883: Inactive is a valid Equipment status but must not cascade quarantine.
+  it('does not trigger quarantine for routine Inactive status (#883)', async () => {
+    const quarantineByEquipmentStatus = vi.fn();
+    app.locals.quarantineService = {
+      isQuarantineTriggerStatus: vi.fn().mockReturnValue(false),
+      quarantineByEquipmentStatus,
+    };
+
+    const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue(FAKE_EQ),
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
+    });
+    app.locals.db = createDbMock({ ...RBAC_COLLECTIONS, organizations: scopedOrganizations(), equipment: coll });
+
+    const res = await request(app)
+      .put('/api/equipment/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ status: 'Inactive' });
+
+    expect(res.status).toBe(200);
+    expect(quarantineByEquipmentStatus).not.toHaveBeenCalled();
+    expect(res.body.quarantine.triggered).toBe(false);
+
+    delete app.locals.quarantineService;
+  });
+
+  it('triggers quarantine service when quarantineService reports a trigger status', async () => {
     const quarantineByEquipmentStatus = vi.fn().mockResolvedValue({
       triggered: true, matched: 2, quarantined: 2, movements: 1, reason: 'test reason'
     });
@@ -819,7 +845,7 @@ describe('PUT /api/equipment/:id with a non-ObjectId, non-numeric id', () => {
     const res = await request(app)
       .put('/api/equipment/507f1f77bcf86cd799439011')
       .set('Authorization', `Bearer ${makeToken(4)}`)
-      .send({ status: 'Inactive' });
+      .send({ status: 'Active' });
 
     expect(res.status).toBe(200);
     expect(quarantineByEquipmentStatus).toHaveBeenCalled();
@@ -904,7 +930,7 @@ describe('PUT /api/equipment/:id with a non-ObjectId, non-numeric id', () => {
     app.locals.db = { ...dbMock, client: { startSession, db: vi.fn(() => ({ command: helloCommand })) } };
 
     const quarantineByEquipmentStatus = vi.fn().mockResolvedValue({
-      triggered: true, matched: 1, quarantined: 1, movements: 1, reason: 'status:inactive'
+      triggered: true, matched: 1, quarantined: 1, movements: 1, reason: 'status:offline'
     });
     app.locals.quarantineService = {
       isQuarantineTriggerStatus: vi.fn().mockReturnValue(true),
@@ -914,7 +940,7 @@ describe('PUT /api/equipment/:id with a non-ObjectId, non-numeric id', () => {
     const res = await request(app)
       .put('/api/equipment/507f1f77bcf86cd799439011')
       .set('Authorization', `Bearer ${makeToken(4)}`)
-      .send({ status: 'Inactive' });
+      .send({ equipmentDescription: 'Freezer A' });
 
     expect(res.status).toBe(200);
     expect(startSession).toHaveBeenCalledTimes(1);
@@ -923,7 +949,7 @@ describe('PUT /api/equipment/:id with a non-ObjectId, non-numeric id', () => {
     expect(quarantineByEquipmentStatus).toHaveBeenCalledWith(
       app.locals.db,
       expect.objectContaining({ equipmentID: FAKE_EQ.equipmentID }),
-      'Inactive',
+      'Active',
       expect.objectContaining({ session: expect.objectContaining({ withTransaction, endSession }) })
     );
     expect(res.body.quarantine.triggered).toBe(true);
@@ -950,7 +976,7 @@ describe('PUT /api/equipment/:id with a non-ObjectId, non-numeric id', () => {
     app.locals.db = { ...dbMock, client: { startSession, db: vi.fn(() => ({ command: helloCommand })) } };
 
     const quarantineByEquipmentStatus = vi.fn().mockResolvedValue({
-      triggered: true, matched: 1, quarantined: 1, movements: 1, reason: 'status:inactive'
+      triggered: true, matched: 1, quarantined: 1, movements: 1, reason: 'status:offline'
     });
     app.locals.quarantineService = {
       isQuarantineTriggerStatus: vi.fn().mockReturnValue(true),
@@ -960,13 +986,13 @@ describe('PUT /api/equipment/:id with a non-ObjectId, non-numeric id', () => {
     const res = await request(app)
       .put('/api/equipment/507f1f77bcf86cd799439011')
       .set('Authorization', `Bearer ${makeToken(4)}`)
-      .send({ status: 'Inactive', _id: '507f1f77bcf86cd799439099', bogusField: 'x' });
+      .send({ equipmentDescription: 'Freezer A', _id: '507f1f77bcf86cd799439099', bogusField: 'x' });
 
     expect(res.status).toBe(200);
     expect(withTransaction).toHaveBeenCalledTimes(1);
     const [, update, options] = updateOne.mock.calls[0];
     expect(options).toEqual(expect.objectContaining({ session: expect.anything() }));
-    expect(update.$set).toHaveProperty('status', 'Inactive');
+    expect(update.$set).toHaveProperty('equipmentDescription', 'Freezer A');
     expect(update.$set).not.toHaveProperty('_id');
     expect(update.$set).not.toHaveProperty('bogusField');
 
@@ -997,13 +1023,13 @@ describe('PUT /api/equipment/:id with a non-ObjectId, non-numeric id', () => {
     const res = await request(app)
       .put('/api/equipment/507f1f77bcf86cd799439011')
       .set('Authorization', `Bearer ${makeTokenLegacyClaims(4)}`)
-      .send({ status: 'Inactive' });
+      .send({ equipmentDescription: 'Freezer A' });
 
     expect(res.status).toBe(200);
     expect(quarantineByEquipmentStatus).toHaveBeenCalledWith(
       app.locals.db,
       expect.anything(),
-      'Inactive',
+      'Active',
       expect.objectContaining({
         auditInfo: expect.objectContaining({ userName: 'legacyUser', userRole: 'Coordenador' })
       })
@@ -1026,7 +1052,7 @@ describe('PUT /api/equipment/:id with a non-ObjectId, non-numeric id', () => {
     app.locals.db = { ...dbMock, client: { startSession } };
 
     const quarantineByEquipmentStatus = vi.fn().mockResolvedValue({
-      triggered: true, matched: 1, quarantined: 1, movements: 1, reason: 'status:inactive'
+      triggered: true, matched: 1, quarantined: 1, movements: 1, reason: 'status:offline'
     });
     app.locals.quarantineService = {
       isQuarantineTriggerStatus: vi.fn().mockReturnValue(true),
@@ -1036,13 +1062,13 @@ describe('PUT /api/equipment/:id with a non-ObjectId, non-numeric id', () => {
     const res = await request(app)
       .put('/api/equipment/507f1f77bcf86cd799439011')
       .set('Authorization', `Bearer ${makeTokenLegacyClaims(4)}`)
-      .send({ status: 'Inactive' });
+      .send({ equipmentDescription: 'Freezer A' });
 
     expect(res.status).toBe(200);
     expect(quarantineByEquipmentStatus).toHaveBeenCalledWith(
       app.locals.db,
       expect.anything(),
-      'Inactive',
+      'Active',
       expect.objectContaining({
         auditInfo: expect.objectContaining({ userName: 'legacyUser', userRole: 'Coordenador' })
       })

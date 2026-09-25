@@ -110,6 +110,9 @@ function buildCreateDb({ sensor = { status: 'active' } } = {}) {
     participants: collection({
       findOne: vi.fn().mockResolvedValue({ participantId: '12345678' }),
     }),
+    organizations: collection({
+      findOne: vi.fn().mockResolvedValue({ organizationId: 'org-item8-1' }),
+    }),
     storageBoxes: collection({
       findOne: vi.fn().mockResolvedValue({ _id: boxId, parent_id: rackId }),
     }),
@@ -150,6 +153,8 @@ function validSample(boxId, overrides = {}) {
     registeredAt: new Date('2026-09-20T12:00:00Z'),
     boxId: String(boxId),
     positionCode: 'A1',
+    // #1092: required Organization reference on create.
+    collectionSite: 'org-item8-1',
     ...overrides,
   };
 }

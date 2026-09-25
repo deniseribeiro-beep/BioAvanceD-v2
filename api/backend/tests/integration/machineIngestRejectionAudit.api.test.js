@@ -78,6 +78,24 @@ describe('#1095/#1119: HTTP machine-ingest rejections are audited, with the righ
     // #1119: ENTITY_MAP['iot'], reachable only from the unstripped path.
     expect(row.payload.path).toBe('/api/iot/telemetry');
     expect(row.resourceType).toBe('TelemetryReading');
+    // #1120: empty sensorId wins over non-finite temperature when both fail.
+    expect(row.payload.reason).toBe('empty_sensorId');
+    expect(res.body.reason).toBe('empty_sensorId');
+  });
+
+  it('#1120: names non_finite_temperature when sensorId is present but temperature is not finite', async () => {
+    const res = await request(app)
+      .post('/api/iot/telemetry')
+      .set('x-telemetry-ingest-secret', INGEST_SECRET)
+      .send({ sensorId: 'sensor-1', temperature: 'abc' });
+
+    expect(res.status).toBe(400);
+    await flushAudit();
+    const row = soleRow();
+
+    expect(row.action).toBe('CREATE_FAILED');
+    expect(row.payload.reason).toBe('non_finite_temperature');
+    expect(res.body.reason).toBe('non_finite_temperature');
   });
 
   // The gate refusal is the case #1095 called "arguably the most

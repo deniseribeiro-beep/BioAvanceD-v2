@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
-const { grantRoleForAccessType, changeUserRole, backfillUserRoleAssignments, userHasPermission, getActiveRoleCodes, isAuditReader, isAdministrator, findUserAccountIdsByRoleCodes, grantAdditionalRole, revokeAdditionalRole, updateAssignmentScope, resolveUserOrganizationScope, isOrganizationScopeUsable, applyOrganizationScopeFilter, isRecordInOrganizationScope, resolveOrganizationIdForCreate, assertOrganizationFieldNotReparented } = require('../../src/services/rbac-assignment.service');
+const { grantRoleForAccessType, changeUserRole, backfillUserRoleAssignments, userHasPermission, getActiveRoleCodes, isAuditReader, isAdministrator, findUserAccountIdsByRoleCodes, grantAdditionalRole, revokeAdditionalRole, updateAssignmentScope, resolveUserOrganizationScope, isOrganizationScopeUsable, applyOrganizationScopeFilter, isRecordInOrganizationScope, resolveOrganizationIdForCreate, resolveOrganizationIdForBatchWrite, assertOrganizationFieldNotReparented } = require('../../src/services/rbac-assignment.service');
 const { createCollectionMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
 const ACTOR_ID = '550e8400-e29b-41d4-a716-446655440001';
@@ -718,5 +718,33 @@ describe('#1053: assertOrganizationFieldNotReparented', () => {
 
   it('names the field in the message, so it can be reused for collectionSite', () => {
     expect(() => assertOrganizationFieldNotReparented(scoped, 'a', 'b', 'collectionSite')).toThrow(/collectionSite/);
+  });
+});
+
+describe('#800: resolveOrganizationIdForBatchWrite', () => {
+  it('stamps the first organization from an organization scope', () => {
+    expect(resolveOrganizationIdForBatchWrite({
+      organizationScope: { scope: 'organization', organizationIds: ['org-a', 'org-b'] },
+    })).toBe('org-a');
+  });
+
+  it('stamps null for a global (Administrador) scope', () => {
+    expect(resolveOrganizationIdForBatchWrite({
+      organizationScope: { scope: 'global', organizationIds: [] },
+      actor: { organizationId: 'org-a' },
+    })).toBeNull();
+  });
+
+  it('falls back to the first actor org when there is no HTTP scope', () => {
+    expect(resolveOrganizationIdForBatchWrite({
+      actor: { organizationIds: ['org-x'] },
+    })).toBe('org-x');
+    expect(resolveOrganizationIdForBatchWrite({
+      actor: { organizationId: 'org-y' },
+    })).toBe('org-y');
+  });
+
+  it('returns null when neither scope nor actor carries an organization', () => {
+    expect(resolveOrganizationIdForBatchWrite({})).toBeNull();
   });
 });

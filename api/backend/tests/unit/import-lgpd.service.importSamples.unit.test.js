@@ -65,6 +65,7 @@ const VALID_ROW = {
   quantity: '5',
   quality: 'GOOD',
   linkedProject: 'Proj1',
+  collectionSite: 'org-test-1',
   tcle_id: 'tcle-1',
   sprec_sample_type: 'ST1',
   sprec_primary_container: 'PC1',
@@ -931,7 +932,16 @@ describe('ImportLGPDService.importSamples', () => {
 
   it('fills in sampleType/sampleOrigin/extractionProtocol from groupFields when the row omits them', async () => {
     vi.spyOn(service, 'readFile').mockResolvedValue([
-      { sampleType: '', sampleOrigin: '', extractionProtocol: '', participantId: '12345678', quantity: '5', quality: 'GOOD' },
+      {
+        sampleType: '',
+        sampleOrigin: '',
+        extractionProtocol: '',
+        participantId: '12345678',
+        quantity: '5',
+        quality: 'GOOD',
+        linkedProject: 'Proj1',
+        collectionSite: 'org-test-1',
+      },
     ]);
 
     const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' }, {
@@ -947,6 +957,7 @@ describe('ImportLGPDService.importSamples', () => {
     expect(inserted.sampleType).toBe('PLASMA');
     expect(inserted.sampleOrigin).toBe('VENOUS_BLOOD');
     expect(inserted.extractionProtocol).toBe('TUBE_EDTA');
+    expect(inserted.collectionSite).toBe('org-test-1');
   });
 
   // #787 (RNF011 AC#4, Crítica): "Importações inválidas são colocadas em
@@ -1361,6 +1372,8 @@ describe('ImportLGPDService.importSamples item 8 residual branches', () => {
       birthDate: '15/06/1985',
       quantity: '5',
       quality: 'GOOD',
+      linkedProject: 'Proj1',
+      collectionSite: 'org-test-1',
     }]);
 
     const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });

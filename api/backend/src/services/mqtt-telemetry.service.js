@@ -167,7 +167,15 @@ class MqttTelemetryService {
         updatedAt: new Date()
       };
 
-      if (!temperatureData.sensorId || !Number.isFinite(temperatureData.temperatureValue)) {
+      // #1120: split the former single `invalid_payload` into the same
+      // reason tokens the HTTP machine-ingest controllers now emit.
+      let rejectionReason = null;
+      if (!temperatureData.sensorId) {
+        rejectionReason = 'empty_sensorId';
+      } else if (!Number.isFinite(temperatureData.temperatureValue)) {
+        rejectionReason = 'non_finite_temperature';
+      }
+      if (rejectionReason) {
         await mqttIngestionAuditService.append(db, {
           topic,
           payloadHash,
@@ -175,9 +183,9 @@ class MqttTelemetryService {
           signatureRequired,
           signatureVerified: payloadSignature ? signatureVerified : !signatureRequired,
           status: 'rejected',
-          reason: 'invalid_payload'
+          reason: rejectionReason
         });
-        logger.warn('[ISO20387][MQTT] Payload inválido de telemetria descartado');
+        logger.warn(`[ISO20387][MQTT] Payload inválido de telemetria descartado (${rejectionReason})`);
         return;
       }
 

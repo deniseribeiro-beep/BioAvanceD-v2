@@ -49,8 +49,8 @@ describe('ImportService SPREC import', () => {
   it('importa CSV fake com colunas SPREC', async () => {
     const csvPath = path.join(tempDir, 'samples.csv');
     const csvContent = [
-      'participantId,sampleType,sampleOrigin,extractionProtocol,quantity,quality,registeredAt,linkedProject,sprec_matrix_type,sprec_sample_type,sprec_primary_container,sprec_pre_centrifugation,sprec_centrifugation,sprec_second_centrifugation,sprec_post_centrifugation_delay,sprec_long_term_storage',
-      '12345678,PLASMA,VENOUS_BLOOD,TUBE_EDTA,1.5,GOOD,2026-01-01,Projeto QA,fluid,BLD,PED,C,A,D,E,F',
+      'participantId,collectionSite,sampleType,sampleOrigin,extractionProtocol,quantity,quality,registeredAt,linkedProject,sprec_matrix_type,sprec_sample_type,sprec_primary_container,sprec_pre_centrifugation,sprec_centrifugation,sprec_second_centrifugation,sprec_post_centrifugation_delay,sprec_long_term_storage',
+      '12345678,org-import-1,PLASMA,VENOUS_BLOOD,TUBE_EDTA,1.5,GOOD,2026-01-01,Projeto QA,fluid,BLD,PED,C,A,D,E,F',
     ].join('\n');
 
     fs.writeFileSync(csvPath, csvContent, 'utf8');
@@ -78,6 +78,7 @@ describe('ImportService SPREC import', () => {
     const sheet = workbook.addWorksheet('Samples');
     sheet.addRow([
       'participantId',
+      'collectionSite',
       'sampleType',
       'sampleOrigin',
       'extractionProtocol',
@@ -96,6 +97,7 @@ describe('ImportService SPREC import', () => {
     ]);
     sheet.addRow([
       '87654321',
+      'org-import-1',
       'PLASMA',
       'VENOUS_BLOOD',
       'TUBE_EDTA',
@@ -134,8 +136,8 @@ describe('ImportService SPREC import', () => {
   it('mapeia a ontologia SPREC completa preservando os 7 eixos', async () => {
     const csvPath = path.join(tempDir, 'samples-sprec-complete.csv');
     const csvContent = [
-      'participantId,sampleType,sampleOrigin,extractionProtocol,quantity,quality,registeredAt,linkedProject,consentTemplateId,sprec_matrix_type,sprec_sample_type,sprec_primary_container,sprec_pre_centrifugation,sprec_centrifugation,sprec_second_centrifugation,sprec_post_centrifugation_delay,sprec_long_term_storage',
-      '11223344,PLASMA,VENOUS_BLOOD,TUBE_EDTA,2.5,GOOD,2026-03-03,Projeto Ontologia,tcle-ontology-1,fluid,BLD,PED,A,B,C,D,E',
+      'participantId,collectionSite,sampleType,sampleOrigin,extractionProtocol,quantity,quality,registeredAt,linkedProject,consentTemplateId,sprec_matrix_type,sprec_sample_type,sprec_primary_container,sprec_pre_centrifugation,sprec_centrifugation,sprec_second_centrifugation,sprec_post_centrifugation_delay,sprec_long_term_storage',
+      '11223344,org-import-1,PLASMA,VENOUS_BLOOD,TUBE_EDTA,2.5,GOOD,2026-03-03,Projeto Ontologia,tcle-ontology-1,fluid,BLD,PED,A,B,C,D,E',
     ].join('\n');
 
     fs.writeFileSync(csvPath, csvContent, 'utf8');
@@ -166,8 +168,8 @@ describe('ImportService SPREC import', () => {
   it('preserva quality_score/category externos como sugestão não canônica', async () => {
     const csvPath = path.join(tempDir, 'samples-external-quality.csv');
     const csvContent = [
-      'participantId,sampleType,sampleOrigin,extractionProtocol,quantity,quality,quality_score,quality_category,registeredAt,linkedProject,sprec_matrix_type,sprec_sample_type,sprec_primary_container,sprec_pre_centrifugation,sprec_centrifugation,sprec_second_centrifugation,sprec_post_centrifugation_delay,sprec_long_term_storage',
-      '12345678,PLASMA,VENOUS_BLOOD,TUBE_EDTA,1.5,GOOD,100,A,2026-01-01,Projeto QA,fluid,BLD,PED,X,A,A,A,C',
+      'participantId,collectionSite,sampleType,sampleOrigin,extractionProtocol,quantity,quality,quality_score,quality_category,registeredAt,linkedProject,sprec_matrix_type,sprec_sample_type,sprec_primary_container,sprec_pre_centrifugation,sprec_centrifugation,sprec_second_centrifugation,sprec_post_centrifugation_delay,sprec_long_term_storage',
+      '12345678,org-import-1,PLASMA,VENOUS_BLOOD,TUBE_EDTA,1.5,GOOD,100,A,2026-01-01,Projeto QA,fluid,BLD,PED,X,A,A,A,C',
     ].join('\n');
 
     fs.writeFileSync(csvPath, csvContent, 'utf8');
@@ -202,8 +204,8 @@ describe('ImportService SPREC import', () => {
 
     const csvPath = path.join(tempDir, 'samples-rcs-assessment.csv');
     const csvContent = [
-      'participantId,sampleType,sampleOrigin,extractionProtocol,quantity,quality,registeredAt,linkedProject,sprec_matrix_type,sprec_sample_type,sprec_primary_container,sprec_pre_centrifugation,sprec_centrifugation,sprec_second_centrifugation,sprec_post_centrifugation_delay,sprec_long_term_storage',
-      '12345678,PLASMA,VENOUS_BLOOD,TUBE_EDTA,1.5,GOOD,2026-01-01,Projeto QA,fluid,BLD,PED,C,A,D,E,F',
+      'participantId,collectionSite,sampleType,sampleOrigin,extractionProtocol,quantity,quality,registeredAt,linkedProject,sprec_matrix_type,sprec_sample_type,sprec_primary_container,sprec_pre_centrifugation,sprec_centrifugation,sprec_second_centrifugation,sprec_post_centrifugation_delay,sprec_long_term_storage',
+      '12345678,org-import-1,PLASMA,VENOUS_BLOOD,TUBE_EDTA,1.5,GOOD,2026-01-01,Projeto QA,fluid,BLD,PED,C,A,D,E,F',
     ].join('\n');
     fs.writeFileSync(csvPath, csvContent, 'utf8');
 
@@ -234,8 +236,8 @@ describe('ImportService SPREC import', () => {
 
     const csvPath = path.join(tempDir, 'samples-sprec-profile.csv');
     const csvContent = [
-      'participantId,sampleType,sampleOrigin,extractionProtocol,quantity,quality,registeredAt,linkedProject,sprec_matrix_type,sprec_sample_type,sprec_primary_container,sprec_pre_centrifugation,sprec_centrifugation,sprec_second_centrifugation,sprec_post_centrifugation_delay,sprec_long_term_storage',
-      '12345678,PLASMA,VENOUS_BLOOD,TUBE_EDTA,1.5,GOOD,2026-01-01,Projeto QA,fluid,BLD,PED,C,A,D,E,F',
+      'participantId,collectionSite,sampleType,sampleOrigin,extractionProtocol,quantity,quality,registeredAt,linkedProject,sprec_matrix_type,sprec_sample_type,sprec_primary_container,sprec_pre_centrifugation,sprec_centrifugation,sprec_second_centrifugation,sprec_post_centrifugation_delay,sprec_long_term_storage',
+      '12345678,org-import-1,PLASMA,VENOUS_BLOOD,TUBE_EDTA,1.5,GOOD,2026-01-01,Projeto QA,fluid,BLD,PED,C,A,D,E,F',
     ].join('\n');
     fs.writeFileSync(csvPath, csvContent, 'utf8');
 
@@ -267,10 +269,10 @@ describe('ImportService SPREC import', () => {
 
     const csvPath = path.join(tempDir, 'samples-sprec-canonical-fluid.csv');
     const csvContent = [
-      'participantId,sampleType,sampleOrigin,extractionProtocol,quantity,quality,registeredAt,linkedProject,'
+      'participantId,collectionSite,sampleType,sampleOrigin,extractionProtocol,quantity,quality,registeredAt,linkedProject,'
         + 'sprec_matrix_type,sprec_sample_type,sprec_primary_container,sprec_pre_centrifugation,sprec_centrifugation,'
         + 'sprec_second_centrifugation,sprec_post_centrifugation_delay,sprec_long_term_storage,sprec_code,sprec_version',
-      '12345678,PLASMA,VENOUS_BLOOD,TUBE_EDTA,1.5,GOOD,2026-01-01,Projeto QA,'
+      '12345678,org-import-1,PLASMA,VENOUS_BLOOD,TUBE_EDTA,1.5,GOOD,2026-01-01,Projeto QA,'
         + 'fluid,BLD,PED,C,A,D,E,F,BLD-PED-C-A-D-E-F,2.0',
     ].join('\n');
     fs.writeFileSync(csvPath, csvContent, 'utf8');
@@ -310,10 +312,10 @@ describe('ImportService SPREC import', () => {
 
     const csvPath = path.join(tempDir, 'samples-sprec-canonical-solid.csv');
     const csvContent = [
-      'participantId,sampleType,sampleOrigin,extractionProtocol,quantity,quality,registeredAt,linkedProject,'
+      'participantId,collectionSite,sampleType,sampleOrigin,extractionProtocol,quantity,quality,registeredAt,linkedProject,'
         + 'sprec_matrix_type,sprec_sample_type,sprec_primary_container,sprec_pre_centrifugation,sprec_centrifugation,'
         + 'sprec_second_centrifugation,sprec_post_centrifugation_delay,sprec_long_term_storage',
-      '87654321,TISSUE_FRESH,VENOUS_BLOOD,TUBE_EDTA,1.0,GOOD,2026-01-01,Projeto QA,'
+      '87654321,org-import-1,TISSUE_FRESH,VENOUS_BLOOD,TUBE_EDTA,1.0,GOOD,2026-01-01,Projeto QA,'
         + 'solid,TIS,BPS,B,C,NBF,D,G',
     ].join('\n');
     fs.writeFileSync(csvPath, csvContent, 'utf8');
@@ -349,8 +351,8 @@ describe('ImportService SPREC import', () => {
 
     const csvPath = path.join(tempDir, 'samples-resilience.csv');
     const csvContent = [
-      'participantId,sampleType,sampleOrigin,extractionProtocol,quantity,quality,registeredAt,linkedProject,sprec_matrix_type,sprec_sample_type,sprec_primary_container,sprec_pre_centrifugation,sprec_centrifugation,sprec_second_centrifugation,sprec_post_centrifugation_delay,sprec_long_term_storage',
-      '12345678,PLASMA,VENOUS_BLOOD,TUBE_EDTA,1.5,GOOD,2026-01-01,Projeto QA,fluid,BLD,PED,C,A,D,E,F',
+      'participantId,collectionSite,sampleType,sampleOrigin,extractionProtocol,quantity,quality,registeredAt,linkedProject,sprec_matrix_type,sprec_sample_type,sprec_primary_container,sprec_pre_centrifugation,sprec_centrifugation,sprec_second_centrifugation,sprec_post_centrifugation_delay,sprec_long_term_storage',
+      '12345678,org-import-1,PLASMA,VENOUS_BLOOD,TUBE_EDTA,1.5,GOOD,2026-01-01,Projeto QA,fluid,BLD,PED,C,A,D,E,F',
     ].join('\n');
     fs.writeFileSync(csvPath, csvContent, 'utf8');
 
@@ -384,6 +386,7 @@ describe('ImportService SPREC import', () => {
     fs.writeFileSync(jsonPath, JSON.stringify({
       specimenId: 'SPEC-JSON-ITEM8',
       participantId: '12345678',
+      collectionSite: 'org-import-1',
       sampleType: 'PLASMA',
       sampleOrigin: 'VENOUS_BLOOD',
       extractionProtocol: 'TUBE_EDTA',

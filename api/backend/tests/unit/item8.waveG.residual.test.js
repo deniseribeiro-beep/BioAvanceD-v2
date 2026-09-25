@@ -255,7 +255,8 @@ describe('item8 waveG residual inventory zeros', () => {
     const routePath = require.resolve('../../src/interface/routes/backup.routes');
     delete require.cache[routePath];
     vi.spyOn(fs, 'readdirSync').mockImplementation((target, options) => {
-      if (path.resolve(target) === path.resolve(entry) && !options?.withFileTypes) {
+      const targetPath = typeof target === 'string' ? target : String(target);
+      if (path.resolve(targetPath) === path.resolve(entry) && !options?.withFileTypes) {
         return ['totally-missing-child'];
       }
       return originals.readdirSync
@@ -272,7 +273,8 @@ describe('item8 waveG residual inventory zeros', () => {
     const realFsReaddir = require('fs').readdirSync;
     fs.readdirSync.mockRestore();
     vi.spyOn(fs, 'readdirSync').mockImplementation((target, options) => {
-      if (path.resolve(target) === path.resolve(entry) && !options?.withFileTypes) {
+      const targetPath = typeof target === 'string' ? target : String(target);
+      if (path.resolve(targetPath) === path.resolve(entry) && !options?.withFileTypes) {
         return ['totally-missing-child'];
       }
       return realFsReaddir(target, options);

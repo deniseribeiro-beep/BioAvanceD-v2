@@ -619,6 +619,28 @@ function resolveOrganizationIdForCreate(organizationScope, requestedOrganization
  * Silently stripping the field was the alternative and is worse: it makes a
  * refused move indistinguishable from a successful no-op in the response.
  */
+/**
+ * #800: organizationId stamped onto import_batches quarantine writers.
+ *
+ * Prefer the caller's resolved organizationScope (first org when scoped).
+ * Global scope stamps null (Administrador-readable). When there is no HTTP
+ * scope (async workers), fall back to the first org on actor, else null —
+ * same fail-closed posture as isRecordInOrganizationScope for unstamped rows.
+ */
+function resolveOrganizationIdForBatchWrite({ organizationScope, actor } = {}) {
+  if (organizationScope?.scope === 'organization') {
+    const ids = organizationScope.organizationIds || [];
+    return ids.length ? String(ids[0]) : null;
+  }
+  if (organizationScope?.scope === 'global') {
+    return null;
+  }
+  if (actor?.organizationId) return String(actor.organizationId);
+  const ids = actor?.organizationIds;
+  if (Array.isArray(ids) && ids.length) return String(ids[0]);
+  return null;
+}
+
 function assertOrganizationFieldNotReparented(organizationScope, existingValue, requestedValue, fieldName = 'organizationId') {
   if (requestedValue === undefined) return;
   if (!organizationScope || organizationScope.scope === 'global') return;
@@ -635,6 +657,7 @@ function assertOrganizationFieldNotReparented(organizationScope, existingValue, 
 module.exports = {
   assertOrganizationFieldNotReparented,
   resolveOrganizationIdForCreate,
+  resolveOrganizationIdForBatchWrite,
   ROLE_CODE_BY_ACCESS_TYPE,
   getActiveAssignments,
   getActiveRoles,

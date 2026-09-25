@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 const { SampleModel: Sample } = require('../../src/models/Sample');
 
-describe('Sample.create - collectionSite (ELM-0128)', () => {
+describe('Sample.create - collectionSite (ELM-0128 / #1092)', () => {
   const base = {
     specimenId: 'SP-1',
     participantId: '12345678',
@@ -10,7 +10,8 @@ describe('Sample.create - collectionSite (ELM-0128)', () => {
     extractionProtocol: 'TUBE_EDTA',
     registeredAt: new Date('2024-01-01'),
     quantity: 10,
-    linkedProject: 'ProjectX'
+    linkedProject: 'ProjectX',
+    collectionSite: 'org-uuid-123',
   };
 
   it('maps collectionSite (Organization reference) onto the created document', () => {
@@ -18,9 +19,17 @@ describe('Sample.create - collectionSite (ELM-0128)', () => {
     expect(result.collectionSite).toBe('org-uuid-123');
   });
 
-  it('defaults collectionSite to null when not provided', () => {
-    const result = Sample.create({ ...base });
-    expect(result.collectionSite).toBeNull();
+  it('does not default collectionSite to null when not provided', () => {
+    const { collectionSite: _omit, ...withoutSite } = base;
+    const result = Sample.create(withoutSite);
+    expect(result.collectionSite).toBeUndefined();
+  });
+
+  it('validate requires collectionSite', () => {
+    const { collectionSite: _omit, ...withoutSite } = base;
+    const result = Sample.validate(withoutSite);
+    expect(result.isValid).toBe(false);
+    expect(result.errors.some((e) => e.includes('collectionSite é obrigatório'))).toBe(true);
   });
 
   it('does not emit the retired qrCode alias and preserves the canonical Data Matrix value', () => {
@@ -145,6 +154,7 @@ describe('Sample.validate', () => {
     unit: 'mL',
     quality: 'GOOD',
     linkedProject: 'PROJ-001',
+    collectionSite: 'org-test-1',
     registeredAt: new Date().toISOString(),
   };
 

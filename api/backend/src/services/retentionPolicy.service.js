@@ -3,12 +3,15 @@ const RetentionPolicyModel = require('../models/RetentionPolicy');
 const { getCollection } = require('../utils/collectionResolver');
 const logger = require('../utils/logger');
 
-// #440's scope (RF014 foundation): only the audit trail collections are
-// targetable in this slice. The dictionary's applicableEntityTypes field is
-// generic ("BioAvanceD entity types"), but the sweep job (#441) is scoped to
-// audit_events/Log, so this service rejects anything else rather than
-// accepting a policy the sweep can never apply.
-const ALLOWED_ENTITY_TYPES = ['AuditEvent', 'Log'];
+// #440 / #667: RF014 allow-list. Audit trail stays archive-only in the sweep;
+// ImportStagingRecord (#793) and NotificationComplianceLog (#812) are destroy-
+// only personal-data stores that the same cron can now target.
+const ALLOWED_ENTITY_TYPES = [
+  'AuditEvent',
+  'Log',
+  'ImportStagingRecord',
+  'NotificationComplianceLog',
+];
 
 class RetentionPolicyService {
   parseVersionNumber(version) {

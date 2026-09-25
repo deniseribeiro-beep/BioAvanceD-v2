@@ -11,7 +11,7 @@ const dictionaryRoutePath = require.resolve('../../src/routes/dictionary');
 
 // dictionary.js destructures `getNeo4jDriver` from ../database/neo4j at
 // require-time, so vi.spyOn on the already-required module has no effect
-// (see hpo.routes.test.js / testing-conventions' cjs-mocking reference).
+// (see label.routes.test.js / testing-conventions' cjs-mocking reference).
 // Clear the cache for both the dependency and the route file, swap in a
 // fake getNeo4jDriver, then require dictionary.js fresh.
 function loadRouteWithMocks({ session, createClientImpl } = {}) {

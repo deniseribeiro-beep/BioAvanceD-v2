@@ -240,7 +240,11 @@ describe('import-lgpd.controller gaps', () => {
       expect(cleanupSpy).toHaveBeenCalledWith(file.path);
       expect(res.status).toHaveBeenCalledWith(400);
       expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({ success: false, error: 'groupFields inválido' })
+        expect.objectContaining({
+          success: false,
+          error: 'groupFields inválido',
+          reason: expect.any(String),
+        })
       );
     });
 

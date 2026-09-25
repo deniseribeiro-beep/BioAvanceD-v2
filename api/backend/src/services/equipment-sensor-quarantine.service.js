@@ -5,17 +5,14 @@ const quarantineActionService = require('./quarantine-action.service');
 const logger = require('../utils/logger');
 const NormalizedPhysicalStorageStore = require('../infrastructure/persistence/mongo/NormalizedPhysicalStorageStore');
 
+// #883: routine Maintenance/Inactive must not bulk-quarantine samples.
+// Cascade only for explicit fault/offline/repair statuses.
 const QUARANTINE_TRIGGER_STATUSES = new Set([
   'offline',
   'desligado',
-  'inactive',
-  'inativo',
   'repair',
-  'maintenance',
   'aguardando reparo',
-  'awaiting repair',
-  'manutencao',
-  'manutenção'
+  'awaiting repair'
 ]);
 
 function normalizeStatus(value) {

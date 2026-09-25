@@ -4,11 +4,45 @@
  * #669): nothing before this cross-checked an *operational* write's coded
  * fields (SPREC code, ICD code, etc.) against RF028's
  * TerminologyConcept/ReferenceDatasetRelease at ingestion time — RF028's own
- * validity machinery (reference-imports/pipeline.js) only guards its own
+ * validity machinery (reference-data/reference-imports/pipeline.js) only guards its own
  * reference-import pipeline's inserts, not a downstream entity referencing
  * an already-promoted code.
+ *
+ * #714: RF005 AC#4 enumerates HPO/ORPHA/CID/MONDO/OMIM; Axis E expands that
+ * allow-list so allergen (DCB), medication (ATC/DCB) and institutional
+ * procedure URIs used by the intake wizard may pass the same active-release
+ * gate as Condition/FamilyHistory.
  */
 const { getCanonicalCollection } = require('../config/canonicalEntityCollections.v2');
+
+/**
+ * System URIs admitted by RF005 AC#4 after #714's expansion. A coded write
+ * whose systemUri is absent from this set is rejected before the
+ * TerminologyConcept lookup — unknown systems must not slip through as
+ * "unknown code" noise.
+ */
+const RF005_CODING_SYSTEM_URIS = Object.freeze([
+  // RF005 AC#4 original enumeration
+  'http://purl.obolibrary.org/obo/hp.owl',
+  'http://www.orpha.net',
+  'http://hl7.org/fhir/sid/icd-10',
+  'http://id.who.int/icd/release/11/mms',
+  'http://purl.obolibrary.org/obo/mondo.owl',
+  'https://www.omim.org',
+  // #714: allergen / medication / procedure systems used in intake
+  'https://www.gov.br/anvisa/pt-br/assuntos/farmacopeia/dcb',
+  'http://www.whocc.no/atc',
+  'urn:biobank:local-procedure-terminology',
+  // dict-02 allows SNOMED for allergen/procedure even without a local importer;
+  // codes still need an active release to pass.
+  'http://snomed.info/sct',
+]);
+
+const RF005_CODING_SYSTEM_URI_SET = new Set(RF005_CODING_SYSTEM_URIS);
+
+function isAllowedCodingSystem(systemUri) {
+  return RF005_CODING_SYSTEM_URI_SET.has(systemUri);
+}
 
 function buildResult(concept, release) {
   if (!concept) {
@@ -95,6 +129,29 @@ async function validateActiveCodes(db, codes = []) {
     const { systemUri, code, version = null, label, allowControlledReview = false } = entry || {};
     if (!systemUri || !code) continue; // presence is a contract-schema concern, not this validator's
 
+    // #714: expand / enforce RF005 AC#4 system allow-list before the lookup.
+    if (!isAllowedCodingSystem(systemUri)) {
+      const unsupported = {
+        systemUri,
+        code,
+        version,
+        label,
+        active: false,
+        status: 'unsupported_system',
+        concept: null,
+        release: null,
+      };
+      results.push(unsupported);
+      if (!allowControlledReview) {
+        violations.push({
+          code: 'UNSUPPORTED_CODING_SYSTEM',
+          field: label || `${systemUri}|${code}`,
+          message: `Sistema de codificação não permitido por RF005 AC#4: ${label || code} (${systemUri})`,
+        });
+      }
+      continue;
+    }
+
     const result = await checkActiveCode(db, { systemUri, code, version });
     results.push({ systemUri, code, version, label, ...result });
 
@@ -113,4 +170,6 @@ async function validateActiveCodes(db, codes = []) {
 module.exports = {
   checkActiveCode,
   validateActiveCodes,
+  RF005_CODING_SYSTEM_URIS,
+  isAllowedCodingSystem,
 };

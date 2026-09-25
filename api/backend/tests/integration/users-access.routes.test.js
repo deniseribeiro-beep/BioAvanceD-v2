@@ -376,7 +376,8 @@ describe('Users and Access routes', () => {
         email: 'new@example.com',
         username: 'newuser',
         password: 'Senha@123',
-        accessType: 2,
+        // #1008: omit accessType/roleName — privilege fields require assignRole.
+        // Default level is granted inside registerUser without that gate.
         actorId: randomUUID(),
       },
     });
@@ -1364,25 +1365,21 @@ describe('Users and Access routes', () => {
     expect(accessCollection.insertOne).toHaveBeenCalled();
   });
 
-  // #998 (RF003, RNF008 AC#1): role assignment is Administrador-only.
+  // #998/#1008 (RF003, RNF008 AC#1): role assignment is Administrador-only
+  // via the distinct assignRole permission. createUser alone is not enough.
   //
-  // requirePermission('createUser') is the ONLY gate on the three routes that
+  // requirePermission('createUser') is still the gate on the three routes that
   // can grant a role, and rbac-catalog-seed grants 'createUser' to the seeded
-  // Coordenador as its first permission. Nothing in requirePermission, in the
-  // handlers, or in rbac-assignment.service checked the CALLER's level against
-  // the level being granted -- so every Coordenador in a default-seeded
-  // deployment could make anyone, including themselves, an Administrador.
+  // Coordenador as its first permission — so without assignRole, every
+  // Coordenador in a default-seeded deployment could make anyone, including
+  // themselves, an Administrador.
   //
   // RF003 (requisitos-index.md:37-50) names Administrador as the actor for
   // "gerenciar ... seus papéis" and AC#3 "Atribuir papel com vigência e escopo
   // institucional". RNF008 AC#1 is deny-by-default and AC#4 says the frontend
   // guard does not substitute for backend validation -- which is what
   // App.tsx's requiredRole was doing alone.
-  //
-  // The gate follows this repo's own precedent: the in-handler
-  // isAdministrator(db, req.user.userID) check that POST /:id/disable-mfa
-  // already uses, rather than a new permission code.
-  describe('#998: only an Administrador may assign a role', () => {
+  describe('#998/#1008: only an Administrador may assign a role', () => {
     function callerCoordenador() {
       return {
         userID: TEST_USER_ACCOUNT_IDS[3],
@@ -1460,10 +1457,9 @@ describe('Users and Access routes', () => {
       await handler(req, res);
 
       expect(res.statusCode).toBe(403);
-      // #1017: was `authServiceMock.registerUser`, which passed vacuously --
-      // that mock was never installed, so the assertion held no matter what
-      // the route did. Now a real spy on the module the route actually calls.
-      expect(registerUserSpy).not.toHaveBeenCalled();
+      // #1057: floor/assignRole live in registerUser, so the service IS called
+      // and refuses before any write.
+      expect(registerUserSpy).toHaveBeenCalled();
     });
 
     // The negative halves. Without these the pair above cannot distinguish a
@@ -1488,12 +1484,9 @@ describe('Users and Access routes', () => {
       expect(res.statusCode).toBe(200);
     });
 
-    // What separates the floor that shipped from an Administrador-only gate.
-    // RF003 points at Administrador-only, which is #998 direction 2 and a
-    // larger change; the floor closes the escalation without deciding whether
-    // Coordenador should hold createUser at all. If direction 2 later lands,
-    // this test is the one that must flip.
-    it('still allows a Coordenador to assign a level at or below their own', async () => {
+    // #1008: assignRole is Administrador-only. Coordenador keeps createUser
+    // for account lifecycle but may not assign any role (even at/below own level).
+    it('#1008: refuses a Coordenador assigning a level at or below their own', async () => {
       const handler = getHandler(userRoutes, 'put', '/:id');
       seedTarget('550e8400-e29b-41d4-a716-44665544110998d');
 
@@ -1510,7 +1503,8 @@ describe('Users and Access routes', () => {
 
       await handler(req, res);
 
-      expect(res.statusCode).toBe(200);
+      expect(res.statusCode).toBe(403);
+      expect(usersCollection.updateOne).not.toHaveBeenCalled();
     });
 
     it('still allows a Coordenador to edit a user without touching their role', async () => {

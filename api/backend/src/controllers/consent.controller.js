@@ -718,7 +718,7 @@ class ConsentController {
       logger.error('Erro ao validar token de consentimento:', error.message);
       return res.status(400).json({
         success: false,
-        error: 'Link inválido ou expirado'
+        error: 'Link inválido, expirado ou substituído'
       });
     }
   }
@@ -754,7 +754,7 @@ class ConsentController {
       logger.error('Erro ao aceitar consentimento:', error.message);
       return res.status(400).json({
         success: false,
-        error: 'Link inválido ou expirado'
+        error: 'Link inválido, expirado ou substituído'
       });
     }
   }

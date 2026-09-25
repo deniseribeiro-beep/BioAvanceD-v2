@@ -10,8 +10,21 @@ const { getCollection } = require('../utils/collectionResolver');
 const { getCanonicalCollectionName } = require('../config/canonicalEntityCollections.v2');
 const { omitParticipantIdentityFields } = require('../utils/participantIdentityFields');
 const { applyOrganizationScopeFilter } = require('./rbac-assignment.service');
+const { hashToken } = require('../utils/tokenHash');
 
 const indexedPatientCollections = new Set();
+
+function hashConsentToken(token) {
+  return hashToken(token);
+}
+
+function consentTokenMatches(stored, presented) {
+  if (!stored || !presented) return false;
+  // #1049: at-rest value is sha256; accept legacy plaintext for one release
+  // window so outstanding emailed links still validate until next mint.
+  if (stored === presented) return true;
+  return stored === hashConsentToken(presented);
+}
 
 /**
  * Service de Pacientes
@@ -678,7 +691,7 @@ class PatientService {
 
       const consentMetadata = notificationService.buildConsentMetadata();
       patientData.status = 'PENDING_CONSENT';
-      patientData.consentToken = consentMetadata.token;
+      patientData.consentToken = hashConsentToken(consentMetadata.token);
       patientData.consentTokenCreatedAt = consentMetadata.createdAt;
       patientData.consentTokenExpiresAt = consentMetadata.expiresAt;
 
@@ -1175,7 +1188,7 @@ class PatientService {
       throw new Error('Paciente não está pendente de consentimento');
     }
 
-    if (!patient.consentToken || patient.consentToken !== token) {
+    if (!consentTokenMatches(patient.consentToken, token)) {
       throw new Error('Token inválido');
     }
 
@@ -1224,22 +1237,14 @@ class PatientService {
       throw new Error('Paciente não está pendente de consentimento');
     }
 
-    const now = new Date();
-    const expiresAt = patient.consentTokenExpiresAt ? new Date(patient.consentTokenExpiresAt) : null;
-    const hasValidToken = Boolean(patient.consentToken && expiresAt && expiresAt > now);
-
-    let token = patient.consentToken;
-    let tokenCreatedAt = patient.consentTokenCreatedAt ? new Date(patient.consentTokenCreatedAt) : null;
-    let tokenExpiresAt = expiresAt;
-
-    if (!hasValidToken) {
-      const consentMetadata = notificationService.buildConsentMetadata();
-      token = consentMetadata.token;
-      tokenCreatedAt = consentMetadata.createdAt;
-      tokenExpiresAt = consentMetadata.expiresAt;
-    } else {
-      void 0;
-    }
+    // #1049: always mint a fresh token (invalidate any prior emailed link).
+    const consentMetadata = notificationService.buildConsentMetadata();
+    const token = consentMetadata.token;
+    const tokenCreatedAt = consentMetadata.createdAt;
+    const tokenExpiresAt = consentMetadata.expiresAt;
+    const previousToken = patient.consentToken;
+    const previousCreatedAt = patient.consentTokenCreatedAt || null;
+    const previousExpiresAt = patient.consentTokenExpiresAt || null;
 
     // RF005/RNF007 (#561/#564): patientName resolved via ParticipantIdentity
     // instead of read directly off the Patient document.
@@ -1251,31 +1256,51 @@ class PatientService {
     const identity = rawIdentity ? participantIdentityService.decryptIdentity(rawIdentity) : null;
     const patientWithIdentity = identity ? { ...patient, patientName: identity.patientName } : patient;
 
+    await patientsCollection.updateOne(
+      { _id: patient._id },
+      {
+        $set: {
+          consentToken: hashConsentToken(token),
+          consentTokenCreatedAt: tokenCreatedAt,
+          consentTokenExpiresAt: tokenExpiresAt,
+          updatedAt: new Date()
+        }
+      }
+    );
+
     const consentLink = notificationService.buildConsentLink(patientWithIdentity, token);
-    await notificationService.enqueueConsentNotification(patientWithIdentity, consentLink);
-
-    const updatePayload = {
-      consentNotifiedAt: new Date(),
-      updatedAt: new Date()
-    };
-
-    if (!hasValidToken) {
-      updatePayload.consentToken = token;
-      updatePayload.consentTokenCreatedAt = tokenCreatedAt;
-      updatePayload.consentTokenExpiresAt = tokenExpiresAt;
-    } else {
-      void 0;
+    try {
+      await notificationService.enqueueConsentNotification(patientWithIdentity, consentLink);
+    } catch (notifyError) {
+      // #836: do not leave the participant worse off if delivery fails.
+      await patientsCollection.updateOne(
+        { _id: patient._id },
+        {
+          $set: {
+            consentToken: previousToken,
+            consentTokenCreatedAt: previousCreatedAt,
+            consentTokenExpiresAt: previousExpiresAt,
+            updatedAt: new Date()
+          }
+        }
+      );
+      throw notifyError;
     }
 
     await patientsCollection.updateOne(
       { _id: patient._id },
-      { $set: updatePayload }
+      {
+        $set: {
+          consentNotifiedAt: new Date(),
+          updatedAt: new Date()
+        }
+      }
     );
 
     return {
       success: true,
       participantId,
-      reusedToken: hasValidToken,
+      reusedToken: false,
       consentTokenExpiresAt: tokenExpiresAt
     };
   }

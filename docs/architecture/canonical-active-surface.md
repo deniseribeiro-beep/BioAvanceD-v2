@@ -23,7 +23,6 @@ Classification:
 - `api/backend/app.js` - active backend entrypoint.
 - `api/backend/src/interface/routes/auth.routes.js` - mounted at `/api/auth`.
 - `api/backend/src/interface/routes/orphanet.routes.js` - mounted at `/api/orphanet`.
-- `api/backend/src/interface/routes/hpo.routes.js` - mounted at `/api/hpo`.
 - `api/backend/src/interface/routes/patient.routes.js` - mounted at `/api/patients` and `/api/v1/patients`.
 - `api/backend/src/interface/routes/sample.routes.js` - mounted at `/api/samples`.
 - `api/backend/src/interface/routes/label.routes.js` - mounted at `/api/labels`.

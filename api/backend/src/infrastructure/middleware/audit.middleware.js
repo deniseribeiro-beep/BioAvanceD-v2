@@ -89,7 +89,10 @@ const auditRequest = async (req, res, next) => {
               path: requestPath,
               statusCode: statusCode,
               duration: duration,
-              query: Object.keys(req.query).length > 0 ? 'present' : null
+              query: Object.keys(req.query).length > 0 ? 'present' : null,
+              // #1120: machine-ingest controllers set this so empty sensorId
+              // vs non-finite temperature are distinguishable on CREATE_FAILED.
+              ...(res.locals?.auditReason ? { reason: res.locals.auditReason } : {})
             }
           });
         }

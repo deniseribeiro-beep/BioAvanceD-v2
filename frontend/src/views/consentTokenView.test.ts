@@ -110,7 +110,7 @@ describe('normalizeConsentTemplate', () => {
 
 describe('mapConsentTokenError', () => {
   it('reports an invalid or expired link for 400', () => {
-    expect(mapConsentTokenError(400)).toMatch(/inválido|expirado/i);
+    expect(mapConsentTokenError(400)).toMatch(/inválido|expirado|substituído/i);
   });
 
   // A 503 means the token was fine and the term could not be loaded. Telling

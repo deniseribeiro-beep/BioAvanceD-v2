@@ -43,7 +43,10 @@ describe('fhir-import-staging.controller', () => {
 
       expect(fhirImportStagingService.stageBundle).toHaveBeenCalledWith('the-db', bundle, {
         fileName: 'bundle.json',
-        userID: 'u-1'
+        userID: 'u-1',
+        organizationScope: null,
+        organizationId: null,
+        organizationIds: [],
       });
       expect(res.status).toHaveBeenCalledWith(201);
       expect(res.json).toHaveBeenCalledWith({
@@ -68,7 +71,10 @@ describe('fhir-import-staging.controller', () => {
 
       expect(fhirImportStagingService.stageBundle).toHaveBeenCalledWith('the-db', payload, {
         fileName: undefined,
-        userID: null
+        userID: null,
+        organizationScope: null,
+        organizationId: null,
+        organizationIds: [],
       });
     });
 
@@ -85,7 +91,10 @@ describe('fhir-import-staging.controller', () => {
 
       expect(fhirImportStagingService.stageBundle).toHaveBeenCalledWith('the-db', expect.anything(), {
         fileName: undefined,
-        userID: null
+        userID: null,
+        organizationScope: null,
+        organizationId: null,
+        organizationIds: [],
       });
     });
 
@@ -147,14 +156,21 @@ describe('fhir-import-staging.controller', () => {
 
   describe('getBatch', () => {
     it('happy path: returns 200 with the batch result', async () => {
-      const req = { app: { locals: { db: 'the-db' } }, params: { id: 'batch-1' } };
+      const organizationScope = { scope: 'organization', organizationIds: ['org-1'] };
+      const req = {
+        app: { locals: { db: 'the-db' } },
+        params: { id: 'batch-1' },
+        organizationScope,
+      };
       const res = createRes();
 
       vi.spyOn(fhirImportStagingService, 'getBatch').mockResolvedValue({ batch: { id: 'batch-1' } });
 
       await controller.getBatch(req, res);
 
-      expect(fhirImportStagingService.getBatch).toHaveBeenCalledWith('the-db', 'batch-1');
+      expect(fhirImportStagingService.getBatch).toHaveBeenCalledWith('the-db', 'batch-1', {
+        organizationScope,
+      });
       expect(res.status).toHaveBeenCalledWith(200);
       expect(res.json).toHaveBeenCalledWith({ success: true, batch: { id: 'batch-1' } });
     });

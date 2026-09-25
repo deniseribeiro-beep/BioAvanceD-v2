@@ -43,12 +43,16 @@ const LEGACY_ROLES_SEED = {
     {
       accessType: 3,
       roleName: 'Coordenador',
-      permissions: ['createUser', 'createSample', 'editSample', 'createPatient', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageSensor', 'recordTemperature', 'viewReports', 'createResult', 'editResult', 'deleteResult', 'manageAccessRequests', 'manageReportTemplates', 'manageStorageAllocation', 'manageStorageTopology'],
+      // #662: manageAccessRequests is Administrador-only until a real committee
+      // workflow exists (same sensitivity posture as reidentifyParticipant).
+      // #1008: assignRole is Administrador-only — Coordenador keeps createUser
+      // for account lifecycle without role assignment.
+      permissions: ['createUser', 'createSample', 'editSample', 'createPatient', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageSensor', 'recordTemperature', 'viewReports', 'createResult', 'editResult', 'deleteResult', 'manageReportTemplates', 'manageStorageAllocation', 'manageStorageTopology'],
     },
     {
       accessType: 4,
       roleName: 'Administrador',
-      permissions: ['createUser', 'createSample', 'editSample', 'deleteSample', 'createPatient', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageSensor', 'recordTemperature', 'viewReports', 'manageBackup', 'manageSystem', 'resetMFA', 'forcePasswordReset', 'disableMFA', 'manageOrganizations', 'createResult', 'editResult', 'deleteResult', 'reidentifyParticipant', 'manageAccessRequests', 'manageReportTemplates', 'manageStorageAllocation', 'manageStorageTopology'],
+      permissions: ['createUser', 'createSample', 'editSample', 'deleteSample', 'createPatient', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageSensor', 'recordTemperature', 'viewReports', 'manageBackup', 'manageSystem', 'resetMFA', 'forcePasswordReset', 'disableMFA', 'manageOrganizations', 'createResult', 'editResult', 'deleteResult', 'reidentifyParticipant', 'manageAccessRequests', 'assignRole', 'manageReportTemplates', 'manageStorageAllocation', 'manageStorageTopology'],
     },
   ],
 };
@@ -96,6 +100,10 @@ const PERMISSION_CATALOG = {
   viewTemperature: { resourceType: 'Temperature', allowedActions: ['CREATE', 'READ', 'UPDATE', 'DELETE'], displayName: 'Visualizar temperatura' },
   uploadFiles: { resourceType: 'SampleFile', allowedActions: ['CREATE', 'READ', 'UPDATE'], displayName: 'Enviar arquivos' },
   createUser: { resourceType: 'User', allowedActions: ['CREATE', 'READ', 'UPDATE', 'DELETE'], displayName: 'Criar usuário' },
+  // #1008 (RF003): distinct from createUser — role assignment is
+  // Administrador-only. createUser holders (Coordenador) may still create
+  // accounts at the default level without supplying accessType/roleName.
+  assignRole: { resourceType: 'User', allowedActions: ['UPDATE'], displayName: 'Atribuir papel' },
   editSample: { resourceType: 'Sample', allowedActions: ['UPDATE'], displayName: 'Editar amostra' },
   deleteSample: { resourceType: 'Sample', allowedActions: ['DELETE'], displayName: 'Excluir amostra' },
   createPatient: { resourceType: 'Patient', allowedActions: ['CREATE', 'READ', 'UPDATE', 'DELETE'], displayName: 'Criar paciente' },
@@ -162,6 +170,7 @@ const PERMISSION_CATALOG = {
   // RF024 (#646 Wave 3): create/evaluate/decide/distribute/revoke all live
   // behind this one code — see accessRequest.js's own comment for why no
   // dedicated researcher/committee role exists to split it across.
+  // #662: Administrador-only until a real committee workflow exists.
   manageAccessRequests: { resourceType: 'AccessRequest', allowedActions: ['CREATE', 'READ', 'UPDATE'], displayName: 'Gerenciar solicitações de acesso' },
   // RF008 AC#6 (#726): Coordenador/Administrador-only -- lets a report
   // template be created/edited without a code change to reports.routes.js.

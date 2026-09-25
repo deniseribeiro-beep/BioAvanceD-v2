@@ -83,6 +83,8 @@ const validSample = (overrides = {}) => ({
   quality: 'GOOD',
   linkedProject: 'Projeto QA',
   registeredAt: '2026-01-01',
+  // #1092: SampleModel.validate requires collectionSite.
+  collectionSite: 'org-import-1',
   ...overrides,
 });
 
@@ -271,7 +273,7 @@ describe('ImportService.importSamples (CSV)', () => {
   it('records a parse error (non-numeric quantity) without stopping the batch, counting it in total', async () => {
     const filePath = writeTmpFile(
       'parse-error.csv',
-      'participantId,sampleType,sampleOrigin,extractionProtocol,quantity,quality,linkedProject,registeredAt\n12345678,PLASMA,VENOUS_BLOOD,TUBE_EDTA,notanumber,GOOD,Projeto QA,2026-01-01\n',
+      'participantId,collectionSite,sampleType,sampleOrigin,extractionProtocol,quantity,quality,linkedProject,registeredAt\n12345678,org-import-1,PLASMA,VENOUS_BLOOD,TUBE_EDTA,notanumber,GOOD,Projeto QA,2026-01-01\n',
     );
     const collection = makeSamplesCollection();
 
@@ -286,7 +288,7 @@ describe('ImportService.importSamples (CSV)', () => {
   it('records a model-validation error for a row with an invalid sampleType, counting it in total', async () => {
     const filePath = writeTmpFile(
       'invalid-row.csv',
-      'participantId,sampleType,sampleOrigin,extractionProtocol,quantity,quality,linkedProject,registeredAt\n12345678,NOT_A_TYPE,VENOUS_BLOOD,TUBE_EDTA,1.5,GOOD,Projeto QA,2026-01-01\n',
+      'participantId,collectionSite,sampleType,sampleOrigin,extractionProtocol,quantity,quality,linkedProject,registeredAt\n12345678,org-import-1,NOT_A_TYPE,VENOUS_BLOOD,TUBE_EDTA,1.5,GOOD,Projeto QA,2026-01-01\n',
     );
     const collection = makeSamplesCollection();
 
@@ -302,7 +304,7 @@ describe('ImportService.importSamples (CSV)', () => {
     vi.spyOn(SampleGraphValidator.prototype, 'validateSampleCompliance').mockRejectedValue(new Error('graph down'));
     const filePath = writeTmpFile(
       'valid-row.csv',
-      'participantId,sampleType,sampleOrigin,extractionProtocol,quantity,quality,linkedProject,registeredAt\n12345678,PLASMA,VENOUS_BLOOD,TUBE_EDTA,1.5,GOOD,Projeto QA,2026-01-01\n',
+      'participantId,collectionSite,sampleType,sampleOrigin,extractionProtocol,quantity,quality,linkedProject,registeredAt\n12345678,org-import-1,PLASMA,VENOUS_BLOOD,TUBE_EDTA,1.5,GOOD,Projeto QA,2026-01-01\n',
     );
     const collection = makeSamplesCollection();
 
@@ -369,8 +371,8 @@ describe('ImportService.importSamples item 8 non-Error dependency failures', () 
     const filePath = writeTmpFile(
       'non-error-dependencies.csv',
       [
-        'participantId,sampleType,sampleOrigin,extractionProtocol,quantity,quality,linkedProject,registeredAt,sprec_matrix_type,sprec_sample_type,sprec_primary_container,sprec_pre_centrifugation,sprec_centrifugation,sprec_second_centrifugation,sprec_post_centrifugation_delay,sprec_long_term_storage',
-        '12345678,PLASMA,VENOUS_BLOOD,TUBE_EDTA,1.5,GOOD,Projeto QA,2026-01-01,fluid,BLD,PED,C,A,D,E,F',
+        'participantId,collectionSite,sampleType,sampleOrigin,extractionProtocol,quantity,quality,linkedProject,registeredAt,sprec_matrix_type,sprec_sample_type,sprec_primary_container,sprec_pre_centrifugation,sprec_centrifugation,sprec_second_centrifugation,sprec_post_centrifugation_delay,sprec_long_term_storage',
+        '12345678,org-import-1,PLASMA,VENOUS_BLOOD,TUBE_EDTA,1.5,GOOD,Projeto QA,2026-01-01,fluid,BLD,PED,C,A,D,E,F',
       ].join('\n')
     );
 

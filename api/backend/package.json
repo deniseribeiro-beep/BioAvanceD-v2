@@ -9,7 +9,7 @@
     "dev": "nodemon server.js",
     "worker": "node ./src/workers/worker.js",
     "worker:dev": "nodemon ./src/workers/worker.js",
-    "create-db": "node scripts/create-db.js",
+    "create-db": "node scripts/run-foundation-data-pipeline.js",
     "migrate:rcs": "node src/scripts/migrate-rcs-governance-indexes.js",
     "migrate:location-storage": "node src/scripts/backfillLocationStorage.js",
     "migrate:user-role-assignments": "node src/scripts/backfillUserRoleAssignments.js",

@@ -261,18 +261,21 @@ describe('user.routes item 8 residual branch coverage', () => {
         phone: '11999990000',
         organizationId: null,
       }),
+      undefined,
       undefined
     );
     expect(registerSpy).toHaveBeenNthCalledWith(
       2,
       db,
       expect.objectContaining({ phone: null, organizationId: null }),
+      undefined,
       undefined
     );
     expect(registerSpy).toHaveBeenNthCalledWith(
       3,
       db,
       expect.objectContaining({ phone: null }),
+      undefined,
       undefined
     );
 
@@ -697,6 +700,7 @@ describe('user.routes item 8 register-sample and normalization alternates', () =
     expect(register).toHaveBeenCalledWith(
       db,
       expect.objectContaining({ phone: 5511999999999, organizationId: 123 }),
+      undefined,
       undefined
     );
   });
@@ -1151,6 +1155,7 @@ describe('user.routes item 8 remaining PUT governance branches', () => {
     const rbacAssignment = require('../../src/services/rbac-assignment.service');
     vi.spyOn(UserModel, 'validate').mockReturnValue({ isValid: true, errors: [] });
     vi.spyOn(rbacAssignment, 'isAdministrator').mockResolvedValue(false);
+    vi.spyOn(rbacAssignment, 'userHasPermission').mockResolvedValue(true);
     const hierarchy = vi.spyOn(rbacAssignment, 'resolveUserHierarchyLevel')
       .mockResolvedValueOnce(2)
       .mockResolvedValueOnce(3);
@@ -1262,6 +1267,7 @@ describe('user.routes item 8 remaining RBAC mutation branches', () => {
 
   it('changes a target role when the requested hierarchy is within the caller level', async () => {
     const { rbacAssignment } = installCommonUpdateMocks();
+    vi.spyOn(rbacAssignment, 'userHasPermission').mockResolvedValue(true);
     vi.spyOn(rbacAssignment, 'resolveUserHierarchyLevel')
       .mockResolvedValueOnce(2)
       .mockResolvedValueOnce(4);
@@ -1413,10 +1419,11 @@ describe('user.routes item 8 HTTP alternate outcomes', () => {
   });
 
   it('blocks register when the requested access level exceeds the caller hierarchy', async () => {
-    const assignment = require('../../src/services/rbac-assignment.service');
     const authService = require('../../src/services/auth.service');
-    vi.spyOn(assignment, 'resolveUserHierarchyLevel').mockResolvedValue(2);
-    const register = vi.spyOn(authService, 'registerUser');
+    // #1057: floor lives in registerUser; route maps statusCode 403.
+    const err = new Error('Não é possível criar um usuário com nível de acesso superior ao seu.');
+    err.statusCode = 403;
+    const register = vi.spyOn(authService, 'registerUser').mockRejectedValue(err);
     const { router } = loadRoute();
 
     const res = await request(buildApp(router, { db: { collection: vi.fn() } }))
@@ -1424,7 +1431,7 @@ describe('user.routes item 8 HTTP alternate outcomes', () => {
       .send({ accessType: 4 });
 
     expect(res.status).toBe(403);
-    expect(register).not.toHaveBeenCalled();
+    expect(register).toHaveBeenCalled();
   });
 
   it('normalizes optional register fields and skips audit when there is no authenticated actor', async () => {
@@ -1454,6 +1461,7 @@ describe('user.routes item 8 HTTP alternate outcomes', () => {
     expect(register).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ phone: '1199990000', organizationId: null }),
+      undefined,
       undefined
     );
     expect(audit).not.toHaveBeenCalled();

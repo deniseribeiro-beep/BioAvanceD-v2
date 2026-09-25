@@ -913,8 +913,15 @@ describe('ConsentService.createPolicy', () => {
       expect(notified).toEqual(['10203041', '10203042', '10203043']);
     });
 
-    it('persists a consentToken for the patient whose delivery failed, so a resend can validate it', async () => {
+    // #836: on delivery failure, restore the prior token (do not leave the
+    // freshly minted hash standing while the emailed link never arrived).
+    it('restores the prior consentToken when republish delivery fails (#836)', async () => {
+      const priorCreatedAt = new Date('2026-09-01T00:00:00.000Z');
+      const priorExpiresAt = new Date('2026-09-08T00:00:00.000Z');
       const pending = THREE_PENDING();
+      pending[0].consentToken = 'prior-hash';
+      pending[0].consentTokenCreatedAt = priorCreatedAt;
+      pending[0].consentTokenExpiresAt = priorExpiresAt;
       const { db, participants } = setup(pending);
       vi.spyOn(notificationService, 'enqueueConsentNotification').mockImplementation(async (patient) => {
         if (patient.participantId === '10203041') throw new Error('CONSENT_RECIPIENT_REQUIRED');
@@ -922,7 +929,32 @@ describe('ConsentService.createPolicy', () => {
 
       await consentService.updatePolicy(db, PREVIOUS_POLICY_ID.toString(), POLICY_PAYLOAD);
 
-      expect(tokenedParticipants(participants, pending)).toEqual(['10203041', '10203042', '10203043']);
+      const failedId = String(pending[0]._id);
+      const restoreCall = participants.updateOne.mock.calls.find(
+        ([filter, update]) =>
+          String(filter._id) === failedId && update?.$set?.consentToken === 'prior-hash'
+      );
+      expect(restoreCall).toBeDefined();
+      expect(restoreCall[1].$set.consentTokenCreatedAt).toEqual(priorCreatedAt);
+      expect(restoreCall[1].$set.consentTokenExpiresAt).toEqual(priorExpiresAt);
+
+      const successIds = ['10203042', '10203043'];
+      for (const participantId of successIds) {
+        const patient = pending.find((p) => p.participantId === participantId);
+        const mintCall = participants.updateOne.mock.calls.find(
+          ([filter, update]) =>
+            String(filter._id) === String(patient._id) &&
+            typeof update?.$set?.consentToken === 'string' &&
+            update.$set.consentToken.length === 64
+        );
+        expect(mintCall).toBeDefined();
+      }
+
+      const notifiedIds = participants.updateOne.mock.calls
+        .filter(([, update]) => update?.$set?.consentNotifiedAt !== undefined)
+        .map(([filter]) => pending.find((p) => String(p._id) === String(filter._id))?.participantId);
+      expect(notifiedIds).toEqual(['10203042', '10203043']);
+      expect(notifiedIds).not.toContain('10203041');
     });
 
     it('does not mark a patient as notified when their delivery threw', async () => {

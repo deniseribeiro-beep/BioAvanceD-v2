@@ -544,7 +544,16 @@ describe('batch-validation-engine item8 process and classification coverage', ()
 
     const result = await engine.processBatchImport({}, 'job-json');
 
-    expect(persist).toHaveBeenCalledWith({}, rows[0], 1);
+    expect(persist).toHaveBeenCalledWith(
+      {},
+      rows[0],
+      1,
+      expect.objectContaining({
+        organizationId: null,
+        organizationIds: [],
+        actor: expect.objectContaining({ organizationId: null, organizationIds: [] }),
+      })
+    );
     expect(result).toMatchObject({ invalidRows: 1, validRows: 0, partialRows: 0 });
     expect(result).not.toHaveProperty('quarantineBatchId');
     expect(updateProgress).toHaveBeenLastCalledWith(

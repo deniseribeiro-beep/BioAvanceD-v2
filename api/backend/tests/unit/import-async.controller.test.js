@@ -305,7 +305,8 @@ describe('import-async.controller', () => {
       expect(res.status).toHaveBeenCalledWith(400);
       const body = res.json.mock.calls[0][0];
       expect(body.success).toBe(false);
-      expect(body.error).toBe('Formato inválido para groupFields. Use JSON válido.');
+      expect(body.error).toBe('groupFields inválido');
+      expect(body.reason).toBe('malformed');
       expect(typeof body.message).toBe('string');
     });
 

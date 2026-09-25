@@ -3,6 +3,7 @@ const logService = require('../services/log.service');
 const logger = require('../utils/logger');
 const { isRecordInOrganizationScope } = require('../services/rbac-assignment.service');
 const { resolveOrganizationIdForCreate } = require('../services/rbac-assignment.service');
+const { classifyTemperatureReadingRejection } = require('../utils/machineIngestRejection');
 
 // #1080: organization resolution for the machine-ingest path.
 //
@@ -106,18 +107,25 @@ class TemperatureController {
       });
     } catch (error) {
       logger.error('Erro ao registrar temperatura:', error.message);
+      // #1120: reason discriminator for the automatic CREATE_FAILED row
+      // (audit.middleware reads res.locals.auditReason). Fail-open — no
+      // separate audit write here so a trail failure cannot mask the 4xx.
+      const rejectionReason = classifyTemperatureReadingRejection(req.body, error);
+      res.locals.auditReason = rejectionReason;
       // #636: organizationId lookup failures throw statusCode:404.
       if (error.statusCode === 404) {
         return res.status(404).json({
           success: false,
           error: error.message,
-          message: error.message
+          message: error.message,
+          reason: rejectionReason
         });
       }
       return res.status(400).json({
         success: false,
         error: 'Erro ao registrar temperatura',
-        message: error.message
+        message: error.message,
+        reason: rejectionReason
       });
     }
   }

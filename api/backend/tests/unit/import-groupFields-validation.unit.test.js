@@ -3,7 +3,7 @@ import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 
-const { parseGroupFields } = require('../../src/utils/importGroupFields');
+const { parseGroupFields, formatGroupFieldsError } = require('../../src/utils/importGroupFields');
 
 describe('parseGroupFields', () => {
   describe('empty input', () => {
@@ -31,6 +31,19 @@ describe('parseGroupFields', () => {
     it('rejects a malformed JSON string with reason "malformed" instead of throwing', () => {
       expect(() => parseGroupFields('{not json')).not.toThrow();
       expect(parseGroupFields('{not json')).toEqual({ ok: false, reason: 'malformed' });
+    });
+  });
+
+  describe('formatGroupFieldsError (#840)', () => {
+    it('returns the shared reason-token body for malformed/shape/value', () => {
+      expect(formatGroupFieldsError('malformed')).toEqual({
+        success: false,
+        error: 'groupFields inválido',
+        reason: 'malformed',
+        message: 'groupFields deve ser um JSON válido',
+      });
+      expect(formatGroupFieldsError('shape').reason).toBe('shape');
+      expect(formatGroupFieldsError('value').reason).toBe('value');
     });
   });
 

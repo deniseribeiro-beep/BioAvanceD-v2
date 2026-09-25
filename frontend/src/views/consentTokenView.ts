@@ -89,7 +89,8 @@ export function normalizeConsentTemplate(raw: unknown): ConsentTokenTemplate | n
 
 export function mapConsentTokenError(status?: number): string {
   if (status === 400) {
-    return 'Link inválido ou expirado. Solicite um novo convite à equipe do biobanco.';
+    // #836: opaque message (#823) also covers republished/replaced invitations.
+    return 'Link inválido, expirado ou substituído por uma versão mais recente do termo. Solicite um novo convite à equipe do biobanco.';
   }
   if (status === 503) {
     // The token was accepted; the term itself could not be loaded.

@@ -102,3 +102,49 @@ describe('#948: restore scratch is disk-backed, not an in-RAM tmpfs', () => {
     expect(svc.getLatestBackupPath()).toBeNull();
   });
 });
+
+// #957: boot must clear orphaned decrypted restore trees left by a crash.
+describe('#957: sweepRestoreScratch clears orphaned decrypt trees', () => {
+  const created = [];
+
+  afterEach(() => {
+    for (const dir of created.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+    delete process.env.BACKUP_DIR;
+    delete process.env.RESTORE_SCRATCH_DIR;
+    delete require.cache[MODULE_PATH];
+    delete require.cache[ENV_PATH];
+  });
+
+  function makeBackupDir() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bioavanced-957-'));
+    created.push(dir);
+    return dir;
+  }
+
+  it('removes children under the scratch base and leaves the base itself', async () => {
+    const backupDir = makeBackupDir();
+    const svc = freshServiceWithBackupDir(backupDir);
+    const scratchBase = svc.getRestoreScratchBaseDir();
+    const orphan = path.join(scratchBase, 'bioavanced-restore-decrypt-orphan');
+    fs.mkdirSync(orphan, { recursive: true });
+    fs.writeFileSync(path.join(orphan, 'dump.bson'), 'plaintext');
+
+    const result = await svc.sweepRestoreScratch();
+
+    expect(result.removed).toBe(1);
+    expect(result.skipped).toBe(false);
+    expect(fs.existsSync(orphan)).toBe(false);
+    expect(fs.existsSync(scratchBase)).toBe(true);
+  });
+
+  it('is a no-op when the scratch base does not exist yet', async () => {
+    const backupDir = makeBackupDir();
+    const svc = freshServiceWithBackupDir(backupDir);
+
+    const result = await svc.sweepRestoreScratch();
+
+    expect(result).toEqual({ removed: 0, skipped: true });
+  });
+});

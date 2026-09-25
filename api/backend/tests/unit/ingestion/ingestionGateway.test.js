@@ -32,10 +32,12 @@ function validSpecimen(overrides = {}) {
 }
 
 describe('ingestion/ingestionGateway (RF029; canonical v2.0.0)', () => {
+  const HPO_SYSTEM = 'http://purl.obolibrary.org/obo/hp.owl';
+
   it('accepts a payload that passes provenance, v2 contract, reference, and active-code checks', async () => {
     const db = createFakeDb({
       participants: [{ participantId: PARTICIPANT_ID }],
-      terminologyConcepts: [{ systemUri: 'sys:x', code: 'C1', conceptStatus: 'active', referenceDatasetReleaseId: 'rel-1' }],
+      terminologyConcepts: [{ systemUri: HPO_SYSTEM, code: 'HP:0001250', conceptStatus: 'active', referenceDatasetReleaseId: 'rel-1' }],
       referenceDatasetReleases: [{ referenceDatasetReleaseId: 'rel-1', releaseStatus: 'active' }],
       ingestionQuarantineRecords: [],
     });
@@ -46,7 +48,7 @@ describe('ingestion/ingestionGateway (RF029; canonical v2.0.0)', () => {
       payload: validSpecimen(),
       provenance: validProvenance(),
       references: [{ collection: 'participants', field: 'participantId', value: PARTICIPANT_ID, label: 'participantId' }],
-      referenceCodes: [{ systemUri: 'sys:x', code: 'C1', label: 'sampleTypeCode' }],
+      referenceCodes: [{ systemUri: HPO_SYSTEM, code: 'HP:0001250', label: 'sampleTypeCode' }],
     });
 
     expect(outcome.status).toBe('accepted');
@@ -91,7 +93,7 @@ describe('ingestion/ingestionGateway (RF029; canonical v2.0.0)', () => {
       entityType: 'Specimen',
       payload: validSpecimen(),
       provenance: validProvenance(),
-      referenceCodes: [{ systemUri: 'sys:x', code: 'UNKNOWN', label: 'sampleTypeCode' }],
+      referenceCodes: [{ systemUri: 'http://purl.obolibrary.org/obo/hp.owl', code: 'UNKNOWN', label: 'sampleTypeCode' }],
     });
 
     expect(outcome.status).toBe('quarantined');

@@ -17,6 +17,7 @@ const TemperatureIncidentModel = require('../models/TemperatureIncident');
 const EnvironmentalExcursionModel = require('../models/EnvironmentalExcursion');
 const coldChainQuarantineService = require('../services/equipment-sensor-quarantine.service');
 const notificationDispatchService = require('../services/notificationDispatch.service');
+const { classifyTelemetryRejection } = require('../utils/machineIngestRejection');
 
 const sensorPolicyCache = new Map();
 const SENSOR_POLICY_CACHE_TTL_MS = 60 * 1000;
@@ -181,8 +182,18 @@ async function ingestTelemetry(req, res) {
     const normalizedTemperature = Number(temperature);
     const normalizedTimestamp = timestamp ? new Date(timestamp) : new Date();
 
-    if (!normalizedSensorId || !Number.isFinite(normalizedTemperature)) {
-      return res.status(400).json({ success: false, error: 'sensorId e temperature são obrigatórios' });
+    // #1120: name WHICH validation failed (MQTT already did). Middleware
+    // picks `res.locals.auditReason` into the automatic CREATE_FAILED row.
+    // Fail-open: no audit write here — availability of the ingest response
+    // must not depend on the trail (same posture as the accepted-path catch).
+    const rejectionReason = classifyTelemetryRejection({ sensorId, temperature });
+    if (rejectionReason) {
+      res.locals.auditReason = rejectionReason;
+      return res.status(400).json({
+        success: false,
+        error: 'sensorId e temperature são obrigatórios',
+        reason: rejectionReason
+      });
     }
 
     void Promise.resolve().then(() => saveTelemetryPoint(normalizedSensorId, normalizedTemperature, normalizedTimestamp)).catch((error) => {

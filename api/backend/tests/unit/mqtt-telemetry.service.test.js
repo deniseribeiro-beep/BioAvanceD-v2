@@ -215,7 +215,7 @@ describe('mqtt-telemetry.service', () => {
       }));
     });
 
-    it('rejects as invalid_payload when sensorId is missing', async () => {
+    it('rejects as empty_sensorId when sensorId is missing (#1120)', async () => {
       const auditSpy = vi.spyOn(mqttIngestionAuditService, 'append').mockResolvedValue();
       const processSpy = vi.spyOn(iotStreamingService, 'processTemperatureData').mockResolvedValue();
       vi.spyOn(mqttSignatureService, 'hashPayload').mockReturnValue('hash123');
@@ -227,11 +227,11 @@ describe('mqtt-telemetry.service', () => {
       expect(processSpy).not.toHaveBeenCalled();
       expect(auditSpy).toHaveBeenCalledWith(db, expect.objectContaining({
         status: 'rejected',
-        reason: 'invalid_payload'
+        reason: 'empty_sensorId'
       }));
     });
 
-    it('rejects as invalid_payload when temperatureValue is non-finite', async () => {
+    it('rejects as non_finite_temperature when temperatureValue is non-finite (#1120)', async () => {
       const auditSpy = vi.spyOn(mqttIngestionAuditService, 'append').mockResolvedValue();
       const processSpy = vi.spyOn(iotStreamingService, 'processTemperatureData').mockResolvedValue();
       vi.spyOn(mqttSignatureService, 'hashPayload').mockReturnValue('hash123');
@@ -243,7 +243,7 @@ describe('mqtt-telemetry.service', () => {
       expect(processSpy).not.toHaveBeenCalled();
       expect(auditSpy).toHaveBeenCalledWith(db, expect.objectContaining({
         status: 'rejected',
-        reason: 'invalid_payload'
+        reason: 'non_finite_temperature'
       }));
     });
 

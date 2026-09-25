@@ -84,12 +84,21 @@ function makeActiveCodeCollections() {
     // #698: RF028's real OMIM importer stores bare digits, no "OMIM:" prefix.
     { systemUri: OMIM_SYSTEM_URI, code: '154700', version: '2026-01', conceptStatus: 'active', referenceDatasetReleaseId: 'release-omim' },
     { systemUri: 'http://hl7.org/fhir/sid/icd-10', code: 'A00', version: '2026-01', conceptStatus: 'active', referenceDatasetReleaseId: 'release-icd10' },
+    // #714: allergen / medication / procedure systems used by the intake wizard.
+    { systemUri: 'http://www.whocc.no/atc', code: 'A10BA02', version: '2026-01', conceptStatus: 'active', referenceDatasetReleaseId: 'release-atc' },
+    { systemUri: 'https://www.gov.br/anvisa/pt-br/assuntos/farmacopeia/dcb', code: '03730', version: '2026-01', conceptStatus: 'active', referenceDatasetReleaseId: 'release-dcb' },
+    { systemUri: 'urn:biobank:local-procedure-terminology', code: 'LOCAL-001', version: '2026-01', conceptStatus: 'active', referenceDatasetReleaseId: 'release-local-proc' },
+    { systemUri: 'urn:biobank:local-procedure-terminology', code: 'LOCAL-002', version: '2026-01', conceptStatus: 'active', referenceDatasetReleaseId: 'release-local-proc' },
+    { systemUri: 'urn:biobank:local-procedure-terminology', code: 'LOCAL-003', version: '2026-01', conceptStatus: 'active', referenceDatasetReleaseId: 'release-local-proc' },
   ];
   const referenceDatasetReleases = [
     { referenceDatasetReleaseId: 'release-orpha', datasetCode: 'ORPHA', releaseStatus: 'active' },
     { referenceDatasetReleaseId: 'release-hpo', datasetCode: 'HPO', releaseStatus: 'active' },
     { referenceDatasetReleaseId: 'release-omim', datasetCode: 'OMIM', releaseStatus: 'active' },
     { referenceDatasetReleaseId: 'release-icd10', datasetCode: 'ICD10', releaseStatus: 'active' },
+    { referenceDatasetReleaseId: 'release-atc', datasetCode: 'ATC', releaseStatus: 'active' },
+    { referenceDatasetReleaseId: 'release-dcb', datasetCode: 'DCB', releaseStatus: 'active' },
+    { referenceDatasetReleaseId: 'release-local-proc', datasetCode: 'LOCAL_PROCEDURE', releaseStatus: 'active' },
   ];
   return {
     terminologyConcepts: {

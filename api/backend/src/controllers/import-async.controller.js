@@ -3,7 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const importAsyncService = require('../services/import-async.service');
 const logger = require('../utils/logger');
-const { parseGroupFields } = require('../utils/importGroupFields');
+const { parseGroupFields, formatGroupFieldsError } = require('../utils/importGroupFields');
 const { UPLOADS_BASE } = require('../config/uploadConfig');
 
 // Configuração do multer para upload
@@ -170,11 +170,8 @@ class ImportAsyncController {
         const parsed = parseGroupFields(req.body.groupFields);
         if (!parsed.ok) {
           importAsyncService.cleanupFile(file.path);
-          return res.status(400).json({
-            success: false,
-            error: 'Formato inválido para groupFields. Use JSON válido.',
-            message: `groupFields ${parsed.reason}`
-          });
+          // #840: same reason-token body as import-lgpd groupFields sites.
+          return res.status(400).json(formatGroupFieldsError(parsed.reason));
         }
         parsedGroupFields = parsed.value;
       }

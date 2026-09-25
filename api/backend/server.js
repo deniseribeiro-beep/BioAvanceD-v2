@@ -12,6 +12,7 @@ const { initializeSecuritySystem } = require('./src/infrastructure/middleware/in
 const { seedReportTemplates } = require('./src/services/report-template-seed.service');
 const { seedRolesAndPermissions } = require('./src/services/rbac-catalog-seed.service');
 const { validateEncryptionAndHalt } = require('./src/config/validateEnv');
+const { sweepRestoreScratch } = require('./src/services/backup.service');
 
 // Install fatal-process handlers once per process. Tests reload this module in
 // the same process, so the guard prevents duplicate listeners.
@@ -79,6 +80,16 @@ async function startServer() {
       initScheduler({ db });
     } catch (schedulerError) {
       logger.error('Erro ao iniciar scheduler:', schedulerError.message);
+    }
+
+    // #957: discard orphaned decrypted restore scratch left by a prior crash.
+    try {
+      const scratchSweep = await sweepRestoreScratch();
+      if (scratchSweep.removed > 0) {
+        logger.info(`🧹 Scratch de restore limpo no boot: ${scratchSweep.removed} órfão(s)`);
+      }
+    } catch (scratchError) {
+      logger.error('Erro ao limpar scratch de restore no boot:', scratchError.message);
     }
 
     // Telemetry v2 reads raw measurements from InfluxDB, writes canonical

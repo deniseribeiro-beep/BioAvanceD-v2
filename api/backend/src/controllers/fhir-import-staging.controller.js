@@ -1,5 +1,7 @@
 const multer = require('multer');
 const fhirImportStagingService = require('../services/fhir-import-staging.service');
+const { resolveUserOrganizationScope } = require('../services/rbac-assignment.service');
+const logger = require('../utils/logger');
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -27,6 +29,23 @@ function sendError(res, error) {
   });
 }
 
+async function resolveFhirOrganizationContext(db, req) {
+  if (!req.user?.userID) {
+    return { organizationScope: null, organizationId: null, organizationIds: [] };
+  }
+  try {
+    const organizationScope = await resolveUserOrganizationScope(db, req.user.userID);
+    return {
+      organizationScope,
+      organizationId: organizationScope?.organizationIds?.[0] || null,
+      organizationIds: organizationScope?.organizationIds || [],
+    };
+  } catch (error) {
+    logger.warn('Falha ao resolver escopo organizacional para staging FHIR:', error.message || error);
+    return { organizationScope: null, organizationId: null, organizationIds: [] };
+  }
+}
+
 class FhirImportStagingController {
   uploadMiddleware() {
     return upload.single('file');
@@ -36,9 +55,13 @@ class FhirImportStagingController {
     try {
       const db = req.app.locals.db;
       const payload = parseJsonFile(req.file) || req.body;
+      const { organizationScope, organizationId, organizationIds } = await resolveFhirOrganizationContext(db, req);
       const result = await fhirImportStagingService.stageBundle(db, payload, {
         fileName: req.file?.originalname,
         userID: req.user?.userID || null,
+        organizationScope,
+        organizationId,
+        organizationIds,
       });
 
       return res.status(201).json({
@@ -53,7 +76,9 @@ class FhirImportStagingController {
 
   async getBatch(req, res) {
     try {
-      const result = await fhirImportStagingService.getBatch(req.app.locals.db, req.params.id);
+      const result = await fhirImportStagingService.getBatch(req.app.locals.db, req.params.id, {
+        organizationScope: req.organizationScope,
+      });
       return res.status(200).json({ success: true, ...result });
     } catch (error) {
       return sendError(res, error);

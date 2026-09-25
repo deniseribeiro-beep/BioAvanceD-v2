@@ -45,12 +45,17 @@ describe('equipment-sensor-quarantine.service', () => {
   describe('isQuarantineTriggerStatus', () => {
     it('recognizes known trigger statuses case-insensitively and trimmed', () => {
       expect(service.isQuarantineTriggerStatus('OFFLINE')).toBe(true);
-      expect(service.isQuarantineTriggerStatus('  Manutenção ')).toBe(true);
+      expect(service.isQuarantineTriggerStatus('  Desligado ')).toBe(true);
       expect(service.isQuarantineTriggerStatus('awaiting repair')).toBe(true);
     });
 
     it('returns false for non-trigger statuses and nullish input', () => {
       expect(service.isQuarantineTriggerStatus('operational')).toBe(false);
+      // #883: routine Maintenance/Inactive must not cascade quarantine
+      expect(service.isQuarantineTriggerStatus('Maintenance')).toBe(false);
+      expect(service.isQuarantineTriggerStatus('  Manutenção ')).toBe(false);
+      expect(service.isQuarantineTriggerStatus('inactive')).toBe(false);
+      expect(service.isQuarantineTriggerStatus('Inactive')).toBe(false);
       expect(service.isQuarantineTriggerStatus(undefined)).toBe(false);
       expect(service.isQuarantineTriggerStatus(null)).toBe(false);
     });
@@ -215,10 +220,19 @@ describe('equipment-sensor-quarantine.service', () => {
       expect(storageContainersCollection.find).toHaveBeenCalledWith(expect.anything(), { session });
     });
 
-    it('returns zero-matched result when equipment has no resolvable identifiers', async () => {
+    it('returns zero-matched no-trigger result when status is routine Inactive (#883)', async () => {
       const db = { collection: vi.fn() };
 
       const result = await service.quarantineByEquipmentStatus(db, {}, 'inactive');
+
+      expect(result).toEqual({ triggered: false, matched: 0, quarantined: 0, movements: 0 });
+      expect(db.collection).not.toHaveBeenCalled();
+    });
+
+    it('returns zero-matched result when equipment has no resolvable identifiers', async () => {
+      const db = { collection: vi.fn() };
+
+      const result = await service.quarantineByEquipmentStatus(db, {}, 'offline');
 
       expect(result).toEqual({
         triggered: true,
@@ -388,7 +402,7 @@ describe('equipment-sensor-quarantine item 8 canonical storage branches', () => 
     const result = await service.quarantineByEquipmentStatus(
       db,
       { equipmentID: 'EQ-NO-RACK' },
-      'maintenance'
+      'repair'
     );
 
     expect(result.boxIds).toEqual([]);
