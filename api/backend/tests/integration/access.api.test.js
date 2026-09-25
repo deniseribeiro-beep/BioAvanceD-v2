@@ -44,11 +44,20 @@ describe('GET /api/access', () => {
     expect(res.status).toBe(401);
   });
 
-  it('returns access list for authenticated user', async () => {
+  // #1202 (33ccf1a6): the reads take the writes' permission, so a Tecnico
+  // no longer lists every grant; access.routes.test.js pins all five gates.
+  it('returns 403 for Técnico, who does not hold the grants permission', async () => {
+    app.locals.db = createDbMock({ ...rbacCollections });
+
+    const res = await request(app).get('/api/access').set('Authorization', `Bearer ${makeToken(2)}`);
+    expect(res.status).toBe(403);
+  });
+
+  it('returns the access list for a holder of the grants permission', async () => {
     const coll = createCollectionMock({ find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([FAKE_ACCESS]) }) });
     app.locals.db = createDbMock({ access: coll, ...rbacCollections });
 
-    const res = await request(app).get('/api/access').set('Authorization', `Bearer ${makeToken(2)}`);
+    const res = await request(app).get('/api/access').set('Authorization', `Bearer ${makeToken(4)}`);
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
   });
@@ -66,7 +75,7 @@ describe('GET /api/access/:id', () => {
 
     const res = await request(app)
       .get('/api/access/507f1f77bcf86cd799439011')
-      .set('Authorization', `Bearer ${makeToken(2)}`);
+      .set('Authorization', `Bearer ${makeToken(4)}`);
     expect(res.status).toBe(404);
   });
 
@@ -76,7 +85,7 @@ describe('GET /api/access/:id', () => {
 
     const res = await request(app)
       .get('/api/access/507f1f77bcf86cd799439011')
-      .set('Authorization', `Bearer ${makeToken(2)}`);
+      .set('Authorization', `Bearer ${makeToken(4)}`);
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
   });
@@ -196,8 +205,10 @@ describe('DELETE /api/access/:id', () => {
     expect(res.status).toBe(403);
   });
 
-  it('returns 404 when not found', async () => {
-    const coll = createCollectionMock({ deleteOne: vi.fn().mockResolvedValue({ deletedCount: 0 }) });
+  // #1202 (1caaf538): DELETE revokes (grantStatus 'revoked') instead of
+  // deleting, so an unknown or already-revoked grant matches nothing.
+  it('returns 404 when not found or already revoked', async () => {
+    const coll = createCollectionMock({ updateOne: vi.fn().mockResolvedValue({ matchedCount: 0, modifiedCount: 0 }) });
     app.locals.db = createDbMock({ access: coll, ...rbacCollections });
 
     const res = await request(app)
@@ -206,8 +217,10 @@ describe('DELETE /api/access/:id', () => {
     expect(res.status).toBe(404);
   });
 
-  it('deletes access for admin', async () => {
-    const coll = createCollectionMock({ deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }) });
+  it('revokes access for admin, keeping the grant', async () => {
+    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
+    const deleteOne = vi.fn();
+    const coll = createCollectionMock({ updateOne, deleteOne });
     app.locals.db = createDbMock({ access: coll, ...rbacCollections });
 
     const res = await request(app)
@@ -215,5 +228,7 @@ describe('DELETE /api/access/:id', () => {
       .set('Authorization', `Bearer ${makeToken(4)}`);
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
+    expect(deleteOne).not.toHaveBeenCalled();
+    expect(updateOne.mock.calls[0][1].$set).toMatchObject({ grantStatus: 'revoked' });
   });
 });
