@@ -318,6 +318,15 @@ async function findBoxIdsBySensorKey(db, sensorKey, options = {}) {
         boxIds.push(...await findBoxIdsUnderFreezer(db, freezer._id, options));
       }
 
+      // #1208: registration (sensor.service.js linkSensorMetadata, #311)
+      // binds a sensor to its freezer by storageContainer, the FREEZER's
+      // _id -- the same link TelemetryMonitor.resolveRootSamples reads for
+      // the Neo4j COMPROMISED mark. Without this, a sensor registered that
+      // way resolved no boxes and a cold-chain excursion quarantined nothing.
+      if (metadata.storageContainer) {
+        boxIds.push(...await findBoxIdsUnderFreezer(db, metadata.storageContainer, options));
+      }
+
       const equipment = await findEquipmentByMetadata(db, metadata, options);
       if (equipment) {
         boxIds.push(...await findBoxIdsByEquipment(db, equipment, options));

@@ -219,6 +219,47 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
     expect(collections.samples.updateOne).toHaveBeenCalledTimes(1);
   });
 
+  // #1208: sensor registration (sensor.service.js linkSensorMetadata, #311)
+  // binds a sensor to its freezer through SensorMetadata.storageContainer,
+  // the FREEZER's _id -- the link TelemetryMonitor.resolveRootSamples reads
+  // for the Neo4j COMPROMISED mark. The quarantine read only locationId ->
+  // containerID and equipment, so a sensor registered that way resolved zero
+  // boxes and its samples were never quarantined.
+  it('#1208: encontra amostra por sensorMetadata.storageContainer -> freezer -> box -> samples', async () => {
+    const collections = {
+      sensors: makeCollection([]),
+      sampleMovements: makeCollection([]),
+      sample_movements: makeCollection([]),
+      counters: makeCollection([]),
+    };
+    // No containerID and no equipment: storageContainer is the only link.
+    const { freezerId, boxId } = seedStorageHierarchy(collections, undefined);
+    collections.sensorMetadata = makeCollection([{ sensorId: 'sensor-freezer-003', storageContainer: freezerId }]);
+    collections.samples = makeCollection([{
+      _id: new ObjectId(),
+      sampleID: 'BIO-SAMPLE-003',
+      barcode: 'BC-COLD-003',
+      storageLocation: { boxId, position: 'A1' },
+      status: 'AVAILABLE',
+      currentStatus: 'Available',
+      quantity: 1,
+      unit: 'mL',
+    }]);
+    const db = buildDb(collections);
+
+    const result = await quarantineService.quarantineByColdChainIncident(db, {
+      _id: new ObjectId(),
+      sensorKey: 'sensor-freezer-003',
+      status: 'open',
+      currentTemperature: 12.5,
+    });
+
+    expect(result.boxIds.map(String)).toEqual([String(boxId)]);
+    expect(result.matched).toBe(1);
+    expect(result.quarantined).toBe(1);
+    expect(collections.samples.updateOne).toHaveBeenCalledTimes(1);
+  });
+
   it('incidente resolvido mantém amostras para revisão e não libera automaticamente', async () => {
     const incidentId = new ObjectId();
     const sampleId = new ObjectId();

@@ -8,6 +8,7 @@ import {
   closeSeedSensorDb,
   seedSensorWithFreezerSample,
   removeSeededFreezerSample,
+  findFreezerSample,
 } from './helpers/seedSensor';
 import { queryTemperaturePoints } from './helpers/queryInflux';
 import { realLogin } from './helpers/realAuth';
@@ -602,6 +603,36 @@ test.describe('Telemetria e monitoramento ambiental (RF009) — real Neo4j propa
       expect(status).toBeNull();
     } finally {
       await removeSampleNodes([sensor.rootSampleId]);
+      await removeSeededFreezerSample(sensor);
+    }
+  });
+
+  // #1207 + #1208: the Mongo cold-chain quarantine, end to end. The fixture
+  // binds the sensor to its freezer by SensorMetadata.storageContainer (how
+  // registration binds it, #311), which the quarantine never read before
+  // #1208. Its policy has no minimumDuration, so the 2-hour
+  // TELEMETRY_CRITICAL_DURATION_HOURS fallback governs (#1207): the first
+  // reading, 121 minutes ago, opens the incident and quarantines nothing,
+  // and the second, now, is past the limit.
+  test('#1207/#1208: a sustained excursion quarantines the Mongo Sample in the sensor\'s freezer, and the first reading does not', async ({
+    request,
+  }) => {
+    const sensor = await seedSensorWithFreezerSample(2, 8);
+    try {
+      await postReadingAt(request, sensor.sensorId, 25, new Date(Date.now() - 121 * 60_000));
+      await expect
+        .poll(async () => (await findTemperatureIncident(sensor.sensorId))?.excursionStartedAt ?? null, { timeout: 15_000 })
+        .not.toBeNull();
+      expect((await findFreezerSample(sensor))?.specimenStatus).not.toBe('quarantined');
+
+      await postReadingAt(request, sensor.sensorId, 25, new Date());
+      await expect
+        .poll(async () => (await findFreezerSample(sensor))?.specimenStatus ?? null, { timeout: 15_000 })
+        .toBe('quarantined');
+      const sample = await findFreezerSample(sensor);
+      expect(sample.quarantineReasonCode).toBe('COLD_CHAIN_INCIDENT');
+      expect(sample.coldChainSensorKey).toBe(sensor.sensorId);
+    } finally {
       await removeSeededFreezerSample(sensor);
     }
   });

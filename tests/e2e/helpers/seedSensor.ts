@@ -264,6 +264,12 @@ export async function seedSensorWithFreezerSample(
   };
 }
 
+/** Reads back the Mongo Sample document seedSensorWithFreezerSample created. */
+export async function findFreezerSample(sensor: SeededFreezerSample): Promise<any | null> {
+  const db = await getDb();
+  return db.collection('samples').findOne({ _id: new ObjectId(sensor.rootSampleId) });
+}
+
 /** Deletes everything seedSensorWithFreezerSample created (sensor, device, policy, storage hierarchy, sample, and any excursion/incident it triggered). */
 export async function removeSeededFreezerSample(sensor: SeededFreezerSample): Promise<void> {
   const db = await getDb();
@@ -274,6 +280,9 @@ export async function removeSeededFreezerSample(sensor: SeededFreezerSample): Pr
     db.collection('environmentalExcursions').deleteMany({ equipmentId: sensor.deviceId }),
     db.collection('temperatureIncidents').deleteMany({ sensorKey: sensor.sensorId }),
     db.collection('samples').deleteMany({ _id: new ObjectId(sensor.rootSampleId) }),
+    // Written when a cold-chain quarantine fires for this sample (#1207, #1208).
+    db.collection('sample_movements').deleteMany({ sampleID: sensor.rootSampleId }),
+    db.collection('quarantineActions').deleteMany({ specimenIds: sensor.rootSampleId }),
     db.collection('storageBoxes').deleteMany({ _id: new ObjectId(sensor.boxId) }),
     db.collection('storageContainers').deleteMany({
       _id: { $in: [new ObjectId(sensor.rackId), new ObjectId(sensor.shelfId), new ObjectId(sensor.freezerId)] },
