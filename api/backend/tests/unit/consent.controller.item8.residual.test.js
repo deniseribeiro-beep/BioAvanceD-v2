@@ -34,6 +34,24 @@ describe('consent.controller.js item 8 residual branches', () => {
     vi.restoreAllMocks();
   });
 
+  it('rejects retired patientId when body is null and the alias arrives via query', async () => {
+    const req = requestWithDb({}, {
+      body: null,
+      query: { patientId: 'legacy-alias', token: 'tok' },
+      params: {},
+    });
+    const res = responseMock();
+
+    await controller.validateConsentToken(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(422);
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'NON_CANONICAL_FIELD',
+      fields: ['patientId'],
+    });
+  });
+
   it('resolves pending-patient policyId from the query and skips identity lookup when no participantId exists', async () => {
     const patientsCursor = {
       project: vi.fn().mockReturnThis(),

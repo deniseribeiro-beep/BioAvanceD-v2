@@ -379,6 +379,35 @@ describe('iot.controller.js item 8 residual branches', () => {
     });
   });
 
+  it('falls back to the normalized sensor id when sensorMetadata.sensorName is absent', async () => {
+    const TemperatureIncidentModel = require('../../src/models/TemperatureIncident');
+    const createSpy = vi.spyOn(TemperatureIncidentModel, 'create').mockImplementation((payload) => ({ ...payload }));
+    const { db, temperatureIncidents } = outOfRangeDb({
+      usersCursor: { toArray: vi.fn().mockResolvedValue([]) },
+    });
+    connectMongoDBMock.mockResolvedValue(db);
+    findUserAccountIdsByRoleCodesMock.mockResolvedValue([]);
+    sensorMetadataFindOneMock.mockReturnValue({
+      populate: () => ({
+        lean: async () => ({
+          sensorId: 'sensor-no-name',
+          alertEmail: 'alerts@example.test',
+          temperaturePolicy: { _id: 'policy-anon', minTemp: 2, maxTemp: 8 },
+        }),
+      }),
+    });
+
+    await ingestTelemetry({ body: { sensorId: 'sensor-no-name', temperature: 12.5 } }, createResponse());
+
+    await vi.waitFor(() => {
+      expect(temperatureIncidents.insertOne).toHaveBeenCalled();
+    });
+    expect(createSpy).toHaveBeenCalledWith(expect.objectContaining({
+      sensorName: 'sensor-no-name',
+      sensorKey: 'sensor-no-name',
+    }));
+  });
+
   it('logs critical alert email failures with and without error.message', async () => {
     const { db } = outOfRangeDb({
       usersCursor: { toArray: vi.fn().mockResolvedValue([]) },

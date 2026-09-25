@@ -371,4 +371,44 @@ describe('sample-file.controller item 8 residual branches', () => {
       else process.env.ALLOW_UNENCRYPTED_FILE_STORAGE = previousOptOut;
     }
   });
+
+  it('listFiles returns 404 for a blank specimenId identifier (?? empty + !raw)', async () => {
+    const findOne = vi.fn().mockResolvedValue(null);
+    const db = createDb({
+      specimens: { findOne },
+    });
+    const res = createRes();
+
+    await controller.listFiles({
+      app: { locals: { db } },
+      params: { specimenId: '   ' },
+    }, res);
+
+    expect(findOne).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      success: false,
+    }));
+  });
+
+  it('listFiles surfaces a sample without canonical specimenId as a list error', async () => {
+    const sample = { _id: new ObjectId(), specimenId: '   ', collectionSite: 'org-1' };
+    const findOne = vi.fn().mockResolvedValue(sample);
+    const db = createDb({
+      specimens: { findOne },
+      sample_files: { find: vi.fn() },
+    });
+    const res = createRes();
+
+    await controller.listFiles({
+      app: { locals: { db } },
+      params: { specimenId: sample._id.toString() },
+    }, res);
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      success: false,
+      message: 'Amostra sem specimenId canônico',
+    }));
+  });
 });
