@@ -1,103 +1,90 @@
 # HANDOFF
 
-**Written 2026-09-25, sixty-fourth queue sitting. INTERIM: the sitting may
+**Written 2026-09-25, sixty-fifth queue sitting. INTERIM: the sitting may
 continue. It has not been told it is over.**
 
 The instruction was "Read handoff. Pick next group of issues. Docker is on."
-The group was the rest of the RF008 reports cluster: **#733**, **#735** and
-**#1215**, plus **#941**, which Dennis put back in scope mid-sitting. Working
-them surfaced **#1217** and **#1218**.
+The group was **#1216** (retire `sampleID` from `POST /api/samples`).
+Working it surfaced **#1219**, **#1220** and **#1221**.
 
 ## Repo state
 
 `feature/docker-e2e-backend-integration`, pushed. The last substantive
-commit is `8fe19c40` (#1217).
+commit is `eba07e1b` (#1221).
 
 ## What shipped
 
-- **#733**, `bde77f88`, closed: the Auditoria report reads the AuditEvent
-  trail (`audit_events`) through a new `auditEvents` handler. Logs de acesso
-  keeps `logs`. RF008 in requisitos v4.0.0 names AuditEvent.
-- **#735**, `76c0b146`, closed: custom report templates are cards on the
-  report menu. The query page labels them and groups their filters by the
-  handler that `GET /:type/filters` now names.
-- **#1215**, `9362ffd5`, closed: the location filter is a freezer-then-box
-  picker (`type: 'storageBox'` in the catalog).
-- **#1217**, `8fe19c40`, closed: ReportViewPage titles a custom-template
-  report by the template's name.
-- `d0429eb5`, Refs #1202: `access.api.test.js` realigned with #1202's grant
-  contract. It had been red since `33ccf1a6`/`1caaf538`.
+- **#1216**, closed. `da72dbf4` (backend), `04a1dcd7` (frontend) and
+  `f2caab1d` (e2e). The create response names a specimen only by
+  `specimenId`, and every sample, sample-file and storage route resolves
+  either form through `utils/sampleLookup.js`. `DELETE /api/samples/:id`
+  had been a 404 for every real sample, and is fixed in the same commit.
+- **#1219**, closed on its items 1-2.
+  - `62541b25`: QuarantineAction writers record the canonical id, and reads
+    and releases match both forms. `GET /:id/quarantine-actions` had never
+    returned a real action.
+  - `13eeb310`: an assay references a specimen by either id and stores the
+    canonical one.
+- **#1221**, closed, `eba07e1b`: `PUT` on master-data mounts runs the #664
+  reference check.
 
-Proof is in each close comment.
-
-## The gate this sitting ran
-
-The first full gate since `5fc5c843`, run on tip `d0429eb5`:
-- Backend vitest 9,205/9,205, after the access fix.
-- Architecture 155/155.
-- seed/dictionary/compliance steps exit 0.
-- Frontend 328/328.
-- **Playwright 251/251, 0 skipped**, on a fresh-volume stack
-  (`-p bioavanced-fresh`, so the accumulated `bioavanced-test` volume was
-  untouched), with the admin bootstrap and the 17-service chain.
-
-`8fe19c40` came after the gate; it was proven by its own component test.
+Proof is in each close comment. Live proof was the 12 spec files that
+touch sample, storage or file routes, on a fresh-volume stack
+(`-p bioavanced-fresh`) with the admin bootstrap and the 17-service chain.
+The last run was 151/151, 0 skipped. No full-suite gate ran this sitting.
+The last one was 251/251, at `d0429eb5`.
 
 ## Open, touched this sitting
 
-- **#941**, open, Denise reopened it on 09-23. Our-branch live proof is
-  posted: 0/23 declared indexes at boot, 23/23 after our own read/write
-  paths on fresh volumes. Re-closing over her reopen is Dennis's call.
-- **#1202**, open: progress comment only (the test alignment above).
-- **#1218**, open (question): decision record for the audit-trail export
-  surface. Column set, and a name-derived pseudonym for pre-anonymization
-  rows.
-- **#1216** (carried from the last sitting, untouched): retiring
-  `sampleID` from the create response.
+- **#1220**, open. Split from #1219 item 3. Storage assignments, occupancy
+  grids, the storage half of the movement ledger and the Neo4j lineage all
+  key a specimen by its `_id` under the name `specimenId`. It is a
+  cross-store migration, only correct applied whole. Its first task is one
+  Cypher query to establish the lineage key. **Not started:** an atomic
+  change like this wants agreement on the shape before a partial lands.
+- **#1211**, closed: a pointer comment only, on the storage resolver that
+  now runs ahead of its scope check.
 
 ## For Dennis
 
-- Whether to re-close #941 (proof posted; she reopened it), and #1218.
-- Still yours from before: #956, #979, whether `0d87f73b` (#1124's port of
-  Denise's service file) stands, whether to mirror Denise's
+- #1220's direction (read-side tolerance vs a backfill), before anyone
+  starts it.
+- Still yours from before: #941 re-close (proof posted), #1218, #956, #979,
+  whether `0d87f73b` (#1124's port) stands, whether to mirror Denise's
   `docs/mestrado/` and `docs/planning/bioavanced-v3/` deletions, and the go
   for a PR into `main`.
 
 ## Docker and the machine
 
 - **Gate:** Dennis, 2026-09-25: "Docker is on." It closes at the next `/clear`.
-- **Nothing is running.** The `bioavanced-fresh` project was taken down with
-  `-v`, and its 24 images and the build cache were removed. The
-  `bioavanced-test` images and `mongodb-test-data` predate `bde77f88`, so
-  the next bring-up needs `--build`.
-- The reserved-port ranges moved: 8086 was free today
-  (`netsh interface ipv4 show excludedportrange protocol=tcp`), so check
-  before reaching for `INFLUXDB_HOST_PORT`.
+- **Nothing is running.** `bioavanced-fresh` was taken down with `-v`. Its
+  images may still be cached; the next bring-up uses `--build` regardless.
 
 ## Things a next session must not undo
 
 Earlier notes' items still hold. Plus:
-- **`audit` and `access_logs` are different reports.** `audit` →
-  `auditEvents` → `audit_events`. A new audit-reading handler joins
-  `AUDIT_READER_HANDLER_KEYS` and `EXPORT_CATALOG`.
-- **A custom template renders through its handler's system type.**
-  `resolveSectionKey`'s map must gain an entry for any new handlerKey.
-- **`storageBoxId` is a `storageBox` catalog type**, not text. Its e2e
-  drives the picker by freezer and box `_id`.
+- **Every route that names a specimen resolves `_id` OR `specimenId`**
+  through `utils/sampleLookup.js`. A new sample-addressed route uses it.
+  A new storage route that names a sample puts `resolveSampleIdentifier`
+  **ahead of** `requireStorageTargetsInScope`, which passes on a miss.
+- **A new QuarantineAction records `canonicalSpecimenId(sample)`**, and a
+  read or release hands the service the sample document, never a bare id,
+  so both key forms match.
+- **`sample-storage-lifecycle.spec.ts` pins today's storage echo** (the
+  `_id` under `specimenId`, via `mongoIdOf`). #1220 removes that pin.
 
 ## Standing context: re-measure, don't copy
 
 - **The project phase (Dennis, 2026-09-25):** we are working down the issues
   the e2e plan surfaced (Wave 3 tracker #646). CI comes only after they are
   all resolved and the whole plan passes on Docker, so it is far off. The
-  proof bar now is our tests plus our Docker e2e on this branch. A
-  collaborator's "resolved" proves nothing here until that bar is met.
+  proof bar now is our tests plus our Docker e2e on this branch.
 - Denise's newest live branch, 2026-09-25: `stabilize/v2.0.0-prototype`,
   last commit 2026-09-24
   (`git for-each-ref refs/remotes/origin --sort=-committerdate`).
-- Divergence, 2026-09-25: 914 commits on hers only, 173 on ours only
+- Divergence, 2026-09-25: 914 commits on hers only, 180 on ours only
   (`git rev-list --left-right --count origin/stabilize/v2.0.0-prototype...HEAD`),
-  measured before `8fe19c40`.
+  measured before this rotation's commit.
 - Her tip's CI, runs of 2026-09-24 23:29 (none newer): current-state
   validation, Full Vitest diagnostic and Coverage diagnostic passed. Release
   manifest integrity failed
