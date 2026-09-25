@@ -26,14 +26,14 @@ const FREEZER_TREE = {
 
 const UNSTORED_SAMPLE = {
   _id: 'sample-488-unstored',
-  sampleID: 'AMO-E2E-0488-1',
+  specimenId: 'AMO-E2E-0488-1',
   sampleType: 'Sangue',
   participantId: 'P-488',
 };
 
 const STORED_SAMPLE = {
   _id: 'sample-488-stored',
-  sampleID: 'AMO-E2E-0488-2',
+  specimenId: 'AMO-E2E-0488-2',
   sampleType: 'Plasma',
   participantId: 'P-489',
   storageLocation: { boxId: 'box-488-0', position: 'A1' },

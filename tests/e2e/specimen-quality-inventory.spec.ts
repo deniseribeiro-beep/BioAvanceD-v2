@@ -180,11 +180,11 @@ test.describe('Specimen registration (RF004) — real backend, happy path (#294)
     // conditional, not the specimen registration this criterion covers.
     const first = await create();
     expect([201, 202]).toContain(first.status());
-    const firstSampleID = (await first.json()).data.sampleID;
+    const firstSampleID = (await first.json()).data.specimenId;
 
     const second = await create();
     expect([201, 202]).toContain(second.status());
-    const secondSampleID = (await second.json()).data.sampleID;
+    const secondSampleID = (await second.json()).data.specimenId;
 
     const [firstGet, secondGet] = await Promise.all([
       request.get(`${apiBaseURL}/api/samples/${firstSampleID}`, {
@@ -231,7 +231,7 @@ test.describe('Specimen registration (RF004) — real backend, happy path (#294)
     });
 
     expect([201, 202]).toContain(create.status());
-    const sampleID = (await create.json()).data.sampleID;
+    const sampleID = (await create.json()).data.specimenId;
 
     const get = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -263,7 +263,7 @@ test.describe('Specimen registration (RF004) — real backend, happy path (#294)
       },
     });
     expect([201, 202]).toContain(create.status());
-    const sampleID = (await create.json()).data.sampleID;
+    const sampleID = (await create.json()).data.specimenId;
 
     const withdraw = await request.post(`${apiBaseURL}/api/samples/${sampleID}/withdraw`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -407,7 +407,7 @@ test.describe('Specimen registration (RF004 AC#3) — study/protocol/collection 
     });
 
     expect([201, 202]).toContain(create.status());
-    const sampleID = (await create.json()).data.sampleID;
+    const sampleID = (await create.json()).data.specimenId;
 
     const get = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -548,7 +548,7 @@ test.describe('Chain of custody (RF006) — real backend', () => {
       },
     });
     expect([201, 202]).toContain(create.status());
-    const sampleID = (await create.json()).data.sampleID;
+    const sampleID = (await create.json()).data.specimenId;
     return { sampleID };
   }
 
@@ -739,7 +739,7 @@ test.describe('Specimen quarantine (RF019) — real backend', () => {
       },
     });
     expect([201, 202]).toContain(create.status());
-    const sampleID = (await create.json()).data.sampleID;
+    const sampleID = (await create.json()).data.specimenId;
     return { sampleID };
   }
 
@@ -896,7 +896,7 @@ test.describe('Sample labeling (RF016) — real backend', () => {
     await closeSeedDb();
   });
 
-  async function createRealSample(request: any, token: string): Promise<{ sampleID: string; barcode: string }> {
+  async function createRealSample(request: any, token: string): Promise<{ specimenId: string; barcode: string }> {
     const participant = await createRealParticipant(request, apiBaseURL!, token);
     const seededStorageBox = await seedStorageBoxLocation();
     seededStorageBoxes.push(seededStorageBox);
@@ -909,11 +909,11 @@ test.describe('Sample labeling (RF016) — real backend', () => {
     expect([201, 202]).toContain(create.status());
     const body = (await create.json()).data;
 
-    const get = await request.get(`${apiBaseURL}/api/samples/${body.sampleID}`, {
+    const get = await request.get(`${apiBaseURL}/api/samples/${body.specimenId}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     const sample = (await get.json()).data;
-    return { sampleID: body.sampleID, barcode: sample.barcode };
+    return { specimenId: body.specimenId, barcode: sample.barcode };
   }
 
   test('generates Code128, DataMatrix and QR symbology assets tied to the specimen\'s own unique barcode (criteria 1, 2)', async ({ request }) => {
@@ -972,7 +972,7 @@ test.describe('Sample labeling (RF016) — real backend', () => {
 
     const res = await request.post(`${apiBaseURL}/api/samples/labels/batch`, {
       headers: { Authorization: `Bearer ${admin.token}` },
-      data: { specimenIds: [sampleA.sampleID, sampleB.sampleID, 'does-not-exist'] },
+      data: { specimenIds: [sampleA.specimenId, sampleB.specimenId, 'does-not-exist'] },
     });
     expect(res.ok(), await res.text()).toBeTruthy();
     const body = (await res.json()).data;
@@ -981,7 +981,7 @@ test.describe('Sample labeling (RF016) — real backend', () => {
     expect(body.generated).toBe(2);
     expect(body.failed).toBe(1);
 
-    const resultA = body.results.find((r: any) => r.specimenId === sampleA.sampleID);
+    const resultA = body.results.find((r: any) => r.specimenId === sampleA.specimenId);
     expect(resultA).toMatchObject({ success: true, barcode: sampleA.barcode });
     expect(resultA.qr.payload).toBe(sampleA.barcode);
 
@@ -1025,7 +1025,7 @@ test.describe('Sample labeling (RF016) — through the real UI (#655)', () => {
       data: { participantId: participant.participantId, ...validSampleFields(), boxId, positionCode },
     });
     expect([201, 202]).toContain(create.status());
-    const sampleID = (await create.json()).data.sampleID;
+    const sampleID = (await create.json()).data.specimenId;
 
     await page.goto(`/samples/${sampleID}/label`);
 
@@ -1124,7 +1124,7 @@ test.describe('Storage location availability (RF017 AC#7) — real backend', () 
       },
     });
     expect([201, 202]).toContain(create.status());
-    const sampleId = (await create.json()).data.sampleID;
+    const sampleId = (await create.json()).data.specimenId;
 
     const destination = await seedStorageBoxLocation();
     seededStorageBoxes.push(destination);
@@ -1233,7 +1233,15 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
       data: { participantId: participant.participantId, ...validSampleFields(), boxId, positionCode },
     });
     expect(sampleRes.status(), await sampleRes.text()).toBe(201);
-    const specimenId = String((await sampleRes.json()).data.sampleID);
+    // #1216: the create response names the specimen by its canonical
+    // specimenId, but an assay's specimenIds still resolve by the sample's
+    // Mongo _id (assayReferenceValidator.js, #1219), so fetch the _id.
+    const createdSpecimenId = String((await sampleRes.json()).data.specimenId);
+    const sampleDoc = await request.get(`${apiBaseURL}/api/samples/${createdSpecimenId}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(sampleDoc.status()).toBe(200);
+    const specimenId = String((await sampleDoc.json()).data._id);
 
     const reagentRes = await request.post(`${apiBaseURL}/api/reagent-lots`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -1309,7 +1317,15 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
       data: { participantId: participant.participantId, ...validSampleFields(), boxId, positionCode },
     });
     expect(sampleRes.status(), await sampleRes.text()).toBe(201);
-    const specimenId = String((await sampleRes.json()).data.sampleID);
+    // #1216: the create response names the specimen by its canonical
+    // specimenId, but an assay's specimenIds still resolve by the sample's
+    // Mongo _id (assayReferenceValidator.js, #1219), so fetch the _id.
+    const createdSpecimenId = String((await sampleRes.json()).data.specimenId);
+    const sampleDoc = await request.get(`${apiBaseURL}/api/samples/${createdSpecimenId}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(sampleDoc.status()).toBe(200);
+    const specimenId = String((await sampleDoc.json()).data._id);
 
     const orgRes = await request.post(`${apiBaseURL}/api/organizations`, {
       headers: { Authorization: `Bearer ${admin.token}` },

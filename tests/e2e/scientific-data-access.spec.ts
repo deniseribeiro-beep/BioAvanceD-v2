@@ -52,7 +52,7 @@ async function createRealSample(request: any, token: string): Promise<string> {
     },
   });
   expect([201, 202]).toContain(create.status());
-  return (await create.json()).data.sampleID;
+  return (await create.json()).data.specimenId;
 }
 
 test.afterAll(async () => {
@@ -622,7 +622,7 @@ test.describe('Reports (RF008) — real backend', () => {
   async function createRealSampleWithParticipant(
     request: any,
     token: string
-  ): Promise<{ sampleID: string; participantId: string }> {
+  ): Promise<{ specimenId: string; participantId: string }> {
     const participant = await createRealParticipant(request, apiBaseURL!, token);
     const seededStorageBox = await seedStorageBoxLocation();
     seededStorageBoxes.push(seededStorageBox);
@@ -638,7 +638,7 @@ test.describe('Reports (RF008) — real backend', () => {
       },
     });
     expect([201, 202]).toContain(create.status());
-    return { sampleID: (await create.json()).data.sampleID, participantId: participant.participantId };
+    return { specimenId: (await create.json()).data.specimenId, participantId: participant.participantId };
   }
 
   async function previewReport(request: any, token: string, type: string, filters: Record<string, unknown>) {

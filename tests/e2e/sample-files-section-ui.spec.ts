@@ -49,9 +49,10 @@ async function createRealSample(request: any, token: string): Promise<string> {
     },
   });
   expect([201, 202]).toContain(create.status());
-  // #647: sample.routes.js's POST handler returns sampleID = sample._id.toString()
-  // — the same identifier SampleDetailsPage's `/samples/:id` route expects.
-  return (await create.json()).data.sampleID;
+  // #1216: the POST handler names the new specimen by its canonical
+  // specimenId, which SampleDetailsPage's `/samples/:id` route and the
+  // sample-file routes both resolve.
+  return (await create.json()).data.specimenId;
 }
 
 test.afterAll(async () => {

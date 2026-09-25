@@ -206,13 +206,13 @@ test.describe('RF008 report filters and bounded report data (#748, #1077) — re
     });
     expect([201, 202], await create.text()).toContain(create.status());
     const created = (await create.json()).data;
-    const sampleId = created.sampleID as string;
-    // #1216: the create response now names the canonical specimenId too.
+    // #1216: the create response names the specimen by its canonical
+    // specimenId only, and the sample routes resolve it.
     const specimenId = created.specimenId as string;
     expect(specimenId).toBeTruthy();
 
     const leakyAgent = `e2e-1077-leaky-agent-${Date.now()}`;
-    const withdraw = await request.post(`${apiBaseURL}/api/samples/${sampleId}/withdraw`, {
+    const withdraw = await request.post(`${apiBaseURL}/api/samples/${specimenId}/withdraw`, {
       headers: { ...auth, 'User-Agent': leakyAgent },
       data: { withdrawalType: 'Total', withdrawalResponsible: 'E2E 1077 Responsible', linkedProject },
     });

@@ -126,7 +126,7 @@ test.describe('Storage allocation is bounded by the caller organization (#1211) 
         data: { participantId: participant.participantId, ...validSampleFields(), collectionSite, boxId: ownTree.boxId, positionCode },
       });
       expect([201, 202], await res.text()).toContain(res.status());
-      const id = (await res.json()).data.sampleID as string;
+      const id = (await res.json()).data.specimenId as string;
       expect(id).toBeTruthy();
       return id;
     };
