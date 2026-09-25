@@ -240,6 +240,11 @@ const consentLimiter = rateLimit({
   skipSuccessfulRequests: false,
 });
 
+// #1230: every limiter mounts AFTER auditRequest (above), deliberately, so a
+// 429 is itself an audited request. RF012 records every AuditEvent with its
+// result, and the binding principle bars configuration from disabling audit,
+// so rows are neither aggregated nor skipped. Their volume is retention's
+// job (RF026, #667). Pinned by rateLimitAudit.composition.test.js.
 if (!isTest) {
   app.use(globalLimiter);
   app.use("/api/auth", authLimiter);
