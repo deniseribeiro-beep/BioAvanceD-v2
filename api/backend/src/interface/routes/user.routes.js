@@ -76,9 +76,14 @@ async function writeMfaResetAudit(db, req, targetUser, { operation, enrolmentPre
 }
 
 // RF003 - Cadastro de usuário
+//
+// #1008: every registration grants a role (registerUser falls back to
+// Técnico when none is named), so creating an account is also a role
+// assignment, and the route requires assignRole as well as createUser.
 router.post('/register',
   authenticate,
   requirePermission('createUser'),
+  requirePermission('assignRole'),
   async (req, res) => {
     try {
       const db = req.app.locals.db;
@@ -454,6 +459,52 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
       }
     }
 
+    // #1008 (RF003 AC#3, Denise 2026-09-25): assigning a role is the
+    // Administrador's, through the assignRole permission, not createUser.
+    // Three things in this body are role assignment: a level change, a
+    // change to the additive auditor role, and a change to the role's
+    // validity window (middleware/auth.js enforces roleValidUntil, so moving
+    // it can lock a user out or keep an expired role alive). Each counts only
+    // when it actually CHANGES. NewUserPage echoes the whole user back on
+    // every save, so a presence check would refuse a Coordenador's plain
+    // rename. The #998 floor above stays as defence in depth.
+    {
+      const {
+        resolveUserHierarchyLevel,
+        getActiveRoleCodes,
+        userHasPermission,
+      } = require('../../services/rbac-assignment.service');
+
+      let levelChange = false;
+      if (requestedAccessType) {
+        const currentLevel = targetLevel !== null
+          ? targetLevel
+          : await resolveUserHierarchyLevel(db, targetUser._id.toString());
+        levelChange = Number(requestedAccessType) !== Number(currentLevel);
+      }
+
+      let auditorChange = false;
+      if (requestedAuditorRole !== undefined) {
+        const currentRoleCodes = await getActiveRoleCodes(db, targetUser._id.toString());
+        auditorChange = Boolean(requestedAuditorRole) !== currentRoleCodes.includes('auditor');
+      }
+
+      const asTime = (value) => (value ? new Date(value).getTime() : null);
+      const validityChange = ['roleValidFrom', 'roleValidUntil'].some((field) =>
+        req.body[field] !== undefined && asTime(req.body[field]) !== asTime(targetUser[field]));
+
+      if (levelChange || auditorChange || validityChange) {
+        const mayAssignRole = await userHasPermission(db, req.user?.userID, 'assignRole');
+        if (!mayAssignRole) {
+          return res.status(403).json({
+            success: false,
+            error: req.t('errors.forbidden'),
+            message: 'Atribuir ou alterar papel é uma ação do Administrador.'
+          });
+        }
+      }
+    }
+
     // #993: mfaSecretCiphertext e mfaActivationDate NUNCA são graváveis pelo chamador.
     // Removidos do body ANTES de qualquer branch abaixo -- a única escrita
     // legítima destes dois campos nesta rota é o CLEAR (null) do branch de
@@ -750,6 +801,28 @@ router.delete('/:id', authenticate, requirePermission('createUser'), async (req,
 
     const usersCollection = db.collection('users');
     const userFilter = buildUserFilterById(req.params.id);
+
+    // #1008: the #998 floor covered granting a level above your own but not
+    // DELETING a user above your own, so a Coordenador could delete an
+    // Administrador. Same root cause as the role-assignment gate: createUser
+    // gates every verb on this resource. A missing target falls through to
+    // deleteOne, which answers the 404 below as before.
+    const targetUser = await usersCollection.findOne(userFilter);
+    if (targetUser) {
+      const { resolveUserHierarchyLevel } = require('../../services/rbac-assignment.service');
+      const [targetLevel, callerLevel] = await Promise.all([
+        resolveUserHierarchyLevel(db, targetUser._id.toString()),
+        resolveUserHierarchyLevel(db, req.user?.userID),
+      ]);
+      if (Number(targetLevel || 0) > Number(callerLevel || 0)) {
+        return res.status(403).json({
+          success: false,
+          error: req.t('errors.forbidden'),
+          message: 'Não é possível excluir um usuário com nível de acesso superior ao seu.'
+        });
+      }
+    }
+
     const result = await usersCollection.deleteOne(userFilter);
 
     if (result.deletedCount === 0) {

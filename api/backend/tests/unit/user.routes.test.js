@@ -120,6 +120,26 @@ describe('user.routes authorization gates (issue #921)', () => {
       { label: 'POST /:id/disable-mfa (disableMFA, UPDATE) :1083', method: 'post', path: '/u1/disable-mfa', expectedArgs: ['disableMFA', 'UPDATE'] },
     ];
 
+    // #1008: POST /register now carries a SECOND gate, assignRole, after
+    // createUser. The denying stub above stops at the first gate, so it
+    // cannot see the second; this stub passes createUser and denies the rest.
+    it('pins the second gate on POST /register: createUser, then assignRole', async () => {
+      const recordedCalls = [];
+      const requirePermissionImpl = (...args) => {
+        recordedCalls.push(args);
+        return (req, res, next) => (args[0] === 'createUser'
+          ? next()
+          : res.status(403).json({ success: false, gate: 'permission' }));
+      };
+      const { router } = loadRoute({ requirePermissionImpl });
+      const app = buildApp(router);
+
+      const res = await request(app).post('/api/users/register').send({});
+
+      expect(res.status).toBe(403);
+      expect(recordedCalls).toEqual([['createUser'], ['assignRole']]);
+    });
+
     for (const { label, method, path, expectedArgs } of CASES) {
       it(`pins requirePermission(${JSON.stringify(expectedArgs)}) for ${label}`, async () => {
         const requirePermissionImpl = denyingRequirePermission();

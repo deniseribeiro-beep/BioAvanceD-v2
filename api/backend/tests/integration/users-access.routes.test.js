@@ -1560,12 +1560,12 @@ describe('Users and Access routes', () => {
       expect(res.statusCode).toBe(200);
     });
 
-    // What separates the floor that shipped from an Administrador-only gate.
-    // RF003 points at Administrador-only, which is #998 direction 2 and a
-    // larger change; the floor closes the escalation without deciding whether
-    // Coordenador should hold createUser at all. If direction 2 later lands,
-    // this test is the one that must flip.
-    it('still allows a Coordenador to assign a level at or below their own', async () => {
+    // What separated the #998 floor from an Administrador-only gate. This
+    // comment said "if direction 2 later lands, this test is the one that
+    // must flip", and #1008 (Denise, 2026-09-25) landed it: assigning a role
+    // needs assignRole, seeded on the Administrador only. So a Coordenador is
+    // now refused even at or below their own level, and nothing is written.
+    it('#1008: refuses a Coordenador assigning a level even at or below their own', async () => {
       const handler = getHandler(userRoutes, 'put', '/:id');
       seedTarget('user-target-998d');
 
@@ -1582,7 +1582,9 @@ describe('Users and Access routes', () => {
 
       await handler(req, res);
 
-      expect(res.statusCode).toBe(200);
+      expect(res.statusCode).toBe(403);
+      expect(res.payload.message).toMatch(/Administrador/);
+      expect(usersCollection.updateOne).not.toHaveBeenCalled();
     });
 
     it('still allows a Coordenador to edit a user without touching their role', async () => {
@@ -1604,6 +1606,169 @@ describe('Users and Access routes', () => {
 
       expect(res.statusCode).toBe(200);
       expect(usersCollection.updateOne).toHaveBeenCalled();
+    });
+
+    // #1008: NewUserPage echoes the whole user back on every save, role and
+    // validity dates included. The gate counts a CHANGE, so this plain rename
+    // carrying the unchanged role, dates and auditor flag must still pass.
+    // Without it the refusals below cannot tell a change check from a
+    // presence check.
+    it('#1008 CONTROL: a Coordenador rename echoing the unchanged role and validity back still succeeds', async () => {
+      const handler = getHandler(userRoutes, 'put', '/:id');
+      const target = seedTarget('user-target-1008a');
+      target.roleValidUntil = new Date('2031-01-01T00:00:00.000Z');
+
+      const req = createRequest({
+        params: { id: 'user-target-1008a' },
+        body: {
+          name: 'Alvo Renomeado',
+          roleName: 'Técnico',
+          roleValidUntil: '2031-01-01T00:00:00.000Z',
+          auditorRole: false,
+        },
+        user: callerCoordenador(),
+      });
+      req.app.locals.db = dbWith([
+        { userAccountId: '507f1f77bcf86cd799439013', accessType: 3 },
+        { userAccountId: 'user-target-1008a', accessType: 2 },
+      ]);
+      const res = createResponse();
+
+      await handler(req, res);
+
+      expect(res.statusCode).toBe(200);
+      expect(usersCollection.updateOne).toHaveBeenCalled();
+    });
+
+    // middleware/auth.js enforces roleValidUntil, so re-dating a role is role
+    // assignment (RF003 AC#3, "atribuir papel com vigência"). Pulling it into
+    // the past would lock the target out.
+    it('#1008: refuses a Coordenador changing the validity window of a role', async () => {
+      const handler = getHandler(userRoutes, 'put', '/:id');
+      seedTarget('user-target-1008b');
+
+      const req = createRequest({
+        params: { id: 'user-target-1008b' },
+        body: { roleValidUntil: new Date(Date.now() - 1000).toISOString() },
+        user: callerCoordenador(),
+      });
+      req.app.locals.db = dbWith([
+        { userAccountId: '507f1f77bcf86cd799439013', accessType: 3 },
+        { userAccountId: 'user-target-1008b', accessType: 2 },
+      ]);
+      const res = createResponse();
+
+      await handler(req, res);
+
+      expect(res.statusCode).toBe(403);
+      expect(usersCollection.updateOne).not.toHaveBeenCalled();
+    });
+
+    it('#1008: refuses a Coordenador granting the additive auditor role', async () => {
+      const handler = getHandler(userRoutes, 'put', '/:id');
+      seedTarget('user-target-1008c');
+
+      const req = createRequest({
+        params: { id: 'user-target-1008c' },
+        body: { auditorRole: true },
+        user: callerCoordenador(),
+      });
+      req.app.locals.db = dbWith([
+        { userAccountId: '507f1f77bcf86cd799439013', accessType: 3 },
+        { userAccountId: 'user-target-1008c', accessType: 2 },
+      ]);
+      const res = createResponse();
+
+      await handler(req, res);
+
+      expect(res.statusCode).toBe(403);
+      expect(usersCollection.updateOne).not.toHaveBeenCalled();
+    });
+
+    it('#1008 CONTROL: an Administrador may change the validity window of a role', async () => {
+      const handler = getHandler(userRoutes, 'put', '/:id');
+      seedTarget('user-target-1008d');
+
+      const req = createRequest({
+        params: { id: 'user-target-1008d' },
+        body: { roleValidUntil: new Date(Date.now() + 3600 * 1000).toISOString() },
+      });
+      req.app.locals.db = dbWith([
+        { userAccountId: '507f1f77bcf86cd799439011', accessType: 4 },
+        { userAccountId: 'user-target-1008d', accessType: 2 },
+      ]);
+      const res = createResponse();
+
+      await handler(req, res);
+
+      expect(res.statusCode).toBe(200);
+      expect(usersCollection.updateOne).toHaveBeenCalled();
+    });
+  });
+
+  // #1008: the #998 floor covered granting above your own level, not
+  // DELETING a user above it, so a Coordenador could delete an Administrador.
+  describe('#1008: DELETE /:id hierarchy floor', () => {
+    const COORD = { userID: '507f1f77bcf86cd799439013', accessType: 3, roleName: 'Coordenador' };
+
+    function dbWithUsers(callers) {
+      const rbacCollections = buildRbacCollections(callers);
+      return {
+        collection: vi.fn((name) => {
+          if (name === 'users') return usersCollection;
+          if (rbacCollections[name]) return rbacCollections[name];
+          return db.collection(name);
+        }),
+      };
+    }
+
+    it('refuses a Coordenador deleting an Administrador, without deleting', async () => {
+      const handler = getHandler(userRoutes, 'delete', '/:id');
+      usersCollection.findOne.mockResolvedValueOnce({ _id: 'admin-target-1008', username: 'adm' });
+
+      const req = createRequest({ params: { id: 'admin-target-1008' }, user: COORD });
+      req.app.locals.db = dbWithUsers([
+        { userAccountId: COORD.userID, accessType: 3 },
+        { userAccountId: 'admin-target-1008', accessType: 4 },
+      ]);
+      const res = createResponse();
+
+      await handler(req, res);
+
+      expect(res.statusCode).toBe(403);
+      expect(usersCollection.deleteOne).not.toHaveBeenCalled();
+    });
+
+    it('CONTROL: a Coordenador may still delete a user at or below their level', async () => {
+      const handler = getHandler(userRoutes, 'delete', '/:id');
+      usersCollection.findOne.mockResolvedValueOnce({ _id: 'tec-target-1008', username: 'tec' });
+      usersCollection.deleteOne.mockResolvedValueOnce({ deletedCount: 1 });
+
+      const req = createRequest({ params: { id: 'tec-target-1008' }, user: COORD });
+      req.app.locals.db = dbWithUsers([
+        { userAccountId: COORD.userID, accessType: 3 },
+        { userAccountId: 'tec-target-1008', accessType: 2 },
+      ]);
+      const res = createResponse();
+
+      await handler(req, res);
+
+      expect(res.statusCode).toBe(200);
+      expect(usersCollection.deleteOne).toHaveBeenCalledTimes(1);
+    });
+
+    it('CONTROL: a missing target still answers 404', async () => {
+      const handler = getHandler(userRoutes, 'delete', '/:id');
+      usersCollection.findOne.mockResolvedValueOnce(null);
+      usersCollection.deleteOne.mockResolvedValueOnce({ deletedCount: 0 });
+
+      const req = createRequest({ params: { id: 'nobody-1008' }, user: COORD });
+      req.app.locals.db = dbWithUsers([{ userAccountId: COORD.userID, accessType: 3 }]);
+      const res = createResponse();
+
+      await handler(req, res);
+
+      expect(res.statusCode).toBe(404);
     });
   });
 

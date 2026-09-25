@@ -140,6 +140,17 @@ describe('rbac-catalog-seed.service', () => {
     expect(holders).toEqual(['administrator']);
   });
 
+  // #1008 (Denise, 2026-09-25): RF003 makes role assignment the
+  // Administrador's. The Coordenador keeps createUser but not assignRole.
+  it('#1008: seeds assignRole on the Administrador only, while the Coordenador keeps createUser', async () => {
+    const db = createFakeDb();
+    const { roles, permissions } = await seedRolesAndPermissions(db);
+    const idOf = (code) => permissions.find((p) => p.permissionCode === code).permissionId;
+
+    expect(roles.filter((r) => r.permissionIds.includes(idOf('assignRole'))).map((r) => r.roleCode)).toEqual(['administrator']);
+    expect(roles.find((r) => r.roleCode === 'coordinator').permissionIds).toContain(idOf('createUser'));
+  });
+
   // upsertRole merges, so deleting the code from the seed alone would leave
   // every database seeded before #662 enforcing the old grant, since
   // userHasPermission reads the stored role document.
@@ -286,6 +297,9 @@ describe('rbac-catalog-seed.service', () => {
       ['viewTemperature', ['CREATE', 'READ', 'UPDATE', 'DELETE']],
       ['uploadFiles', ['CREATE', 'READ', 'UPDATE']],
       ['createUser', ['CREATE', 'READ', 'UPDATE', 'DELETE']],
+      // #1008: CREATE is POST /users/register, UPDATE the in-handler check on
+      // PUT /users/:id.
+      ['assignRole', ['CREATE', 'UPDATE']],
       ['editSample', ['UPDATE']],
       ['deleteSample', ['DELETE']],
       ['createPatient', ['CREATE', 'READ', 'UPDATE', 'DELETE']],

@@ -18,13 +18,17 @@ const { buildRbacCollections } = require('../factories/rbac.factory');
 // a handler actually executes.
 const auditLogger = require('../../src/utils/auditLogger');
 
-function createCoordinatorToken() {
+// #1008: registering a user assigns a role, which is the Administrador's
+// (assignRole). These validation tests used a Coordenador caller, which the
+// route now refuses before validation runs, so the caller is an
+// Administrador. The Coordenador refusal is pinned in its own test below.
+function createCallerToken({ userID = 'qa-admin-1', accessType = 4, roleName = 'Administrador' } = {}) {
   return jwt.sign(
     {
-      userID: 'qa-coord-1',
-      accessType: 3,
-      roleName: 'Coordenador',
-      name: 'QA Coordenador',
+      userID,
+      accessType,
+      roleName,
+      name: `QA ${roleName}`,
       mfaVerified: true,
     },
     process.env.JWT_SECRET,
@@ -42,7 +46,7 @@ describe('RF003 - POST /api/users/register', () => {
     const usersCollection = createCollectionMock(overrides);
     app.locals.db = createDbMock({
       users: usersCollection,
-      ...buildRbacCollections([{ userAccountId: 'qa-coord-1', accessType: 3 }]),
+      ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]),
     });
     return usersCollection;
   }
@@ -50,9 +54,29 @@ describe('RF003 - POST /api/users/register', () => {
   async function whenRegisterUser(payload) {
     return request(app)
       .post('/api/users/register')
-      .set('Authorization', `Bearer ${createCoordinatorToken()}`)
+      .set('Authorization', `Bearer ${createCallerToken()}`)
       .send(payload);
   }
+
+  // #1008 (Denise, 2026-09-25): through the real requirePermission chain, a
+  // Coordenador holds createUser but not assignRole, so it cannot register a
+  // user at any level, the default Técnico included.
+  it('#1008: refuses a Coordenador registering a user, even with no role named, and writes nothing', async () => {
+    const usersCollection = createCollectionMock({ findOne: vi.fn().mockResolvedValue(null), insertOne: vi.fn(), updateOne: vi.fn() });
+    app.locals.db = createDbMock({
+      users: usersCollection,
+      ...buildRbacCollections([{ userAccountId: 'qa-coord-1', accessType: 3 }]),
+    });
+    const { accessType: _omit, ...noRole } = buildUserRegistrationPayload();
+
+    const response = await request(app)
+      .post('/api/users/register')
+      .set('Authorization', `Bearer ${createCallerToken({ userID: 'qa-coord-1', accessType: 3, roleName: 'Coordenador' })}`)
+      .send(noRole);
+
+    expect(response.status).toBe(403);
+    expect(usersCollection.insertOne).not.toHaveBeenCalled();
+  });
 
   beforeEach(() => {
     givenAuthenticatedSession();
@@ -122,7 +146,7 @@ describe('RF003 - POST /api/users/register', () => {
       insertOne: vi.fn().mockResolvedValue({ insertedId: 'new-user-1' }),
       updateOne: vi.fn(),
     });
-    const rbacCollections = buildRbacCollections([{ userAccountId: 'qa-coord-1', accessType: 3 }]);
+    const rbacCollections = buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]);
     const organizationsCollection = createCollectionMock({
       findOne: vi.fn().mockResolvedValue({ organizationId: 'org-1' }),
     });
@@ -153,7 +177,7 @@ describe('RF003 - POST /api/users/register', () => {
       insertOne: vi.fn(),
       updateOne: vi.fn(),
     });
-    const rbacCollections = buildRbacCollections([{ userAccountId: 'qa-coord-1', accessType: 3 }]);
+    const rbacCollections = buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]);
     const organizationsCollection = createCollectionMock({
       findOne: vi.fn().mockResolvedValue(null),
     });
