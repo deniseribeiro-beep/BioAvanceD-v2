@@ -1,103 +1,94 @@
 # HANDOFF
 
-**Written 2026-09-24, fifty-eighth queue sitting. INTERIM: the sitting may
+**Written 2026-09-24, fifty-ninth queue sitting. INTERIM: the sitting may
 continue. It has not been told it is over.**
 
 The instruction was "Pick next group of issues. Docker is on." The group
-was the **account-lockout cluster** (#986 item 2, #985, #761, #1002), and
-it grew by #1203, which was found and filed mid-group. All five are
-closed. Mid-sitting, Dennis pointed out that "for Denise" and "not
-something I can close" were hand-offs made before the outward ladder
-(law, then standards, then literature, then precedent) had been walked.
-Once it was walked, every issue in the group closed without the owner.
+was the previous note's "not yet laddered" set: #1108, #1196, #1197 and
+#1200. All four are closed. Walking them also produced #1204 and #1205,
+both fixed and closed, plus #1206 and #1207, both filed and open.
 
 ## Repo state
 
 `feature/docker-e2e-backend-integration`, pushed. The last substantive
-commit is `67a51f4d` (#1203, second instance).
+commit is `8ca5b95b` (#1196, #1197).
 
 ## What shipped
 
-- **#1002**, `c0a6ce12`: a completed forgotten-password reset clears
-  `failedLoginAttempts`/`accountLockedUntil`, per the OWASP Authentication
-  Cheat Sheet ("Account Lockout"). The gate on the authenticated
-  password-change routes stays.
-- **#1203**, `c5d8b54a` and `67a51f4d`: neither reset path ever emailed
-  its link.
-  - The unauthenticated path now sends without awaiting, so the send cannot
-    expose account existence through timing.
-  - The in-app path awaits the send, and a failure surfaces as a 400.
-  - The expiry text now follows the token, and the dead
-    `sendRecoveryEmail` is deleted.
-- **#985**, `77289f9c`: `accountLockedUntil` is recorded as a UserAccount
-  local extension, following the v2.0.0 dictionary's own "Extensão local"
-  class (P1X-0188, P1X-0191).
-- **#761**, closed with no code: NIST SP 800-63B-4 §3.2.2 treats an
-  exhausted authenticator as disabled until it is rebound, so the
-  admin-cleared MFA lock is kept.
-- **#986** item 2, closed with no code: OWASP says to count failures per
-  account, not per IP, and a per-IP block is a denial-of-service risk
-  behind a lab's NAT. The inert `loginAttempts.*` UI is #914's.
+- **#1108**, `8e69902a`: `utils/validations.ts` keeps only
+  `validateThresholds`, and `utils/logMethods.ts` is deleted.
+- **#1204**, `d693f5a1`: the disease seed keyed Gaucher to ORPHA 79258
+  (GSD Ia) and Duchenne to 58 (Alexander disease), per Orphanet's API.
+  They are now re-keyed to 355 and 98896.
+- **#1200**, `277aa315` (comments only): `disease_dictionary` is recorded
+  as a legacy, manual-only store, and the validator stays on its defaults.
+  The canonical replacement is #1206.
+- **#1205**, `8e85431f`: `APP_DOMAIN` is dropped. `c5d8b54a` (#1203) had
+  left it unread, so the architecture suite was at **150/151**. The last
+  note's 151/151 predated that. Now 151/151.
+- **#1196 + #1197**, `8ca5b95b`:
+  - #1196: the policy form pre-fills `minimumDuration: 30`, relabelled
+    "Duração Mínima da Excursão".
+  - #1197: `targetTemp` is removed from the policy, in the schema, API,
+    type, validator and UI. The setpoint's canonical home is v2.0.0
+    ELM-0175 `StorageAssignment.nominalTemperature`, which matches
+    `StorageContainer.temperature`.
+  - Both close comments carry the law, standards, literature and precedent
+    walk, with quotes.
 
 Verification:
-- **Native:** the 7 test files touching `requestPasswordReset`, plus
-  `NotificationService.test.js`, pass 363/363, and the architecture tests
-  pass 151/151. Every fix got a pin probe.
-- **Live,** on `compose.test.yml` (`backend-app-test` and its dependencies,
-  built from HEAD): the full lock, email, reset and login run passed
-  against Mailpit. The step table is on #1002.
+- **Native:** every touched test file passes: 65/65 (seed and dictionary),
+  227/227 (policy), and architecture 151/151. Pin probes were run for
+  #1204 and #1197.
+- **Live:** on `compose.test.yml` (`backend-app-test` and
+  `frontend-app-test` built from `8ca5b95b`'s tree, before the commit),
+  `temperature-policies-ui` and `sensor-registration` pass 7/7 with 0
+  skipped. The e2e assertions were not pin-probed.
 
-## Touched, not closed
+## Filed, open, not worked
 
-- **#914**: #986's close sends the editable-but-inert `loginAttempts.*`
-  controls here. #914's own sweep comment already records all 43
-  `security_config` keys as inert, so there was nothing new to post on it.
+- **#1207 (bug, not worked, I chose to stop):** on `POST /api/iot/telemetry`,
+  the first out-of-range reading quarantines all of that sensor's samples.
+  `minimumDuration` gates only `TelemetryMonitor`'s Neo4j `COMPROMISED`
+  mark. The issue body has the remedy direction and one open design point:
+  which scheduling shape fits the incident lifecycle.
+- **#1206 (enhancement):** build v2.0.0 `BiomarkerAssociation`. No RF/RNF
+  requires disease-gated release, per #1200's second comment.
 
-## Not yet laddered, so not yet the owner's
+## Still genuinely Dennis's
 
-Before these go to Dennis or Denise, walk the outward rungs (law, then
-standards, then literature, then precedent) and come back with a
-recommended default:
-- **#1197** and **#1200**, from the previous note. Unverified: they were
-  not re-read this sitting.
-- **#1196**: its alert-delay default is a domain question with published
-  cold-chain guidance to check.
-- **#1108**: the edit is still pending (trim `validations.ts` to
-  `validateThresholds`, fix the import at `FacilityManagementPage.tsx:18`,
-  delete `utils/logMethods.ts`, run `npm run typecheck`). It is not an
-  owner question.
-- **Still genuinely Dennis's:** whether to mirror Denise's `docs/mestrado/`
-  and `docs/planning/bioavanced-v3/` deletions (a change on her branch
-  would need his go), and the go for a PR into `main`.
+- Whether to mirror Denise's `docs/mestrado/` and
+  `docs/planning/bioavanced-v3/` deletions (unverified this sitting;
+  carried from the last note).
+- The go for a PR into `main`.
 
 For the rest of the question backlog, run `gh issue list --state open
---label question`, redirect it to a file, and grep it.
+--label question`, redirect it to a file, and grep it rather than reading
+it whole.
 
 ## Docker and the machine
 
 - **Gate:** Dennis, 2026-09-24: "Docker is on." It closes at the next
   `/clear`.
 - **The test stack is down.** Its `mongodb-test-data` volume persists, and
-  the bootstrap admin was restored to `Admin@123` with the lock cleared
-  (verified with a 200 login). A probe that changes that credential has to
-  restore it by direct document write, because the reset policy refuses
-  the 9-character bootstrap password.
+  the bootstrap admin logged in with `Admin@123` (200) before the run.
+  Images were rebuilt from this sitting's tree.
 
 ## Things a next session must not undo
 
 Earlier notes' items still hold. Plus:
-- **A password reset ends the account lockout**
-  (`auth.service.processLogin.unit.test.js`, `#1002`).
-- **The unauthenticated reset email is fire-and-forget, and its response
-  never differs by delivery outcome** (`#1203` block, same file).
+- **A temperature policy has no `targetTemp`** (`policy.routes.test.js`,
+  `#1197` block). A caller that sends one has it dropped.
+- **The disease seed's explicit rules are keyed 324/355/98896**
+  (`seedDiseaseValidationRules.script.test.js`, `#1204`).
 
 ## Standing context: re-measure, don't copy
 
 - Denise's newest live branch, 2026-09-24: `stabilize/v2.0.0-prototype`
   (`git for-each-ref refs/remotes/origin --sort=-committerdate`).
-- Divergence, 2026-09-24: 914 commits on hers only, 143 on ours only
+- Divergence, 2026-09-24: 914 commits on hers only, 149 on ours only
   (`git rev-list --left-right --count origin/stabilize/v2.0.0-prototype...HEAD`).
-- Her tip's CI, 2026-09-24 22:52: current-state validation, Full Vitest
+- Her tip's CI, 2026-09-24 23:29: current-state validation, Full Vitest
   diagnostic and Coverage diagnostic passed. Release manifest integrity
   failed (`gh run list --branch stabilize/v2.0.0-prototype --limit 4`).
 
