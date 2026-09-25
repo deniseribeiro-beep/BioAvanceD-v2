@@ -34,6 +34,8 @@ commit is `49b507ae` (#1008).
 Proof: targeted vitest per slice, with controls (see each close comment).
 Architecture suite 157/157. **Full e2e on a fresh-volume stack built from
 `49b507ae`: 253 passed, 1 failed, 0 skipped.** The one failure is #1227.
+Two later full runs on a second fresh stack from the same images passed
+254/254 each.
 
 ## Reconciliation done this sitting (digest acked through 2026-09-25T21:10Z)
 
@@ -49,10 +51,12 @@ Architecture suite 157/157. **Full e2e on a fresh-volume stack built from
 ## Open, touched or filed this sitting
 
 - **#1227**, new. In a full-suite run, the `scientific-data-access.spec.ts`
-  `afterAll` stalls on host-side Mongo cleanup. It is green in isolation.
-  The failing trace was lost to the re-run, so the cause is
-  `[not established]`. The next step is a full run with `--trace on`,
-  keeping `test-results/`.
+  `afterAll` stalls on host-side Mongo cleanup. It hit once in 3 full runs,
+  and two later fresh-stack full runs were 254/254 (its newest comment).
+  The trace is lost, so the cause is `[not established]`. The candidate
+  mechanism is `getDb()`'s default 30 s server selection, labelled
+  `[inference]` there. On recurrence, keep `test-results/` before any
+  re-run.
 - **#1228**, new question and security record. `49b507ae` means a
   Coordenador cannot create ANY account, an `[inference]` from "when a role
   is set" (every registration grants a role). The body carries the one-edit
