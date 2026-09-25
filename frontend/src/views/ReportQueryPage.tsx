@@ -237,6 +237,84 @@ const INVENTORY_OPTION_LABELS: Record<string, Record<string, string>> = {
   sampleOrigin: Object.fromEntries(SAMPLE_ORIGINS.map((entry) => [entry.id, entry.label])),
 };
 
+type SprecDictionary = typeof SPREC_FLUID_DICTIONARY | typeof SPREC_SOLID_DICTIONARY;
+
+export function buildQualityFields(dictionary: SprecDictionary): ReportFilterField[] {
+  const axisFields: ReportFilterField[] = [
+    {
+      name: 'sprecSampleType',
+      label: `Axis 1 - ${dictionary.sampleType.label}`,
+      kind: 'select',
+      options: dictionary.sampleType.options,
+      helperText: 'Código SPREC do tipo da amostra.',
+    },
+    {
+      name: 'sprecPrimaryContainer',
+      label: `Axis 2 - ${dictionary.primaryContainer.label}`,
+      kind: 'select',
+      options: dictionary.primaryContainer.options,
+      helperText: 'Código SPREC do recipiente/tipo de coleta.',
+    },
+    {
+      name: 'sprecPreCentrifugation',
+      label: `Axis 3 - ${dictionary.preCentrifugation.label}`,
+      kind: 'select',
+      options: dictionary.preCentrifugation.options,
+    },
+    {
+      name: 'sprecCentrifugation',
+      label: `Axis 4 - ${dictionary.centrifugation.label}`,
+      kind: 'select',
+      options: dictionary.centrifugation.options,
+    },
+    {
+      name: 'sprecSecondCentrifugation',
+      label: `Axis 5 - ${dictionary.secondCentrifugation.label}`,
+      kind: 'select',
+      options: dictionary.secondCentrifugation.options,
+    },
+    {
+      name: 'sprecPostCentrifugationDelay',
+      label: `Axis 6 - ${dictionary.postCentrifugationDelay.label}`,
+      kind: 'select',
+      options: dictionary.postCentrifugationDelay.options,
+    },
+    {
+      name: 'sprecLongTermStorage',
+      label: `Axis 7 - ${dictionary.longTermStorage.label}`,
+      kind: 'select',
+      options: dictionary.longTermStorage.options,
+    },
+  ];
+
+  return [
+    {
+      name: 'sprecMatrixType',
+      label: 'Filtro SPREC - Matriz',
+      kind: 'select',
+      options: SPREC_MATRIX_OPTIONS,
+      helperText: 'Mesmo padrão da fase pré-analítica (Step 2).',
+    },
+    ...axisFields,
+    {
+      // #1214: the key buildSampleQuery reads. `final_grade` was never read,
+      // so this select filtered nothing.
+      name: 'qualityCategory',
+      label: 'Filtro RCS-GOV - Grade final',
+      kind: 'select',
+      options: RCS_GRADE_OPTIONS,
+      helperText: 'Grades RCS-GOV A-E.',
+    },
+    {
+      name: 'status',
+      label: 'Filtro de Status',
+      kind: 'select',
+      options: RELEASE_STATUS_OPTIONS,
+      helperText: 'Status do grafo e da amostra: ativa, quarentena ou esgotada.',
+    },
+  ];
+}
+
 export function buildInventoryFields(catalog: CatalogFilter[], alreadyRendered: ReadonlySet<string>): ReportFilterField[] {
   const byName = new Map(catalog.map((entry) => [entry.name, entry]));
   const fields: ReportFilterField[] = [];
@@ -268,8 +346,8 @@ export function buildInventoryFields(catalog: CatalogFilter[], alreadyRendered: 
   return fields;
 }
 
-export function buildSections(reportKey: string, qualityFields: ReportFilterField[], catalog: CatalogFilter[] = []): ReportFilterSection[] {
-  const sections: ReportFilterSection[] = [];
+export function buildSections(reportKey: string, qualityFields: ReportFilterField[], catalog: CatalogFilter[] | null = null): ReportFilterSection[] {
+  let sections: ReportFilterSection[] = [];
 
   if (CLINICAL_KEYS.has(reportKey)) {
     sections.push(REPORT_SECTION_LIBRARY.clinical);
@@ -286,8 +364,19 @@ export function buildSections(reportKey: string, qualityFields: ReportFilterFiel
     sections.push(REPORT_SECTION_LIBRARY.monitoring);
   }
 
+  // #1214: the key sets above group fields; the catalog decides which exist.
+  // Once it has loaded, a field renders only if the type's handler reads it,
+  // and a section left empty is dropped. `null` (fetch pending or failed)
+  // keeps the key-set sections as they are.
+  if (catalog) {
+    const catalogNames = new Set(catalog.map((entry) => entry.name));
+    sections = sections
+      .map((section) => ({ ...section, fields: section.fields.filter((field) => catalogNames.has(field.name)) }))
+      .filter((section) => section.fields.length > 0);
+  }
+
   const alreadyRendered = new Set(sections.flatMap((section) => section.fields.map((field) => field.name)));
-  const inventoryFields = buildInventoryFields(catalog, alreadyRendered);
+  const inventoryFields = buildInventoryFields(catalog || [], alreadyRendered);
   if (inventoryFields.length > 0) {
     sections.unshift({
       id: 'inventory',
@@ -607,84 +696,12 @@ export default function ReportQueryPage() {
   const [values, setValues] = useState<Record<string, FilterValue>>({});
   const [error, setError] = useState('');
   const [exporting, setExporting] = useState(false);
-  const [filterCatalog, setFilterCatalog] = useState<CatalogFilter[]>([]);
+  const [filterCatalog, setFilterCatalog] = useState<CatalogFilter[] | null>(null);
 
   const sprecMatrixType = String(values.sprecMatrixType || 'fluid').trim().toLowerCase() === 'solid' ? 'solid' : 'fluid';
   const activeSprecDictionary = sprecMatrixType === 'solid' ? SPREC_SOLID_DICTIONARY : SPREC_FLUID_DICTIONARY;
 
-  const qualityFields = useMemo<ReportFilterField[]>(() => {
-    const axisFields: ReportFilterField[] = [
-      {
-        name: 'sprecSampleType',
-        label: `Axis 1 - ${activeSprecDictionary.sampleType.label}`,
-        kind: 'select',
-        options: activeSprecDictionary.sampleType.options,
-        helperText: 'Código SPREC do tipo da amostra.',
-      },
-      {
-        name: 'sprecPrimaryContainer',
-        label: `Axis 2 - ${activeSprecDictionary.primaryContainer.label}`,
-        kind: 'select',
-        options: activeSprecDictionary.primaryContainer.options,
-        helperText: 'Código SPREC do recipiente/tipo de coleta.',
-      },
-      {
-        name: 'sprecPreCentrifugation',
-        label: `Axis 3 - ${activeSprecDictionary.preCentrifugation.label}`,
-        kind: 'select',
-        options: activeSprecDictionary.preCentrifugation.options,
-      },
-      {
-        name: 'sprecCentrifugation',
-        label: `Axis 4 - ${activeSprecDictionary.centrifugation.label}`,
-        kind: 'select',
-        options: activeSprecDictionary.centrifugation.options,
-      },
-      {
-        name: 'sprecSecondCentrifugation',
-        label: `Axis 5 - ${activeSprecDictionary.secondCentrifugation.label}`,
-        kind: 'select',
-        options: activeSprecDictionary.secondCentrifugation.options,
-      },
-      {
-        name: 'sprecPostCentrifugationDelay',
-        label: `Axis 6 - ${activeSprecDictionary.postCentrifugationDelay.label}`,
-        kind: 'select',
-        options: activeSprecDictionary.postCentrifugationDelay.options,
-      },
-      {
-        name: 'sprecLongTermStorage',
-        label: `Axis 7 - ${activeSprecDictionary.longTermStorage.label}`,
-        kind: 'select',
-        options: activeSprecDictionary.longTermStorage.options,
-      },
-    ];
-
-    return [
-      {
-        name: 'sprecMatrixType',
-        label: 'Filtro SPREC - Matriz',
-        kind: 'select',
-        options: SPREC_MATRIX_OPTIONS,
-        helperText: 'Mesmo padrão da fase pré-analítica (Step 2).',
-      },
-      ...axisFields,
-      {
-        name: 'final_grade',
-        label: 'Filtro RCS-GOV - Grade final',
-        kind: 'select',
-        options: RCS_GRADE_OPTIONS,
-        helperText: 'Grades RCS-GOV A-E.',
-      },
-      {
-        name: 'status',
-        label: 'Filtro de Status',
-        kind: 'select',
-        options: RELEASE_STATUS_OPTIONS,
-        helperText: 'Status do grafo e da amostra: ativa, quarentena ou esgotada.',
-      },
-    ];
-  }, [activeSprecDictionary]);
+  const qualityFields = useMemo(() => buildQualityFields(activeSprecDictionary), [activeSprecDictionary]);
 
   useEffect(() => {
     setValues({});
@@ -695,7 +712,7 @@ export default function ReportQueryPage() {
   // failed fetch leaves the page as it was before #748, never blocks export.
   useEffect(() => {
     let cancelled = false;
-    setFilterCatalog([]);
+    setFilterCatalog(null);
     if (!reportKey) {
       return undefined;
     }
@@ -703,12 +720,12 @@ export default function ReportQueryPage() {
       .getFilters(reportKey)
       .then((response) => {
         if (!cancelled) {
-          setFilterCatalog(Array.isArray(response?.data?.filters) ? response.data.filters : []);
+          setFilterCatalog(Array.isArray(response?.data?.filters) ? response.data.filters : null);
         }
       })
       .catch(() => {
         if (!cancelled) {
-          setFilterCatalog([]);
+          setFilterCatalog(null);
         }
       });
     return () => {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { buildInventoryFields, buildSections, type CatalogFilter } from './ReportQueryPage';
+import { buildInventoryFields, buildQualityFields, buildSections, type CatalogFilter } from './ReportQueryPage';
+import { SPREC_FLUID_DICTIONARY } from '../constants/sprecDictionary';
 
 // The shape GET /reports/samples/filters answers (reports.routes.js
 // SAMPLE_QUERY_FILTERS), trimmed to the entries these cases read plus two
@@ -85,5 +86,68 @@ describe('buildSections', () => {
   it('CONTROL: with no catalog the sections are the pre-#748 ones', () => {
     expect(buildSections('samples', []).map((section) => section.id)).toEqual(['quality']);
     expect(buildSections('patients', []).map((section) => section.id)).toEqual(['clinical']);
+  });
+});
+
+// #1214: the page chose its sections from hardcoded key sets, so four report
+// types offered clinical and SPREC filters their handlers never read, and the
+// grade select sent `final_grade`, a key the backend has never read (it reads
+// qualityCategory). With the type's catalog loaded, a field renders only when
+// the catalog lists it.
+describe('#1214: sections render only the filters the catalog lists for the type', () => {
+  const QUALITY_FIELDS = buildQualityFields(SPREC_FLUID_DICTIONARY);
+  const WITHDRAWAL_CATALOG: CatalogFilter[] = [
+    { name: 'startDate', label: 'Data inicial', type: 'date' },
+    { name: 'endDate', label: 'Data final', type: 'date' },
+  ];
+  const FULL_SAMPLE_CATALOG: CatalogFilter[] = [
+    ...SAMPLE_CATALOG,
+    { name: 'sprecMatrixType', type: 'text' },
+    { name: 'sprecPrimaryContainer', type: 'text' },
+    { name: 'sprecPreCentrifugation', type: 'text' },
+    { name: 'sprecCentrifugation', type: 'text' },
+    { name: 'sprecSecondCentrifugation', type: 'text' },
+    { name: 'sprecPostCentrifugationDelay', type: 'text' },
+    { name: 'sprecLongTermStorage', type: 'text' },
+    { name: 'qualityCategory', type: 'text' },
+    { name: 'orphaCode', type: 'text' },
+    { name: 'atcCode', type: 'text' },
+    { name: 'treatmentStatus', type: 'select', options: ['NAIVE'] },
+  ];
+
+  it('#1214: the grade select sends qualityCategory, the key the backend reads', () => {
+    const names = QUALITY_FIELDS.map((field) => field.name);
+    expect(names).toContain('qualityCategory');
+    expect(names).not.toContain('final_grade');
+  });
+
+  it('#1214: results, whose catalog is empty, gets no clinical section', () => {
+    expect(buildSections('results', QUALITY_FIELDS, [])).toEqual([]);
+  });
+
+  it('#1214: sampleAnalysis, whose catalog is empty, gets neither clinical nor quality', () => {
+    expect(buildSections('sampleAnalysis', QUALITY_FIELDS, [])).toEqual([]);
+  });
+
+  it('#1214: withdrawalHistory gets only its period, and no SPREC section', () => {
+    const sections = buildSections('withdrawalHistory', QUALITY_FIELDS, WITHDRAWAL_CATALOG);
+    expect(sections.map((section) => section.id)).toEqual(['inventory']);
+    expect(sections[0].fields.map((field) => field.name)).toEqual(['startDate', 'endDate']);
+  });
+
+  it('#1214: tissueOriginHistory, whose catalog is empty, gets no quality section', () => {
+    expect(buildSections('tissueOriginHistory', QUALITY_FIELDS, [])).toEqual([]);
+  });
+
+  it('#1214: samples keeps every quality field its catalog lists, grade included', () => {
+    const quality = buildSections('samples', QUALITY_FIELDS, FULL_SAMPLE_CATALOG).find((section) => section.id === 'quality');
+    expect(quality?.fields.map((field) => field.name)).toEqual(
+      QUALITY_FIELDS.map((field) => field.name).filter((name) => FULL_SAMPLE_CATALOG.some((entry) => entry.name === name))
+    );
+    expect(quality?.fields.length).toBeGreaterThanOrEqual(9);
+  });
+
+  it('CONTROL: an unknown catalog (null, fetch pending or failed) renders the key-set sections unfiltered', () => {
+    expect(buildSections('results', QUALITY_FIELDS, null).map((section) => section.id)).toEqual(['clinical']);
   });
 });

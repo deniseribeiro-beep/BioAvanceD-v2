@@ -111,6 +111,30 @@ test.describe('RF008 report filters and bounded report data (#748, #1077) — re
     expect(serumExport).toContain(serumSample);
   });
 
+  // #1214: the page used to pick sections from hardcoded key sets, so these
+  // two types offered SPREC and clinical filters their handlers never read.
+  // With the live catalog loaded, withdrawal history offers only its period,
+  // and results -- whose handler reads no filter -- offers none.
+  test('#1214: report types render only the filters their handler reads', async ({ page, request }) => {
+    const admin = await realLogin(request);
+    await seedRealAuth(page, admin);
+
+    await page.goto('/reports/query/withdrawalHistory');
+    const inventory = page.locator('.report-query-section-card', { hasText: 'Inventário' });
+    await expect(inventory.getByText('Data inicial', { exact: true })).toBeVisible();
+    await expect(page.getByText('Relatório de Amostras / Qualidade')).toHaveCount(0);
+    await expect(page.getByText('Filtro SPREC - Matriz')).toHaveCount(0);
+
+    await page.goto('/reports/query/results');
+    await expect(page.getByText('Nenhum filtro específico foi definido para este relatório.', { exact: false })).toBeVisible();
+    await expect(page.getByText('Relatório de Pacientes / Clínico')).toHaveCount(0);
+
+    // Control: the samples page still offers the grade select, now sending
+    // the key the backend reads.
+    await page.goto('/reports/query/samples');
+    await expect(page.getByLabel('Filtro RCS-GOV - Grade final')).toBeVisible();
+  });
+
   test('#1077: a generated withdrawal report stores no operator user agent, identity or ledger hash', async ({ request }) => {
     const admin = await realLogin(request);
     const auth = { Authorization: `Bearer ${admin.token}` };
