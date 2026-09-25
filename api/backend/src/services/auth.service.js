@@ -291,9 +291,21 @@ class AuthService {
   }
   /**
    * Registra um novo usuário
+   *
+   * #1057: `grantedBy` is REQUIRED, and it is who the hierarchy floor below
+   * is measured against. Pass the calling user's userID from an HTTP route,
+   * or the literal 'system' from a trusted internal caller with no human
+   * actor. It used to default to 'system', and a default parameter also
+   * fires on `undefined`: a route passing `req.user?.userID` without a user
+   * would then have skipped the floor silently. A missing value now throws
+   * before any read or write.
    */
-  async registerUser(db, userData, grantedBy = 'system') {
+  async registerUser(db, userData, grantedBy) {
     try {
+      if (!grantedBy) {
+        throw new Error("registerUser requires grantedBy: the caller's userID, or 'system' for a trusted internal caller");
+      }
+
       const validation = UserModel.validate(userData);
       if (!validation.isValid) {
         throw new Error(validation.errors.join(', '));
@@ -341,6 +353,27 @@ class AuthService {
         throw new Error(`accessType inválido: ${resolvedAccessType}`);
       }
 
+      // #998's hierarchy floor, moved here from user.routes.js (#1057,
+      // Denise 2026-09-25): a caller may not create a user at a level above
+      // their own. It lived in one of two routes reaching this method, and
+      // the sibling POST /api/auth/register inherited nothing, which is how
+      // #1037 happened. Enforcing it in the service means no route can drift
+      // from it again.
+      //
+      // Measured against the RESOLVED level, default included, so a request
+      // with no accessType/roleName is held to the same floor as one naming
+      // a level. A caller with no active role resolves to null, which is
+      // refused. 'system' is the one exemption: a trusted internal caller
+      // with no hierarchy of its own to compare against.
+      if (grantedBy !== 'system') {
+        const callerLevel = await resolveUserHierarchyLevel(db, grantedBy);
+        if (Number(resolvedAccessType) > Number(callerLevel || 0)) {
+          const error = new Error('Não é possível criar um usuário com nível de acesso superior ao seu.');
+          error.statusCode = 403;
+          throw error;
+        }
+      }
+
       // Para Administrador, MFA é opcional e pode ser setado manualmente
       // Se não foi fornecido explicitamente, desabilita por padrão
       if (resolvedAccessType === 4 || userData.roleName === 'Administrador') {
@@ -355,11 +388,9 @@ class AuthService {
       // #1028: widens #435's pre-write guard to the OTHER two throw sites
       // reachable from grantRoleForAccessType below. #435 closed the
       // accessType trigger; an unseeded RBAC catalogue and an unknown
-      // organizationId were still reachable AFTER the insert, and the
-      // organizationId one is reachable by an UNAUTHENTICATED caller --
-      // auth.routes.js registers POST /register with no `authenticate`, and
-      // #1037's rejectCallerSuppliedPrivilege inspects only accessType and
-      // roleName, so a bogus organizationId passes straight through.
+      // organizationId were still reachable AFTER the insert. (When #1028
+      // landed, the organizationId one was reachable anonymously through
+      // POST /api/auth/register. #1037 gated that route and #1057 deleted it.)
       //
       // Fail-fast, not atomic: only compose.test.yml runs a replica set, so a
       // transaction here would break user creation on dev and prod while the

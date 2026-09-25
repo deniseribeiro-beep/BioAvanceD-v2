@@ -125,34 +125,9 @@ router.post('/register',
         }
       }
 
-      // #998 (RF003, RNF008 AC#1): a caller may not create a user at a level
-      // above their own. requirePermission('createUser') is the only gate on
-      // this route, and rbac-catalog-seed grants 'createUser' to the seeded
-      // Coordenador -- so without this, every Coordenador in a default
-      // deployment could POST a working Administrador account, with a password
-      // of their choosing, in one request. That needs no existing target and
-      // no role change, which makes it strictly cheaper to exploit than the
-      // PUT leg #998 was written around.
-      //
-      // A floor rather than an Administrador-only check, deliberately: it
-      // closes the escalation without deciding whether Coordenador should hold
-      // 'createUser' at all. RF003 names Administrador as the actor for role
-      // assignment, which points at a distinct assignRole permission -- that is
-      // #998 direction 2 and a larger change than a security fix should carry.
-      const requestedLevel = req.body.accessType
-        || (req.body.roleName ? authService.getAccessTypeForRole(req.body.roleName) : null);
-      if (requestedLevel) {
-        const { resolveUserHierarchyLevel } = require('../../services/rbac-assignment.service');
-        const callerLevel = await resolveUserHierarchyLevel(db, req.user?.userID);
-        if (Number(requestedLevel) > Number(callerLevel || 0)) {
-          return res.status(403).json({
-            success: false,
-            error: req.t('errors.forbidden'),
-            message: 'Não é possível criar um usuário com nível de acesso superior ao seu.'
-          });
-        }
-      }
-
+      // #998's hierarchy floor now lives in registerUser itself (#1057), so
+      // this route and any future caller of the service get the same check.
+      // It throws a statusCode-403 error, mapped in the catch below.
       const user = await authService.registerUser(db, req.body, req.user?.userID);
 
       // Registra log de criação de usuário
@@ -178,6 +153,13 @@ router.post('/register',
       });
     } catch (error) {
       logger.error('Erro ao registrar usuário:', error.message);
+      if (error.statusCode === 403) {
+        return res.status(403).json({
+          success: false,
+          error: req.t('errors.forbidden'),
+          message: error.message
+        });
+      }
       return res.status(400).json({
         success: false,
         error: req.t('users.registerError'),

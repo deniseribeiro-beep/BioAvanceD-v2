@@ -1530,7 +1530,12 @@ describe('Users and Access routes', () => {
       // #1017: was `authServiceMock.registerUser`, which passed vacuously --
       // that mock was never installed, so the assertion held no matter what
       // the route did. Now a real spy on the module the route actually calls.
-      expect(registerUserSpy).not.toHaveBeenCalled();
+      //
+      // #1057: the floor moved INTO registerUser, so the service is now
+      // reached and refuses from inside. What has to hold is that no user
+      // was written: the refusal comes before the insert.
+      expect(registerUserSpy).toHaveBeenCalledTimes(1);
+      expect(usersCollection.insertOne).not.toHaveBeenCalled();
     });
 
     // The negative halves. Without these the pair above cannot distinguish a
