@@ -48,6 +48,30 @@ const EXEMPT = new Map([
   ['reports.routes.js GET /:type/filters', 'report-type filter metadata, no organization data'],
 ]);
 
+// NOT exemptions: routes that DO need the gate and do not have it yet, each
+// against the open issue that owns it. Kept apart from EXEMPT so that list
+// keeps meaning "needs none". Same stale check: an entry that gains the gate
+// fails until it is dropped here.
+//
+// #1210 scoped storage.routes.js's two topology creates, which made the file
+// visible to this sweep for the first time; the rest of it checks no tenancy
+// at all, the mutations included (#1211).
+const TRACKED_UNSCOPED = new Map([
+  ['storage.routes.js GET /freezers', '#1211'],
+  ['storage.routes.js GET /samples/search', '#1211'],
+  ['storage.routes.js POST /allocate', '#1211'],
+  ['storage.routes.js POST /allocate/auto', '#1211'],
+  ['storage.routes.js POST /move', '#1211'],
+  ['storage.routes.js DELETE /release/:sampleId', '#1211'],
+  ['storage.routes.js GET /sample/:sampleId', '#1211'],
+  ['storage.routes.js GET /box/:boxId/available', '#1211'],
+  ['storage.routes.js GET /validate/:boxId/:position', '#1211'],
+  ['storage.routes.js GET /freezer/:freezerId/stats', '#1211'],
+  ['storage.routes.js GET /box/:boxId/integrity', '#1211'],
+  ['storage.routes.js GET /freezer/:freezerId/tree', '#1211'],
+  ['storage.routes.js PATCH /freezer/:freezerId/room', '#1211'],
+]);
+
 function routeFiles() {
   const files = [];
   for (const dir of ROUTE_DIRS) {
@@ -105,7 +129,9 @@ test('#1183: the sweep reads real route files and finds registrations', () => {
 
 test('#1183: every registration in a scoped route file carries the organization gate', () => {
   const { registrations } = sweep();
-  const ungated = registrations.filter((r) => !r.gated && !EXEMPT.has(r.key)).map((r) => r.key);
+  const ungated = registrations
+    .filter((r) => !r.gated && !EXEMPT.has(r.key) && !TRACKED_UNSCOPED.has(r.key))
+    .map((r) => r.key);
   assert.deepEqual(ungated, [],
     'A route over an organization-scoped resource answers every caller, whatever their organization. ' +
     'Add requireOrganizationScope (or inline resolveUserOrganizationScope) and a record-level check, ' +
@@ -117,6 +143,26 @@ test('#1183: every EXEMPT entry still names an ungated registration', () => {
   const byKey = new Map(registrations.map((r) => [r.key, r]));
   const stale = [...EXEMPT.keys()].filter((key) => !byKey.has(key) || byKey.get(key).gated);
   assert.deepEqual(stale, [], 'EXEMPT names a route that is gone or now gated -- drop it');
+});
+
+test('#1211: every TRACKED_UNSCOPED entry still names an ungated registration', () => {
+  const { registrations } = sweep();
+  const byKey = new Map(registrations.map((r) => [r.key, r]));
+  const stale = [...TRACKED_UNSCOPED.keys()].filter((key) => !byKey.has(key) || byKey.get(key).gated);
+  assert.deepEqual(stale, [], 'TRACKED_UNSCOPED names a route that is gone or now gated -- drop it, and update its issue');
+});
+
+// #1210: the two topology creates are scoped. Pinned by name, because the
+// sweep's general rule would also pass if they were merely added to one of
+// the two lists above.
+test('#1210: the storage topology creates carry the organization gate', () => {
+  const { registrations } = sweep();
+  const byKey = new Map(registrations.map((r) => [r.key, r]));
+  for (const key of ['storage.routes.js POST /topology/containers', 'storage.routes.js POST /topology/boxes']) {
+    assert.ok(byKey.has(key), `${key} not found by the sweep`);
+    assert.equal(byKey.get(key).gated, true, `${key} is not organization-scoped`);
+    assert.equal(EXEMPT.has(key) || TRACKED_UNSCOPED.has(key), false, `${key} must not be listed as unscoped`);
+  }
 });
 
 // ---------------------------------------------------------------------------

@@ -1,5 +1,6 @@
 const { ObjectId } = require('mongodb');
 const { ensureStorageContainerIndexes, ensureStorageBoxIndexes } = require('../utils/storageIndexes');
+const { isRecordInOrganizationScope } = require('./rbac-assignment.service');
 
 const CONTAINER_PARENT_TYPES = Object.freeze({
   SHELF: 'FREEZER',
@@ -68,7 +69,40 @@ class StorageTopologyAuthoringService {
     await ensureStorageBoxIndexes(this.db.collection('storageBoxes'));
   }
 
-  async createContainer(input = {}, actorId = null) {
+  /**
+   * #1210: Equipment is organization-scoped (#635, #1071); the container
+   * tree has no organizationId of its own, so its scope is its root
+   * freezer's Equipment's. Same rule as equipment.routes.js: a null
+   * organizationId is outside every scope but a global one.
+   *
+   * Fails CLOSED on a missing scope: the #1081 shape was a guard written as
+   * `scope && !inScope(...)`, which silently passes everything when the
+   * middleware is absent.
+   */
+  assertEquipmentInScope(equipment, organizationScope) {
+    if (!organizationScope || !isRecordInOrganizationScope(equipment || {}, organizationScope, 'organizationId')) {
+      throw topologyError('EQUIPMENT_OUT_OF_SCOPE', 'O equipamento desta topologia pertence a outra organização', 403);
+    }
+  }
+
+  async assertTreeInScope(node, organizationScope) {
+    if (organizationScope?.scope === 'global') return;
+    const storageContainers = this.db.collection('storageContainers');
+    let current = node;
+    // FREEZER -> SHELF -> RACK -> DRAWER is at most three hops from a DRAWER.
+    for (let hops = 0; current && current.containerType !== 'FREEZER' && hops < 4; hops += 1) {
+      current = current.parent_id
+        ? await storageContainers.findOne({ _id: current.parent_id, deletedAt: null })
+        : null;
+    }
+    const containerID = current?.containerType === 'FREEZER' ? current.containerID : null;
+    const equipment = containerID === null || containerID === undefined
+      ? null
+      : await this.db.collection('equipment').findOne({ equipmentID: { $in: buildIdVariants(containerID) }, deletedAt: null });
+    this.assertEquipmentInScope(equipment, organizationScope);
+  }
+
+  async createContainer(input = {}, actorId = null, organizationScope = null) {
     await this.ensureLayoutIndexes();
 
     const name = requiredText(input.name, 'name');
@@ -100,6 +134,7 @@ class StorageTopologyAuthoringService {
       if (input.temperature !== undefined && input.temperature !== null) {
         throw topologyError('INVALID_TEMPERATURE_SCOPE', 'temperature só é aplicável a FREEZER');
       }
+      await this.assertTreeInScope(parent, organizationScope);
     }
 
     let containerID;
@@ -110,6 +145,7 @@ class StorageTopologyAuthoringService {
         deletedAt: null,
       });
       if (!equipment) throw topologyError('EQUIPMENT_NOT_FOUND', `Equipment ${equipmentIdentifier} não encontrado`, 404);
+      this.assertEquipmentInScope(equipment, organizationScope);
       // Deliberately NOT String(): Denise's branch stringifies here, but on
       // this branch StorageContainer.containerID is a Number and #757 settled
       // that it and Equipment.equipmentID are the same plain number. Keep
@@ -176,7 +212,7 @@ class StorageTopologyAuthoringService {
     }
   }
 
-  async createBox(input = {}, actorId = null) {
+  async createBox(input = {}, actorId = null, organizationScope = null) {
     await this.ensureLayoutIndexes();
 
     const name = requiredText(input.name, 'name');
@@ -188,6 +224,7 @@ class StorageTopologyAuthoringService {
     if (!['RACK', 'DRAWER'].includes(parent.containerType)) {
       throw topologyError('INVALID_HIERARCHY', 'StorageBox exige parent do tipo RACK ou DRAWER');
     }
+    await this.assertTreeInScope(parent, organizationScope);
 
     const rows = Number(input.dimension?.rows);
     const cols = Number(input.dimension?.cols);

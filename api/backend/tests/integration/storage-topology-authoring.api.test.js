@@ -43,6 +43,27 @@ beforeEach(() => {
 
 afterEach(() => { vi.restoreAllMocks(); });
 
+// A FREEZER -> SHELF -> RACK chain whose freezer is bound to an Equipment in
+// `organizationId`. findOne answers by _id, so a walk up the parent chain
+// reaches the real root rather than the same fixture every time.
+function chainInOrg(organizationId) {
+  const freezerId = new ObjectId();
+  const shelfId = new ObjectId();
+  const rackId = new ObjectId();
+  const byId = new Map([
+    [String(freezerId), { _id: freezerId, containerType: 'FREEZER', containerID: 4201, parent_id: null, deletedAt: null }],
+    [String(shelfId), { _id: shelfId, containerType: 'SHELF', parent_id: freezerId, deletedAt: null }],
+    [String(rackId), { _id: rackId, containerType: 'RACK', parent_id: shelfId, deletedAt: null }],
+  ]);
+  const storageContainers = createCollectionMock({
+    findOne: vi.fn().mockImplementation(async (filter) => (filter?._id ? byId.get(String(filter._id)) || null : null)),
+  });
+  const equipment = createCollectionMock({
+    findOne: vi.fn().mockResolvedValue({ _id: new ObjectId(), equipmentID: 4201, organizationId, deletedAt: null }),
+  });
+  return { freezerId, shelfId, rackId, storageContainers, equipment };
+}
+
 describe('governed storage topology authoring (#1124)', () => {
   it('rejects Técnico: layout authoring is manageStorageTopology, not manageStorageAllocation', async () => {
     const storageContainers = createCollectionMock();
@@ -63,7 +84,7 @@ describe('governed storage topology authoring (#1124)', () => {
     const storageInsert = vi.fn().mockResolvedValue({ insertedId: freezerId });
     const storageContainers = createCollectionMock({ insertOne: storageInsert });
     const equipment = createCollectionMock({
-      findOne: vi.fn().mockResolvedValue({ _id: new ObjectId(), equipmentID: 4201, deletedAt: null }),
+      findOne: vi.fn().mockResolvedValue({ _id: new ObjectId(), equipmentID: 4201, organizationId: 'test-org-default', deletedAt: null }),
     });
     const rooms = createCollectionMock({
       findOne: vi.fn().mockResolvedValue({ _id: roomId, name: 'Sala fria', deletedAt: null }),
@@ -118,7 +139,7 @@ describe('governed storage topology authoring (#1124)', () => {
     const dup = Object.assign(new Error('E11000 duplicate key'), { code: 11000 });
     const storageContainers = createCollectionMock({ insertOne: vi.fn().mockRejectedValue(dup) });
     const equipment = createCollectionMock({
-      findOne: vi.fn().mockResolvedValue({ _id: new ObjectId(), equipmentID: 4201, deletedAt: null }),
+      findOne: vi.fn().mockResolvedValue({ _id: new ObjectId(), equipmentID: 4201, organizationId: 'test-org-default', deletedAt: null }),
     });
     app.locals.db = dbWithRbac({ storageContainers, equipment }, 3);
 
@@ -143,7 +164,7 @@ describe('governed storage topology authoring (#1124)', () => {
       )),
     });
     const equipment = createCollectionMock({
-      findOne: vi.fn().mockResolvedValue({ _id: new ObjectId(), equipmentID: 4201, deletedAt: null }),
+      findOne: vi.fn().mockResolvedValue({ _id: new ObjectId(), equipmentID: 4201, organizationId: 'test-org-default', deletedAt: null }),
     });
     app.locals.db = dbWithRbac({ storageContainers, equipment }, 3);
 
@@ -174,14 +195,11 @@ describe('governed storage topology authoring (#1124)', () => {
   });
 
   it('creates a StorageBox under RACK as layout configuration with deterministic capacity and empty occupancy', async () => {
-    const rackId = new ObjectId();
+    const { rackId, storageContainers, equipment } = chainInOrg('test-org-default');
     const boxId = new ObjectId();
-    const storageContainers = createCollectionMock({
-      findOne: vi.fn().mockResolvedValue({ _id: rackId, containerType: 'RACK', deletedAt: null }),
-    });
     const boxInsert = vi.fn().mockResolvedValue({ insertedId: boxId });
     const storageBoxes = createCollectionMock({ insertOne: boxInsert });
-    app.locals.db = dbWithRbac({ storageContainers, storageBoxes }, 3);
+    app.locals.db = dbWithRbac({ storageContainers, storageBoxes, equipment }, 3);
 
     const res = await request(app)
       .post('/api/storage/topology/boxes')
@@ -218,5 +236,103 @@ describe('governed storage topology authoring (#1124)', () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('INVALID_HIERARCHY');
     expect(storageBoxes.insertOne).not.toHaveBeenCalled();
+  });
+});
+
+// #1210: Equipment is organization-scoped (#635, #1071) and the storage tree
+// built on it carried no scope check, so a Coordenador of one organization
+// could bind a FREEZER -- and every consumer joining on
+// freezer.containerID === Equipment.equipmentID -- to another's Equipment.
+// The tree has no organizationId of its own; its scope is its root
+// freezer's Equipment's.
+describe('topology authoring is bounded by the caller organization (#1210)', () => {
+  it('refuses a FREEZER bound to another organization\'s Equipment, without inserting', async () => {
+    const storageContainers = createCollectionMock();
+    const equipment = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue({ _id: new ObjectId(), equipmentID: 4201, organizationId: 'org-other', deletedAt: null }),
+    });
+    app.locals.db = dbWithRbac({ storageContainers, equipment }, 3);
+
+    const res = await request(app)
+      .post('/api/storage/topology/containers')
+      .set('Authorization', `Bearer ${makeToken(3)}`)
+      .send({ name: 'UF-foreign', containerType: 'FREEZER', equipmentId: '4201' });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe('EQUIPMENT_OUT_OF_SCOPE');
+    expect(storageContainers.insertOne).not.toHaveBeenCalled();
+  });
+
+  it('refuses a FREEZER on Equipment with no organization, as the equipment routes do for a non-global caller', async () => {
+    const storageContainers = createCollectionMock();
+    const equipment = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue({ _id: new ObjectId(), equipmentID: 4201, organizationId: null, deletedAt: null }),
+    });
+    app.locals.db = dbWithRbac({ storageContainers, equipment }, 3);
+
+    const res = await request(app)
+      .post('/api/storage/topology/containers')
+      .set('Authorization', `Bearer ${makeToken(3)}`)
+      .send({ name: 'UF-orgless', containerType: 'FREEZER', equipmentId: '4201' });
+
+    expect(res.status).toBe(403);
+    expect(storageContainers.insertOne).not.toHaveBeenCalled();
+  });
+
+  it('lets an Administrador (global scope) bind a FREEZER to any organization\'s Equipment', async () => {
+    const storageContainers = createCollectionMock({ insertOne: vi.fn().mockResolvedValue({ insertedId: new ObjectId() }) });
+    const equipment = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue({ _id: new ObjectId(), equipmentID: 4201, organizationId: 'org-other', deletedAt: null }),
+    });
+    app.locals.db = dbWithRbac({ storageContainers, equipment }, 4);
+
+    const res = await request(app)
+      .post('/api/storage/topology/containers')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ name: 'UF-admin', containerType: 'FREEZER', equipmentId: '4201' });
+
+    expect(res.status).toBe(201);
+  });
+
+  it('refuses a RACK whose root freezer belongs to another organization', async () => {
+    const { shelfId, storageContainers, equipment } = chainInOrg('org-other');
+    app.locals.db = dbWithRbac({ storageContainers, equipment }, 3);
+
+    const res = await request(app)
+      .post('/api/storage/topology/containers')
+      .set('Authorization', `Bearer ${makeToken(3)}`)
+      .send({ name: 'Rack foreign', containerType: 'RACK', parentId: shelfId.toString() });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe('EQUIPMENT_OUT_OF_SCOPE');
+    expect(storageContainers.insertOne).not.toHaveBeenCalled();
+  });
+
+  it('refuses a box whose root freezer belongs to another organization', async () => {
+    const { rackId, storageContainers, equipment } = chainInOrg('org-other');
+    const storageBoxes = createCollectionMock();
+    app.locals.db = dbWithRbac({ storageContainers, storageBoxes, equipment }, 3);
+
+    const res = await request(app)
+      .post('/api/storage/topology/boxes')
+      .set('Authorization', `Bearer ${makeToken(3)}`)
+      .send({ name: 'Box foreign', parentId: rackId.toString(), dimension: { rows: 9, cols: 9 } });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe('EQUIPMENT_OUT_OF_SCOPE');
+    expect(storageBoxes.insertOne).not.toHaveBeenCalled();
+  });
+
+  it('creates a RACK under a SHELF whose root freezer is in the caller organization (control)', async () => {
+    const { shelfId, storageContainers, equipment } = chainInOrg('test-org-default');
+    storageContainers.insertOne = vi.fn().mockResolvedValue({ insertedId: new ObjectId() });
+    app.locals.db = dbWithRbac({ storageContainers, equipment }, 3);
+
+    const res = await request(app)
+      .post('/api/storage/topology/containers')
+      .set('Authorization', `Bearer ${makeToken(3)}`)
+      .send({ name: 'Rack own', containerType: 'RACK', parentId: shelfId.toString() });
+
+    expect(res.status).toBe(201);
   });
 });

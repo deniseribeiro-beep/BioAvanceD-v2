@@ -18,7 +18,7 @@ const { authenticate } = require('../../infrastructure/middleware/auth');
 // #888: requireRole is no longer imported -- every gate on this router is now
 // a permission code. The role list it carried lives on as the grant list for
 // manageStorageAllocation in rbac-catalog-seed.service.js.
-const { requirePermission } = require('../../infrastructure/middleware/rbac');
+const { requirePermission, requireOrganizationScope } = require('../../infrastructure/middleware/rbac');
 const { ObjectId } = require('mongodb');
 const logger = require('../../utils/logger');
 const { StorageTopologyAuthoringService } = require('../../services/storage-topology-authoring.service');
@@ -614,10 +614,10 @@ async function auditTopologyCreate(req, resourceType, resourceId, payload) {
  * 404 PARENT_NOT_FOUND | EQUIPMENT_NOT_FOUND | ROOM_NOT_FOUND;
  * 409 STORAGE_CONTAINER_CONFLICT (a FREEZER already holds that equipment).
  */
-router.post('/topology/containers', requirePermission('manageStorageTopology'), async (req, res) => {
+router.post('/topology/containers', requirePermission('manageStorageTopology'), requireOrganizationScope, async (req, res) => {
   try {
     const service = new StorageTopologyAuthoringService(req.app.locals.db);
-    const created = await service.createContainer(req.body || {}, topologyActorId(req));
+    const created = await service.createContainer(req.body || {}, topologyActorId(req), req.organizationScope);
     await auditTopologyCreate(req, 'StorageContainerLayout', created._id, {
       containerType: created.containerType,
       parentId: created.parent_id ? String(created.parent_id) : null,
@@ -636,10 +636,10 @@ router.post('/topology/containers', requirePermission('manageStorageTopology'), 
  * Body: { name, parentId (a RACK or DRAWER), dimension: { rows 1-26, cols 1-100 },
  *         boxID?, status?, description? }
  */
-router.post('/topology/boxes', requirePermission('manageStorageTopology'), async (req, res) => {
+router.post('/topology/boxes', requirePermission('manageStorageTopology'), requireOrganizationScope, async (req, res) => {
   try {
     const service = new StorageTopologyAuthoringService(req.app.locals.db);
-    const created = await service.createBox(req.body || {}, topologyActorId(req));
+    const created = await service.createBox(req.body || {}, topologyActorId(req), req.organizationScope);
     await auditTopologyCreate(req, 'StorageBoxLayout', created._id, {
       parentId: String(created.parent_id),
       dimension: created.dimension,
