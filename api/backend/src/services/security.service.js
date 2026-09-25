@@ -20,11 +20,12 @@ const SERVER_OWNED_KEYS = ['configVersion', 'lastUpdatedAt', 'lastUpdatedBy'];
 //   revoke when a TIGHTENING invalidates a guarantee an already-issued session
 //   is currently relying on.
 //
-// That yields exactly one entry today, and the shortness is the finding, not an
-// oversight. session.timeoutMinutes is the only SecurityConfiguration key any
-// code path actually enforces (#914 wired it; the session snapshots it at
-// creation, so an existing session keeps the OLD, more generous limit until it
-// is revoked -- which is precisely the gap AC#8 names).
+// That yields two entries today, and the shortness is the finding, not an
+// oversight. session.timeoutMinutes and session.maxSessionDurationHours are the
+// only SecurityConfiguration keys any code path actually enforces (#914 wired
+// both; the session snapshots them at creation, so an existing session keeps
+// the OLD, more generous limit until it is revoked -- which is precisely the
+// gap AC#8 names).
 //
 // Deliberately NOT included, each for a stated reason:
 //  - authentication.requireMFA / enhancedSecurity.requireMFAForAll: still inert
@@ -41,7 +42,7 @@ const SERVER_OWNED_KEYS = ['configVersion', 'lastUpdatedAt', 'lastUpdatedBy'];
 // directions here -- it includes maxLoginAttempts and privacy.autoPurge and
 // omits maxSessionDurationHours. Coupling session lifecycle to audit-log
 // severity would mean a future logging tweak starts or stops logging people out.
-const SESSION_INVALIDATING_PATHS = ['session.timeoutMinutes'];
+const SESSION_INVALIDATING_PATHS = ['session.timeoutMinutes', 'session.maxSessionDurationHours'];
 
 function requiresSessionRevocation(changes) {
   return changes.some((change) => {

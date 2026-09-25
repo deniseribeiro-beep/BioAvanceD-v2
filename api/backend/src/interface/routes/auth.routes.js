@@ -536,7 +536,7 @@ router.post('/refresh', async (req, res) => {
       { expiresIn: '7d' }
     );
 
-    await sessionService.rotateSessionTokens(db, session.sessionID, accessToken, newRefreshToken);
+    await sessionService.rotateSessionTokens(db, session.sessionID, accessToken, newRefreshToken, session);
     setRefreshCookie(res, newRefreshToken);
 
     return res.status(200).json({

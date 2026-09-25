@@ -29,17 +29,44 @@ const REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 // the fallback is the documented default rather than an invented one.
 const DEFAULT_INACTIVE_TIMEOUT_MS = 30 * 60 * 1000;
 
-async function resolveInactiveTimeoutMs(db) {
+// #914 / RF014 AC#1, RNF021 AC#3. session.maxSessionDurationHours is dict-02
+// P1X-0293, "Duração máxima absoluta", anchored on sessionStartedAt (P1X-0259,
+// our createdAt). Before this nothing capped a session at all:
+// rotateSessionTokens reset refreshExpiresAt to now + 7 days on every refresh,
+// so a client that kept refreshing held one session indefinitely.
+//
+// The cap is carried by refreshExpiresAt itself rather than a new field: it is
+// set once here to min(start + cap, start + REFRESH_TOKEN_TTL_MS) and rotation
+// may only shorten it. isSessionActive (every authenticated request, through
+// verifySession) and getSessionByRefreshToken already refuse a session past
+// refreshExpiresAt, so both paths enforce the cap with no new check.
+//
+// Same snapshot-and-fail-open shape as the inactivity timeout above, for the
+// same reasons: AC#8 needs a snapshot to revoke, and an unreadable policy falls
+// back to getDefaultConfig()'s own value (12) rather than an invented one.
+const DEFAULT_MAX_SESSION_DURATION_MS = 12 * 60 * 60 * 1000;
+
+function positiveNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : null;
+}
+
+async function resolveSessionPolicy(db) {
+  const policy = {
+    inactiveTimeoutMs: DEFAULT_INACTIVE_TIMEOUT_MS,
+    maxSessionDurationMs: DEFAULT_MAX_SESSION_DURATION_MS
+  };
   try {
     const config = await db.collection('security_config').findOne({ _id: 'main' });
-    const minutes = Number(config && config.session && config.session.timeoutMinutes);
-    if (Number.isFinite(minutes) && minutes > 0) {
-      return minutes * 60 * 1000;
-    }
+    const session = (config && config.session) || {};
+    const minutes = positiveNumber(session.timeoutMinutes);
+    if (minutes) policy.inactiveTimeoutMs = minutes * 60 * 1000;
+    const hours = positiveNumber(session.maxSessionDurationHours);
+    if (hours) policy.maxSessionDurationMs = hours * 60 * 60 * 1000;
   } catch (error) {
-    logger.warn('#914: política de sessão ilegível, usando 30 min:', error.message);
+    logger.warn('#914: política de sessão ilegível, usando os padrões (30 min / 12 h):', error.message);
   }
-  return DEFAULT_INACTIVE_TIMEOUT_MS;
+  return policy;
 }
 
 /**
@@ -120,8 +147,10 @@ class SessionService {
     try {
       const sessionID = `session_${userID}_${Date.now()}`;
       const now = new Date();
-      const expiresAt = new Date(now.getTime() + ACCESS_TOKEN_TTL_MS);
-      const refreshExpiresAt = new Date(now.getTime() + REFRESH_TOKEN_TTL_MS);
+      const policy = await resolveSessionPolicy(db);
+      // #914: the absolute cap -- see resolveSessionPolicy.
+      const refreshExpiresAt = new Date(now.getTime() + Math.min(policy.maxSessionDurationMs, REFRESH_TOKEN_TTL_MS));
+      const expiresAt = new Date(Math.min(now.getTime() + ACCESS_TOKEN_TTL_MS, refreshExpiresAt.getTime()));
       const clientInfo = this.extractClientInfo(req);
       const accessTokenHash = hashToken(accessToken);
       const refreshTokenHash = hashToken(refreshToken);
@@ -136,10 +165,13 @@ class SessionService {
         deviceInfo: clientInfo.deviceInfo,
         expiresAt,
         refreshExpiresAt,
-        inactiveTimeout: await resolveInactiveTimeoutMs(db) // #914: from session.timeoutMinutes
+        inactiveTimeout: policy.inactiveTimeoutMs // #914: from session.timeoutMinutes
       };
 
       const session = SessionModel.create(sessionData);
+      // #914: createdAt is sessionStartedAt, the cap's anchor; pin it to the
+      // same instant the cap was computed from.
+      session.createdAt = now;
       
       // Salva no cache
       this.sessions.set(sessionID, session);
@@ -547,17 +579,27 @@ class SessionService {
     });
   }
 
-  async rotateSessionTokens(db, sessionID, nextAccessToken, nextRefreshToken) {
+  async rotateSessionTokens(db, sessionID, nextAccessToken, nextRefreshToken, session = null) {
     const sessionsCollection = db.collection('sessions');
     const now = new Date();
+
+    // #914: rotation may shorten refreshExpiresAt, never extend it -- that
+    // field carries the absolute cap set at createSession. The caller hands us
+    // the document getSessionByRefreshToken already read; the findOne covers
+    // any other caller. A document with no ceiling keeps the old sliding window
+    // rather than failing a refresh on a missing field.
+    const current = session || await sessionsCollection.findOne({ sessionID });
+    const slidingRefreshMs = now.getTime() + REFRESH_TOKEN_TTL_MS;
+    const ceilingMs = current && current.refreshExpiresAt ? new Date(current.refreshExpiresAt).getTime() : NaN;
+    const refreshExpiresAtMs = Number.isFinite(ceilingMs) ? Math.min(slidingRefreshMs, ceilingMs) : slidingRefreshMs;
 
     const update = {
       tokenHash: hashToken(nextAccessToken),
       refreshTokenHash: hashToken(nextRefreshToken),
       lastActivity: now,
       updatedAt: now,
-      expiresAt: new Date(now.getTime() + ACCESS_TOKEN_TTL_MS),
-      refreshExpiresAt: new Date(now.getTime() + REFRESH_TOKEN_TTL_MS),
+      expiresAt: new Date(Math.min(now.getTime() + ACCESS_TOKEN_TTL_MS, refreshExpiresAtMs)),
+      refreshExpiresAt: new Date(refreshExpiresAtMs),
       isActive: true,
       isRevoked: false,
       revokedAt: null,

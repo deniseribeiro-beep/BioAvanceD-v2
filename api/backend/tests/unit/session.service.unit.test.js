@@ -191,6 +191,90 @@ describe('#914: session.timeoutMinutes drives inactiveTimeout', () => {
   });
 });
 
+// #914 / RF014 AC#1, RNF021 AC#3: session.maxSessionDurationHours (dict-02
+// P1X-0293, "Duração máxima absoluta") is carried by refreshExpiresAt, set once
+// at creation from sessionStartedAt and never extended by rotation. Before this,
+// rotateSessionTokens reset it to now + 7 days on every refresh, so no session
+// ever had to end.
+describe('#914: session.maxSessionDurationHours is an absolute cap', () => {
+  const HOUR = 60 * 60 * 1000;
+  beforeEach(() => { sessionService.sessions.clear(); });
+
+  function dbWith(securityConfig, collection) {
+    return {
+      collection: vi.fn((name) => (name === 'security_config'
+        ? { findOne: vi.fn().mockResolvedValue(securityConfig) }
+        : collection)),
+    };
+  }
+
+  it('sets refreshExpiresAt to sessionStartedAt + the configured cap, not + 7 days', async () => {
+    const db = dbWith({ _id: 'main', session: { maxSessionDurationHours: 4 } }, makeCollection());
+
+    const session = await sessionService.createSession(db, 'user-1', 'a', 'r', null);
+
+    expect(session.refreshExpiresAt.getTime() - session.createdAt.getTime()).toBe(4 * HOUR);
+    expect(session.expiresAt.getTime()).toBeLessThanOrEqual(session.refreshExpiresAt.getTime());
+  });
+
+  it("falls back to getDefaultConfig()'s 12 hours when the policy has no cap", async () => {
+    const db = dbWith(null, makeCollection());
+
+    const session = await sessionService.createSession(db, 'user-1', 'a', 'r', null);
+
+    expect(session.refreshExpiresAt.getTime() - session.createdAt.getTime()).toBe(12 * HOUR);
+  });
+
+  it('never lets the access token outlive the cap', async () => {
+    // The cap is reached 10 minutes from now: the next rotation must clamp the
+    // 15-minute access token to the cap, not issue one past it.
+    const collection = makeCollection();
+    const ceiling = new Date(Date.now() + 10 * 60 * 1000);
+
+    await sessionService.rotateSessionTokens(makeDb(collection), 's1', 'acc', 'ref', { sessionID: 's1', refreshExpiresAt: ceiling });
+
+    const [, { $set }] = collection.updateOne.mock.calls[0];
+    expect($set.refreshExpiresAt.getTime()).toBe(ceiling.getTime());
+    expect($set.expiresAt.getTime()).toBe(ceiling.getTime());
+  });
+
+  it("rotation keeps the session's ceiling instead of sliding it forward", async () => {
+    const collection = makeCollection();
+    const ceiling = new Date(Date.now() + 3 * HOUR);
+
+    await sessionService.rotateSessionTokens(makeDb(collection), 's1', 'acc', 'ref', { sessionID: 's1', refreshExpiresAt: ceiling });
+
+    const [, { $set }] = collection.updateOne.mock.calls[0];
+    expect($set.refreshExpiresAt.getTime()).toBe(ceiling.getTime());
+    expect($set.expiresAt.getTime() - Date.now()).toBeLessThanOrEqual(15 * 60 * 1000);
+  });
+
+  it('reads the ceiling from the stored session when the caller does not pass it', async () => {
+    const ceiling = new Date(Date.now() + 2 * HOUR);
+    const collection = makeCollection({ findOne: vi.fn().mockResolvedValue({ sessionID: 's1', refreshExpiresAt: ceiling }) });
+
+    await sessionService.rotateSessionTokens(makeDb(collection), 's1', 'acc', 'ref');
+
+    expect(collection.findOne).toHaveBeenCalledWith({ sessionID: 's1' });
+    const [, { $set }] = collection.updateOne.mock.calls[0];
+    expect($set.refreshExpiresAt.getTime()).toBe(ceiling.getTime());
+  });
+
+  it('a session already past its cap is refused by verifySession', async () => {
+    const now = Date.now();
+    const session = {
+      sessionID: 's-capped', userID: 'u1', tokenHash: sessionService.getTokenHash('capped-tok'),
+      isActive: true, isRevoked: false, lastActivity: new Date(now - 1000), inactiveTimeout: 30 * 60 * 1000,
+      createdAt: new Date(now - 5 * HOUR), expiresAt: new Date(now + 60 * 1000), refreshExpiresAt: new Date(now - 1000),
+    };
+    sessionService.sessions.set(session.sessionID, session);
+
+    const result = await sessionService.verifySession(makeDb(makeCollection()), 'capped-tok');
+
+    expect(result).toEqual({ valid: false, reason: 'session_expired' });
+  });
+});
+
 describe('SessionService.createSession', () => {
   beforeEach(() => {
     sessionService.sessions.clear();

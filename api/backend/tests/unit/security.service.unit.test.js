@@ -542,6 +542,26 @@ describe('SecurityService.updateConfig session revocation (#649)', () => {
     expect(sessions.updateMany).not.toHaveBeenCalled();
   });
 
+  it('#914: revokes when the absolute session cap is TIGHTENED, not when it is loosened', async () => {
+    const tightened = makeDb();
+    await securityService.updateConfig(
+      tightened.db,
+      { session: { maxSessionDurationHours: 4 } },
+      { session: { maxSessionDurationHours: 12 } },
+      req
+    );
+    expect(tightened.sessions.updateMany).toHaveBeenCalled();
+
+    const loosened = makeDb();
+    await securityService.updateConfig(
+      loosened.db,
+      { session: { maxSessionDurationHours: 24 } },
+      { session: { maxSessionDurationHours: 12 } },
+      req
+    );
+    expect(loosened.sessions.updateMany).not.toHaveBeenCalled();
+  });
+
   it('does NOT revoke on requireMFA, which is still inert -- it would readmit everyone WITHOUT MFA', async () => {
     const { db, sessions } = makeDb();
 
