@@ -148,7 +148,6 @@ module.exports = {
   TEMP_STALE_MINUTES: process.env.TEMP_STALE_MINUTES,
 
   // Notification
-  APP_DOMAIN: process.env.APP_DOMAIN,
   ALERT_EMAIL_TO: process.env.ALERT_EMAIL_TO,
   RESEND_API_KEY: process.env.RESEND_API_KEY,
   EMAIL_FROM: process.env.EMAIL_FROM,
