@@ -57,8 +57,9 @@ The last one was 251/251, at `d0429eb5`.
 ## Docker and the machine
 
 - **Gate:** Dennis, 2026-09-25: "Docker is on." It closes at the next `/clear`.
-- **Nothing is running.** `bioavanced-fresh` was taken down with `-v`. Its
-  images may still be cached; the next bring-up uses `--build` regardless.
+- **Nothing is running.** `bioavanced-fresh` was taken down with `-v`, and
+  its 24 images and the build cache were removed. The `bioavanced-test`
+  images predate this sitting's code, so the next bring-up needs `--build`.
 
 ## Things a next session must not undo
 
