@@ -9,6 +9,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { getReportTypeDefinition } from '../config/constants/report.constants';
 import { SPREC_FLUID_DICTIONARY, SPREC_SOLID_DICTIONARY } from '../constants/sprecDictionary';
+import { SPECIMEN_TYPES, SAMPLE_ORIGINS } from '../config/constants/specimen.constants';
 import { ArrowLeft, Download, Filter, Search, X } from 'lucide-react';
 import './ReportQueryPage.css';
 
@@ -20,7 +21,7 @@ type LookupOption = {
 
 type FilterValue = string | boolean | LookupOption | null;
 
-type FilterKind = 'autocomplete' | 'select' | 'date' | 'checkbox';
+type FilterKind = 'autocomplete' | 'select' | 'date' | 'checkbox' | 'text';
 
 type FilterFieldBase = {
   name: string;
@@ -48,7 +49,20 @@ type CheckboxField = FilterFieldBase & {
   kind: 'checkbox';
 };
 
-type ReportFilterField = AutocompleteField | SelectField | DateField | CheckboxField;
+type TextField = FilterFieldBase & {
+  kind: 'text';
+};
+
+type ReportFilterField = AutocompleteField | SelectField | DateField | CheckboxField | TextField;
+
+// One entry of GET /reports/:type/filters (#732), the per-handler catalog of
+// the filters the backend actually reads for that report type.
+export type CatalogFilter = {
+  name: string;
+  label?: string;
+  type?: string;
+  options?: string[];
+};
 
 type ReportFilterSection = {
   id: string;
@@ -203,7 +217,58 @@ function formatFilename(reportLabel: string) {
     .toLowerCase();
 }
 
-function buildSections(reportKey: string, qualityFields: ReportFilterField[]): ReportFilterSection[] {
+// #748 (RF008 AC#1): periodo, colecao, tipo, origem and localizacao, in the
+// AC's own order. `estado` is the quality section's `status` select. The
+// backend reads all of them (#739), but which ones a report type honours is
+// the catalog's answer, not this page's: a dimension renders only when
+// GET /reports/:type/filters lists it for the selected type.
+const INVENTORY_FILTER_NAMES = [
+  'startDate',
+  'endDate',
+  'collectionId',
+  'sampleType',
+  'sampleOrigin',
+  'storageBoxId',
+  'storagePosition',
+] as const;
+
+const INVENTORY_OPTION_LABELS: Record<string, Record<string, string>> = {
+  sampleType: Object.fromEntries(SPECIMEN_TYPES.map((entry) => [entry.id, entry.label])),
+  sampleOrigin: Object.fromEntries(SAMPLE_ORIGINS.map((entry) => [entry.id, entry.label])),
+};
+
+export function buildInventoryFields(catalog: CatalogFilter[], alreadyRendered: ReadonlySet<string>): ReportFilterField[] {
+  const byName = new Map(catalog.map((entry) => [entry.name, entry]));
+  const fields: ReportFilterField[] = [];
+
+  INVENTORY_FILTER_NAMES.forEach((name) => {
+    const entry = byName.get(name);
+    if (!entry || alreadyRendered.has(name)) {
+      return;
+    }
+
+    const label = entry.label || name;
+    if (entry.type === 'date') {
+      fields.push({ name, label, kind: 'date' });
+    } else if (entry.type === 'select' && Array.isArray(entry.options)) {
+      const optionLabels = INVENTORY_OPTION_LABELS[name] || {};
+      fields.push({
+        name,
+        label,
+        kind: 'select',
+        // The ID is what the backend matches on; an ID this page has no
+        // label for still renders rather than silently disappearing.
+        options: entry.options.map((value) => ({ value, label: optionLabels[value] || value })),
+      });
+    } else {
+      fields.push({ name, label, kind: 'text' });
+    }
+  });
+
+  return fields;
+}
+
+export function buildSections(reportKey: string, qualityFields: ReportFilterField[], catalog: CatalogFilter[] = []): ReportFilterSection[] {
   const sections: ReportFilterSection[] = [];
 
   if (CLINICAL_KEYS.has(reportKey)) {
@@ -219,6 +284,17 @@ function buildSections(reportKey: string, qualityFields: ReportFilterField[]): R
 
   if (MONITORING_KEYS.has(reportKey)) {
     sections.push(REPORT_SECTION_LIBRARY.monitoring);
+  }
+
+  const alreadyRendered = new Set(sections.flatMap((section) => section.fields.map((field) => field.name)));
+  const inventoryFields = buildInventoryFields(catalog, alreadyRendered);
+  if (inventoryFields.length > 0) {
+    sections.unshift({
+      id: 'inventory',
+      title: 'Inventário (período, coleção, tipo, origem, localização)',
+      description: 'Filtros de inventário do RF008, conforme o catálogo do tipo de relatório selecionado.',
+      fields: inventoryFields,
+    });
   }
 
   return sections;
@@ -406,6 +482,26 @@ function ReportDateField({
   );
 }
 
+function ReportTextField({
+  label,
+  helperText,
+  value,
+  onChange,
+}: {
+  label: string;
+  helperText?: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div className="report-field-stack">
+      <label className="report-field-label">{label}</label>
+      <Input type="text" value={value} aria-label={label} onChange={(event) => onChange(event.target.value)} />
+      {helperText && <p className="report-field-help">{helperText}</p>}
+    </div>
+  );
+}
+
 function ReportCheckboxField({
   label,
   helperText,
@@ -472,6 +568,15 @@ function ReportField({
           onChange={(nextValue) => onChange(field.name, nextValue)}
         />
       );
+    case 'text':
+      return (
+        <ReportTextField
+          label={field.label}
+          helperText={field.helperText}
+          value={String(values[field.name] || '')}
+          onChange={(nextValue) => onChange(field.name, nextValue)}
+        />
+      );
     case 'checkbox':
       return (
         <ReportCheckboxField
@@ -502,6 +607,7 @@ export default function ReportQueryPage() {
   const [values, setValues] = useState<Record<string, FilterValue>>({});
   const [error, setError] = useState('');
   const [exporting, setExporting] = useState(false);
+  const [filterCatalog, setFilterCatalog] = useState<CatalogFilter[]>([]);
 
   const sprecMatrixType = String(values.sprecMatrixType || 'fluid').trim().toLowerCase() === 'solid' ? 'solid' : 'fluid';
   const activeSprecDictionary = sprecMatrixType === 'solid' ? SPREC_SOLID_DICTIONARY : SPREC_FLUID_DICTIONARY;
@@ -585,7 +691,35 @@ export default function ReportQueryPage() {
     setError('');
   }, [reportKey]);
 
-  const sections = useMemo(() => buildSections(reportKey, qualityFields), [qualityFields, reportKey]);
+  // #748: the per-type catalog decides which inventory dimensions render. A
+  // failed fetch leaves the page as it was before #748, never blocks export.
+  useEffect(() => {
+    let cancelled = false;
+    setFilterCatalog([]);
+    if (!reportKey) {
+      return undefined;
+    }
+    reportsService
+      .getFilters(reportKey)
+      .then((response) => {
+        if (!cancelled) {
+          setFilterCatalog(Array.isArray(response?.data?.filters) ? response.data.filters : []);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setFilterCatalog([]);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [reportKey]);
+
+  const sections = useMemo(
+    () => buildSections(reportKey, qualityFields, filterCatalog),
+    [filterCatalog, qualityFields, reportKey]
+  );
 
   const searchOrpha = useCallback(async (query: string): Promise<LookupOption[]> => {
     const trimmed = normalizeText(query);

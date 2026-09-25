@@ -1,0 +1,166 @@
+import { test, expect } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
+import { realLogin, seedRealAuth } from './helpers/realAuth';
+import {
+  createRealParticipant,
+  seedActiveConsent,
+  seedStorageBoxLocation,
+  cleanupStorageBoxLocation,
+  closeSeedDb,
+  type SeededStorageBox,
+} from './helpers/seedParticipant';
+
+// Real-backend proof for two RF008 report defects.
+//
+// #748 (AC#1): #739 wired period, collection, type, origin and location into
+// the sample query and #732 publishes them per report type, but
+// ReportQueryPage rendered none of them. The page now renders the dimensions
+// the type's catalog lists, and an export sends them.
+//
+// #1077: the export catalog bounded the CSV only; the stored Report that
+// POST /generate persists carried the raw custody-ledger rows, operator
+// user agent and ledger hashes included.
+const apiBaseURL = process.env.PLAYWRIGHT_API_BASE_URL;
+
+test.skip(!apiBaseURL, 'PLAYWRIGHT_API_BASE_URL not set — run via npm run test:e2e:docker');
+
+function validSampleFields(sampleType: string, linkedProject: string) {
+  return {
+    sampleType,
+    sampleOrigin: 'VENOUS_BLOOD',
+    extractionProtocol: 'TUBE_EDTA',
+    quantity: 5,
+    quality: 'GOOD',
+    linkedProject,
+    registeredAt: new Date().toISOString(),
+  };
+}
+
+test.describe('RF008 report filters and bounded report data (#748, #1077) — real backend', () => {
+  const seededBoxes: SeededStorageBox[] = [];
+
+  test.afterAll(async () => {
+    await Promise.all(seededBoxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {})));
+    await closeSeedDb();
+  });
+
+  test('#748: the samples query page filters an export by storage box and sample type', async ({ page, request }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    await seedActiveConsent(participant.participantId);
+
+    const plasmaBox = await seedStorageBoxLocation();
+    const serumBox = await seedStorageBoxLocation();
+    seededBoxes.push(plasmaBox, serumBox);
+
+    // The create response names the Mongo _id, which the export catalog does
+    // not carry, so each specimen is found in the CSV by a per-run
+    // linkedProject tag -- a catalog column.
+    const runTag = `RF008 #748 ${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const createSample = async (sampleType: string, box: SeededStorageBox) => {
+      const linkedProject = `${runTag} ${sampleType}`;
+      const res = await request.post(`${apiBaseURL}/api/samples`, {
+        headers: auth,
+        data: {
+          participantId: participant.participantId,
+          ...validSampleFields(sampleType, linkedProject),
+          boxId: box.boxId,
+          positionCode: box.positionCode,
+        },
+      });
+      expect([201, 202], await res.text()).toContain(res.status());
+      return linkedProject;
+    };
+    const plasmaSample = await createSample('PLASMA', plasmaBox);
+    const serumSample = await createSample('SERUM', serumBox);
+
+    await seedRealAuth(page, admin);
+    await page.goto('/reports/query/samples');
+
+    const inventory = page.locator('.report-query-section-card', { hasText: 'Inventário' });
+    await expect(inventory).toBeVisible();
+    for (const label of ['Coleção', 'Tipo de amostra', 'Origem', 'Caixa de armazenamento', 'Posição na caixa']) {
+      await expect(inventory.getByText(label, { exact: true })).toBeVisible();
+    }
+
+    const exportCsv = async () => {
+      const downloadPromise = page.waitForEvent('download');
+      await page.getByRole('button', { name: 'Exportar' }).click();
+      const download = await downloadPromise;
+      return readFile((await download.path())!, 'utf-8');
+    };
+
+    // The box filter narrows the export to the one box's specimen.
+    await inventory.getByLabel('Caixa de armazenamento').fill(plasmaBox.boxId);
+    const byBox = await exportCsv();
+    expect(byBox).toContain(plasmaSample);
+    expect(byBox).not.toContain(serumSample);
+
+    // The type select sends the MIABIS ID. PLASMA's specimen does not match
+    // SERUM, so the same box now exports nothing.
+    await inventory.getByLabel('Tipo de amostra').selectOption({ label: 'Soro' });
+    const byBoxAndType = await exportCsv();
+    expect(byBoxAndType).not.toContain(plasmaSample);
+    expect(byBoxAndType.split('\n')[0]).toBe('total,message');
+
+    // Control: the serum box with the serum type exports its specimen, so the
+    // empty result above is the filter, not a broken export.
+    await inventory.getByLabel('Caixa de armazenamento').fill(serumBox.boxId);
+    const serumExport = await exportCsv();
+    expect(serumExport).toContain(serumSample);
+  });
+
+  test('#1077: a generated withdrawal report stores no operator user agent, identity or ledger hash', async ({ request }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    await seedActiveConsent(participant.participantId);
+    const box = await seedStorageBoxLocation();
+    seededBoxes.push(box);
+
+    const linkedProject = `RF008 #1077 ${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const create = await request.post(`${apiBaseURL}/api/samples`, {
+      headers: auth,
+      data: {
+        participantId: participant.participantId,
+        ...validSampleFields('PLASMA', linkedProject),
+        boxId: box.boxId,
+        positionCode: box.positionCode,
+      },
+    });
+    expect([201, 202], await create.text()).toContain(create.status());
+    const sampleId = (await create.json()).data.sampleID as string;
+
+    const leakyAgent = `e2e-1077-leaky-agent-${Date.now()}`;
+    const withdraw = await request.post(`${apiBaseURL}/api/samples/${sampleId}/withdraw`, {
+      headers: { ...auth, 'User-Agent': leakyAgent },
+      data: { withdrawalType: 'Total', withdrawalResponsible: 'E2E 1077 Responsible', linkedProject },
+    });
+    expect(withdraw.status(), await withdraw.text()).toBe(200);
+
+    const generate = await request.post(`${apiBaseURL}/api/reports/generate`, {
+      headers: auth,
+      data: { reportType: 'withdrawal_history' },
+    });
+    expect(generate.status(), await generate.text()).toBe(201);
+    const reportID = (await generate.json()).reportID as number;
+
+    // Read the stored document back, the surface a later reader gets.
+    const stored = await request.get(`${apiBaseURL}/api/reports/${reportID}`, { headers: auth });
+    expect(stored.status()).toBe(200);
+    const reportData = JSON.parse((await stored.json()).reportData);
+    const rows = reportData.withdrawals as Array<Record<string, unknown>>;
+
+    // CONTROL: the ledger row is really in the stored report. It is found by
+    // this run's linkedProject: the ledger's specimenId is the specimen's
+    // business id, not the Mongo _id the create response returns.
+    const row = rows.find((entry) => entry.linkedProject === linkedProject);
+    expect(row, JSON.stringify(rows.slice(0, 3))).toBeTruthy();
+
+    expect(JSON.stringify(reportData)).not.toContain(leakyAgent);
+    for (const column of ['userAgent', 'ipAddress', 'userId', 'userName', 'responsible', 'hash', 'previousHash', '_id']) {
+      expect(Object.keys(row!)).not.toContain(column);
+    }
+  });
+});
