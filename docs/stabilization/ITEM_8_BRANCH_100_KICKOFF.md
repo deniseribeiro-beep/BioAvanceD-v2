@@ -56,3 +56,11 @@ Mesmo cobrindo **todos** os source-located zeros restantes (~280 após harvest),
 ## Política mantida
 
 Só `TEST_V2`; inventário classificado; `[skip ci]` intermediário; no máximo 2 Full+coverage + 1 Docker nesta stage.
+
+---
+
+## Stage 2G — desbloqueio normativo + colheita source-located
+
+**Emenda #228** publicada (comentário Stage 2G): marco 100% fecha quando inventário source-located não tem `TEST_V2_CANDIDATE` pendente + Full/Docker verdes + residual classificado; empty-loc V8 não exige hit. Aprovação operacional = execução deste plano pelo maintainer.
+
+Status: **em execução**.
