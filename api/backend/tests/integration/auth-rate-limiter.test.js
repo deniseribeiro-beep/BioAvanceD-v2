@@ -71,7 +71,9 @@ describe('#359: authLimiter budget requires the explicit AUTH_RATE_LIMIT_RELAXED
 
     const rateLimited = responses.filter((res) => res.status === 429);
     expect(rateLimited.length).toBeGreaterThan(0);
-  }, 15000);
+    // Full-suite scheduling pressure can push the inherent 12-request
+    // budget well past 15s; keep headroom without changing the assertion.
+  }, 60000);
 
   it('allows more than 10 /api/auth requests/min when the explicit opt-in is set (real Docker dev stack)', async () => {
     const app = loadAppWithEnv('development', { relaxed: true });

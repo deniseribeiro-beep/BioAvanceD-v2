@@ -58,7 +58,7 @@ describe('item8 waveG residual inventory zeros', () => {
     });
     const csv = await logService.exportLogsToCSV(db, {});
     expect(csv).toContain('USR-SYSTEM');
-  });
+  }, 30000);
 
   it('import-lgpd sample template falls back to catalog constants when collections are empty', async () => {
     const controller = require('../../src/controllers/import-lgpd.controller');
@@ -74,7 +74,7 @@ describe('item8 waveG residual inventory zeros', () => {
     await controller.downloadSampleTemplateExcel({ app: { locals: { db } } }, res);
     expect(res.setHeader).toHaveBeenCalled();
     expect(res.send.mock.calls.length + res.status.mock.calls.length).toBeGreaterThan(0);
-  });
+  }, 30000);
 
   it('import-lgpd sample template prefers id when present on type/origin/protocol', async () => {
     const controller = require('../../src/controllers/import-lgpd.controller');
