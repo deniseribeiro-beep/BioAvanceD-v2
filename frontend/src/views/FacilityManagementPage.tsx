@@ -15,7 +15,7 @@ import { useTemperature } from '../hooks/useTemperature';
 import { useSensors } from '../hooks/useSensors';
 import { usePolicies } from '../hooks/usePolicies';
 import { useOrganizations } from '../hooks/useOrganizations';
-import { validateReading, validateTemperatureUnit, generateAlert, validateThresholds } from '../utils/validations';
+import { validateThresholds } from '../utils/validations';
 import { CryoBoxGrid } from '../components/CryoBoxGrid';
 import { storageApi } from '../services/storageApi';
 import { MAINTENANCE_STATUS_OPTIONS, getMaintenanceStatusLabel } from '../config/constants/sensor.constants';
