@@ -92,6 +92,16 @@ EXAMPLE="$SCRIPT_DIR/.env.docker.example"
 #
 # Safe to copy values because no secret in .env.docker.example carries a real
 # one -- every secret-shaped entry there is blank.
+#
+# #1162 (Axis E E1, Denise, 2026-09-25): except the rate-limit RELAXATIONS.
+# Those flags exist so that loosening an authentication or consent control is
+# an explicit act (#359, #832), and copying the example's `true` made it a
+# consequence of running this script instead. A name in RELAX_OPT_INS is
+# written BLANK, which env.js reads as off; the example keeps `true` as
+# documentation of the value a controlled suite sets by hand. The e2e stack
+# (compose.test.yml) is unaffected: it runs NODE_ENV=test, reads no
+# .env.docker, and app.js mounts no limiter under test at all.
+RELAX_OPT_INS=" AUTH_RATE_LIMIT_RELAXED CONSENT_RATE_LIMIT_RELAXED "
 sync_from_example() {
   local target="$1"
   local line name
@@ -102,6 +112,9 @@ sync_from_example() {
       *) continue ;;
     esac
     name="${line%%=*}"
+    if [[ "$RELAX_OPT_INS" == *" $name "* ]]; then
+      line="$name="
+    fi
     if ! grep -q "^$name=" "$target"; then
       printf '%s\n' "$line" >> "$target"
       SYNC_ADDED=$((SYNC_ADDED + 1))

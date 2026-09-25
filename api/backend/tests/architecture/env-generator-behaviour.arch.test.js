@@ -161,6 +161,33 @@ test('a fresh generate mints the audit signing key, a second fresh generate reus
   }
 });
 
+// #1162: --upgrade fills a missing relaxation BLANK too, and -- like every
+// other existing line -- leaves an operator's hand-set value alone.
+test('--upgrade restores a missing rate-limit relaxation blank, and keeps a hand-set true (#1162)', () => {
+  const { dir, script } = makeSandbox();
+  try {
+    const outFile = path.join(dir, '.env.docker');
+    const fresh = run(script, [outFile], dir);
+    assert.equal(fresh.status, 0, `fresh generate must succeed: ${fresh.stderr}`);
+
+    const mutated = fs.readFileSync(outFile, 'utf8')
+      .split(/\r?\n/)
+      .filter((line) => !line.startsWith('AUTH_RATE_LIMIT_RELAXED='))
+      .map((line) => (line.startsWith('CONSENT_RATE_LIMIT_RELAXED=') ? 'CONSENT_RATE_LIMIT_RELAXED=true' : line))
+      .join('\n');
+    fs.writeFileSync(outFile, mutated);
+
+    const upgrade = run(script, ['--upgrade', outFile], dir);
+    assert.equal(upgrade.status, 0, `--upgrade must succeed: ${upgrade.stderr}`);
+
+    const content = fs.readFileSync(outFile, 'utf8');
+    assert.deepEqual(findLines(content, 'AUTH_RATE_LIMIT_RELAXED='), ['AUTH_RATE_LIMIT_RELAXED=']);
+    assert.deepEqual(findLines(content, 'CONSENT_RATE_LIMIT_RELAXED='), ['CONSENT_RATE_LIMIT_RELAXED=true']);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('--upgrade preserves existing credentials, restores deleted example-sourced lines, fixes the AUDIT_MERKLE_SIGN_* registry, writes a matching backup, and a second --upgrade is a no-op', () => {
   const { dir, script, example, keyFile } = makeSandbox();
   try {

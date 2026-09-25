@@ -130,6 +130,28 @@ test('a fresh generate does not trust a proxy that does not exist (#1162)', () =
   }
 });
 
+// #1162, Axis E E1 (Denise, 2026-09-25): the example ships both rate-limit
+// relaxations as `true`, and a fresh generate must not inherit them, so
+// relaxing an auth or consent control stays an explicit edit (#359, #832).
+test('a fresh generate writes the rate-limit relaxations blank, not the example\'s true (#1162)', () => {
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-generator-arch-'));
+  const outFile = path.join(outDir, '.env.docker');
+  try {
+    execFileSync('bash', [GENERATOR, outFile], { cwd: REPO_ROOT, stdio: 'pipe' });
+
+    const lines = fs.readFileSync(outFile, 'utf8').split(/\r?\n/);
+    const exampleLines = fs.readFileSync(EXAMPLE, 'utf8').split(/\r?\n/);
+    for (const name of ['AUTH_RATE_LIMIT_RELAXED', 'CONSENT_RATE_LIMIT_RELAXED']) {
+      // CONTROL: the example still carries the value the sync must NOT copy.
+      assert.ok(exampleLines.includes(`${name}=true`), `the example must still declare ${name}=true`);
+      const found = lines.filter((line) => line.startsWith(`${name}=`));
+      assert.deepEqual(found, [`${name}=`], `${name} must be written exactly once, blank`);
+    }
+  } finally {
+    fs.rmSync(outDir, { recursive: true, force: true });
+  }
+});
+
 // The generator's own values must win where the two disagree. #1153 recorded
 // one such divergence -- AUDIT_RFC3161_MODE is `remote` in the example and
 // `disabled` from the generator -- and which is intended is #962's open call,
