@@ -5,17 +5,20 @@ const { ensureStorageContainerIndexes, ensureStorageBoxIndexes } = require('../u
 const quarantineActionService = require('./quarantine-action.service');
 const logger = require('../utils/logger');
 
+// #883: routine "Maintenance"/"Inactive" states are deliberately excluded
+// here. A sample-bearing freezer taken out of service for routine
+// maintenance, or marked inactive, must not silently bulk-quarantine every
+// sample stored under it -- quarantine is reserved for failure states that
+// actually threaten sample integrity (offline/powered-down, repair). Keeping
+// an out-of-service location from being used further is RF017 AC#7's job,
+// already enforced at the readiness gate -- not a reason to quarantine its
+// contents.
 const QUARANTINE_TRIGGER_STATUSES = new Set([
   'offline',
   'desligado',
-  'inactive',
-  'inativo',
   'repair',
-  'maintenance',
   'aguardando reparo',
-  'awaiting repair',
-  'manutencao',
-  'manutenção'
+  'awaiting repair'
 ]);
 
 function normalizeStatus(value) {
@@ -411,7 +414,7 @@ async function quarantineSamplesByFilter(db, filter, context = {}) {
       updatePayload.locationStatus = 'Quarantine';
     }
 
-    await samplesCollection.updateOne(
+    const updateResult = await samplesCollection.updateOne(
       { _id: sample._id },
       { $set: updatePayload },
       queryOptions
@@ -422,7 +425,11 @@ async function quarantineSamplesByFilter(db, filter, context = {}) {
       reasonCodes: [context.coldChainIncidentId ? 'COLD_CHAIN_INCIDENT' : (context.source || 'AUTOMATIC')],
     }, context.session);
 
-    quarantined += 1;
+    // #883: only count a sample as quarantined when the update actually
+    // changed it; the reported count used to be a loop counter.
+    if (updateResult?.modifiedCount > 0) {
+      quarantined += 1;
+    }
 
     const quantitySnapshot = Number(sample.currentQuantity ?? sample.quantity ?? 0);
     const movementID = await SampleMovementModel.generateMovementID(db);
