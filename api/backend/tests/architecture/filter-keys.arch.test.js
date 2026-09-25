@@ -260,9 +260,11 @@ const RETIRED_KEY_EXEMPT = new Set([
   // guard went red on the shift alone, which is the intended behaviour.
   // :683/:760/:853 -> :691/:768/:861, a uniform +8, when #1185 added
   // requireOrganizationScope and the collectionSite stamp to POST /.
-  'interface/routes/sample.routes.js:691',
-  'interface/routes/sample.routes.js:768',
-  'interface/routes/sample.routes.js:861',
+  // :691/:768/:861 -> :695/:772/:865, a uniform +4, when #1216 added
+  // specimenId to POST /'s response and audit payload.
+  'interface/routes/sample.routes.js:695',
+  'interface/routes/sample.routes.js:772',
+  'interface/routes/sample.routes.js:865',
   'services/analysisValidation.service.js:29'
 ]);
 

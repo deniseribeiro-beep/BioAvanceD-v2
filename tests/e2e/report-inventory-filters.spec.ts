@@ -154,7 +154,11 @@ test.describe('RF008 report filters and bounded report data (#748, #1077) — re
       },
     });
     expect([201, 202], await create.text()).toContain(create.status());
-    const sampleId = (await create.json()).data.sampleID as string;
+    const created = (await create.json()).data;
+    const sampleId = created.sampleID as string;
+    // #1216: the create response now names the canonical specimenId too.
+    const specimenId = created.specimenId as string;
+    expect(specimenId).toBeTruthy();
 
     const leakyAgent = `e2e-1077-leaky-agent-${Date.now()}`;
     const withdraw = await request.post(`${apiBaseURL}/api/samples/${sampleId}/withdraw`, {
@@ -181,6 +185,9 @@ test.describe('RF008 report filters and bounded report data (#748, #1077) — re
     // business id, not the Mongo _id the create response returns.
     const row = rows.find((entry) => entry.linkedProject === linkedProject);
     expect(row, JSON.stringify(rows.slice(0, 3))).toBeTruthy();
+    // #1216: the specimenId the create response returned is the one the
+    // ledger, and so the report, carries.
+    expect(row!.specimenId).toBe(specimenId);
 
     expect(JSON.stringify(reportData)).not.toContain(leakyAgent);
     for (const column of ['userAgent', 'ipAddress', 'userId', 'userName', 'responsible', 'hash', 'previousHash', '_id']) {

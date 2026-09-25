@@ -402,6 +402,7 @@ router.post('/',
           message: `Amostra criada - Participante ID: ${sample.participantId}`, // Apenas ID, sem dados sensíveis
           payload: {
             sampleID: sample._id.toString(),
+            specimenId: sample.specimenId || null,
             participantId: sample.participantId, // Apenas ID anonimizado
             sampleType: sample.sampleType,
             barcode: sample.barcode,
@@ -420,6 +421,9 @@ router.post('/',
           : req.t('samples.createSuccess') || 'Amostra criada com sucesso',
         data: {
           sampleID: sample._id.toString(),
+          // #1216: the canonical business id every report, ledger row and
+          // export carries. sampleID (the Mongo _id) stays for its callers.
+          specimenId: sample.specimenId || null,
           // #795: canonical name on the way out, matching the way in --
           // validateCreateSamplePayload already 422s a request carrying
           // `patientID` (NON_CANONICAL_FIELD), and the field is on
