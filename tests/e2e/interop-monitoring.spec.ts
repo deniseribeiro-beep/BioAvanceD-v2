@@ -926,16 +926,20 @@ test.describe('Alertas e notificações (RF015) — real backend', () => {
   }) => {
     const admin = await realLogin(request);
 
-    // coordinator resolves to zero recipients in this stack's seed data
-    // (only an Administrador bootstrap user exists) -- a real failure, not
-    // a simulated one, same technique notificationDispatch.service.test.js
-    // uses natively.
+    // A role code no user can hold resolves to zero recipients -- a real
+    // resolution failure, not a simulated one, same technique
+    // notificationDispatch.service.test.js uses natively. #1223: this was
+    // 'coordinator', which is empty only on a fresh volume; once any spec
+    // registers a Coordenador, the email channel resolves a recipient and
+    // nothing escalates. NotificationRule.validate does not check codes
+    // against the RBAC catalog, so a per-run code is accepted and empty by
+    // construction on any volume.
     const ruleRes = await request.post(`${apiBaseURL}/api/notification-rules`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: {
         eventType: 'environmental_excursion',
         channels: ['email'],
-        recipientRoleCodes: ['coordinator'],
+        recipientRoleCodes: [`e2e-no-holder-${Date.now()}`],
         sensitiveFieldsAllowlist: ['sensorId'],
         maxDeliveryMinutes: 2,
         escalation: { enabled: true, afterFailures: 1, channel: 'in_app' },
