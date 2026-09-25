@@ -6,6 +6,7 @@ const { getCollection } = require('../../../utils/collectionResolver');
 const { isKnownStandaloneDeployment } = require('../../../utils/mongoTransaction');
 const StorageAssignmentModel = require('../../../models/StorageAssignment');
 const positionGrid = require('../../../utils/storagePositionGrid');
+const { escapeRegex } = require('../../../utils/escapeRegex');
 
 /**
  * Repositório Mongo para operações de armazenamento físico de amostras.
@@ -1033,7 +1034,7 @@ class MongoStorageRepository {
 
     const samplesCollection = await getCollection(this.db, 'samples');
 
-    const searchRegex = new RegExp(searchTerm, 'i');
+    const searchRegex = new RegExp(escapeRegex(searchTerm), 'i');
     return samplesCollection.find({
       $and: [
         {

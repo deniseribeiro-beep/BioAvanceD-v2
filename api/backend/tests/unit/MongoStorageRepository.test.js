@@ -1734,5 +1734,23 @@ describe('MongoStorageRepository', () => {
       ]);
       expect(limit).toHaveBeenCalledWith(20);
     });
+
+    // #1212: the query is a search term, not a pattern. Unescaped, '(' threw a
+    // SyntaxError (a 500 for the caller) and '.' matched any character.
+    it('matches regex metacharacters in the query literally', async () => {
+      const toArray = vi.fn().mockResolvedValue([]);
+      const limit = vi.fn(() => ({ toArray }));
+      const find = vi.fn(() => ({ limit }));
+      const samples = makeCollection({ find });
+      const db = makeDb({ samples });
+      const repo = new MongoStorageRepository(db);
+
+      await expect(repo.searchAllocatableSampleCandidates({ query: 'BC-9(' })).resolves.toEqual([]);
+      await repo.searchAllocatableSampleCandidates({ query: 'BC.9' });
+
+      const regex = find.mock.calls[1][0].$and[0].$or[0].barcode;
+      expect(regex.test('BC.9')).toBe(true);
+      expect(regex.test('BCX9')).toBe(false);
+    });
   });
 });

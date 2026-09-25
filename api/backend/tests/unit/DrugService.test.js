@@ -257,6 +257,20 @@ describe('DrugService#searchAndCacheDrug', () => {
     expect(db.collection).not.toHaveBeenCalled();
   });
 
+  // #1212: the query is a search term, not a pattern. Unescaped, '(' threw a
+  // SyntaxError and '.' matched any character.
+  it('matches regex metacharacters in the query literally', async () => {
+    const { db, find } = makeDb([]);
+    const service = new DrugService(db);
+
+    await expect(service.searchAndCacheDrug('aspirin(')).resolves.toBeDefined();
+    await service.searchAndCacheDrug('a.pirin');
+
+    const regex = find.mock.calls[find.mock.calls.length - 1][0].$or[0].generic_name;
+    expect(regex.test('a.pirin')).toBe(true);
+    expect(regex.test('aspirin')).toBe(false);
+  });
+
   it('clamps an oversized limit to 50', async () => {
     const { db, limit } = makeDb([]);
     const service = new DrugService(db);

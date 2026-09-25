@@ -191,6 +191,19 @@ describe('GET /api/dictionary/medications/search', () => {
     });
   });
 
+  // #1212: the query is a search term, not a pattern. Unescaped, '(' threw
+  // inside the handler and '.' matched any character.
+  it('matches regex metacharacters in the query literally', async () => {
+    const crash = await request(app).get('/api/dictionary/medications/search?query=' + encodeURIComponent('fab(ry'));
+    expect(crash.status).toBe(200);
+
+    await request(app).get('/api/dictionary/medications/search?query=' + encodeURIComponent('fa.ry'));
+    const calledFilter = collection.find.mock.calls[collection.find.mock.calls.length - 1][0];
+    const regex = calledFilter.$and.find((clause) => clause.$or).$or[0].name;
+    expect(regex.test('fa.ry')).toBe(true);
+    expect(regex.test('fabry')).toBe(false);
+  });
+
   it('uses the base active filter alone (no $and) when no other params are provided', async () => {
     await request(app).get('/api/dictionary/medications/search');
     const calledFilter = collection.find.mock.calls[0][0];

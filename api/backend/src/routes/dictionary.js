@@ -4,6 +4,7 @@ const router = express.Router();
 const redis = require('redis');
 const { getNeo4jDriver } = require('../database/neo4j');
 const DrugService = require('../services/DrugService');
+const { escapeRegex } = require('../utils/escapeRegex');
 
 let redisClient = null;
 let redisConnectPromise = null;
@@ -389,7 +390,7 @@ router.get('/medications/search', async (req, res) => {
 
     const filters = [{ active: { $ne: false } }];
     if (query) {
-      const regex = new RegExp(query, 'i');
+      const regex = new RegExp(escapeRegex(query), 'i');
       filters.push({
         $or: [
           { name: regex },

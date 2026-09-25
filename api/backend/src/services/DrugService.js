@@ -1,5 +1,6 @@
 const DEFAULT_LIMIT = 10;
 const logService = require('./log.service');
+const { escapeRegex } = require('../utils/escapeRegex');
 
 const ATC_LEVEL_1_CLASSES = {
   A: 'Alimentary tract and metabolism',
@@ -50,7 +51,7 @@ class DrugService {
 
     const limit = Math.min(Math.max(Number(options.limit ?? DEFAULT_LIMIT), 1), 50);
     const collection = this.db.collection('medication_dictionary');
-    const regex = new RegExp(normalizedQuery, 'i');
+    const regex = new RegExp(escapeRegex(normalizedQuery), 'i');
 
     const localRows = await collection
       .find({
