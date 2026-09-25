@@ -1,4 +1,5 @@
 const { ObjectId } = require('mongodb');
+const { findSampleByAnyId } = require('../utils/sampleLookup');
 
 function toObjectId(value) {
   if (value instanceof ObjectId) return value;
@@ -29,12 +30,20 @@ function createReferenceError(message) {
  * @param {object} payload
  */
 async function validateAssayReferences(db, payload) {
+  // #1219: a specimen is referenced by its canonical specimenId or its _id,
+  // and the assay stores the canonical one, so its specimenIds mean what
+  // the field name says whichever form the caller held.
   const samplesCollection = db.collection('samples');
-  for (const specimenId of payload.specimenIds || []) {
-    const sample = await samplesCollection.findOne({ _id: toObjectId(specimenId) });
-    if (!sample) {
-      throw createReferenceError(`specimenIds: ${specimenId} não encontrado`);
+  if (Array.isArray(payload.specimenIds)) {
+    const canonical = [];
+    for (const specimenId of payload.specimenIds) {
+      const sample = await findSampleByAnyId(samplesCollection, specimenId);
+      if (!sample) {
+        throw createReferenceError(`specimenIds: ${specimenId} não encontrado`);
+      }
+      canonical.push(String(sample.specimenId || sample._id));
     }
+    payload.specimenIds = canonical;
   }
 
   if (payload.protocolId) {

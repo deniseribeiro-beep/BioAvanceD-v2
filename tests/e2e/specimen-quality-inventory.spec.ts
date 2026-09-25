@@ -1262,15 +1262,9 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
       data: { participantId: participant.participantId, ...validSampleFields(), boxId, positionCode },
     });
     expect(sampleRes.status(), await sampleRes.text()).toBe(201);
-    // #1216: the create response names the specimen by its canonical
-    // specimenId, but an assay's specimenIds still resolve by the sample's
-    // Mongo _id (assayReferenceValidator.js, #1219), so fetch the _id.
-    const createdSpecimenId = String((await sampleRes.json()).data.specimenId);
-    const sampleDoc = await request.get(`${apiBaseURL}/api/samples/${createdSpecimenId}`, {
-      headers: { Authorization: `Bearer ${admin.token}` },
-    });
-    expect(sampleDoc.status()).toBe(200);
-    const specimenId = String((await sampleDoc.json()).data._id);
+    // #1216/#1219: an assay references the specimen by the canonical
+    // specimenId the create response names, and stores it as given.
+    const specimenId = String((await sampleRes.json()).data.specimenId);
 
     const reagentRes = await request.post(`${apiBaseURL}/api/reagent-lots`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -1346,15 +1340,9 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
       data: { participantId: participant.participantId, ...validSampleFields(), boxId, positionCode },
     });
     expect(sampleRes.status(), await sampleRes.text()).toBe(201);
-    // #1216: the create response names the specimen by its canonical
-    // specimenId, but an assay's specimenIds still resolve by the sample's
-    // Mongo _id (assayReferenceValidator.js, #1219), so fetch the _id.
-    const createdSpecimenId = String((await sampleRes.json()).data.specimenId);
-    const sampleDoc = await request.get(`${apiBaseURL}/api/samples/${createdSpecimenId}`, {
-      headers: { Authorization: `Bearer ${admin.token}` },
-    });
-    expect(sampleDoc.status()).toBe(200);
-    const specimenId = String((await sampleDoc.json()).data._id);
+    // #1216/#1219: an assay references the specimen by the canonical
+    // specimenId the create response names, and stores it as given.
+    const specimenId = String((await sampleRes.json()).data.specimenId);
 
     const orgRes = await request.post(`${apiBaseURL}/api/organizations`, {
       headers: { Authorization: `Bearer ${admin.token}` },
