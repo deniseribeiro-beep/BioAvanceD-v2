@@ -13,6 +13,12 @@ const { ensureFacilityIndexes } = require('../../utils/facilityIndexes');
  * admin-config CRUD route in this repo (equipment.routes.js,
  * location.routes.js) — MongoStorageRepository already reads Facility/Room
  * via raw collections rather than the mongoose models added in #418.
+ *
+ * Documented dictionary deviation (#1147): dict-02 makes facilityId 1..1
+ * Core, but RF017's storage topology starts at the Freezer and nothing reads
+ * this field, so an assignment with a null facilityId/roomId is accepted for
+ * the prototype. The surface is API-only by decision; a facility/room UI is
+ * post-prototype work, and only if RF017 is widened.
  */
 
 function validateFacilityInput(data) {

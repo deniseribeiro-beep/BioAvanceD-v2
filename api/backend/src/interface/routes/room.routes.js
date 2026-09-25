@@ -10,6 +10,7 @@ const { ensureRoomIndexes } = require('../../utils/facilityIndexes');
  * Room CRUD — dict-02 StorageAssignment.roomId (ELM-0169, 1..1 Core).
  * Deferred from #418 (models added, no CRUD path); closes that gap (#419).
  * Reads/writes `rooms` directly, same convention as facility.routes.js.
+ * The 1..1 Core deviation and the API-only decision are recorded there (#1147).
  */
 
 function validateRoomInput(data) {

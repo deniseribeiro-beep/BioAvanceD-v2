@@ -30,6 +30,9 @@ async function createPhenotypeObservation(db, data) {
   // and discarded (#866). Stamp it onto hpoCoding when the caller didn't
   // supply one already; never overwrite an explicitly-given version, and
   // leave the field absent (not null) if the validator couldn't resolve one.
+  // Cutoff (#879): codings written before 1d6d10b2 (2026-08-28) carry no
+  // version and are deliberately not back-filled, so an absent version on an
+  // older row means "written before the cutoff", not "unversioned".
   if (!observation.hpoCoding.version) {
     const resolvedVersion = codeCheck.results[0]?.concept?.version;
     if (resolvedVersion) {
