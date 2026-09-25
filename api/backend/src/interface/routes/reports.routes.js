@@ -345,11 +345,9 @@ const SCOPED_HANDLER_KEYS = new Set([
 // /:type/export, /:type/export/pdf and POST /generate in one place -- all
 // four already translate a thrown `statusCode === 403` into a 403 response.
 //
-// This is the GATE only. It bounds WHO may call these types, not WHAT the
-// export contains. As of #1058/#1061/#1050 the CSV export IS bounded, by
-// EXPORT_CATALOG below -- but the preview, the PDF branch and the Report
-// document POST /generate persists are all still the raw handler output,
-// so this sentence still holds for three of the four surfaces.
+// This is the GATE only. It bounds WHO may call these types. WHAT they
+// contain is bounded by EXPORT_CATALOG below, which buildPreviewData applies
+// to every handler's output (#1077), so all four surfaces share it.
 const AUDIT_READER_HANDLER_KEYS = new Set(['accessLogs']);
 
 function unknownTypeResult(rawType) {
@@ -410,7 +408,10 @@ async function buildPreviewData(db, rawType, filters = {}) {
     filters.organizationScope = organizationScope;
   }
 
-  return handler(db, filters, handlerOptions);
+  // #1077: the catalog bounds the result here, where all four surfaces --
+  // the preview, the CSV, the "PDF" branch and the Report POST /generate
+  // persists -- receive it, rather than at one surface at a time.
+  return boundPreviewData(await handler(db, filters, handlerOptions), handlerKey);
 }
 
 async function handleSamplesByPatient(db, filters) {
@@ -992,9 +993,13 @@ const EXPORT_CATALOG = {
   // recordNumberCiphertext), `email`/`phone`, the free-form clinical blobs
   // `anamneseGeral`/`dadosEspecificos`, and the consent token pair #1045
   // already strips upstream.
+  // `nested`: each patient row carries its own samples. The CSV has no
+  // column for them, but the preview and the stored Report do (#1077), so
+  // they are bounded by the Sample column list.
   samplesByPatient: {
     rowKey: 'patients',
-    columns: ['participantId', 'status', 'clinicalUnit', 'unitAcronym', 'clinicalUnitId', 'consentTemplateId', 'consentAcceptedAt', 'sampleCount', 'samplesLimited'],
+    columns: ['participantId', 'status', 'clinicalUnit', 'unitAcronym', 'clinicalUnitId', 'consentTemplateId', 'consentAcceptedAt', 'consentTokenExpiresAt', 'sampleCount', 'samplesLimited'],
+    nested: { samples: SAMPLE_EXPORT_COLUMNS },
   },
   patient: {
     rowKey: 'patients',
@@ -1044,6 +1049,45 @@ const EXPORT_CATALOG = {
   },
   accessLogs: { rowKey: 'logs', columns: AUDIT_LOG_EXPORT_COLUMNS },
 };
+
+function pickColumns(row, columns) {
+  const picked = {};
+  for (const column of columns) {
+    if (row && Object.prototype.hasOwnProperty.call(row, column)) {
+      picked[column] = row[column];
+    }
+  }
+  return picked;
+}
+
+// #1077: the same allow-list as the CSV, applied to the handler's whole
+// result. The row array keeps only its declared columns (and a declared
+// nested array only its own). Scalar and object keys -- total, statistics,
+// mode, previewLimited -- pass through. Any OTHER array is dropped, and a
+// handlerKey with no entry keeps no rows at all: deny by default, as below.
+function boundPreviewData(previewData, handlerKey) {
+  if (!previewData || typeof previewData !== 'object') {
+    return previewData;
+  }
+  const entry = EXPORT_CATALOG[handlerKey];
+  const bounded = {};
+  for (const [key, value] of Object.entries(previewData)) {
+    if (!Array.isArray(value)) {
+      bounded[key] = value;
+    } else if (entry && key === entry.rowKey) {
+      bounded[key] = value.map((row) => {
+        const picked = pickColumns(row, entry.columns);
+        for (const [nestedKey, nestedColumns] of Object.entries(entry.nested || {})) {
+          if (Array.isArray(row?.[nestedKey])) {
+            picked[nestedKey] = row[nestedKey].map((nestedRow) => pickColumns(nestedRow, nestedColumns));
+          }
+        }
+        return picked;
+      });
+    }
+  }
+  return bounded;
+}
 
 function toCsvRows(previewData, handlerKey) {
   const entry = EXPORT_CATALOG[handlerKey];

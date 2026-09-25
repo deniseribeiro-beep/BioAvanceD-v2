@@ -436,7 +436,10 @@ describe('Reports API integration', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.data.total).toBe(2);
-      const semId = response.body.data.patients.find((p) => p.patientName === 'Sem ID');
+      // #1077: located by its missing participantId. patientName is civil
+      // identity and is no longer in the preview at all.
+      const semId = response.body.data.patients.find((p) => p.participantId === undefined);
+      expect(semId.patientName).toBeUndefined();
       expect(semId.sampleCount).toBe(0);
       expect(semId.samples).toEqual([]);
       const semAmostras = response.body.data.patients.find((p) => p.participantId === 'P9');
@@ -1178,6 +1181,151 @@ describe('Reports API integration', () => {
       expect(response.status).toBe(200);
       expect(response.text.split('\n')[0].split(',')).toContain('consentTokenExpiresAt');
       expect(response.text).toContain('2026-12-31');
+    });
+  });
+
+  // #1077: EXPORT_CATALOG bounded the CSV only. The preview, the "PDF" branch
+  // (which answers JSON) and the Report document POST /generate persists all
+  // carried the raw handler output, so the columns the catalog excludes still
+  // left through three surfaces. The catalog now applies where
+  // buildPreviewData returns, so every surface inherits it.
+  describe('#1077: preview, PDF and the stored Report are bounded by the export catalog', () => {
+    function appWithDb(db) {
+      const testApp = express();
+      testApp.use(express.json());
+      testApp.use((req, _res, next) => {
+        req.app.locals.db = db;
+        next();
+      });
+      const reportsRouter = require(modulePaths.controller);
+      testApp.use('/api/reports', reportsRouter);
+      return testApp;
+    }
+
+    // Captures the document POST /generate persists, which buildCollectionDb's
+    // generic collection cannot insert.
+    function withCapturedInsert(db) {
+      const inner = db.collection.bind(db);
+      const inserted = [];
+      return {
+        inserted,
+        db: {
+          collection(name) {
+            if (name === 'reports') {
+              return { ...inner(name), insertOne: async (doc) => { inserted.push(doc); return { insertedId: 'r-1' }; } };
+            }
+            return inner(name);
+          },
+        },
+      };
+    }
+
+    const LEDGER_ROW = {
+      movementId: 'M-1',
+      specimenId: 'S-1',
+      type: 'withdraw',
+      quantity: 2,
+      userId: 'user-9',
+      userName: 'Alice Operator',
+      responsible: 'Alice Operator',
+      ipAddress: '203.0.113.7',
+      userAgent: 'Mozilla/5.0 leaky-agent',
+      hash: 'deadbeefcafe',
+      previousHash: 'feedfacebeef',
+    };
+    const LEDGER_LEAKS = ['Alice Operator', '203.0.113.7', 'leaky-agent', 'deadbeefcafe', 'feedfacebeef', 'user-9'];
+
+    const SAMPLE_ROW = {
+      specimenId: 'S-1',
+      participantId: 'P-1',
+      sampleType: 'blood',
+      clinicalData: { note: 'CLINICAL-SHOULD-NOT-LEAK' },
+      pharmacologyData: { drug: 'PHARMA-SHOULD-NOT-LEAK' },
+      merkleRoot: 'MERKLE-SHOULD-NOT-LEAK',
+    };
+    const SAMPLE_LEAKS = ['CLINICAL-SHOULD-NOT-LEAK', 'PHARMA-SHOULD-NOT-LEAK', 'MERKLE-SHOULD-NOT-LEAK'];
+
+    function expectBounded(body, keep, leaks) {
+      const text = JSON.stringify(body);
+      // CONTROL inside the case: the row is really there, so the negatives
+      // below cannot pass against an empty result.
+      expect(text).toContain(keep);
+      for (const leaked of leaks) {
+        expect(text).not.toContain(leaked);
+      }
+    }
+
+    it('POST /:type/preview omits the custody ledger\'s operator identity, network identifiers and hashes', async () => {
+      const { db } = buildCollectionDb({ sample_movements: [LEDGER_ROW] });
+      const response = await request(appWithDb(db)).post('/api/reports/withdrawal_history/preview').send({});
+
+      expect(response.status).toBe(200);
+      expectBounded(response.body.data, 'M-1', LEDGER_LEAKS);
+    });
+
+    it('GET /:type/export/pdf omits the custody ledger\'s operator identity, network identifiers and hashes', async () => {
+      const { db } = buildCollectionDb({ sample_movements: [LEDGER_ROW] });
+      const response = await request(appWithDb(db)).get('/api/reports/withdrawal_history/export/pdf');
+
+      expect(response.status).toBe(200);
+      expectBounded(response.body.data, 'M-1', LEDGER_LEAKS);
+    });
+
+    it('POST /generate persists a Report whose reportData omits the custody ledger\'s excluded columns', async () => {
+      const { db: base } = buildCollectionDb({ sample_movements: [LEDGER_ROW] });
+      const { db, inserted } = withCapturedInsert(base);
+      const response = await request(appWithDb(db)).post('/api/reports/generate').send({ reportType: 'withdrawal_history' });
+
+      expect(response.status).toBe(201);
+      expect(inserted).toHaveLength(1);
+      expectBounded(JSON.parse(inserted[0].reportData), 'M-1', LEDGER_LEAKS);
+      expectBounded(response.body, 'M-1', LEDGER_LEAKS);
+    });
+
+    it('POST /:type/preview omits Sample clinicalData, pharmacologyData and seal internals', async () => {
+      const { db } = buildCollectionDb({ samples: [SAMPLE_ROW] });
+      const response = await request(appWithDb(db)).post('/api/reports/samples/preview').send({});
+
+      expect(response.status).toBe(200);
+      expectBounded(response.body.data, 'S-1', SAMPLE_LEAKS);
+    });
+
+    // samples_by_patient nests each patient's samples inside the patient row.
+    // The CSV never exported that nested array, but the preview and the stored
+    // Report do, so it is bounded by the Sample column list too.
+    it('POST /generate bounds the samples nested under each patient in samples_by_patient', async () => {
+      const { db: base } = buildCollectionDb({
+        patients: [{ participantId: 'P-1', status: 'active', representative: { name: 'REP-SHOULD-NOT-LEAK' } }],
+        samples: [SAMPLE_ROW],
+      });
+      const { db, inserted } = withCapturedInsert(base);
+      const response = await request(appWithDb(db)).post('/api/reports/generate').send({ reportType: 'samples_by_patient' });
+
+      expect(response.status).toBe(201);
+      const stored = JSON.parse(inserted[0].reportData);
+      expect(stored.patients[0].samples[0].specimenId).toBe('S-1');
+      expectBounded(stored, 'P-1', [...SAMPLE_LEAKS, 'REP-SHOULD-NOT-LEAK']);
+    });
+
+    // CONTROLS: unchanged by this fix, green before and after (#695).
+    it('CONTROL: the non-row keys of a preview are kept (total, statistics, mode, previewLimited)', async () => {
+      const { db } = buildCollectionDb({
+        temperature: [{ logId: 'T-1', sensorId: 'SEN-1', temperatureValue: -80, temperatureUnit: 'C' }],
+      });
+      const response = await request(appWithDb(db)).post('/api/reports/temperature/preview').send({});
+
+      expect(response.status).toBe(200);
+      expect(response.body.data).toMatchObject({ total: 1, mode: 'report', previewLimited: false });
+      expect(response.body.data.statistics).toMatchObject({ average: -80, min: -80, max: -80 });
+      expect(response.body.data.temperatures[0]).toMatchObject({ logId: 'T-1', sensorId: 'SEN-1', temperatureValue: -80 });
+    });
+
+    it('CONTROL: an unknown report type still answers the no-preview shape', async () => {
+      const { db } = buildCollectionDb({});
+      const response = await request(appWithDb(db)).post('/api/reports/no_such_type/preview').send({});
+
+      expect(response.status).toBe(200);
+      expect(response.body.data).toMatchObject({ total: 0, type: 'no_such_type' });
     });
   });
 });
