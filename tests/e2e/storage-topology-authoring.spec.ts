@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { realLogin } from './helpers/realAuth';
+import { completeFirstLoginMfa } from './helpers/completeFirstLoginMfa';
 import {
   createRealParticipant,
   cleanupStorageBoxLocation,
@@ -115,5 +116,72 @@ test.describe('Storage topology authoring through the API (#1124) — real backe
       data: { participantId: participant.participantId, ...validSampleFields(), boxId: box._id, positionCode: 'A1' },
     });
     expect(sampleRes.status(), await sampleRes.text()).toBe(201);
+  });
+
+  // #1210: a Coordenador scoped to one organization may author topology only
+  // on that organization's Equipment. The in-organization create is the
+  // control: an unscoped user would be refused there too, so a 201 there is
+  // what shows the 403 is the scope check and not a missing assignment.
+  test('a Coordenador scoped to one organization cannot bind a FREEZER to another organization\'s Equipment', async ({ request }) => {
+    const admin = await realLogin(request);
+    const adminAuth = { Authorization: `Bearer ${admin.token}` };
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    const makeOrg = async (label: string) => {
+      const res = await request.post(`${apiBaseURL}/api/organizations`, {
+        headers: adminAuth,
+        data: { officialName: `#1210 ${label} ${suffix}`, countryCode: 'BR' },
+      });
+      expect(res.ok(), await res.text()).toBeTruthy();
+      return (await res.json()).data.organizationId as string;
+    };
+    const ownOrg = await makeOrg('own');
+    const otherOrg = await makeOrg('other');
+
+    const makeEquipment = async (organizationId: string, label: string) => {
+      const res = await request.post(`${apiBaseURL}/api/equipment`, {
+        headers: adminAuth,
+        data: { equipmentDescription: `#1210 ${label} ${suffix}`, name: `UF ${label} ${suffix}`, type: 'Freezer', status: 'Active', organizationId },
+      });
+      expect(res.status(), await res.text()).toBe(201);
+      const data = (await res.json()).data;
+      expect(data.organizationId).toBe(organizationId);
+      return data;
+    };
+    const ownEquipment = await makeEquipment(ownOrg, 'own');
+    const otherEquipment = await makeEquipment(otherOrg, 'other');
+
+    const username = `coord.1210.${Date.now()}`;
+    const password = 'Coordenador@123';
+    const registerRes = await request.post(`${apiBaseURL}/api/users/register`, {
+      headers: adminAuth,
+      data: {
+        name: '#1210 Coordenador Fixture',
+        email: `${username}@example.com`,
+        username,
+        password,
+        accessType: 3,
+        roleName: 'Coordenador',
+        organizationId: ownOrg,
+      },
+    });
+    expect(registerRes.ok(), await registerRes.text()).toBeTruthy();
+    const coordinator = await completeFirstLoginMfa(request, apiBaseURL!, username, password);
+    const coordAuth = { Authorization: `Bearer ${coordinator.token}` };
+
+    const foreign = await request.post(`${apiBaseURL}/api/storage/topology/containers`, {
+      headers: coordAuth,
+      data: { name: `#1210 foreign ${suffix}`, containerType: 'FREEZER', equipmentId: String(otherEquipment.equipmentID) },
+    });
+    expect(foreign.status(), await foreign.text()).toBe(403);
+    expect((await foreign.json()).error).toBe('EQUIPMENT_OUT_OF_SCOPE');
+
+    const own = await request.post(`${apiBaseURL}/api/storage/topology/containers`, {
+      headers: coordAuth,
+      data: { name: `#1210 own ${suffix}`, containerType: 'FREEZER', equipmentId: String(ownEquipment.equipmentID) },
+    });
+    expect(own.status(), await own.text()).toBe(201);
+    // No sensor was registered; this removes only the freezer container.
+    await removeSensorRegistration(`none-${suffix}`, (await own.json()).data._id);
   });
 });
