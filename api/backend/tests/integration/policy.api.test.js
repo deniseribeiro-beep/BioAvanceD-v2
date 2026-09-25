@@ -358,7 +358,6 @@ describe('#1074: policy writes are gated on a write permission, not viewTemperat
     name: 'Freezer -80',
     minTemp: -85,
     maxTemp: -75,
-    targetTemp: -80,
   };
 
   beforeEach(() => {

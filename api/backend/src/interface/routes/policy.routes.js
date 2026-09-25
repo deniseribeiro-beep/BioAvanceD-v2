@@ -14,10 +14,11 @@ const logger = require('../../utils/logger');
 // The names are TemperaturePolicy.schema.js's, whose header maps them onto
 // dict-02: name = profileName (P1X-0106), minTemp/maxTemp = lowerLimit/
 // upperLimit, effectivePeriod (P1X-0111), minimumDuration (P1X-0110, minutes,
-// #1195). Two non-dictionary fields remain: targetTemp, which the schema
-// requires and the operator UI shows, and temperatureUnit, which dict-02
+// #1195). One non-dictionary field remains: temperatureUnit, which dict-02
 // carries inside lowerLimit/upperLimit as Quantities -- a storage migration,
-// not a boundary one.
+// not a boundary one. #1197 dropped targetTemp: a nominal setpoint belongs to
+// the storage unit (StorageContainer.temperature; v2.0.0 ELM-0175
+// nominalTemperature), not to the threshold rule, and nothing enforced it.
 const CANONICAL_METRIC_TYPE = 'temperature';
 const CANONICAL_RULE_VERSION = '1.0.0';
 // #1198: Celsius only. Nothing that enforces a policy reads its unit --
@@ -35,7 +36,7 @@ function validatePolicy(body) {
   if (typeof body.name !== 'string' || body.name.trim() === '') {
     errors.push('name \u00e9 obrigat\u00f3rio e deve ser string n\u00e3o vazia');
   }
-  for (const field of ['minTemp', 'maxTemp', 'targetTemp']) {
+  for (const field of ['minTemp', 'maxTemp']) {
     if (typeof body[field] !== 'number') {
       errors.push(`${field} \u00e9 obrigat\u00f3rio e deve ser number`);
     }
@@ -60,7 +61,6 @@ function buildPolicy(body) {
     name: body.name,
     minTemp: body.minTemp,
     maxTemp: body.maxTemp,
-    targetTemp: body.targetTemp,
     hysteresis: body.hysteresis === undefined ? 0.5 : body.hysteresis,
     metricType: CANONICAL_METRIC_TYPE,
     ruleVersion: CANONICAL_RULE_VERSION,
@@ -304,7 +304,6 @@ router.put('/:id', authenticate, requirePermission('manageTemperaturePolicy'), a
       'name',
       'minTemp',
       'maxTemp',
-      'targetTemp',
       'hysteresis',
       'minimumDuration',
       'temperatureUnit'

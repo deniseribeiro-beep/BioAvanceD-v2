@@ -1206,7 +1206,7 @@ function SensorForm({
             </option>
             {policies.filter((policy) => policy && policy._id).map((policy) => (
               <option key={policy._id} value={policy._id}>
-                {policy.name || 'Política'} - {policy.targetTemp}{policy.temperatureUnit} (Limites: {policy.minTemp} - {policy.maxTemp})
+                {policy.name || 'Política'} (Limites: {policy.minTemp} - {policy.maxTemp}{policy.temperatureUnit})
               </option>
             ))}
           </select>
@@ -1321,7 +1321,6 @@ function PoliciesSection() {
         <Table
           headers={[
             'Política',
-            'Temperatura Alvo',
             'Limite Mínimo',
             'Limite Máximo',
             'Histerese',
@@ -1348,9 +1347,6 @@ function PoliciesSection() {
               .map((policy) => (
               <tr key={`policy-${policy._id}`} data-testid={`policy-row-${policy._id}`}>
                 <td>{policy.name}</td>
-                <td>
-                  {policy.targetTemp}°C
-                </td>
                 <td>
                   {policy.minTemp}°C
                 </td>
@@ -1456,9 +1452,10 @@ function PolicyForm({
       name: '',
       minTemp: -85,
       maxTemp: -75,
-      targetTemp: -80,
       hysteresis: 2,
-      minimumDuration: 5,
+      // #1196: 30 min, past a -80 °C freezer's recovery to -75 °C after a
+      // routine door opening, so a retrieval does not compromise the samples.
+      minimumDuration: 30,
       temperatureUnit: '°C',
       effectivePeriod: { start: new Date(), end: new Date() },
     }
@@ -1500,20 +1497,6 @@ function PolicyForm({
           required
         />
         <Input
-          label="Temperatura Alvo"
-          type="number"
-          step="0.1"
-          value={formData.targetTemp || ''}
-          onChange={(e) =>
-            setFormData({
-              ...formData,
-              targetTemp: parseFloat(e.target.value),
-            })
-          }
-          helperText="Temperatura ideal que deve ser mantida. Deve estar entre o limite mínimo e máximo."
-          required
-        />
-        <Input
           label="Limite Mínimo"
           type="number"
           step="0.1"
@@ -1552,7 +1535,7 @@ function PolicyForm({
           helperText="Margem de tolerância para evitar alertas frequentes. Valor recomendado: 1-5 unidades."
         />
         <Input
-          label="Atraso de Alerta (minutos)"
+          label="Duração Mínima da Excursão (minutos)"
           type="number"
           value={formData.minimumDuration || ''}
           onChange={(e) =>
@@ -1561,7 +1544,7 @@ function PolicyForm({
               minimumDuration: parseInt(e.target.value),
             })
           }
-          helperText="Tempo em minutos que a temperatura deve estar fora dos limites antes de gerar um alerta."
+          helperText="Tempo em minutos que a temperatura deve permanecer fora dos limites antes de as amostras serem marcadas como comprometidas."
         />
         {/* #1198: fixed, not selectable. Alert enforcement compares readings
             against these limits in Celsius, so a policy entered in another

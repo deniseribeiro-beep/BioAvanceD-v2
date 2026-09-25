@@ -27,7 +27,6 @@ const basePolicy = {
   name: 'Existing',
   minTemp: 1,
   maxTemp: 10,
-  targetTemp: 5,
   effectivePeriod: { start: '2026-01-01', end: '2026-12-31' },
 };
 

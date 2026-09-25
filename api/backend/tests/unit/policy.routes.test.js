@@ -247,7 +247,6 @@ describe('policy.routes', () => {
         name: 'Freezer -20',
         minTemp: -20,
         maxTemp: -10,
-        targetTemp: -15,
         temperatureUnit: '°C',
       });
 
@@ -266,7 +265,6 @@ describe('policy.routes', () => {
         name: 'Freezer -20',
         minTemp: -20,
         maxTemp: -10,
-        targetTemp: -15,
         temperatureUnit: '°C',
       });
 
@@ -287,7 +285,6 @@ describe('policy.routes', () => {
       name: 'Freezer -80',
       minTemp: -85,
       maxTemp: -75,
-      targetTemp: -80,
       temperatureUnit: '°C',
       minimumDuration: 5,
     };
@@ -317,7 +314,7 @@ describe('policy.routes', () => {
       expect(stored.name).toBe('Freezer -80');
       expect(stored.minTemp).toBe(-85);
       expect(stored.maxTemp).toBe(-75);
-      expect(stored.targetTemp).toBe(-80);
+      expect(stored).not.toHaveProperty('targetTemp');
       expect(stored.temperatureUnit).toBe('°C');
       expect(stored.metricType).toBe('temperature');
       expect(stored.ruleVersion).toBe('1.0.0');
@@ -338,7 +335,7 @@ describe('policy.routes', () => {
 
     it('GET / reads temperaturePolicies', async () => {
       const toArray = vi.fn().mockResolvedValue([
-        { _id: 'p1', name: 'Freezer -80', minTemp: -85, maxTemp: -75, targetTemp: -80 },
+        { _id: 'p1', name: 'Freezer -80', minTemp: -85, maxTemp: -75 },
       ]);
       const find = vi.fn().mockReturnValue({ toArray });
       const db = { collection: vi.fn().mockReturnValue({ find }) };
@@ -361,7 +358,6 @@ describe('policy.routes', () => {
       name: 'Freezer -80',
       minTemp: -85,
       maxTemp: -75,
-      targetTemp: -80,
       hysteresis: 1,
       minimumDuration: 30,
       temperatureUnit: '°C',
@@ -377,7 +373,7 @@ describe('policy.routes', () => {
       await request(app).post('/api/policies').send(body);
 
       const stored = insertOne.mock.calls[0][0];
-      for (const field of ['name', 'minTemp', 'maxTemp', 'targetTemp', 'hysteresis', 'minimumDuration', 'temperatureUnit']) {
+      for (const field of ['name', 'minTemp', 'maxTemp', 'hysteresis', 'minimumDuration', 'temperatureUnit']) {
         expect(stored[field]).toBe(body[field]);
       }
       expect(stored.effectivePeriod.start.toISOString()).toBe(body.effectivePeriod.start);
@@ -397,7 +393,7 @@ describe('policy.routes', () => {
     });
 
     it('GET returns stored documents as they are', async () => {
-      const doc = { _id: 'p1', name: 'A', minTemp: -85, maxTemp: -75, targetTemp: -80, minimumDuration: 30 };
+      const doc = { _id: 'p1', name: 'A', minTemp: -85, maxTemp: -75, minimumDuration: 30 };
       const toArray = vi.fn().mockResolvedValue([doc]);
       const find = vi.fn().mockReturnValue({ toArray });
       const db = { collection: vi.fn().mockReturnValue({ find }) };
@@ -425,7 +421,7 @@ describe('policy.routes', () => {
 
     // Ported from the deleted models/Policy.js test block: the checks it
     // made on the request shape now live in the route's own validator.
-    it('POST 422s on inverted limits, a non-number target and an unknown unit', async () => {
+    it('POST 422s on inverted limits and an unknown unit', async () => {
       const { router } = loadRoute();
       const app = buildApp(router, {});
 
@@ -433,13 +429,11 @@ describe('policy.routes', () => {
         name: 'Geladeira 2-8',
         minTemp: 8,
         maxTemp: 2,
-        targetTemp: '5',
         temperatureUnit: 'K',
       });
 
       expect(res.status).toBe(422);
       expect(res.body.message).toContain('minTemp deve ser menor que maxTemp');
-      expect(res.body.message).toContain('targetTemp é obrigatório e deve ser number');
       expect(res.body.message).toContain('temperatureUnit deve ser °C');
     });
 
@@ -475,7 +469,6 @@ describe('policy.routes', () => {
         'minTemp',
         'minimumDuration',
         'name',
-        'targetTemp',
         'temperatureUnit',
         'updatedAt',
       ]);
@@ -501,12 +494,49 @@ describe('policy.routes', () => {
   // #1198: the form offered degF and K, and nothing that enforces a policy
   // reads its unit -- iot.controller compares the reading's bare number with
   // minTemp/maxTemp. A degF policy was stored and enforced as if it were degC.
+  // #1197: the nominal setpoint belongs to the storage unit
+  // (StorageContainer.temperature; v2.0.0 ELM-0175 nominalTemperature), not to
+  // the threshold rule, which dict-02 models as limits plus a duration.
+  describe('#1197: a policy carries limits, not a setpoint', () => {
+    const body = {
+      name: 'Freezer -80',
+      minTemp: -85,
+      maxTemp: -75,
+      minimumDuration: 30,
+    };
+
+    it('POST without targetTemp is accepted and stores no setpoint', async () => {
+      const insertOne = vi.fn().mockResolvedValue({ insertedId: 'new-id' });
+      const db = { collection: vi.fn().mockReturnValue({ insertOne }) };
+      const { router } = loadRoute();
+      const app = buildApp(router, db);
+
+      const res = await request(app).post('/api/policies').send(body);
+
+      expect(res.status).toBe(201);
+      expect(insertOne.mock.calls[0][0]).not.toHaveProperty('targetTemp');
+    });
+
+    it('POST and PUT drop a targetTemp a caller still sends', async () => {
+      const insertOne = vi.fn().mockResolvedValue({ insertedId: 'new-id' });
+      const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+      const db = { collection: vi.fn().mockReturnValue({ insertOne, updateOne }) };
+      const { router } = loadRoute();
+      const app = buildApp(router, db);
+
+      await request(app).post('/api/policies').send({ ...body, targetTemp: -80 });
+      await request(app).put('/api/policies/507f1f77bcf86cd799439011').send({ targetTemp: -80 });
+
+      expect(insertOne.mock.calls[0][0]).not.toHaveProperty('targetTemp');
+      expect(updateOne.mock.calls[0][1].$set).not.toHaveProperty('targetTemp');
+    });
+  });
+
   describe('#1198: a policy is Celsius, the unit its enforcement assumes', () => {
     const body = {
       name: 'Geladeira 2-8',
       minTemp: 35.6,
       maxTemp: 46.4,
-      targetTemp: 41,
     };
 
     it('POST 422s on °F rather than storing limits enforcement would misread', async () => {

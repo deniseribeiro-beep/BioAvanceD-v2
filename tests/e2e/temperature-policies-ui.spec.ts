@@ -33,7 +33,6 @@ test.describe('Temperature policies tab (#1178) — real backend', () => {
         name: policyName,
         minTemp: 2,
         maxTemp: 8,
-        targetTemp: 5,
         minimumDuration: 30,
         effectivePeriod: {
           start: new Date().toISOString(),
@@ -105,7 +104,9 @@ test.describe('Temperature policies tab (#1178) — real backend', () => {
       await page.goto('/facility-management?tab=policies');
       await page.getByRole('button', { name: 'Nova Política' }).click();
       await page.getByLabel('Nome da Política').fill(policyName);
-      await page.getByLabel('Atraso de Alerta (minutos)').fill('15');
+      // #1196: the untouched default is 30 minutes.
+      await expect(page.getByLabel('Duração Mínima da Excursão (minutos)')).toHaveValue('30');
+      await page.getByLabel('Duração Mínima da Excursão (minutos)').fill('15');
       // #1198: the unit is fixed at Celsius, not a select offering °F/K.
       await expect(page.getByTestId('policy-temperature-unit')).toContainText('°C');
       await page.getByRole('button', { name: 'Salvar' }).click();
@@ -117,7 +118,7 @@ test.describe('Temperature policies tab (#1178) — real backend', () => {
       // The form's defaults, landing on the fields TelemetryMonitor reads.
       expect(stored.minTemp).toBe(-85);
       expect(stored.maxTemp).toBe(-75);
-      expect(stored.targetTemp).toBe(-80);
+      expect(stored).not.toHaveProperty('targetTemp'); // #1197
       expect(stored.minimumDuration).toBe(15);
       expect(stored.temperatureUnit).toBe('°C');
       expect(stored.effectivePeriod.start).toBeInstanceOf(Date);
@@ -143,7 +144,7 @@ test.describe('Temperature policies tab (#1178) — real backend', () => {
     const policyName = `e2e-1198-${Date.now()}`;
     const res = await request.post(`${apiBaseURL}/api/policies`, {
       headers: { Authorization: `Bearer ${session.token}` },
-      data: { name: policyName, minTemp: 35.6, maxTemp: 46.4, targetTemp: 41, temperatureUnit: '°F' },
+      data: { name: policyName, minTemp: 35.6, maxTemp: 46.4, temperatureUnit: '°F' },
     });
     expect(res.status()).toBe(422);
     expect((await res.json())?.message).toContain('temperatureUnit deve ser °C');

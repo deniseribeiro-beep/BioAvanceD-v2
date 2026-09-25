@@ -142,7 +142,6 @@ test.describe('Sensor registration links SensorMetadata (#311)', () => {
           name: `e2e-1145-${suffix}`,
           minTemp: 2,
           maxTemp: 8,
-          targetTemp: 5,
           effectivePeriod: {
             start: new Date().toISOString(),
             end: new Date(Date.now() + 86_400_000).toISOString(),
@@ -210,7 +209,6 @@ test.describe('Sensor registration links SensorMetadata (#311)', () => {
             name: `e2e-1179-${tag}-${suffix}`,
             minTemp: 2,
             maxTemp: 8,
-            targetTemp: 5,
             effectivePeriod: {
               start: new Date().toISOString(),
               end: new Date(Date.now() + 86_400_000).toISOString(),

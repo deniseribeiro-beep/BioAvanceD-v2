@@ -154,7 +154,6 @@ describe('TemperaturePolicy schema', () => {
   it('validates successfully with all required fields', () => {
     const doc = new TemperaturePolicy({
       name: 'Cold storage',
-      targetTemp: -20,
       minTemp: -25,
       maxTemp: -15,
     });
@@ -169,7 +168,7 @@ describe('TemperaturePolicy schema', () => {
 
     expect(err).toBeDefined();
     expect(err.errors.name).toBeDefined();
-    expect(err.errors.targetTemp).toBeDefined();
+    expect(err.errors.targetTemp).toBeUndefined(); // #1197: no setpoint
     expect(err.errors.minTemp).toBeDefined();
     expect(err.errors.maxTemp).toBeDefined();
   });
@@ -177,7 +176,6 @@ describe('TemperaturePolicy schema', () => {
   it('defaults hysteresis to 0.5 when omitted', () => {
     const doc = new TemperaturePolicy({
       name: 'Cold storage',
-      targetTemp: -20,
       minTemp: -25,
       maxTemp: -15,
     });
@@ -188,7 +186,6 @@ describe('TemperaturePolicy schema', () => {
   it('allows overriding hysteresis', () => {
     const doc = new TemperaturePolicy({
       name: 'Cold storage',
-      targetTemp: -20,
       minTemp: -25,
       maxTemp: -15,
       hysteresis: 1.5,
@@ -201,7 +198,6 @@ describe('TemperaturePolicy schema', () => {
     it('defaults metricType, ruleVersion and effectivePeriod.start, leaves minimumDuration/effectivePeriod.end null', () => {
       const doc = new TemperaturePolicy({
         name: 'Cold storage',
-        targetTemp: -20,
         minTemp: -25,
         maxTemp: -15,
       });
@@ -221,7 +217,6 @@ describe('TemperaturePolicy schema', () => {
       const end = new Date('2026-12-31T00:00:00Z');
       const doc = new TemperaturePolicy({
         name: 'Cold storage',
-        targetTemp: -20,
         minTemp: -25,
         maxTemp: -15,
         metricType: 'humidity',

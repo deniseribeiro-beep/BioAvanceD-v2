@@ -739,7 +739,6 @@ export interface Policy {
   name?: string; // dict-02 P1X-0106 profileName
   minTemp: number; // P1X-0108 lowerLimit
   maxTemp: number; // P1X-0109 upperLimit
-  targetTemp: number;
   hysteresis?: number;
   minimumDuration?: number | null; // P1X-0110, minutes before an excursion opens
   temperatureUnit?: string;

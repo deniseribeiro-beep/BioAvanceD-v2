@@ -58,7 +58,6 @@ export async function seedSensorWithPolicy(
 
   const policyResult = await db.collection('temperaturePolicies').insertOne({
     name: `RF009 e2e policy ${suffix}`,
-    targetTemp: (minTemp + maxTemp) / 2,
     minTemp,
     maxTemp,
     hysteresis: 0.5,
@@ -173,7 +172,6 @@ export async function seedSensorWithFreezerSample(
 
   const policyResult = await db.collection('temperaturePolicies').insertOne({
     name: `RF009 propagate e2e policy ${suffix}`,
-    targetTemp: (minTemp + maxTemp) / 2,
     minTemp,
     maxTemp,
     hysteresis: 0.5,
