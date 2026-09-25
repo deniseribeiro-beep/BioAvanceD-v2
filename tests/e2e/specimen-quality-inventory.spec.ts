@@ -1414,6 +1414,47 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
     expect(body.message).toMatch(/specimenIds/);
   });
 
+  // #1221: PUT ran none of #664's reference checks, so an assay created
+  // with verified links could be edited to name a specimen that does not
+  // exist.
+  test('#1221: rejects an assay update whose specimenIds do not resolve, and leaves the assay unchanged', async ({ request }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const studyId = `rf025-study-${suffix}`;
+    const protocolId = `rf025-protocol-${suffix}`;
+    await seedStudy(studyId);
+    await seedProtocol(protocolId);
+    const { specimenId, operatorId, organizationId } = await seedRealAssayLinkage(request, admin);
+
+    const created = await request.post(`${apiBaseURL}/api/assays`, {
+      headers: auth,
+      data: {
+        studyId,
+        specimenIds: [specimenId],
+        assayType: 'RNA sequencing',
+        protocolId,
+        operatorId,
+        laboratoryId: organizationId,
+        assayDateTime: new Date().toISOString(),
+        intendedUse: '#1221 e2e update integrity',
+      },
+    });
+    expect(created.status(), await created.text()).toBe(201);
+    const assayId = (await created.json()).data.assayId;
+
+    const update = await request.put(`${apiBaseURL}/api/assays/${assayId}`, {
+      headers: auth,
+      data: { specimenIds: ['specimen-does-not-exist'] },
+    });
+    expect(update.status()).toBe(404);
+    expect((await update.json()).message).toMatch(/specimenIds/);
+
+    const after = await request.get(`${apiBaseURL}/api/assays/${assayId}`, { headers: auth });
+    expect(after.status()).toBe(200);
+    expect((await after.json()).data.specimenIds).toEqual([specimenId]);
+  });
+
   test('#664: rejects an assay create when laboratoryId does not resolve to a real Organization', async ({ request }) => {
     const admin = await realLogin(request);
     const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;

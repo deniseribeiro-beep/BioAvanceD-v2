@@ -202,6 +202,13 @@ function createMasterDataRouter({ collectionName, idField, model, validateRefere
         }
       }
 
+      // #1221: the create path's #664 reference check, over the keys this
+      // update carries. Without it an edit could point a record at a
+      // specimen, protocol, operator or lot that does not exist.
+      if (validateReferences) {
+        await validateReferences(db, update);
+      }
+
       const result = await db.collection(collectionName).findOneAndUpdate(
         query,
         { $set: update },
@@ -217,6 +224,10 @@ function createMasterDataRouter({ collectionName, idField, model, validateRefere
       // #1182: a refused re-parent throws statusCode:403.
       if (error.statusCode === 403) {
         return res.status(403).json({ success: false, error: 'Acesso negado', message: error.message });
+      }
+      // #1221: an unresolved reference throws statusCode:404, as on create.
+      if (error.statusCode) {
+        return res.status(error.statusCode).json({ success: false, error: error.message, message: error.message });
       }
       return res.status(500).json({ success: false, error: 'Erro ao atualizar dado mestre', message: error.message });
     }

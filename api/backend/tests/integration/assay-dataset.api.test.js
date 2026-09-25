@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 const request = require('supertest');
 const jwt = require('jsonwebtoken');
+const { ObjectId } = require('mongodb');
 
 process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
@@ -305,6 +306,45 @@ describe('#1182: /api/assays is scoped on laboratoryId', () => {
 
     expect(res.status).toBe(200);
     expect(findOneAndUpdate).toHaveBeenCalled();
+  });
+
+  // #1221: PUT ran no reference check, so an edit could point an assay at
+  // a specimen that does not exist, or put a raw _id back where create
+  // stores the canonical specimenId (#1219).
+  it('#1221: refuses a PUT whose specimenIds name no sample, and writes nothing', async () => {
+    const findOneAndUpdate = vi.fn().mockResolvedValue(MINE);
+    app.locals.db = createDbMock({
+      assays: createCollectionMock({ findOne: vi.fn().mockResolvedValue(MINE), findOneAndUpdate }),
+      samples: createCollectionMock({ findOne: vi.fn().mockResolvedValue(null) }),
+      ...rbacCollectionsScoped,
+    });
+
+    const res = await request(app).put('/api/assays/assay-mine').set('Authorization', token())
+      .send({ specimenIds: ['does-not-exist'] });
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/specimenIds: does-not-exist/);
+    expect(findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('#1221: a PUT naming a specimen by its _id stores the canonical specimenId', async () => {
+    const sample = { _id: new ObjectId(), specimenId: '3116768' };
+    const findOneAndUpdate = vi.fn().mockResolvedValue(MINE);
+    app.locals.db = createDbMock({
+      assays: createCollectionMock({ findOne: vi.fn().mockResolvedValue(MINE), findOneAndUpdate }),
+      samples: createCollectionMock({
+        findOne: vi.fn(async (filter = {}) => (
+          (filter._id && String(filter._id) === String(sample._id)) || filter.specimenId === sample.specimenId ? sample : null
+        )),
+      }),
+      ...rbacCollectionsScoped,
+    });
+
+    const res = await request(app).put('/api/assays/assay-mine').set('Authorization', token())
+      .send({ specimenIds: [String(sample._id)] });
+
+    expect(res.status).toBe(200);
+    expect(findOneAndUpdate.mock.calls[0][1].$set.specimenIds).toEqual(['3116768']);
   });
 
   it('CONTROL: deletes an in-scope assay', async () => {
