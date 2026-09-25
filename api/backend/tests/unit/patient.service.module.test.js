@@ -124,8 +124,9 @@ describe('PatientService module rules', () => {
 
     expect(String(created.participantId)).toMatch(/^\d{8}$/);
     expect(created.status).toBe('PENDING_CONSENT');
-    expect(typeof created.consentToken).toBe('string');
-    expect(created.consentToken.length).toBeGreaterThan(10);
+    // #1049: the stored credential is the token's SHA-256, never the token.
+    expect(created.consentTokenHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(created.consentToken).toBeUndefined();
     expect(db._patientsCollection.insertOne).toHaveBeenCalled();
   });
 });

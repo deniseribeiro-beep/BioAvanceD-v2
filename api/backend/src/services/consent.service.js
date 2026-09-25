@@ -12,6 +12,7 @@ const { getCollection } = require('../utils/collectionResolver');
 const { GraphProjectionService } = require('./graphProjection.service');
 const participantIdentityService = require('./participantIdentity.service');
 const notificationDispatchService = require('./notificationDispatch.service');
+const { hashConsentToken } = require('../utils/consentTokenHash');
 
 const ajv = new Ajv({ allErrors: true, strict: false, removeAdditional: 'failing' });
 addFormats(ajv);
@@ -536,11 +537,14 @@ class ConsentService {
             { _id: patient._id },
             {
               $set: {
-                consentToken: consentMetadata.token,
+                consentTokenHash: hashConsentToken(consentMetadata.token),
                 consentTokenCreatedAt: consentMetadata.createdAt,
                 consentTokenExpiresAt: consentMetadata.expiresAt,
                 updatedAt: new Date()
-              }
+              },
+              // #1049: only the hash is stored; a legacy plaintext token on
+              // this row is superseded by the new one and removed here.
+              $unset: { consentToken: '' }
             }
           );
 

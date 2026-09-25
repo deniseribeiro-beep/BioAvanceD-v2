@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { MongoClient, Db, ObjectId } from 'mongodb';
-import { randomBytes } from 'crypto';
+import { randomBytes, createHash } from 'crypto';
 import { realLogin } from '../e2e/helpers/realAuth';
 import { createRealParticipant, seedStorageBoxLocation, cleanupStorageBoxLocation, closeSeedDb, type SeededStorageBox } from '../e2e/helpers/seedParticipant';
 
@@ -531,7 +531,8 @@ test.describe('Human-paced e2e showcase reel — Wave 5', () => {
     await db.collection('patients').insertOne({
       participantId,
       status: 'PENDING_CONSENT',
-      consentToken,
+      // #1049: only the token's SHA-256 is stored; the link carries the token.
+      consentTokenHash: createHash('sha256').update(consentToken).digest('hex'),
       consentTokenCreatedAt: new Date(),
       consentTokenExpiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
       createdAt: new Date(),
@@ -590,7 +591,7 @@ test.describe('Human-paced e2e showcase reel — Wave 5', () => {
       const stored = await db.collection('patients').findOne({ participantId });
       expect(stored?.status).toBe('ACTIVE');
       expect(stored?.consentAcceptedAt).toBeTruthy();
-      expect(stored?.consentToken).toBeNull();
+      expect(stored?.consentTokenHash).toBeNull();
     } finally {
       await db.collection('patients').deleteMany({ participantId }).catch(() => {});
       await db.collection('patientConsents').deleteMany({ participantId }).catch(() => {});

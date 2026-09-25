@@ -9,7 +9,7 @@
 // ParticipantIdentity alone (dict-02 P1X-0352/P1X-0353). #1168: likewise the
 // four representative* fields (dict-02 P1X-0357..0360).
 const CANONICAL_FIELDS = [
-  'participantId','sex','email','phone','recordNumber','clinicalUnitId','clinicalUnit','unitAcronym','isDeceased','representativeName','representativeEmail','representativeIdentityDocument','representativePhone','consentTemplateId','status','consentToken','consentTokenCreatedAt','consentTokenExpiresAt','consentNotifiedAt','consentAcceptedAt','createdAt','updatedAt','anamneseGeral','dadosEspecificos','studyId'
+  'participantId','sex','email','phone','recordNumber','clinicalUnitId','clinicalUnit','unitAcronym','isDeceased','representativeName','representativeEmail','representativeIdentityDocument','representativePhone','consentTemplateId','status','consentTokenHash','consentTokenCreatedAt','consentTokenExpiresAt','consentNotifiedAt','consentAcceptedAt','createdAt','updatedAt','anamneseGeral','dadosEspecificos','studyId'
 ];
 
 class ParticipantModel {
@@ -75,7 +75,7 @@ class ParticipantModel {
       isDeceased: Boolean(data.isDeceased),
       consentTemplateId: data.consentTemplateId || null,
       status: data.status || 'PENDING_CONSENT',
-      consentToken: data.consentToken || null,
+      consentTokenHash: data.consentTokenHash || null,
       consentTokenCreatedAt: data.consentTokenCreatedAt ? new Date(data.consentTokenCreatedAt) : null,
       consentTokenExpiresAt: data.consentTokenExpiresAt ? new Date(data.consentTokenExpiresAt) : null,
       consentNotifiedAt: data.consentNotifiedAt ? new Date(data.consentNotifiedAt) : null,
@@ -140,21 +140,21 @@ ParticipantModel.CANONICAL_FIELDS = CANONICAL_FIELDS;
  * patient directory renders both and neither is a credential -- stripping the
  * whole consent block would break the badge and the resend flow instead.
  *
- * This is containment, not the fix. The token is still stored in plaintext and
- * still compared with `!==`; hashing it at rest is tracked separately, and it
- * is gated on `resendConsentNotification`, which READS the stored token back
- * to re-send the same link and so cannot work against a hash unchanged.
+ * #1049: the token is no longer stored at all -- only `consentTokenHash`
+ * (utils/consentTokenHash.js). The hash is stripped too: it is not a usable
+ * credential, but it is still nothing a response needs. A legacy row's
+ * plaintext `consentToken` is stripped until the migration has converted it.
  *
  * Applied at the RESPONSE boundary rather than in a query projection on
  * purpose: the same documents are read internally by paths that legitimately
- * need the token (validateConsentToken, acceptConsentToken,
- * resendConsentNotification), so a projection would break them.
+ * need the hash (validateConsentToken, acceptConsentToken), so a projection
+ * would break them.
  */
 ParticipantModel.stripConsentSecrets = function stripConsentSecrets(patient) {
   if (!patient || typeof patient !== 'object') return patient;
   if (Array.isArray(patient)) return patient.map(ParticipantModel.stripConsentSecrets);
 
-  const { consentToken, consentTokenCreatedAt, ...rest } = patient;
+  const { consentToken, consentTokenHash, consentTokenCreatedAt, ...rest } = patient;
   return rest;
 };
 

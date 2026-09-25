@@ -189,7 +189,7 @@ describe('PatientModel.validate', () => {
       representativeIdentityDocument: '98765432100',
       representativePhone: '11987654321',
       status: 'ACTIVE',
-      consentToken: 'tok',
+      consentTokenHash: 'a'.repeat(64),
       consentTokenCreatedAt: new Date(),
       consentTokenExpiresAt: new Date(),
       consentNotifiedAt: new Date(),
@@ -303,7 +303,7 @@ describe('PatientModel.create', () => {
     expect(result.clinicalUnitId).toBeNull();
     expect(result.clinicalUnit).toBeNull();
     expect(result.unitAcronym).toBeNull();
-    expect(result.consentToken).toBeNull();
+    expect(result.consentTokenHash).toBeNull();
     expect(result.consentTokenCreatedAt).toBeNull();
     expect(result.consentTokenExpiresAt).toBeNull();
     expect(result.consentNotifiedAt).toBeNull();
@@ -383,7 +383,9 @@ describe('PatientModel.fillAcronym', () => {
     const withSecrets = {
       participantId: '77222497',
       status: 'PENDING_CONSENT',
+      // #1049: a legacy row's plaintext token, next to the hash new rows carry.
       consentToken: 'a'.repeat(64),
+      consentTokenHash: 'b'.repeat(64),
       consentTokenCreatedAt: new Date('2026-09-02T00:00:00Z'),
       consentTokenExpiresAt: new Date('2026-09-09T00:00:00Z'),
       consentNotifiedAt: new Date('2026-09-02T00:01:00Z'),
@@ -394,6 +396,11 @@ describe('PatientModel.fillAcronym', () => {
       expect(out.consentToken).toBeUndefined();
       expect(out.consentTokenCreatedAt).toBeUndefined();
       expect('consentToken' in out).toBe(false);
+    });
+
+    it('removes the stored hash too (#1049)', () => {
+      const out = PatientModel.stripConsentSecrets(withSecrets);
+      expect('consentTokenHash' in out).toBe(false);
     });
 
     it('KEEPS consentTokenExpiresAt and consentNotifiedAt -- the directory renders both', () => {

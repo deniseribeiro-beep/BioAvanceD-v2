@@ -5,6 +5,7 @@ process.env.ENCRYPTION_KEY_ID = 'test-key-1';
 
 const patientService = require('../../src/services/patient.service');
 const notificationService = require('../../src/services/notification.service');
+const { hashConsentToken } = require('../../src/utils/consentTokenHash');
 
 function makeFakeCollection(overrides = {}) {
   return {
@@ -330,7 +331,7 @@ describe('PatientService.validateConsentToken', () => {
       findOne: vi.fn().mockResolvedValue({
         participantId: '12345678',
         status: 'PENDING_CONSENT',
-        consentToken: 'right-token'
+        consentTokenHash: hashConsentToken('right-token')
       })
     });
     const db = makeFakeDb({ patients: patientsCollection });
@@ -340,12 +341,30 @@ describe('PatientService.validateConsentToken', () => {
     );
   });
 
-  it('rejects when the patient has no consentToken stored', async () => {
+  it('rejects when the patient has no consentTokenHash stored', async () => {
     const patientsCollection = makeFakeCollection({
       findOne: vi.fn().mockResolvedValue({
         participantId: '12345678',
         status: 'PENDING_CONSENT',
-        consentToken: null
+        consentTokenHash: null
+      })
+    });
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    await expect(patientService.validateConsentToken(db, '12345678', 'tok')).rejects.toThrow(
+      'Token inválido'
+    );
+  });
+
+  // #1049: no plaintext fallback. A legacy row that still holds the token in
+  // clear and no hash is refused until the migration converts it.
+  it('rejects a legacy row holding only a plaintext consentToken, even with the right token', async () => {
+    const patientsCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({
+        participantId: '12345678',
+        status: 'PENDING_CONSENT',
+        consentToken: 'tok',
+        consentTokenExpiresAt: new Date(Date.now() + 60000)
       })
     });
     const db = makeFakeDb({ patients: patientsCollection });
@@ -360,7 +379,7 @@ describe('PatientService.validateConsentToken', () => {
       findOne: vi.fn().mockResolvedValue({
         participantId: '12345678',
         status: 'PENDING_CONSENT',
-        consentToken: 'tok',
+        consentTokenHash: hashConsentToken('tok'),
         consentTokenExpiresAt: new Date(Date.now() - 60000)
       })
     });
@@ -376,7 +395,7 @@ describe('PatientService.validateConsentToken', () => {
       findOne: vi.fn().mockResolvedValue({
         participantId: '12345678',
         status: 'PENDING_CONSENT',
-        consentToken: 'tok',
+        consentTokenHash: hashConsentToken('tok'),
         consentTokenExpiresAt: new Date(Date.now() + 60000)
       })
     });
@@ -400,7 +419,7 @@ describe('PatientService.acceptConsentToken', () => {
       findOne: vi.fn().mockResolvedValue({
         participantId: '12345678',
         status: 'PENDING_CONSENT',
-        consentToken: 'tok',
+        consentTokenHash: hashConsentToken('tok'),
         consentTokenExpiresAt: new Date(Date.now() + 60000)
       }),
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 })
@@ -415,7 +434,7 @@ describe('PatientService.acceptConsentToken', () => {
     expect(result).toEqual({ success: true, participantId: '12345678', consentId: 'uuid-1', consentVersion: '1' });
     const setPayload = patientsCollection.updateOne.mock.calls[0][1].$set;
     expect(setPayload.status).toBe('ACTIVE');
-    expect(setPayload.consentToken).toBeNull();
+    expect(setPayload.consentTokenHash).toBeNull();
   });
 
   it('propagates the validation error and never calls updateOne when the token is invalid', async () => {
@@ -423,7 +442,7 @@ describe('PatientService.acceptConsentToken', () => {
       findOne: vi.fn().mockResolvedValue({
         participantId: '12345678',
         status: 'PENDING_CONSENT',
-        consentToken: 'right-token'
+        consentTokenHash: hashConsentToken('right-token')
       })
     });
     const db = makeFakeDb({ patients: patientsCollection });
@@ -463,31 +482,60 @@ describe('PatientService.resendConsentNotification', () => {
     );
   });
 
-  it('reuses an existing unexpired token instead of generating a new one', async () => {
+  // #1049: the resend used to re-send an unexpired stored token, which needed
+  // it in plaintext at rest. It now always mints, and the old link dies.
+  it('mints a fresh token even when the stored one is unexpired (#1049)', async () => {
     const futureExpiry = new Date(Date.now() + 60000);
+    const newExpiry = new Date(Date.now() + 3600000);
     const patientsCollection = makeFakeCollection({
       findOne: vi.fn().mockResolvedValue({
         _id: 'p1',
         participantId: '12345678',
         status: 'PENDING_CONSENT',
-        consentToken: 'existing-token',
+        consentTokenHash: hashConsentToken('existing-token'),
         consentTokenExpiresAt: futureExpiry
       }),
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 })
     });
     const db = makeFakeDb({ patients: patientsCollection });
 
-    const buildMetadataSpy = vi.spyOn(notificationService, 'buildConsentMetadata');
-    vi.spyOn(notificationService, 'buildConsentLink').mockReturnValue('http://link');
+    const buildMetadataSpy = vi.spyOn(notificationService, 'buildConsentMetadata').mockReturnValue({
+      token: 'minted-token',
+      createdAt: new Date(),
+      expiresAt: newExpiry
+    });
+    const buildLinkSpy = vi.spyOn(notificationService, 'buildConsentLink').mockReturnValue('http://link');
     vi.spyOn(notificationService, 'enqueueConsentNotification').mockResolvedValue(undefined);
 
     const result = await patientService.resendConsentNotification(db, '12345678');
 
-    expect(buildMetadataSpy).not.toHaveBeenCalled();
-    expect(result.reusedToken).toBe(true);
-    expect(result.consentTokenExpiresAt).toEqual(futureExpiry);
+    expect(buildMetadataSpy).toHaveBeenCalled();
+    expect(buildLinkSpy).toHaveBeenCalledWith(expect.anything(), 'minted-token');
+    expect(result).not.toHaveProperty('reusedToken');
+    expect(result.consentTokenExpiresAt).toEqual(newExpiry);
     const setPayload = patientsCollection.updateOne.mock.calls[0][1].$set;
+    expect(setPayload.consentTokenHash).toBe(hashConsentToken('minted-token'));
     expect(setPayload).not.toHaveProperty('consentToken');
+  });
+
+  it('removes a legacy plaintext consentToken in the same write (#1049)', async () => {
+    const patientsCollection = makeFakeCollection({
+      findOne: vi.fn().mockResolvedValue({
+        _id: 'p1',
+        participantId: '12345678',
+        status: 'PENDING_CONSENT',
+        consentToken: 'legacy-plaintext'
+      }),
+      updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 })
+    });
+    const db = makeFakeDb({ patients: patientsCollection });
+
+    vi.spyOn(notificationService, 'buildConsentLink').mockReturnValue('http://link');
+    vi.spyOn(notificationService, 'enqueueConsentNotification').mockResolvedValue(undefined);
+
+    await patientService.resendConsentNotification(db, '12345678');
+
+    expect(patientsCollection.updateOne.mock.calls[0][1].$unset).toEqual({ consentToken: '' });
   });
 
   // #1104: this read went straight to identity.patientName off a raw
@@ -505,7 +553,7 @@ describe('PatientService.resendConsentNotification', () => {
         _id: 'p1',
         participantId: '12345678',
         status: 'PENDING_CONSENT',
-        consentToken: 'existing-token',
+        consentTokenHash: hashConsentToken('existing-token'),
         consentTokenExpiresAt: new Date(Date.now() + 60000)
       }),
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 })
@@ -542,7 +590,7 @@ describe('PatientService.resendConsentNotification', () => {
         _id: 'p1',
         participantId: '12345678',
         status: 'PENDING_CONSENT',
-        consentToken: 'existing-token',
+        consentTokenHash: hashConsentToken('existing-token'),
         consentTokenExpiresAt: new Date(Date.now() + 60000)
       }),
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 })
@@ -570,7 +618,7 @@ describe('PatientService.resendConsentNotification', () => {
         _id: 'p1',
         participantId: '12345678',
         status: 'PENDING_CONSENT',
-        consentToken: null,
+        consentTokenHash: null,
         consentTokenExpiresAt: null
       }),
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 })
@@ -587,10 +635,10 @@ describe('PatientService.resendConsentNotification', () => {
 
     const result = await patientService.resendConsentNotification(db, '12345678');
 
-    expect(result.reusedToken).toBe(false);
+    expect(result).not.toHaveProperty('reusedToken');
     expect(result.consentTokenExpiresAt).toEqual(newExpiry);
     const setPayload = patientsCollection.updateOne.mock.calls[0][1].$set;
-    expect(setPayload.consentToken).toBe('new-token');
+    expect(setPayload.consentTokenHash).toBe(hashConsentToken('new-token'));
   });
 
   it('generates a new token when the existing token has expired', async () => {
@@ -601,7 +649,7 @@ describe('PatientService.resendConsentNotification', () => {
         _id: 'p1',
         participantId: '12345678',
         status: 'PENDING_CONSENT',
-        consentToken: 'stale-token',
+        consentTokenHash: hashConsentToken('stale-token'),
         consentTokenExpiresAt: pastExpiry
       }),
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 })
@@ -618,9 +666,9 @@ describe('PatientService.resendConsentNotification', () => {
 
     const result = await patientService.resendConsentNotification(db, '12345678');
 
-    expect(result.reusedToken).toBe(false);
+    expect(result).not.toHaveProperty('reusedToken');
     const setPayload = patientsCollection.updateOne.mock.calls[0][1].$set;
-    expect(setPayload.consentToken).toBe('fresh-token');
+    expect(setPayload.consentTokenHash).toBe(hashConsentToken('fresh-token'));
   });
 });
 

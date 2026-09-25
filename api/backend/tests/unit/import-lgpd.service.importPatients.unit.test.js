@@ -24,6 +24,7 @@ const service = require('../../src/services/import-lgpd.service');
 const notificationService = require('../../src/services/notification.service');
 const patientService = require('../../src/services/patient.service');
 const PatientModel = require('../../src/models/Patient');
+const { hashConsentToken } = require('../../src/utils/consentTokenHash');
 
 const VALID_ROW = {
   patientName: 'Maria Silva',
@@ -219,7 +220,9 @@ describe('ImportLGPDService.importPatients', () => {
     const insertedPatient = patientsCollection.insertOne.mock.calls[0][0];
     expect(insertedPatient.participantId).toMatch(/^\d{8}$/);
     expect(insertedPatient.status).toBe('PENDING_CONSENT');
-    expect(insertedPatient.consentToken).toBe('tok-1');
+    // #1049: only the hash of the minted token is persisted.
+    expect(insertedPatient.consentTokenHash).toBe(hashConsentToken('tok-1'));
+    expect(insertedPatient.consentToken).toBeUndefined();
 
     expect(notificationService.enqueueConsentNotification).toHaveBeenCalledTimes(1);
     expect(patientsCollection.updateOne).toHaveBeenCalledWith(

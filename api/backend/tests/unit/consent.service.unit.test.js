@@ -913,10 +913,10 @@ describe('ConsentService.createPolicy', () => {
       return { db, patients, templates };
     }
 
-    /** participantIds the sweep persisted a consentToken for. */
+    /** participantIds the sweep persisted a consentTokenHash for (#1049). */
     function tokenedParticipants(patients, pending) {
       return patients.updateOne.mock.calls
-        .filter(([, update]) => update?.$set?.consentToken !== undefined)
+        .filter(([, update]) => update?.$set?.consentTokenHash !== undefined)
         .map(([filter]) => pending.find((p) => String(p._id) === String(filter._id))?.participantId);
     }
 

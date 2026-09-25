@@ -24,6 +24,7 @@ const rcsAssessmentService = require('./rcs-assessment.service');
 const specimenPreanalyticsService = require('./specimen-preanalytics.service');
 const { generateUniqueSpecimenId } = require('../utils/sampleIDGenerator');
 const { generateUniqueParticipantId } = require('../utils/patientAnonymization');
+const { hashConsentToken } = require('../utils/consentTokenHash');
 
 /**
  * Service de Importação de Dados
@@ -356,7 +357,7 @@ class ImportService {
           // Novo cadastro
           const consentMetadata = notificationService.buildConsentMetadata();
           patientData.status = 'PENDING_CONSENT';
-          patientData.consentToken = consentMetadata.token;
+          patientData.consentTokenHash = hashConsentToken(consentMetadata.token);
           patientData.consentTokenCreatedAt = consentMetadata.createdAt;
           patientData.consentTokenExpiresAt = consentMetadata.expiresAt;
           const patient = PatientModel.create(omitLegacyIdentityFields(patientData));

@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const consentController = require('../../../src/controllers/consent.controller');
 const consentService = require('../../../src/services/consent.service');
 const patientService = require('../../../src/services/patient.service');
+const { hashConsentToken } = require('../../../src/utils/consentTokenHash');
 const participantIdentityService = require('../../../src/services/participantIdentity.service');
 const auditLogger = require('../../../src/utils/auditLogger');
 
@@ -1302,7 +1303,7 @@ describe('ConsentController.acceptConsentToken', () => {
   // neither a bad link (400) nor an outage (503).
   it('returns 422 with a fixed body when the service refuses the MANIFESTATION', async () => {
     const refusal = await patientService
-      .acceptConsentToken({ collection: () => ({ findOne: async () => ({ participantId: 'p1', status: 'PENDING_CONSENT', consentToken: 'tok' }) }) }, 'p1', 'tok', {})
+      .acceptConsentToken({ collection: () => ({ findOne: async () => ({ participantId: 'p1', status: 'PENDING_CONSENT', consentTokenHash: hashConsentToken('tok') }) }) }, 'p1', 'tok', {})
       .catch(e => e);
     expect(patientService.isConsentManifestationRejection(refusal)).toBe(true);
 

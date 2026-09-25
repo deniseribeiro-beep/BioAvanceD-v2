@@ -14,6 +14,7 @@ const {
   omitParticipantIdentityOnlyFields
 } = require('../utils/legacyPatientIdentityFields');
 const { applyOrganizationScopeFilter } = require('./rbac-assignment.service');
+const { hashConsentToken, consentTokenMatches } = require('../utils/consentTokenHash');
 
 const indexedPatientCollections = new Set();
 
@@ -693,7 +694,7 @@ class PatientService {
 
       const consentMetadata = notificationService.buildConsentMetadata();
       patientData.status = 'PENDING_CONSENT';
-      patientData.consentToken = consentMetadata.token;
+      patientData.consentTokenHash = hashConsentToken(consentMetadata.token);
       patientData.consentTokenCreatedAt = consentMetadata.createdAt;
       patientData.consentTokenExpiresAt = consentMetadata.expiresAt;
 
@@ -1207,7 +1208,10 @@ class PatientService {
       throw consentTokenRejection('Paciente não está pendente de consentimento');
     }
 
-    if (!patient.consentToken || patient.consentToken !== token) {
+    // #1049: only the hash is stored, compared in constant time. A legacy
+    // row still holding a plaintext `consentToken` and no hash is rejected
+    // here; src/scripts/migrateConsentTokenHash.js converts those in place.
+    if (!consentTokenMatches(patient.consentTokenHash, token)) {
       throw consentTokenRejection('Token inválido');
     }
 
@@ -1269,7 +1273,7 @@ class PatientService {
         $set: {
           status: 'ACTIVE',
           consentAcceptedAt: new Date(),
-          consentToken: null,
+          consentTokenHash: null,
           consentTokenExpiresAt: null,
           updatedAt: new Date()
         }
@@ -1300,20 +1304,12 @@ class PatientService {
       throw new Error('Paciente não está pendente de consentimento');
     }
 
-    const now = new Date();
-    const expiresAt = patient.consentTokenExpiresAt ? new Date(patient.consentTokenExpiresAt) : null;
-    const hasValidToken = Boolean(patient.consentToken && expiresAt && expiresAt > now);
-
-    let token = patient.consentToken;
-    let tokenCreatedAt = patient.consentTokenCreatedAt ? new Date(patient.consentTokenCreatedAt) : null;
-    let tokenExpiresAt = expiresAt;
-
-    if (!hasValidToken) {
-      const consentMetadata = notificationService.buildConsentMetadata();
-      token = consentMetadata.token;
-      tokenCreatedAt = consentMetadata.createdAt;
-      tokenExpiresAt = consentMetadata.expiresAt;
-    }
+    // #1049: a resend always mints a fresh token. It used to re-send the
+    // stored token while it was unexpired, which needed the plaintext at rest;
+    // only its hash is stored now, so it cannot be recovered. The link a
+    // participant already holds stops working once this one is persisted.
+    const consentMetadata = notificationService.buildConsentMetadata();
+    const token = consentMetadata.token;
 
     // RF005/RNF007 (#561/#564): patientName resolved via ParticipantIdentity
     // instead of read directly off the Patient document.
@@ -1330,29 +1326,35 @@ class PatientService {
       : patient;
 
     const consentLink = notificationService.buildConsentLink(patientWithIdentity, token);
+
+    // Persisted BEFORE delivery, the #810 ordering the publication sweep
+    // uses: an emailed link is only usable if the database already holds its
+    // hash, so a failure here means "not sent" rather than "sent, unusable".
+    // A legacy plaintext `consentToken` is removed in the same write.
+    await patientsCollection.updateOne(
+      { _id: patient._id },
+      {
+        $set: {
+          consentTokenHash: hashConsentToken(token),
+          consentTokenCreatedAt: consentMetadata.createdAt,
+          consentTokenExpiresAt: consentMetadata.expiresAt,
+          updatedAt: new Date()
+        },
+        $unset: { consentToken: '' }
+      }
+    );
+
     await notificationService.enqueueConsentNotification(patientWithIdentity, consentLink);
-
-    const updatePayload = {
-      consentNotifiedAt: new Date(),
-      updatedAt: new Date()
-    };
-
-    if (!hasValidToken) {
-      updatePayload.consentToken = token;
-      updatePayload.consentTokenCreatedAt = tokenCreatedAt;
-      updatePayload.consentTokenExpiresAt = tokenExpiresAt;
-    }
 
     await patientsCollection.updateOne(
       { _id: patient._id },
-      { $set: updatePayload }
+      { $set: { consentNotifiedAt: new Date(), updatedAt: new Date() } }
     );
 
     return {
       success: true,
       participantId,
-      reusedToken: hasValidToken,
-      consentTokenExpiresAt: tokenExpiresAt
+      consentTokenExpiresAt: consentMetadata.expiresAt
     };
   }
 

@@ -95,7 +95,9 @@ test.describe('#824 TCLE builder revision runs the consent-invitation sweep -- r
 
     // The invitation: a consent token minted for the pending participant.
     const patient = await db.collection('patients').findOne({ participantId });
-    expect(patient?.consentToken).toMatch(/^[0-9a-f]{64}$/);
+    // #1049: stored as the token's SHA-256, never the token itself.
+    expect(patient?.consentTokenHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(patient?.consentToken).toBeUndefined();
     expect(patient?.consentTokenExpiresAt).toBeTruthy();
   });
 });

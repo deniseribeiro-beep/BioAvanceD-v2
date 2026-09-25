@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 const request = require('supertest');
 const { ObjectId } = require('mongodb');
+const { hashConsentToken } = require('../../src/utils/consentTokenHash');
 
 process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
@@ -47,7 +48,7 @@ function patientDoc(overrides = {}) {
     participantId: PARTICIPANT_ID,
     status: 'PENDING_CONSENT',
     clinicalUnitId: 'unit-1',
-    consentToken: VALID_TOKEN,
+    consentTokenHash: hashConsentToken(VALID_TOKEN),
     consentTokenCreatedAt: new Date('2026-09-01T10:00:00.000Z'),
     consentTokenExpiresAt: new Date('2099-01-01T00:00:00.000Z'),
     ...overrides,

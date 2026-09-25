@@ -35,6 +35,7 @@ const MongoAuditRepository = require('../infrastructure/persistence/mongo/MongoA
 const LineageRepository = require('../infrastructure/database/neo4j/LineageRepository');
 
 const { CRITICAL_SENSOR_STATUSES, isEquipmentBlocked } = require('../models/equipmentStatus');
+const { hashConsentToken } = require('../utils/consentTokenHash');
 
 /**
  * Os dois tipos de lote de quarentena que a importacao LGPD escreve em
@@ -790,7 +791,7 @@ class ImportLGPDService {
 
           const consentMetadata = notificationService.buildConsentMetadata();
           patientData.status = 'PENDING_CONSENT';
-          patientData.consentToken = consentMetadata.token;
+          patientData.consentTokenHash = hashConsentToken(consentMetadata.token);
           patientData.consentTokenCreatedAt = consentMetadata.createdAt;
           patientData.consentTokenExpiresAt = consentMetadata.expiresAt;
 
@@ -2459,7 +2460,7 @@ class ImportLGPDService {
 
         const consentMetadata = notificationService.buildConsentMetadata();
         patientData.status = 'PENDING_CONSENT';
-        patientData.consentToken = consentMetadata.token;
+        patientData.consentTokenHash = hashConsentToken(consentMetadata.token);
         patientData.consentTokenCreatedAt = consentMetadata.createdAt;
         patientData.consentTokenExpiresAt = consentMetadata.expiresAt;
 

@@ -34,7 +34,8 @@ async function seedPendingParticipant(): Promise<{ participantId: string; token:
   await db.collection('patients').insertOne({
     participantId,
     status: 'PENDING_CONSENT',
-    consentToken: token,
+    // #1049: only the token's SHA-256 is stored; the link carries the token.
+    consentTokenHash: crypto.createHash('sha256').update(token).digest('hex'),
     consentTokenCreatedAt: new Date(),
     consentTokenExpiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
     createdAt: new Date(),
@@ -107,8 +108,8 @@ test.describe('RF010 bulk consent-token page (/patients/:id/consent?token=) -- r
     const stored = await db.collection('patients').findOne({ participantId });
     expect(stored?.status).toBe('ACTIVE');
     expect(stored?.consentAcceptedAt).toBeTruthy();
-    // The token is single-use: acceptConsentToken nulls it.
-    expect(stored?.consentToken).toBeNull();
+    // The token is single-use: acceptConsentToken nulls its hash (#1049).
+    expect(stored?.consentTokenHash).toBeNull();
 
     // #821 (RF010 AC#2-4): the acceptance is a recorded Consent, not only a
     // status flag -- bound to the term the page showed, with the answers given
