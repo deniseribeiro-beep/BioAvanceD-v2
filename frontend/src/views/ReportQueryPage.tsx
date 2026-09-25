@@ -346,6 +346,32 @@ export function buildInventoryFields(catalog: CatalogFilter[], alreadyRendered: 
   return fields;
 }
 
+// #735: a custom template has no definition here, so its sections are
+// grouped as its handler's system type is. GET /:type/filters names the
+// handler.
+const HANDLER_SECTION_KEYS: Record<string, string> = {
+  samplesByPatient: 'samplesByPatient',
+  patient: 'patients',
+  sample: 'samples',
+  sampleAnalysis: 'sampleAnalysis',
+  temperature: 'temperature',
+  sensor: 'sensors',
+  equipment: 'equipment',
+  result: 'results',
+  withdrawalHistory: 'withdrawalHistory',
+  tissueOriginHistory: 'tissueOriginHistory',
+  extracellularNetwork: 'extracellularNetwork',
+  accessLogs: 'accessLogs',
+  auditEvents: 'audit',
+};
+
+export function resolveSectionKey(reportKey: string, isKnownType: boolean, handlerKey: string | null): string {
+  if (isKnownType || !handlerKey) {
+    return reportKey;
+  }
+  return HANDLER_SECTION_KEYS[handlerKey] || reportKey;
+}
+
 export function buildSections(reportKey: string, qualityFields: ReportFilterField[], catalog: CatalogFilter[] | null = null): ReportFilterSection[] {
   let sections: ReportFilterSection[] = [];
 
@@ -688,10 +714,17 @@ export default function ReportQueryPage() {
 
   const reportDefinition = getReportTypeDefinition(type);
   const reportKey = reportDefinition?.key || String(type || '');
-  const reportLabel = reportDefinition ? t(reportDefinition.type, reportDefinition.fallbackType) : 'Relatório';
+  // #735: a custom template has no definition; GET /:type/filters names it
+  // and its handler.
+  const [templateMeta, setTemplateMeta] = useState<{ handlerKey: string | null; name: string | null; description: string | null }>({
+    handlerKey: null,
+    name: null,
+    description: null,
+  });
+  const reportLabel = reportDefinition ? t(reportDefinition.type, reportDefinition.fallbackType) : templateMeta.name || 'Relatório';
   const reportDescription = reportDefinition
     ? t(reportDefinition.description, reportDefinition.fallbackDescription)
-    : 'Configure os filtros e exporte o relatório';
+    : templateMeta.description || 'Configure os filtros e exporte o relatório';
 
   const [values, setValues] = useState<Record<string, FilterValue>>({});
   const [error, setError] = useState('');
@@ -713,6 +746,7 @@ export default function ReportQueryPage() {
   useEffect(() => {
     let cancelled = false;
     setFilterCatalog(null);
+    setTemplateMeta({ handlerKey: null, name: null, description: null });
     if (!reportKey) {
       return undefined;
     }
@@ -721,6 +755,11 @@ export default function ReportQueryPage() {
       .then((response) => {
         if (!cancelled) {
           setFilterCatalog(Array.isArray(response?.data?.filters) ? response.data.filters : null);
+          setTemplateMeta({
+            handlerKey: typeof response?.data?.handlerKey === 'string' ? response.data.handlerKey : null,
+            name: typeof response?.data?.name === 'string' ? response.data.name : null,
+            description: typeof response?.data?.description === 'string' ? response.data.description : null,
+          });
         }
       })
       .catch(() => {
@@ -734,8 +773,8 @@ export default function ReportQueryPage() {
   }, [reportKey]);
 
   const sections = useMemo(
-    () => buildSections(reportKey, qualityFields, filterCatalog),
-    [filterCatalog, qualityFields, reportKey]
+    () => buildSections(resolveSectionKey(reportKey, Boolean(reportDefinition), templateMeta.handlerKey), qualityFields, filterCatalog),
+    [filterCatalog, qualityFields, reportKey, reportDefinition, templateMeta.handlerKey]
   );
 
   const searchOrpha = useCallback(async (query: string): Promise<LookupOption[]> => {

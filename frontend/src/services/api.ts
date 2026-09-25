@@ -610,7 +610,8 @@ export const reportsService = {
   getById: (id: number) => api.get<Reports>(`/reports/${id}`),
   generate: (reportType: string) => api.post<Reports>('/reports/generate', { reportType }), // Implementa User.generateReports()
   delete: (id: number) => api.delete(`/reports/${id}`),
-  getFilters: (type: string) => api.get<{ filters: any[] }>(`/reports/${encodeURIComponent(type)}/filters`),
+  getFilters: (type: string) =>
+    api.get<{ filters: any[]; reportType?: string; handlerKey?: string; name?: string; description?: string | null }>(`/reports/${encodeURIComponent(type)}/filters`),
   previewReport: (type: string, data: { filters: any }) => 
     api.post<any>(`/reports/${encodeURIComponent(type)}/preview`, data),
   exportReport: (type: string, format: 'csv' | 'pdf', filters?: any) => {

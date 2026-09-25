@@ -5,7 +5,8 @@ import Button from '../components/UI/Button';
 import { FileText, Filter, ArrowRight } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
-import { getAllowedReportDefinitions } from '../config/constants/report.constants';
+import { REPORT_TYPE_DEFINITIONS, mergeCustomTemplates } from '../config/constants/report.constants';
+import { useReportTemplates } from '../hooks/useReportTemplates';
 import './ReportsPage.css';
 
 // REPORT_TYPES será definido dentro do componente para ter acesso ao t()
@@ -14,14 +15,18 @@ export default function ReportsPage() {
   const navigate = useNavigate();
   const { t } = useLanguage();
   const { hasReportAccess } = useAuth();
+  // #735 (RF008 AC#6): templates created on ReportTemplatesPage join the menu.
+  const { reportTemplates } = useReportTemplates();
 
   const reportCatalog = useMemo(() => {
-    return getAllowedReportDefinitions(hasReportAccess).map((reportType) => ({
+    return mergeCustomTemplates(REPORT_TYPE_DEFINITIONS, reportTemplates)
+      .filter((reportType) => hasReportAccess(reportType.type) || hasReportAccess(reportType.key))
+      .map((reportType) => ({
       ...reportType,
       typeLabel: t(reportType.type, reportType.fallbackType),
-      descriptionLabel: t(reportType.description, reportType.fallbackDescription),
+      descriptionLabel: reportType.description ? t(reportType.description, reportType.fallbackDescription) : reportType.fallbackDescription,
     }));
-  }, [hasReportAccess, t]);
+  }, [hasReportAccess, reportTemplates, t]);
   // Filtra tipos de relatórios baseado nas permissões do usuário
   const allowedReportTypes = reportCatalog;
 

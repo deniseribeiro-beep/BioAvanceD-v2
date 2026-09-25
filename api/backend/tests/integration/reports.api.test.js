@@ -286,6 +286,16 @@ describe('Reports API integration', () => {
     ]);
   });
 
+  // #735: a custom template has no frontend definition, so the query page
+  // takes its title and description from here.
+  it('GET /api/reports/:type/filters names the template, for a page that has no definition of it', async () => {
+    const response = await request(app).get('/api/reports/access_logs/filters');
+
+    expect(response.status).toBe(200);
+    expect(response.body.name).toBe('Logs de Acesso');
+    expect(response.body).toHaveProperty('description');
+  });
+
   it('GET /api/reports/:id resolve por reportID numérico', async () => {
     const response = await request(app).get('/api/reports/2');
 

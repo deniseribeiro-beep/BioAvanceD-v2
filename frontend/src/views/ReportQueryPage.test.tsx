@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildInventoryFields, buildQualityFields, buildSections, type CatalogFilter } from './ReportQueryPage';
+import { buildInventoryFields, buildQualityFields, buildSections, resolveSectionKey, type CatalogFilter } from './ReportQueryPage';
 import { SPREC_FLUID_DICTIONARY } from '../constants/sprecDictionary';
 
 // The shape GET /reports/samples/filters answers (reports.routes.js
@@ -149,5 +149,38 @@ describe('#1214: sections render only the filters the catalog lists for the type
 
   it('CONTROL: an unknown catalog (null, fetch pending or failed) renders the key-set sections unfiltered', () => {
     expect(buildSections('results', QUALITY_FIELDS, null).map((section) => section.id)).toEqual(['clinical']);
+  });
+});
+
+// #735: a custom template (RF008 AC#6) has no REPORT_TYPE_DEFINITIONS entry,
+// so its code matched none of the key sets and its handler's clinical,
+// quality or monitoring filters never rendered. The catalog response names
+// the handler; the page groups sections as that handler's system type.
+describe('#735: resolveSectionKey', () => {
+  it('a custom template over the sample handler groups as samples', () => {
+    expect(resolveSectionKey('inventario_mensal', false, 'sample')).toBe('samples');
+  });
+
+  it('maps every handler whose system type differs by name', () => {
+    expect(resolveSectionKey('x', false, 'patient')).toBe('patients');
+    expect(resolveSectionKey('x', false, 'sensor')).toBe('sensors');
+    expect(resolveSectionKey('x', false, 'result')).toBe('results');
+    expect(resolveSectionKey('x', false, 'auditEvents')).toBe('audit');
+  });
+
+  it('a custom template over the sample handler renders the quality section its catalog lists', () => {
+    const qualityFields = buildQualityFields(SPREC_FLUID_DICTIONARY);
+    const sections = buildSections(resolveSectionKey('inventario_mensal', false, 'sample'), qualityFields, SAMPLE_CATALOG);
+
+    expect(sections.map((section) => section.id)).toContain('quality');
+  });
+
+  it('CONTROL: a known type keeps its own key whatever the handler', () => {
+    expect(resolveSectionKey('temperatureControl', true, 'temperature')).toBe('temperatureControl');
+  });
+
+  it('CONTROL: an unknown handler, or none yet, keeps the key', () => {
+    expect(resolveSectionKey('inventario_mensal', false, null)).toBe('inventario_mensal');
+    expect(resolveSectionKey('inventario_mensal', false, 'noSuchHandler')).toBe('inventario_mensal');
   });
 });

@@ -135,6 +135,50 @@ test.describe('RF008 report filters and bounded report data (#748, #1077) — re
     await expect(page.getByLabel('Filtro RCS-GOV - Grade final')).toBeVisible();
   });
 
+  // #735 (RF008 AC#6): a template created through the templates API was
+  // stored and editable but never listed on the report menu, so it could not
+  // generate anything. It is now a card that opens its own query page,
+  // grouped as its handler's system type.
+  test('#735: a custom report template is selectable on the menu and exports through its handler', async ({ page, request }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const suffix = `${Date.now()}${Math.random().toString(36).slice(2, 6)}`;
+    const code = `e2e_735_${suffix}`;
+    const name = `Inventário e2e ${suffix}`;
+
+    const created = await request.post(`${apiBaseURL}/api/report-templates`, {
+      headers: auth,
+      data: { code, name, description: 'Modelo criado pelo teste #735.', handlerKey: 'sample' },
+    });
+    expect(created.status(), await created.text()).toBe(201);
+    const templateId = (await created.json()).data._id;
+
+    try {
+      await seedRealAuth(page, admin);
+      await page.goto('/reports');
+      const card = page.locator('.report-card', { hasText: name });
+      await expect(card).toBeVisible();
+      await expect(card.getByText('Modelo criado pelo teste #735.')).toBeVisible();
+      await card.getByRole('button').click();
+      await expect(page).toHaveURL(new RegExp(`/reports/query/${code}$`));
+
+      // Labelled from the template, with the sample handler's sections.
+      await expect(page.getByText(name).first()).toBeVisible();
+      await expect(page.getByLabel('Filtro RCS-GOV - Grade final')).toBeVisible();
+      const inventory = page.locator('.report-query-section-card', { hasText: 'Inventário' });
+      await expect(inventory.getByText('Caixa de armazenamento', { exact: true })).toBeVisible();
+
+      const downloadPromise = page.waitForEvent('download');
+      await page.getByRole('button', { name: 'Exportar' }).click();
+      const csv = await readFile((await (await downloadPromise).path())!, 'utf-8');
+      // The sample handler's declared columns, or its no-data fallback.
+      const header = csv.split('\n')[0];
+      expect(header === 'total,message' || header.split(',').includes('specimenId'), header).toBe(true);
+    } finally {
+      await request.delete(`${apiBaseURL}/api/report-templates/${templateId}`, { headers: auth });
+    }
+  });
+
   test('#1077: a generated withdrawal report stores no operator user agent, identity or ledger hash', async ({ request }) => {
     const admin = await realLogin(request);
     const auth = { Authorization: `Bearer ${admin.token}` };

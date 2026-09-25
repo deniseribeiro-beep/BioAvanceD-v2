@@ -1337,7 +1337,15 @@ router.get('/:type/filters', authenticate, requirePermission('viewReports'), asy
     }
 
     const filters = FILTER_CATALOG[template.handlerKey] || [];
-    return res.status(200).json({ filters, reportType: template.code, handlerKey: template.handlerKey });
+    // #735: name/description label a custom template on the query page,
+    // which has no frontend definition for it.
+    return res.status(200).json({
+      filters,
+      reportType: template.code,
+      handlerKey: template.handlerKey,
+      name: template.name || template.code,
+      description: template.description || null,
+    });
   } catch (error) {
     return res.status(500).json({ error: 'Erro ao obter filtros', message: error.message });
   }
