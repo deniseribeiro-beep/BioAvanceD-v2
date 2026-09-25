@@ -532,6 +532,7 @@ export const REPORT_TEMPLATE_HANDLER_KEYS = [
   'tissueOriginHistory',
   'extracellularNetwork',
   'accessLogs',
+  'auditEvents',
 ] as const;
 
 export type ReportTemplateHandlerKey = typeof REPORT_TEMPLATE_HANDLER_KEYS[number];

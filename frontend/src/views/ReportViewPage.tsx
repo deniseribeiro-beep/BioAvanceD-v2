@@ -10,7 +10,7 @@ import { getPatientDisplayName } from '../utils/patientAnonymization';
 import { getReportTypeDefinition } from '../config/constants/report.constants';
 import { getMaintenanceStatusLabel } from '../config/constants/sensor.constants';
 import { resolveSpecimenStatus, translateSpecimenStatus } from '../utils/sampleHelpers';
-import { selectTemperatureRows, selectAccessLogRows, rowKey } from './ReportViewPage.helpers';
+import { selectTemperatureRows, selectAccessLogRows, selectAuditEventRows, rowKey } from './ReportViewPage.helpers';
 import './ReportViewPage.css';
 
 export default function ReportViewPage() {
@@ -228,7 +228,7 @@ export default function ReportViewPage() {
         {/* #949: `temperatures` and `logs` are the keys handleTemperature and
             handleAccessLogs actually return; this gate read `recentReadings`/
             `recentLogs`, which no handler has ever emitted. */}
-        {(reportData.patients || reportData.samples || reportData.equipment || reportData.results || reportData.sensors || selectTemperatureRows(reportData).length > 0 || selectAccessLogRows(reportData).length > 0) && (
+        {(reportData.patients || reportData.samples || reportData.equipment || reportData.results || reportData.sensors || selectTemperatureRows(reportData).length > 0 || selectAccessLogRows(reportData).length > 0 || selectAuditEventRows(reportData).length > 0) && (
           <div className="report-details">
             {reportData.patients && reportData.patients.length > 0 && (
               <Card className="details-card">
@@ -430,6 +430,40 @@ export default function ReportViewPage() {
                           <td>{l.entity}</td>
                           <td>{l.result}</td>
                           <td>{l.severity}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
+            )}
+
+            {selectAuditEventRows(reportData).length > 0 && (
+              <Card className="details-card">
+                <h3 className="details-title">Eventos de Auditoria ({selectAuditEventRows(reportData).length})</h3>
+                <div className="details-table">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Data/Hora</th>
+                        <th>Ator</th>
+                        <th>Ação</th>
+                        <th>Recurso</th>
+                        <th>Resultado</th>
+                        <th>Origem</th>
+                        <th>Evento</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectAuditEventRows(reportData).map((e, i) => (
+                        <tr key={e.eventId || String(i)}>
+                          <td>{formatDate(e.occurredAt)}</td>
+                          <td>{e.actorPseudonym}</td>
+                          <td>{e.action}</td>
+                          <td>{e.entityType}</td>
+                          <td>{e.result}</td>
+                          <td>{e.source}</td>
+                          <td>{e.eventId}</td>
                         </tr>
                       ))}
                     </tbody>

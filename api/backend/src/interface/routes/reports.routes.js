@@ -9,7 +9,7 @@ const PatientModel = require('../../models/Patient');
 const { SampleModel } = require('../../models/Sample');
 const { SPECIMEN_TYPE_IDS, SAMPLE_ORIGIN_IDS } = require('../../config/constants/specimen.constants');
 const logger = require('../../utils/logger');
-const { anonymizeLogs } = require('../../utils/userAnonymization');
+const { anonymizeLogs, generateAnonId } = require('../../utils/userAnonymization');
 const specimenPreanalyticsService = require('../../services/specimen-preanalytics.service');
 const rcsAssessmentService = require('../../services/rcs-assessment.service');
 const { resolveUserOrganizationScope, isOrganizationScopeUsable, applyOrganizationScopeFilter, isRecordInOrganizationScope, isAuditReader } = require('../../services/rbac-assignment.service');
@@ -348,7 +348,7 @@ const SCOPED_HANDLER_KEYS = new Set([
 // This is the GATE only. It bounds WHO may call these types. WHAT they
 // contain is bounded by EXPORT_CATALOG below, which buildPreviewData applies
 // to every handler's output (#1077), so all four surfaces share it.
-const AUDIT_READER_HANDLER_KEYS = new Set(['accessLogs']);
+const AUDIT_READER_HANDLER_KEYS = new Set(['accessLogs', 'auditEvents']);
 
 function unknownTypeResult(rawType) {
   return {
@@ -831,6 +831,39 @@ async function handleAccessLogs(db, filters) {
   return { total, logs, previewLimited: total > 200 };
 }
 
+// #733: RF008 names AuditEvent as the audit report's contract (requisitos
+// v4.0.0), so 'Auditoria' reads the hash-chained `audit_events` trail
+// (audit-v2.service.js) rather than sharing handleAccessLogs' `logs` query.
+// Stored `occurredAt` is an ISO string, so the range is compared as ISO
+// strings -- a Date bound never matches a string field.
+const PSEUDONYM_PATTERN = /^USR-(?:[0-9A-F]{8}|SYSTEM)$/;
+
+function toActorPseudonym(actor) {
+  if (!actor || actor === 'system') return 'USR-SYSTEM';
+  const value = String(actor);
+  // ingestLogRecord copies the log's userName, falling back to its userID.
+  // A row written before the userName was pseudonymized carries the raw
+  // value, and audit_events is append-only, so it is masked here on read.
+  return PSEUDONYM_PATTERN.test(value) ? value : generateAnonId(value);
+}
+
+async function handleAuditEvents(db, filters) {
+  const collection = db.collection('audit_events');
+  const query = {};
+
+  const dateQuery = buildDateQuery(filters);
+  if (dateQuery) {
+    query.occurredAt = {};
+    if (dateQuery.$gte) query.occurredAt.$gte = dateQuery.$gte.toISOString();
+    if (dateQuery.$lte) query.occurredAt.$lte = dateQuery.$lte.toISOString();
+  }
+
+  const rawEvents = await collection.find(query).sort({ occurredAt: -1, sequenceNumber: -1 }).limit(200).toArray();
+  const total = await collection.countDocuments(query);
+  const auditEvents = rawEvents.map((event) => ({ ...event, actorPseudonym: toActorPseudonym(event.actorPseudonym) }));
+  return { total, auditEvents, previewLimited: total > 200 };
+}
+
 // #726: one entry per ReportTemplate.HANDLER_KEYS value -- buildPreviewData
 // dispatches here by the matched template's `handlerKey`, not by
 // re-matching the incoming type string.
@@ -847,6 +880,7 @@ const REPORT_HANDLERS = {
   tissueOriginHistory: handleTissueOriginHistory,
   extracellularNetwork: handleExtracellularNetwork,
   accessLogs: handleAccessLogs,
+  auditEvents: handleAuditEvents,
 };
 
 // #732 (RF008 AC#1/AC#6): GET /:type/filters used to ignore its own
@@ -913,6 +947,7 @@ const FILTER_CATALOG = {
   tissueOriginHistory: [],
   extracellularNetwork: [],
   accessLogs: DATE_RANGE_FILTERS,
+  auditEvents: DATE_RANGE_FILTERS,
 };
 
 // #1058/#1061/#1050 piece 2: `toCsvRows` used to pick its rows by sniffing a
@@ -1048,6 +1083,15 @@ const EXPORT_CATALOG = {
     columns: ['movementId', 'specimenId', 'barcode', 'type', 'quantity', 'unit', 'destination', 'purpose', 'linkedProject', 'condition', 'previousQuantity', 'newQuantity', 'previousState', 'newState', 'createdAt'],
   },
   accessLogs: { rowKey: 'logs', columns: AUDIT_LOG_EXPORT_COLUMNS },
+  // #733: the same exclusions as the logs list above -- no entity ids, and
+  // none of the hash-chain internals (eventHash, previousEventHash,
+  // canonicalLeaf, inclusionProof), for the reason withdrawalHistory gives.
+  // `eventId` stays: it is what POST /api/audit/verify takes, so an auditor
+  // can check any exported row against the tree.
+  auditEvents: {
+    rowKey: 'auditEvents',
+    columns: ['eventId', 'sequenceNumber', 'occurredAt', 'recordedAt', 'actorPseudonym', 'action', 'entityType', 'result', 'source'],
+  },
 };
 
 function pickColumns(row, columns) {

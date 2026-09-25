@@ -944,4 +944,31 @@ test.describe('Reports (RF008) — real backend', () => {
     const csv = fs.readFileSync(downloadedPath!, 'utf8');
     expect(csv.split('\n')[0].split(',')).toContain('participantId');
   });
+
+  // #733: `audit` and `access_logs` were two menu entries over one `logs`
+  // query. RF008 names AuditEvent, so `audit` now reads the hash-chained
+  // audit_events trail. The login itself is audited, so the trail is never
+  // empty here.
+  test('the audit report reads the AuditEvent trail, distinct from access_logs (#733)', async ({ request }) => {
+    const admin = await realLogin(request);
+
+    const audit = await previewReport(request, admin.token, 'audit', {});
+    expect(audit.ok(), await audit.text()).toBe(true);
+    const auditData = (await audit.json()).data;
+    expect(auditData.logs).toBeUndefined();
+    expect(Array.isArray(auditData.auditEvents)).toBe(true);
+    expect(auditData.auditEvents.length).toBeGreaterThan(0);
+    for (const row of auditData.auditEvents) {
+      expect(row.eventId).toBeTruthy();
+      expect(row.actorPseudonym).toMatch(/^USR-/);
+      expect(row.eventHash).toBeUndefined();
+      expect(row.entityId).toBeUndefined();
+    }
+
+    const accessLogs = await previewReport(request, admin.token, 'access_logs', {});
+    expect(accessLogs.ok(), await accessLogs.text()).toBe(true);
+    const accessLogsData = (await accessLogs.json()).data;
+    expect(accessLogsData.auditEvents).toBeUndefined();
+    expect(Array.isArray(accessLogsData.logs)).toBe(true);
+  });
 });

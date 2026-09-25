@@ -1029,12 +1029,13 @@ describe('reports.routes.js gaps', () => {
     expect(p1.sampleCount).toBe(1);
   });
 
-  it('logs/audit: aplica intervalo de datas na query', async () => {
+  // #733: `access_logs` reads `logs`; `audit` reads audit_events (reports.api.test.js).
+  it('logs/access_logs: aplica intervalo de datas na query', async () => {
     const { db, capturedQueries } = buildCollectionDb({ logs: [{ dateTime: new Date('2026-01-05') }] });
     const testApp = appWithDb(db);
 
     const response = await request(testApp)
-      .post('/api/reports/audit/preview')
+      .post('/api/reports/access_logs/preview')
       .send({ filters: { startDate: '2026-01-01', endDate: '2026-01-31' } });
 
     expect(response.status).toBe(200);

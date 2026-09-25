@@ -275,7 +275,8 @@ describe('Reports API integration', () => {
   // filters -- a date range, and nothing else, because handleAccessLogs
   // reads nothing else off `filters`.
   it('GET /api/reports/:type/filters devolve o catálogo do handler do tipo', async () => {
-    const response = await request(app).get('/api/reports/audit/filters');
+    // #733: `access_logs`; `audit` has its own handler now, pinned below.
+    const response = await request(app).get('/api/reports/access_logs/filters');
 
     expect(response.status).toBe(200);
     expect(response.body.handlerKey).toBe('accessLogs');
@@ -332,11 +333,11 @@ describe('Reports API integration', () => {
   });
 
   it('POST /api/reports/:type/preview retorna envelope de sucesso com dados', async () => {
-    const response = await request(app).post('/api/reports/audit/preview').send({ filters: {} });
+    const response = await request(app).post('/api/reports/access_logs/preview').send({ filters: {} });
 
     expect(response.status).toBe(200);
     expect(response.body.success).toBe(true);
-    expect(response.body.reportType).toBe('audit');
+    expect(response.body.reportType).toBe('access_logs');
     expect(typeof response.body.generatedAt).toBe('string');
     expect(response.body.data).toEqual({ total: 0, logs: [], previewLimited: false });
   });
@@ -350,7 +351,7 @@ describe('Reports API integration', () => {
   });
 
   it('GET /api/reports/:type/export/pdf retorna envelope PDF', async () => {
-    const response = await request(app).get('/api/reports/audit/export/pdf');
+    const response = await request(app).get('/api/reports/access_logs/export/pdf');
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual({
@@ -1005,7 +1006,8 @@ describe('Reports API integration', () => {
       sensors: { sensors: [{ sensorId: 'SEN-1', sensorType: 'temperature' }] },
       equipment: { equipment: [{ equipmentID: 'EQ-1', name: 'Freezer A' }] },
       results: { results: [{ resultID: 'R-1', specimenId: 'S-1' }] },
-      audit: { logs: [{ logId: 'L-1', action: 'LOGIN', timestamp: '2026-01-01' }] },
+      // #733: `audit` reads the AuditEvent trail, `access_logs` the `logs` collection.
+      audit: { audit_events: [{ eventId: 'E-1', action: 'LOGIN', occurredAt: '2026-01-01T00:00:00.000Z' }] },
       access_logs: { logs: [{ logId: 'L-1', action: 'LOGIN', timestamp: '2026-01-01' }] },
       withdrawal_history: { sample_movements: [{ movementId: 'M-1', specimenId: 'S-1', type: 'withdrawal' }] },
       tissue_origin_history: { samples: [{ specimenId: 'S-1', sampleType: 'tissue' }] },
@@ -1326,6 +1328,114 @@ describe('Reports API integration', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.data).toMatchObject({ total: 0, type: 'no_such_type' });
+    });
+  });
+
+  // #733: RF008 (requisitos v4.0.0) names AuditEvent as the audit report's
+  // contract. `audit` and `access_logs` were two menu entries over one
+  // `logs` query; `audit` now reads the hash-chained `audit_events` trail.
+  describe('#733: the Auditoria report reads audit_events, not the access logs', () => {
+    function appWithDb(db) {
+      const testApp = express();
+      testApp.use(express.json());
+      testApp.use((req, _res, next) => {
+        req.app.locals.db = db;
+        next();
+      });
+      const reportsRouter = require(modulePaths.controller);
+      testApp.use('/api/reports', reportsRouter);
+      return testApp;
+    }
+
+    const saltBefore = process.env.USER_ANON_SALT;
+    beforeEach(() => { process.env.USER_ANON_SALT = 'test-user-anon-salt'; });
+    afterEach(() => {
+      if (saltBefore === undefined) delete process.env.USER_ANON_SALT;
+      else process.env.USER_ANON_SALT = saltBefore;
+    });
+
+    const LOG_ROWS = [{ logId: 'L-1', userName: 'USR-AAAAAAAA', action: 'ONLY_IN_LOGS', timestamp: '2026-01-01' }];
+    const EVENT_ROWS = [{
+      eventId: 'E-1',
+      logId: 'L-9',
+      sequenceNumber: 3,
+      occurredAt: '2026-01-02T10:00:00.000Z',
+      recordedAt: '2026-01-02T10:00:01.000Z',
+      actorPseudonym: 'Alice Real Name',
+      action: 'ONLY_IN_AUDIT_EVENTS',
+      entityType: 'Sample',
+      entityId: 'SPEC-SECRET-1',
+      result: 'success',
+      source: 'Amostras',
+      payloadDigest: 'digest-secret',
+      eventHash: 'hash-secret',
+      previousEventHash: 'prev-hash-secret',
+      canonicalLeaf: { eventHash: 'hash-secret' },
+      inclusionProof: ['proof-secret'],
+    }];
+
+    it('POST /audit/preview returns the audit_events rows, not the logs rows', async () => {
+      const { db } = buildCollectionDb({ logs: LOG_ROWS, audit_events: EVENT_ROWS });
+
+      const response = await request(appWithDb(db)).post('/api/reports/audit/preview').send({ filters: {} });
+
+      expect(response.status).toBe(200);
+      const body = JSON.stringify(response.body);
+      expect(body).toContain('ONLY_IN_AUDIT_EVENTS');
+      expect(body).not.toContain('ONLY_IN_LOGS');
+    });
+
+    it('CONTROL: POST /access_logs/preview still returns the logs rows', async () => {
+      const { db } = buildCollectionDb({ logs: LOG_ROWS, audit_events: EVENT_ROWS });
+
+      const response = await request(appWithDb(db)).post('/api/reports/access_logs/preview').send({ filters: {} });
+
+      expect(response.status).toBe(200);
+      const body = JSON.stringify(response.body);
+      expect(body).toContain('ONLY_IN_LOGS');
+      expect(body).not.toContain('ONLY_IN_AUDIT_EVENTS');
+    });
+
+    it('GET /audit/export declares the AuditEvent columns and omits entity ids and the hash chain', async () => {
+      const { db } = buildCollectionDb({ audit_events: EVENT_ROWS });
+
+      const response = await request(appWithDb(db)).get('/api/reports/audit/export');
+
+      expect(response.status).toBe(200);
+      const [header] = response.text.split('\n');
+      expect(header).toBe('eventId,sequenceNumber,occurredAt,recordedAt,actorPseudonym,action,entityType,result,source');
+      expect(response.text).toContain('ONLY_IN_AUDIT_EVENTS');
+      for (const secret of ['SPEC-SECRET-1', 'digest-secret', 'hash-secret', 'prev-hash-secret', 'proof-secret']) {
+        expect(response.text).not.toContain(secret);
+      }
+    });
+
+    it('masks an actor stored as a real name, and keeps a stored USR- pseudonym as is', async () => {
+      const { generateAnonId } = require('../../src/utils/userAnonymization');
+      const rows = [...EVENT_ROWS, { ...EVENT_ROWS[0], eventId: 'E-2', actorPseudonym: 'USR-1234ABCD' }];
+      const { db } = buildCollectionDb({ audit_events: rows });
+
+      const response = await request(appWithDb(db)).get('/api/reports/audit/export');
+
+      expect(response.status).toBe(200);
+      expect(response.text).not.toContain('Alice Real Name');
+      expect(response.text).toContain(generateAnonId('Alice Real Name'));
+      expect(response.text).toContain('USR-1234ABCD');
+    });
+
+    it('filters the period on occurredAt as ISO strings, the type the trail stores', async () => {
+      const { db, capturedQueries } = buildCollectionDb({ audit_events: EVENT_ROWS });
+
+      const response = await request(appWithDb(db))
+        .post('/api/reports/audit/preview')
+        .send({ filters: { startDate: '2026-01-01', endDate: '2026-01-31' } });
+
+      expect(response.status).toBe(200);
+      const range = capturedQueries.audit_events.occurredAt;
+      expect(typeof range.$gte).toBe('string');
+      expect(typeof range.$lte).toBe('string');
+      expect(range.$gte).toBe(new Date('2026-01-01').toISOString());
+      expect(range.$lte.startsWith('2026-01-31') || range.$lte.startsWith('2026-02-01')).toBe(true);
     });
   });
 });
