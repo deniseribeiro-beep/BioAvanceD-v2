@@ -364,7 +364,7 @@ Déficit branches vs 95% (`ceil(0,95 × 23.943) = 22.746`): **−33** (acima do 
 
 Docker espelho (`compose.test.yml` `backend-unit-runner` / `current-state:ci`): exit 0 — `logs/item8-stage2/docker-stage2e4-gate.log`.
 
-**Marco 95% Item 8 (#228): FECHADO.** Stage 2F (marco 100%) concluída com status `BLOCKED_BY_COVERAGE_INSTRUMENTATION` — ver [`ITEM_8_BRANCH_100_KICKOFF.md`](ITEM_8_BRANCH_100_KICKOFF.md). Checkbox 100% **não** marcado (branches 95,25%; ~757 empty-loc no denominador V8).
+**Marco 95% Item 8 (#228): FECHADO.** Stage 2G fechou o marco **100% sob emenda source-located** — ver [`ITEM_8_BRANCH_100_KICKOFF.md`](ITEM_8_BRANCH_100_KICKOFF.md). Relatório V8 bruto de branches permanece ~95,3% (empty-loc ~757 no denominador).
 
 STAGE_2E_4_CURSOR
 
