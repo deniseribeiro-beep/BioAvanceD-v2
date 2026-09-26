@@ -829,7 +829,11 @@ services:
     environment:
       CI: "true"
       PLAYWRIGHT_SKIP_WEBSERVER: "1"
-      PLAYWRIGHT_BASE_URL: http://frontend-app-test:5173
+      # #1233: the bundle's API base is baked as http://localhost:3000/api, so
+      # the browser here must load the app from localhost too. The image's CMD
+      # forwards this container's localhost:5173/:3000 to the two services,
+      # which makes origin, API base, CORS and cookies match a host-side run.
+      PLAYWRIGHT_BASE_URL: http://localhost:5173
       PLAYWRIGHT_API_BASE_URL: http://backend-app-test:3000
       TEST_USER: admin
       TEST_PASS: Admin@123
@@ -841,6 +845,10 @@ services:
       # repeated here -- same reason TEST_SUPPORT_SECRET is repeated on the
       # line above.
       TELEMETRY_INGEST_SECRET: e2e-telemetry-ingest-secret
+      # #1233: the Neo4j and InfluxDB fixture helpers default to localhost,
+      # which reaches the published ports only from the host, not from here.
+      E2E_NEO4J_URI: bolt://neo4j-test:7687
+      E2E_INFLUXDB_URL: http://influxdb-test:8086
     depends_on:
       frontend-app-test:
         condition: service_healthy
