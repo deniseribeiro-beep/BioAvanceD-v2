@@ -1054,8 +1054,12 @@ describe('reports.routes.js gaps', () => {
     expect(p1.sampleCount).toBe(1);
   });
 
-  it('logs/audit: aplica intervalo de datas na query', async () => {
-    const { db, capturedQueries } = buildCollectionDb({ logs: [{ dateTime: new Date('2026-01-05') }] });
+  // #1218: `audit` dispatches to auditEvents over audit_events (occurredAt/recordedAt),
+  // not accessLogs/logs. access_logs keeps the logs date-range path.
+  it('audit: aplica intervalo de datas na query em audit_events', async () => {
+    const { db, capturedQueries } = buildCollectionDb({
+      audit_events: [{ eventId: 'E-1', occurredAt: new Date('2026-01-05'), actorPseudonym: 'USR-1' }],
+    });
     const testApp = appWithDb(db);
 
     const response = await request(testApp)
@@ -1063,7 +1067,13 @@ describe('reports.routes.js gaps', () => {
       .send({ filters: { startDate: '2026-01-01', endDate: '2026-01-31' } });
 
     expect(response.status).toBe(200);
-    expect(capturedQueries.logs.$or).toBeDefined();
+    expect(capturedQueries.audit_events.$or).toBeDefined();
+    expect(capturedQueries.audit_events.$or).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ occurredAt: expect.any(Object) }),
+        expect.objectContaining({ recordedAt: expect.any(Object) }),
+      ])
+    );
   });
 
   it('amostra: treatmentStatus NAIVE/INICIAL é normalizado', async () => {
