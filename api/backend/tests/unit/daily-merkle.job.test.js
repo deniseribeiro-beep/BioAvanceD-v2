@@ -95,7 +95,7 @@ describe('daily-merkle.job', () => {
   });
 
   describe('runOnce', () => {
-    it('happy path: generates root, saves it with correct args, and closes the connection', async () => {
+    it('happy path: generates root, saves it with correct args, and leaves the shared connection open', async () => {
       await job.runOnce();
 
       expect(mongo.connectDB).toHaveBeenCalledTimes(1);
@@ -111,11 +111,13 @@ describe('daily-merkle.job', () => {
         treeSize: 3,
         db: { __fakeDb: true },
       });
-      expect(mongo.closeConnection).toHaveBeenCalledTimes(1);
+      // connectDB() returns the worker's shared client; closing it here left
+      // every later queue job failing with "Client must be connected".
+      expect(mongo.closeConnection).not.toHaveBeenCalled();
       expect(logger.warn).not.toHaveBeenCalled();
     });
 
-    it('warns and skips persistence when buildMerkleForDate resolves without a root, but still closes the connection', async () => {
+    it('warns and skips persistence when buildMerkleForDate resolves without a root, and leaves the shared connection open', async () => {
       integrityService.buildMerkleForDate.mockResolvedValue({ root: null, leaves: [] });
 
       await job.runOnce();
@@ -124,10 +126,10 @@ describe('daily-merkle.job', () => {
       // saveDailyRoot when the result is invalid, so nothing gets persisted.
       expect(logger.warn).toHaveBeenCalledTimes(1);
       expect(auditRootService.saveDailyRoot).not.toHaveBeenCalled();
-      expect(mongo.closeConnection).toHaveBeenCalledTimes(1);
+      expect(mongo.closeConnection).not.toHaveBeenCalled();
     });
 
-    it('when connectDB throws: error is caught and logged, promise resolves (never rejects), closeConnection is not called since db stayed null', async () => {
+    it('when connectDB throws: error is caught and logged, promise resolves (never rejects), closeConnection is not called', async () => {
       mongo.connectDB.mockRejectedValue(new Error('mongo down'));
 
       await expect(job.runOnce()).resolves.toBeUndefined();
@@ -138,23 +140,23 @@ describe('daily-merkle.job', () => {
       expect(auditRootService.saveDailyRoot).not.toHaveBeenCalled();
     });
 
-    it('when buildMerkleForDate throws: error is caught and logged, closeConnection is still called via finally since db was set', async () => {
+    it('when buildMerkleForDate throws: error is caught and logged, and the shared connection stays open', async () => {
       integrityService.buildMerkleForDate.mockRejectedValue(new Error('merkle build failed'));
 
       await expect(job.runOnce()).resolves.toBeUndefined();
 
       expect(logger.error).toHaveBeenCalledTimes(1);
-      expect(mongo.closeConnection).toHaveBeenCalledTimes(1);
+      expect(mongo.closeConnection).not.toHaveBeenCalled();
       expect(auditRootService.saveDailyRoot).not.toHaveBeenCalled();
     });
 
-    it('when saveDailyRoot throws: error is caught and logged, closeConnection is still called via finally', async () => {
+    it('when saveDailyRoot throws: error is caught and logged, and the shared connection stays open', async () => {
       auditRootService.saveDailyRoot.mockRejectedValue(new Error('save failed'));
 
       await expect(job.runOnce()).resolves.toBeUndefined();
 
       expect(logger.error).toHaveBeenCalledTimes(1);
-      expect(mongo.closeConnection).toHaveBeenCalledTimes(1);
+      expect(mongo.closeConnection).not.toHaveBeenCalled();
     });
   });
 
