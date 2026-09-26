@@ -47,16 +47,27 @@ export async function seedActiveConsentTemplate(db: Db): Promise<string> {
   // Canonical name is `consent_templates` (snake_case), not the
   // `consentTemplates` field/param name used throughout the API layer —
   // see api/backend/src/config/collections.js's CANONICAL_COLLECTIONS map.
+  //
+  // One shared fixture, upserted, not a fresh insert per call: every caller
+  // only needs *an* active template id, and a per-call insert with no
+  // cleanup left 1317 active templates on the kept test volume, all served
+  // by GET /api/e-consent/consent-templates (~345 KB) on every wizard load.
   const templates = db.collection('consent_templates');
-  const result = await templates.insertOne({
-    title: `RF004 e2e consent template ${Date.now()}`,
-    content: 'Termo de Consentimento Livre e Esclarecido para testes e2e (RF004).',
-    version: 'v1',
-    active: true,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  });
-  return result.insertedId.toString();
+  const now = new Date();
+  const doc = await templates.findOneAndUpdate(
+    { e2eFixture: 'rf004-shared-consent-template' },
+    {
+      $setOnInsert: {
+        title: 'RF004 e2e consent template',
+        content: 'Termo de Consentimento Livre e Esclarecido para testes e2e (RF004).',
+        version: 'v1',
+        createdAt: now,
+      },
+      $set: { active: true, updatedAt: now },
+    },
+    { upsert: true, returnDocument: 'after' }
+  );
+  return String(doc?._id);
 }
 
 export interface SeededParticipant {
