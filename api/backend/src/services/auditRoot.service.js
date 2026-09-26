@@ -23,10 +23,27 @@ class AuditRootService {
       await coll.createIndex({ date: 1 }, { unique: true });
       await coll.createIndex({ chainIndex: 1 });
       await coll.createIndex({ previousRootHash: 1 });
-      await coll.createIndex({ 'timestamp.token': 1 }, { unique: true, sparse: true });
+      await this._ensureTimestampTokenIndex(coll);
       await coll.createIndex({ 'timestamp.status': 1, date: 1 });
     } catch (err) {
       logger.warn('Não foi possível criar índices para audit_roots:', err.message);
+    }
+  }
+
+  // #1236: unique among real tokens only. A sparse index skips an ABSENT field
+  // but indexes an explicit null, and saveDailyRoot writes timestamp.token: null
+  // for every root the TSA has not anchored, so `sparse` allowed exactly one
+  // such root. A stack created before this carries the sparse index under the
+  // same name, which createIndex rejects as IndexKeySpecsConflict (86): replace it.
+  async _ensureTimestampTokenIndex(coll) {
+    const keys = { 'timestamp.token': 1 };
+    const options = { unique: true, partialFilterExpression: { 'timestamp.token': { $type: 'string' } } };
+    try {
+      await coll.createIndex(keys, options);
+    } catch (err) {
+      if (err?.code !== 86 && err?.code !== 85) throw err;
+      await coll.dropIndex('timestamp.token_1');
+      await coll.createIndex(keys, options);
     }
   }
 

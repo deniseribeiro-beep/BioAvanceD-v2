@@ -739,4 +739,64 @@ describe('auditRoot.service', () => {
       );
     });
   });
+
+  // #1236: a sparse index skips an ABSENT field but indexes an explicit null,
+  // and saveDailyRoot writes timestamp.token: null for every root the TSA has
+  // not anchored -- so a unique sparse index allowed exactly one such root and
+  // every later saveDailyRoot failed E11000. Uniqueness is only meaningful
+  // among real tokens (replay detection).
+  describe('_ensureIndexes (#1236)', () => {
+    const TOKEN_INDEX_OPTIONS = {
+      unique: true,
+      partialFilterExpression: { 'timestamp.token': { $type: 'string' } },
+    };
+
+    it('makes timestamp.token unique among string tokens only, not sparse', async () => {
+      const coll = makeCollection({ dropIndex: vi.fn().mockResolvedValue(undefined) });
+
+      await auditRootService._ensureIndexes(makeDb(coll));
+
+      expect(coll.createIndex).toHaveBeenCalledWith({ 'timestamp.token': 1 }, TOKEN_INDEX_OPTIONS);
+      expect(coll.createIndex).not.toHaveBeenCalledWith(
+        { 'timestamp.token': 1 },
+        expect.objectContaining({ sparse: true })
+      );
+      expect(coll.dropIndex).not.toHaveBeenCalled();
+    });
+
+    it('replaces an existing sparse timestamp.token_1 when createIndex reports IndexKeySpecsConflict', async () => {
+      const conflict = Object.assign(new Error('An existing index has the same name as the requested index'), {
+        code: 86,
+        codeName: 'IndexKeySpecsConflict',
+      });
+      const createIndex = vi.fn(async (keys) => {
+        if (keys['timestamp.token'] && createIndex.mock.calls.filter(([k]) => k['timestamp.token']).length === 1) {
+          throw conflict;
+        }
+        return 'ok';
+      });
+      const coll = makeCollection({ createIndex, dropIndex: vi.fn().mockResolvedValue(undefined) });
+
+      await auditRootService._ensureIndexes(makeDb(coll));
+
+      expect(coll.dropIndex).toHaveBeenCalledWith('timestamp.token_1');
+      const tokenCalls = createIndex.mock.calls.filter(([k]) => k['timestamp.token']);
+      expect(tokenCalls).toEqual([
+        [{ 'timestamp.token': 1 }, TOKEN_INDEX_OPTIONS],
+        [{ 'timestamp.token': 1 }, TOKEN_INDEX_OPTIONS],
+      ]);
+      expect(createIndex).toHaveBeenCalledWith({ 'timestamp.status': 1, date: 1 });
+    });
+
+    it('CONTROL: the date index stays unique and the other indexes are unchanged', async () => {
+      const coll = makeCollection({ dropIndex: vi.fn().mockResolvedValue(undefined) });
+
+      await auditRootService._ensureIndexes(makeDb(coll));
+
+      expect(coll.createIndex).toHaveBeenCalledWith({ date: 1 }, { unique: true });
+      expect(coll.createIndex).toHaveBeenCalledWith({ chainIndex: 1 });
+      expect(coll.createIndex).toHaveBeenCalledWith({ previousRootHash: 1 });
+      expect(coll.createIndex).toHaveBeenCalledWith({ 'timestamp.status': 1, date: 1 });
+    });
+  });
 });
