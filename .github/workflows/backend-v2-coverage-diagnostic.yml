@@ -37,9 +37,51 @@ jobs:
       - name: Build backend-unit-runner
         run: docker compose -f compose.test.yml build backend-unit-runner
 
+      # Optional: set DOCKERHUB_USERNAME + DOCKERHUB_TOKEN repo secrets to
+      # reduce anonymous Docker Hub rate limits / flaky auth resets.
+      - name: Log in to Docker Hub
+        if: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - name: Start coverage Compose dependencies
+        shell: bash
         run: |
-          docker compose -f compose.test.yml up -d --wait mongodb-test neo4j-test redis-test influxdb-test smtp-test tsa-test witness-test
+          set -Eeuo pipefail
+
+          services=(
+            mongodb-test
+            neo4j-test
+            redis-test
+            influxdb-test
+            smtp-test
+            tsa-test
+            witness-test
+          )
+
+          for attempt in 1 2 3 4 5; do
+            echo "Starting Compose dependencies (attempt ${attempt}/5)"
+
+            if docker compose -f compose.test.yml pull "${services[@]}" &&
+               docker compose -f compose.test.yml up -d --wait "${services[@]}"; then
+              break
+            fi
+
+            if [[ "$attempt" -eq 5 ]]; then
+              echo "Unable to pull/start Compose dependencies after 5 attempts"
+              docker compose -f compose.test.yml ps || true
+              exit 1
+            fi
+
+            delay=$((attempt * 15))
+            echo "Docker Hub pull/start failed; retrying in ${delay}s..."
+            docker compose -f compose.test.yml down --remove-orphans || true
+            sleep "$delay"
+          done
+
           docker compose -f compose.test.yml run --rm mongo-rs-init-test
           docker compose -f compose.test.yml ps | tee /tmp/item8-compose-ps.txt
 
