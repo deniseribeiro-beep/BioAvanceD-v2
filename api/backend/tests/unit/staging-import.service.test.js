@@ -5,8 +5,7 @@ const require = createRequire(import.meta.url);
 
 const fs = require('fs');
 const path = require('path');
-const StagingImport = require('../../src/models/StagingImport');
-const connectionModule = require('../../src/infrastructure/database/mongodb/connection');
+const mongoModule = require('../../src/database/mongo');
 const queueModule = require('../../src/config/queue');
 const logger = require('../../src/utils/logger');
 const stagingImportIndexes = require('../../src/utils/stagingImportIndexes');
@@ -20,13 +19,22 @@ function reloadService() {
 
 describe('staging-import.service', () => {
   let stagingImportService;
+  let mockDb;
+  let mockCollection;
 
   beforeEach(() => {
-    vi.spyOn(connectionModule, 'connectMongoDB').mockResolvedValue(undefined);
+    mockCollection = {
+      insertOne: vi.fn().mockResolvedValue({ insertedId: 'staging-id-1' }),
+      updateOne: vi.fn().mockResolvedValue({ acknowledged: true }),
+    };
+    mockDb = { marker: 'fake-db' };
+
+    vi.spyOn(mongoModule, 'connectDB').mockResolvedValue(mockDb);
+    vi.spyOn(stagingImportIndexes, 'getStagingImportsCollection').mockReturnValue(mockCollection);
+    vi.spyOn(stagingImportIndexes, 'ensureStagingImportIndexes').mockResolvedValue(undefined);
     vi.spyOn(queueModule, 'getQueue').mockReturnValue(null);
     vi.spyOn(logger, 'info').mockImplementation(() => {});
     vi.spyOn(logger, 'error').mockImplementation(() => {});
-    vi.spyOn(stagingImportIndexes, 'ensureStagingImportIndexes').mockResolvedValue(undefined);
     stagingImportService = reloadService();
   });
 
@@ -141,15 +149,10 @@ describe('staging-import.service', () => {
   });
 
   describe('createStagingImport', () => {
-    it('connects to mongo, persists the raw file, and creates the StagingImport doc', async () => {
+    it('connects to mongo, persists the raw file, and inserts the stagingImports document', async () => {
       vi.spyOn(fs, 'existsSync').mockReturnValue(true);
       vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
       vi.spyOn(fs, 'copyFileSync').mockImplementation(() => {});
-
-      const toObjectResult = { jobId: 'fixed-uuid', fileName: 'data.csv', status: 'staged' };
-      const createSpy = vi.spyOn(StagingImport, 'create').mockResolvedValue({
-        toObject: () => toObjectResult,
-      });
 
       const file = {
         path: '/tmp/upload-2',
@@ -160,52 +163,37 @@ describe('staging-import.service', () => {
 
       const result = await stagingImportService.createStagingImport(file);
 
-      expect(connectionModule.connectMongoDB).toHaveBeenCalledTimes(1);
-      expect(createSpy).toHaveBeenCalledTimes(1);
-      const createArg = createSpy.mock.calls[0][0];
-      expect(createArg).toMatchObject({
+      expect(mongoModule.connectDB).toHaveBeenCalledTimes(1);
+      expect(stagingImportIndexes.getStagingImportsCollection).toHaveBeenCalledWith(mockDb);
+      expect(mockCollection.insertOne).toHaveBeenCalledTimes(1);
+      const insertArg = mockCollection.insertOne.mock.calls[0][0];
+      expect(insertArg).toMatchObject({
         fileName: 'data.csv',
         status: 'staged',
         totalRows: 0,
         processedRows: 0,
         importErrors: [],
       });
-      expect(typeof createArg.jobId).toBe('string');
-      expect(createArg.rawData).toMatchObject({
+      expect(typeof insertArg.jobId).toBe('string');
+      expect(insertArg.rawData).toMatchObject({
         storageType: 'filesystem',
         originalName: 'data.csv',
       });
-      expect(result).toBe(toObjectResult);
+      expect(result).toBe(insertArg);
     });
 
-    // #941: `jobId: { unique: true }` on StagingImport.js never reaches Mongo --
-    // the connection is opened with `autoIndex: false` and nothing anywhere
-    // calls syncIndexes()/createIndexes(). createStagingImport is this
-    // collection's ONLY writer, so an ensure call not made here is made
-    // nowhere, and the four keyed jobId operations
-    // (import-batch.controller.js:131, batch-validation-engine.service.js:890,
-    // :923, :1076) stay collection scans.
-    //
-    // This pins the WIRING deliberately. The sibling storageIndexes helpers
-    // have their own behaviour pinned but nothing asserts they are ever
-    // called, which is #941's own failure mode one level up: a helper that is
-    // never invoked reads as a fix exactly the way an unbuilt declaration did.
+    // #941: the jobId index must be ensured on the write path. This pins the
+    // WIRING deliberately: a helper that is never invoked reads as a fix
+    // exactly the way an unbuilt declaration did.
     it('ensures the stagingImports.jobId index on the write path (#941)', async () => {
       vi.spyOn(fs, 'existsSync').mockReturnValue(true);
       vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
       vi.spyOn(fs, 'copyFileSync').mockImplementation(() => {});
 
-      // Spy BEFORE reloading: the service destructures the helper at require
-      // time, so a spy installed after load would not be seen. Same order the
-      // suite's own beforeEach uses for connectMongoDB/getQueue.
       const ensureSpy = stagingImportIndexes.ensureStagingImportIndexes;
       ensureSpy.mockClear();
       ensureSpy.mockResolvedValue(undefined);
       stagingImportService = reloadService();
-
-      vi.spyOn(StagingImport, 'create').mockResolvedValue({
-        toObject: () => ({ jobId: 'fixed-uuid', fileName: 'data.csv', status: 'staged' }),
-      });
 
       await stagingImportService.createStagingImport({
         path: '/tmp/upload-2',
@@ -215,13 +203,11 @@ describe('staging-import.service', () => {
       });
 
       expect(ensureSpy).toHaveBeenCalledTimes(1);
-      // The native driver handle, not the model: createIndex lives on the
-      // collection, and the helper's guard tests for it by duck-typing.
-      expect(ensureSpy.mock.calls[0][0]).toBe(StagingImport.collection);
+      expect(ensureSpy.mock.calls[0][0]).toBe(mockCollection);
     });
 
-    it('writes to a field that actually exists on the StagingImport schema (#43)', () => {
-      const doc = new StagingImport({
+    it('uses importErrors on the plain stagingImports document shape (#43)', () => {
+      const doc = {
         jobId: 'schema-check',
         fileName: 'data.csv',
         status: 'staged',
@@ -229,10 +215,10 @@ describe('staging-import.service', () => {
         processedRows: 0,
         importErrors: [{ message: 'boom', occurredAt: new Date() }],
         rawData: { storageType: 'filesystem' },
-      });
+      };
 
-      expect(doc.toObject().importErrors).toHaveLength(1);
-      expect(doc.toObject().importErrors[0].message).toBe('boom');
+      expect(doc.importErrors).toHaveLength(1);
+      expect(doc.importErrors[0].message).toBe('boom');
     });
   });
 
@@ -249,8 +235,6 @@ describe('staging-import.service', () => {
       const queueJob = { id: 'queue-job-id-1' };
       const addSpy = vi.fn().mockResolvedValue(queueJob);
       queueModule.getQueue.mockReturnValue({ add: addSpy });
-
-      const updateOneSpy = vi.spyOn(StagingImport, 'updateOne').mockResolvedValue({});
 
       const stagingImport = { jobId: 'job-99', fileName: 'batch.csv' };
       const result = await stagingImportService.dispatchBatchJob(stagingImport);
@@ -269,13 +253,12 @@ describe('staging-import.service', () => {
       );
 
       // #900: removeOnFail must NOT be passed, so config/queue.js's 7-day
-      // retention applies instead of bullmq's keep-forever. Asserted
-      // explicitly because the object equality above would still pass if a
-      // future edit reintroduced it as `undefined`.
+      // retention applies instead of bullmq's keep-forever.
       expect(addSpy.mock.calls[0][2]).not.toHaveProperty('removeOnFail');
 
-      expect(updateOneSpy).toHaveBeenCalledTimes(1);
-      const [filterArg, updateArg] = updateOneSpy.mock.calls[0];
+      expect(mongoModule.connectDB).toHaveBeenCalled();
+      expect(mockCollection.updateOne).toHaveBeenCalledTimes(1);
+      const [filterArg, updateArg] = mockCollection.updateOne.mock.calls[0];
       expect(filterArg).toEqual({ jobId: 'job-99' });
       expect(updateArg.$set.status).toBe('queued');
       expect(updateArg.$set.updatedAt).toBeInstanceOf(Date);
@@ -307,19 +290,18 @@ describe('staging-import.service', () => {
       });
     });
 
-    it('failure path: when dispatchBatchJob throws, records failure on StagingImport and rethrows', async () => {
+    it('failure path: when dispatchBatchJob throws, records failure on stagingImports and rethrows', async () => {
       const stagingImportDoc = { jobId: 'job-fail', fileName: 'bad.csv' };
       vi.spyOn(stagingImportService, 'createStagingImport').mockResolvedValue(stagingImportDoc);
       const dispatchError = new Error('queue exploded');
       vi.spyOn(stagingImportService, 'dispatchBatchJob').mockRejectedValue(dispatchError);
-      const updateOneSpy = vi.spyOn(StagingImport, 'updateOne').mockResolvedValue({});
 
       await expect(stagingImportService.createBatchImportJob({ originalname: 'bad.csv' })).rejects.toThrow(
         'queue exploded'
       );
 
-      expect(updateOneSpy).toHaveBeenCalledTimes(1);
-      const [filterArg, updateArg] = updateOneSpy.mock.calls[0];
+      expect(mockCollection.updateOne).toHaveBeenCalledTimes(1);
+      const [filterArg, updateArg] = mockCollection.updateOne.mock.calls[0];
       expect(filterArg).toEqual({ jobId: 'job-fail' });
       expect(updateArg.$set.status).toBe('failed');
       expect(updateArg.$set.updatedAt).toBeInstanceOf(Date);
@@ -331,14 +313,13 @@ describe('staging-import.service', () => {
       const creationError = new Error('mongo unavailable');
       vi.spyOn(stagingImportService, 'createStagingImport').mockRejectedValue(creationError);
       const dispatchSpy = vi.spyOn(stagingImportService, 'dispatchBatchJob');
-      const updateOneSpy = vi.spyOn(StagingImport, 'updateOne').mockResolvedValue({});
 
       await expect(
         stagingImportService.createBatchImportJob({ originalname: 'x.csv' })
       ).rejects.toThrow('mongo unavailable');
 
       expect(dispatchSpy).not.toHaveBeenCalled();
-      expect(updateOneSpy).not.toHaveBeenCalled();
+      expect(mockCollection.updateOne).not.toHaveBeenCalled();
     });
   });
 });

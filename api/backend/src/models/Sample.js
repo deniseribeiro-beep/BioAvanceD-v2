@@ -1,11 +1,14 @@
-const mongoose = require('mongoose');
-const { Schema } = mongoose;
 const { validateQualityMIABIS } = require('../utils/qualityMIABISValidator');
 const {
   SPECIMEN_TYPE_IDS,
   SAMPLE_ORIGIN_IDS,
   EXTRACTION_PROTOCOL_IDS,
 } = require('../config/constants/specimen.constants');
+
+// #830 follow-up: this module is a plain helper (SampleModel), not a Mongoose
+// model. Persistence goes through the native driver (collection `specimens`).
+// The former mongoose.model('Sample') registration was unused by writers and
+// left a silent buffer risk for any process that required this file.
 
 // dict-02 ELM-0123 enum plus the documented local extension `disposed`
 // (RF006 AC#4 requires it distinct from `destroyed` — see
@@ -25,91 +28,6 @@ const SPECIMEN_STATUS_VALUES = [
 // specimenStatus's sticky/blocked values — quantity changes must not
 // override these, and write sites treat them as non-movable.
 const BLOCKED_SPECIMEN_STATUSES = ['unavailable', 'destroyed', 'disposed', 'quarantined'];
-
-const SampleSchema = new Schema({
-  specimenId: { type: String, required: true, index: true },
-  participantId: { type: String, required: true, index: true },
-  sampleType: { type: String, required: true },
-  sampleOrigin: { type: String, required: true },
-  extractionProtocol: { type: String, required: true },
-  barcode: { type: String, index: true },
-  registeredAt: { type: Date, required: true },
-  withdrawnAt: { type: Date, default: null },
-  receivedAt: { type: Date, default: null },
-  quantity: { type: Number, required: true },
-  unit: { type: String, default: 'µL' },
-  quality: { type: String },
-  modelVersion: { type: String, default: null },
-  matrixType: { type: String, default: null },
-  governanceStatus: { type: Number, enum: [0, 1], default: null },
-  governanceFailureReasons: { type: [String], default: [] },
-  governanceRuleCodes: { type: [String], default: [] },
-  biologicalPenalty: { type: Number, default: null },
-  rcsScore: { type: Number, default: null },
-  scoreBasedGrade: { type: String, default: '' },
-  finalGrade: { type: String, default: '' },
-  gradeRoute: { type: String, default: null },
-  axisPenalties: { type: [Schema.Types.Mixed], default: [] },
-  calculationTrace: { type: Schema.Types.Mixed, default: null },
-  rcsEvaluation: { type: Schema.Types.Mixed, default: null },
-  externalQualityAssessment: { type: Schema.Types.Mixed, default: null },
-  locationId: { type: Number, default: null },
-  location: { type: Object, default: null },
-  linkedProject: { type: String, required: true },
-  // #1092: required on create — samples without collectionSite are unwritable
-  // for non-Admin under org scope (#1082 fail-closed).
-  collectionSite: { type: String, required: true },
-  sprec: { type: Schema.Types.Mixed, default: null },
-  merkleRoot: { type: String, default: null },
-  // #502: pins integrity verification to the RcsAssessment/SpecimenPreanalytics
-  // snapshot (if any) that existed at seal time, so a later re-assessment
-  // snapshot for the same specimenId can't cause a false tamper report.
-  // No dict-02 entity covers this — it's an implementation detail of
-  // MerkleService's per-sample hash, not part of the dict-02 P1X-0162..0167
-  // MerkleRoot stub entity.
-  sealedRcsAssessmentId: { type: Schema.Types.Mixed, default: null },
-  sealedSpecimenPreanalyticsId: { type: Schema.Types.Mixed, default: null },
-  consentTemplateId: { type: String, default: null },
-  clinicalData: { type: Schema.Types.Mixed, default: null },
-  pharmacologyData: { type: Schema.Types.Mixed, default: null },
-  consentStatus: { type: String, default: null },
-  // quarantineReason has no specimenStatus equivalent — it's the only
-  // free-text field in the legacy trio, kept deliberately (#407/#415/#408).
-  quarantineReason: { type: String, default: null },
-  importBatchId: { type: String, default: null },
-  importedAt: { type: Date, default: null },
-  importedBy: { type: String, default: null },
-  specimenStatus: {
-    type: String,
-    enum: SPECIMEN_STATUS_VALUES,
-    default: 'available'
-  },
-  // dict-02 ELM-0138 (initialQuantity)/ELM-0139 (currentQuantity, "Derivada de
-  // eventos; preservar ledger"). Confirmed (#401): sample.service.js's
-  // withdrawSample/returnSample already write currentQuantity/totalWithdrawn/
-  // totalReturned atomically alongside the hash-chained SampleMovement ledger inside
-  // a single Mongo transaction (RF006 AC#6) — this is not naive duplicated state.
-  // totalWithdrawn/totalReturned have no direct dict-02 counterpart; #449 decided
-  // to keep them as Sample-level running totals (cheap to keep in sync with the
-  // ledger, per #401) rather than compute on read from SampleMovement.
-  currentQuantity: { type: Number, default: null },
-  initialQuantity: { type: Number, default: null },
-  totalWithdrawn: { type: Number, default: 0 },
-  totalReturned: { type: Number, default: 0 },
-  accessionNumber: { type: String, default: null },
-  orderNumber: { type: String, default: null },
-  processingStatus: { type: String, default: null },
-  protocolApplied: { type: String, default: null },
-  specimenCollection: { type: Schema.Types.Mixed, default: null },
-  studyId: { type: String, default: null },
-  protocolId: { type: String, default: null },
-  collectionId: { type: String, default: null },
-  linkedFiles: { type: [Schema.Types.Mixed], default: [] },
-  createdAt: { type: Date, default: Date.now },
-  updatedAt: { type: Date, default: Date.now }
-}, { collection: 'specimens' });
-
-const Sample = mongoose.models.Sample || mongoose.model('Sample', SampleSchema);
 
 class SampleModel {
   static validateSpecimenStatus(status) {
@@ -273,7 +191,7 @@ class SampleModel {
   }
 }
 
-module.exports = Sample;
+module.exports = SampleModel;
 module.exports.SampleModel = SampleModel;
 module.exports.SPECIMEN_STATUS_VALUES = SPECIMEN_STATUS_VALUES;
 module.exports.BLOCKED_SPECIMEN_STATUSES = BLOCKED_SPECIMEN_STATUSES;

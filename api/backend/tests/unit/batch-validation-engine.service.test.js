@@ -9,7 +9,35 @@ const batchValidationEngine = require('../../src/services/batch-validation-engin
 const patientService = require('../../src/services/patient.service');
 const sampleService = require('../../src/services/sample.service');
 const biomarkerObservationService = require('../../src/services/biomarker-observation.service');
-const StagingImport = require('../../src/models/StagingImport');
+function mockStagingImportsDb(overrides = {}) {
+  const stagingCollection = {
+    findOne: overrides.findOne ?? vi.fn().mockResolvedValue(null),
+    updateOne: overrides.updateOne ?? vi.fn().mockResolvedValue({}),
+  };
+  const db = {
+    collection: vi.fn((name) => {
+      if (name === 'stagingImports') return stagingCollection;
+      return {
+        findOne: vi.fn().mockResolvedValue(null),
+        updateOne: vi.fn().mockResolvedValue({}),
+      };
+    }),
+  };
+  return { db, stagingCollection };
+}
+
+function attachStagingImports(db, overrides = {}) {
+  const stagingCollection = {
+    findOne: overrides.findOne ?? vi.fn().mockResolvedValue(null),
+    updateOne: overrides.updateOne ?? vi.fn().mockResolvedValue({}),
+  };
+  const originalCollection = db.collection.bind(db);
+  db.collection = vi.fn((name) => {
+    if (name === 'stagingImports') return stagingCollection;
+    return originalCollection(name);
+  });
+  return stagingCollection;
+}
 
 function createDb(patientsByFilter = {}) {
   // #853: `patients` never writes a `patientID` key (that's the
@@ -474,35 +502,38 @@ describe('batch-validation-engine.service processBatchImport', () => {
   }
 
   it('throws when no StagingImport document is found for the jobId', async () => {
-    vi.spyOn(StagingImport, 'findOne').mockResolvedValue(null);
+    const { db } = mockStagingImportsDb({ findOne: vi.fn().mockResolvedValue(null) });
 
-    await expect(batchValidationEngine.processBatchImport({}, 'missing-job')).rejects.toThrow(
+    await expect(batchValidationEngine.processBatchImport(db, 'missing-job')).rejects.toThrow(
       'StagingImport não encontrado para jobId missing-job'
     );
   });
 
   it('throws when the staged file no longer exists on disk', async () => {
-    vi.spyOn(StagingImport, 'findOne').mockResolvedValue({
-      jobId: 'job-1',
-      fileName: 'rows.json',
-      rawData: { storagePath: '/nonexistent/path/rows.json' },
+    const { db } = mockStagingImportsDb({
+      findOne: vi.fn().mockResolvedValue({
+        jobId: 'job-1',
+        fileName: 'rows.json',
+        rawData: { storagePath: '/nonexistent/path/rows.json' },
+      }),
     });
 
-    await expect(batchValidationEngine.processBatchImport({}, 'job-1')).rejects.toThrow(
+    await expect(batchValidationEngine.processBatchImport(db, 'job-1')).rejects.toThrow(
       'Arquivo bruto do staging não encontrado'
     );
   });
 
   it('throws when the file contains no rows', async () => {
     const filePath = writeTmpFile('empty.json', JSON.stringify([]));
-    vi.spyOn(StagingImport, 'findOne').mockResolvedValue({
-      jobId: 'job-2',
-      fileName: 'empty.json',
-      rawData: { storagePath: filePath },
+    const { db } = mockStagingImportsDb({
+      findOne: vi.fn().mockResolvedValue({
+        jobId: 'job-2',
+        fileName: 'empty.json',
+        rawData: { storagePath: filePath },
+      }),
     });
-    vi.spyOn(StagingImport, 'updateOne').mockResolvedValue({});
 
-    await expect(batchValidationEngine.processBatchImport({}, 'job-2')).rejects.toThrow(
+    await expect(batchValidationEngine.processBatchImport(db, 'job-2')).rejects.toThrow(
       'Arquivo não contém registros válidos para processar'
     );
   });
@@ -519,15 +550,17 @@ describe('batch-validation-engine.service processBatchImport', () => {
       { patientName: 'Sem Dados' },
     ]));
 
-    vi.spyOn(StagingImport, 'findOne').mockResolvedValue({
-      jobId: 'job-3',
-      fileName: 'patients.json',
-      rawData: { storagePath: filePath },
+    const { db, stagingCollection } = mockStagingImportsDb({
+      findOne: vi.fn().mockResolvedValue({
+        jobId: 'job-3',
+        fileName: 'patients.json',
+        rawData: { storagePath: filePath },
+      }),
     });
-    const updateOneSpy = vi.spyOn(StagingImport, 'updateOne').mockResolvedValue({});
+    const updateOneSpy = stagingCollection.updateOne;
     vi.spyOn(patientService, 'createPatient').mockResolvedValue({ _id: 'new-patient-id' });
 
-    const result = await batchValidationEngine.processBatchImport({}, 'job-3');
+    const result = await batchValidationEngine.processBatchImport(db, 'job-3');
 
     expect(result.dataType).toBe('patients');
     expect(result.totalRows).toBe(2);
@@ -545,17 +578,14 @@ describe('batch-validation-engine.service processBatchImport', () => {
     expect(finalUpdateCall).toBeTruthy();
   });
 
-  // #900: every other test in this file spies over StagingImport.updateOne,
-  // so a rename of the persisted field to a name the schema does not declare
-  // would stay green here forever -- the schema never runs. This one goes
-  // through the real model instead (mirrors
-  // tests/unit/staging-import.service.test.js:179-192, which pins the same
-  // failure mode for the sibling service): errors/errorEntry must land on
-  // `importErrors`, the field the StagingImport schema (strict: true)
-  // actually declares, or Mongoose silently strips the whole $push.
-  it('writes to a field that actually exists on the StagingImport schema (#900)', () => {
+  // #900: every other test in this file spies over collection.updateOne,
+  // so a rename of the persisted field would stay green here forever. This
+  // one pins the plain document shape the native driver persists (mirrors
+  // tests/unit/staging-import.service.test.js): errors/errorEntry must land
+  // on `importErrors`, the field the stagingImports collection actually uses.
+  it('writes to a field that exists on the stagingImports document shape (#900)', () => {
     const entry = { row: 4, classification: 'INVALID', errors: ['sampleType é obrigatório'] };
-    const doc = new StagingImport({
+    const doc = {
       jobId: 'schema-check-batch-validation',
       fileName: 'data.csv',
       status: 'processing',
@@ -563,10 +593,10 @@ describe('batch-validation-engine.service processBatchImport', () => {
       processedRows: 1,
       importErrors: [entry],
       rawData: { storagePath: '/tmp/data.csv' },
-    });
+    };
 
-    expect(doc.toObject().importErrors).toHaveLength(1);
-    expect(doc.toObject().importErrors[0]).toMatchObject(entry);
+    expect(doc.importErrors).toHaveLength(1);
+    expect(doc.importErrors[0]).toMatchObject(entry);
   });
 
   // The wiring, not the writer: a quarantine helper nothing calls is exactly
@@ -577,12 +607,13 @@ describe('batch-validation-engine.service processBatchImport', () => {
     const badRow = { participantId: '87654321', sampleType: '', sampleOrigin: 'Coleta', barcode: 'B-2' };
     const filePath = writeTmpFile('samples.json', JSON.stringify([goodRow, badRow]));
 
-    vi.spyOn(StagingImport, 'findOne').mockResolvedValue({
-      jobId: 'job-813-wiring',
-      fileName: 'samples.json',
-      rawData: { storagePath: filePath },
+    const { db } = mockStagingImportsDb({
+      findOne: vi.fn().mockResolvedValue({
+        jobId: 'job-813-wiring',
+        fileName: 'samples.json',
+        rawData: { storagePath: filePath },
+      }),
     });
-    vi.spyOn(StagingImport, 'updateOne').mockResolvedValue({});
     vi.spyOn(batchValidationEngine, 'persistSample').mockImplementation(async (db, rawRow) => (
       rawRow.sampleType
         ? { classification: 'VALID', errors: [], warnings: [], persistedId: 'sample-1' }
@@ -592,7 +623,7 @@ describe('batch-validation-engine.service processBatchImport', () => {
       .spyOn(batchValidationEngine, 'quarantineRejectedRows')
       .mockResolvedValue('batch-813-wiring');
 
-    const result = await batchValidationEngine.processBatchImport({}, 'job-813-wiring');
+    const result = await batchValidationEngine.processBatchImport(db, 'job-813-wiring');
 
     expect(result.dataType).toBe('samples');
     expect(quarantineSpy).toHaveBeenCalledTimes(1);
@@ -619,18 +650,19 @@ describe('batch-validation-engine.service processBatchImport', () => {
       { participantId: '12345678', sampleType: 'Sangue', sampleOrigin: 'Coleta', barcode: 'B-1' },
     ]));
 
-    vi.spyOn(StagingImport, 'findOne').mockResolvedValue({
-      jobId: 'job-813-clean',
-      fileName: 'samples-clean.json',
-      rawData: { storagePath: filePath },
+    const { db } = mockStagingImportsDb({
+      findOne: vi.fn().mockResolvedValue({
+        jobId: 'job-813-clean',
+        fileName: 'samples-clean.json',
+        rawData: { storagePath: filePath },
+      }),
     });
-    vi.spyOn(StagingImport, 'updateOne').mockResolvedValue({});
     vi.spyOn(batchValidationEngine, 'persistSample').mockResolvedValue({
       classification: 'VALID', errors: [], warnings: [], persistedId: 'sample-1',
     });
     const quarantineSpy = vi.spyOn(batchValidationEngine, 'quarantineRejectedRows');
 
-    const result = await batchValidationEngine.processBatchImport({}, 'job-813-clean');
+    const result = await batchValidationEngine.processBatchImport(db, 'job-813-clean');
 
     expect(result.invalidRows).toBe(0);
     // Called (unconditionally, with an empty list) but must open no batch --
@@ -647,14 +679,16 @@ describe('batch-validation-engine.service processBatchImport', () => {
       { patientName: 'Sem Dados' },
     ]));
 
-    vi.spyOn(StagingImport, 'findOne').mockResolvedValue({
-      jobId: 'job-4',
-      fileName: 'patients-invalid.json',
-      rawData: { storagePath: filePath },
+    const { db, stagingCollection } = mockStagingImportsDb({
+      findOne: vi.fn().mockResolvedValue({
+        jobId: 'job-4',
+        fileName: 'patients-invalid.json',
+        rawData: { storagePath: filePath },
+      }),
     });
-    const updateOneSpy = vi.spyOn(StagingImport, 'updateOne').mockResolvedValue({});
+    const updateOneSpy = stagingCollection.updateOne;
 
-    const result = await batchValidationEngine.processBatchImport({}, 'job-4');
+    const result = await batchValidationEngine.processBatchImport(db, 'job-4');
 
     expect(result.validRows).toBe(0);
     expect(result.invalidRows).toBe(1);
@@ -676,16 +710,17 @@ describe('batch-validation-engine.service processBatchImport', () => {
       },
     ]));
 
-    vi.spyOn(StagingImport, 'findOne').mockResolvedValue({
-      jobId: 'job-5',
-      fileName: 'patients-progress.json',
-      rawData: { storagePath: filePath },
+    const { db } = mockStagingImportsDb({
+      findOne: vi.fn().mockResolvedValue({
+        jobId: 'job-5',
+        fileName: 'patients-progress.json',
+        rawData: { storagePath: filePath },
+      }),
     });
-    vi.spyOn(StagingImport, 'updateOne').mockResolvedValue({});
     vi.spyOn(patientService, 'createPatient').mockResolvedValue({ _id: 'new-patient-id' });
 
     const updateProgress = vi.fn().mockResolvedValue();
-    await batchValidationEngine.processBatchImport({}, 'job-5', { updateProgress });
+    await batchValidationEngine.processBatchImport(db, 'job-5', { updateProgress });
 
     expect(updateProgress).toHaveBeenCalledWith(100);
   });
@@ -708,15 +743,16 @@ describe('batch-validation-engine.service processBatchImport', () => {
     worksheet.addRow(['Sem Dados', null, null, null, null]);
     await workbook.xlsx.writeFile(filePath);
 
-    vi.spyOn(StagingImport, 'findOne').mockResolvedValue({
-      jobId: 'job-1041',
-      fileName: 'patients.xlsx',
-      rawData: { storagePath: filePath },
+    const { db } = mockStagingImportsDb({
+      findOne: vi.fn().mockResolvedValue({
+        jobId: 'job-1041',
+        fileName: 'patients.xlsx',
+        rawData: { storagePath: filePath },
+      }),
     });
-    vi.spyOn(StagingImport, 'updateOne').mockResolvedValue({});
     vi.spyOn(patientService, 'createPatient').mockResolvedValue({ _id: 'new-patient-id' });
 
-    const result = await batchValidationEngine.processBatchImport({}, 'job-1041');
+    const result = await batchValidationEngine.processBatchImport(db, 'job-1041');
 
     expect(result.totalRows).toBe(2);
     expect(result.errors).toHaveLength(1);
@@ -738,15 +774,16 @@ describe('batch-validation-engine.service processBatchImport', () => {
       },
     ]));
 
-    vi.spyOn(StagingImport, 'findOne').mockResolvedValue({
-      jobId: 'job-6',
-      fileName: 'samples.json',
-      rawData: { storagePath: filePath },
-    });
-    vi.spyOn(StagingImport, 'updateOne').mockResolvedValue({});
     const db = createDb({
       participantId: '12345678',
       patient: { _id: 'patient-object-id-5', participantId: '12345678' },
+    });
+    attachStagingImports(db, {
+      findOne: vi.fn().mockResolvedValue({
+        jobId: 'job-6',
+        fileName: 'samples.json',
+        rawData: { storagePath: filePath },
+      }),
     });
     vi.spyOn(sampleService, 'createSample').mockResolvedValue({ _id: 'sample-object-id-5', specimenId: 'SPEC-BATCH-005' });
 
@@ -1059,15 +1096,15 @@ describe('batch-validation-engine.service item 8 attempt/progress residuals', ()
   });
 
   it('records a non-final failed attempt without prematurely marking the import failed', async () => {
-    const updateOne = vi.spyOn(StagingImport, 'updateOne').mockResolvedValue({});
+    const { db, stagingCollection } = mockStagingImportsDb();
 
-    await batchValidationEngine.recordAttemptFailure('job-retry', {
+    await batchValidationEngine.recordAttemptFailure(db, 'job-retry', {
       attemptNumber: 1,
       attemptsAllowed: 3,
       message: 'temporary database failure',
     });
 
-    expect(updateOne).toHaveBeenCalledWith(
+    expect(stagingCollection.updateOne).toHaveBeenCalledWith(
       { jobId: 'job-retry' },
       {
         $set: {
@@ -1085,14 +1122,14 @@ describe('batch-validation-engine.service item 8 attempt/progress residuals', ()
   });
 
   it('marks the last allowed attempt failed and preserves the fallback error message', async () => {
-    const updateOne = vi.spyOn(StagingImport, 'updateOne').mockResolvedValue({});
+    const { db, stagingCollection } = mockStagingImportsDb();
 
-    await batchValidationEngine.recordAttemptFailure('job-final', {
+    await batchValidationEngine.recordAttemptFailure(db, 'job-final', {
       attemptNumber: 3,
       attemptsAllowed: 3,
     });
 
-    expect(updateOne).toHaveBeenCalledWith(
+    expect(stagingCollection.updateOne).toHaveBeenCalledWith(
       { jobId: 'job-final' },
       expect.objectContaining({
         $set: expect.objectContaining({ status: 'failed' }),

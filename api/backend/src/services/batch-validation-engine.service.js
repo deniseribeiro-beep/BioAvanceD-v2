@@ -4,7 +4,7 @@ const ExcelJS = require('exceljs');
 const csvParser = require('csv-parser');
 const { ObjectId } = require('mongodb');
 
-const StagingImport = require('../models/StagingImport');
+const { getStagingImportsCollection } = require('../utils/stagingImportIndexes');
 const importLGPDService = require('./import-lgpd.service');
 const patientService = require('./patient.service');
 const sampleService = require('./sample.service');
@@ -901,8 +901,8 @@ class BatchValidationEngine {
     }
   }
 
-  async updateProgress(jobId, patch = {}) {
-    await StagingImport.updateOne(
+  async updateProgress(db, jobId, patch = {}) {
+    await getStagingImportsCollection(db).updateOne(
       { jobId },
       {
         $set: {
@@ -924,7 +924,7 @@ class BatchValidationEngine {
    *
    * Only marks the document `failed` when this was the last allowed attempt;
    * otherwise the status is left as `processing`, since bullmq may still
-   * retry and the run may yet complete. The schema enum only allows
+   * retry and the run may yet complete. Allowed statuses:
    * ['staged','queued','processing','completed','failed'], so there is no
    * "retrying" status to set instead.
    *
@@ -932,10 +932,10 @@ class BatchValidationEngine {
    * pushes onto importErrors on its own failure path, so the two writers
    * stay consistent.
    */
-  async recordAttemptFailure(jobId, { attemptNumber, attemptsAllowed, message } = {}) {
+  async recordAttemptFailure(db, jobId, { attemptNumber, attemptsAllowed, message } = {}) {
     const isFinalAttempt = attemptNumber >= attemptsAllowed;
 
-    await StagingImport.updateOne(
+    await getStagingImportsCollection(db).updateOne(
       { jobId },
       {
         $set: {
@@ -1092,7 +1092,7 @@ class BatchValidationEngine {
   }
 
   async processBatchImport(db, stagingImportId, job = null) {
-    const stagingImport = await StagingImport.findOne({ jobId: stagingImportId });
+    const stagingImport = await getStagingImportsCollection(db).findOne({ jobId: stagingImportId });
 
     if (!stagingImport) {
       throw new Error(`StagingImport não encontrado para jobId ${stagingImportId}`);
@@ -1105,7 +1105,7 @@ class BatchValidationEngine {
       throw new Error('Arquivo bruto do staging não encontrado');
     }
 
-    await this.updateProgress(stagingImportId, {
+    await this.updateProgress(db, stagingImportId, {
       status: 'processing',
       processedRows: 0,
       totalRows: 0,
@@ -1133,7 +1133,7 @@ class BatchValidationEngine {
       persistedIds: [],
     };
 
-    await this.updateProgress(stagingImportId, {
+    await this.updateProgress(db, stagingImportId, {
       totalRows: rows.length,
       rawData: {
         ...stagingImport.rawData,
@@ -1224,7 +1224,7 @@ class BatchValidationEngine {
             errors: rowResult.errors,
             classification: rowResult.classification,
           });
-          await StagingImport.updateOne(
+          await getStagingImportsCollection(db).updateOne(
             { jobId: stagingImportId },
             { $push: { importErrors: errorEntry } }
           );
@@ -1240,7 +1240,7 @@ class BatchValidationEngine {
         }
       }
 
-      await this.updateProgress(stagingImportId, {
+      await this.updateProgress(db, stagingImportId, {
         processedRows: result.processedRows,
       });
     }
@@ -1263,7 +1263,7 @@ class BatchValidationEngine {
       ? 'failed'
       : 'completed';
 
-    await this.updateProgress(stagingImportId, {
+    await this.updateProgress(db, stagingImportId, {
       status: finalStatus,
       processedRows: result.processedRows,
       rawData: {

@@ -74,11 +74,9 @@ async function initWorker() {
     // Conecta ao banco
     db = await connectDB();
 
-    // #826: connectDB() abre apenas a conexão do driver nativo. Os modelos
-    // Mongoose alcançados por este worker (StagingImport, via
-    // batch-validation-engine) precisam da conexão do Mongoose -- sem ela o
-    // Mongoose enfileira cada operação e a rejeita após 10s, o job falha,
-    // retenta indefinidamente e o documento nunca sai de `status: queued`.
+    // #826/#830: StagingImport is native-driver now (#830). Other Mongoose
+    // models still reached via the require graph (e.g. Sample registration)
+    // need the Mongoose connection so buffered ops do not silently retry.
     await connectMongoDB();
 
     // Inicializa Redis (usa instância comum)
@@ -104,7 +102,7 @@ async function initWorker() {
           try {
             const batchResult = await batchValidationEngine.processBatchImport(db, stagingImportId, job);
 
-            await batchValidationEngine.updateProgress(stagingImportId, {
+            await batchValidationEngine.updateProgress(db, stagingImportId, {
               status: batchResult.invalidRows > 0 && batchResult.validRows === 0 && batchResult.partialRows === 0
                 ? 'failed'
                 : 'completed',
@@ -127,7 +125,7 @@ async function initWorker() {
             const attemptNumber = (job?.attemptsMade || 0) + 1;
             const attemptsAllowed = Math.max(1, Number(job?.opts?.attempts) || 1);
 
-            await batchValidationEngine.recordAttemptFailure(stagingImportId, {
+            await batchValidationEngine.recordAttemptFailure(db, stagingImportId, {
               attemptNumber,
               attemptsAllowed,
               message: error.message,

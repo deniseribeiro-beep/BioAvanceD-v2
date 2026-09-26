@@ -6,8 +6,24 @@ const importLGPDService = require('../../src/services/import-lgpd.service');
 const patientService = require('../../src/services/patient.service');
 const sampleService = require('../../src/services/sample.service');
 const biomarkerObservationService = require('../../src/services/biomarker-observation.service');
-const StagingImport = require('../../src/models/StagingImport');
 const fs = require('fs');
+
+function mockStagingImportsDb(overrides = {}) {
+  const stagingCollection = {
+    findOne: overrides.findOne ?? vi.fn().mockResolvedValue(null),
+    updateOne: overrides.updateOne ?? vi.fn().mockResolvedValue({}),
+  };
+  const db = {
+    collection: vi.fn((name) => {
+      if (name === 'stagingImports') return stagingCollection;
+      return {
+        findOne: vi.fn().mockResolvedValue(null),
+        updateOne: vi.fn().mockResolvedValue({}),
+      };
+    }),
+  };
+  return { db, stagingCollection };
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -398,10 +414,10 @@ describe('batch-validation-engine additional item8 residual branches', () => {
     });
   });
 
-  it('updateProgress forwards patch plus updatedAt to StagingImport', async () => {
-    const update = vi.spyOn(StagingImport, 'updateOne').mockResolvedValue({});
-    await engine.updateProgress('job-1', { status: 'processing', processedRows: 2 });
-    expect(update).toHaveBeenCalledWith(
+  it('updateProgress forwards patch plus updatedAt to stagingImports collection', async () => {
+    const { db, stagingCollection } = mockStagingImportsDb();
+    await engine.updateProgress(db, 'job-1', { status: 'processing', processedRows: 2 });
+    expect(stagingCollection.updateOne).toHaveBeenCalledWith(
       { jobId: 'job-1' },
       { $set: { status: 'processing', processedRows: 2, updatedAt: expect.any(Date) } }
     );
@@ -424,14 +440,14 @@ describe('batch-validation-engine item8 process and classification coverage', ()
   });
 
   it('records retry and terminal attempt failures with the canonical status and fallback message', async () => {
-    const update = vi.spyOn(StagingImport, 'updateOne').mockResolvedValue({});
+    const { db, stagingCollection } = mockStagingImportsDb();
 
-    await engine.recordAttemptFailure('job-retry', {
+    await engine.recordAttemptFailure(db, 'job-retry', {
       attemptNumber: 1,
       attemptsAllowed: 3,
       message: 'temporary',
     });
-    expect(update).toHaveBeenLastCalledWith(
+    expect(stagingCollection.updateOne).toHaveBeenLastCalledWith(
       { jobId: 'job-retry' },
       expect.objectContaining({
         $set: expect.objectContaining({ status: 'processing' }),
@@ -441,11 +457,11 @@ describe('batch-validation-engine item8 process and classification coverage', ()
       })
     );
 
-    await engine.recordAttemptFailure('job-final', {
+    await engine.recordAttemptFailure(db, 'job-final', {
       attemptNumber: 3,
       attemptsAllowed: 3,
     });
-    expect(update).toHaveBeenLastCalledWith(
+    expect(stagingCollection.updateOne).toHaveBeenLastCalledWith(
       { jobId: 'job-final' },
       expect.objectContaining({
         $set: expect.objectContaining({ status: 'failed' }),
@@ -457,19 +473,19 @@ describe('batch-validation-engine item8 process and classification coverage', ()
   });
 
   it('processBatchImport rejects missing staging, missing file, and empty input before row persistence', async () => {
-    const find = vi.spyOn(StagingImport, 'findOne');
-    find.mockResolvedValueOnce(null);
-    await expect(engine.processBatchImport({}, 'missing')).rejects.toThrow('StagingImport não encontrado');
+    const findOne = vi.fn().mockResolvedValueOnce(null);
+    const { db } = mockStagingImportsDb({ findOne });
+    await expect(engine.processBatchImport(db, 'missing')).rejects.toThrow('StagingImport não encontrado');
 
-    find.mockResolvedValueOnce({ fileName: 'missing.csv', rawData: { storagePath: '/missing.csv' } });
+    findOne.mockResolvedValueOnce({ fileName: 'missing.csv', rawData: { storagePath: '/missing.csv' } });
     vi.spyOn(fs, 'existsSync').mockReturnValueOnce(false);
-    await expect(engine.processBatchImport({}, 'missing-file')).rejects.toThrow('Arquivo bruto do staging não encontrado');
+    await expect(engine.processBatchImport(db, 'missing-file')).rejects.toThrow('Arquivo bruto do staging não encontrado');
 
-    find.mockResolvedValueOnce({ fileName: 'empty.csv', rawData: { storagePath: '/empty.csv' } });
+    findOne.mockResolvedValueOnce({ fileName: 'empty.csv', rawData: { storagePath: '/empty.csv' } });
     fs.existsSync.mockReturnValueOnce(true);
     vi.spyOn(engine, 'updateProgress').mockResolvedValue(undefined);
     vi.spyOn(engine, 'readRowsFromFile').mockResolvedValueOnce([]);
-    await expect(engine.processBatchImport({}, 'empty')).rejects.toThrow('Arquivo não contém registros válidos');
+    await expect(engine.processBatchImport(db, 'empty')).rejects.toThrow('Arquivo não contém registros válidos');
   });
 
   it('processBatchImport accounts for VALID/PARTIAL/INVALID sample rows, sheet metadata, persistence ids and progress', async () => {
@@ -477,11 +493,12 @@ describe('batch-validation-engine item8 process and classification coverage', ()
     Object.defineProperty(rows, 'sourceLines', { value: [4, 8, 12], enumerable: false });
     Object.defineProperty(rows, 'sourceSheets', { value: ['A', 'A', 'B'], enumerable: false });
 
-    vi.spyOn(StagingImport, 'findOne').mockResolvedValue({
-      fileName: 'samples.xlsx',
-      rawData: { storagePath: '/tmp/samples.xlsx', keep: 'yes' },
+    const { db } = mockStagingImportsDb({
+      findOne: vi.fn().mockResolvedValue({
+        fileName: 'samples.xlsx',
+        rawData: { storagePath: '/tmp/samples.xlsx', keep: 'yes' },
+      }),
     });
-    vi.spyOn(StagingImport, 'updateOne').mockResolvedValue({});
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
     vi.spyOn(engine, 'readRowsFromFile').mockResolvedValue(rows);
     vi.spyOn(engine, 'detectDataType').mockReturnValue('samples');
@@ -493,7 +510,7 @@ describe('batch-validation-engine item8 process and classification coverage', ()
     const updateProgress = vi.spyOn(engine, 'updateProgress').mockResolvedValue(undefined);
     const job = { updateProgress: vi.fn().mockResolvedValue(undefined) };
 
-    const result = await engine.processBatchImport({}, 'job-xlsx', job);
+    const result = await engine.processBatchImport(db, 'job-xlsx', job);
 
     expect(result).toMatchObject({
       dataType: 'samples',
@@ -514,6 +531,7 @@ describe('batch-validation-engine item8 process and classification coverage', ()
     ]);
     expect(job.updateProgress).toHaveBeenCalledTimes(3);
     expect(updateProgress).toHaveBeenLastCalledWith(
+      db,
       'job-xlsx',
       expect.objectContaining({
         status: 'completed',
@@ -526,11 +544,12 @@ describe('batch-validation-engine item8 process and classification coverage', ()
 
   it('processBatchImport uses JSON row numbering, patient persistence, no progress callback and failed final status', async () => {
     const rows = [{ patientName: 'one' }];
-    vi.spyOn(StagingImport, 'findOne').mockResolvedValue({
-      fileName: 'patients.json',
-      rawData: { storagePath: '/tmp/patients.json' },
+    const { db } = mockStagingImportsDb({
+      findOne: vi.fn().mockResolvedValue({
+        fileName: 'patients.json',
+        rawData: { storagePath: '/tmp/patients.json' },
+      }),
     });
-    vi.spyOn(StagingImport, 'updateOne').mockResolvedValue({});
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
     vi.spyOn(engine, 'readRowsFromFile').mockResolvedValue(rows);
     vi.spyOn(engine, 'detectDataType').mockReturnValue('patients');
@@ -542,10 +561,10 @@ describe('batch-validation-engine item8 process and classification coverage', ()
     vi.spyOn(engine, 'quarantineRejectedRows').mockResolvedValue(null);
     const updateProgress = vi.spyOn(engine, 'updateProgress').mockResolvedValue(undefined);
 
-    const result = await engine.processBatchImport({}, 'job-json');
+    const result = await engine.processBatchImport(db, 'job-json');
 
     expect(persist).toHaveBeenCalledWith(
-      {},
+      db,
       rows[0],
       1,
       expect.objectContaining({
@@ -557,6 +576,7 @@ describe('batch-validation-engine item8 process and classification coverage', ()
     expect(result).toMatchObject({ invalidRows: 1, validRows: 0, partialRows: 0 });
     expect(result).not.toHaveProperty('quarantineBatchId');
     expect(updateProgress).toHaveBeenLastCalledWith(
+      db,
       'job-json',
       expect.objectContaining({
         status: 'failed',

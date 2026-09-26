@@ -2,12 +2,14 @@ const fs = require('fs');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 
-const StagingImport = require('../models/StagingImport');
-const { connectMongoDB } = require('../infrastructure/database/mongodb/connection');
+const { connectDB } = require('../database/mongo');
 const { getQueue } = require('../config/queue');
 const logger = require('../utils/logger');
 const { UPLOADS_BASE } = require('../config/uploadConfig');
-const { ensureStagingImportIndexes } = require('../utils/stagingImportIndexes');
+const {
+  ensureStagingImportIndexes,
+  getStagingImportsCollection,
+} = require('../utils/stagingImportIndexes');
 
 class StagingImportService {
   getStagingDirectory() {
@@ -44,15 +46,17 @@ class StagingImportService {
   }
 
   async createStagingImport(file) {
-    await connectMongoDB();
+    // #830: native driver only — same connection family as the rest of the import path.
+    const db = await connectDB();
+    const collection = getStagingImportsCollection(db);
     // #941: jobId is the lookup key for the batch lifecycle. Ensure the
-    // native index has completed before the first persisted row rather than
-    // racing an un-awaited best-effort build.
-    await ensureStagingImportIndexes(StagingImport.collection);
+    // native index has completed before the first persisted row.
+    await ensureStagingImportIndexes(collection);
 
     const jobId = uuidv4();
     const rawData = await this.persistRawFile(file, jobId);
-    const stagingImport = await StagingImport.create({
+    const now = new Date();
+    const stagingImport = {
       jobId,
       fileName: file.originalname,
       status: 'staged',
@@ -60,8 +64,11 @@ class StagingImportService {
       processedRows: 0,
       importErrors: [],
       rawData,
-    });
-    return stagingImport.toObject();
+      createdAt: now,
+      updatedAt: now,
+    };
+    await collection.insertOne(stagingImport);
+    return stagingImport;
   }
 
   async dispatchBatchJob(stagingImport) {
@@ -78,7 +85,8 @@ class StagingImportService {
       { jobId: stagingImport.jobId, removeOnComplete: true }
     );
 
-    await StagingImport.updateOne(
+    const db = await connectDB();
+    await getStagingImportsCollection(db).updateOne(
       { jobId: stagingImport.jobId },
       { $set: { status: 'queued', updatedAt: new Date() } }
     );
@@ -94,7 +102,8 @@ class StagingImportService {
       return { jobId: stagingImport.jobId, stagingImport, queueJob };
     } catch (error) {
       if (stagingImport?.jobId) {
-        await StagingImport.updateOne(
+        const db = await connectDB();
+        await getStagingImportsCollection(db).updateOne(
           { jobId: stagingImport.jobId },
           {
             $set: { status: 'failed', updatedAt: new Date() },

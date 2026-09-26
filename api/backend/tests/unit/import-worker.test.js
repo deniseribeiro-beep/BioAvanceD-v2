@@ -127,10 +127,9 @@ function installFakes() {
     exports: fakeMongo,
   };
 
-  // #826: the worker needs the Mongoose connection too -- connectDB() above is
-  // the native driver only, and StagingImport (reached via
-  // batch-validation-engine) is a Mongoose model whose writes silently buffer
-  // and time out after 10s without it.
+  // #826: the worker still needs the Mongoose connection for Sample and other
+  // models reached by the import sub-workers. connectDB() above is the native
+  // driver; stagingImports is reached via getStagingImportsCollection(db).
   fakeMongooseConnection = {
     connectMongoDB: vi.fn().mockResolvedValue({ readyState: 1 }),
     getMongoDBConnection: vi.fn(),
@@ -1037,7 +1036,7 @@ describe('workers/import-worker', () => {
 
       const result = await processor(job);
 
-      expect(fakeBatchValidationEngine.updateProgress).toHaveBeenCalledWith('stg-1', {
+      expect(fakeBatchValidationEngine.updateProgress).toHaveBeenCalledWith(fakeDb, 'stg-1', {
         status: 'completed',
         processedRows: 5,
       });
@@ -1057,7 +1056,7 @@ describe('workers/import-worker', () => {
 
       await processor(job);
 
-      expect(fakeBatchValidationEngine.updateProgress).toHaveBeenCalledWith('stg-2', {
+      expect(fakeBatchValidationEngine.updateProgress).toHaveBeenCalledWith(fakeDb, 'stg-2', {
         status: 'failed',
         processedRows: 5,
       });
@@ -1066,10 +1065,10 @@ describe('workers/import-worker', () => {
     // #900: bullmq's Worker runs the processor's catch once per attempt, not
     // once per job -- moveToFailed() runs on every attempt and decides
     // retry-vs-fail inside itself, after the processor has already rejected.
-    // Marking the StagingImport document 'failed' on attempt 1 of an
+    // Marking the stagingImports document 'failed' on attempt 1 of an
     // `attempts: 3` job was wrong: the document read FAILED through a run
     // that could still finish `completed`. These cases pin the replacement:
-    // recordAttemptFailure() decides final-vs-not from attemptsMade/opts.attempts.
+    // recordAttemptFailure(db, ...) decides final-vs-not from attemptsMade/opts.attempts.
     it('on batch-import failure, attempt 1 of 3 (not final): still retries, processor rejects with the original error', async () => {
       const processor = await getProcessor();
       const boom = new Error('batch exploded');
@@ -1088,12 +1087,12 @@ describe('workers/import-worker', () => {
 
       await expect(processor(job)).rejects.toThrow('batch exploded');
 
-      expect(fakeBatchValidationEngine.recordAttemptFailure).toHaveBeenCalledWith('stg-3', {
+      expect(fakeBatchValidationEngine.recordAttemptFailure).toHaveBeenCalledWith(fakeDb, 'stg-3', {
         attemptNumber: 1,
         attemptsAllowed: 3,
         message: 'batch exploded',
       });
-      expect(fakeBatchValidationEngine.updateProgress).not.toHaveBeenCalledWith('stg-3', { status: 'failed' });
+      expect(fakeBatchValidationEngine.updateProgress).not.toHaveBeenCalledWith(fakeDb, 'stg-3', { status: 'failed' });
       expect(updateOneMock).not.toHaveBeenCalled();
       expect(fakeAuditLogger.logError).not.toHaveBeenCalled();
       expect(fakeNotificationService.notifyJobFailed).not.toHaveBeenCalled();
@@ -1114,7 +1113,7 @@ describe('workers/import-worker', () => {
 
       await expect(processor(job)).rejects.toThrow('batch exploded again');
 
-      expect(fakeBatchValidationEngine.recordAttemptFailure).toHaveBeenCalledWith('stg-3b', {
+      expect(fakeBatchValidationEngine.recordAttemptFailure).toHaveBeenCalledWith(fakeDb, 'stg-3b', {
         attemptNumber: 2,
         attemptsAllowed: 3,
         message: 'batch exploded again',
@@ -1136,7 +1135,7 @@ describe('workers/import-worker', () => {
 
       await expect(processor(job)).rejects.toThrow('batch exploded for good');
 
-      expect(fakeBatchValidationEngine.recordAttemptFailure).toHaveBeenCalledWith('stg-3c', {
+      expect(fakeBatchValidationEngine.recordAttemptFailure).toHaveBeenCalledWith(fakeDb, 'stg-3c', {
         attemptNumber: 3,
         attemptsAllowed: 3,
         message: 'batch exploded for good',
@@ -1161,7 +1160,7 @@ describe('workers/import-worker', () => {
 
       await expect(processor(job)).rejects.toThrow('batch exploded, no retries configured');
 
-      expect(fakeBatchValidationEngine.recordAttemptFailure).toHaveBeenCalledWith('stg-3d', {
+      expect(fakeBatchValidationEngine.recordAttemptFailure).toHaveBeenCalledWith(fakeDb, 'stg-3d', {
         attemptNumber: 1,
         attemptsAllowed: 1,
         message: 'batch exploded, no retries configured',

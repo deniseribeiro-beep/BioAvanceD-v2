@@ -3,7 +3,6 @@ import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 
-const Sample = require('../../src/models/Sample');
 const collectionResolver = require('../../src/utils/collectionResolver');
 
 const { validateMiabisCompliance } = require('../../src/services/miabisValidator.service');
@@ -21,7 +20,25 @@ function makeCompleteSample(overrides = {}) {
 }
 
 function makeFakeDb() {
-  return {};
+  return { collection: vi.fn() };
+}
+
+/**
+ * #830 follow-up: miabisValidator reads specimens via native getCollection.
+ * Specimen findOne is always called; consents only when fields are complete
+ * and participantId is present.
+ */
+function mockCollections({ sampleDoc, consentFindOne } = {}) {
+  const specimenFindOne = vi.fn().mockResolvedValue(sampleDoc);
+  const consentCollection = consentFindOne
+    ? { findOne: consentFindOne }
+    : { findOne: vi.fn() };
+
+  return vi.spyOn(collectionResolver, 'getCollection').mockImplementation((_db, key) => {
+    if (key === 'Specimen') return { findOne: specimenFindOne };
+    if (key === 'consents') return consentCollection;
+    throw new Error(`unexpected collection key: ${key}`);
+  });
 }
 
 describe('validateMiabisCompliance', () => {
@@ -30,10 +47,7 @@ describe('validateMiabisCompliance', () => {
   });
 
   it('returns sampleNotFound result and never queries consents when sample is missing', async () => {
-    vi.spyOn(Sample, 'findOne').mockReturnValue({
-      lean: vi.fn().mockResolvedValue(null),
-    });
-    const getCollectionSpy = vi.spyOn(collectionResolver, 'getCollection');
+    const getCollectionSpy = mockCollections({ sampleDoc: null });
 
     const result = await validateMiabisCompliance('SPEC-MISSING', makeFakeDb());
 
@@ -43,15 +57,13 @@ describe('validateMiabisCompliance', () => {
       consentStatus: 'sample_not_found',
       canBeShared: false,
     });
-    expect(getCollectionSpy).not.toHaveBeenCalled();
+    expect(getCollectionSpy).toHaveBeenCalledWith(expect.anything(), 'Specimen');
+    expect(getCollectionSpy).not.toHaveBeenCalledWith(expect.anything(), 'consents');
   });
 
   it('fast-fails with not_evaluated and preserves field order when only some fields are missing', async () => {
     const sample = makeCompleteSample({ sampleType: undefined, diagnosisCode: undefined });
-    vi.spyOn(Sample, 'findOne').mockReturnValue({
-      lean: vi.fn().mockResolvedValue(sample),
-    });
-    const getCollectionSpy = vi.spyOn(collectionResolver, 'getCollection');
+    const getCollectionSpy = mockCollections({ sampleDoc: sample });
 
     const result = await validateMiabisCompliance('SPEC-1', makeFakeDb());
 
@@ -61,13 +73,11 @@ describe('validateMiabisCompliance', () => {
       consentStatus: 'not_evaluated',
       canBeShared: false,
     });
-    expect(getCollectionSpy).not.toHaveBeenCalled();
+    expect(getCollectionSpy).not.toHaveBeenCalledWith(expect.anything(), 'consents');
   });
 
   it('lists all four missing fields in fixed order when all are absent', async () => {
-    vi.spyOn(Sample, 'findOne').mockReturnValue({
-      lean: vi.fn().mockResolvedValue({}),
-    });
+    mockCollections({ sampleDoc: {} });
 
     const result = await validateMiabisCompliance('SPEC-2', makeFakeDb());
 
@@ -81,11 +91,8 @@ describe('validateMiabisCompliance', () => {
   });
 
   it('is fully compliant when all fields present and an active consent record exists', async () => {
-    vi.spyOn(Sample, 'findOne').mockReturnValue({
-      lean: vi.fn().mockResolvedValue(makeCompleteSample()),
-    });
     const findOne = vi.fn().mockResolvedValue({ status: 'ACTIVE' });
-    vi.spyOn(collectionResolver, 'getCollection').mockResolvedValue({ findOne });
+    mockCollections({ sampleDoc: makeCompleteSample(), consentFindOne: findOne });
 
     const result = await validateMiabisCompliance('SPEC-3', makeFakeDb());
 
@@ -102,11 +109,8 @@ describe('validateMiabisCompliance', () => {
   });
 
   it('is not compliant when consent record exists but status is not active', async () => {
-    vi.spyOn(Sample, 'findOne').mockReturnValue({
-      lean: vi.fn().mockResolvedValue(makeCompleteSample()),
-    });
     const findOne = vi.fn().mockResolvedValue({ status: 'REVOKED' });
-    vi.spyOn(collectionResolver, 'getCollection').mockResolvedValue({ findOne });
+    mockCollections({ sampleDoc: makeCompleteSample(), consentFindOne: findOne });
 
     const result = await validateMiabisCompliance('SPEC-4', makeFakeDb());
 
@@ -119,11 +123,8 @@ describe('validateMiabisCompliance', () => {
   });
 
   it('falls back to unknown status when record.status is falsy', async () => {
-    vi.spyOn(Sample, 'findOne').mockReturnValue({
-      lean: vi.fn().mockResolvedValue(makeCompleteSample()),
-    });
     const findOne = vi.fn().mockResolvedValue({ status: null });
-    vi.spyOn(collectionResolver, 'getCollection').mockResolvedValue({ findOne });
+    mockCollections({ sampleDoc: makeCompleteSample(), consentFindOne: findOne });
 
     const result = await validateMiabisCompliance('SPEC-5', makeFakeDb());
 
@@ -134,14 +135,11 @@ describe('validateMiabisCompliance', () => {
 
   it('does not query consents and yields canBeShared false when sample has no participantId', async () => {
     const sample = makeCompleteSample({ participantId: undefined });
-    vi.spyOn(Sample, 'findOne').mockReturnValue({
-      lean: vi.fn().mockResolvedValue(sample),
-    });
-    const getCollectionSpy = vi.spyOn(collectionResolver, 'getCollection');
+    const getCollectionSpy = mockCollections({ sampleDoc: sample });
 
     const result = await validateMiabisCompliance('SPEC-9', makeFakeDb());
 
-    expect(getCollectionSpy).not.toHaveBeenCalled();
+    expect(getCollectionSpy).not.toHaveBeenCalledWith(expect.anything(), 'consents');
     expect(result).toEqual({
       isCompliant: false,
       missingFields: [],
@@ -151,11 +149,8 @@ describe('validateMiabisCompliance', () => {
   });
 
   it('uses consentStatus no_consent (distinct from sample_not_found) when no consent record exists', async () => {
-    vi.spyOn(Sample, 'findOne').mockReturnValue({
-      lean: vi.fn().mockResolvedValue(makeCompleteSample()),
-    });
     const findOne = vi.fn().mockResolvedValue(null);
-    vi.spyOn(collectionResolver, 'getCollection').mockResolvedValue({ findOne });
+    mockCollections({ sampleDoc: makeCompleteSample(), consentFindOne: findOne });
 
     const result = await validateMiabisCompliance('SPEC-6', makeFakeDb());
 
@@ -168,10 +163,12 @@ describe('validateMiabisCompliance', () => {
   });
 
   it('catches errors from getCollection and falls back to consentStatus error without rethrowing', async () => {
-    vi.spyOn(Sample, 'findOne').mockReturnValue({
-      lean: vi.fn().mockResolvedValue(makeCompleteSample()),
+    vi.spyOn(collectionResolver, 'getCollection').mockImplementation((_db, key) => {
+      if (key === 'Specimen') {
+        return { findOne: vi.fn().mockResolvedValue(makeCompleteSample()) };
+      }
+      throw new Error('mongo down');
     });
-    vi.spyOn(collectionResolver, 'getCollection').mockRejectedValue(new Error('mongo down'));
 
     const result = await validateMiabisCompliance('SPEC-7', makeFakeDb());
 
@@ -184,11 +181,8 @@ describe('validateMiabisCompliance', () => {
   });
 
   it('catches errors from findOne and falls back to consentStatus error', async () => {
-    vi.spyOn(Sample, 'findOne').mockReturnValue({
-      lean: vi.fn().mockResolvedValue(makeCompleteSample()),
-    });
     const findOne = vi.fn().mockRejectedValue(new Error('query failed'));
-    vi.spyOn(collectionResolver, 'getCollection').mockResolvedValue({ findOne });
+    mockCollections({ sampleDoc: makeCompleteSample(), consentFindOne: findOne });
 
     const result = await validateMiabisCompliance('SPEC-8', makeFakeDb());
 
