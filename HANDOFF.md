@@ -1,96 +1,91 @@
 # HANDOFF
 
-**Written 2026-09-25, sixty-ninth queue sitting. INTERIM: the sitting may
+**Written 2026-09-25, seventieth queue sitting. INTERIM: the sitting may
 continue. It has not been told it is over.**
 
-The instruction was "Read handoff. Pick next group of issues to resolve.
-Docker is on." The group was the six remaining Axis E AMEND vehicles whose
-decision comments supersede their bodies: **#1055, #883, #840, #714,
-#1049, #830**. All six are closed.
+The instruction was "Read handoff. Resolve next group of issues. Docker is
+on." The group was the three open defects the Docker e2e proofs had
+surfaced: **#1225, #1222, #1227**. Not picked: #1229 (Denise deferred it),
+#1228 and #1226 (confirm-only records for Dennis), #1220 (waits on his
+step 5), and #914's remainder (the admin-MFA revisit is gated).
 
 ## Repo state
 
 `feature/docker-e2e-backend-integration`, pushed. The last substantive
-commit is `c0df22f2`.
+commit is `bdd58350`.
 
-## What shipped (each issue's close comment has the detail)
+## What shipped
 
-- **#1055** `307a6bd1`. `create-db.js` moved to
-  `docs/historical/create-db.js` with a banner. Its npm entry is gone and
-  the eight authority citations were dropped.
-- **#883** `c63fd736`, `bdbef765`. Routine Maintenance/Inactive (equipment
-  and sensor) no longer trigger the quarantine cascade. `quarantined`
-  counts `modifiedCount`, and a no-op update writes no action or ledger
-  movement.
-- **#840** `578490af`. The four groupFields 400s share one body,
-  `{error, reason, message}`.
-- **#714** `665fdbc5`. `allergenCoding` passes `validateActiveCodes` (DCB).
-  The intake-wizard e2e seeds a DCB concept.
-- **#1049** `2a7d9e83`. The consent-link token is stored as
-  `consentTokenHash` (SHA-256) and compared with `timingSafeEqual`. Resend
-  always mints and returns no `reusedToken`. Legacy rows need `npm run
-  migrate:consent-token-hash`, recorded on #682. The security record is
-  **#1231**.
-- **#830** `a8d0e13a`, `c0df22f2`. StagingImport is on the native driver
-  (`services/stagingImport.store.js`) and the Mongoose model is deleted.
-  The body's "Sample.js is dormant" claim was wrong: `miabisValidator`
-  calls `Sample.findById`. So `server.js` now awaits `connectMongoDB()` at
-  boot. Labelled `premise-corrected`.
-- `43da643c` renamed `incidents.api.node.test.js` to `incidents.api.test.js`.
-  It is a vitest file, and `node --test` fails on it at parse time.
+- **`72a72e07` (Refs #1225).** Consent governance now reaches the real
+  Sample, not a phantom keyed by the consent id.
+  - New `SPECIMEN_UPSERTED` outbox event. It is emitted after the Mongo
+    insert in `createSample`, the CSV/XLSX import and the LGPD import.
+  - The consent projection has no aggregateId fallback. It governs the
+    samples the donor already DONATED.
+  - The rebuild script no longer mints an ACTIVE consent per sample.
+- **`bdd58350` (#1232, closed).** The intake-wizard outcome assertion
+  counts pre-existing `(type, date)` rows first. That was a birthday-problem
+  flake on the kept volume.
 
-**Proof, [ran it] this sitting:**
-- Targeted unit tests plus pins for each slice. Architecture 160/160, and
-  `api/backend/scripts/lint.js` clean.
-- **Docker e2e**, 7 specs: consent-token-page, tcle-publication-sweep,
-  intake-wizard, async-import-quarantine, lgpd-sample-import,
-  e-consent-import-page, participant-e-consent-page. All green once the
-  reference-data chain ran. Without the chain, 6 lgpd-sample-import cases
-  fail on missing PLASMA, which is environmental.
-- Live API probes for #883, #840, #1049 (resend and migration) and #830
-  (batch status, MIABIS on a fresh boot, with a no-connection control that
-  timed out at 10s).
-- **Not run:** the full e2e suite and the full vitest suite.
+## Touched, left open (each issue's last comment has the detail)
 
-## Filed this sitting
+- **#1225:** needs **Dennis's option call**, laid out in the comment.
+  - The lineage gate reads consent from the eventually consistent graph to
+    decide a synchronous pre-Mongo operation.
+  - So **allocate-at-create still fails the gate** (2 of 2 after the fix),
+    and fail-closed would refuse every sample registration.
+  - Also open: whether custody moves should be consent-gated at all
+    (`requisitos.md:632`, `:1578`).
+  - The kept test volume still holds 8 pre-fix phantom Samples.
+- **#1222:** reproduced (6 of 240 unprobed) and narrowed.
+  - The page's event loop stops: its axios 10 s timer never fires.
+  - It happens only when the test interacts right after render. A CDP
+    session or a 3 s wait gives 0 of 360.
+  - `[inference]` A host-Chromium stall on Windows. Not fixed, on purpose.
+    Settling it needs Linux Playwright, which is blocked by #1233.
+- **#1227:** no recurrence in one more full run. It stands at 1 in 4.
+- **#1233 (new, milestone "CI Integration for E2E Tests"):**
+  `playwright-runner`'s browser cannot reach the bundle's baked
+  `localhost:3000` API base, so UI specs cannot run in-container. `[read it]`
+  only, never run.
+- **#1234 (new):** one `socket hang up` on login in a full run.
+  Keep-alive-race probes were negative through Docker Desktop's port proxy.
 
-- **#1231** (question). Security record for #1049; nothing to do unless
-  Dennis disagrees.
-- The skills-pack tracker got three filings and one tally from the friction
-  audit. They are not repo work.
+## Proof, [ran it] this sitting
 
-## Still open from the Axis E batch
-
-Unchanged: #1227, #1228, #1229, #914, #1225, #1222, #1226, #1220.
+- Unit tests: can-it-fail probe 9 red / 56 green of 65. Targeted vitest
+  64/64 files. Architecture 160/160. Lint clean.
+- Docker e2e on a stack rebuilt from `72a72e07`:
+  - `pipeline-continuity`, `sample-storage-lifecycle`, `intake-wizard`,
+    `lgpd-sample-import`, `async-import-quarantine`: **81/81, 0 skipped**.
+  - **Full suite: 255 passed, 1 failed** (#1234).
 
 ## For Dennis
 
-Unchanged from the previous note: #1228's default, #1220's step 5, the #941
-re-close, #1218, #956, #979, whether `0d87f73b` (#1124) stands, whether to
-mirror Denise's `docs/` deletions, and the go for a PR into `main`. New:
-#1231, which is a confirm-only record.
+New: **#1225's option** (read consent from Mongo in the custody use cases,
+dual-write, or Denise's delete-the-gate route) and whether custody moves are
+consent-gated. Unchanged from the previous note: #1228's default, #1220's
+step 5, the #941 re-close, #1218, #956, #979, whether `0d87f73b` (#1124)
+stands, whether to mirror Denise's `docs/` deletions, #1231, and the go for
+a PR into `main`.
 
 ## Docker and the machine
 
 - **Gate:** Dennis, 2026-09-25: "Docker is on." It closes at the next
   `/clear`. It was used this sitting.
 - **Nothing is running.** The test stack was torn down with `compose down`,
-  and its volumes were kept. The images were built from this sitting's
-  tree, but `backend-app-test`'s last build predates only the `43da643c`
-  rename, so the next bring-up needs no `--build` unless src changes.
+  and its volumes were kept. The `backend-app-test`, `worker-test` and
+  `neo4j-projection-worker-test` images are built from `72a72e07`.
+  `bdd58350` is test-only, so the next bring-up needs no `--build` unless
+  src changes.
 
 ## Things a next session must not undo
 
 Earlier notes' items still hold. Plus:
-- **The consent token is never stored in plaintext.** Only
-  `consentTokenHash` is stored, and validation has no plaintext fallback.
-  Resend always mints.
-- **StagingImport goes through `stagingImport.store.js`.** A write to an
-  undeclared field throws there rather than being stripped.
-- **`server.js` connects Mongoose at boot.** Mongoose models (Sample,
-  storage hierarchy, Cid, ...) are still live in the API and the worker.
-- **Quarantine cascades only on failure states** (offline, desligado,
-  repair, awaiting repair), never on routine Maintenance/Inactive.
+- **A sample's graph identity comes from `SPECIMEN_UPSERTED`, keyed by its
+  Mongo `_id`.** Never reintroduce a consent event keyed by a sample, or a
+  `specimenId` fallback to the consent's `aggregateId`.
+- **Don't paper over #1222 with a fixed wait before the first fill.**
 - **On this branch a `Closes #N` commit does not close the issue.** Comment,
   then `gh issue close`.
 
@@ -102,18 +97,16 @@ Earlier notes' items still hold. Plus:
 - Denise's newest live branch, 2026-09-25: `stabilize/v2.0.0-prototype`,
   last commit 2026-09-25
   (`git for-each-ref refs/remotes/origin --sort=-committerdate`).
-- Divergence, 2026-09-25: 928 commits on hers only, 208 on ours only
+- Divergence, 2026-09-25: 928 commits on hers only, 211 on ours only
   (`git rev-list --left-right --count origin/stabilize/v2.0.0-prototype...HEAD`),
   measured before this rotation's commit.
 - Her tip's CI, runs of 2026-09-24 23:29 (none newer): current-state
   validation, Full Vitest diagnostic and Coverage diagnostic passed. Release
   manifest integrity failed
   (`gh run list --branch stabilize/v2.0.0-prototype --limit 4`).
-- Her Axis E decision log `docs/stabilization/AXIS_E_DECISION_LOG.md` **is
-  now on her pushed branch** as of 2026-09-25
+- Her `docs/stabilization/AXIS_E_DECISION_LOG.md` is on her pushed branch
   (`git ls-tree -r --name-only origin/stabilize/v2.0.0-prototype docs/stabilization`).
-  This sitting worked from the issue comments. It did not read the log, so
-  whether the log differs from them is unverified.
+  It is still unread against the issue comments.
 
 ## Recommended next
 
