@@ -1050,7 +1050,7 @@ router.post('/:id/withdraw',
           resourceType: 'Sample',
           resourceId: req.params.id,
           status: 'success',
-          severity: 'high',
+          severity: 'warning',
           message: `Amostra retirada - Tipo: ${req.body.withdrawalType}, Responsável: ${req.body.withdrawalResponsible}, Qtd: ${result.withdrawnQuantity}`,
           payload: {
             withdrawalType: req.body.withdrawalType,
@@ -1538,7 +1538,7 @@ router.post('/:id/return', authenticate, requirePermission('withdrawSample', 'UP
         resourceType: 'Sample',
         resourceId: req.params.id,
         status: 'success',
-        severity: 'high',
+        severity: 'warning',
         message: `Amostra devolvida - Qtd: ${result.returnedQuantity}, Condição: ${result.condition}`,
         payload: {
           returnedQuantity: result.returnedQuantity,

@@ -889,7 +889,7 @@ class SampleFileController {
           resourceType: 'SampleFile',
           resourceId: fileRecord._id.toString(),
           status: 'success',
-          severity: 'medium',
+          severity: 'warning',
           message: `Substituição de arquivo de análise: ${fileRecord.fileName} -> ${file.originalname}`,
           payload: {
             previousFileName: fileRecord.fileName,
@@ -1018,7 +1018,7 @@ class SampleFileController {
           resourceType: 'SampleFile',
           resourceId: fileID,
           status: 'success',
-          severity: 'medium',
+          severity: 'info',
           message: `Exportação HL7 v2.x do arquivo: ${fileRecord.fileName}`,
           payload: {
             fileName: fileRecord.fileName,
@@ -1119,7 +1119,7 @@ class SampleFileController {
           resourceType: 'SampleFile',
           resourceId: fileID,
           status: 'success',
-          severity: 'medium',
+          severity: 'info',
           message: `Exportação FHIR do arquivo: ${fileRecord.fileName}`,
           payload: {
             fileName: fileRecord.fileName,
@@ -1220,7 +1220,7 @@ class SampleFileController {
           resourceType: 'SampleFile',
           resourceId: fileID,
           status: 'success',
-          severity: 'medium',
+          severity: 'info',
           message: `Exportação CDA do arquivo: ${fileRecord.fileName}`,
           payload: {
             fileName: fileRecord.fileName,

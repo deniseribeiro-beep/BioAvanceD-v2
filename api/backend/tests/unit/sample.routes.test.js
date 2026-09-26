@@ -2396,7 +2396,7 @@ describe('sample.routes', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.data.withdrawnQuantity).toBe(2);
-      expect(auditLoggerModule.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'WITHDRAW', severity: 'high' }));
+      expect(auditLoggerModule.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'WITHDRAW', severity: 'warning' }));
     });
 
     it('returns 400 when consent validation rejects the request', async () => {
@@ -2492,7 +2492,7 @@ describe('sample.routes', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.data.returnedQuantity).toBe(1);
-      expect(auditLoggerModule.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'RETURN', severity: 'high' }));
+      expect(auditLoggerModule.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'RETURN', severity: 'warning' }));
     });
 
     it('returns 400 when the service throws', async () => {
