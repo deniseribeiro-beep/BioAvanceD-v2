@@ -106,7 +106,6 @@ module.exports = {
   FRONTEND_URL: process.env.FRONTEND_URL,
   ALLOW_CLOUD_INTEGRATIONS: process.env.ALLOW_CLOUD_INTEGRATIONS === 'true' || process.env.ALLOW_CLOUD_INTEGRATIONS === '1',
   ALLOW_EXTERNAL_TERMINOLOGY_SYNC: process.env.ALLOW_EXTERNAL_TERMINOLOGY_SYNC === 'true' || process.env.ALLOW_EXTERNAL_TERMINOLOGY_SYNC === '1',
-  ALLOW_EXTERNAL_HPO_LOOKUP: process.env.ALLOW_EXTERNAL_HPO_LOOKUP === 'true' || process.env.ALLOW_EXTERNAL_HPO_LOOKUP === '1',
   ALLOW_EXTERNAL_DRUG_LOOKUP: process.env.ALLOW_EXTERNAL_DRUG_LOOKUP === 'true' || process.env.ALLOW_EXTERNAL_DRUG_LOOKUP === '1',
   CORS_ALLOW_ALL: process.env.CORS_ALLOW_ALL === 'true' || process.env.CORS_ALLOW_ALL === '1',
   TRUST_PROXY: process.env.TRUST_PROXY || '0',

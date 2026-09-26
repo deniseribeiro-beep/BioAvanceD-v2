@@ -44,7 +44,6 @@ x-test-env: &test-env
   FRONTEND_URL: https://e2e.bioavanced.test
   ALLOW_CLOUD_INTEGRATIONS: "false"
   ALLOW_EXTERNAL_TERMINOLOGY_SYNC: "false"
-  ALLOW_EXTERNAL_HPO_LOOKUP: "false"
   ALLOW_EXTERNAL_DRUG_LOOKUP: "false"
   BOOTSTRAP_ADMIN_NAME: "E2E Test Admin"
   BOOTSTRAP_ADMIN_EMAIL: e2e-admin@bioavanced.test
