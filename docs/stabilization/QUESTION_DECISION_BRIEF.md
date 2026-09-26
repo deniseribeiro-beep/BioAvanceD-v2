@@ -140,16 +140,25 @@ Keep open for implementation: all AMEND + hybrid AMEND halves (#836 with #1049, 
 
 ---
 
-## Suggested owner GitHub order (later session — not this log)
+## Addendum — 2026-09-25 (post-brief follow-ups)
+
+| # | Decision | Notes |
+| --- | --- | --- |
+| 1228 | **AMEND** — Coordenador with `createUser` may mint **Técnico** only (explicit or default). `assignRole` remains Administrador-only for every other level. Técnico never gets `createUser`. | Softens the #1008 reading that required `assignRole` on every register. UI: Coordenador reaches user management; role select locked to Técnico. |
+| 830 | **AMEND** (Axis E) — StagingImport via **native driver**; Mongoose model retired. Sample.js no longer registers a Mongoose model (helper `SampleModel` only); MIABIS validator uses native `Specimen` collection. | Implemented with `getStagingImportsCollection(db)`. |
+| 1218 | **CONFIRM+AMEND** (brief) — `audit` template → `auditEvents` over `audit_events`; allow-list columns; non-`USR-*` actor → `USR-SYSTEM`. `access_logs` stays on `logs`. | Implemented. |
+
+Owner still applies GitHub close/retag for implemented AMENDs (including this addendum).
+
+## Suggested owner GitHub order (later session)
 
 1. #793 + #812 (+ #667 gate comment)  
 2. #800 → then close #950 as REJECT  
 3. #836 together with #1049 impl notes  
 4. #1092, #957  
-5. #1147, #870, #879, #976, #1218  
+5. #1147, #870, #879, #976, #1218, #830, #1228  
 
-## Explicitly not done in this session
+## Explicitly not done in the original brief session
 
-- No GitHub issue comments, closes, or label changes.  
-- No code implementation of AMEND follow-ups.  
+- No GitHub issue comments, closes, or label changes at recording time.  
 - Axis E Phase 2 (C) remains blocked until Axis E CONFIRM closes are applied by the owner on GitHub.
