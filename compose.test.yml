@@ -833,8 +833,10 @@ services:
       # the browser here must load the app from localhost too. The image's CMD
       # forwards this container's localhost:5173/:3000 to the two services,
       # which makes origin, API base, CORS and cookies match a host-side run.
+      # The API base goes through the forwarder too: the e-consent specs assert
+      # the browser's API origin equals this one.
       PLAYWRIGHT_BASE_URL: http://localhost:5173
-      PLAYWRIGHT_API_BASE_URL: http://backend-app-test:3000
+      PLAYWRIGHT_API_BASE_URL: http://localhost:3000
       TEST_USER: admin
       TEST_PASS: Admin@123
       E2E_MONGO_URI: mongodb://mongodb-test:27017
