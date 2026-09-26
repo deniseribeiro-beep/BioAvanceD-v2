@@ -297,16 +297,13 @@ describe('Reports API integration', () => {
     expect(mockDb.reports[2].generatedBy).toBe('user-1');
   });
 
-  // #732: this used to assert one hardcoded list that every `:type`
-  // returned. The catalog is now resolved per report type through the
-  // template's handlerKey, so `audit` gets the accessLogs handler's own
-  // filters -- a date range, and nothing else, because handleAccessLogs
-  // reads nothing else off `filters`.
+  // #732/#1218: catalog resolved per handlerKey — `audit` → auditEvents
+  // (date range only, same as accessLogs).
   it('GET /api/reports/:type/filters devolve o catálogo do handler do tipo', async () => {
     const response = await request(app).get('/api/reports/audit/filters');
 
     expect(response.status).toBe(200);
-    expect(response.body.handlerKey).toBe('accessLogs');
+    expect(response.body.handlerKey).toBe('auditEvents');
     expect(response.body.filters).toEqual([
       { name: 'startDate', label: 'Data inicial', type: 'date' },
       { name: 'endDate', label: 'Data final', type: 'date' },
@@ -366,7 +363,7 @@ describe('Reports API integration', () => {
     expect(response.body.success).toBe(true);
     expect(response.body.reportType).toBe('audit');
     expect(typeof response.body.generatedAt).toBe('string');
-    expect(response.body.data).toEqual({ total: 0, logs: [], previewLimited: false });
+    expect(response.body.data).toEqual({ total: 0, events: [], previewLimited: false });
   });
 
   it('GET /api/reports/:type/export retorna CSV com cabeçalho', async () => {
@@ -384,7 +381,7 @@ describe('Reports API integration', () => {
     expect(response.body).toEqual({
       success: true,
       format: 'pdf',
-      data: { total: 0, logs: [], previewLimited: false },
+      data: { total: 0, events: [], previewLimited: false },
     });
   });
 
@@ -896,10 +893,13 @@ describe('Reports API integration', () => {
       expect(response.text).not.toContain('deadbeef');
     });
 
-    // `audit` is the SECOND template code mapping onto the same accessLogs
-    // handler -- gating by handlerKey is what makes this case free.
+    // #1218: `audit` uses auditEvents; `access_logs` stays on accessLogs.
+    // Gating by handlerKey still covers both.
     it('usuário externo recebe 403 no código `audit`, não apenas em `access_logs`', async () => {
-      const { db } = buildCollectionDb({ ...rbacFor('external_user', 1), logs: AUDIT_ROWS });
+      const { db } = buildCollectionDb({
+        ...rbacFor('external_user', 1),
+        audit_events: [{ eventId: 'E-1', actorPseudonym: 'alice', action: 'LOGIN' }],
+      });
       const testApp = appWithDb(db);
 
       const response = await request(testApp).get('/api/reports/audit/export');
@@ -981,7 +981,19 @@ describe('Reports API integration', () => {
       sensors: { sensors: [{ sensorId: 'SEN-1', sensorType: 'temperature' }] },
       equipment: { equipment: [{ equipmentID: 'EQ-1', name: 'Freezer A' }] },
       results: { results: [{ resultID: 'R-1', specimenId: 'S-1' }] },
-      audit: { logs: [{ logId: 'L-1', action: 'LOGIN', timestamp: '2026-01-01' }] },
+      audit: {
+        audit_events: [{
+          eventId: 'E-1',
+          sequenceNumber: 1,
+          occurredAt: '2026-01-01T00:00:00.000Z',
+          recordedAt: '2026-01-01T00:00:01.000Z',
+          actorPseudonym: 'USR-abc',
+          action: 'LOGIN',
+          entityType: 'User',
+          result: 'success',
+          source: 'api',
+        }],
+      },
       access_logs: { logs: [{ logId: 'L-1', action: 'LOGIN', timestamp: '2026-01-01' }] },
       withdrawal_history: { sampleMovements: [{ movementId: 'M-1', specimenId: 'S-1', type: 'withdrawal' }] },
       tissue_origin_history: { samples: [{ specimenId: 'S-1', sampleType: 'tissue' }] },
@@ -1143,6 +1155,54 @@ describe('Reports API integration', () => {
       const patientHeader = response.text.split('\n')[0].split(',');
       expect(patientHeader).not.toContain('consentToken');
       expect(patientHeader).not.toContain('consentTokenCreatedAt');
+    });
+
+    // #1218: audit export reads audit_events; non-USR-* actor → USR-SYSTEM;
+    // hashes / entityId / civil names omitted.
+    it('#1218: audit CSV uses audit_events allow-list and USR-SYSTEM for non-pseudonym actors', async () => {
+      const { db } = buildCollectionDb({
+        audit_events: [
+          {
+            eventId: 'E-civil',
+            sequenceNumber: 1,
+            occurredAt: '2026-01-01T00:00:00.000Z',
+            recordedAt: '2026-01-01T00:00:01.000Z',
+            actorPseudonym: 'Maria Silva',
+            action: 'LOGIN',
+            entityType: 'User',
+            entityId: 'secret-entity',
+            result: 'success',
+            source: 'api',
+            eventHash: 'deadbeef',
+            previousEventHash: 'cafe',
+          },
+          {
+            eventId: 'E-usr',
+            sequenceNumber: 2,
+            occurredAt: '2026-01-02T00:00:00.000Z',
+            recordedAt: '2026-01-02T00:00:01.000Z',
+            actorPseudonym: 'USR-abc123',
+            action: 'UPDATE',
+            entityType: 'Sample',
+            result: 'success',
+            source: 'api',
+          },
+        ],
+      });
+      const response = await request(appWithDb(db)).get('/api/reports/audit/export');
+
+      expect(response.status).toBe(200);
+      const [header, ...rows] = response.text.split('\n').filter(Boolean);
+      expect(header.split(',')).toEqual([
+        'eventId', 'sequenceNumber', 'occurredAt', 'recordedAt', 'actorPseudonym',
+        'action', 'entityType', 'result', 'source',
+      ]);
+      expect(response.text).toContain('USR-SYSTEM');
+      expect(response.text).toContain('USR-abc123');
+      expect(response.text).not.toContain('Maria Silva');
+      expect(response.text).not.toContain('deadbeef');
+      expect(response.text).not.toContain('secret-entity');
+      expect(rows.length).toBe(2);
     });
 
     // NOT a control -- this one only holds after the catalog lands, and

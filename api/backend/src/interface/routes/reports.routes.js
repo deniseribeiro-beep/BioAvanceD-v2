@@ -324,28 +324,14 @@ const SCOPED_HANDLER_KEYS = new Set([
   'extracellularNetwork',
 ]);
 
-// #1056 (RNF009): report types whose handler reads the `logs` audit trail.
-// Every route in this file is gated uniformly on `viewReports`, which is
-// UsuarioExterno's ENTIRE permission set (rbac-catalog-seed.service.js) --
-// so before this gate the lowest role in the system could export the raw
-// audit trail through GET /:type/export, while logs.routes.js, the router
-// purpose-built for that collection, admits only administrators and holders
-// of the `auditor` roleCode.
+// #1056 (RNF009): report types whose handler reads an audit trail
+// (`logs` or `audit_events`). Every route in this file is gated uniformly
+// on `viewReports`, which is UsuarioExterno's ENTIRE permission set -- so
+// before this gate the lowest role could export the raw audit trail.
 //
-// Keyed by `handlerKey` rather than by the `:type` path parameter, for the
-// same reason SCOPED_HANDLER_KEYS above is: BOTH the `audit` and
-// `access_logs` template codes resolve to the single `accessLogs` handler,
-// so a code-keyed table would have to enumerate both and could drift as
-// codes are added. Checking inside buildPreviewData covers /:type/preview,
-// /:type/export, /:type/export/pdf and POST /generate in one place -- all
-// four already translate a thrown `statusCode === 403` into a 403 response.
-//
-// This is the GATE only. It bounds WHO may call these types, not WHAT the
-// export contains. As of #1058/#1061/#1050 the CSV export IS bounded, by
-// EXPORT_CATALOG below -- but the preview, the PDF branch and the Report
-// document POST /generate persists are all still the raw handler output,
-// so this sentence still holds for three of the four surfaces.
-const AUDIT_READER_HANDLER_KEYS = new Set(['accessLogs']);
+// Keyed by `handlerKey`. #1218 split `audit` onto `auditEvents` while
+// `access_logs` stays on `accessLogs`; both remain behind this gate.
+const AUDIT_READER_HANDLER_KEYS = new Set(['accessLogs', 'auditEvents']);
 
 function unknownTypeResult(rawType) {
   return {
@@ -817,6 +803,42 @@ async function handleAccessLogs(db, filters) {
   return { total, logs, previewLimited: total > 200 };
 }
 
+/**
+ * #1218: Auditoria report reads the hash-chained `audit_events` trail.
+ * Actor rule: preserve USR-* pseudonyms; otherwise export USR-SYSTEM
+ * (do not generateAnonId over a civil display name).
+ */
+function mapAuditEventForExport(event) {
+  const raw = event?.actorPseudonym;
+  const actorPseudonym = typeof raw === 'string' && /^USR-/.test(raw) ? raw : 'USR-SYSTEM';
+  return {
+    eventId: event?.eventId ?? null,
+    sequenceNumber: event?.sequenceNumber ?? null,
+    occurredAt: event?.occurredAt ?? null,
+    recordedAt: event?.recordedAt ?? null,
+    actorPseudonym,
+    action: event?.action ?? null,
+    entityType: event?.entityType ?? null,
+    result: event?.result ?? null,
+    source: event?.source ?? null,
+  };
+}
+
+async function handleAuditEvents(db, filters) {
+  const collection = resolveCollection(db, ['audit_events']);
+  const query = {};
+
+  const dateQuery = buildDateQuery(filters);
+  if (dateQuery) {
+    query.$or = [{ occurredAt: dateQuery }, { recordedAt: dateQuery }];
+  }
+
+  const rawEvents = await collection.find(query).sort({ occurredAt: -1, recordedAt: -1, sequenceNumber: -1 }).limit(200).toArray();
+  const total = await collection.countDocuments(query);
+  const events = rawEvents.map(mapAuditEventForExport);
+  return { total, events, previewLimited: total > 200 };
+}
+
 // #726: one entry per ReportTemplate.HANDLER_KEYS value -- buildPreviewData
 // dispatches here by the matched template's `handlerKey`, not by
 // re-matching the incoming type string.
@@ -833,6 +855,7 @@ const REPORT_HANDLERS = {
   tissueOriginHistory: handleTissueOriginHistory,
   extracellularNetwork: handleExtracellularNetwork,
   accessLogs: handleAccessLogs,
+  auditEvents: handleAuditEvents,
 };
 
 // #732 (RF008 AC#1/AC#6): GET /:type/filters used to ignore its own
@@ -899,6 +922,7 @@ const FILTER_CATALOG = {
   tissueOriginHistory: [],
   extracellularNetwork: [],
   accessLogs: DATE_RANGE_FILTERS,
+  auditEvents: DATE_RANGE_FILTERS,
 };
 
 // #1058/#1061/#1050 piece 2: `toCsvRows` used to pick its rows by sniffing a
@@ -1030,6 +1054,14 @@ const EXPORT_CATALOG = {
     columns: ['movementId', 'specimenId', 'barcode', 'type', 'quantity', 'unit', 'destination', 'purpose', 'linkedProject', 'condition', 'previousQuantity', 'newQuantity', 'previousState', 'newState', 'createdAt'],
   },
   accessLogs: { rowKey: 'logs', columns: AUDIT_LOG_EXPORT_COLUMNS },
+  // #1218: Merkle audit_events trail — allow-list only; actor non-USR-* → USR-SYSTEM.
+  auditEvents: {
+    rowKey: 'events',
+    columns: [
+      'eventId', 'sequenceNumber', 'occurredAt', 'recordedAt', 'actorPseudonym',
+      'action', 'entityType', 'result', 'source',
+    ],
+  },
 };
 
 function toCsvRows(previewData, handlerKey) {
