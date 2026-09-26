@@ -1,90 +1,95 @@
 # HANDOFF
 
-**Written 2026-09-25, seventieth queue sitting. INTERIM: the sitting may
+**Written 2026-09-26, seventy-first queue sitting. INTERIM: the sitting may
 continue. It has not been told it is over.**
 
-The instruction was "Read handoff. Resolve next group of issues. Docker is
-on." The group was the three open defects the Docker e2e proofs had
-surfaced: **#1225, #1222, #1227**. Not picked: #1229 (Denise deferred it),
-#1228 and #1226 (confirm-only records for Dennis), #1220 (waits on his
-step 5), and #914's remainder (the admin-MFA revisit is gated).
+The instruction was "Read handoff. Pick next group of issues to resolve.
+Docker is off, turn it on if needed." The group picked was the e2e
+harness defects: **#1233** (in-container runner), then **#1222**, **#1234** and
+**#1227** measured through it. Three product bugs the runner surfaced were
+filed and fixed on the way (#1235, #1236, #1237).
 
 ## Repo state
 
 `feature/docker-e2e-backend-integration`, pushed. The last substantive
-commit is `bdd58350`.
+commit is `2fa62825`.
 
-## What shipped
+## What shipped (all closed with comments)
 
-- **`72a72e07` (Refs #1225).** Consent governance now reaches the real
-  Sample, not a phantom keyed by the consent id.
-  - New `SPECIMEN_UPSERTED` outbox event. It is emitted after the Mongo
-    insert in `createSample`, the CSV/XLSX import and the LGPD import.
-  - The consent projection has no aggregateId fallback. It governs the
-    samples the donor already DONATED.
-  - The rebuild script no longer mints an ACTIVE consent per sample.
-- **`bdd58350` (#1232, closed).** The intake-wizard outcome assertion
-  counts pre-existing `(type, date)` rows first. That was a birthday-problem
-  flake on the kept volume.
+- **#1233** (`8c007f8d`, `36bbdfd5`): `playwright-runner` works.
+  - `tests/e2e/docker/loopback-forward.cjs` forwards the container's
+    `localhost:5173`/`:3000` to the compose services. The image CMD runs it
+    in front of `npx playwright test`, so the in-container topology equals
+    the host's.
+  - Full suite in-container: **255 passed, 1 flaky, 0 failed, 0 skipped.**
+  - Status posted on #284. Milestone #3's "Known starting gaps" line still
+    calls the runner misconfigured. It is left for Dennis to edit.
+- **#1235** (`8b51cb47`): daily-merkle's `runOnce` closed the worker's
+  shared Mongo client every night. After that, every worker job failed
+  while the container stayed healthy.
+- **#1236** (`22e3af2c`): `audit_roots`' unique **sparse** `timestamp.token`
+  index indexed explicit nulls. Only one unanchored root could ever exist.
+  It is now a partial index on string tokens, and a drop-and-recreate
+  migrates old stacks. Verified live.
+- **#1237** (`2fa62825`): seven `auditLogger.log` callers passed severity
+  `high`/`medium`. Withdrawals, returns, file replacements and exports wrote
+  no audit row. A new architecture test guards the vocabulary.
+- `1ed3ac34`: `seedActiveConsentTemplate` upserts one shared fixture. It
+  used to insert per call, and the kept volume held 1314 active templates.
 
 ## Touched, left open (each issue's last comment has the detail)
 
-- **#1225:** needs **Dennis's option call**, laid out in the comment.
-  - The lineage gate reads consent from the eventually consistent graph to
-    decide a synchronous pre-Mongo operation.
-  - So **allocate-at-create still fails the gate** (2 of 2 after the fix),
-    and fail-closed would refuse every sample registration.
-  - Also open: whether custody moves should be consent-gated at all
-    (`requisitos.md:632`, `:1578`).
-  - The kept test volume still holds 8 pre-fix phantom Samples.
-- **#1222:** reproduced (6 of 240 unprobed) and narrowed.
-  - The page's event loop stops: its axios 10 s timer never fires.
-  - It happens only when the test interacts right after render. A CDP
-    session or a 3 s wait gives 0 of 360.
-  - `[inference]` A host-Chromium stall on Windows. Not fixed, on purpose.
-    Settling it needs Linux Playwright, which is blocked by #1233.
-- **#1227:** no recurrence in one more full run. It stands at 1 in 4.
-- **#1233 (new, milestone "CI Integration for E2E Tests"):**
-  `playwright-runner`'s browser cannot reach the bundle's baked
-  `localhost:3000` API base, so UI specs cannot run in-container. `[read it]`
-  only, never run.
-- **#1234 (new):** one `socket hang up` on login in a full run.
-  Keep-alive-race probes were negative through Docker Desktop's port proxy.
+- **#1222:** now labelled `premise-corrected`. It is a **Chromium engine
+  stall, not Windows-only.**
+  - Linux Chromium: 15 hangs in 1920 tests (both headless builds).
+  - Firefox: 0 in 600.
+  - Open because the fix is upstream. The next step is a minimal repro.
+  - `[read it]` CI's `retries: 2` absorbs it.
+- **#1234:** two in-container requests got no response for 30 s. Both passed
+  on retry. Cause `[not established]`. The comment names the instrument
+  (upstream connect latency logged in the forwarder).
+- **#1227:** no recurrence. It stands at 1 in 7 full runs.
 
-## Proof, [ran it] this sitting
+## Filed elsewhere
 
-- Unit tests: can-it-fail probe 9 red / 56 green of 65. Targeted vitest
-  64/64 files. Architecture 160/160. Lint clean.
-- Docker e2e on a stack rebuilt from `72a72e07`:
-  - `pipeline-continuity`, `sample-storage-lifecycle`, `intake-wizard`,
-    `lgpd-sample-import`, `async-import-quarantine`: **81/81, 0 skipped**.
-  - **Full suite: 255 passed, 1 failed** (#1234).
+- **dyeallpies-skills-pack#1227:** a long `compose run --rm` lost its log
+  when the Windows client's attach dropped. The durable pattern is
+  `run -d --name` + `docker wait` + `docker logs` + `rm`. It needs a pack
+  session (Rule 0).
 
 ## For Dennis
 
-New: **#1225's option** (read consent from Mongo in the custody use cases,
-dual-write, or Denise's delete-the-gate route) and whether custody moves are
-consent-gated. Unchanged from the previous note: #1228's default, #1220's
-step 5, the #941 re-close, #1218, #956, #979, whether `0d87f73b` (#1124)
-stands, whether to mirror Denise's `docs/` deletions, #1231, and the go for
-a PR into `main`.
+New:
+- Milestone #3's stale runner line (see #284).
+- Whether #1222 merits an upstream Chromium/Playwright report.
+
+Unchanged from the previous note: #1225's option call, #1228's default,
+#1220's step 5, the #941 re-close, #1218, #956, #979, whether `0d87f73b`
+(#1124) stands, whether to mirror Denise's `docs/` deletions, #1231, and
+the go for a PR into `main`.
 
 ## Docker and the machine
 
-- **Gate:** Dennis, 2026-09-25: "Docker is on." It closes at the next
-  `/clear`. It was used this sitting.
-- **Nothing is running.** The test stack was torn down with `compose down`,
-  and its volumes were kept. The `backend-app-test`, `worker-test` and
-  `neo4j-projection-worker-test` images are built from `72a72e07`.
-  `bdd58350` is test-only, so the next bring-up needs no `--build` unless
-  src changes.
+- **Gate:** Dennis, 2026-09-26: "Docker is off, turn it on if needed." It
+  closes at the next `/clear`. It was used this sitting.
+- **Nothing is running.** The `bioavanced-test` stack was torn down with
+  `compose down`, and its 6 volumes were kept.
+  - Images: `backend-app-test` is built from `2fa62825`, both workers from
+    `22e3af2c`, and `playwright-runner` from `1ed3ac34`. No `src` has changed
+    since, so the next bring-up needs no `--build`.
+  - The kept volume has fixture accumulation, including 1924 old consent
+    templates.
+- `docker compose ... up -d` auto-starts `playwright-runner`, which **now
+  runs the full suite for real**. Stop it before any host-side run.
 
 ## Things a next session must not undo
 
 Earlier notes' items still hold. Plus:
-- **A sample's graph identity comes from `SPECIMEN_UPSERTED`, keyed by its
-  Mongo `_id`.** Never reintroduce a consent event keyed by a sample, or a
-  `specimenId` fallback to the consent's `aggregateId`.
+- **The runner's base URLs are `localhost`, on purpose.** The forwarder
+  makes that resolve in-container. Do not point them at compose hostnames:
+  the e-consent specs assert origin equality.
+- **Never close the shared Mongo client from a job or a service method**
+  that got it from `connectDB()`. The process owns it (#1235).
 - **Don't paper over #1222 with a fixed wait before the first fill.**
 - **On this branch a `Closes #N` commit does not close the issue.** Comment,
   then `gh issue close`.
@@ -94,10 +99,10 @@ Earlier notes' items still hold. Plus:
 - **Project phase (Dennis, 2026-09-25):** work down the issues the e2e plan
   surfaced (Wave 3 tracker #646). CI comes only after they are all resolved
   and the whole plan passes on Docker.
-- Denise's newest live branch, 2026-09-25: `stabilize/v2.0.0-prototype`,
+- Denise's newest live branch, 2026-09-26: `stabilize/v2.0.0-prototype`,
   last commit 2026-09-25
   (`git for-each-ref refs/remotes/origin --sort=-committerdate`).
-- Divergence, 2026-09-25: 928 commits on hers only, 211 on ours only
+- Divergence, 2026-09-26: 928 commits on hers only, 218 on ours only
   (`git rev-list --left-right --count origin/stabilize/v2.0.0-prototype...HEAD`),
   measured before this rotation's commit.
 - Her tip's CI, runs of 2026-09-24 23:29 (none newer): current-state
