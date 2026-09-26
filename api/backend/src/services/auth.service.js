@@ -287,9 +287,9 @@ class AuthService {
    * @param {object} userData
    * @param {string} grantedBy - Actor UUID attributing the grant
    * @param {string} [callerUserAccountId] - authenticated caller's account id;
-   *   when present, enforces #1008 assignRole + #998/#1057 hierarchy floor for
-   *   any caller-supplied accessType/roleName. Omitted for bootstrap paths
-   *   that mint accounts without an interactive caller.
+   *   when present, enforces #1008/#1228 assignRole (levels other than Técnico)
+   *   + #998/#1057 hierarchy floor. Omitted for bootstrap paths that mint
+   *   accounts without an interactive caller.
    */
   async registerUser(db, userData, grantedBy, callerUserAccountId) {
     try {
@@ -315,41 +315,38 @@ class AuthService {
       // Hash da senha
       const hashedPassword = await bcrypt.hash(userData.password, 10);
 
-      // Caller-supplied privilege fields (before defaulting accessType).
-      // #1057: hierarchy floor lives here so every writer shares it — the
-      // deleted POST /api/auth/register used to skip the route-level #998
-      // check that only lived on POST /api/users/register.
-      const privilegeSupplied = userData.accessType != null || userData.roleName != null;
-
       // Mapeia roleName para accessType se necessário
       if (userData.roleName && !userData.accessType) {
         userData.accessType = this.getAccessTypeForRole(userData.roleName);
       }
 
-      if (privilegeSupplied && callerUserAccountId) {
-        // #1008: role assignment is a distinct Administrador-only permission.
-        // createUser alone must not let Coordenador choose a level.
-        // Look up via the module object (not a top-level destructure) so
-        // tests can spy these and so the durable service-level gate stays
+      // #427/#432: accessType/roleName resolved only to grant the matching
+      // UserRoleAssignment (#421) below — never persisted on the User
+      // document itself. Default Técnico (2) when omitted (#1228).
+      const resolvedAccessType = userData.accessType || 2;
+
+      if (callerUserAccountId) {
+        // #1008/#1228: assignRole is Administrador-only and is required for
+        // any level other than Técnico. createUser alone may mint Técnico
+        // (explicit accessType/roleName or the default). Look up via the
+        // module object so tests can spy and the service-level gate stays
         // the single source of truth (#1057).
         const rbacAssignment = require('./rbac-assignment.service');
-        const canAssign = await rbacAssignment.userHasPermission(db, callerUserAccountId, 'assignRole');
-        if (!canAssign) {
-          const err = new Error('Não é possível atribuir papel sem a permissão assignRole.');
-          err.statusCode = 403;
-          throw err;
-        }
-
-        // #998/#1057: a caller may not create a user above their own level.
-        const requestedLevel = userData.accessType
-          || (userData.roleName ? this.getAccessTypeForRole(userData.roleName) : null);
-        if (requestedLevel) {
-          const callerLevel = await rbacAssignment.resolveUserHierarchyLevel(db, callerUserAccountId);
-          if (Number(requestedLevel) > Number(callerLevel || 0)) {
-            const err = new Error('Não é possível criar um usuário com nível de acesso superior ao seu.');
+        if (Number(resolvedAccessType) !== 2) {
+          const canAssign = await rbacAssignment.userHasPermission(db, callerUserAccountId, 'assignRole');
+          if (!canAssign) {
+            const err = new Error('Não é possível atribuir papel sem a permissão assignRole.');
             err.statusCode = 403;
             throw err;
           }
+        }
+
+        // #998/#1057: a caller may not create a user above their own level.
+        const callerLevel = await rbacAssignment.resolveUserHierarchyLevel(db, callerUserAccountId);
+        if (Number(resolvedAccessType) > Number(callerLevel || 0)) {
+          const err = new Error('Não é possível criar um usuário com nível de acesso superior ao seu.');
+          err.statusCode = 403;
+          throw err;
         }
       }
       
@@ -370,12 +367,6 @@ class AuthService {
         actors.findOne({ actorId: grantedBy }),
       ]);
       if (!accountActor || !grantActor) throw new Error('Referência Actor não resolvida');
-
-      // #427/#432: accessType/roleName resolved only to grant the matching
-      // UserRoleAssignment (#421) below — never persisted on the User
-      // document itself, and no longer a UserModel.create() output field
-      // as of #432's schema drop.
-      const resolvedAccessType = userData.accessType || 2;
 
       // #435: reject an unrecognized accessType before any write — without
       // this, only grantRoleForAccessType's lookup would catch it, and by

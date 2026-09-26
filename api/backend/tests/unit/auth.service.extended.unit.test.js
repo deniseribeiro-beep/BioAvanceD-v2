@@ -189,9 +189,10 @@ describe('AuthService.registerUser', () => {
     expect(insertOne).toHaveBeenCalled();
   });
 
-  // #1008/#1057: when a callerUserAccountId is supplied with privilege fields,
-  // assignRole + hierarchy floor run inside registerUser.
-  it('#1008: refuses role assignment when the caller lacks assignRole', async () => {
+  // #1008/#1228/#1057: when a callerUserAccountId is supplied,
+  // assignRole is required for levels other than Técnico; hierarchy floor
+  // always applies.
+  it('#1008/#1228: refuses non-Técnico role assignment when the caller lacks assignRole', async () => {
     const insertOne = vi.fn();
     const callerId = '550e8400-e29b-41d4-a716-446655440003';
     const rbac = buildRbacCollections([{ userAccountId: callerId, accessType: 3 }]);
@@ -213,7 +214,7 @@ describe('AuthService.registerUser', () => {
     await expect(
       authService.registerUser(
         dbWithCaller,
-        { ...VALID_USER, accessType: 2 },
+        { ...VALID_USER, accessType: 3, roleName: 'Coordenador' },
         BIOAVANCED_SYSTEM_ACTOR_ID,
         callerId
       )
@@ -222,6 +223,36 @@ describe('AuthService.registerUser', () => {
       statusCode: 403,
     });
     expect(insertOne).not.toHaveBeenCalled();
+  });
+
+  it('#1228: allows a createUser caller without assignRole to mint Técnico', async () => {
+    const insertOne = vi.fn().mockResolvedValue({ insertedId: 'new-id' });
+    const updateOne = vi.fn().mockResolvedValue({ modifiedCount: 1 });
+    const callerId = '550e8400-e29b-41d4-a716-446655440003';
+    const rbac = buildRbacCollections([{ userAccountId: callerId, accessType: 3 }]);
+    const actors = makeActorsCollection();
+    const dbWithCaller = {
+      collection: vi.fn((name) => {
+        if (name === 'actors') return actors;
+        if (name === 'userAccounts') {
+          return {
+            findOne: vi.fn().mockResolvedValue(null),
+            insertOne,
+            updateOne,
+          };
+        }
+        return rbac[name];
+      }),
+    };
+
+    const result = await authService.registerUser(
+      dbWithCaller,
+      { ...VALID_USER, accessType: 2, roleName: 'Técnico' },
+      BIOAVANCED_SYSTEM_ACTOR_ID,
+      callerId
+    );
+    expect(result).toBeTruthy();
+    expect(insertOne).toHaveBeenCalled();
   });
 
   it('#1057: refuses creating a user above the caller hierarchy when assignRole is held', async () => {

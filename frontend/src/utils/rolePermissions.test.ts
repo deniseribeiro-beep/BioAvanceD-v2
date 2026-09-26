@@ -32,9 +32,19 @@ describe('canRoleAccessRoute — unknown routes', () => {
 
 describe('canRoleAccessRoute — the restrictive blocks still hold', () => {
   it('keeps admin-only routes admin-only', () => {
-    for (const route of ['/system-management', '/users', '/access', '/backup', '/security', '/admin/dicionario']) {
+    for (const route of ['/backup', '/security', '/admin/dicionario']) {
       expect(canRoleAccessRoute('Administrador', route)).toBe(true);
       expect(canRoleAccessRoute('Coordenador', route)).toBe(false);
+      expect(canRoleAccessRoute('Técnico', route)).toBe(false);
+      expect(canRoleAccessRoute('Usuário Externo', route)).toBe(false);
+    }
+  });
+
+  // #1228: Coordenador may mint Técnico accounts via user management.
+  it('allows Coordenador on user-management routes', () => {
+    for (const route of ['/system-management', '/users', '/users/new', '/access']) {
+      expect(canRoleAccessRoute('Administrador', route)).toBe(true);
+      expect(canRoleAccessRoute('Coordenador', route)).toBe(true);
       expect(canRoleAccessRoute('Técnico', route)).toBe(false);
       expect(canRoleAccessRoute('Usuário Externo', route)).toBe(false);
     }

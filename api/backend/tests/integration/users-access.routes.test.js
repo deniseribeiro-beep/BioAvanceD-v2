@@ -1484,8 +1484,8 @@ describe('Users and Access routes', () => {
       expect(res.statusCode).toBe(200);
     });
 
-    // #1008: assignRole is Administrador-only. Coordenador keeps createUser
-    // for account lifecycle but may not assign any role (even at/below own level).
+    // #1008/#1228: assignRole is Administrador-only for levels other than
+    // Técnico. Coordenador keeps createUser and may mint Técnico.
     it('#1008: refuses a Coordenador assigning a level at or below their own', async () => {
       const handler = getHandler(userRoutes, 'put', '/:id');
       seedTarget('550e8400-e29b-41d4-a716-44665544110998d');

@@ -8,6 +8,7 @@ import { useUsers } from '../hooks/useUsers';
 import { useOrganizations } from '../hooks/useOrganizations';
 import { getAccessTypeForRole, getRoleDescription, RoleName } from '../utils/rolePermissions';
 import { useLanguage } from '../contexts/LanguageContext';
+import { useAuth } from '../contexts/AuthContext';
 import { validatePassword } from '../utils/passwordValidator';
 import { getPasswordIssues } from '../utils/passwordRules';
 import './NewUserPage.css';
@@ -79,8 +80,12 @@ export default function NewUserPage() {
   const { registerUser, updateUser, loadUsers } = useUsers();
   const { organizations } = useOrganizations();
   const { t } = useLanguage();
+  const { user: currentUser } = useAuth();
   const roleSelectId = useId();
   const organizationSelectId = useId();
+  // #1228: Coordenador may only mint Técnico; Admin keeps the full role select.
+  const isAdmin = currentUser?.roleName === 'Administrador' || currentUser?.accessType === 4;
+  const canPickRole = isAdmin;
   
   // Verifica se há usuário para edição (vindo da navegação)
   const editingUser = (location.state as any)?.user as User | null;
@@ -113,7 +118,7 @@ export default function NewUserPage() {
       organizationId: null,
       username: '',
       password: '',
-      accessType: 1,
+      accessType: 2,
       roleName: 'Técnico' as RoleName,
       accessIDs: [],
       status: 'Ativo',
@@ -419,6 +424,7 @@ export default function NewUserPage() {
               name="roleName"
               value={formData.roleName || 'Técnico'}
               onChange={(e) => {
+                if (!canPickRole) return;
                 const newRoleName = e.target.value as RoleName;
                 const newAccessType = getAccessTypeForRole(newRoleName);
                 setFormData({ 
@@ -434,11 +440,16 @@ export default function NewUserPage() {
               className="form-select"
               title={t('users.role')}
               required
+              disabled={!canPickRole}
             >
               <option value="Técnico">{t('users.roleTechnician')}</option>
-              <option value="Coordenador">{t('users.roleCoordinator')}</option>
-              <option value="Administrador">{t('users.roleAdministrator')}</option>
-              <option value="Usuário Externo">{t('users.roleExternalUser')}</option>
+              {canPickRole && (
+                <>
+                  <option value="Coordenador">{t('users.roleCoordinator')}</option>
+                  <option value="Administrador">{t('users.roleAdministrator')}</option>
+                  <option value="Usuário Externo">{t('users.roleExternalUser')}</option>
+                </>
+              )}
             </select>
             <div className="role-description">
               <p className="form-help-text">

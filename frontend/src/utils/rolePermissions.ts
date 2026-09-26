@@ -100,11 +100,12 @@ const ROUTE_ACCESS: ReadonlyArray<readonly [string, readonly RoleName[]]> = [
   ['/security/mfa-setup', ALL_ROLES],
   ['/mfa-setup', ALL_ROLES],
 
-  // Administration.
+  // Administration. #1228: Coordenador may reach user management (mint Técnico);
+  // organizations/collections/security tabs stay Admin-gated inside the page.
   ['/security', ADMIN],
-  ['/system-management', ADMIN],
-  ['/users', ADMIN],
-  ['/access', ADMIN],
+  ['/system-management', ADMIN_COORD],
+  ['/users', ADMIN_COORD],
+  ['/access', ADMIN_COORD],
   ['/backup', ADMIN],
   ['/settings/parameters', ADMIN],
   ['/admin/tcle', ADMIN_COORD],

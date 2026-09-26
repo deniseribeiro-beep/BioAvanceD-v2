@@ -45,8 +45,8 @@ const LEGACY_ROLES_SEED = {
       roleName: 'Coordenador',
       // #662: manageAccessRequests is Administrador-only until a real committee
       // workflow exists (same sensitivity posture as reidentifyParticipant).
-      // #1008: assignRole is Administrador-only — Coordenador keeps createUser
-      // for account lifecycle without role assignment.
+      // #1008/#1228: assignRole is Administrador-only. Coordenador keeps
+      // createUser and may mint Técnico only; other levels need assignRole.
       permissions: ['createUser', 'createSample', 'editSample', 'createPatient', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageSensor', 'recordTemperature', 'viewReports', 'createResult', 'editResult', 'deleteResult', 'manageReportTemplates', 'manageStorageAllocation', 'manageStorageTopology'],
     },
     {
@@ -100,9 +100,9 @@ const PERMISSION_CATALOG = {
   viewTemperature: { resourceType: 'Temperature', allowedActions: ['CREATE', 'READ', 'UPDATE', 'DELETE'], displayName: 'Visualizar temperatura' },
   uploadFiles: { resourceType: 'SampleFile', allowedActions: ['CREATE', 'READ', 'UPDATE'], displayName: 'Enviar arquivos' },
   createUser: { resourceType: 'User', allowedActions: ['CREATE', 'READ', 'UPDATE', 'DELETE'], displayName: 'Criar usuário' },
-  // #1008 (RF003): distinct from createUser — role assignment is
-  // Administrador-only. createUser holders (Coordenador) may still create
-  // accounts at the default level without supplying accessType/roleName.
+  // #1008/#1228 (RF003): distinct from createUser — role assignment for
+  // levels other than Técnico is Administrador-only. createUser holders
+  // (Coordenador) may mint Técnico accounts (explicit or default).
   assignRole: { resourceType: 'User', allowedActions: ['UPDATE'], displayName: 'Atribuir papel' },
   editSample: { resourceType: 'Sample', allowedActions: ['UPDATE'], displayName: 'Editar amostra' },
   deleteSample: { resourceType: 'Sample', allowedActions: ['DELETE'], displayName: 'Excluir amostra' },

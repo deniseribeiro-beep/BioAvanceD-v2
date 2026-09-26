@@ -36,24 +36,33 @@ export function resolveOrganizationLabel(
 
 export default function SystemManagementPage() {
   const { t } = useLanguage();
+  const { user: currentUser } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = searchParams.get('tab') as TabType | null;
-  const validTabs: TabType[] = ['users', 'organizations', 'collections', 'security'];
+  const isAdmin = currentUser?.roleName === 'Administrador' || currentUser?.accessType === 4;
+  // #1228: Coordenador may only use the users tab (mint Técnico / manage users).
+  const validTabs: TabType[] = isAdmin
+    ? ['users', 'organizations', 'collections', 'security']
+    : ['users'];
   const initialTab = (tabParam && validTabs.includes(tabParam)) ? tabParam : 'users';
   const [activeTab, setActiveTab] = useState<TabType>(initialTab);
 
   useEffect(() => {
     if (tabParam && validTabs.includes(tabParam)) {
       setActiveTab(tabParam);
+    } else if (tabParam && !validTabs.includes(tabParam)) {
+      setActiveTab('users');
+      setSearchParams({ tab: 'users' }, { replace: true });
     }
-  }, [tabParam]);
+  }, [tabParam, isAdmin]);
 
-  const tabs = [
+  const allTabs = [
     { id: 'users' as TabType, label: t('system.tabs.users', 'Usuários'), icon: UserCog },
     { id: 'organizations' as TabType, label: t('system.tabs.organizations', 'Organizações'), icon: Building2 },
     { id: 'collections' as TabType, label: t('system.tabs.collections', 'Coleções'), icon: FlaskConical },
     { id: 'security' as TabType, label: t('system.tabs.security', 'Segurança'), icon: ShieldIcon },
   ];
+  const tabs = allTabs.filter((tab) => validTabs.includes(tab.id));
 
   return (
     <div className="page" data-testid="system-management-page">
@@ -86,9 +95,9 @@ export default function SystemManagementPage() {
 
       <div className="system-tab-content">
         {activeTab === 'users' && <UsersSection />}
-        {activeTab === 'organizations' && <OrganizationsSection />}
-        {activeTab === 'collections' && <CollectionsSection />}
-        {activeTab === 'security' && <SecuritySection />}
+        {isAdmin && activeTab === 'organizations' && <OrganizationsSection />}
+        {isAdmin && activeTab === 'collections' && <CollectionsSection />}
+        {isAdmin && activeTab === 'security' && <SecuritySection />}
       </div>
     </div>
   );

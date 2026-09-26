@@ -219,7 +219,7 @@ describe('RF003 - POST /api/users/register', () => {
       }),
     });
 
-    // When — #1008: role assignment requires Administrador assignRole (accessType 4).
+    // When — #1008/#1228: Técnico mint via createUser (Admin also holds assignRole).
     const response = await request(app)
       .post('/api/users/register')
       .set('Authorization', `Bearer ${makeAuthToken(4)}`)
@@ -238,6 +238,49 @@ describe('RF003 - POST /api/users/register', () => {
     expect(rbacCollections.userRoleAssignments.insertOne).toHaveBeenCalledWith(
       expect.objectContaining({ scopeType: 'organization', scopeId: 'org-1' })
     );
+  });
+
+  it('#1228: Coordenador com createUser pode criar Técnico (accessType 2 explícito)', async () => {
+    const usersCollection = givenUsersCollection({
+      findOne: vi.fn().mockResolvedValue(null),
+      insertOne: vi.fn().mockResolvedValue({ insertedId: 'new-tech-1' }),
+      updateOne: vi.fn(),
+    });
+
+    const response = await whenRegisterUser(
+      buildUserRegistrationPayload({
+        name: 'Técnico Novo',
+        email: 'tecnico.novo@example.com',
+        username: 'tecnico.novo',
+        accessType: 2,
+        roleName: 'Técnico',
+      })
+    );
+
+    expect(response.status).toBe(201);
+    expect(usersCollection.insertOne).toHaveBeenCalled();
+  });
+
+  it('#1228: Coordenador sem assignRole não pode criar Administrador', async () => {
+    const usersCollection = givenUsersCollection({
+      findOne: vi.fn().mockResolvedValue(null),
+      insertOne: vi.fn(),
+      updateOne: vi.fn(),
+    });
+
+    const response = await whenRegisterUser(
+      buildUserRegistrationPayload({
+        name: 'Admin Tentativa',
+        email: 'admin.tentativa@example.com',
+        username: 'admin.tentativa',
+        accessType: 4,
+        roleName: 'Administrador',
+      })
+    );
+
+    expect(response.status).toBe(403);
+    expect(String(response.body.message || response.body.error || '')).toMatch(/assignRole/i);
+    expect(usersCollection.insertOne).not.toHaveBeenCalled();
   });
 
   it('#617: rejeita organizationId que não resolve a uma Organization real', async () => {

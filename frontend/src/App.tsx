@@ -110,12 +110,13 @@ function App() {
                   {/* Rota de Nova Amostra removida. Cadastro de amostras agora é feito apenas via Intake Wizard. */}
                   <Route path="samples" element={<ProtectedRoute><SamplesPage /></ProtectedRoute>} />
                   <Route path="/results" element={<ProtectedRoute><ResultsPage /></ProtectedRoute>} />
-                  <Route path="/system-management" element={<ProtectedRoute requiredRole="Administrador"><SystemManagementPage /></ProtectedRoute>} />
+                  {/* #1228: Coordenador may manage users (mint Técnico); Admin tabs stay Admin-gated inside the page. */}
+                  <Route path="/system-management" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><SystemManagementPage /></ProtectedRoute>} />
                   <Route path="/users" element={<Navigate to="/system-management?tab=users" replace />} />
                   <Route path="/access" element={<Navigate to="/system-management?tab=users" replace />} />
                   <Route path="/security" element={<Navigate to="/system-management?tab=security" replace />} />
-                  <Route path="/users/new" element={<ProtectedRoute requiredRole="Administrador"><NewUserPage /></ProtectedRoute>} />
-                  <Route path="/users/new/success" element={<ProtectedRoute requiredRole="Administrador"><NewUserSuccessPage /></ProtectedRoute>} />
+                  <Route path="/users/new" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><NewUserPage /></ProtectedRoute>} />
+                  <Route path="/users/new/success" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><NewUserSuccessPage /></ProtectedRoute>} />
                   <Route path="/facility-management" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><FacilityManagementPage /></ProtectedRoute>} />
                   <Route path="/equipment" element={<Navigate to="/facility-management?tab=equipment" replace />} />
                   <Route path="/locations" element={<Navigate to="/facility-management?tab=locations" replace />} />
