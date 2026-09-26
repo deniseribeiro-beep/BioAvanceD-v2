@@ -415,6 +415,13 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
     await page.getByTestId('wizard-comorbidity-ckd').check();
     await page.getByTestId('wizard-comorbidity-hypertension').check();
 
+    // #1232: (outcomeType, outcomeDate) is drawn from 9000 dates and every
+    // run's outcome stays on the volume, so count what is already there.
+    const outcomesBefore = await mongoClient.db(mongoDbName).collection('clinicalOutcomes').countDocuments({
+      'outcomeType.code': outcomeType,
+      outcomeDate: new Date(outcomeDate),
+    });
+
     const submissionResponse = page.waitForResponse((response) => response.url().includes('/intake-wizard') && response.request().method() === 'POST');
     await page.getByTestId('wizard-submit-button').click();
     const response = await submissionResponse;
@@ -558,12 +565,13 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
     // longitudinal-outcome UI existed before this slice). No participantId
     // field exists on this entity (dict-02's own gap, matching #691's
     // model) and no free-text display field either -- queried by the
-    // (outcomeType, outcomeDate) pair this run's fixture uniquely derived.
+    // (outcomeType, outcomeDate) pair, counted against the rows that pair
+    // already matched before this submission (#1232).
     const outcomes = await db.collection('clinicalOutcomes').find({
       'outcomeType.code': outcomeType,
       outcomeDate: new Date(outcomeDate),
     }).toArray();
-    expect(outcomes).toHaveLength(1);
+    expect(outcomes).toHaveLength(outcomesBefore + 1);
     expect(outcomes[0]).toMatchObject({
       outcomeType: { code: outcomeType },
     });
