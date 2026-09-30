@@ -84,8 +84,9 @@ function denyingRequirePermission() {
 
 describe('user.routes authorization gates (issue #921)', () => {
   describe('requirePermission argument pinning', () => {
-    // One entry per requirePermission-gated registration -- all 12 of them
-    // (#1010 added the 12th), confirmed against user.routes.js line-by-line.
+    // One entry per requirePermission-gated registration -- all 14 of them
+    // (#1010 added the 12th, #1020 the 13th, #1241 the 14th), confirmed
+    // with `grep -n "requirePermission(" user.routes.js`.
     // The per-case line numbers in the labels below have drifted since #921
     // wrote them and are indicative, not authoritative -- re-derive with
     // git grep rather than trusting them. Each pins the exact permission
@@ -120,6 +121,9 @@ describe('user.routes authorization gates (issue #921)', () => {
       { label: 'POST /:id/disable-mfa (disableMFA, UPDATE) :1083', method: 'post', path: '/u1/disable-mfa', expectedArgs: ['disableMFA', 'UPDATE'] },
       // #1020: RF003 AC#5's administrator session revoke.
       { label: 'POST /:id/revoke-sessions (revokeSessions, UPDATE)', method: 'post', path: '/u1/revoke-sessions', expectedArgs: ['revokeSessions', 'UPDATE'] },
+      // #1241: GET /:id had authenticate only, so any account could read any
+      // other user's record. It now carries the list's own gate.
+      { label: 'GET /:id (createUser)', method: 'get', path: '/u1', expectedArgs: ['createUser'] },
     ];
 
     // #1008: POST /register now carries a SECOND gate, assignRole, after
@@ -221,8 +225,9 @@ describe('user.routes authorization gates (issue #921)', () => {
   // under the router root. Express matches router.METHOD registrations in
   // registration order, not by literal-vs-param specificity, so a request
   // to /api/users/logs actually falls through GET /:id (id = 'logs') first
-  // and never reaches line 823's own registration. GET /:id carries no
-  // requirePermission gate at all (only authenticate), so this is not a
+  // and never reaches line 823's own registration. GET /:id carried no
+  // requirePermission gate at all then (only authenticate; #1241 added
+  // createUser), so this is not a
   // gate-args question -- but it does mean GET /logs's own registration
   // (and whatever the real logService.getLogs endpoint is meant to enforce)
   // is unreachable. Pinned here as observed; not fixed (out of this file's
@@ -246,5 +251,42 @@ describe('user.routes authorization gates (issue #921)', () => {
     // absence of the /:id shape rather than a specific success status keeps
     // this independent of whatever logService.getLogs does with a stub db.
     expect(res.body.error).not.toBe('users.notFound');
+  });
+
+  // #1241: once #926 made GET /logs reachable, it served the `logs`
+  // collection -- the RNF009 audit trail -- to any authenticated account,
+  // while /api/logs gates the same collection on isAuditReader (#1056).
+  describe('GET /logs follows the audit-reader rule (#1241)', () => {
+    const rbacServicePath = require.resolve('../../src/services/rbac-assignment.service');
+    const logServicePath = require.resolve('../../src/services/log.service');
+
+    async function getLogsAs(auditReader) {
+      const rbacService = require(rbacServicePath);
+      const logService = require(logServicePath);
+      const readerSpy = vi.spyOn(rbacService, 'isAuditReader').mockResolvedValue(auditReader);
+      const logsSpy = vi.spyOn(logService, 'getLogs').mockResolvedValue({ logs: [], total: 0 });
+      try {
+        const { router } = loadRoute();
+        const res = await request(buildApp(router)).get('/api/users/logs');
+        // Copied out before mockRestore() in finally, which clears mock.calls.
+        return { res, readerCalls: [...readerSpy.mock.calls], logsCalls: logsSpy.mock.calls.length };
+      } finally {
+        readerSpy.mockRestore();
+        logsSpy.mockRestore();
+      }
+    }
+
+    it('refuses an account that is not an audit reader, before reading any log', async () => {
+      const { res, readerCalls, logsCalls } = await getLogsAs(false);
+      expect(res.status).toBe(403);
+      expect(readerCalls).toEqual([[expect.anything(), 'user-1']]);
+      expect(logsCalls).toBe(0);
+    });
+
+    it('control: an audit reader gets the logs', async () => {
+      const { res, logsCalls } = await getLogsAs(true);
+      expect(res.status).toBe(200);
+      expect(logsCalls).toBe(1);
+    });
   });
 });

@@ -669,6 +669,13 @@ class SessionService {
     const invalid = (message) => Object.assign(new Error(message), { statusCode: 422 });
     const query = {};
 
+    // #1241, kept deliberately: a reader who knows a raw id can link it to its
+    // pseudonym through this filter. Readers are administrators and auditors,
+    // the controller's own audit function, and LGPD Art. 13 §4 defines
+    // pseudonymisation as data that can be re-associated only with information
+    // the controller keeps "em ambiente controlado e seguro". Pulling one
+    // named account's sessions is what an audit of that account is.
+    // log.service#getLogs takes the same raw filter for GET /api/logs.
     const userId = filters.userId || filters.userID;
     if (userId) query.userID = String(userId);
 

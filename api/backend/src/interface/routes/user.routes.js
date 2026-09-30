@@ -245,6 +245,19 @@ router.get('/logs', authenticate, async (req, res) => {
       });
     }
 
+    // #1241: this serves the `logs` collection, the RNF009 audit trail, which
+    // /api/logs gates on isAuditReader (#1056). Once #926 made this route
+    // reachable it had authenticate alone, so every account could read the
+    // trail here. Same rule and same refusal as logs.routes.js.
+    const { isAuditReader } = require('../../services/rbac-assignment.service');
+    if (!(await isAuditReader(db, req.user?.userID))) {
+      return res.status(403).json({
+        success: false,
+        error: 'Acesso negado',
+        message: 'Apenas perfis Admin ou Auditor podem acessar trilhas de auditoria.'
+      });
+    }
+
     const logService = require('../../services/log.service');
     const result = await logService.getLogs(db, req.query);
 
@@ -262,7 +275,9 @@ router.get('/logs', authenticate, async (req, res) => {
   }
 });
 
-router.get('/:id', authenticate, async (req, res) => {
+// #1241: gated like GET / above. With authenticate alone any account could
+// read any other user's record (email, phone, organization, status, roles).
+router.get('/:id', authenticate, requirePermission('createUser'), async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -1285,6 +1300,12 @@ router.post('/:id/reset-mfa', authenticate, requirePermission('resetMFA', 'UPDAT
 // expiry), so they are refused here. No automatic 'risk' writer exists on
 // purpose: revoking on a login lockout would let anyone log the real owner
 // out by failing passwords against the account.
+//
+// #1241, kept deliberately: no hierarchy floor, so an administrator may
+// revoke another administrator's sessions, and their own. Revocation grants
+// nothing and the target signs in again. A compromised administrator account
+// is the case reason 'risk' exists for, and a floor would leave no other
+// administrator able to cut it off.
 router.post('/:id/revoke-sessions', authenticate, requirePermission('revokeSessions', 'UPDATE'), async (req, res) => {
   try {
     const db = req.app.locals.db;
