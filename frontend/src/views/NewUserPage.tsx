@@ -35,6 +35,10 @@ export function buildUserSubmissionPayload(formData: Partial<User>, editingUser:
   delete dataToSave.mfaLocked;
   delete dataToSave.accessIDs; // Campo não é mais usado
   delete dataToSave.modelVersion; // Remove modelVersion se existir
+  // #1240: the auditor role is granted through PUT /api/users/:id only.
+  if (!editingUser) {
+    delete dataToSave.auditorRole;
+  }
 
   // Normaliza telefone: remove formatação antes de salvar (apenas números)
   if (dataToSave.phone !== undefined) {
@@ -446,7 +450,22 @@ export default function NewUserPage() {
               </p>
             </div>
           </div>
-          
+
+          {editingUser && (
+            <div className="form-grid-full">
+              <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <input
+                  type="checkbox"
+                  data-testid="new-user-auditor-checkbox"
+                  checked={Boolean(formData.auditorRole)}
+                  onChange={(e) => setFormData({ ...formData, auditorRole: e.target.checked })}
+                />
+                {t('users.auditorRole')}
+              </label>
+              <p className="form-help-text">{t('users.auditorRoleHelp')}</p>
+            </div>
+          )}
+
           <div className="form-grid-full">
             <label className="form-label">{t('users.status')} *</label>
             <select

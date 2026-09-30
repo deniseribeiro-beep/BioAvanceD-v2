@@ -980,6 +980,64 @@ test.describe('Audit trail screen (RNF009, #1239) — real backend', () => {
     expect(refusedCalls).toEqual([]);
     await coordinatorContext.close();
   });
+
+  // #1240 (RF003 AC#3): the auditor role is granted and revoked from the
+  // user edit form, not only through a raw PUT.
+  test('the administrator grants the auditor role from the user form, the list shows it, the target sees Logs, and unticking revokes it', async ({
+    page,
+    browser,
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const target = await registerWithMfa(request, admin.token, { accessType: 2, roleName: 'Técnico', label: 'form1240' });
+
+    async function saveAuditorFlag(checked: boolean) {
+      await page.goto('/system-management?tab=users');
+      await page.getByTestId(`edit-user-button-${target.userID}`).click();
+      const checkbox = page.getByTestId('new-user-auditor-checkbox');
+      await expect(checkbox).toBeVisible();
+      await checkbox.setChecked(checked);
+      const saved = page.waitForResponse(
+        (response) => response.url().includes(`/api/users/${target.userID}`) && response.request().method() === 'PUT'
+      );
+      await page.getByTestId('new-user-submit-button').click();
+      const response = await saved;
+      expect(response.status(), await response.text()).toBe(200);
+      expect(response.request().postDataJSON().auditorRole).toBe(checked);
+      expect((await response.json()).data.auditorRole).toBe(checked);
+      await expect(page).toHaveURL(/system-management/);
+    }
+
+    await seedRealAuth(page, admin);
+
+    // Before the grant, the list shows no auditor badge.
+    await page.goto('/system-management?tab=users');
+    await expect(page.getByTestId(`auditor-badge-${target.userID}`)).toHaveCount(0);
+
+    await saveAuditorFlag(true);
+    await expect(page.getByTestId(`auditor-badge-${target.userID}`)).toBeVisible();
+
+    // The edit form now seeds itself ticked from the list row.
+    await page.getByTestId(`edit-user-button-${target.userID}`).click();
+    await expect(page.getByTestId('new-user-auditor-checkbox')).toBeChecked();
+
+    const targetSession = await completeFirstLoginMfa(request, apiBaseURL!, target.username, target.password);
+    expect((targetSession.user as { isAuditReader?: boolean }).isAuditReader).toBe(true);
+    const targetContext = await browser.newContext();
+    const targetPage = await targetContext.newPage();
+    await seedRealAuth(targetPage, targetSession);
+    await targetPage.goto('/logs');
+    await expect(targetPage.getByText('Acesso Negado')).toHaveCount(0);
+    await expect(targetPage.locator('a[href="/logs"]').first()).toBeVisible();
+    await targetContext.close();
+
+    await saveAuditorFlag(false);
+    await expect(page.getByTestId(`auditor-badge-${target.userID}`)).toHaveCount(0);
+    const afterRevoke = await request.get(`${apiBaseURL}/api/users/${target.userID}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect((await afterRevoke.json()).data.auditorRole).toBe(false);
+  });
 });
 
 // #1020 / RF003 AC#5: the administrator revokes an account's sessions from

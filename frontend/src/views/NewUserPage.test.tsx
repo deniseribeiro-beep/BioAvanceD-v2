@@ -49,4 +49,17 @@ describe('buildUserSubmissionPayload', () => {
     const payload = buildUserSubmissionPayload({ ...editingUser, password: '' }, editingUser);
     expect(payload.password).toBeUndefined();
   });
+
+  // #1240: auditorRole is granted through PUT /api/users/:id only, so a
+  // create never carries it, while an edit sends it either way.
+  it('#1240: a new user never sends auditorRole', () => {
+    const payload = buildUserSubmissionPayload({ name: 'Ana', username: 'ana', auditorRole: true }, null);
+    expect(payload).not.toHaveProperty('auditorRole');
+  });
+
+  it('#1240: an edit sends auditorRole, false included', () => {
+    const editingUser = { id: 1, _id: 'abc', name: 'Ana', email: 'a@b.com', username: 'ana', auditorRole: true } as User;
+    expect(buildUserSubmissionPayload({ ...editingUser }, editingUser).auditorRole).toBe(true);
+    expect(buildUserSubmissionPayload({ ...editingUser, auditorRole: false }, editingUser).auditorRole).toBe(false);
+  });
 });

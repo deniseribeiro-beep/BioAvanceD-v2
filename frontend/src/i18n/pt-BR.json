@@ -1726,6 +1726,9 @@
   },
   "users": {
     "accessType": "Tipo de Acesso",
+    "auditorBadge": "Auditor",
+    "auditorRole": "Perfil Auditor (acesso de leitura à trilha de auditoria)",
+    "auditorRoleHelp": "Papel adicional: permite consultar Logs e Auditoria sem alterar o papel principal.",
     "create": "Criar Usuário",
     "delete": "Excluir Usuário",
     "deleteConfirm": "Tem certeza que deseja excluir este usuário?",

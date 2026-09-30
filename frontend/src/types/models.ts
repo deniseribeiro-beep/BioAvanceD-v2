@@ -587,6 +587,9 @@ export interface User {
   // #1239: the backend's audit-trail rule (administrator or the additive
   // auditor role), sent on login and verify. roleName cannot express it.
   isAuditReader?: boolean;
+  // #1240: whether this user holds the additive auditor role. Read on the
+  // user list and item; written through PUT /api/users/:id only.
+  auditorRole?: boolean;
   accessIDs?: number[]; // IDs dos Access permitidos (reportID da tabela Access)
   allowedReports?: string[]; // Tipos de relatórios permitidos (preenchido pelo backend)
   status?: string;

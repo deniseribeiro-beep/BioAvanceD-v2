@@ -183,6 +183,12 @@ function UsersSection() {
                         {getAccessTypeLabel(user.accessType)}
                       </span>
                     )}
+                    {/* #1240: the additive auditor role, beside the main one. */}
+                    {user.auditorRole && (
+                      <span className="role-badge role-auditor" data-testid={`auditor-badge-${userId || user.id}`}>
+                        {t('users.auditorBadge')}
+                      </span>
+                    )}
                   </div>
                 </td>
                 <td>

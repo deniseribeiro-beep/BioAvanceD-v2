@@ -85,6 +85,7 @@
 
 .role-badge-container {
 	display: inline-flex;
+	gap: 0.35rem;
 }
 
 .role-badge {
@@ -104,6 +105,13 @@
 	background: var(--color-primary-soft);
 	color: var(--primary-dark);
 	border-color: rgba(0, 122, 77, 0.22);
+}
+
+/* #1240: the additive auditor role, shown beside the main role. */
+.role-auditor {
+	background: rgba(124, 58, 237, 0.1);
+	color: #6d28d9;
+	border-color: rgba(124, 58, 237, 0.22);
 }
 
 .role-coordenador {
