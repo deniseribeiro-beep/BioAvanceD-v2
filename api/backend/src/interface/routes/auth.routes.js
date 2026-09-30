@@ -213,7 +213,8 @@ router.post('/logout', authenticate, async (req, res) => {
           db,
           sessionCheck.session.sessionID,
           'user_request',
-          sessionCheck.session.userID
+          sessionCheck.session.userID,
+          { req }
         );
       }
     }
@@ -341,7 +342,7 @@ router.delete('/sessions/all-others', authenticate, async (req, res) => {
 
     const token = req.headers.authorization?.substring(7);
     const sessionService = require('../../services/session.service');
-    await sessionService.revokeAllOtherSessions(db, req.user.userID, token);
+    await sessionService.revokeAllOtherSessions(db, req.user.userID, token, 'user_request', null, { req });
 
     return res.status(200).json({
       success: true,
@@ -371,7 +372,7 @@ router.delete('/sessions/:sessionId', authenticate, async (req, res) => {
       clearRefreshCookie(res);
     }
 
-    const revoked = await sessionService.revokeSessionById(db, req.user.userID, sessionId, 'user_request', req.user.userID);
+    const revoked = await sessionService.revokeSessionById(db, req.user.userID, sessionId, 'user_request', req.user.userID, { req });
 
     if (!revoked) {
       return res.status(404).json({

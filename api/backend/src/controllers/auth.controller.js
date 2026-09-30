@@ -393,7 +393,7 @@ class AuthController {
       // sessions die.
       const currentToken = (req.headers && req.headers.authorization || '').replace('Bearer ', '');
       await sessionService.revokeAllOtherSessions(
-        db, req.user.userID, currentToken, 'password_change', req.user.userID
+        db, req.user.userID, currentToken, 'password_change', req.user.userID, { req }
       );
       
       return res.status(200).json({

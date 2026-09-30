@@ -644,7 +644,7 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
     // reset-mfa abaixo.
     if (passwordWasSet) {
       const sessionService = require('../../services/session.service');
-      await sessionService.invalidateUserSessions(db, targetUser._id.toString(), 'admin_action', req.user?.userID);
+      await sessionService.invalidateUserSessions(db, targetUser._id.toString(), 'admin_action', req.user?.userID, { req });
     }
 
     // #615: organizationId used for RBAC scoping below — already normalized
@@ -1227,7 +1227,7 @@ router.post('/:id/reset-mfa', authenticate, requirePermission('resetMFA', 'UPDAT
     // aceita _id/id/userID em forma string E numérica, então o parâmetro da
     // rota não é necessariamente igual ao userID gravado na sessão.
     const sessionService = require('../../services/session.service');
-    await sessionService.invalidateUserSessions(db, targetUser._id.toString(), 'admin_action', req.user?.userID);
+    await sessionService.invalidateUserSessions(db, targetUser._id.toString(), 'admin_action', req.user?.userID, { req });
 
     // #1031: par explícito da linha do desbloqueio acima. Sem as duas, a
     // trilha registra as duas operações de forma indistinguível.
@@ -1251,6 +1251,48 @@ router.post('/:id/reset-mfa', authenticate, requirePermission('resetMFA', 'UPDAT
       error: req.t('users.resetMFAError'),
       message: error.message
     });
+  }
+});
+
+// #1020 / RF003 AC#5 ("Revogar sessões"): an administrator revokes every
+// active session of an account. `reason` is 'admin_action' (default) or
+// 'risk', the P1X-0267 member that had no writer: the administrator records
+// that they judge the account at risk, which is what an auditor filtering the
+// session view by motivo needs to see. The other three members are not the
+// administrator's to claim (a user's own request, a password change, an
+// expiry), so they are refused here. No automatic 'risk' writer exists on
+// purpose: revoking on a login lockout would let anyone log the real owner
+// out by failing passwords against the account.
+router.post('/:id/revoke-sessions', authenticate, requirePermission('revokeSessions', 'UPDATE'), async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
+    }
+
+    const reason = req.body?.reason === undefined ? 'admin_action' : req.body.reason;
+    if (!['admin_action', 'risk'].includes(reason)) {
+      return res.status(422).json({
+        success: false,
+        error: 'Dados inválidos',
+        message: "reason deve ser 'admin_action' ou 'risk'"
+      });
+    }
+
+    const targetUser = await db.collection('users').findOne(buildUserFilterById(req.params.id));
+    if (!targetUser) {
+      return res.status(404).json({ success: false, error: 'Usuário não encontrado' });
+    }
+
+    const sessionService = require('../../services/session.service');
+    const revoked = await sessionService.invalidateUserSessions(
+      db, targetUser._id.toString(), reason, req.user?.userID, { req }
+    );
+
+    return res.status(200).json({ success: true, data: { revoked, reason } });
+  } catch (error) {
+    logger.error('Erro ao revogar sessões do usuário:', error.message);
+    return res.status(500).json({ success: false, error: 'Erro ao revogar sessões' });
   }
 });
 

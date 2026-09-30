@@ -48,7 +48,7 @@ const LEGACY_ROLES_SEED = {
     {
       accessType: 4,
       roleName: 'Administrador',
-      permissions: ['createUser', 'assignRole', 'createSample', 'editSample', 'deleteSample', 'createPatient', 'requestConsent', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageTemperaturePolicy', 'manageSensor', 'recordTemperature', 'viewReports', 'manageBackup', 'manageSystem', 'resetMFA', 'forcePasswordReset', 'disableMFA', 'manageOrganizations', 'createResult', 'editResult', 'deleteResult', 'reidentifyParticipant', 'manageAccessRequests', 'manageReportTemplates', 'viewEquipment', 'viewStorageTopology', 'manageStorageAllocation', 'manageStorageTopology'],
+      permissions: ['createUser', 'assignRole', 'createSample', 'editSample', 'deleteSample', 'createPatient', 'requestConsent', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageTemperaturePolicy', 'manageSensor', 'recordTemperature', 'viewReports', 'manageBackup', 'manageSystem', 'resetMFA', 'forcePasswordReset', 'disableMFA', 'revokeSessions', 'manageOrganizations', 'createResult', 'editResult', 'deleteResult', 'reidentifyParticipant', 'manageAccessRequests', 'manageReportTemplates', 'viewEquipment', 'viewStorageTopology', 'manageStorageAllocation', 'manageStorageTopology'],
     },
   ],
 };
@@ -221,6 +221,10 @@ const PERMISSION_CATALOG = {
   // isAdministrator check only, so it appeared in no permission audit.
   // Same shape as resetMFA -- acts on another user's second factor.
   disableMFA: { resourceType: 'User', allowedActions: ['UPDATE'], displayName: 'Desativar MFA' },
+  // #1020: RF003 AC#5 ("Revogar sessões") as an administrator's own act on
+  // another user's sessions, not only a side effect of a password set or MFA
+  // reset. Same shape as resetMFA.
+  revokeSessions: { resourceType: 'User', allowedActions: ['UPDATE'], displayName: 'Revogar sessões' },
   manageTemperature: { resourceType: 'Temperature', allowedActions: ['UPDATE'], displayName: 'Gerenciar incidentes de temperatura' },
   // #1073: every sensor and temperature WRITE route was gated on
   // 'viewTemperature' -- a read permission whose allowedActions had been

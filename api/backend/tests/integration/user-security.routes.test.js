@@ -341,12 +341,18 @@ describe('User security routes', () => {
     // init() proves the spy target is the same module object the controller's
     // module-scope require bound -- the identity this file previously got wrong.
     expect(auditSpies.init).toHaveBeenCalledWith(db);
-    expect(auditSpies.log).toHaveBeenCalledTimes(1);
-    expect(auditSpies.log.mock.calls[0][0]).toMatchObject({
+    // #1020: the revocation of the user's other sessions writes its own row
+    // now, carrying the reason in `message`, beside the Password row.
+    const rows = auditSpies.log.mock.calls.map((call) => call[0]);
+    expect(rows).toHaveLength(2);
+    expect(rows.find((row) => row.resourceType === 'Password')).toMatchObject({
       action: 'UPDATE',
-      resourceType: 'Password',
       status: 'success',
       severity: 'critical',
+    });
+    expect(rows.find((row) => row.resourceType === 'Session')).toMatchObject({
+      action: 'UPDATE',
+      message: expect.stringContaining('motivo password_change'),
     });
   });
 });

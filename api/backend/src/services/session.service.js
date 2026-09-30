@@ -327,20 +327,68 @@ class SessionService {
   }
 
   /**
+   * #1020: one audit row per revocation event, written HERE rather than at
+   * each of the ~14 call sites, so a new caller cannot forget it.
+   *
+   * The reason rides in `message` and the owner's pseudonym in `resourceId`,
+   * never in `payload`: audit-v2's ingestLogRecord copies a fixed field set
+   * into the tamper-evident chain and drops the rest (#1005's finding). The
+   * pseudonym is kept out of `message` because sanitizeMessage's phone
+   * pattern rewrites an all-digit USR-XXXXXXXX to "[telefone]".
+   *
+   * 'expiration' is not audited: it is housekeeping on sessions that already
+   * timed out, not a decision anyone took, and it runs on every stale
+   * request. Nothing is written when no session actually changed.
+   *
+   * The actor is `req`'s user when the caller has one, otherwise `revokedBy`
+   * (a process name like 'system' is attributed to USR-SYSTEM). An audit
+   * failure never undoes or fails the revocation.
+   */
+  async recordRevocationAudit(db, { reason, revokedBy = null, ownerID = null, count = 1, req = null } = {}) {
+    if (!count || reason === 'expiration') return;
+    try {
+      const auditLogger = require('../utils/auditLogger');
+      auditLogger.init(db);
+      const actorReq = req
+        || (revokedBy && revokedBy !== 'system' ? { user: { userID: String(revokedBy) } } : null);
+      await auditLogger.log({
+        action: 'UPDATE',
+        resourceType: 'Session',
+        resourceId: ownerID ? await getUserAnonId({ _id: String(ownerID) }, db) : null,
+        status: 'success',
+        severity: reason === 'risk' || reason === 'admin_action' ? 'warning' : 'info',
+        message: `Sessão revogada: motivo ${reason || 'não informado'}; sessões afetadas ${count}`,
+        req: actorReq,
+        // source stays the default 'api': every audited revocation is an API
+        // request's side effect ('expiration', the housekeeping one, is skipped).
+        module: 'Sessões',
+      });
+    } catch (error) {
+      logger.warn('[SESSIONS][AUDIT] Falha ao auditar revogação de sessão (#1020): ' + (error?.message || error));
+    }
+  }
+
+  /**
    * Invalida uma sessão
    */
-  async invalidateSession(db, sessionID, reason = null, revokedBy = null) {
+  async invalidateSession(db, sessionID, reason = null, revokedBy = null, { req = null } = {}) {
     try {
       // Remove do cache
+      const cachedOwner = this.sessions.get(sessionID)?.userID;
       this.sessions.delete(sessionID);
 
       // Marca como inativa no banco
       try {
         const sessionsCollection = db.collection('sessions');
-        await sessionsCollection.updateOne(
+        const result = await sessionsCollection.updateOne(
           { sessionID },
           { $set: { isActive: false, isRevoked: true, revokedAt: new Date(), revocationReason: reason, revokedBy: revokedBy == null ? revokedBy : String(revokedBy), updatedAt: new Date() } }
         );
+        if (result?.modifiedCount && reason !== 'expiration') {
+          const ownerID = cachedOwner
+            ?? (await sessionsCollection.findOne({ sessionID }, { projection: { userID: 1 } }))?.userID;
+          await this.recordRevocationAudit(db, { reason, revokedBy, ownerID, count: 1, req });
+        }
       } catch (dbError) {
         logger.warn('Erro ao invalidar sessão no banco:', dbError.message);
       }
@@ -353,7 +401,7 @@ class SessionService {
   /**
    * Invalida todas as sessões de um usuário
    */
-  async invalidateUserSessions(db, userID, reason = null, revokedBy = null) {
+  async invalidateUserSessions(db, userID, reason = null, revokedBy = null, { req = null } = {}) {
     try {
       // #963: coage como os irmãos (listUserSessions, revokeSessionById,
       // revokeAllOtherSessions) já fazem. O campo gravado é sempre string
@@ -373,13 +421,18 @@ class SessionService {
       // Marca como inativas no banco
       try {
         const sessionsCollection = db.collection('sessions');
-        await sessionsCollection.updateMany(
+        const result = await sessionsCollection.updateMany(
           { userID: ownerID, isActive: true },
           { $set: { isActive: false, isRevoked: true, revokedAt: new Date(), revocationReason: reason, revokedBy: revokedBy == null ? revokedBy : String(revokedBy), updatedAt: new Date() } }
         );
+        const count = (result && result.modifiedCount) || 0;
+        await this.recordRevocationAudit(db, { reason, revokedBy, ownerID, count, req });
+        // #1020: callers such as the admin revoke route report how many went.
+        return count;
       } catch (dbError) {
         logger.warn('Erro ao invalidar sessões do usuário no banco:', dbError.message);
       }
+      return 0;
     } catch (error) {
       logger.error('Erro ao invalidar sessões do usuário:', error.message);
       throw error;
@@ -470,7 +523,7 @@ class SessionService {
     }));
   }
 
-  async revokeSessionById(db, userID, sessionID, reason = null, revokedBy = null) {
+  async revokeSessionById(db, userID, sessionID, reason = null, revokedBy = null, { req = null } = {}) {
     const sessionsCollection = db.collection('sessions');
 
     const result = await sessionsCollection.updateOne(
@@ -492,6 +545,7 @@ class SessionService {
     }
 
     this.sessions.delete(sessionID);
+    await this.recordRevocationAudit(db, { reason, revokedBy, ownerID: userID, count: 1, req });
     return true;
   }
 
@@ -503,7 +557,7 @@ class SessionService {
   // established the keep-mine shape, and an admin who tightens session policy
   // and logs themselves out mid-configuration is a foreseeable self-lockout on
   // the only role that can undo it.
-  async revokeAllSessionsForPolicyChange(db, exceptAccessToken, revokedBy) {
+  async revokeAllSessionsForPolicyChange(db, exceptAccessToken, revokedBy, { req = null } = {}) {
     const sessionsCollection = db.collection('sessions');
     const exceptHash = hashToken(exceptAccessToken);
 
@@ -537,7 +591,10 @@ class SessionService {
       }
     }
 
-    return (result && result.modifiedCount) || 0;
+    const count = (result && result.modifiedCount) || 0;
+    // Global: many owners, so no single owner pseudonym for resourceId.
+    await this.recordRevocationAudit(db, { reason: 'admin_action', revokedBy: revokedBy || 'system', count, req });
+    return count;
   }
 
   // #958: reason/revokedBy are optional and default to what this helper
@@ -547,11 +604,11 @@ class SessionService {
   // in P1X-0267's closed vocabulary and was previously unwritable here.
   // Refs #974, which added the same optional pair to the other three helpers
   // and deliberately left this one alone.
-  async revokeAllOtherSessions(db, userID, currentAccessToken, reason = 'user_request', revokedBy = null) {
+  async revokeAllOtherSessions(db, userID, currentAccessToken, reason = 'user_request', revokedBy = null, { req = null } = {}) {
     const sessionsCollection = db.collection('sessions');
     const currentHash = hashToken(currentAccessToken);
 
-    await sessionsCollection.updateMany(
+    const result = await sessionsCollection.updateMany(
       {
         userID: String(userID),
         isActive: true,
@@ -581,6 +638,14 @@ class SessionService {
         this.sessions.delete(sid);
       }
     }
+
+    await this.recordRevocationAudit(db, {
+      reason,
+      revokedBy: revokedBy === null ? String(userID) : String(revokedBy),
+      ownerID: userID,
+      count: (result && result.modifiedCount) || 0,
+      req,
+    });
   }
 
   /**

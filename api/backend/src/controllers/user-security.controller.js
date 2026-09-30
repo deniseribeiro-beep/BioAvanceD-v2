@@ -198,7 +198,7 @@ class UserSecurityController {
       // the current access token stays in the controller where it already is.
       const currentToken = (req.headers && req.headers.authorization || '').replace('Bearer ', '');
       await sessionService.revokeAllOtherSessions(
-        db, req.user.userID, currentToken, 'password_change', req.user.userID
+        db, req.user.userID, currentToken, 'password_change', req.user.userID, { req }
       );
 
       // Registra auditoria
@@ -301,7 +301,10 @@ class UserSecurityController {
         resourceId: id,
         status: 'success',
         severity: 'warning',
-        message: 'Sessão revogada',
+        // #1020: this path revokes through user-security.service, not the
+        // session.service helpers that audit themselves, so this row carries
+        // the reason, in `message`, the field the audit chain keeps.
+        message: 'Sessão revogada: motivo user_request; sessões afetadas 1',
         req: req,
         module: 'Segurança do Usuário'
       });

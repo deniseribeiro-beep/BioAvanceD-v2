@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createRequire } from 'module';
 import fs from 'fs';
 import express from 'express';
@@ -118,6 +118,8 @@ describe('user.routes authorization gates (issue #921)', () => {
       // gate but is invisible to the RBAC catalogue, so the operation could
       // be neither granted to another role nor denied to an Administrador.
       { label: 'POST /:id/disable-mfa (disableMFA, UPDATE) :1083', method: 'post', path: '/u1/disable-mfa', expectedArgs: ['disableMFA', 'UPDATE'] },
+      // #1020: RF003 AC#5's administrator session revoke.
+      { label: 'POST /:id/revoke-sessions (revokeSessions, UPDATE)', method: 'post', path: '/u1/revoke-sessions', expectedArgs: ['revokeSessions', 'UPDATE'] },
     ];
 
     // #1008: POST /register now carries a SECOND gate, assignRole, after
@@ -157,6 +159,51 @@ describe('user.routes authorization gates (issue #921)', () => {
         expect(requirePermissionImpl.recordedCalls).toEqual([expectedArgs]);
       });
     }
+  });
+
+  // #1020: POST /:id/revoke-sessions -- 'risk' is the P1X-0267 member that had
+  // no writer; only admin_action and risk are the administrator's to claim.
+  describe('POST /:id/revoke-sessions', () => {
+    const sessionServicePath = require.resolve('../../src/services/session.service');
+
+    function appWithUser(user) {
+      const { router } = loadRoute();
+      return buildApp(router, { db: { collection: () => ({ findOne: async () => user }) } });
+    }
+
+    it.each([
+      [undefined, 'admin_action'],
+      ['risk', 'risk'],
+    ])('reason %s revokes every active session with reason %s, actor = the admin', async (sent, expected) => {
+      const sessionService = require(sessionServicePath);
+      const spy = vi.spyOn(sessionService, 'invalidateUserSessions').mockResolvedValue(2);
+      try {
+        const body = sent === undefined ? {} : { reason: sent };
+        const res = await request(appWithUser({ _id: 'target-1' })).post('/api/users/target-1/revoke-sessions').send(body);
+        expect(res.status).toBe(200);
+        expect(res.body.data).toEqual({ revoked: 2, reason: expected });
+        expect(spy).toHaveBeenCalledWith(expect.anything(), 'target-1', expected, 'user-1', { req: expect.anything() });
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it.each(['user_request', 'password_change', 'expiration', 'hacked'])('refuses reason %s with 422 before any write', async (reason) => {
+      const sessionService = require(sessionServicePath);
+      const spy = vi.spyOn(sessionService, 'invalidateUserSessions').mockResolvedValue(0);
+      try {
+        const res = await request(appWithUser({ _id: 'target-1' })).post('/api/users/target-1/revoke-sessions').send({ reason });
+        expect(res.status).toBe(422);
+        expect(spy).not.toHaveBeenCalled();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('404 for an unknown user', async () => {
+      const res = await request(appWithUser(null)).post('/api/users/nobody/revoke-sessions').send({});
+      expect(res.status).toBe(404);
+    });
   });
 
   it('does not apply requireOrganizationScope anywhere on this router (confirmed absent)', () => {

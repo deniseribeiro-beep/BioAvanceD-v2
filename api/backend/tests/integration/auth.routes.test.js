@@ -440,7 +440,7 @@ describe('auth.routes.js (integration, real router mounted)', () => {
       // #974: an explicit logout is 'user_request' by the session's own owner,
       // so it is distinguishable from the 'expiration'/'system' pair the clock
       // writes and from an admin's 'admin_action'.
-      expect(invalidateSpy).toHaveBeenCalledWith(expect.anything(), 's1', 'user_request', 'u1');
+      expect(invalidateSpy).toHaveBeenCalledWith(expect.anything(), 's1', 'user_request', 'u1', { req: expect.anything() });
       expect(logLogoutSpy).toHaveBeenCalledTimes(1);
       expect(res.headers['set-cookie']?.some((c) => c.startsWith('refresh_token=;'))).toBe(true);
     });

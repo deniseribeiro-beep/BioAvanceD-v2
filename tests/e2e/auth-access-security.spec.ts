@@ -596,6 +596,45 @@ test.describe('User management (RF003) — real backend', () => {
     });
     expect(badReason.status()).toBe(422);
 
+    // #1020 / RF003 AC#5: an administrator revokes the account's sessions as
+    // their own act, recording 'risk' -- the P1X-0267 member that had no
+    // writer -- and the revocation lands in the audit trail with its reason.
+    const riskSession = await completeFirstLoginMfa(request, apiBaseURL!, username, password);
+    const nonAdminRevoke = await request.post(`${apiBaseURL}/api/users/${userID}/revoke-sessions`, {
+      headers: { Authorization: `Bearer ${riskSession.token}` },
+      data: { reason: 'risk' },
+    });
+    expect(nonAdminRevoke.status()).toBe(403);
+    const riskRevoke = await request.post(`${apiBaseURL}/api/users/${userID}/revoke-sessions`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { reason: 'risk' },
+    });
+    expect(riskRevoke.ok(), await riskRevoke.text()).toBeTruthy();
+    expect((await riskRevoke.json()).data).toEqual({ revoked: 1, reason: 'risk' });
+    const afterRisk = await request.get(`${apiBaseURL}/api/user/security/status`, {
+      headers: { Authorization: `Bearer ${riskSession.token}` },
+    });
+    expect(afterRisk.status()).toBe(401);
+
+    const riskRows = await request.get(`${apiBaseURL}/api/logs/sessions?userId=${userID}&revocationReason=risk`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    const riskData = (await riskRows.json()).data;
+    expect(riskData.total).toBe(1);
+    expect(riskData.sessions[0].revokedBy).toBe(adminRevoked.revokedBy);
+
+    const sessionAudit = await request.get(`${apiBaseURL}/api/logs?resourceType=Session&limit=200`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(sessionAudit.ok()).toBeTruthy();
+    const auditBody = (await sessionAudit.json()).data;
+    const auditRows: Array<{ message: string; resourceId: string }> = auditBody.logs || auditBody;
+    const riskAudit = auditRows.find(
+      (row) => row.resourceId === adminRevoked.user && String(row.message).includes('motivo risk')
+    );
+    expect(riskAudit, 'no Session audit row carrying motivo risk for this account').toBeTruthy();
+    expect(riskAudit!.message).toContain('sessões afetadas 1');
+
     // The lookup indexes are built on the live collection, the per-request
     // tokenHash lookup's included (ensured un-awaited, so polled).
     await expect

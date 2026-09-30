@@ -270,7 +270,8 @@ class SecurityService {
           const revoked = await sessionService.revokeAllSessionsForPolicyChange(
             db,
             actingToken,
-            req && req.user && req.user.userID || 'SYSTEM'
+            req && req.user && req.user.userID || 'SYSTEM',
+            { req }
           );
           logger.info(`#649: política de sessão restringida, ${revoked} sessão(ões) revogada(s)`);
         } catch (revokeError) {
