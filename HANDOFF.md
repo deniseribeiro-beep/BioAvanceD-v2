@@ -1,118 +1,134 @@
 # HANDOFF
 
-**Written 2026-09-26, seventy-first queue sitting. INTERIM: the sitting may
-continue. It has not been told it is over.**
+**Written 2026-09-30, seventy-second queue sitting. INTERIM: the sitting ran
+its end sequence (audit, suite, push, issues, clean-up), but Dennis has not
+said it is over.**
 
-The instruction was "Read handoff. Pick next group of issues to resolve.
-Docker is off, turn it on if needed." The group picked was the e2e
-harness defects: **#1233** (in-container runner), then **#1222**, **#1234** and
-**#1227** measured through it. Three product bugs the runner surfaced were
-filed and fixed on the way (#1235, #1236, #1237).
+The instruction was "Read handoff. Pick next group of issues to resolve and
+begin. Docker is on. We haven't tested docker with the updated workflow, so
+remember full testing only in end of session." The group picked was
+**#1238**, then the session chain **#1005 → #1020**, plus **#1239**, which
+#1005 surfaced.
 
 ## Repo state
 
 `feature/docker-e2e-backend-integration`, pushed. The last substantive
-commit is `2fa62825`.
+commit is `09fa4166`.
 
 ## What shipped (all closed with comments)
 
-- **#1233** (`8c007f8d`, `36bbdfd5`): `playwright-runner` works.
-  - `tests/e2e/docker/loopback-forward.cjs` forwards the container's
-    `localhost:5173`/`:3000` to the compose services. The image CMD runs it
-    in front of `npx playwright test`, so the in-container topology equals
-    the host's.
-  - Full suite in-container: **255 passed, 1 flaky, 0 failed, 0 skipped.**
-  - Status posted on #284. Milestone #3's "Known starting gaps" line still
-    calls the runner misconfigured. It is left for Dennis to edit.
-- **#1235** (`8b51cb47`): daily-merkle's `runOnce` closed the worker's
-  shared Mongo client every night. After that, every worker job failed
-  while the container stayed healthy.
-- **#1236** (`22e3af2c`): `audit_roots`' unique **sparse** `timestamp.token`
-  index indexed explicit nulls. Only one unanchored root could ever exist.
-  It is now a partial index on string tokens, and a drop-and-recreate
-  migrates old stacks. Verified live.
-- **#1237** (`2fa62825`): seven `auditLogger.log` callers passed severity
-  `high`/`medium`. Withdrawals, returns, file replacements and exports wrote
-  no audit row. A new architecture test guards the vocabulary.
-- `1ed3ac34`: `seedActiveConsentTemplate` upserts one shared fixture. It
-  used to insert per call, and the kept volume held 1314 active templates.
+- **#1238** (`ddcac10c`): two unit files paid the cold module-graph load
+  (import-worker 2.4 s, server.js 4.2 s in plain node) inside their first
+  test. They now warm it in a `beforeAll`. The suite-wide duration sweep
+  found nothing else near its timeout (numbers are on the issue).
+- **#1005** (`0e778147`, `fe4b6b1f`): `GET /api/logs/sessions` is the audit
+  read path over every user's sessions, revoked ones included.
+  - Access: `requireAuditReader`.
+  - LGPD: pseudonymised owner and actor, masked IP, no `sessionID` (it
+    embeds the raw user id).
+  - Seven `sessions` lookup indexes, chosen on the planner. The per-request
+    `tokenHash` lookup was a collection scan.
+  - The session panel is on the Logs page.
+- **#1239** (`fe4b6b1f`): the Logs screen, its nav entry and the route map
+  now follow the backend's admin-or-auditor rule. The new
+  `user.isAuditReader` is in the login and verify payloads.
+- **#1020** (`30e99b55`, `fa9b898f`):
+  - Every session revocation writes an audit row from inside
+    `session.service`. The reason goes in `message` and the owner pseudonym
+    in `resourceId`.
+  - `POST /api/users/:id/revoke-sessions` (new `revokeSessions`
+    permission) gives `risk` a writer, and the admin button for it is on
+    System Management.
+- `09fa4166`: the `logs/` gitignore patterns no longer swallow source
+  directories named `logs/`.
 
-## Touched, left open (each issue's last comment has the detail)
+## Test runs this sitting
 
-- **#1222:** now labelled `premise-corrected`. It is a **Chromium engine
-  stall, not Windows-only.**
-  - Linux Chromium: 15 hangs in 1920 tests (both headless builds).
-  - Firefox: 0 in 600.
-  - Open because the fix is upstream. The next step is a minimal repro.
-  - `[read it]` CI's `retries: 2` absorbs it.
-- **#1234:** two in-container requests got no response for 30 s. Both passed
-  on retry. Cause `[not established]`. The comment names the instrument
-  (upstream connect latency logged in the forwarder).
-- **#1227:** no recurrence. It stands at 1 in 7 full runs.
+All at `09fa4166` unless noted.
 
-## Filed elsewhere
+| run | scope | result | time |
+|---|---|---|---|
+| backend vitest, `tests/unit tests/integration tests/compliance`, JSON reporter | full | 487 files, 9358/9358 | 637 s |
+| frontend vitest, the seven `src/` test dirs, `resources.cjs run --width 3` | full | 37 files, 329/329 | 30.5 s |
+| backend `node --test "tests/architecture/**/*.arch.test.js"` | full | 161/162, **1 red → #1242** | 44.6 s |
+| `compose build`, then stack + admin bootstrap + 17-service chain, all `--no-deps` | full | all one-shots `Exited (0)` | build 163 s |
+| in-container `playwright-runner`, `compose run -d --no-deps --name`, `docker wait`, `docker logs` | full | **258/258**, 0 flaky, 1 worker | 135 s |
 
-- **dyeallpies-skills-pack#1227:** a long `compose run --rm` lost its log
-  when the Windows client's attach dropped. The durable pattern is
-  `run -d --name` + `docker wait` + `docker logs` + `rm`. It needs a pack
-  session (Rule 0).
+No suite was skipped: the diff touched backend, frontend and e2e.
+Per-fix targeted runs are in the commit messages. This is the first full run
+of the updated Docker workflow, and it worked as written (status on #284).
+
+## Filed, carried open
+
+- **#1242 (`suite-red`), first next sitting:** the #1088 filter-keys guard
+  flags the new revoke route's inline `buildUserFilterById`. It is a
+  one-line fix, and the issue names it.
+- **#1240:** no UI grants the `auditor` role (`auditorRole` is API-only).
+- **#1241:** security review of the new surfaces (session list, revoke
+  route, `isAuditReader`).
+- Pack issues: **pack#1447** (full-suite guard false positives), **pack#1448**
+  (a 22.5 KB whole-file `cat`), and **pack#1450** (Docker had no load
+  sizing, peer check or `resources.cjs` record). pack#1450 carries Dennis's
+  correction: it is one general testing approach that every run type falls
+  under, and omitting Docker was a slip. All need a pack session (Rule 0).
+
+## Touched, left open
+
+None beyond the filings above. #1222, #1234 and #1227 are unchanged from the
+previous note (see their last comments).
 
 ## For Dennis
 
-New:
-- Milestone #3's stale runner line (see #284).
-- Whether #1222 merits an upstream Chromium/Playwright report.
-
-Unchanged from the previous note: #1225's option call, #1228's default,
-#1220's step 5, the #941 re-close, #1218, #956, #979, whether `0d87f73b`
-(#1124) stands, whether to mirror Denise's `docs/` deletions, #1231, and
-the go for a PR into `main`.
+Unchanged from the previous note:
+- Milestone #3's stale runner line (#284).
+- Whether #1222 merits an upstream report.
+- #1225's option call, #1228's default, #1220's step 5, the #941 re-close,
+  #1218, #956 and #979.
+- Whether `0d87f73b` (#1124) stands.
+- Whether to mirror Denise's `docs/` deletions, and #1231.
+- The go for a PR into `main`.
 
 ## Docker and the machine
 
-- **Gate:** Dennis, 2026-09-26: "Docker is off, turn it on if needed." It
-  closes at the next `/clear`. It was used this sitting.
-- **Nothing is running.** The `bioavanced-test` stack was torn down with
-  `compose down`, and its 6 volumes were kept.
-  - Images: `backend-app-test` is built from `2fa62825`, both workers from
-    `22e3af2c`, and `playwright-runner` from `1ed3ac34`. No `src` has changed
-    since, so the next bring-up needs no `--build`.
-  - The kept volume has fixture accumulation, including 1924 old consent
-    templates.
-- `docker compose ... up -d` auto-starts `playwright-runner`, which **now
-  runs the full suite for real**. Stop it before any host-side run.
+- **Gate:** Dennis, 2026-09-30: "Docker is on." It closes at the next `/clear`.
+- **Nothing is running.** `compose down` ran. The 6 named volumes and all
+  images (built from `09fa4166`'s sources) are kept, and the build cache is
+  pruned to 0.
+- Empty `logs/` and `api/backend/logs/` may be leftovers of a
+  `git check-ignore` control. They are ignored and harmless.
+- `resources.cjs` now has BioAvanceD records for `vitest-frontend`,
+  `node-test-arch` and `docker-build-test` (~3.4 GB, 15 GB disk). There is
+  none yet for the backend suite or the e2e run. Use `suggest` before heavy
+  runs (#1249, #1287).
 
 ## Things a next session must not undo
 
 Earlier notes' items still hold. Plus:
-- **The runner's base URLs are `localhost`, on purpose.** The forwarder
-  makes that resolve in-container. Do not point them at compose hostnames:
-  the e-consent specs assert origin equality.
-- **Never close the shared Mongo client from a job or a service method**
-  that got it from `connectDB()`. The process owns it (#1235).
-- **Don't paper over #1222 with a fixed wait before the first fill.**
-- **On this branch a `Closes #N` commit does not close the issue.** Comment,
-  then `gh issue close`.
+- **Never emit `sessionID` from an audit or read path.** It is
+  `session_<userID>_<ms>`.
+- **Session-revocation audit rows keep the reason in `message` and the
+  pseudonym in `resourceId`, never in `payload`,** which audit-v2 drops. And
+  keep pseudonyms out of `message`: `sanitizeMessage`'s phone regex
+  rewrites all-digit ones.
+- **No automatic `risk` revocation on login lockout.** It would let anyone
+  log the owner out.
+- **Don't add an `_id` tiebreak to the session list's sort.** It stops
+  `{createdAt:-1}` serving it (measured).
 
 ## Standing context: re-measure, don't copy
 
-- **Project phase (Dennis, 2026-09-25):** work down the issues the e2e plan
-  surfaced (Wave 3 tracker #646). CI comes only after they are all resolved
-  and the whole plan passes on Docker.
-- Denise's newest live branch, 2026-09-26: `stabilize/v2.0.0-prototype`,
-  last commit 2026-09-25
+- Denise's newest live branch, 2026-09-30: `stabilize/v2.0.0-prototype`,
+  last commit 2026-09-26
   (`git for-each-ref refs/remotes/origin --sort=-committerdate`).
-- Divergence, 2026-09-26: 928 commits on hers only, 218 on ours only
+- Divergence, 2026-09-30: 936 commits on hers only, 225 on ours only
   (`git rev-list --left-right --count origin/stabilize/v2.0.0-prototype...HEAD`),
   measured before this rotation's commit.
-- Her tip's CI, runs of 2026-09-24 23:29 (none newer): current-state
-  validation, Full Vitest diagnostic and Coverage diagnostic passed. Release
-  manifest integrity failed
-  (`gh run list --branch stabilize/v2.0.0-prototype --limit 4`).
-- Her `docs/stabilization/AXIS_E_DECISION_LOG.md` is on her pushed branch
-  (`git ls-tree -r --name-only origin/stabilize/v2.0.0-prototype docs/stabilization`).
-  It is still unread against the issue comments.
+- Her tip's CI, runs of 2026-09-26 14:05 (none newer): release manifest
+  integrity, Full Vitest diagnostic, Coverage diagnostic and current-state
+  validation all passed (`gh run list --branch stabilize/v2.0.0-prototype --limit 4`).
+- Her `docs/stabilization/AXIS_E_DECISION_LOG.md` is still unread against the
+  issue comments.
 
 ## Recommended next
 
-None queued by Dennis.
+None queued by Dennis. #1242 comes first by rule (suite-red).
