@@ -48,7 +48,7 @@ const LEGACY_ROLES_SEED = {
     {
       accessType: 4,
       roleName: 'Administrador',
-      permissions: ['createUser', 'assignRole', 'createSample', 'editSample', 'deleteSample', 'createPatient', 'requestConsent', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageTemperaturePolicy', 'manageSensor', 'recordTemperature', 'viewReports', 'manageBackup', 'manageSystem', 'resetMFA', 'forcePasswordReset', 'disableMFA', 'revokeSessions', 'manageOrganizations', 'createResult', 'editResult', 'deleteResult', 'reidentifyParticipant', 'manageAccessRequests', 'manageReportTemplates', 'viewEquipment', 'viewStorageTopology', 'manageStorageAllocation', 'manageStorageTopology'],
+      permissions: ['createUser', 'assignRole', 'createSample', 'editSample', 'deleteSample', 'createPatient', 'requestConsent', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageTemperaturePolicy', 'manageSensor', 'recordTemperature', 'viewReports', 'manageBackup', 'manageSystem', 'resetMFA', 'forcePasswordReset', 'disableMFA', 'revokeSessions', 'setUserPassword', 'manageOrganizations', 'createResult', 'editResult', 'deleteResult', 'reidentifyParticipant', 'manageAccessRequests', 'manageReportTemplates', 'viewEquipment', 'viewStorageTopology', 'manageStorageAllocation', 'manageStorageTopology'],
     },
   ],
 };
@@ -225,6 +225,10 @@ const PERMISSION_CATALOG = {
   // another user's sessions, not only a side effect of a password set or MFA
   // reset. Same shape as resetMFA.
   revokeSessions: { resourceType: 'User', allowedActions: ['UPDATE'], displayName: 'Revogar sessões' },
+  // #1013: an administrator setting another user's password. It rode on
+  // PUT /api/users/:id under createUser, with no reuse check, no history and
+  // a generic audit row. Same shape as resetMFA.
+  setUserPassword: { resourceType: 'User', allowedActions: ['UPDATE'], displayName: 'Definir senha de usuário' },
   manageTemperature: { resourceType: 'Temperature', allowedActions: ['UPDATE'], displayName: 'Gerenciar incidentes de temperatura' },
   // #1073: every sensor and temperature WRITE route was gated on
   // 'viewTemperature' -- a read permission whose allowedActions had been

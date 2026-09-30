@@ -50,6 +50,20 @@ describe('buildUserSubmissionPayload', () => {
     expect(payload.password).toBeUndefined();
   });
 
+  // #1013: PUT /api/users/:id refuses a password; an edit sets it through
+  // POST /:id/set-password, so the PUT payload never carries one. A create
+  // still does, since registration sets the first password.
+  it('#1013: an edit never puts a typed password in the PUT payload', () => {
+    const editingUser = { id: 1, _id: 'abc', name: 'Ana', email: 'a@b.com', username: 'ana' } as User;
+    const payload = buildUserSubmissionPayload({ ...editingUser, password: 'NovaSenh@2026' }, editingUser);
+    expect(payload).not.toHaveProperty('password');
+  });
+
+  it('#1013 control: a create sends the typed password', () => {
+    const payload = buildUserSubmissionPayload({ name: 'Ana', username: 'ana', password: 'NovaSenh@2026' }, null);
+    expect(payload.password).toBe('NovaSenh@2026');
+  });
+
   // #1240: auditorRole is granted through PUT /api/users/:id only, so a
   // create never carries it, while an edit sends it either way.
   it('#1240: a new user never sends auditorRole', () => {

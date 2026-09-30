@@ -361,7 +361,20 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
     // grantAdditionalRole/revokeAdditionalRole, same pattern as accessType.
     const requestedAuditorRole = req.body.auditorRole;
     delete req.body.auditorRole;
-    
+
+    // #1013: an administrator sets a password through POST /:id/set-password.
+    // A non-empty one here is refused rather than dropped, so a stale client
+    // cannot believe it changed a password. A blank one is the form's
+    // "unchanged" and is dropped.
+    if (req.body.password) {
+      return res.status(422).json({
+        success: false,
+        error: req.t('errors.invalidInput'),
+        message: 'A senha não é alterada por esta rota; use POST /api/users/:id/set-password.'
+      });
+    }
+    delete req.body.password;
+
     // Prepara dados para validação (mescla dados existentes com novos)
     // Remove campos que não devem ser validados na atualização
     const { password: __unusedPassword, ...targetUserWithoutPassword } = targetUser;
@@ -369,8 +382,9 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
       ...targetUserWithoutPassword,
       ...req.body,
       _id: targetUser._id, // Mantém _id para indicar que é atualização
-      // Se senha não foi fornecida, não inclui no validate (será removida depois)
-      password: req.body.password || undefined
+      // #1013: this route never sets a password (refused above), so the
+      // stored hash is kept out of validation.
+      password: undefined
     };
 
     // Valida dados antes de atualizar
@@ -418,18 +432,6 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
       if (!organization) {
         throw new Error(`organizationId ${req.body.organizationId} não encontrado`);
       }
-    }
-
-    // Remove senha se não for fornecida
-    // #982: capturado ANTES do delete abaixo -- depois dele não há como
-    // distinguir "senha não enviada" de "senha enviada", e é essa distinção
-    // que decide a revogação de sessões após o updateOne.
-    const passwordWasSet = Boolean(req.body.password);
-    if (!req.body.password) {
-      delete req.body.password;
-    } else {
-      const bcrypt = require('bcryptjs');
-      req.body.password = await bcrypt.hash(req.body.password, 10);
     }
 
     // Verifica se é admin (já buscamos targetUser acima)
@@ -605,7 +607,7 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
     // inject arbitrary keys (e.g. userID, or anything else) that reach the
     // driver untouched. Allowlist to UserModel.create()'s own fields, plus
     // the route-managed fields the preprocessing above legitimately writes
-    // (password/mfaEnabled/mfaSecretCiphertext/mfaActivationDate/roleValidFrom/
+    // (mfaEnabled/mfaSecretCiphertext/mfaActivationDate/roleValidFrom/
     // roleValidUntil/organizationId — already covered by create()'s field
     // set) and updatedAt (server-set above, never caller-supplied).
     // Excluded: _id/id (identity, already deleted above), userID (business
@@ -618,7 +620,8 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
     // route).
     const ALLOWED_USER_UPDATE_FIELDS = [
       'name', 'email', 'phone', 'organizationId', 'organizationIds', 'username',
-      'password', 'status',
+      // #1013: 'password' is gone -- POST /:id/set-password owns it.
+      'status',
       'mfaEnabled', 'mfaSecretCiphertext', 'mfaActivationDate',
       'anonId',
       // #952: 'failedLoginAttempts' was HERE and is deliberately gone. It is now
@@ -657,21 +660,8 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
       });
     }
     
-    // #982 (RF003 AC#5, "Revogar sessões"): trocar a senha de um usuário por
-    // esta rota é uma escrita ADMINISTRATIVA -- #958 cobriu os quatro caminhos
-    // em que o próprio dono troca a senha, e este quinto ficou de fora. Sem
-    // isto, toda sessão que o alvo já tinha continua viva, autenticada por uma
-    // senha que não existe mais: middleware/auth.js só relê roleValidUntil, e
-    // rotateSessionTokens renova indefinidamente.
-    //
-    // targetUser._id.toString(), não req.params.id: buildUserFilterById aceita
-    // _id/id/userID em forma string E numérica, então o parâmetro da rota não é
-    // necessariamente igual ao userID gravado na sessão. Mesmo motivo do
-    // reset-mfa abaixo.
-    if (passwordWasSet) {
-      const sessionService = require('../../services/session.service');
-      await sessionService.invalidateUserSessions(db, targetUser._id.toString(), 'admin_action', req.user?.userID, { req });
-    }
+    // #982's revocation moved to POST /:id/set-password with the password
+    // set itself (#1013).
 
     // #615: organizationId used for RBAC scoping below — already normalized
     // above (lines 280-287). Falls back to the user's current org when not
@@ -1411,6 +1401,79 @@ router.post('/:id/force-password-reset', authenticate, requirePermission('forceP
       error: req.t('users.forcePasswordResetError'),
       message: error.message
     });
+  }
+});
+
+// #1013: an administrator sets another user's password. This rode on PUT /:id
+// under createUser, which hashed and $set the field and nothing else: no
+// strength or reuse check, no passwordHistory, and a generic update row in the
+// trail. It now has its own permission and its own audit row, and it keeps
+// the bookkeeping the owner's own change keeps (auth.service's forceReset
+// branch). It also sets forceReset, because the administrator now knows the
+// password, so the owner must replace it at next login (RF014 AC#4's
+// mechanism). #982's revocation moved here from the PUT.
+router.post('/:id/set-password', authenticate, requirePermission('setUserPassword', 'UPDATE'), async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
+    }
+
+    const usersCollection = db.collection('users');
+    const userFilter = buildUserFilterById(req.params.id);
+    const targetUser = await usersCollection.findOne(userFilter);
+    if (!targetUser) {
+      return res.status(404).json({ success: false, error: 'Usuário não encontrado' });
+    }
+
+    const newPassword = req.body?.password;
+    const passwordService = require('../../services/password.service');
+    try {
+      passwordService.validateStrength(newPassword);
+      await passwordService.validateReuse(newPassword, targetUser);
+    } catch (validationError) {
+      return res.status(422).json({ success: false, error: 'Dados inválidos', message: validationError.message });
+    }
+
+    const bcrypt = require('bcryptjs');
+    const history = Array.isArray(targetUser.passwordHistory) ? targetUser.passwordHistory : [];
+    const now = new Date();
+    await usersCollection.updateOne(userFilter, {
+      $set: {
+        password: await bcrypt.hash(newPassword, 10),
+        // Same depth validateReuse checks.
+        passwordHistory: (targetUser.password ? [targetUser.password, ...history] : history).slice(0, 3),
+        lastPasswordChange: now,
+        forceReset: true,
+        updatedAt: now,
+      },
+    });
+
+    // targetUser._id.toString(), not req.params.id: sessions key their owner
+    // as the stored id string (see PUT /:id's #982 note).
+    const sessionService = require('../../services/session.service');
+    await sessionService.invalidateUserSessions(db, targetUser._id.toString(), 'admin_action', req.user?.userID, { req });
+
+    const auditLogger = require('../../utils/auditLogger');
+    auditLogger.init(db);
+    await auditLogger.log({
+      action: 'UPDATE',
+      resourceType: 'User',
+      resourceId: targetUser._id.toString(),
+      status: 'success',
+      severity: 'warning',
+      // audit-v2 keeps `message` and drops `payload` (#1005), so the
+      // operation is named here.
+      message: 'Senha definida por administrador; troca obrigatória no próximo login',
+      payload: { operation: 'setUserPassword', fieldsSet: ['password', 'passwordHistory', 'lastPasswordChange', 'forceReset'] },
+      req,
+      module: 'Usuários',
+    });
+
+    return res.status(200).json({ success: true, data: { forceReset: true } });
+  } catch (error) {
+    logger.error('Erro ao definir senha:', error.message);
+    return res.status(500).json({ success: false, error: 'Erro ao definir senha', message: error.message });
   }
 });
 

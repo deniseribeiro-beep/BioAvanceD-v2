@@ -5,6 +5,7 @@ import Input from '../components/UI/Input';
 import { ArrowLeft } from 'lucide-react';
 import { User } from '../types/models';
 import { useUsers } from '../hooks/useUsers';
+import { userService } from '../services/api';
 import { useOrganizations } from '../hooks/useOrganizations';
 import { getAccessTypeForRole, getRoleDescription, RoleName } from '../utils/rolePermissions';
 import { useLanguage } from '../contexts/LanguageContext';
@@ -57,6 +58,11 @@ export function buildUserSubmissionPayload(formData: Partial<User>, editingUser:
 
   // Remove senha se estiver vazia (não atualiza senha)
   if (!dataToSave.password || dataToSave.password.trim() === '') {
+    delete dataToSave.password;
+  }
+  // #1013: PUT /api/users/:id refuses a password; an edit sets it through
+  // POST /:id/set-password instead (handleSubmit).
+  if (editingUser) {
     delete dataToSave.password;
   }
 
@@ -251,6 +257,11 @@ export default function NewUserPage() {
         if (!userId) {
           alert(t('users.userIdNotFound'));
           return;
+        }
+        // #1013: a typed password goes to its own route, first, so a password
+        // the policy refuses (strength, recent reuse) stops the whole save.
+        if (formData.password) {
+          await userService.setPassword(userId, formData.password);
         }
         await updateUser(userId, dataToSave);
         await loadUsers();

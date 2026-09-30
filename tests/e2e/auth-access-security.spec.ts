@@ -1083,3 +1083,72 @@ test.describe('Administrator session revoke (RF003 criterion 5, #1020) — real 
     expect(afterRevoke.status()).toBe(401);
   });
 });
+
+// #1013: an administrator sets another user's password through its own route,
+// with the owner's password bookkeeping, not through PUT /api/users/:id.
+test.describe('Administrator password set (RF003 criteria 2 and 5, #1013) — real backend', () => {
+  test('the edit form sets the password through set-password: sessions end, a change is forced, the old password is dead and cannot be set back; PUT refuses a password', async ({
+    page,
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const username = `setpw1013.${Date.now()}`;
+    const originalPassword = 'OriginalPass@1013';
+    const adminSetPassword = 'AdminSet@Pass1013';
+    // An Administrador target, as in the RF014 criterion-4 test: it has no
+    // MFA onboarding, so the login responses below are the password logic's.
+    const register = await request.post(`${apiBaseURL}/api/users/register`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { name: '#1013 set-password target', email: `${username}@example.com`, username, password: originalPassword, accessType: 4, roleName: 'Administrador' },
+    });
+    expect(register.ok(), await register.text()).toBeTruthy();
+    const userID = (await register.json()).data?._id;
+    const targetLogin = await request.post(`${apiBaseURL}/api/auth/login`, { data: { username, password: originalPassword } });
+    expect(targetLogin.ok(), await targetLogin.text()).toBeTruthy();
+    const targetToken = (await targetLogin.json()).data.token;
+
+    const refused = await request.put(`${apiBaseURL}/api/users/${userID}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { password: 'Another@Pass1013' },
+    });
+    expect(refused.status()).toBe(422);
+
+    await seedRealAuth(page, admin);
+    await page.goto('/system-management?tab=users');
+    await page.getByTestId(`edit-user-button-${userID}`).click();
+    await page.getByTestId('new-user-password-input').fill(adminSetPassword);
+    const setCall = page.waitForResponse(
+      (response) => response.url().includes(`/api/users/${userID}/set-password`) && response.request().method() === 'POST'
+    );
+    const putCall = page.waitForResponse(
+      (response) => response.url().includes(`/api/users/${userID}`) && response.request().method() === 'PUT'
+    );
+    await page.getByTestId('new-user-submit-button').click();
+    const setResponse = await setCall;
+    expect(setResponse.status(), await setResponse.text()).toBe(200);
+    const putResponse = await putCall;
+    expect(putResponse.status(), await putResponse.text()).toBe(200);
+    expect(putResponse.request().postDataJSON()).not.toHaveProperty('password');
+
+    // RF003 AC#5: the session the target already held is gone.
+    const staleSession = await request.get(`${apiBaseURL}/api/user/security/status`, {
+      headers: { Authorization: `Bearer ${targetToken}` },
+    });
+    expect(staleSession.status()).toBe(401);
+
+    // The administrator knows the new password, so the owner must replace it.
+    const withNew = await request.post(`${apiBaseURL}/api/auth/login`, { data: { username, password: adminSetPassword } });
+    expect(withNew.ok(), await withNew.text()).toBeTruthy();
+    expect((await withNew.json()).requiresPasswordChange).toBe(true);
+    const withOld = await request.post(`${apiBaseURL}/api/auth/login`, { data: { username, password: originalPassword } });
+    expect(withOld.status()).toBe(401);
+
+    // RF003 AC#2: the replaced password is in the history, so it cannot be set back.
+    const reuse = await request.post(`${apiBaseURL}/api/users/${userID}/set-password`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { password: originalPassword },
+    });
+    expect(reuse.status()).toBe(422);
+    expect((await reuse.json()).message).toContain('Senha já utilizada recentemente');
+  });
+});

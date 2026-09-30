@@ -562,6 +562,9 @@ export const userService = {
   resetMFA: (id: number | string) => api.post(`/users/${id}/reset-mfa`),
   disableMFA: (id: number | string) => api.post(`/users/${id}/disable-mfa`),
   forcePasswordReset: (id: number | string) => api.post(`/users/${id}/force-password-reset`),
+  // #1013: an administrator sets another user's password (off PUT /:id).
+  setPassword: (id: number | string, password: string) =>
+    api.post<ApiEnvelope<{ forceReset: boolean }>>(`/users/${id}/set-password`, { password }),
   // #1020 / RF003 AC#5: revoke every active session; 'risk' records a
   // suspected compromise, 'admin_action' a routine administrative revoke.
   revokeSessions: (id: number | string, reason: 'admin_action' | 'risk') =>

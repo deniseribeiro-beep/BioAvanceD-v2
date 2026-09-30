@@ -937,13 +937,13 @@ describe('Users and Access routes', () => {
     expect(Object.keys(setPayload).sort()).toEqual(['name', 'updatedAt']);
   });
 
-  // #982 (RF003 AC#5, "Revogar sessões"): PUT /api/users/:id hashes and $sets
-  // an inbound password, and until now revoked nothing. #958 fixed the four
-  // paths where the account OWNER changes their own password; this fifth one
-  // is an admin write and was outside its frame -- so an admin could replace a
-  // user's password while every session that user already held stayed live,
-  // authenticated with a password that no longer exists.
-  it('#982: PUT /api/users/:id com senha nova revoga as sessões do alvo', async () => {
+  // #1013: PUT /api/users/:id used to hash and $set an inbound password under
+  // createUser, with no reuse check, no history and a generic audit row. The
+  // administrator's password set is POST /:id/set-password now, and a PUT
+  // carrying one is refused rather than ignored, so a stale client cannot
+  // believe it changed a password. #982's session revocation moved with it
+  // (the set-password block below).
+  it('#1013: PUT /api/users/:id refuses a password and writes nothing', async () => {
     const handler = getHandler(userRoutes, 'put', '/:id');
     const targetUser = {
       _id: 'user-target-9',
@@ -980,26 +980,100 @@ describe('Users and Access routes', () => {
 
     await handler(req, res);
 
-    expect(res.statusCode).toBe(200);
-    // The password really was written -- otherwise a revoke assertion could
-    // pass on a request that changed nothing.
-    const setPayload = usersCollection.updateOne.mock.calls[0][1].$set;
-    expect(setPayload.password).toEqual(expect.any(String));
-    expect(setPayload.password).not.toBe('NovaSenh@2026');
-    // Same filter-value discipline as the reset-mfa revoke above: sessions key
-    // their owner as a string, so revoking with a non-string id matches
-    // nothing, throws nothing and still returns 200.
-    expect(sessionsCollection.updateMany).toHaveBeenCalledWith(
-      { userID: 'user-target-9', isActive: true },
-      expect.objectContaining({
-        $set: expect.objectContaining({
-          isActive: false,
-          isRevoked: true,
-          revocationReason: 'admin_action',
-          revokedBy: '507f1f77bcf86cd799439011',
-        }),
-      })
-    );
+    expect(res.statusCode).toBe(422);
+    expect(String(res.payload.message)).toContain('set-password');
+    expect(usersCollection.updateOne).not.toHaveBeenCalled();
+    expect(sessionsCollection.updateMany).not.toHaveBeenCalled();
+  });
+
+  // #1013: the administrator's password set, with the bookkeeping the old PUT
+  // path skipped. #982's revocation (RF003 AC#5) moved here with it.
+  describe('#1013: POST /api/users/:id/set-password', () => {
+    const bcrypt = require2('bcryptjs');
+
+    function seedTarget(overrides = {}) {
+      const targetUser = {
+        _id: 'user-target-1013',
+        name: 'Alvo 1013',
+        email: 'alvo-1013@bioavanced.com.br',
+        username: 'alvo1013',
+        status: 'active',
+        password: bcrypt.hashSync('Atual@2026x', 4),
+        passwordHistory: [],
+        ...overrides,
+      };
+      usersCollection.findOne.mockResolvedValue(targetUser);
+      usersCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
+      return targetUser;
+    }
+
+    async function post(body) {
+      const handler = getHandler(userRoutes, 'post', '/:id/set-password');
+      const req = createRequest({ params: { id: 'user-target-1013' }, body });
+      req.app.locals.db = db;
+      const res = createResponse();
+      await handler(req, res);
+      return res;
+    }
+
+    it('sets the hash, keeps the old one in history, forces a change at next login and revokes sessions', async () => {
+      const target = seedTarget();
+
+      const res = await post({ password: 'NovaSenh@2026' });
+
+      expect(res.statusCode).toBe(200);
+      expect(usersCollection.updateOne).toHaveBeenCalledTimes(1);
+      const setPayload = usersCollection.updateOne.mock.calls[0][1].$set;
+      expect(bcrypt.compareSync('NovaSenh@2026', setPayload.password)).toBe(true);
+      expect(setPayload.passwordHistory).toEqual([target.password]);
+      expect(setPayload.lastPasswordChange).toBeInstanceOf(Date);
+      // The administrator knows this password; the owner must replace it.
+      expect(setPayload.forceReset).toBe(true);
+      expect(sessionsCollection.updateMany).toHaveBeenCalledWith(
+        { userID: 'user-target-1013', isActive: true },
+        expect.objectContaining({
+          $set: expect.objectContaining({
+            isRevoked: true,
+            revocationReason: 'admin_action',
+            revokedBy: '507f1f77bcf86cd799439011',
+          }),
+        })
+      );
+      expect(auditSpies.log).toHaveBeenCalledWith(expect.objectContaining({
+        action: 'UPDATE',
+        resourceType: 'User',
+        message: expect.stringContaining('Senha definida por administrador'),
+      }));
+    });
+
+    it('refuses a password in the target\'s recent history, writing nothing', async () => {
+      seedTarget({ passwordHistory: [bcrypt.hashSync('Antiga@2025x', 4)] });
+
+      const res = await post({ password: 'Antiga@2025x' });
+
+      expect(res.statusCode).toBe(422);
+      expect(String(res.payload.message)).toContain('Senha já utilizada recentemente');
+      expect(usersCollection.updateOne).not.toHaveBeenCalled();
+      expect(sessionsCollection.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('refuses a password that fails the strength policy, writing nothing', async () => {
+      seedTarget();
+
+      const res = await post({ password: 'fraca' });
+
+      expect(res.statusCode).toBe(422);
+      expect(usersCollection.updateOne).not.toHaveBeenCalled();
+    });
+
+    it('answers 404 for an unknown user', async () => {
+      usersCollection.findOne.mockResolvedValue(null);
+
+      const res = await post({ password: 'NovaSenh@2026' });
+
+      expect(res.statusCode).toBe(404);
+      expect(usersCollection.updateOne).not.toHaveBeenCalled();
+    });
   });
 
   // #982: the mirror -- an update that carries no password must NOT revoke.
