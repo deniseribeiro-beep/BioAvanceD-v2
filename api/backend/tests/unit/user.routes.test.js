@@ -84,8 +84,8 @@ function denyingRequirePermission() {
 
 describe('user.routes authorization gates (issue #921)', () => {
   describe('requirePermission argument pinning', () => {
-    // One entry per requirePermission-gated registration -- all 14 of them
-    // (#1010 added the 12th, #1020 the 13th, #1241 the 14th), confirmed
+    // One entry per requirePermission-gated registration -- all 15 of them
+    // (#1010 added the 12th, #1020 the 13th, #1241 the 14th and 15th), confirmed
     // with `grep -n "requirePermission(" user.routes.js`.
     // The per-case line numbers in the labels below have drifted since #921
     // wrote them and are indicative, not authoritative -- re-derive with
@@ -124,6 +124,9 @@ describe('user.routes authorization gates (issue #921)', () => {
       // #1241: GET /:id had authenticate only, so any account could read any
       // other user's record. It now carries the list's own gate.
       { label: 'GET /:id (createUser)', method: 'get', path: '/u1', expectedArgs: ['createUser'] },
+      // #1241: likewise answered "does this id exist, and is it active" for
+      // any id to any account. Its one caller is the System Management screen.
+      { label: 'GET /:id/validate-status (createUser)', method: 'get', path: '/u1/validate-status', expectedArgs: ['createUser'] },
     ];
 
     // #1008: POST /register now carries a SECOND gate, assignRole, after

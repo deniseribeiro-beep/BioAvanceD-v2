@@ -888,7 +888,9 @@ router.delete('/:id', authenticate, requirePermission('createUser'), async (req,
   }
 });
 
-router.get('/:id/validate-status', authenticate, async (req, res) => {
+// #1241: gated like GET /:id. With authenticate alone it told any account
+// whether an id existed and whether it was active.
+router.get('/:id/validate-status', authenticate, requirePermission('createUser'), async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
