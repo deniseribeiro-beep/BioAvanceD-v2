@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest';
 import { createRequire } from 'module';
 import express from 'express';
 import request from 'supertest';
@@ -146,6 +146,15 @@ const VALID_PAYLOAD = {
  * tracked separately (see #693's close comment for the follow-up number).
  */
 describe('intakeWizard clinical-entity recording (#693)', () => {
+  // #1238: the first require of the route pulls in its whole third-party and
+  // service graph, 2+ s cold, which is load cost rather than anything a test
+  // proves. clearCache() drops only this file's own modules, so the graph
+  // stays warm after this hook and each test's 5 s budget covers its own work.
+  beforeAll(() => {
+    require(routePath);
+    clearCache();
+  }, 30000);
+
   afterEach(() => {
     vi.restoreAllMocks();
     clearCache();
