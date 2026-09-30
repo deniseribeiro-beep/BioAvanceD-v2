@@ -447,7 +447,11 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
     if (req.body.roleName && !requestedAccessType) {
       requestedAccessType = authService.getAccessTypeForRole(req.body.roleName);
     }
-    const isBecomingAdmin = requestedAccessType === 4 || req.body.roleName === 'Administrador';
+    // #1243: a promotion is a change of level (#1009's rule). NewUserPage
+    // echoes roleName on every save, so without `!isAdmin` a plain edit of an
+    // existing Administrador counted as one and the clear below destroyed
+    // their MFA enrolment -- #1021's defect through a second field.
+    const isBecomingAdmin = !isAdmin && (requestedAccessType === 4 || req.body.roleName === 'Administrador');
 
     // #998 (RF003, RNF008 AC#1): a caller may not raise anyone -- including
     // themselves -- above their own level. requirePermission('createUser') was

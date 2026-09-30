@@ -1252,6 +1252,58 @@ describe('Users and Access routes', () => {
     });
   });
 
+  // Recurrence of #1021 by a new path: isBecomingAdmin was computed from the
+  // request alone, and NewUserPage echoes roleName on every save, so a plain
+  // rename of an EXISTING Administrador counted as a promotion and destroyed
+  // their MFA enrolment. A promotion is a change of level, as #1009 decided
+  // for changeUserRole.
+  it('an edit of an existing Administrador that echoes roleName keeps their MFA enrolment', async () => {
+    const handler = getHandler(userRoutes, 'put', '/:id');
+    const targetUser = {
+      _id: 'user-target-admin-echo',
+      name: 'Admin Existente',
+      email: 'admin-existente@bioavanced.com.br',
+      username: 'adminexistente',
+      status: 'active',
+      mfaEnabled: true,
+      mfaSecretCiphertext: 'SEGREDO-DO-ADMIN',
+      mfaActivationDate: new Date('2026-01-01T00:00:00.000Z'),
+    };
+    usersCollection.findOne
+      .mockResolvedValueOnce(targetUser)
+      .mockResolvedValueOnce(targetUser);
+    usersCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
+
+    const rbacCollections = buildRbacCollections([
+      { userAccountId: '507f1f77bcf86cd799439011', accessType: 4 },
+      { userAccountId: 'user-target-admin-echo', accessType: 4 },
+    ]);
+    const dbWithTarget = {
+      collection: vi.fn((name) => {
+        if (name === 'users') return usersCollection;
+        if (rbacCollections[name]) return rbacCollections[name];
+        return db.collection(name);
+      }),
+    };
+
+    const req = createRequest({
+      params: { id: 'user-target-admin-echo' },
+      body: { name: 'Admin Renomeado', roleName: 'Administrador', accessType: 4 },
+    });
+    req.app.locals.db = dbWithTarget;
+    const res = createResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    const setPayload = usersCollection.updateOne.mock.calls[0][1].$set;
+    expect(setPayload).not.toHaveProperty('mfaEnabled');
+    expect(setPayload).not.toHaveProperty('mfaSecretCiphertext');
+    expect(setPayload).not.toHaveProperty('mfaActivationDate');
+    const mfaRows = auditSpies.log.mock.calls.filter(([entry]) => entry && entry.action === 'MFA');
+    expect(mfaRows).toHaveLength(0);
+  });
+
   it('#914/#1011: promoting a user with NO enrolment writes no MFA row -- there was nothing to clear', async () => {
     const handler = getHandler(userRoutes, 'put', '/:id');
     const targetUser = {
