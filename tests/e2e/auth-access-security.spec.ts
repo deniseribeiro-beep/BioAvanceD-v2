@@ -981,3 +981,47 @@ test.describe('Audit trail screen (RNF009, #1239) — real backend', () => {
     await coordinatorContext.close();
   });
 });
+
+// #1020 / RF003 AC#5: the administrator revokes an account's sessions from
+// the user-management screen, choosing 'risk' in the second dialog.
+test.describe('Administrator session revoke (RF003 criterion 5, #1020) — real backend', () => {
+  test('the revoke button on System Management kills the target\'s live session and records reason risk', async ({
+    page,
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const username = `revoke1020.${Date.now()}`;
+    const password = 'Fixture@123456';
+    const register = await request.post(`${apiBaseURL}/api/users/register`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { name: '#1020 revoke target', email: `${username}@example.com`, username, password, accessType: 2, roleName: 'Técnico' },
+    });
+    expect(register.ok(), await register.text()).toBeTruthy();
+    const registered = await register.json();
+    const userID = registered.data?._id || registered.data?.id;
+    const target = await completeFirstLoginMfa(request, apiBaseURL!, username, password);
+
+    await seedRealAuth(page, admin);
+    await page.goto('/system-management?tab=users');
+    const dialogs: string[] = [];
+    page.on('dialog', async (dialog) => {
+      dialogs.push(dialog.message());
+      // Both confirms are accepted: revoke, then "OK" = reason risk.
+      await dialog.accept();
+    });
+    const revokeCall = page.waitForResponse(
+      (response) => response.url().includes(`/api/users/${userID}/revoke-sessions`) && response.request().method() === 'POST'
+    );
+    await page.getByTestId(`revoke-sessions-button-${userID}`).click();
+    const revokeResponse = await revokeCall;
+    expect(revokeResponse.status()).toBe(200);
+    expect(await revokeResponse.json()).toMatchObject({ data: { revoked: 1, reason: 'risk' } });
+    await expect.poll(() => dialogs.length).toBe(3);
+    expect(dialogs[2]).toContain('1 sessão(ões) revogada(s)');
+
+    const afterRevoke = await request.get(`${apiBaseURL}/api/user/security/status`, {
+      headers: { Authorization: `Bearer ${target.token}` },
+    });
+    expect(afterRevoke.status()).toBe(401);
+  });
+});

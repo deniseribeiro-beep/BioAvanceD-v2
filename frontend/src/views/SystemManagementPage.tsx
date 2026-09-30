@@ -5,7 +5,7 @@ import Table from '../components/UI/Table';
 import Button from '../components/UI/Button';
 import Modal from '../components/UI/Modal';
 import Input from '../components/UI/Input';
-import { Plus, Edit, Trash2, UserCog, Shield, Shield as ShieldIcon, RotateCcw, XCircle, Building2, FlaskConical, KeyRound } from 'lucide-react';
+import { Plus, Edit, Trash2, UserCog, Shield, Shield as ShieldIcon, RotateCcw, XCircle, Building2, FlaskConical, KeyRound, LogOut } from 'lucide-react';
 import { useUsers } from '../hooks/useUsers';
 import { useOrganizations } from '../hooks/useOrganizations';
 import { useCollections } from '../hooks/useCollections';
@@ -295,6 +295,33 @@ function UsersSection() {
                       title={t('users.forcePasswordResetTitle')}
                     >
                       <KeyRound size={16} />
+                    </button>
+                    {/* #1020 / RF003 AC#5: revoke every active session, recording
+                        whether the account is judged at risk (P1X-0267 'risk'). */}
+                    <button
+                      data-testid={`revoke-sessions-button-${userId || user.id}`}
+                      className="action-button"
+                      onClick={async (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        if (!userId) {
+                          alert(t('users.userIdNotFound'));
+                          return;
+                        }
+                        if (!confirm(`Revogar todas as sessões ativas de ${user.name}?`)) return;
+                        const reason = confirm(
+                          'A conta pode estar comprometida?\n\nOK: registrar o motivo como "risco".\nCancelar: registrar como ação administrativa.'
+                        ) ? 'risk' : 'admin_action';
+                        try {
+                          const response = await userService.revokeSessions(userId, reason);
+                          alert(`${response.data.data.revoked} sessão(ões) revogada(s).`);
+                        } catch (err: any) {
+                          alert(err.response?.data?.message || err.response?.data?.error || err.message || 'Erro ao revogar sessões');
+                        }
+                      }}
+                      title="Revogar sessões"
+                    >
+                      <LogOut size={16} />
                     </button>
                     <button
                       data-testid={`delete-user-button-${userId || user.id}`}
