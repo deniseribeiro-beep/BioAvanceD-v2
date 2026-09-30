@@ -164,3 +164,8 @@ frontend/playwright/.auth/
 
 # Session handoffs (ephemeral cross-session notes, not durable conventions)
 .claude/handoffs/
+
+# A source directory named logs/ is code, not log output; the logs/ patterns
+# above would otherwise drop it from git add silently.
+!frontend/src/**/logs/
+!api/backend/src/**/logs/
