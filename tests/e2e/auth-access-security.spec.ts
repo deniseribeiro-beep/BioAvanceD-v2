@@ -3,7 +3,7 @@ import { realLogin, realAuthLogin } from './helpers/realAuth';
 import { watchAuditTrail, assertAuditEventRecorded } from './helpers/assertAuditEvent';
 import { completeFirstLoginMfa } from './helpers/completeFirstLoginMfa';
 import { computeTotp } from './helpers/totp';
-import { findLatestSession, closeSessionsDb } from './helpers/querySessions';
+import { findLatestSession, closeSessionsDb, listSessionIndexNames } from './helpers/querySessions';
 
 // Real backend + real frontend only — see backend-integration.spec.ts for the
 // same skip rationale. Run via `npm run test:e2e:docker` against the compose
@@ -532,6 +532,12 @@ test.describe('User management (RF003) — real backend', () => {
     });
     expect(forbiddenReset.status()).toBe(403);
 
+    // #1005: the audit session view is admin-or-auditor only; a Técnico is refused.
+    const forbiddenSessions = await request.get(`${apiBaseURL}/api/logs/sessions?userId=${userID}`, {
+      headers: { Authorization: `Bearer ${secondToken}` },
+    });
+    expect(forbiddenSessions.status()).toBe(403);
+
     // An admin's reset succeeds and actually clears the target's MFA state,
     // forcing fresh setup on the next login.
     const resetResponse = await request.post(`${apiBaseURL}/api/users/${userID}/reset-mfa`, {
@@ -545,6 +551,57 @@ test.describe('User management (RF003) — real backend', () => {
     const fetchedUser = (await fetchResponse.json()).data;
     expect(fetchedUser.mfaEnabled).toBe(false);
     expect(fetchedUser.lastLogin).toBeFalsy();
+
+    // #1005: both revocations above are readable back, with their reasons,
+    // through the audit session view. Before it nothing could list a revoked
+    // session or another user's sessions at all.
+    const auditResponse = await request.get(`${apiBaseURL}/api/logs/sessions?userId=${userID}&isRevoked=true`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(auditResponse.ok(), await auditResponse.text()).toBeTruthy();
+    const audit = (await auditResponse.json()).data;
+    const reasons = audit.sessions.map((s: { revocationReason: string }) => s.revocationReason).sort();
+    expect(reasons).toEqual(['admin_action', 'user_request']);
+    expect(audit.total).toBe(2);
+
+    const adminRevoked = audit.sessions.find((s: { revocationReason: string }) => s.revocationReason === 'admin_action');
+    const selfRevoked = audit.sessions.find((s: { revocationReason: string }) => s.revocationReason === 'user_request');
+    // LGPD shaping (dict-02 P1X-0256, RNF009 AC#2): pseudonyms, never raw ids;
+    // a masked IP; no token material.
+    expect(adminRevoked.user).toMatch(/^USR-[0-9A-F]{8}$/);
+    expect(selfRevoked.user).toBe(adminRevoked.user);
+    expect(adminRevoked.revokedBy).toMatch(/^USR-[0-9A-F]{8}$/);
+    expect(adminRevoked.revokedBy).not.toBe(adminRevoked.user);
+    expect(selfRevoked.revokedBy).toBe(selfRevoked.user);
+    const raw = JSON.stringify(audit);
+    expect(raw).not.toContain(String(userID));
+    expect(raw).not.toContain('tokenHash');
+    for (const s of audit.sessions) {
+      if (s.ipAddress !== null) expect(s.ipAddress).toMatch(/(\.x|::x|^x)$/);
+      expect(s.isRevoked).toBe(true);
+      expect(s.revokedAt).toBeTruthy();
+    }
+
+    const reasonFiltered = await request.get(
+      `${apiBaseURL}/api/logs/sessions?userId=${userID}&revocationReason=admin_action`,
+      { headers: { Authorization: `Bearer ${admin.token}` } }
+    );
+    expect(reasonFiltered.ok()).toBeTruthy();
+    expect((await reasonFiltered.json()).data.sessions.map((s: { id: string }) => s.id)).toEqual([
+      adminRevoked.id,
+    ]);
+
+    const badReason = await request.get(`${apiBaseURL}/api/logs/sessions?revocationReason=hacked`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(badReason.status()).toBe(422);
+
+    // The lookup indexes are built on the live collection, the per-request
+    // tokenHash lookup's included (ensured un-awaited, so polled).
+    await expect
+      .poll(async () => listSessionIndexNames(), { timeout: 10_000 })
+      .toEqual(expect.arrayContaining(['sessions_tokenHash_v1', 'sessions_revocationReason_createdAt_v1']));
+    await closeSessionsDb();
   });
 });
 

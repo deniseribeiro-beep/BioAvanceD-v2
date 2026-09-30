@@ -3,6 +3,7 @@ const { ObjectId } = require('mongodb');
 const router = express.Router();
 const { authenticate } = require('../../infrastructure/middleware/auth');
 const logService = require('../../services/log.service');
+const sessionService = require('../../services/session.service');
 const logger = require('../../utils/logger');
 const { isAuditReader } = require('../../services/rbac-assignment.service');
 
@@ -147,6 +148,29 @@ router.get('/export/xlsx', authenticate, requireAuditReader, async (req, res) =>
   } catch (error) {
     logger.error('Erro ao exportar logs XLSX:', error.message || error);
     return res.status(500).json({ success: false, error: 'Erro ao exportar logs XLSX', message: error.message });
+  }
+});
+
+// #1005: the audit read path over sessions, revoked ones included, for every
+// user (dict-02 P1X-0267, "Sessões > Motivo"). It sits behind the same
+// admin-or-auditor rule as the log trail rather than a named permission, since
+// #1056 made isAuditReader the shared rule for access-log data. Registered
+// before '/:id', which would otherwise take 'sessions' as a log id.
+router.get('/sessions', authenticate, requireAuditReader, async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
+    }
+
+    const result = await sessionService.listSessionsForAudit(db, req.query || {});
+    return res.status(200).json({ success: true, data: result });
+  } catch (error) {
+    if (error.statusCode === 422) {
+      return res.status(422).json({ success: false, error: 'Dados inválidos', message: error.message });
+    }
+    logger.error('Erro ao buscar sessões:', error.message || error);
+    return res.status(500).json({ success: false, error: 'Erro ao buscar sessões', message: error.message });
   }
 });
 

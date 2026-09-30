@@ -28,6 +28,13 @@ export async function closeSessionsDb(): Promise<void> {
   }
 }
 
+/** #1005: names of the indexes on `sessions`, to prove the lookup indexes are built live. */
+export async function listSessionIndexNames(): Promise<string[]> {
+  const db = await getDb();
+  const indexes = await db.collection('sessions').indexes();
+  return indexes.map((index) => String(index.name));
+}
+
 /** The user's most recently created session, or null. */
 export async function findLatestSession(userID: string) {
   const db = await getDb();

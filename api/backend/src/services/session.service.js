@@ -4,6 +4,19 @@ const logger = require('../utils/logger');
 // implementation instead of adding a third copy. Byte-identical body; the
 // only crypto use in this file was inside it, so the require went with it.
 const { hashToken } = require('../utils/tokenHash');
+const { getUserAnonId, maskIpAddress } = require('../utils/userAnonymization');
+const { ensureSessionIndexes } = require('../utils/sessionIndexes');
+
+// #1005: dict-02 P1X-0267's closed vocabulary. A filter outside it is refused
+// rather than run, since it could only ever match nothing.
+const REVOCATION_REASONS = ['user_request', 'admin_action', 'password_change', 'risk', 'expiration'];
+
+// #1005: the audit list's sort allow-list, same reasoning as log.service's
+// SORTABLE_LOG_FIELDS (#780): an unknown key sorts every row equal and returns
+// the wrong page with a 200. createdAt is the default and the one every audit
+// filter is index-served under (utils/sessionIndexes.js).
+const AUDIT_SORTABLE_SESSION_FIELDS = new Set(['createdAt', 'revokedAt', 'lastActivity']);
+const AUDIT_SESSION_MAX_LIMIT = 200;
 
 const ACCESS_TOKEN_TTL_MS = 15 * 60 * 1000;
 const REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -277,6 +290,9 @@ class SessionService {
       // Se não encontrou, busca no banco
       if (!session) {
         const sessionsCollection = db.collection('sessions');
+        // #1005: the per-request lookup; ensured here so a process builds the
+        // index on its first cache miss, not only once someone opens the audit list.
+        ensureSessionIndexes(sessionsCollection);
         session = await sessionsCollection.findOne({ tokenHash: accessTokenHash });
         if (!session) {
           // Compatibilidade com sessões antigas
@@ -565,6 +581,126 @@ class SessionService {
         this.sessions.delete(sid);
       }
     }
+  }
+
+  /**
+   * #1005: the audit read path over sessions, revoked ones included, across
+   * every user. listUserSessions and user-security's getSessions are both
+   * self-scoped and drop revoked rows, so before this nothing could answer
+   * "which sessions were revoked, when, by whom, and why".
+   *
+   * LGPD shaping, per dict-02 v2.0.0: the owner and the revoking actor leave
+   * as the same USR-XXXX pseudonym the audit log uses (RNF009 AC#2), the IP is
+   * masked (P1X-0256), and token hashes never leave. `revokedBy: 'system'`
+   * stays literal, as it names a process, not a person.
+   *
+   * Filters: userId, revocationReason, isRevoked, isActive, from/to on
+   * createdAt. Throws a 422-shaped error on an invalid one.
+   */
+  async listSessionsForAudit(db, filters = {}) {
+    const sessionsCollection = db.collection('sessions');
+    ensureSessionIndexes(sessionsCollection);
+
+    const invalid = (message) => Object.assign(new Error(message), { statusCode: 422 });
+    const query = {};
+
+    const userId = filters.userId || filters.userID;
+    if (userId) query.userID = String(userId);
+
+    if (filters.revocationReason) {
+      if (!REVOCATION_REASONS.includes(filters.revocationReason)) {
+        throw invalid(`revocationReason inválido. Use: ${REVOCATION_REASONS.join(', ')}`);
+      }
+      query.revocationReason = filters.revocationReason;
+    }
+
+    for (const flag of ['isRevoked', 'isActive']) {
+      const raw = filters[flag];
+      if (raw === undefined || raw === '') continue;
+      if (raw !== true && raw !== false && raw !== 'true' && raw !== 'false') {
+        throw invalid(`${flag} deve ser true ou false`);
+      }
+      const value = raw === true || raw === 'true';
+      // Rows written before isRevoked existed carry no field; they were not revoked.
+      query[flag] = flag === 'isRevoked' && !value ? { $ne: true } : value;
+    }
+
+    const range = {};
+    for (const [key, op] of [['from', '$gte'], ['to', '$lte']]) {
+      if (!filters[key]) continue;
+      const date = new Date(filters[key]);
+      if (Number.isNaN(date.getTime())) throw invalid(`${key} não é uma data válida`);
+      range[op] = date;
+    }
+    if (Object.keys(range).length) query.createdAt = range;
+
+    const requestedSort = typeof filters.sortBy === 'string' ? filters.sortBy.trim() : '';
+    if (requestedSort && !AUDIT_SORTABLE_SESSION_FIELDS.has(requestedSort)) {
+      throw invalid(`sortBy inválido. Use: ${[...AUDIT_SORTABLE_SESSION_FIELDS].join(', ')}`);
+    }
+    const sortField = requestedSort || 'createdAt';
+    const sortOrder = filters.sortOrder === 'asc' ? 1 : -1;
+
+    const limit = Math.min(Math.max(parseInt(filters.limit, 10) || 50, 1), AUDIT_SESSION_MAX_LIMIT);
+    const page = Math.max(parseInt(filters.page, 10) || 1, 1);
+    const skip = (page - 1) * limit;
+
+    const [rows, total] = await Promise.all([
+      sessionsCollection
+        .find(query, { projection: { tokenHash: 0, refreshTokenHash: 0, token: 0, refreshToken: 0, sessionID: 0 } })
+        // One literal per allow-listed key, so the sort-keys guard can follow
+        // every branch. No _id tiebreak: {createdAt:-1} serves a createdAt
+        // sort only as the sole key.
+        .sort(sortField === 'revokedAt' ? { revokedAt: sortOrder }
+          : sortField === 'lastActivity' ? { lastActivity: sortOrder }
+            : { createdAt: sortOrder })
+        .skip(skip)
+        .limit(limit)
+        .toArray(),
+      sessionsCollection.countDocuments(query),
+    ]);
+
+    const anonIds = new Map();
+    const anon = async (id) => {
+      const key = String(id);
+      if (!anonIds.has(key)) anonIds.set(key, await getUserAnonId({ _id: key }, db));
+      return anonIds.get(key);
+    };
+
+    const sessions = [];
+    for (const session of rows) {
+      const revokedBy = session.revokedBy == null
+        ? null
+        : session.revokedBy === 'system' ? 'system' : await anon(session.revokedBy);
+      sessions.push({
+        // Not sessionID: that is `session_<userID>_<ms>` and would carry the
+        // raw owner id straight past the pseudonym. The document _id is opaque.
+        id: session._id != null ? String(session._id) : null,
+        user: session.userID ? await anon(session.userID) : 'USR-SYSTEM',
+        ipAddress: maskIpAddress(session.ipAddress),
+        browser: session.deviceInfo?.browser || this.extractBrowser(session.userAgent),
+        os: session.deviceInfo?.os || this.extractOS(session.userAgent),
+        deviceType: session.deviceInfo?.type || null,
+        createdAt: session.createdAt || null,
+        lastActivity: session.lastActivity || null,
+        expiresAt: session.expiresAt || null,
+        isActive: session.isActive === true,
+        isRevoked: session.isRevoked === true,
+        revokedAt: session.revokedAt || null,
+        revokedBy,
+        revocationReason: session.revocationReason || null,
+      });
+    }
+
+    return {
+      sessions,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+      sortBy: sortField,
+      sortOrder: sortOrder === 1 ? 'asc' : 'desc',
+    };
   }
 
   async getSessionByRefreshToken(db, refreshToken) {
