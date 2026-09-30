@@ -1279,7 +1279,8 @@ router.post('/:id/revoke-sessions', authenticate, requirePermission('revokeSessi
       });
     }
 
-    const targetUser = await db.collection('users').findOne(buildUserFilterById(req.params.id));
+    const userFilter = buildUserFilterById(req.params.id);
+    const targetUser = await db.collection('users').findOne(userFilter);
     if (!targetUser) {
       return res.status(404).json({ success: false, error: 'Usuário não encontrado' });
     }
