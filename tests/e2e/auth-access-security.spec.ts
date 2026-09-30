@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { realLogin, realAuthLogin } from './helpers/realAuth';
+import { realLogin, realAuthLogin, seedRealAuth } from './helpers/realAuth';
 import { watchAuditTrail, assertAuditEventRecorded } from './helpers/assertAuditEvent';
 import { completeFirstLoginMfa } from './helpers/completeFirstLoginMfa';
 import { computeTotp } from './helpers/totp';
@@ -869,5 +869,76 @@ test.describe('Security policy management (RF014) — real backend', () => {
     });
     expect(newPasswordAttempt.ok(), await newPasswordAttempt.text()).toBeTruthy();
     expect((await newPasswordAttempt.json()).data.token).toBeTruthy();
+  });
+});
+
+// #1239 / #1005: the Logs screen follows the backend's audit-trail rule
+// (administrator or the additive auditor role). A Coordenador used to be let
+// onto a page whose every call was refused, and an auditor could not open it.
+test.describe('Audit trail screen (RNF009, #1239) — real backend', () => {
+  async function registerWithMfa(
+    request: import('@playwright/test').APIRequestContext,
+    adminToken: string,
+    { accessType, roleName, label }: { accessType: number; roleName: string; label: string }
+  ) {
+    const username = `${label}.${Date.now()}`;
+    const password = 'Fixture@123456';
+    const register = await request.post(`${apiBaseURL}/api/users/register`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+      data: { name: `#1239 ${label}`, email: `${username}@example.com`, username, password, accessType, roleName },
+    });
+    expect(register.ok(), await register.text()).toBeTruthy();
+    const body = await register.json();
+    const userID = body.data?._id || body.data?.id;
+    return { userID, username, password };
+  }
+
+  test('a Técnico holding the auditor role sees the Logs screen and its session view; a Coordenador is refused both', async ({
+    page,
+    browser,
+    request,
+  }) => {
+    const admin = await realLogin(request);
+
+    const auditor = await registerWithMfa(request, admin.token, { accessType: 2, roleName: 'Técnico', label: 'auditor1239' });
+    const grant = await request.put(`${apiBaseURL}/api/users/${auditor.userID}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { auditorRole: true },
+    });
+    expect(grant.ok(), await grant.text()).toBeTruthy();
+    const auditorSession = await completeFirstLoginMfa(request, apiBaseURL!, auditor.username, auditor.password);
+    expect(auditorSession.user.roleName).toBe('Técnico');
+    expect((auditorSession.user as { isAuditReader?: boolean }).isAuditReader).toBe(true);
+
+    const coordinator = await registerWithMfa(request, admin.token, { accessType: 3, roleName: 'Coordenador', label: 'coord1239' });
+    const coordinatorSession = await completeFirstLoginMfa(request, apiBaseURL!, coordinator.username, coordinator.password);
+    expect((coordinatorSession.user as { isAuditReader?: boolean }).isAuditReader).toBe(false);
+
+    // Auditor: the nav entry is there, the page opens, and the session view
+    // loads from the real endpoint.
+    await seedRealAuth(page, auditorSession);
+    const sessionsLoaded = page.waitForResponse(
+      (response) => response.url().includes('/api/logs/sessions') && response.request().method() === 'GET'
+    );
+    await page.goto('/logs');
+    expect((await sessionsLoaded).status()).toBe(200);
+    await expect(page.getByText('Sessões e motivos de revogação')).toBeVisible();
+    await expect(page.getByTestId('session-audit-table')).toBeVisible();
+    await expect(page.getByText('Acesso Negado')).toHaveCount(0);
+    await expect(page.locator('a[href="/logs"]').first()).toBeVisible();
+
+    // Coordenador: no nav entry, and the route is refused before any call.
+    const coordinatorContext = await browser.newContext();
+    const coordinatorPage = await coordinatorContext.newPage();
+    await seedRealAuth(coordinatorPage, coordinatorSession);
+    const refusedCalls: string[] = [];
+    coordinatorPage.on('request', (req) => {
+      if (req.url().includes('/api/logs')) refusedCalls.push(req.url());
+    });
+    await coordinatorPage.goto('/logs');
+    await expect(coordinatorPage.getByText('Acesso Negado')).toBeVisible();
+    await expect(coordinatorPage.locator('a[href="/logs"]')).toHaveCount(0);
+    expect(refusedCalls).toEqual([]);
+    await coordinatorContext.close();
   });
 });

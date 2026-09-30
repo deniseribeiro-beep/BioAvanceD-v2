@@ -694,7 +694,46 @@ export const logService = {
   queryLogs: (filters: any) => api.post<{ success: boolean; data: { logs: Log[]; total: number; page: number; totalPages: number } }>('/logs/query', filters),
   exportCSV: (filters?: any) => api.get('/logs/export/csv', { params: filters, responseType: 'blob' }),
   exportExcel: (filters?: any) => api.get('/logs/export/xlsx', { params: filters, responseType: 'blob' }),
+  // #1005: every user's sessions, revoked ones included, pseudonymised.
+  getSessions: (filters?: SessionAuditFilters) =>
+    api.get<{ success: boolean; data: SessionAuditPage }>('/logs/sessions', { params: filters }),
 };
+
+export type SessionRevocationReason = 'user_request' | 'admin_action' | 'password_change' | 'risk' | 'expiration';
+
+export interface SessionAuditFilters {
+  revocationReason?: SessionRevocationReason | '';
+  isRevoked?: 'true' | 'false' | '';
+  from?: string;
+  to?: string;
+  page?: number;
+  limit?: number;
+}
+
+export interface SessionAuditRow {
+  id: string | null;
+  user: string;
+  ipAddress: string | null;
+  browser: string | null;
+  os: string | null;
+  deviceType: string | null;
+  createdAt: string | null;
+  lastActivity: string | null;
+  expiresAt: string | null;
+  isActive: boolean;
+  isRevoked: boolean;
+  revokedAt: string | null;
+  revokedBy: string | null;
+  revocationReason: SessionRevocationReason | null;
+}
+
+export interface SessionAuditPage {
+  sessions: SessionAuditRow[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
 
 // ========== AUDIT SERVICES ==========
 export const auditService = {

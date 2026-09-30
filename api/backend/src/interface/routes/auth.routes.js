@@ -276,10 +276,12 @@ router.get('/verify', authenticate, async (req, res) => {
     // #428: accessType/roleName no longer persisted on the User document
     // (#427) — resolve both display values from the active RBAC assignment,
     // same pattern as user.routes.js's resolveRoleDisplayName since #427.
-    const { resolveRoleDisplayName, resolveUserHierarchyLevel } = require('../../services/rbac-assignment.service');
-    const [roleName, accessType] = await Promise.all([
+    const { resolveRoleDisplayName, resolveUserHierarchyLevel, isAuditReader } = require('../../services/rbac-assignment.service');
+    const [roleName, accessType, auditReader] = await Promise.all([
       resolveRoleDisplayName(db, req.user.userID),
-      resolveUserHierarchyLevel(db, req.user.userID)
+      resolveUserHierarchyLevel(db, req.user.userID),
+      // #1239: the audit-trail gate's own rule, for the frontend's Logs guard.
+      isAuditReader(db, req.user.userID)
     ]);
 
     return res.status(200).json({
@@ -292,6 +294,7 @@ router.get('/verify', authenticate, async (req, res) => {
           username: user.username,
           accessType,
           roleName,
+          isAuditReader: auditReader,
           name: user.name,
           mfaEnabled: user.mfaEnabled || false
         },

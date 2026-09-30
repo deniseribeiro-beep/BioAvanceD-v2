@@ -113,7 +113,12 @@ const ROUTE_ACCESS: ReadonlyArray<readonly [string, readonly RoleName[]]> = [
   // Reporting and audit.
   ['/reports/templates', ADMIN_COORD],
   ['/reports', [...ADMIN_COORD, 'Usuário Externo']],
-  ['/logs', ADMIN_COORD],
+  // #1239: /logs is gated by the backend's audit-reader rule (administrator
+  // or the additive auditor role), which no base role can express: an auditor
+  // may hold any base role, and a Coordenador is refused by every /api/logs
+  // call. ProtectedRoute's requireAuditReader carries the real gate; this
+  // entry only stops the role map from overruling it.
+  ['/logs', ALL_ROLES],
 
   // Intake wizard.
   ['/next/intake', STAFF],

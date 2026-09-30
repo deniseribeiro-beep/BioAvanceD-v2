@@ -11,7 +11,7 @@ const sessionService = require('./session.service');
 const { hashToken } = require('../utils/tokenHash');
 const { encryptValue, decryptValue, assertFieldEncryptionConfigured } = require('../utils/fieldEncryption');
 const passwordService = require('./password.service');
-const { grantRoleForAccessType, assertGrantPreconditions, isAdministrator, resolveRoleDisplayName, resolveUserHierarchyLevel, ROLE_CODE_BY_ACCESS_TYPE } = require('./rbac-assignment.service');
+const { grantRoleForAccessType, assertGrantPreconditions, isAdministrator, isAuditReader, resolveRoleDisplayName, resolveUserHierarchyLevel, ROLE_CODE_BY_ACCESS_TYPE } = require('./rbac-assignment.service');
 const notificationDispatchService = require('./notificationDispatch.service');
 
 /**
@@ -678,7 +678,13 @@ class AuthService {
             accessType: await resolveUserHierarchyLevel(db, user._id.toString()),
             // #427: resolved from the RBAC assignment — roleName is no
             // longer persisted on the User document for new/edited users.
-            roleName: await resolveRoleDisplayName(db, user._id.toString())
+            roleName: await resolveRoleDisplayName(db, user._id.toString()),
+
+            // #1239: the audit-trail gate's own rule (admin or the additive
+
+            // auditor role), so the frontend guards the Logs screen with it.
+
+            isAuditReader: await isAuditReader(db, user._id.toString())
           }
         };
       }
@@ -824,6 +830,12 @@ class AuthService {
           // #427: resolved from the RBAC assignment — roleName is no
           // longer persisted on the User document for new/edited users.
           roleName: await resolveRoleDisplayName(db, user._id.toString()),
+
+          // #1239: the audit-trail gate's own rule (admin or the additive
+
+          // auditor role), so the frontend guards the Logs screen with it.
+
+          isAuditReader: await isAuditReader(db, user._id.toString()),
           mfaEnabled: user.mfaEnabled
         }
       };
@@ -1131,6 +1143,12 @@ class AuthService {
           // #427: resolved from the RBAC assignment — roleName is no
           // longer persisted on the User document for new/edited users.
           roleName: await resolveRoleDisplayName(db, user._id.toString()),
+
+          // #1239: the audit-trail gate's own rule (admin or the additive
+
+          // auditor role), so the frontend guards the Logs screen with it.
+
+          isAuditReader: await isAuditReader(db, user._id.toString()),
           mfaEnabled: true
         }
       };
@@ -1245,6 +1263,12 @@ class AuthService {
             // #427: resolved from the RBAC assignment — roleName is no
             // longer persisted on the User document for new/edited users.
             roleName: await resolveRoleDisplayName(db, user._id.toString()),
+
+            // #1239: the audit-trail gate's own rule (admin or the additive
+
+            // auditor role), so the frontend guards the Logs screen with it.
+
+            isAuditReader: await isAuditReader(db, user._id.toString()),
             mfaEnabled: true
           }
         };

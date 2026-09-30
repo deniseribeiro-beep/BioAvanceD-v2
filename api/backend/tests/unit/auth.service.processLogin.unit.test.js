@@ -152,6 +152,28 @@ describe('AuthService.processLogin', () => {
     expect(result.user.accessType).toBe(3);
   });
 
+  // #1239: the response carries the audit-trail gate's own rule, so the
+  // frontend can guard the Logs screen with it. The auditor role is additive
+  // (granted beside a base role), so roleName alone cannot express it.
+  it.each([
+    [['gestor'], false],
+    [['gestor', 'auditor'], true],
+    [['administrator'], true],
+  ])('user.isAuditReader for active role codes %o is %s', async (roleCodes, expected) => {
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+    const db = makeDb();
+    const roles = roleCodes.map((roleCode, i) => ({ roleId: `role-${i}`, roleCode, roleStatus: 'active', hierarchyLevel: 3 }));
+    const assignments = roles.map(({ roleId }) => ({ userAccountId: 'user-1', roleId, assignmentStatus: 'active', validUntil: null }));
+    db.collection.mockImplementation((name) => {
+      if (name === 'roles') return { findOne: vi.fn(), find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue(roles) }) };
+      if (name === 'userRoleAssignments') return { findOne: vi.fn(), find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue(assignments) }) };
+      return db._collectionApi;
+    });
+    const user = { ...BASE_USER, lastLogin: null, mfaEnabled: false };
+    const result = await authService.processLogin(db, user, 'pw', null, db.collection(), {});
+    expect(result.user.isAuditReader).toBe(expected);
+  });
+
   it('skips mandatory MFA setup for admin on first login', async () => {
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
     const db = makeDb();

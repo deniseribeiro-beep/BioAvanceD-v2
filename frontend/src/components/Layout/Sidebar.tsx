@@ -28,6 +28,8 @@ type MenuItem = {
   label: string;
   roles: string[];
   featured?: boolean;
+  // #1239: shown only to the backend's audit readers, whatever the base role.
+  auditReader?: boolean;
 };
 
 export default function Sidebar() {
@@ -101,7 +103,7 @@ export default function Sidebar() {
     { path: '/user/security', icon: Shield, label: t('navigation.userSecurity'), roles: ['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo'] },
     { path: '/reports', icon: BarChart3, label: t('navigation.reports'), roles: ['Administrador', 'Coordenador', 'Usuário Externo'] },
     { path: '/reports/templates', icon: FileText, label: t('navigation.reportTemplates'), roles: ['Administrador', 'Coordenador'] },
-    { path: '/logs', icon: FileSearch, label: t('navigation.logs'), roles: ['Administrador', 'Coordenador'] },
+    { path: '/logs', icon: FileSearch, label: t('navigation.logs'), roles: ['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo'], auditReader: true },
     { path: '/system-management', icon: UserCog, label: t('navigation.systemManagement') || 'Gerenciamento do Sistema', roles: ['Administrador'] },
     { path: '/admin/dicionario', icon: Database, label: t('navigation.dataDictionary', 'Dicionário de Dados'), roles: ['Administrador'] },
     { path: '/backup', icon: Database, label: t('navigation.backup'), roles: ['Administrador'] },
@@ -114,6 +116,7 @@ export default function Sidebar() {
       if (item.path === '/dashboard') return true;
       return false;
     }
+    if (item.auditReader && user?.isAuditReader !== true) return false;
     // Verifica se a role do usuário está na lista de roles permitidas
     return item.roles.includes(roleName) && canRoleAccessRoute(roleName, item.path);
   });

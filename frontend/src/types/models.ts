@@ -584,6 +584,9 @@ export interface User {
   password?: string; // Não deve ser retornado em respostas GET
   accessType?: number; // Mantido para compatibilidade (1: Básico, 2: Intermediário, 3: Completo)
   roleName?: 'Coordenador' | 'Técnico' | 'Administrador' | 'Usuário Externo'; // Role conforme diagrama de caso de uso
+  // #1239: the backend's audit-trail rule (administrator or the additive
+  // auditor role), sent on login and verify. roleName cannot express it.
+  isAuditReader?: boolean;
   accessIDs?: number[]; // IDs dos Access permitidos (reportID da tabela Access)
   allowedReports?: string[]; // Tipos de relatórios permitidos (preenchido pelo backend)
   status?: string;

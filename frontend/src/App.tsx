@@ -122,8 +122,8 @@ function App() {
                   <Route path="/temperature" element={<Navigate to="/facility-management?tab=temperature" replace />} />
                   <Route path="/sensors" element={<Navigate to="/facility-management?tab=sensors" replace />} />
                   <Route path="/policies" element={<Navigate to="/facility-management?tab=policies" replace />} />
-                  <Route path="/logs" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><LogsPage /></ProtectedRoute>} />
-                  <Route path="/logs/:id" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><LogDetailPage /></ProtectedRoute>} />
+                  <Route path="/logs" element={<ProtectedRoute requireAuditReader><LogsPage /></ProtectedRoute>} />
+                  <Route path="/logs/:id" element={<ProtectedRoute requireAuditReader><LogDetailPage /></ProtectedRoute>} />
                   <Route path="/reports" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Usuário Externo']}><ReportsPage /></ProtectedRoute>} />
                   {/* #726 (RF008 AC#6): template management is Coordenador+Administrador
                       only (manageReportTemplates), narrower than /reports' own view-only gate. */}
