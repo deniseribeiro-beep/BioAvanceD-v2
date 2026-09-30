@@ -1938,5 +1938,131 @@ describe('Users and Access routes', () => {
         expect.objectContaining({ accessType: { from: 2, to: 3 } })
       );
     });
+
+    // #1240: the user form seeds itself from the list row and echoes every
+    // field back, so the list has to say who holds `auditor`, and an echoed
+    // flag equal to the current state is not a permission change -- the same
+    // trap #1009 closed for roleName.
+    describe('#1240: auditorRole is readable, and an echoed flag is not a change', () => {
+      function auditorAssignmentsFor(targetId) {
+        return [
+          ...assignmentsFor(targetId),
+          { assignmentId: 'assign-auditor-1240', userAccountId: targetId, roleId: 'role-auditor', assignmentStatus: 'active', validUntil: null },
+        ];
+      }
+
+      it('GET /api/users reports auditorRole for each user', async () => {
+        const handler = getHandler(userRoutes, 'get', '/');
+        usersCollection.find.mockReturnValue({
+          toArray: vi.fn().mockResolvedValue([
+            { _id: 'user-1240-holder', name: 'Holder', username: 'holder', status: 'active' },
+            { _id: 'user-1240-plain', name: 'Plain', username: 'plain', status: 'active' },
+          ]),
+        });
+        const assignmentDocs = [
+          ...auditorAssignmentsFor('user-1240-holder'),
+          { assignmentId: 'assign-plain-1240', userAccountId: 'user-1240-plain', roleId: 'role-technician', assignmentStatus: 'active', validUntil: null },
+        ];
+        const req = createRequest();
+        req.app.locals.db = dbWithAssignments(assignmentDocs);
+        const res = createResponse();
+
+        await handler(req, res);
+
+        expect(res.statusCode).toBe(200);
+        const byId = Object.fromEntries(res.payload.data.map((u) => [u.id, u]));
+        expect(byId['user-1240-holder'].auditorRole).toBe(true);
+        expect(byId['user-1240-plain'].auditorRole).toBe(false);
+      });
+
+      it('GET /api/users/:id reports auditorRole', async () => {
+        const handler = getHandler(userRoutes, 'get', '/:id');
+        usersCollection.findOne.mockResolvedValue({ _id: 'user-1240-one', name: 'One', username: 'one', status: 'active' });
+        const req = createRequest({ params: { id: 'user-1240-one' } });
+        req.app.locals.db = dbWithAssignments(auditorAssignmentsFor('user-1240-one'));
+        const res = createResponse();
+
+        await handler(req, res);
+
+        expect(res.statusCode).toBe(200);
+        expect(res.payload.data.auditorRole).toBe(true);
+      });
+
+      it('a rename echoing auditorRole=true for a holder writes no permission change', async () => {
+        const handler = getHandler(userRoutes, 'put', '/:id');
+        seedTargetWithoutAccessType('user-target-1240a');
+        const assignmentDocs = auditorAssignmentsFor('user-target-1240a');
+
+        const req = createRequest({
+          params: { id: 'user-target-1240a' },
+          body: { name: 'Renomeado', roleName: 'Técnico', auditorRole: true },
+        });
+        req.app.locals.db = dbWithAssignments(assignmentDocs);
+        const res = createResponse();
+
+        await handler(req, res);
+
+        expect(res.statusCode).toBe(200);
+        expect(assignmentDocs).toHaveLength(3);
+        const auditor = assignmentDocs.find((d) => d.assignmentId === 'assign-auditor-1240');
+        expect(auditor.assignmentStatus).toBe('active');
+        expect(auditSpies.logPermissionChange).not.toHaveBeenCalled();
+        expect(auditSpies.logUpdate).toHaveBeenCalled();
+        expect(res.payload.data.auditorRole).toBe(true);
+      });
+
+      // changeUserRole revokes EVERY active assignment, auditor included, so
+      // a level change that echoes auditorRole=true must re-grant it -- and
+      // the audit row must not claim the auditor flag changed.
+      it('a level change echoing auditorRole=true keeps the holder an auditor and logs only the level', async () => {
+        const handler = getHandler(userRoutes, 'put', '/:id');
+        seedTargetWithoutAccessType('user-target-1240b');
+        const assignmentDocs = auditorAssignmentsFor('user-target-1240b');
+
+        const req = createRequest({
+          params: { id: 'user-target-1240b' },
+          body: { roleName: 'Coordenador', auditorRole: true },
+        });
+        req.app.locals.db = dbWithAssignments(assignmentDocs);
+        const res = createResponse();
+
+        await handler(req, res);
+
+        expect(res.statusCode).toBe(200);
+        const active = assignmentDocs
+          .filter((d) => d.userAccountId === 'user-target-1240b' && d.assignmentStatus === 'active')
+          .map((d) => d.roleId)
+          .sort();
+        expect(active).toEqual(['role-auditor', 'role-coordinator']);
+        expect(auditSpies.logPermissionChange).toHaveBeenCalledTimes(1);
+        const changes = auditSpies.logPermissionChange.mock.calls[0][2];
+        expect(changes.accessType).toEqual({ from: 2, to: 3 });
+        expect(changes).not.toHaveProperty('auditorRole');
+      });
+
+      // Control: identical before and after the fix.
+      it('control: granting auditorRole to a non-holder grants it and logs the change', async () => {
+        const handler = getHandler(userRoutes, 'put', '/:id');
+        seedTargetWithoutAccessType('user-target-1240c');
+        const assignmentDocs = assignmentsFor('user-target-1240c');
+
+        const req = createRequest({
+          params: { id: 'user-target-1240c' },
+          body: { roleName: 'Técnico', auditorRole: true },
+        });
+        req.app.locals.db = dbWithAssignments(assignmentDocs);
+        const res = createResponse();
+
+        await handler(req, res);
+
+        expect(res.statusCode).toBe(200);
+        expect(assignmentDocs.some((d) => d.userAccountId === 'user-target-1240c' && d.roleId === 'role-auditor' && d.assignmentStatus === 'active')).toBe(true);
+        expect(auditSpies.logPermissionChange).toHaveBeenCalledWith(
+          expect.anything(),
+          'user-target-1240c',
+          expect.objectContaining({ auditorRole: true })
+        );
+      });
+    });
   });
 });

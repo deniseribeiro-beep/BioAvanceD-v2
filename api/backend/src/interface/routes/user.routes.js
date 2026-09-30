@@ -190,7 +190,7 @@ router.get('/', authenticate, requirePermission('createUser'), async (req, res) 
     const usersCollection = db.collection('users');
     const users = await usersCollection.find({}).toArray();
     const UserModel = require('../../models/User');
-    const { resolveRoleDisplayName } = require('../../services/rbac-assignment.service');
+    const { resolveRoleDisplayName, getActiveRoleCodes } = require('../../services/rbac-assignment.service');
 
     // Remove senhas dos resultados e traduz status para português
     const sanitizedUsers = await Promise.all(users.map(async (user) => {
@@ -206,6 +206,9 @@ router.get('/', authenticate, requirePermission('createUser'), async (req, res) 
       if (!userWithoutPassword.roleName) {
         userWithoutPassword.roleName = await resolveRoleDisplayName(db, String(userWithoutPassword._id));
       }
+      // #1240: the additive `auditor` role, read back under the same name PUT
+      // takes it by. The user form seeds itself from this row.
+      userWithoutPassword.auditorRole = (await getActiveRoleCodes(db, String(userWithoutPassword._id))).includes('auditor');
       // Garante que o ID esteja disponível como _id e id
       if (userWithoutPassword._id && !userWithoutPassword.id) {
         userWithoutPassword.id = userWithoutPassword._id.toString();
@@ -289,6 +292,10 @@ router.get('/:id', authenticate, async (req, res) => {
     if (userWithoutPassword.status) {
       userWithoutPassword.status = UserModel.translateStatus(userWithoutPassword.status);
     }
+
+    // #1240: same field as the list.
+    const { getActiveRoleCodes } = require('../../services/rbac-assignment.service');
+    userWithoutPassword.auditorRole = (await getActiveRoleCodes(db, user._id.toString())).includes('auditor');
 
     return res.status(200).json({
       success: true,
@@ -459,6 +466,11 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
       }
     }
 
+    // #1240: hoisted out of the #1008 block below, which computes it against
+    // the pre-edit state; the audit row further down records the auditor flag
+    // only when this is true.
+    let auditorChange = false;
+
     // #1008 (RF003 AC#3, Denise 2026-09-25): assigning a role is the
     // Administrador's, through the assignRole permission, not createUser.
     // Three things in this body are role assignment: a level change, a
@@ -483,7 +495,6 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
         levelChange = Number(requestedAccessType) !== Number(currentLevel);
       }
 
-      let auditorChange = false;
       if (requestedAuditorRole !== undefined) {
         const currentRoleCodes = await getActiveRoleCodes(db, targetUser._id.toString());
         auditorChange = Boolean(requestedAuditorRole) !== currentRoleCodes.includes('auditor');
@@ -689,22 +700,31 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
       });
     }
     if (requestedAuditorRole !== undefined) {
-      const { grantAdditionalRole, revokeAdditionalRole } = require('../../services/rbac-assignment.service');
-      if (requestedAuditorRole) {
+      // #1240: read the held state HERE, after changeUserRole, which revokes
+      // every active assignment -- auditor included. A level change that
+      // echoes auditorRole=true must re-grant it, while the audit row reports
+      // the flag only when it differs from the pre-edit state (auditorChange),
+      // so a form echoing the unchanged flag is not logged as a permission
+      // change (the #1009 trap, for this field).
+      const { grantAdditionalRole, revokeAdditionalRole, getActiveRoleCodes } = require('../../services/rbac-assignment.service');
+      const heldNow = (await getActiveRoleCodes(db, targetUser._id.toString())).includes('auditor');
+      if (requestedAuditorRole && !heldNow) {
         await grantAdditionalRole(db, {
           userAccountId: targetUser._id.toString(),
           roleCode: 'auditor',
           grantedBy: req.user?.userID,
           organizationId: effectiveOrganizationId,
         });
-      } else {
+      } else if (!requestedAuditorRole && heldNow) {
         await revokeAdditionalRole(db, {
           userAccountId: targetUser._id.toString(),
           roleCode: 'auditor',
           revokedBy: req.user?.userID,
         });
       }
-      changes.auditorRole = Boolean(requestedAuditorRole);
+      if (auditorChange) {
+        changes.auditorRole = Boolean(requestedAuditorRole);
+      }
     }
     // #615: org-only edit (no accessType/auditorRole change this request)
     // still needs to resync the existing assignment's scopeId — otherwise a
@@ -761,8 +781,10 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
 
     // #427: roleName resolved from the active RBAC assignment for display —
     // no longer persisted on the User document.
-    const { resolveRoleDisplayName } = require('../../services/rbac-assignment.service');
+    const { resolveRoleDisplayName, getActiveRoleCodes: readRoleCodes } = require('../../services/rbac-assignment.service');
     userWithoutPassword.roleName = await resolveRoleDisplayName(db, targetUser._id.toString());
+    // #1240: same field as the list, so the form's next save echoes the truth.
+    userWithoutPassword.auditorRole = (await readRoleCodes(db, targetUser._id.toString())).includes('auditor');
 
     // Traduz status para português
     if (userWithoutPassword.status) {
