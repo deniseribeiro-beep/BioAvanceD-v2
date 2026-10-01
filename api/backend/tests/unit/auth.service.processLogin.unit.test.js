@@ -1000,6 +1000,14 @@ describe('AuthService.requestPasswordReset', () => {
 });
 
 describe('AuthService.resetPassword', () => {
+  // #1244: resetPassword now runs validateReuse against the stored hash, and
+  // BASE_USER's password is a placeholder string bcrypt cannot parse. Every
+  // case here is about the token, so the new password is a fresh one unless a
+  // case says otherwise.
+  beforeEach(() => {
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(false);
+  });
+
   it('throws when token missing', async () => {
     const db = makeDb();
     await expect(authService.resetPassword(db, null, 'NewPass123!@#', {})).rejects.toThrow('não fornecido');
@@ -1247,6 +1255,55 @@ describe('AuthService.resetPassword', () => {
       })
     );
   });
+
+  // #1244: the token reset was the one password writer with no reuse check and
+  // no history, so a forgotten-password link could set the current password again.
+  function resetDb(user, securityConfig = null) {
+    const usersApi = {
+      findOne: vi.fn().mockResolvedValue({
+        ...user,
+        passwordResetTokenHash: hashToken('tok'),
+        passwordResetExpires: new Date(Date.now() + 100000),
+      }),
+      updateOne: vi.fn().mockResolvedValue({}),
+    };
+    const base = makeDb(usersApi);
+    const configApi = { findOne: vi.fn().mockResolvedValue(securityConfig) };
+    return {
+      usersApi,
+      db: { ...base, collection: vi.fn((name) => (name === 'security_config' ? configApi : base.collection(name))) },
+    };
+  }
+
+  it('#1244: refuses a reset to the current password and writes nothing', async () => {
+    vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'password-reset', userID: '507f1f77bcf86cd799439011' });
+    vi.spyOn(bcrypt, 'compare').mockImplementation(async (_plain, hash) => hash === HASHED);
+    const { db, usersApi } = resetDb(BASE_USER);
+    await expect(authService.resetPassword(db, 'tok', 'NewPass123!@#', {})).rejects.toThrow('utilizada recentemente');
+    expect(usersApi.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('#1244: records the replaced password in passwordHistory, to the policy depth', async () => {
+    vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'password-reset', userID: '507f1f77bcf86cd799439011' });
+    const { db, usersApi } = resetDb(
+      { ...BASE_USER, passwordHistory: ['h1', 'h2', 'h3'] },
+      { _id: 'main', passwordRules: { preventReuse: true, maxReuseHistory: 2 } },
+    );
+    await authService.resetPassword(db, 'tok', 'NewPass123!@#', {});
+    const update = usersApi.updateOne.mock.calls[0][1];
+    expect(update.$set.passwordHistory).toEqual([HASHED, 'h1']);
+    expect(update.$set.lastPasswordChange).toBeInstanceOf(Date);
+  });
+
+  it('#1244: preventReuse false lets the reset reuse the current password', async () => {
+    vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'password-reset', userID: '507f1f77bcf86cd799439011' });
+    const compare = vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+    const { db, usersApi } = resetDb(BASE_USER, { _id: 'main', passwordRules: { preventReuse: false } });
+    const result = await authService.resetPassword(db, 'tok', 'NewPass123!@#', {});
+    expect(result.success).toBe(true);
+    expect(compare).not.toHaveBeenCalled();
+    expect(usersApi.updateOne).toHaveBeenCalled();
+  });
 });
 
 // #958 / RNF021 AC#2. Unlike the two self-service paths, neither of these has a
@@ -1280,6 +1337,7 @@ describe('#958: password changes revoke sessions', () => {
       updateOne: vi.fn().mockResolvedValue({}),
     });
 
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(false); // #1244: a fresh password
     await authService.resetPassword(db, 'tok', 'NewPass123!@#', {});
 
     expect(sessionsCollection.updateMany).toHaveBeenCalledWith(

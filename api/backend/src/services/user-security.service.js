@@ -463,21 +463,24 @@ class UserSecurityService {
       const PasswordValidator = require('../utils/passwordValidator');
       PasswordValidator.validateOrThrow(newPassword);
       
-      // Verifica se não está reutilizando senha (últimas 5)
-      const passwordHistory = user.passwordHistory || [];
-      for (const oldHash of passwordHistory) {
-        const isReused = await bcrypt.compare(newPassword, oldHash);
-        if (isReused) {
-          throw new Error('Você não pode reutilizar uma senha recente');
-        }
+      // #1244: reuse follows passwordRules through the one shared check.
+      // This site used to compare every stored hash but never the current
+      // password, and kept 5 where the others kept 3. Its own message is
+      // kept, since UserSecurityPage shows it.
+      const passwordService = require('./password.service');
+      const reusePolicy = await passwordService.resolveReusePolicy(db);
+      try {
+        await passwordService.validateReuse(newPassword, user, reusePolicy);
+      } catch (reuseError) {
+        throw new Error('Você não pode reutilizar uma senha recente');
       }
-      
+
       // Hash da nova senha
       const saltRounds = 12;
       const newPasswordHash = await bcrypt.hash(newPassword, saltRounds);
-      
+
       // Atualiza senha e histórico
-      const newPasswordHistory = [user.password, ...passwordHistory].slice(0, 5);
+      const newPasswordHistory = passwordService.nextPasswordHistory(user, reusePolicy);
       
       await usersCollection.updateOne(
         { _id: new ObjectId(userID) },

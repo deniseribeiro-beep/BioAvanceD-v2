@@ -366,6 +366,14 @@ class SecurityService {
       if (config.passwordRules.expirationDays && (config.passwordRules.expirationDays < 0 || config.passwordRules.expirationDays > 365)) {
         errors.push('expirationDays deve estar entre 0 e 365');
       }
+      // #1244: password.service now reads this depth, so an out-of-range
+      // value is refused here rather than silently replaced by the default
+      // there. 1..20 is SecurityPage's own input bound.
+      const reuseHistory = config.passwordRules.maxReuseHistory;
+      if (reuseHistory !== undefined && reuseHistory !== null
+        && !(Number.isInteger(reuseHistory) && reuseHistory >= 1 && reuseHistory <= 20)) {
+        errors.push('maxReuseHistory deve ser um inteiro entre 1 e 20');
+      }
     }
 
     // Validações de sessão

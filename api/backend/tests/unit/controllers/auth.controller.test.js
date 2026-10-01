@@ -694,6 +694,36 @@ describe('AuthController.changePassword', () => {
     expect(res.status).toHaveBeenCalledWith(200);
   });
 
+  it('#1244: stores passwordHistory to the policy depth from security_config', async () => {
+    const user = { _id: 'u1', password: 'hashed-old', passwordHistory: ['h1', 'h2'] };
+    const usersCollection = createUsersCollection(user);
+    const sessionsCollection = { updateMany: vi.fn().mockResolvedValue({ modifiedCount: 0 }) };
+    const policy = { _id: 'main', passwordRules: { preventReuse: true, maxReuseHistory: 2 } };
+    const configCollection = { findOne: vi.fn().mockResolvedValue(policy) };
+    const db = {
+      collection: vi.fn((name) => {
+        if (name === 'sessions') return sessionsCollection;
+        if (name === 'security_config') return configCollection;
+        return usersCollection;
+      }),
+    };
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+    vi.spyOn(bcrypt, 'hash').mockResolvedValue('hashed-new');
+    vi.spyOn(passwordService, 'validateStrength').mockReturnValue(true);
+    vi.spyOn(passwordService, 'validateReuse').mockResolvedValue(undefined);
+    const req = createReq({
+      app: { locals: { db } },
+      user: { userID: '507f1f77bcf86cd799439011' },
+      body: { oldPassword: 'correct', newPassword: 'NewStr0ng!' },
+    });
+    const res = createRes();
+
+    await authController.changePassword(req, res);
+
+    expect(passwordService.validateReuse).toHaveBeenCalledWith('NewStr0ng!', user, { preventReuse: true, maxReuseHistory: 2 });
+    expect(usersCollection.updateOne.mock.calls[0][1].$set.passwordHistory).toEqual(['hashed-old', 'h1']);
+  });
+
   it('updates the password and returns 200 on success', async () => {
     const user = { _id: 'u1', password: 'hashed-old', passwordHistory: ['hashed-oldest'] };
     const usersCollection = createUsersCollection(user);
@@ -717,7 +747,8 @@ describe('AuthController.changePassword', () => {
     await authController.changePassword(req, res);
 
     expect(passwordService.validateStrength).toHaveBeenCalledWith('NewStr0ng!');
-    expect(passwordService.validateReuse).toHaveBeenCalledWith('NewStr0ng!', user);
+    // #1244: no security_config document here, so the default policy.
+    expect(passwordService.validateReuse).toHaveBeenCalledWith('NewStr0ng!', user, { preventReuse: true, maxReuseHistory: 5 });
     expect(bcrypt.hash).toHaveBeenCalledWith('NewStr0ng!', 10);
     expect(usersCollection.updateOne).toHaveBeenCalledWith(
       { _id: 'u1' },

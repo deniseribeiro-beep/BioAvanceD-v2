@@ -838,6 +838,72 @@ test.describe('Security policy management (RF014) — real backend', () => {
     }
   });
 
+  // #1244: the reuse window is passwordRules.maxReuseHistory, and preventReuse
+  // can switch the check off. Before this the depth was a hard-coded 3 at four
+  // sites (5 at a fifth) and both keys were stored and never read. Driven
+  // through the administrator's set-password route, which needs no MFA
+  // onboarding for the target.
+  test('#1244: password reuse follows passwordRules.preventReuse and maxReuseHistory on a live set (criterion 2)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+
+    const before = await request.get(`${apiBaseURL}/api/security/config`, { headers: auth });
+    expect(before.ok()).toBeTruthy();
+    const originalRules = (await before.json()).data.passwordRules;
+
+    const username = `tecnico.1244.${Date.now()}`;
+    const passwords = ['Reuse@1244zero', 'Reuse@1244one', 'Reuse@1244two'];
+    const register = await request.post(`${apiBaseURL}/api/users/register`, {
+      headers: auth,
+      data: { name: '#1244 reuse Fixture', email: `${username}@example.com`, username, password: passwords[0], accessType: 2, roleName: 'Técnico' },
+    });
+    expect(register.ok(), await register.text()).toBeTruthy();
+    const registered = await register.json();
+    const userID = registered.data?._id || registered.data?.id || registered.data?.user?._id || registered.data?.userID;
+    expect(userID, JSON.stringify(registered)).toBeTruthy();
+    const setPassword = (password: string) =>
+      request.post(`${apiBaseURL}/api/users/${userID}/set-password`, { headers: auth, data: { password } });
+
+    try {
+      const depthOne = await request.put(`${apiBaseURL}/api/security/config`, {
+        headers: auth,
+        data: { passwordRules: { preventReuse: true, maxReuseHistory: 1 } },
+      });
+      expect(depthOne.ok(), await depthOne.text()).toBeTruthy();
+
+      expect((await setPassword(passwords[1])).status()).toBe(200);
+      expect((await setPassword(passwords[2])).status()).toBe(200);
+      // History is now [passwords[1]] at depth 1: the one just replaced is refused...
+      const refused = await setPassword(passwords[1]);
+      expect(refused.status()).toBe(422);
+      expect((await refused.json()).message).toContain('Senha já utilizada recentemente');
+      // ...and the one past the window is allowed. Under the old fixed depth of 3 it was refused.
+      expect((await setPassword(passwords[0])).status()).toBe(200);
+
+      // Control: the config refuses a depth outside the page's 1..20.
+      const outOfRange = await request.put(`${apiBaseURL}/api/security/config`, {
+        headers: auth,
+        data: { passwordRules: { maxReuseHistory: 21 } },
+      });
+      expect(outOfRange.status()).toBeGreaterThanOrEqual(400);
+
+      // preventReuse=false: even the current password may be set again.
+      const off = await request.put(`${apiBaseURL}/api/security/config`, {
+        headers: auth,
+        data: { passwordRules: { preventReuse: false } },
+      });
+      expect(off.ok(), await off.text()).toBeTruthy();
+      expect((await setPassword(passwords[0])).status()).toBe(200);
+    } finally {
+      await request.put(`${apiBaseURL}/api/security/config`, {
+        headers: auth,
+        data: { passwordRules: { preventReuse: originalRules.preventReuse, maxReuseHistory: originalRules.maxReuseHistory } },
+      }).catch(() => {});
+    }
+  });
+
   // #648: AC#4 was genuinely absent (no code path at all) as of the test
   // above — built separately so this criterion's own admin-action + login-
   // gate + real-UI-blocking round trip gets its own real-backend proof.

@@ -135,6 +135,20 @@ describe('SecurityService.validateConfig', () => {
     })).toThrow('inválidas');
   });
 
+  // #1244: password.service reads this depth, so the config refuses what the
+  // page's own 1..20 input would refuse.
+  it.each([0, 21, 2.5, '5'])('throws for passwordRules.maxReuseHistory %j', (value) => {
+    expect(() => securityService.validateConfig({
+      passwordRules: { maxReuseHistory: value },
+    })).toThrow('inválidas');
+  });
+
+  it.each([1, 5, 20])('accepts passwordRules.maxReuseHistory %j', (value) => {
+    expect(() => securityService.validateConfig({
+      passwordRules: { maxReuseHistory: value },
+    })).not.toThrow();
+  });
+
   it('throws for invalid session.maxSessionDurationHours', () => {
     expect(() => securityService.validateConfig({
       session: { maxSessionDurationHours: 48 },

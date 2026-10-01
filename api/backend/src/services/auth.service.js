@@ -768,11 +768,11 @@ class AuthService {
         }
 
         passwordService.validateStrength(newPassword);
-        await passwordService.validateReuse(newPassword, user);
+        const reusePolicy = await passwordService.resolveReusePolicy(db);
+        await passwordService.validateReuse(newPassword, user, reusePolicy);
 
         const newHash = await bcrypt.hash(newPassword, 10);
-        const history = Array.isArray(user.passwordHistory) ? user.passwordHistory : [];
-        const updatedHistory = [user.password, ...history].slice(0, 3);
+        const updatedHistory = passwordService.nextPasswordHistory(user, reusePolicy);
 
         await usersCollection.updateOne(
           { _id: user._id },
@@ -1477,6 +1477,13 @@ class AuthService {
         throw new Error('Token de recuperação expirado. Solicite um novo link.');
       }
 
+      // #1244: the sixth password writer, and the one that neither checked
+      // reuse nor kept history -- a forgotten-password link could set the
+      // current password again, or any earlier one. After the token checks,
+      // so an invalid link never learns whether a password was reused.
+      const reusePolicy = await passwordService.resolveReusePolicy(db);
+      await passwordService.validateReuse(newPassword, user, reusePolicy);
+
       // Hash da nova senha
       const hashedPassword = await bcrypt.hash(newPassword, 10);
 
@@ -1497,6 +1504,8 @@ class AuthService {
         {
           $set: {
             password: hashedPassword,
+            passwordHistory: passwordService.nextPasswordHistory(user, reusePolicy),
+            lastPasswordChange: new Date(),
             ...clearedLockoutFields(),
             updatedAt: new Date()
           },

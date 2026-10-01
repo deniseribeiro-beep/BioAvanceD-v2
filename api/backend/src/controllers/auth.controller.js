@@ -355,11 +355,11 @@ class AuthController {
       }
 
       passwordService.validateStrength(newPassword);
-      await passwordService.validateReuse(newPassword, user);
+      const reusePolicy = await passwordService.resolveReusePolicy(db);
+      await passwordService.validateReuse(newPassword, user, reusePolicy);
 
       const newHash = await bcrypt.hash(newPassword, 10);
-      const history = Array.isArray(user.passwordHistory) ? user.passwordHistory : [];
-      const updatedHistory = [user.password, ...history].slice(0, 3);
+      const updatedHistory = passwordService.nextPasswordHistory(user, reusePolicy);
 
       await usersCollection.updateOne(
         { _id: user._id },

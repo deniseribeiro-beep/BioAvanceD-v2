@@ -243,6 +243,39 @@ describe('UserSecurityService DB-backed methods', () => {
       ).rejects.toThrow('Você não pode reutilizar uma senha recente');
     });
 
+    // #1244: this site compared every stored history hash but never the
+    // current password, and kept 5 where the other writers kept 3.
+    it('#1244: rejects setting the current password again', async () => {
+      const currentHash = await bcrypt.hash('NewPassw0rd!123', 4);
+      const users = buildCollection({
+        findOne: vi.fn().mockResolvedValue({ _id: USER_ID, password: currentHash, passwordHistory: [] })
+      });
+      const db = buildDb({ users });
+
+      await expect(
+        userSecurityService.updatePassword(db, USER_ID, 'NewPassw0rd!123', 'NewPassw0rd!123')
+      ).rejects.toThrow('Você não pode reutilizar uma senha recente');
+      expect(users.updateOne).not.toHaveBeenCalled();
+    });
+
+    it('#1244: checks and stores history to passwordRules.maxReuseHistory', async () => {
+      const currentHash = await bcrypt.hash('correct-pass', 4);
+      const olderHash = await bcrypt.hash('NewPassw0rd!123', 4);
+      const users = buildCollection({
+        findOne: vi.fn().mockResolvedValue({ _id: USER_ID, password: currentHash, passwordHistory: ['h1', olderHash] })
+      });
+      const security_config = buildCollection({
+        findOne: vi.fn().mockResolvedValue({ _id: 'main', passwordRules: { preventReuse: true, maxReuseHistory: 1 } })
+      });
+      const db = buildDb({ users, security_config });
+
+      // olderHash is history entry 2, past depth 1, so it is not checked.
+      await userSecurityService.updatePassword(db, USER_ID, 'correct-pass', 'NewPassw0rd!123');
+
+      const [, update] = users.updateOne.mock.calls[0];
+      expect(update.$set.passwordHistory).toEqual([currentHash]);
+    });
+
     it('updates the password and rotates history on success', async () => {
       const currentHash = await bcrypt.hash('correct-pass', 10);
       const users = buildCollection({

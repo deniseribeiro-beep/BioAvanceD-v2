@@ -1432,21 +1432,21 @@ router.post('/:id/set-password', authenticate, requirePermission('setUserPasswor
 
     const newPassword = req.body?.password;
     const passwordService = require('../../services/password.service');
+    const reusePolicy = await passwordService.resolveReusePolicy(db);
     try {
       passwordService.validateStrength(newPassword);
-      await passwordService.validateReuse(newPassword, targetUser);
+      await passwordService.validateReuse(newPassword, targetUser, reusePolicy);
     } catch (validationError) {
       return res.status(422).json({ success: false, error: 'Dados inválidos', message: validationError.message });
     }
 
     const bcrypt = require('bcryptjs');
-    const history = Array.isArray(targetUser.passwordHistory) ? targetUser.passwordHistory : [];
     const now = new Date();
     await usersCollection.updateOne(userFilter, {
       $set: {
         password: await bcrypt.hash(newPassword, 10),
-        // Same depth validateReuse checks.
-        passwordHistory: (targetUser.password ? [targetUser.password, ...history] : history).slice(0, 3),
+        // #1244: the same policy depth validateReuse checks.
+        passwordHistory: passwordService.nextPasswordHistory(targetUser, reusePolicy),
         lastPasswordChange: now,
         forceReset: true,
         updatedAt: now,
