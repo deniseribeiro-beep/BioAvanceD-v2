@@ -548,6 +548,10 @@ export default function SecurityPage() {
                       value={localConfig.loginAttempts.blockIPAfterAttempts}
                       onChange={(e) => handleConfigChange('loginAttempts.blockIPAfterAttempts', parseInt(e.target.value))}
                     />
+                    {/* #1264 item 2: the count is per network address, not per person. */}
+                    <span className="config-help" data-testid="security-ip-block-help">
+                      {t('security.login.blockIPAfterAttemptsHelp')}
+                    </span>
                   </div>
                 )}
               </div>

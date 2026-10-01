@@ -1656,6 +1656,7 @@
     },
     "login": {
       "blockIPAfterAttempts": "Bloquear IP tras intentos",
+      "blockIPAfterAttemptsHelp": "Cuenta los fallos desde una misma dirección de red. Todos los que comparten una dirección (NAT, proxy institucional) comparten este conteo, así que los fallos de una persona pueden bloquear a todos durante el tiempo de bloqueo. 0 registra sin bloquear.",
       "lockoutDuration": "Duración del bloqueo (minutos)",
       "maxAttempts": "Intentos máximos antes del bloqueo",
       "title": "Intentos de login y bloqueo",

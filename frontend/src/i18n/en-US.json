@@ -1656,6 +1656,7 @@
     },
     "login": {
       "blockIPAfterAttempts": "Block IP after attempts",
+      "blockIPAfterAttemptsHelp": "Counts failures from one network address. Everyone behind a shared address (NAT, institutional proxy) shares this count, so one person's failures can block all of them for the lockout duration. 0 tracks without blocking.",
       "lockoutDuration": "Lockout duration (minutes)",
       "maxAttempts": "Maximum attempts before lockout",
       "title": "Login Attempts and Lockout",
