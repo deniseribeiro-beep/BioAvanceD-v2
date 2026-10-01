@@ -7,6 +7,9 @@ const { SYSTEM_REPORT_TEMPLATES } = require('../../src/services/report-template-
 const modulePaths = {
   auth: require.resolve('../../src/infrastructure/middleware/auth'),
   rbac: require.resolve('../../src/infrastructure/middleware/rbac'),
+  // #1266: the export gate reads security_config, which these db mocks
+  // cannot answer; it is stubbed open here and tested on its own.
+  exportGate: require.resolve('../../src/infrastructure/middleware/lgpdExportGate'),
   controller: require.resolve('../../src/interface/routes/reports.routes'),
 };
 
@@ -229,6 +232,7 @@ describe('Reports API integration', () => {
 
     setCachedModule(modulePaths.auth, { authenticate });
     setCachedModule(modulePaths.rbac, { requirePermission, requireRole: () => (_req, _res, next) => next() });
+    setCachedModule(modulePaths.exportGate, { requireDataExportAllowed: (_req, _res, next) => next() });
     delete require.cache[modulePaths.controller];
 
     const reportsRouter = require(modulePaths.controller);

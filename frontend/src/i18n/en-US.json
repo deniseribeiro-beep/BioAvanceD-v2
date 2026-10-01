@@ -1644,6 +1644,7 @@
       "fixedAuditRequired": "Always on: the audit trail records these events (RNF009).",
       "fixedConsentNoExpiry": "Not applied: a consent has no expiry of its own; it is valid within its consent policy's validity window.",
       "fixedConsentRequired": "Always on: consent is a legal basis for processing health data (LGPD art. 11 I).",
+      "fixedExportPseudonymised": "Always on: exports write pseudonymised identifiers in place of names, contacts and documents (RNF007).",
       "fixedNotApplied": "Not applied: no job applies a retention or anonymisation period to data other than logs.",
       "governedByPolicy": "Set by the active retention policy (version {{version}}); change it there.",
       "governedNoPolicy": "No active retention policy covers logs, so nothing is purged.",

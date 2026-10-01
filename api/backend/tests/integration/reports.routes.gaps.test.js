@@ -8,6 +8,9 @@ const { createCursorMock } = require('../factories/cursor.factory');
 const modulePaths = {
   auth: require.resolve('../../src/infrastructure/middleware/auth'),
   rbac: require.resolve('../../src/infrastructure/middleware/rbac'),
+  // #1266: the export gate reads security_config, which these db mocks
+  // cannot answer; it is stubbed open here and tested on its own.
+  exportGate: require.resolve('../../src/infrastructure/middleware/lgpdExportGate'),
   controller: require.resolve('../../src/interface/routes/reports.routes'),
 };
 
@@ -121,6 +124,9 @@ describe('reports.routes.js gaps', () => {
   // denies when a request carries x-deny-role, so a test can tell which
   // routes the gate is on without re-implementing the hierarchy lookup.
   let requireRoleCalls = [];
+  // #1266: open unless a request carries x-deny-export, so a test can tell
+  // which routes carry the export gate.
+  const exportGate = (req, res, next) => (req.headers['x-deny-export'] ? res.status(403).json({ gate: 'export' }) : next());
   const requireRole = (...levels) => {
     requireRoleCalls.push(levels);
     return (req, res, next) => (req.headers['x-deny-role'] ? res.status(403).json({ gate: 'role' }) : next());
@@ -136,6 +142,7 @@ describe('reports.routes.js gaps', () => {
 
     setCachedModule(modulePaths.auth, { authenticate });
     setCachedModule(modulePaths.rbac, { requirePermission, requireRole });
+    setCachedModule(modulePaths.exportGate, { requireDataExportAllowed: exportGate });
     delete require.cache[modulePaths.controller];
   });
 
@@ -1437,6 +1444,27 @@ describe('reports.routes.js gaps', () => {
       expect(denied.status).toBe(403);
       expect(denied.body.gate).toBe('role');
       expect(reports).toHaveLength(1);
+    });
+
+    // #1266: lgpd.allowDataExport gates the two export routes, and only them.
+    it('#1266: GET /:type/export and /:type/export/pdf are behind the export gate', async () => {
+      const { db } = buildCollectionDb({ ...ORG_SCOPED_RBAC, reports: [] });
+      const testApp = appWithDb(db);
+
+      for (const path of ['/api/reports/patient/export', '/api/reports/patient/export/pdf']) {
+        const denied = await request(testApp).get(path).set('x-deny-export', '1');
+        expect(denied.status, path).toBe(403);
+        expect(denied.body.gate, path).toBe('export');
+      }
+    });
+
+    it('#1266 CONTROL: the report preview is not behind the export gate', async () => {
+      const { db } = buildCollectionDb({ ...ORG_SCOPED_RBAC, reports: [] });
+      const testApp = appWithDb(db);
+
+      const res = await request(testApp).post('/api/reports/patient/preview').send({}).set('x-deny-export', '1');
+
+      expect(res.body.gate).not.toBe('export');
     });
 
     it('CONTROL: GET /api/reports/:id is not behind the role gate', async () => {

@@ -18,6 +18,7 @@ const FIXED_HELP_KEYS: Record<string, string> = {
   'not-applied': 'security.logging.fixedNotApplied',
   'consent-required': 'security.logging.fixedConsentRequired',
   'consent-no-expiry': 'security.logging.fixedConsentNoExpiry',
+  'export-pseudonymised': 'security.logging.fixedExportPseudonymised',
 };
 function retentionGovernedHelp(t: (key: string, fallback?: string) => string, source?: GovernedSource): string {
   if (!source) return '';
@@ -887,10 +888,14 @@ export default function SecurityPage() {
                   <input title="security-input"
                     type="checkbox"
                     checked={localConfig.lgpd.anonymizeOnExport}
+                    disabled={Boolean(localConfig.governedBy?.['lgpd.anonymizeOnExport'])}
                     onChange={(e) => handleConfigChange('lgpd.anonymizeOnExport', e.target.checked)}
                   />
                   <span>{t('security.lgpd.anonymizeOnExport')}</span>
                 </label>
+                <span className="config-help" data-testid="security-export-fixed-help">
+                  {retentionGovernedHelp(t, localConfig.governedBy?.['lgpd.anonymizeOnExport'])}
+                </span>
                 <label className="config-switch">
                   <input title="security-input"
                     type="checkbox"

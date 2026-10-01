@@ -262,9 +262,11 @@ const RETIRED_KEY_EXEMPT = new Set([
   // requireOrganizationScope and the collectionSite stamp to POST /.
   // :691/:768/:861 -> :695/:772/:865, a uniform +4, when #1216 added
   // specimenId to POST /'s response and audit payload.
-  'interface/routes/sample.routes.js:695',
-  'interface/routes/sample.routes.js:772',
-  'interface/routes/sample.routes.js:865',
+  // :695/:772/:865 -> :697/:774/:867, a uniform +2, when #1266 added the
+  // export-gate require at the top of the file.
+  'interface/routes/sample.routes.js:697',
+  'interface/routes/sample.routes.js:774',
+  'interface/routes/sample.routes.js:867',
   'services/analysisValidation.service.js:29'
 ]);
 

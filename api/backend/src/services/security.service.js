@@ -117,8 +117,14 @@ async function resolveRetentionGoverned(db) {
 //  - 'consent-no-expiry': a PatientConsent carries no expiry; its validity
 //    is the ConsentPolicy's validFrom/validTo window. P1X-0320 applies "when
 //    defined by the policy", and none defines a per-consent period.
-// lgpd.allowDataDeletion is not here: the patient delete reads it.
-// allowDataExport and anonymizeOnExport are carried in #1266.
+//  - 'export-pseudonymised' (#1266): every export of the system writes
+//    pseudonymised rows. The report exports keep only EXPORT_CATALOG's
+//    allow-listed columns (no name, contact or document), HL7/FHIR/CDA
+//    carry only the participantId, and every log export runs anonymizeLogs
+//    (#1267). RNF007 AC 5 requires exactly that, so anonymizeOnExport
+//    (P1X-0318) is true.
+// lgpd.allowDataDeletion and lgpd.allowDataExport are not here: the patient
+// delete and the personal-data exports read them.
 const FIXED_PATHS = {
   'logging.logLoginAttempts': { value: true, reason: 'audit-required' },
   'logging.logAllActions': { value: true, reason: 'audit-required' },
@@ -128,6 +134,7 @@ const FIXED_PATHS = {
   'privacy.anonymizeAfterDays': { value: null, reason: 'not-applied' },
   'lgpd.requireConsent': { value: true, reason: 'consent-required' },
   'lgpd.consentExpirationDays': { value: null, reason: 'consent-no-expiry' },
+  'lgpd.anonymizeOnExport': { value: true, reason: 'export-pseudonymised' },
 };
 const GOVERNED_PATHS = [...RETENTION_GOVERNED_PATHS, ...Object.keys(FIXED_PATHS)];
 
@@ -174,6 +181,19 @@ function withoutRetentionGoverned(config) {
 function applyLogLevel(config) {
   const level = config && config.logging && config.logging.level;
   if (level) logLevel.setMinLevel(level);
+}
+
+// #1262, #1266: an lgpd permission switch, read directly from the document.
+// Absent means the default, true; an unreadable document refuses.
+async function readLgpdSwitch(db, key) {
+  try {
+    const doc = await db.collection('security_config')
+      .findOne({ _id: 'main' }, { projection: { [`lgpd.${key}`]: 1 } });
+    return doc?.lgpd?.[key] !== false;
+  } catch (error) {
+    logger.warn(`#1266: configuração LGPD ilegível, lgpd.${key} tratado como desabilitado: ${error.message}`);
+    return false;
+  }
 }
 
 function requiresSessionRevocation(changes) {
@@ -302,14 +322,18 @@ class SecurityService {
    * failure falls on the side that can be retried.
    */
   async isDataDeletionAllowed(db) {
-    try {
-      const doc = await db.collection('security_config')
-        .findOne({ _id: 'main' }, { projection: { 'lgpd.allowDataDeletion': 1 } });
-      return doc?.lgpd?.allowDataDeletion !== false;
-    } catch (error) {
-      logger.warn(`#1262: configuração LGPD ilegível, eliminação recusada: ${error.message}`);
-      return false;
-    }
+    return readLgpdSwitch(db, 'allowDataDeletion');
+  }
+
+  /**
+   * #1266: lgpd.allowDataExport (P1X-0316) gates the exports of personal
+   * data: the report exports and the sample-file HL7/FHIR/CDA exports. The
+   * audit-log exports are not personal-data exports and stay open to their
+   * readers. Same reading rules as isDataDeletionAllowed; a refused export
+   * can simply be retried.
+   */
+  async isDataExportAllowed(db) {
+    return readLgpdSwitch(db, 'allowDataExport');
   }
 
   /**

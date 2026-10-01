@@ -110,7 +110,7 @@ export interface SecurityConfig {
     postRetentionAction?: string;
     unavailable?: boolean;
     // #1260, #1261: set for a key whose behaviour is fixed, naming why.
-    fixed?: 'audit-required' | 'always-anonymized' | 'not-applied' | 'consent-required' | 'consent-no-expiry';
+    fixed?: 'audit-required' | 'always-anonymized' | 'not-applied' | 'consent-required' | 'consent-no-expiry' | 'export-pseudonymised';
   }>;
   // #953: flat, per dict-02 P1X-0321/0322/0323.
   configVersion?: number;

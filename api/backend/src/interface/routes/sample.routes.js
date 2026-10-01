@@ -5,6 +5,8 @@ const { validateMiabisCompliance } = require('../../services/miabisValidator.ser
 const SampleGraphValidator = require('../../services/SampleGraphValidator');
 const { authenticate } = require('../../infrastructure/middleware/auth');
 const { requireOrganizationScope } = require('../../infrastructure/middleware/rbac');
+// #1266: lgpd.allowDataExport switches the HL7/FHIR/CDA file exports off.
+const { requireDataExportAllowed } = require('../../infrastructure/middleware/lgpdExportGate');
 const { isRecordInOrganizationScope, assertOrganizationFieldNotReparented, resolveOrganizationIdForCreate, applyOrganizationScopeFilter } = require('../../services/rbac-assignment.service');
 // const { authenticate } = require('../../infrastructure/middleware/auth');
 const sampleService = require('../../services/sample.service');
@@ -1779,6 +1781,7 @@ router.put('/:specimenId/files/:fileID/replace',
 router.get('/:specimenId/files/:fileID/export/hl7',
   authenticate,
   requireOrganizationScope,
+  requireDataExportAllowed,
   enforceCommercialConsent({ resolveSampleId: (req) => req.params.specimenId }),
   sampleFileController.exportHL7v2.bind(sampleFileController)
 );
@@ -1787,6 +1790,7 @@ router.get('/:specimenId/files/:fileID/export/hl7',
 router.get('/:specimenId/files/:fileID/export/fhir',
   authenticate,
   requireOrganizationScope,
+  requireDataExportAllowed,
   enforceCommercialConsent({ resolveSampleId: (req) => req.params.specimenId }),
   sampleFileController.exportFHIR.bind(sampleFileController)
 );
@@ -1795,6 +1799,7 @@ router.get('/:specimenId/files/:fileID/export/fhir',
 router.get('/:specimenId/files/:fileID/export/cda',
   authenticate,
   requireOrganizationScope,
+  requireDataExportAllowed,
   enforceCommercialConsent({ resolveSampleId: (req) => req.params.specimenId }),
   sampleFileController.exportCDA.bind(sampleFileController)
 );

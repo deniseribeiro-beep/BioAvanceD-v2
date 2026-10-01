@@ -1301,6 +1301,8 @@ test.describe('Security policy management (RF014) — real backend', () => {
       // #1262
       'lgpd.requireConsent': ['consent-required', true],
       'lgpd.consentExpirationDays': ['consent-no-expiry', null],
+      // #1266
+      'lgpd.anonymizeOnExport': ['export-pseudonymised', true],
     };
     const valueAt = (config: Record<string, Record<string, unknown>>, path: string) => {
       const [group, key] = path.split('.');
@@ -1320,7 +1322,7 @@ test.describe('Security policy management (RF014) — real backend', () => {
           logging: { level: newLevel, logLoginAttempts: false, logAllActions: false },
           privacy: { anonymizeLogs: false, dataRetentionDays: 40, anonymizeAfterDays: 40 },
           enhancedSecurity: { logAllActions: false },
-          lgpd: { requireConsent: false, consentExpirationDays: 40 },
+          lgpd: { requireConsent: false, consentExpirationDays: 40, anonymizeOnExport: false },
         },
       });
       expect(put.ok(), await put.text()).toBeTruthy();
@@ -1376,6 +1378,36 @@ test.describe('Security policy management (RF014) — real backend', () => {
       await setAllowed(true);
       const allowed = await request.delete(`${apiBaseURL}/api/patients/${missingId}`, { headers: auth });
       expect(allowed.status(), await allowed.text()).toBe(404);
+    } finally {
+      await setAllowed(original);
+    }
+  });
+
+  // #1266: lgpd.allowDataExport gates the personal-data exports. The report
+  // CSV export answers 403 while it is off and anything but that 403 while
+  // it is on.
+  test('#1266: lgpd.allowDataExport switches the report export off', async ({ request }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const config = await request.get(`${apiBaseURL}/api/security/config`, { headers: auth });
+    expect(config.ok()).toBeTruthy();
+    const original = (await config.json()).data.lgpd?.allowDataExport !== false;
+    const setAllowed = async (value: boolean) => {
+      const res = await request.put(`${apiBaseURL}/api/security/config`, {
+        headers: auth,
+        data: { lgpd: { allowDataExport: value } },
+      });
+      expect(res.ok(), await res.text()).toBeTruthy();
+    };
+    try {
+      await setAllowed(false);
+      const refused = await request.get(`${apiBaseURL}/api/reports/patient/export`, { headers: auth });
+      expect(refused.status(), await refused.text()).toBe(403);
+      expect((await refused.json()).error).toBe('Exportação desabilitada');
+
+      await setAllowed(true);
+      const allowed = await request.get(`${apiBaseURL}/api/reports/patient/export`, { headers: auth });
+      expect(allowed.status(), await allowed.text()).not.toBe(403);
     } finally {
       await setAllowed(original);
     }

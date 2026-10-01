@@ -3,6 +3,8 @@ const { ObjectId } = require('mongodb');
 const router = express.Router();
 const { authenticate } = require('../../infrastructure/middleware/auth');
 const { requirePermission, requireRole } = require('../../infrastructure/middleware/rbac');
+// #1266: lgpd.allowDataExport switches the two report exports off.
+const { requireDataExportAllowed } = require('../../infrastructure/middleware/lgpdExportGate');
 const ReportsModel = require('../../models/Reports');
 // #1045: stripConsentSecrets -- the patient reports return raw participant documents.
 const PatientModel = require('../../models/Patient');
@@ -1376,7 +1378,7 @@ router.post('/:type/preview', authenticate, requirePermission('viewReports'), as
   }
 });
 
-router.get('/:type/export', authenticate, requirePermission('viewReports'), async (req, res) => {
+router.get('/:type/export', authenticate, requirePermission('viewReports'), requireDataExportAllowed, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -1407,7 +1409,7 @@ router.get('/:type/export', authenticate, requirePermission('viewReports'), asyn
   }
 });
 
-router.get('/:type/export/pdf', authenticate, requirePermission('viewReports'), async (req, res) => {
+router.get('/:type/export/pdf', authenticate, requirePermission('viewReports'), requireDataExportAllowed, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
