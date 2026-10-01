@@ -1,117 +1,119 @@
 # HANDOFF
 
-**Written 2026-10-01, seventy-fifth queue sitting. INTERIM: the sitting ran
+**Written 2026-10-01, seventy-sixth queue sitting. INTERIM: the sitting ran
 its end sequence (audit, suite, push, issues, clean-up), but Dennis has not
-said it is over.** It stopped picking new work at about 300K context in use.
+said it is over.** It stopped picking new work at about 310K context in use.
 
-The instruction was: "Read handoff. Pick next group of issues to resolve and
-begin. Docker is on." The group picked was **#1252**, **#1249**, **#1247**
-and **#1253**.
+The instruction was: "Read handoff. Docker is on. There might be leftover
+processes from other sessions. Pick next group of issues to resolve and
+begin. No parallel sessions." The group picked was **#1255**, **#1256**,
+**#1258** and **#1248**.
 
 ## Repo state
 
 The branch is `feature/docker-e2e-backend-integration`, pushed. The last
-code commit is `bf76bc22`.
+code commit is `0aeaf6ed`.
 
 ## What shipped (all closed with comments)
 
-- **#1252** (`0e0c26f7`): LoginPage carries the accepted TOTP into the
-  password-change submit, so an enrolled user types one code.
-- **#1249** (`761ad4e1`): these keys now act. All default to true, so
-  nothing changes until an administrator turns one off.
-  - `allowPasswordReset`: 403 `PASSWORD_RESET_DISABLED`. The login link and
-    the security page's reset button hide.
-  - `requireStrongPassword`: the master switch over the composition flags.
-  - `autoRenewal`: `/refresh` refuses and the session ends as an expiry.
-  - `logExpiration`: an expiry writes a Session audit row, which reverses
-    #1020's skip per dict-02 P1X-0296.
-  - `mfaMethod` is constrained to TOTP. `loginAttempts`' duplicate pair
-    follows the enforced `authentication` pair.
-  - Also fixed: `registerUser` now checks strength against the stored
-    policy, a writer #1246 missed.
-- **#1247** (`739cb5a5`): `enhancedSecurity` acts only while `enabled`
-  (default `false`).
-  - `requireMFAForAll` enrols every unenrolled user, Administrador and
-    returning accounts included.
-  - `sessionTimeoutMinutes` replaces the ordinary timeout.
-  - `strictPasswordPolicy` holds the composition flags on.
-- **#1253** (`bf76bc22`), the review:
-  - The current password always counts as reuse, even with
-    `preventReuse: false`. This closed a hole where a "change" to the same
-    password cleared `forceReset`.
-  - The `minLength` floor is 8 (NIST SP 800-63B).
-  - `GET /api/auth/password-policy` is exempt from `authLimiter`
-    (`authLimiterSkip.js`).
-  - Items 2 and 3 needed no change, with the reasoning in the code.
+- **#1255** and **#1256** (`9c381b66`):
+  - `api/backend/src/services/ipAttempt.service.js` is a new store, collection
+    `login_ip_attempts`. It keeps HMACs of the source address and of the
+    typed account identifiers, with a TTL index.
+  - `blockIPAfterAttempts` blocks a source for `lockoutDurationMinutes`. It is
+    read only while `trackIP` is on, and 0 means track without blocking.
+  - `blockUnusualActivity` is now defined: one source failing against at
+    least `maxLoginAttempts` distinct accounts. It is read only while
+    `enhancedSecurity.enabled` is on.
+  - Login and both first-login endpoints ask the gate first and count every
+    failure kind.
+  - e2e housekeeping: `global-setup` clears the store, and the #650
+    brute-force spec clears its own failures.
+- **#1258** (`fbcf5e06`): the review found a real gap.
+  `enable-first-login` gave a session to an inactive, suspended or blocked
+  account that had not enrolled MFA, and skipped #1251's password expiry.
+  Now `assertAccountActive()` runs at all three password sites, and an
+  expired password withholds the session. The other items hold, with
+  evidence in the close comment.
+- **#1259**, filed and fixed this sitting (`d315e4a0`): the retention sweep
+  deleted `logs` rows under every `postRetentionAction`. Now `archive` moves
+  them to `logs_archive`, and `review`/`anonymize` remove nothing.
+- **#1248** (`0aeaf6ed`, labelled `premise-corrected`):
+  - `logging.retentionDays`, `privacy.autoPurge` and `privacy.purgeAfterDays`
+    are derived from the active RetentionPolicy, read-only on the page, and
+    a write to them is dropped.
+  - Only these three keys duplicated a policy. The unread rest were split
+    into #1260 (logging), #1261 (privacy) and #1262 (lgpd).
 
 ## Test runs this sitting
 
 | run | scope | result | commit | time |
 |---|---|---|---|---|
-| per-fix targeted vitest and pin probes with `src/` stashed (files named in each commit message) | touched files | all green; every pin probe failed the new cases, and the controls passed | per commit | seconds |
-| backend session/auth/security/password set (29 files) | targeted | 813/813 | `761ad4e1` sources | ~60 s |
-| backend vitest `tests/unit tests/integration tests/compliance --maxWorkers=4`, JSON reporter | full | 9423/9423, 0 skipped | `bf76bc22` | ~620 s (date stamps) |
-| frontend `npx vitest run src/components src/config src/contexts src/foundation src/hooks src/pages src/utils src/views` | full | 40 files, 349/349 | `bf76bc22` | 18 s |
-| backend `node --test "tests/architecture/**/*.arch.test.js"` | full | 162/162 | `bf76bc22` | 42 s |
-| frontend `typecheck`, root `typecheck:e2e` | full | clean | `bf76bc22` | under 1 min |
-| `compose build` of backend, frontend, worker and runner; stack up; admin bootstrap and the 17-service chain, both `--no-deps`; in-container `playwright-runner` | full | **267/267**, 0 failed, 0 flaky | `bf76bc22` | build 61 s, up 52 s, e2e 175 s |
+| per-fix targeted vitest and pin probes with `src/` stashed (files named in each commit message) | touched files | all green; every pin probe failed its gap cases, and the controls passed | per commit | seconds |
+| throwaway `mongo:7` probe of `ipAttempt.service` | store semantics | 10th failure blocks, 5th distinct account blocks, no address stored, stale window resets, TTL index built | `9c381b66` sources | ~30 s |
+| backend vitest `tests/unit tests/integration tests/compliance --maxWorkers=4`, JSON reporter | full | **9470/9471, 1 red, filed as #1265** | `0aeaf6ed` | 624 s (date stamps) |
+| frontend `npx vitest run src/components src/config src/contexts src/foundation src/hooks src/pages src/utils src/views` | full | 40 files, 349/349 | `0aeaf6ed` | 20 s |
+| backend `node --test "tests/architecture/**/*.arch.test.js"` | full | 162/162 | `0aeaf6ed` | 41 s |
+| frontend `typecheck`, root `typecheck:e2e` | full | clean | `0aeaf6ed` | 13 s |
+| `compose build` of backend, frontend, worker and runner; stack up; admin bootstrap and the 17-service chain, both `--no-deps`; in-container `playwright-runner` (detached, `docker wait`) | full | **268 passed, 1 flaky, 0 failed** (269 = 267 + 2 new specs) | `0aeaf6ed` | build 55 s, up 49 s, e2e 185 s |
 
 No suite was skipped, because the diff touched backend, frontend and e2e.
-Times come from `date` stamps, not the `resources.cjs` wrapper, whose
-junction guard misfires (tracked outside this repo).
+The flaky case is `specimen-quality-inventory.spec.ts:1458`. Its fixture's
+sample create got a 202 from #1225's lineage consent gate, and that is
+commented on #1225.
 
 ## Filed this sitting, carried open
 
-- **#1254**, a question for Dennis: should `allowMultipleSessions` default to
-  true before it is wired? Recommended: yes. Wiring the stored `false` makes
-  every deployment single-session.
-- **#1255**: `trackIP`/`blockIPAfterAttempts` need an IP-attempt store. The
-  Security page also shows both keys twice.
-- **#1256**: `blockUnusualActivity` has no definition, detector or block.
-- **#1257**, a question for Dennis: should the password defaults move to
-  NIST SP 800-63B-4? That means 15 characters without MFA, no composition
-  rules and no periodic expiry. Recommended: yes, for new deployments only.
-- **#1258**: a security review of this sitting's surfaces, filed by rule.
-  Item 3 (no refresh loop) is already settled in a comment.
-- Three workflow findings are tracked outside this repo.
-
-Still open from earlier: #1248 (the `logging`/`privacy`/`lgpd` duplicates)
-and #1011's thread, now superseded by #1247 for config-driven Admin MFA.
+- **#1265 (`suite-red`), take it first.** `tests/unit/controllers/auth.controller.test.js`
+  pins `setupMFAFirstLogin`'s old two-argument call. The fix is in the issue:
+  the expectation becomes the three-argument call, with `req`.
+- **#1263**: e2e cannot exercise the live IP block or the unusual-activity
+  block, because the test stack gives every spec one source address
+  (`TRUST_PROXY=0`).
+- **#1264**: a security review of this sitting's surfaces, filed by rule.
+  Item 2 (one shared NAT address locks everyone out) is the one most likely
+  to need a change.
+- **#1260**, **#1261**, **#1262**: the unread `logging`, `privacy` and
+  `lgpd` keys. Each needs its surface found, then the key wired or shown
+  read-only.
+- Two workflow findings are tracked outside this repo.
 
 ## For Dennis
 
-- New: #1254 and #1257, both titled as questions with a recommended option.
+- Still waiting on the question in each title: #1254 and #1257.
 - Unchanged: #284's milestone line, #1222, #1225, #1228, #1220 step 5, the
   #941 re-close, #1218, #956, #979, whether `0d87f73b` (#1124) stands,
   Denise's `docs/` deletions and #1231, and the go for a PR into `main`.
-- #1251's deployment effect still stands. #1257 asks whether the 90-day
-  default should go entirely.
 
 ## Docker and the machine
 
 - **Gate:** Dennis, 2026-10-01: "Docker is on." It closes at the next `/clear`.
 - **Nothing is running.** `compose down` ran, and no containers remain. The
-  named volumes and the images built from `bf76bc22`'s sources are kept.
-  The build cache was pruned (2.985 GB).
+  named volumes and the images built from `0aeaf6ed`'s sources are kept.
+  The build cache was pruned (2.204 GB).
+- The one leftover process found at the start was a Playwright
+  `test-server` (the IDE extension), left alone.
 
 ## Things a next session must not undo
 
 Earlier notes' items still hold. Plus:
 
-- **`validateReuse` always refuses the current password.** `preventReuse`
-  governs only the history (#1253).
-- **The `enhancedSecurity` keys are read only while `enabled === true`**
-  (#1247, #1011's "via config").
-- **`authLimiter` skips exactly `GET /password-policy`.** Any other public
-  `/api/auth` route stays inside the brute-force budget.
-- **`minLength` floor 8** in `validateConfig` and `strengthMinLength`.
+- **The source-address store keys on `req.ip` and stores only HMACs.**
+  Never read `X-Forwarded-For` by hand. A successful login does not clear
+  a source's count.
+- **Every first-login password site calls `assertAccountActive()` after the
+  password check**, never before it.
+- **The three retention keys are derived, not stored inputs.**
+  `updateConfig` drops writes to them.
+- **The e2e store clears** (global-setup, and the #650 and #1255 specs) keep
+  the suite's deliberate failures under `blockIPAfterAttempts`.
 
 ## Standing context: re-measure, don't copy
 
 - Denise's newest live branch, 2026-10-01: `stabilize/v2.0.0-prototype`,
   last commit 2026-09-26
   (`git for-each-ref refs/remotes/origin --sort=-committerdate`).
-- Divergence, 2026-10-01: 936 commits on hers only and 245 on ours only
+- Divergence, 2026-10-01: 936 commits on hers only and 250 on ours only
   (`git rev-list --left-right --count origin/stabilize/v2.0.0-prototype...HEAD`),
   measured before this rotation's commit.
 - Her tip's CI, runs of 2026-09-26 14:05 (none newer): release manifest
@@ -122,6 +124,6 @@ Earlier notes' items still hold. Plus:
 
 ## Recommended next
 
-None queued by Dennis. No `suite-red` issue is open. Of this sitting's
-filings, #1255, #1256 and #1258 are workable, and so is #1248. #1254 and
-#1257 wait on Dennis's answer to the question in each title.
+None queued by Dennis. **#1265 comes first** (`suite-red`). After it, the
+workable ones are #1263, #1264, #1260, #1261 and #1262. #1254 and #1257
+wait on Dennis's answer to the question in each title.
