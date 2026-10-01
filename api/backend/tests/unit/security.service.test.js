@@ -67,6 +67,8 @@ describe('SecurityService', () => {
     const csv = await securityService.exportLogs(db, { severity: 'warning' }, 'csv');
 
     expect(csv).toContain('timestamp,userID,action,entity,severity,module,message');
-    expect(csv).toContain('"admin-1"');
+    // #1267: the export carries the pseudonym, never the raw user id.
+    expect(csv).not.toContain('admin-1');
+    expect(csv).toMatch(/"USR-[^"]+"/);
   });
 });

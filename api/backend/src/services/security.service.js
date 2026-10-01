@@ -644,7 +644,12 @@ class SecurityService {
         }
       }
 
-      const logs = await logsCollection.find(query).sort({ timestamp: -1 }).limit(10000).toArray();
+      const rawLogs = await logsCollection.find(query).sort({ timestamp: -1 }).limit(10000).toArray();
+      // #1267: the same read-time anonymisation logService.getLogs applies
+      // (RNF007 AC 5). Without it the export carried raw staff ids, and any
+      // row a direct createLog writer stored unsanitised.
+      const { anonymizeLogs } = require('../utils/userAnonymization');
+      const logs = await anonymizeLogs(rawLogs, db);
 
       if (format === 'csv') {
         return this.formatLogsAsCSV(logs);

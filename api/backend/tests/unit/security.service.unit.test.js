@@ -426,14 +426,34 @@ describe('SecurityService.exportLogs', () => {
     return { db: { collection: vi.fn(() => ({ find })) }, find };
   }
 
-  it('returns raw logs array (not CSV) when format is not csv', async () => {
+  // #1267: both formats go through the read-time anonymisation getLogs
+  // applies (RNF007 AC 5); before it the JSON export was the raw documents.
+  it('returns the anonymised logs array (not CSV) when format is not csv', async () => {
     const logs = [{ action: 'CREATE', entity: 'Sample' }];
     const { db } = makeDbWithLogs(logs);
 
     const result = await securityService.exportLogs(db, {}, 'json');
 
     expect(Array.isArray(result)).toBe(true);
-    expect(result).toEqual(logs);
+    expect(result[0]).toEqual(expect.objectContaining({ action: 'CREATE', entity: 'Sample', userName: 'USR-SYSTEM' }));
+  });
+
+  it('#1267: a row stored with a real user id, a name and personal metadata leaves pseudonymised', async () => {
+    const logs = [{
+      action: 'UPDATE',
+      userID: 'u-real-1',
+      userName: 'Maria Silva',
+      metadata: { user: { userName: 'Maria Silva', email: 'maria@example.org', userRole: 'Administrador' } },
+    }];
+    const { db } = makeDbWithLogs(logs);
+
+    const [row] = await securityService.exportLogs(db, {}, 'json');
+
+    expect(row.userName).toMatch(/^USR-/);
+    expect(row.userID).toBe(row.userName);
+    expect(JSON.stringify(row)).not.toContain('Maria Silva');
+    expect(JSON.stringify(row)).not.toContain('maria@example.org');
+    expect(JSON.stringify(row)).not.toContain('u-real-1');
   });
 
   it('returns CSV header-only string for empty result set', async () => {
