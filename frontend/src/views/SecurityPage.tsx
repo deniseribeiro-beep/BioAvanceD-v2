@@ -11,8 +11,15 @@ import './SecurityPage.css';
 // #1248: the retention keys are decided by the active RetentionPolicy, so
 // they render read-only with a line naming it.
 type GovernedSource = NonNullable<SecurityConfig['governedBy']>[string];
+// #1260, #1261: a key whose behaviour is fixed names why.
+const FIXED_HELP_KEYS: Record<string, string> = {
+  'audit-required': 'security.logging.fixedAuditRequired',
+  'always-anonymized': 'security.logging.fixedAlwaysAnonymized',
+  'not-applied': 'security.logging.fixedNotApplied',
+};
 function retentionGovernedHelp(t: (key: string, fallback?: string) => string, source?: GovernedSource): string {
   if (!source) return '';
+  if (source.fixed) return FIXED_HELP_KEYS[source.fixed] ? t(FIXED_HELP_KEYS[source.fixed]) : '';
   if (source.unavailable) return t('security.logging.governedUnavailable');
   if (!source.policyId) return t('security.logging.governedNoPolicy');
   return t('security.logging.governedByPolicy').replace('{{version}}', source.version ?? '');
@@ -567,11 +574,13 @@ export default function SecurityPage() {
                     <option value="error">{t('logs.severity.error')}</option>
                     <option value="critical">{t('logs.severity.critical')}</option>
                   </select>
+                  <span className="config-help">{t('security.logging.minLevelHelp')}</span>
                 </div>
                 <label className="config-switch">
                   <input title="security-input"
                     type="checkbox"
                     checked={localConfig.logging.logLoginAttempts}
+                    disabled={Boolean(localConfig.governedBy?.['logging.logLoginAttempts'])}
                     onChange={(e) => handleConfigChange('logging.logLoginAttempts', e.target.checked)}
                   />
                   <span>{t('security.logging.logLoginAttempts')}</span>
@@ -580,10 +589,14 @@ export default function SecurityPage() {
                   <input title="security-input"
                     type="checkbox"
                     checked={localConfig.logging.logAllActions}
+                    disabled={Boolean(localConfig.governedBy?.['logging.logAllActions'])}
                     onChange={(e) => handleConfigChange('logging.logAllActions', e.target.checked)}
                   />
                   <span>{t('security.logging.logAllActions')}</span>
                 </label>
+                <span className="config-help" data-testid="security-logging-fixed-help">
+                  {retentionGovernedHelp(t, localConfig.governedBy?.['logging.logAllActions'])}
+                </span>
                 <div className="config-field">
                   <label>{t('security.logging.retentionDays')}</label>
                   <input title="security-input"
@@ -702,19 +715,27 @@ export default function SecurityPage() {
                   <input title="security-input"
                     type="checkbox"
                     checked={localConfig.privacy.anonymizeLogs}
+                    disabled={Boolean(localConfig.governedBy?.['privacy.anonymizeLogs'])}
                     onChange={(e) => handleConfigChange('privacy.anonymizeLogs', e.target.checked)}
                   />
                   <span>{t('security.privacy.anonymizeLogs')}</span>
                 </label>
+                <span className="config-help">
+                  {retentionGovernedHelp(t, localConfig.governedBy?.['privacy.anonymizeLogs'])}
+                </span>
                 <div className="config-field">
                   <label>{t('security.privacy.dataRetentionDays')}</label>
                   <input title="security-input"
                     type="number"
                     min="30"
                     max="3650"
-                    value={localConfig.privacy.dataRetentionDays}
+                    value={localConfig.privacy.dataRetentionDays ?? ''}
+                    disabled={Boolean(localConfig.governedBy?.['privacy.dataRetentionDays'])}
                     onChange={(e) => handleConfigChange('privacy.dataRetentionDays', parseInt(e.target.value))}
                   />
+                  <span className="config-help" data-testid="security-privacy-fixed-help">
+                    {retentionGovernedHelp(t, localConfig.governedBy?.['privacy.dataRetentionDays'])}
+                  </span>
                 </div>
                 <label className="config-switch">
                   <input title="security-input"
@@ -747,7 +768,8 @@ export default function SecurityPage() {
                         type="number"
                         min="30"
                         max="365"
-                        value={localConfig.privacy.anonymizeAfterDays}
+                        value={localConfig.privacy.anonymizeAfterDays ?? ''}
+                        disabled={Boolean(localConfig.governedBy?.['privacy.anonymizeAfterDays'])}
                         onChange={(e) => handleConfigChange('privacy.anonymizeAfterDays', parseInt(e.target.value))}
                       />
                     </div>
@@ -808,6 +830,7 @@ export default function SecurityPage() {
                       <input title="security-input"
                         type="checkbox"
                         checked={localConfig.enhancedSecurity.logAllActions}
+                        disabled={Boolean(localConfig.governedBy?.['enhancedSecurity.logAllActions'])}
                         onChange={(e) => handleConfigChange('enhancedSecurity.logAllActions', e.target.checked)}
                       />
                       <span>{t('security.enhanced.logAllActions')}</span>

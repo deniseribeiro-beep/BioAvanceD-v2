@@ -1276,7 +1276,76 @@ test.describe('Security policy management (RF014) — real backend', () => {
     await expect(page.locator('.config-field').filter({ has: help }).locator('input')).toBeDisabled();
   });
 
-  // #1247: the enhancedSecurity group is read only while its enabled switch is
+  // #1260, #1261: the logging switches RNF009 makes mandatory and the privacy
+  // keys whose behaviour is fixed show that behaviour, ignore writes, and
+  // render read-only. logging.level is a real input and round-trips.
+  test('#1260 #1261: the fixed logging and privacy keys ignore writes and render read-only; logging.level saves', async ({
+    page,
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const read = async () => {
+      const res = await request.get(`${apiBaseURL}/api/security/config`, { headers: auth });
+      expect(res.ok()).toBeTruthy();
+      return (await res.json()).data;
+    };
+    const before = await read();
+    const fixed: Record<string, [string, unknown]> = {
+      'logging.logLoginAttempts': ['audit-required', true],
+      'logging.logAllActions': ['audit-required', true],
+      'enhancedSecurity.logAllActions': ['audit-required', true],
+      'privacy.anonymizeLogs': ['always-anonymized', true],
+      'privacy.dataRetentionDays': ['not-applied', null],
+      'privacy.anonymizeAfterDays': ['not-applied', null],
+    };
+    const valueAt = (config: Record<string, Record<string, unknown>>, path: string) => {
+      const [group, key] = path.split('.');
+      return config[group]?.[key];
+    };
+    for (const [path, [reason, value]] of Object.entries(fixed)) {
+      expect(before.governedBy?.[path]?.fixed, path).toBe(reason);
+      expect(valueAt(before, path), path).toBe(value);
+    }
+
+    const originalLevel = before.logging.level;
+    const newLevel = originalLevel === 'warning' ? 'error' : 'warning';
+    try {
+      const put = await request.put(`${apiBaseURL}/api/security/config`, {
+        headers: auth,
+        data: {
+          logging: { level: newLevel, logLoginAttempts: false, logAllActions: false },
+          privacy: { anonymizeLogs: false, dataRetentionDays: 40, anonymizeAfterDays: 40 },
+          enhancedSecurity: { logAllActions: false },
+        },
+      });
+      expect(put.ok(), await put.text()).toBeTruthy();
+      const after = await read();
+      expect(after.logging.level).toBe(newLevel);
+      for (const [path, [, value]] of Object.entries(fixed)) {
+        expect(valueAt(after, path), path).toBe(value);
+      }
+
+      await seedRealAuth(page, admin);
+      await page.goto('/system-management?tab=security');
+      await page.getByTestId('security-nav-logging').click();
+      const loggingHelp = page.getByTestId('security-logging-fixed-help');
+      await expect(loggingHelp).not.toBeEmpty();
+      await expect(page.locator('.config-switch input[type="checkbox"]:disabled')).toHaveCount(2);
+      await page.getByTestId('security-nav-privacy').click();
+      const privacyHelp = page.getByTestId('security-privacy-fixed-help');
+      await expect(privacyHelp).not.toBeEmpty();
+      await expect(page.locator('.config-field').filter({ has: privacyHelp }).locator('input')).toBeDisabled();
+    } finally {
+      const restore = await request.put(`${apiBaseURL}/api/security/config`, {
+        headers: auth,
+        data: { logging: { level: originalLevel } },
+      });
+      expect(restore.ok(), await restore.text()).toBeTruthy();
+    }
+  });
+
+  // #1247:the enhancedSecurity group is read only while its enabled switch is
   // on. Under the mode an unenrolled Administrador is sent to MFA enrolment,
   // the mode's session timeout replaces the ordinary one, and the strict
   // password policy holds every composition flag on.

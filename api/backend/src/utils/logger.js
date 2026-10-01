@@ -1,9 +1,15 @@
 /**
  * Logger utilitário para o sistema
+ *
+ * #1260: the minimum level comes from security_config's logging.level, held
+ * in ./logLevel. Errors always print (see logLevel.js for 'critical').
  */
+
+const { isEnabled } = require('./logLevel');
 
 const log = {
   info: (message, ...args) => {
+    if (!isEnabled('info')) return;
     console.log(`[INFO] ${new Date().toISOString()} - ${message}`, ...args);
   },
 
@@ -12,15 +18,16 @@ const log = {
   },
 
   warn: (message, ...args) => {
+    if (!isEnabled('warn')) return;
     console.warn(`[WARN] ${new Date().toISOString()} - ${message}`, ...args);
   },
 
   debug: (message, ...args) => {
-    if (process.env.NODE_ENV === 'development') {
+    // The config vocabulary starts at 'info', so debug follows it.
+    if (process.env.NODE_ENV === 'development' && isEnabled('info')) {
       console.log(`[DEBUG] ${new Date().toISOString()} - ${message}`, ...args);
     }
   }
 };
 
 module.exports = log;
-

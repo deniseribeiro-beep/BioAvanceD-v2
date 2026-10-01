@@ -47,7 +47,10 @@ describe('#1248 getConfig derives the retention keys from the active RetentionPo
     expect(config.privacy.autoPurge).toBe(true);
     expect(config.privacy.purgeAfterDays).toBe(400);
     expect(config.governedBy['logging.retentionDays']).toEqual(expect.objectContaining({ entity: 'RetentionPolicy', policyId: 'pol-1248', version: 'v7' }));
-    expect(Object.keys(config.governedBy).sort()).toEqual([...securityService.RETENTION_GOVERNED_PATHS].sort());
+    // #1260, #1261: the fixed keys share governedBy with the retention keys.
+    expect(Object.keys(config.governedBy).sort()).toEqual(
+      [...securityService.RETENTION_GOVERNED_PATHS, ...Object.keys(securityService.FIXED_PATHS)].sort()
+    );
   });
 
   it('archive: removes from the live collections, but purges nothing', async () => {
@@ -77,8 +80,8 @@ describe('#1248 getConfig derives the retention keys from the active RetentionPo
   it('keys no policy governs keep their stored values', async () => {
     vi.spyOn(retentionPolicyService, 'getActivePolicy').mockResolvedValue(policy('destroy'));
     const config = await securityService.getConfig(makeDb());
-    expect(config.privacy.anonymizeAfterDays).toBe(90);
-    expect(config.privacy.dataRetentionDays).toBe(365);
+    // privacy.anonymizeAfterDays and dataRetentionDays left this list with
+    // #1261: no job applies them, so they are fixed at null.
     expect(config.logging.level).toBe('info');
   });
 

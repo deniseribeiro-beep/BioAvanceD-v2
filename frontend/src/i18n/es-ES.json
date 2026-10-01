@@ -1640,12 +1640,16 @@
       "filterModulePlaceholder": "Ej: Seguridad, Usuarios, Muestras",
       "filterSeverity": "Filtrar por severidad",
       "filterStartDate": "Fecha inicial",
+      "fixedAlwaysAnonymized": "Siempre activo: las vistas de registros muestran identidades anonimizadas (LGPD).",
+      "fixedAuditRequired": "Siempre activo: la auditoría registra estos eventos (RNF009).",
+      "fixedNotApplied": "No aplicado: ninguna tarea aplica un plazo de retención o anonimización a datos distintos de los registros.",
       "governedByPolicy": "Definido por la política de retención activa (versión {{version}}); cámbielo allí.",
       "governedNoPolicy": "Ninguna política de retención activa cubre los registros, así que nada se depura.",
       "governedUnavailable": "No se pudo leer la política de retención.",
       "logAllActions": "Registrar todas las acciones",
       "logLoginAttempts": "Registrar todos los intentos de login",
       "minLevel": "Nivel mínimo de log",
+      "minLevelHelp": "Nivel mínimo del registro del servidor. Crítico conserva las líneas de error, las más graves que escribe el servidor.",
       "retentionDays": "Retención de logs (días)"
     },
     "login": {

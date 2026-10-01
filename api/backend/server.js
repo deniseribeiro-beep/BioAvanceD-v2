@@ -141,6 +141,14 @@ async function startServer() {
     await initializeSecuritySystem(app, db);
     logger.info("✅ Sistema de segurança ativado com sucesso");
 
+    // #1260: the logger's minimum level follows security_config's
+    // logging.level. Read once now, then polled, so a level saved through
+    // another replica reaches this process within a minute. syncLogLevel
+    // never throws; unref() keeps the poll from holding the process open.
+    const securityService = require("./src/services/security.service");
+    await securityService.syncLogLevel(db);
+    setInterval(() => securityService.syncLogLevel(db), 60 * 1000).unref();
+
     // #916: the RBAC catalog reached a live database ONLY at first-admin
     // bootstrap -- createFirstAdmin early-returns on `users_exist`, and the
     // two standalone scripts have no npm entry and no compose service. So a

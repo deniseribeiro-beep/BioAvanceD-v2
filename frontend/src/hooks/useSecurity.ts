@@ -80,10 +80,11 @@ export interface SecurityConfig {
   };
   privacy: {
     anonymizeLogs: boolean;
-    dataRetentionDays: number;
+    // #1261: fixed at null; no job applies a period to data other than logs.
+    dataRetentionDays: number | null;
     autoPurge: boolean;
     purgeAfterDays: number | null;
-    anonymizeAfterDays: number;
+    anonymizeAfterDays: number | null;
   };
   enhancedSecurity: {
     enabled: boolean;
@@ -107,6 +108,8 @@ export interface SecurityConfig {
     version: string | null;
     postRetentionAction?: string;
     unavailable?: boolean;
+    // #1260, #1261: set for a key whose behaviour is fixed, naming why.
+    fixed?: 'audit-required' | 'always-anonymized' | 'not-applied';
   }>;
   // #953: flat, per dict-02 P1X-0321/0322/0323.
   configVersion?: number;

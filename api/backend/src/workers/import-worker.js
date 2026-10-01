@@ -53,6 +53,7 @@ const getNotificationService = () => require('../services/notification.service')
 let worker = null;
 let notificationWorker = null;
 let db = null;
+let logLevelPoll = null;
 
 /**
  * Inicializa worker
@@ -81,6 +82,14 @@ async function initWorker() {
     // models/Sample.js, que nada consulta. A conexão fica enquanto esse
     // registro existir -- worker-mongoose-connection.arch.test.js exige isso.
     await connectMongoDB();
+
+    // #1260: the worker logs through the same logger as the API, so it
+    // follows security_config's logging.level the same way server.js does:
+    // once now, then on a poll. syncLogLevel never throws.
+    const securityService = require('../services/security.service');
+    await securityService.syncLogLevel(db);
+    logLevelPoll = setInterval(() => securityService.syncLogLevel(db), 60 * 1000);
+    logLevelPoll.unref();
 
     // Inicializa Redis (usa instância comum)
     const connection = initRedis();
@@ -512,6 +521,11 @@ async function updateJobStatus(db, jobID, status, progress, additionalData = {})
  * Fecha worker
  */
 async function closeWorker() {
+  if (logLevelPoll) {
+    clearInterval(logLevelPoll);
+    logLevelPoll = null;
+  }
+
   if (worker) {
     await worker.close();
     worker = null;

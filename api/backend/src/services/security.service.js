@@ -1,6 +1,7 @@
 const logger = require('../utils/logger');
 const auditLogger = require('../utils/auditLogger');
 const sessionService = require('./session.service');
+const logLevel = require('../utils/logLevel');
 
 /**
  * Service de Configurações de Segurança
@@ -90,6 +91,41 @@ async function resolveRetentionGoverned(db) {
   }
 }
 
+// #1260, #1261: keys whose behaviour is fixed, whatever the document says.
+// Nothing ever read them, so a value other than the one below changed
+// nothing. They stay in the document (dict-02 keeps them), show read-only,
+// and a write to them is dropped, exactly as for the retention keys.
+//  - 'audit-required': RNF009 AC 1 requires auditing authentication,
+//    configuration and every other critical event, so login attempts and
+//    auditable actions are always recorded. Turning that off is not an option
+//    the requirement leaves. enhancedSecurity.logAllActions (P1X-0314) is the
+//    same switch inside the reinforced mode.
+//  - 'always-anonymized': log reads always go through
+//    userAnonymization.anonymizeLogs (log.service, reports.routes). P1X-0305's
+//    "substitui identidade direta por anonId nos logs de consulta" is that
+//    behaviour, and LGPD art. 6 III (necessidade) argues against a view that
+//    drops it.
+//  - 'not-applied': no job applies a retention or anonymisation period to
+//    data other than logs; the RetentionPolicy sweep covers only Log and
+//    AuditEvent (#1248). The page says so rather than offer a period that
+//    nothing enforces.
+const FIXED_PATHS = {
+  'logging.logLoginAttempts': { value: true, reason: 'audit-required' },
+  'logging.logAllActions': { value: true, reason: 'audit-required' },
+  'enhancedSecurity.logAllActions': { value: true, reason: 'audit-required' },
+  'privacy.anonymizeLogs': { value: true, reason: 'always-anonymized' },
+  'privacy.dataRetentionDays': { value: null, reason: 'not-applied' },
+  'privacy.anonymizeAfterDays': { value: null, reason: 'not-applied' },
+};
+const GOVERNED_PATHS = [...RETENTION_GOVERNED_PATHS, ...Object.keys(FIXED_PATHS)];
+
+function applyFixedValues(config) {
+  for (const [path, { value }] of Object.entries(FIXED_PATHS)) {
+    const [group, key] = path.split('.');
+    if (config[group]) config[group][key] = value;
+  }
+}
+
 function applyRetentionGoverned(config, governed) {
   const out = { ...config, governedBy: {} };
   for (const path of RETENTION_GOVERNED_PATHS) {
@@ -99,12 +135,18 @@ function applyRetentionGoverned(config, governed) {
       out[group] = { ...(out[group] || {}), [key]: governed.values[path] };
     }
   }
+  for (const [path, { value, reason }] of Object.entries(FIXED_PATHS)) {
+    const [group, key] = path.split('.');
+    out.governedBy[path] = { entity: 'Fixed', policyId: null, version: null, fixed: reason };
+    // A document missing the whole group is not given a one-key group.
+    if (out[group]) out[group] = { ...out[group], [key]: value };
+  }
   return out;
 }
 
 function withoutRetentionGoverned(config) {
   const out = { ...config };
-  for (const path of RETENTION_GOVERNED_PATHS) {
+  for (const path of GOVERNED_PATHS) {
     const [group, key] = path.split('.');
     if (out[group] && Object.prototype.hasOwnProperty.call(out[group], key)) {
       const { [key]: _dropped, ...rest } = out[group];
@@ -113,6 +155,13 @@ function withoutRetentionGoverned(config) {
   }
   delete out.governedBy;
   return out;
+}
+
+// #1260: logging.level (P1X-0301) sets the backend logger's minimum level.
+// An absent or unknown value leaves the current level, which starts at 'info'.
+function applyLogLevel(config) {
+  const level = config && config.logging && config.logging.level;
+  if (level) logLevel.setMinLevel(level);
 }
 
 function requiresSessionRevocation(changes) {
@@ -218,6 +267,22 @@ class SecurityService {
   }
 
   /**
+   * #1260: applies the stored logging.level to this process's logger. server.js
+   * runs it at boot and on a poll, so a level saved through another replica
+   * reaches this one. Reads the document directly: getConfig would insert the
+   * default document as a side effect of a background read.
+   */
+  async syncLogLevel(db) {
+    try {
+      const doc = await db.collection('security_config')
+        .findOne({ _id: 'main' }, { projection: { 'logging.level': 1 } });
+      applyLogLevel(doc);
+    } catch (error) {
+      logger.warn(`#1260: nível de log não sincronizado: ${error.message}`);
+    }
+  }
+
+  /**
    * Busca configurações atuais do banco ou retorna padrões
    */
   async getConfig(db) {
@@ -239,6 +304,7 @@ class SecurityService {
 
       // Remove _id e campos internos antes de retornar
       const { _id, createdAt, ...configData } = config;
+      applyLogLevel(configData);
       // #1248: the retention keys come from the active RetentionPolicy.
       return applyRetentionGoverned(configData, await resolveRetentionGoverned(db));
     } catch (error) {
@@ -315,6 +381,8 @@ class SecurityService {
           if (mergedConfig[group]) mergedConfig[group][key] = governed.values[path];
         }
       }
+      // #1260, #1261: the fixed keys are stored at their fixed value too.
+      applyFixedValues(mergedConfig);
 
       mergedConfig.configVersion = (currentConfig.configVersion || 1) + 1;
       mergedConfig.lastUpdatedAt = new Date();
@@ -377,6 +445,10 @@ class SecurityService {
           logger.error('#649: falha ao revogar sessões após alteração de política:', revokeError.message);
         }
       }
+
+      // #1260: the logger follows the saved level at once in this process;
+      // syncLogLevel's poll carries it to the others.
+      applyLogLevel(mergedConfig);
 
       return applyRetentionGoverned(mergedConfig, governed);
     } catch (error) {
@@ -635,4 +707,5 @@ class SecurityService {
 
 module.exports = new SecurityService();
 module.exports.RETENTION_GOVERNED_PATHS = RETENTION_GOVERNED_PATHS;
+module.exports.FIXED_PATHS = FIXED_PATHS;
 
