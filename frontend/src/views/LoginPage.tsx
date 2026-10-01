@@ -58,10 +58,12 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
+      // #1252: the code accepted before a required password change rides
+      // along with the change, so an enrolled user is not asked for a second.
       const result = await login(
         username,
         password,
-        requiresTwoFactor ? twoFactorCode : undefined,
+        requiresTwoFactor || requiresPasswordChange ? twoFactorCode || undefined : undefined,
         requiresPasswordChange ? newPassword : undefined
       );
 
@@ -79,6 +81,8 @@ export default function LoginPage() {
       }
 
       if (result && result.requiresTwoFactor) {
+        // During a password change this means the carried code has expired.
+        if (requiresPasswordChange) setTwoFactorCode('');
         setRequiresTwoFactor(true);
         setLoading(false);
         return;

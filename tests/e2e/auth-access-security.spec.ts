@@ -1009,6 +1009,81 @@ test.describe('Security policy management (RF014) — real backend', () => {
     }
   });
 
+  // #1252: the login page dropped the accepted TOTP when the password change
+  // was asked for, so the change submit came back requiresMFA and an enrolled
+  // user typed a second code. A Técnico is MFA-enrolled by its first login.
+  test('#1252: an MFA-enrolled user with an expired password enters one code, sets the new password and lands past the login page', async ({
+    page,
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const before = await request.get(`${apiBaseURL}/api/security/config`, { headers: auth });
+    expect(before.ok()).toBeTruthy();
+    const originalDays = (await before.json()).data.passwordRules.expirationDays;
+
+    const username = `tecnico.1252.${Date.now()}`;
+    const password = 'Expiry@1252pass';
+    const newPassword = 'Renewed@1252pass';
+    const register = await request.post(`${apiBaseURL}/api/users/register`, {
+      headers: auth,
+      data: { name: '#1252 enrolled Fixture', email: `${username}@example.com`, username, password, accessType: 2, roleName: 'Técnico' },
+    });
+    expect(register.ok(), await register.text()).toBeTruthy();
+    const userID = (await register.json()).data?._id;
+    expect(userID).toBeTruthy();
+
+    const qr = await request.post(`${apiBaseURL}/api/auth/two-factor/qr-first-login`, { data: { username, password } });
+    expect(qr.ok(), await qr.text()).toBeTruthy();
+    const secret = (await qr.json()).data?.secret;
+    expect(secret).toBeTruthy();
+    const enable = await request.post(`${apiBaseURL}/api/auth/two-factor/enable-first-login`, {
+      data: { username, password, code: computeTotp(secret) },
+    });
+    expect(enable.ok(), await enable.text()).toBeTruthy();
+
+    try {
+      await setPasswordChangedAt(userID, new Date(Date.now() - 100 * 24 * 60 * 60 * 1000));
+      const on = await request.put(`${apiBaseURL}/api/security/config`, { headers: auth, data: { passwordRules: { expirationDays: 90 } } });
+      expect(on.ok(), await on.text()).toBeTruthy();
+
+      const loginBodies: Array<Record<string, unknown>> = [];
+      page.on('request', (req) => {
+        if (req.method() === 'POST' && req.url().endsWith('/api/auth/login')) loginBodies.push(req.postDataJSON());
+      });
+
+      await page.goto('/login');
+      await page.getByTestId('login-username-input').fill(username);
+      await page.getByTestId('login-password-input').fill(password);
+      await page.getByTestId('login-submit-button').click();
+
+      await expect(page.getByTestId('two-factor-section')).toBeVisible();
+      await page.getByTestId('login-mfa-code-input').fill(computeTotp(secret));
+      await page.getByTestId('login-submit-button').click();
+
+      await expect(page.getByTestId('force-password-change-section')).toBeVisible();
+      await expect(page.getByTestId('two-factor-section')).toHaveCount(0);
+      await page.getByTestId('login-new-password-input').fill(newPassword);
+      await page.getByTestId('login-confirm-new-password-input').fill(newPassword);
+      await page.getByTestId('login-submit-button').click();
+
+      // One code: the change submit carried it, and no code field came back.
+      await page.waitForURL((url) => !url.pathname.endsWith('/login'));
+      expect(loginBodies).toHaveLength(3);
+      expect(loginBodies[2].newPassword).toBe(newPassword);
+      expect(loginBodies[2].twoFactorCode).toBe(loginBodies[1].twoFactorCode);
+
+      const old = await request.post(`${apiBaseURL}/api/auth/login`, { data: { username, password } });
+      expect(old.status()).toBe(401);
+    } finally {
+      await request.put(`${apiBaseURL}/api/security/config`, {
+        headers: auth,
+        data: { passwordRules: { expirationDays: originalDays } },
+      }).catch(() => {});
+      await closeSessionsDb();
+    }
+  });
+
   // #648: AC#4 was genuinely absent (no code path at all) as of the test
   // above — built separately so this criterion's own admin-action + login-
   // gate + real-UI-blocking round trip gets its own real-backend proof.
