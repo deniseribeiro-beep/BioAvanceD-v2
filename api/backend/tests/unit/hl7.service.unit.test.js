@@ -259,9 +259,12 @@ describe('HL7Service.buildOBX', () => {
     expect(result).toContain('||7|');
   });
 
-  it('falls back to fileName as observation value when resultValue is null/undefined', () => {
-    const result = hl7Service.buildOBX({ fileType: 'PDF', fileName: 'a.pdf' }, {});
-    expect(result).toContain('||a.pdf|');
+  // #1272: the fallback is the file's generated label, never the uploader's
+  // original name, which can carry a person's name.
+  it('falls back to the generated file label as observation value when resultValue is null/undefined', () => {
+    const result = hl7Service.buildOBX({ _id: 'F1', fileType: 'PDF', fileName: 'maria_silva.pdf' }, {});
+    expect(result).toContain('||F1.pdf|');
+    expect(result).not.toContain('maria_silva');
   });
 
   it('treats resultValue of 0 as a real value (not falling back to fileName)', () => {
@@ -584,7 +587,7 @@ describe('HL7Service.generateCDA', () => {
     expect(cda).toContain('<?xml version="1.0" encoding="UTF-8"?>');
     expect(cda).toContain('<ClinicalDocument');
     expect(cda).toContain('extension="12345678"');
-    expect(cda).toContain('File: report.pdf');
+    expect(cda).toContain('File: FILE1.pdf');
   });
 
   it('includes optional loincCode/procedureCode/interpretation content when present', async () => {
@@ -600,10 +603,13 @@ describe('HL7Service.generateCDA', () => {
     expect(cda).toContain('interpretationCode code="H"');
   });
 
-  it('escapes unsafe characters in the file name via escapeXML', async () => {
-    const cda = await hl7Service.generateCDA(null, { ...sampleFile, fileName: '<r&d>' }, sample, '12345678');
-    expect(cda).toContain('&lt;r&amp;d&gt;');
+  // #1272: the original name no longer reaches the document, so markup in it
+  // cannot either; the extension is reduced to [.a-z0-9].
+  it('keeps the original file name, and any markup in it, out of the CDA', async () => {
+    const cda = await hl7Service.generateCDA(null, { ...sampleFile, fileName: 'joao <r&d>.p"df' }, sample, '12345678');
+    expect(cda).not.toContain('joao');
     expect(cda).not.toContain('<r&d>');
+    expect(cda).toContain('File: FILE1.pdf');
   });
 
   it('embeds resultValue as a PQ value with unit when present', async () => {
@@ -740,5 +746,19 @@ describe('HL7Service.formatFileSize', () => {
 
   it('rounds to two decimal places for non-exact sizes', () => {
     expect(hl7Service.formatFileSize(1500)).toBe('1.46 KB');
+  });
+});
+
+describe('#1272 HL7Service.exportFileLabel', () => {
+  it('is the file id plus the lower-cased extension, and never the original name', () => {
+    expect(hl7Service.exportFileLabel({ _id: 'abc', fileName: 'Maria Silva - Hemograma.PDF' })).toBe('abc.pdf');
+    expect(hl7Service.exportFileLabel({ _id: 'abc', fileName: 'noextension' })).toBe('abc');
+    expect(hl7Service.exportFileLabel({ fileName: 'x.csv' })).toBe('file.csv');
+  });
+
+  it('FHIR title and valueString carry the label', async () => {
+    const out = JSON.stringify(await hl7Service.generateFHIRResource(null, { _id: 'F9', fileType: 'PDF', fileName: 'ana_costa.pdf' }, { _id: 'S1' }, '12345678'));
+    expect(out).toContain('F9.pdf');
+    expect(out).not.toContain('ana_costa');
   });
 });

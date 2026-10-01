@@ -164,13 +164,13 @@ class HL7Service {
     const observationID = sampleFile.loincCode || `FILE^${sampleFile.fileType}`;
     const observationValue = sampleFile.resultValue !== null && sampleFile.resultValue !== undefined
       ? `${sampleFile.resultValue}${sampleFile.unitOfMeasure ? `^${sampleFile.unitOfMeasure}` : ''}`
-      : sampleFile.fileName;
+      : this.exportFileLabel(sampleFile);
     const units = sampleFile.unitOfMeasure || '';
     const referencesRange = '';
     const abnormalFlags = this.mapInterpretationToHL7(sampleFile.interpretation);
     const observationResultStatus = sampleFile.resultStatus || 'F'; // F = Final, P = Preliminary, C = Canceled
     
-    return `OBX|1|${valueType}|${observationID}|${sampleFile.fileName}||${observationValue}|${units}||${referencesRange}||${abnormalFlags}|||${observationResultStatus}|||${this.formatHL7DateTime(sampleFile.uploadDate || new Date())}||`;
+    return `OBX|1|${valueType}|${observationID}|${this.exportFileLabel(sampleFile)}||${observationValue}|${units}||${referencesRange}||${abnormalFlags}|||${observationResultStatus}|||${this.formatHL7DateTime(sampleFile.uploadDate || new Date())}||`;
   }
 
   /**
@@ -269,7 +269,7 @@ class HL7Service {
         presentedForm: [{
           contentType: this.getMimeType(sampleFile.fileType),
           url: `${baseUrl}/api/samples/${sample._id?.toString()}/files/${fileID}/download`,
-          title: sampleFile.fileName,
+          title: this.exportFileLabel(sampleFile),
           creation: sampleFile.uploadDate 
             ? (sampleFile.uploadDate instanceof Date ? sampleFile.uploadDate.toISOString() : new Date(sampleFile.uploadDate).toISOString())
             : new Date().toISOString()
@@ -322,7 +322,7 @@ class HL7Service {
         issued: sampleFile.uploadDate 
           ? (sampleFile.uploadDate instanceof Date ? sampleFile.uploadDate.toISOString() : new Date(sampleFile.uploadDate).toISOString())
           : new Date().toISOString(),
-        valueString: sampleFile.fileName,
+        valueString: this.exportFileLabel(sampleFile),
         interpretation: sampleFile.interpretation ? [{
           coding: [{
             system: 'http://terminology.hl7.org/CodeSystem/v3-ObservationInterpretation',
@@ -454,7 +454,7 @@ class HL7Service {
           <title>Laboratory Analysis</title>
           <text>
             <paragraph>
-              <content ID="file-description">File: ${this.escapeXML(sampleFile.fileName)}</content>
+              <content ID="file-description">File: ${this.escapeXML(this.exportFileLabel(sampleFile))}</content>
               <content>Type: ${this.escapeXML(sampleFile.fileType)}</content>
               <content>Size: ${this.formatFileSize(sampleFile.fileSize)}</content>
               ${sampleFile.loincCode ? `<content>LOINC Code: ${this.escapeXML(sampleFile.loincCode)}</content>` : ''}
@@ -475,7 +475,7 @@ class HL7Service {
                   ${sampleFile.resultValue !== null && sampleFile.resultValue !== undefined ? `
                   <value xsi:type="PQ" value="${sampleFile.resultValue}" unit="${sampleFile.unitOfMeasure || ''}"/>
                   ` : `
-                  <value xsi:type="ED" mediaType="${this.getMimeType(sampleFile.fileType)}">${this.escapeXML(sampleFile.fileName)}</value>
+                  <value xsi:type="ED" mediaType="${this.getMimeType(sampleFile.fileType)}">${this.escapeXML(this.exportFileLabel(sampleFile))}</value>
                   `}
                   ${sampleFile.interpretation ? `
                   <interpretationCode code="${this.mapInterpretationToHL7(sampleFile.interpretation)}" codeSystem="2.16.840.1.113883.5.83"/>
@@ -607,6 +607,22 @@ class HL7Service {
   /**
    * Escapa XML para prevenir injection
    */
+  /**
+   * #1272: the label a message gives the file. The stored fileName is the
+   * uploader's original name, which can carry a person's name
+   * ("maria_silva_hemograma.pdf"), and RNF007 keeps exports to pseudonymised
+   * or opaque identifiers. The file's own id plus its extension identifies
+   * it as well; the original name stays in the stored record and the
+   * download.
+   */
+  exportFileLabel(sampleFile) {
+    const id = sampleFile && sampleFile._id ? String(sampleFile._id) : 'file';
+    const name = (sampleFile && typeof sampleFile.fileName === 'string') ? sampleFile.fileName : '';
+    const dot = name.lastIndexOf('.');
+    const ext = dot > 0 ? name.slice(dot).toLowerCase().replace(/[^.a-z0-9]/g, '') : '';
+    return `${id}${ext}`;
+  }
+
   escapeXML(str) {
     if (!str) return '';
     return String(str)
