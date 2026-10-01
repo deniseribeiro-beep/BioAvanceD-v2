@@ -459,18 +459,17 @@ class UserSecurityService {
         throw new Error('Senha atual incorreta');
       }
 
-      // Valida complexidade da senha
-      const PasswordValidator = require('../utils/passwordValidator');
-      PasswordValidator.validateOrThrow(newPassword);
-      
       // #1244: reuse follows passwordRules through the one shared check.
       // This site used to compare every stored hash but never the current
       // password, and kept 5 where the others kept 3. Its own message is
       // kept, since UserSecurityPage shows it.
       const passwordService = require('./password.service');
-      const reusePolicy = await passwordService.resolveReusePolicy(db);
+      const passwordPolicy = await passwordService.resolvePasswordPolicy(db);
+      // #1246: the policy's strength rules, as every other password write
+      // checks them; this site had its own 12-character validator.
+      passwordService.validateStrength(newPassword, passwordPolicy);
       try {
-        await passwordService.validateReuse(newPassword, user, reusePolicy);
+        await passwordService.validateReuse(newPassword, user, passwordPolicy);
       } catch (reuseError) {
         throw new Error('Você não pode reutilizar uma senha recente');
       }
@@ -480,7 +479,7 @@ class UserSecurityService {
       const newPasswordHash = await bcrypt.hash(newPassword, saltRounds);
 
       // Atualiza senha e histórico
-      const newPasswordHistory = passwordService.nextPasswordHistory(user, reusePolicy);
+      const newPasswordHistory = passwordService.nextPasswordHistory(user, passwordPolicy);
       
       await usersCollection.updateOne(
         { _id: new ObjectId(userID) },

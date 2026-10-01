@@ -354,12 +354,12 @@ class AuthController {
         });
       }
 
-      passwordService.validateStrength(newPassword);
-      const reusePolicy = await passwordService.resolveReusePolicy(db);
-      await passwordService.validateReuse(newPassword, user, reusePolicy);
+      const passwordPolicy = await passwordService.resolvePasswordPolicy(db);
+      passwordService.validateStrength(newPassword, passwordPolicy);
+      await passwordService.validateReuse(newPassword, user, passwordPolicy);
 
       const newHash = await bcrypt.hash(newPassword, 10);
-      const updatedHistory = passwordService.nextPasswordHistory(user, reusePolicy);
+      const updatedHistory = passwordService.nextPasswordHistory(user, passwordPolicy);
 
       await usersCollection.updateOne(
         { _id: user._id },

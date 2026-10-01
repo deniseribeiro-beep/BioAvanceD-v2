@@ -1,13 +1,14 @@
 /**
- * Utilitário para validação de senha no frontend
- * Requisitos:
- * - Mínimo de 8 caracteres
- * - Pelo menos uma letra maiúscula
- * - Pelo menos uma letra minúscula
- * - Pelo menos um número
- * - Pelo menos um caractere especial
+ * Utilitário para validação de senha no frontend.
+ * #1246: os requisitos são a política passwordRules do servidor
+ * (usePasswordPolicy); sem ela, o padrão do backend.
  */
-import { getPasswordIssues, PasswordIssue, meetsAllPasswordRules } from './passwordRules';
+import {
+  getPasswordIssues,
+  PasswordIssue,
+  PasswordStrengthRules,
+  DEFAULT_PASSWORD_RULES,
+} from './passwordRules';
 
 export interface PasswordValidationResult {
   isValid: boolean;
@@ -17,7 +18,7 @@ export interface PasswordValidationResult {
 /**
  * Valida se a senha atende aos requisitos
  */
-export function validatePassword(password: string): PasswordValidationResult {
+export function validatePassword(password: string, rules: PasswordStrengthRules = DEFAULT_PASSWORD_RULES): PasswordValidationResult {
   const errors: string[] = [];
 
   if (!password || typeof password !== 'string') {
@@ -25,10 +26,10 @@ export function validatePassword(password: string): PasswordValidationResult {
     return { isValid: false, errors };
   }
 
-  const issues = getPasswordIssues(password);
+  const issues = getPasswordIssues(password, rules);
 
   const issueMessages: Record<PasswordIssue, string> = {
-    minLength: 'A senha deve ter no mínimo 8 caracteres',
+    minLength: `A senha deve ter no mínimo ${rules.minLength} caracteres`,
     upper: 'A senha deve conter pelo menos uma letra maiúscula',
     lower: 'A senha deve conter pelo menos uma letra minúscula',
     number: 'A senha deve conter pelo menos um número',
@@ -40,7 +41,7 @@ export function validatePassword(password: string): PasswordValidationResult {
   });
 
   return {
-    isValid: meetsAllPasswordRules(password),
+    isValid: issues.length === 0,
     errors
   };
 }
@@ -48,8 +49,8 @@ export function validatePassword(password: string): PasswordValidationResult {
 /**
  * Valida senha e retorna mensagem de erro formatada
  */
-export function validatePasswordAndGetError(password: string): string | null {
-  const validation = validatePassword(password);
+export function validatePasswordAndGetError(password: string, rules: PasswordStrengthRules = DEFAULT_PASSWORD_RULES): string | null {
+  const validation = validatePassword(password, rules);
   if (!validation.isValid) {
     return validation.errors.join('. ');
   }

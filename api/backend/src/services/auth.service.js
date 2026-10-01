@@ -767,12 +767,12 @@ class AuthService {
           };
         }
 
-        passwordService.validateStrength(newPassword);
-        const reusePolicy = await passwordService.resolveReusePolicy(db);
-        await passwordService.validateReuse(newPassword, user, reusePolicy);
+        const passwordPolicy = await passwordService.resolvePasswordPolicy(db);
+        passwordService.validateStrength(newPassword, passwordPolicy);
+        await passwordService.validateReuse(newPassword, user, passwordPolicy);
 
         const newHash = await bcrypt.hash(newPassword, 10);
-        const updatedHistory = passwordService.nextPasswordHistory(user, reusePolicy);
+        const updatedHistory = passwordService.nextPasswordHistory(user, passwordPolicy);
 
         await usersCollection.updateOne(
           { _id: user._id },
@@ -1432,9 +1432,10 @@ class AuthService {
         throw new Error('Nova senha é obrigatória');
       }
 
-      // Valida complexidade da senha
-      const PasswordValidator = require('../utils/passwordValidator');
-      PasswordValidator.validateOrThrow(newPassword);
+      // #1246: the policy's strength rules, the same check every other
+      // password write uses (this path had its own 12-character validator).
+      const passwordPolicy = await passwordService.resolvePasswordPolicy(db);
+      passwordService.validateStrength(newPassword, passwordPolicy);
 
       // Verifica e decodifica token
       let decoded;
@@ -1494,8 +1495,7 @@ class AuthService {
       // reuse nor kept history -- a forgotten-password link could set the
       // current password again, or any earlier one. After the token checks,
       // so an invalid link never learns whether a password was reused.
-      const reusePolicy = await passwordService.resolveReusePolicy(db);
-      await passwordService.validateReuse(newPassword, user, reusePolicy);
+      await passwordService.validateReuse(newPassword, user, passwordPolicy);
 
       // Hash da nova senha
       const hashedPassword = await bcrypt.hash(newPassword, 10);
@@ -1517,7 +1517,7 @@ class AuthService {
         {
           $set: {
             password: hashedPassword,
-            passwordHistory: passwordService.nextPasswordHistory(user, reusePolicy),
+            passwordHistory: passwordService.nextPasswordHistory(user, passwordPolicy),
             lastPasswordChange: new Date(),
             // #1250: the owner just replaced the password through their own
             // mailbox, which is what a forced reset asks for.

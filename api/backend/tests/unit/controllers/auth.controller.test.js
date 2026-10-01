@@ -720,7 +720,7 @@ describe('AuthController.changePassword', () => {
 
     await authController.changePassword(req, res);
 
-    expect(passwordService.validateReuse).toHaveBeenCalledWith('NewStr0ng!', user, { preventReuse: true, maxReuseHistory: 2 });
+    expect(passwordService.validateReuse).toHaveBeenCalledWith('NewStr0ng!', user, expect.objectContaining({ preventReuse: true, maxReuseHistory: 2 }));
     expect(usersCollection.updateOne.mock.calls[0][1].$set.passwordHistory).toEqual(['hashed-old', 'h1']);
   });
 
@@ -746,9 +746,9 @@ describe('AuthController.changePassword', () => {
 
     await authController.changePassword(req, res);
 
-    expect(passwordService.validateStrength).toHaveBeenCalledWith('NewStr0ng!');
-    // #1244: no security_config document here, so the default policy.
-    expect(passwordService.validateReuse).toHaveBeenCalledWith('NewStr0ng!', user, { preventReuse: true, maxReuseHistory: 5 });
+    // #1244/#1246: no security_config document here, so the default policy.
+    expect(passwordService.validateStrength).toHaveBeenCalledWith('NewStr0ng!', passwordService.DEFAULT_PASSWORD_POLICY);
+    expect(passwordService.validateReuse).toHaveBeenCalledWith('NewStr0ng!', user, passwordService.DEFAULT_PASSWORD_POLICY);
     expect(bcrypt.hash).toHaveBeenCalledWith('NewStr0ng!', 10);
     expect(usersCollection.updateOne).toHaveBeenCalledWith(
       { _id: 'u1' },

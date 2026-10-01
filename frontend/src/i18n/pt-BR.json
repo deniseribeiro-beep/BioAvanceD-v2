@@ -695,6 +695,7 @@
     "requirements": {
       "lower": "Pelo menos uma letra minúscula",
       "minLength": "Mínimo de 8 caracteres",
+      "minLengthN": "Mínimo de {{n}} caracteres",
       "number": "Pelo menos um número",
       "placeholder": "Mínimo 8 caracteres com maiúscula, minúscula, número e símbolo",
       "symbol": "Pelo menos um símbolo (!@#$%^&*()_-+=[]{}|;:,.<>?/)",

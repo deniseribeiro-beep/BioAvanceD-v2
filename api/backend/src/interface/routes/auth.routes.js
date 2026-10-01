@@ -488,6 +488,20 @@ router.post('/refresh', async (req, res) => {
   }
 });
 
+// #1246: the password strength rules in force, so every form that sets a
+// password checks what the server will check. Unauthenticated on purpose: the
+// token-reset page and the first-login change have no session yet, and the
+// rules are what a user is told before choosing (the reuse keys stay out).
+router.get('/password-policy', async (req, res) => {
+  const db = req.app.locals.db;
+  if (!db) {
+    return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
+  }
+  const passwordService = require('../../services/password.service');
+  const policy = await passwordService.resolvePasswordPolicy(db);
+  return res.status(200).json({ success: true, data: passwordService.publicStrengthRules(policy) });
+});
+
 // Password reset
 router.post('/password-reset/request', authController.requestPasswordReset.bind(authController));
 router.post('/password-reset/reset', authController.resetPassword.bind(authController));

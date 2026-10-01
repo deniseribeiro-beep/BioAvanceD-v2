@@ -1,15 +1,50 @@
 const bcrypt = require('bcryptjs');
 const logger = require('../utils/logger');
 
-const PASSWORD_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_\-+=[\]{};':"\\|,.<>/?]).{8,}$/;
+// #1246: strength is policy too. dict-02 P1X-0284..0288 (passwordRules.
+// minLength and the four require* flags), RF014 AC#2 "Configurar ... regras de
+// senha". Before this the Security page stored them and nothing read them,
+// and two validators disagreed: this file's fixed regex (8, four classes)
+// served four routes, and utils/passwordValidator.js (12, no digit) served
+// the token reset and PUT /api/user-security/password.
+//
+// The defaults are getDefaultConfig()'s, which the frontend and this file's
+// old regex already enforced; the 12-character validator was the outlier.
+// Same direct read and fail-closed shape as the reuse keys below. 6..128 is
+// validateConfig's own minLength range.
+const DEFAULT_STRENGTH_POLICY = Object.freeze({
+  minLength: 8,
+  requireUppercase: true,
+  requireLowercase: true,
+  requireNumbers: true,
+  requireSpecialChars: true,
+});
+const SPECIAL_CHARACTER = /[!@#$%^&*()_\-+=[\]{};':"\\|,.<>/?]/;
 
-function validateStrength(password) {
+function strengthMinLength(value) {
+  const length = Number(value);
+  return Number.isInteger(length) && length >= 6 && length <= 128 ? length : DEFAULT_STRENGTH_POLICY.minLength;
+}
+
+function validateStrength(password, policy = DEFAULT_STRENGTH_POLICY) {
   if (!password || typeof password !== 'string') {
     throw new Error('Senha é obrigatória');
   }
 
-  if (!PASSWORD_REGEX.test(password)) {
-    throw new Error('Senha deve ter pelo menos 8 caracteres, com letra maiúscula, letra minúscula, número e símbolo');
+  const minLength = strengthMinLength(policy.minLength);
+  const required = [
+    [policy.requireUppercase !== false, /[A-Z]/, 'letra maiúscula'],
+    [policy.requireLowercase !== false, /[a-z]/, 'letra minúscula'],
+    [policy.requireNumbers !== false, /\d/, 'número'],
+    [policy.requireSpecialChars !== false, SPECIAL_CHARACTER, 'símbolo'],
+  ].filter(([on]) => on);
+
+  const tooShort = password.length < minLength;
+  const missing = required.filter(([, pattern]) => !pattern.test(password));
+  if (tooShort || missing.length > 0) {
+    const classes = required.map(([, , label]) => label);
+    const tail = classes.length ? `, com ${classes.slice(0, -1).join(', ')}${classes.length > 1 ? ' e ' : ''}${classes[classes.length - 1]}` : '';
+    throw new Error(`Senha deve ter pelo menos ${minLength} caracteres${tail}`);
   }
 }
 
@@ -39,19 +74,34 @@ function reuseDepth(value) {
     : DEFAULT_REUSE_POLICY.maxReuseHistory;
 }
 
-async function resolveReusePolicy(db) {
+const DEFAULT_PASSWORD_POLICY = Object.freeze({ ...DEFAULT_STRENGTH_POLICY, ...DEFAULT_REUSE_POLICY });
+
+// One read for every passwordRules key a password write needs (#1244, #1246).
+// Only an explicit boolean false relaxes a flag.
+async function resolvePasswordPolicy(db) {
   try {
     const config = await db.collection('security_config').findOne({ _id: 'main' });
     const rules = (config && config.passwordRules) || {};
     return {
-      // Only an explicit boolean false relaxes it.
+      minLength: strengthMinLength(rules.minLength),
+      requireUppercase: rules.requireUppercase !== false,
+      requireLowercase: rules.requireLowercase !== false,
+      requireNumbers: rules.requireNumbers !== false,
+      requireSpecialChars: rules.requireSpecialChars !== false,
       preventReuse: rules.preventReuse !== false,
       maxReuseHistory: reuseDepth(rules.maxReuseHistory),
     };
   } catch (error) {
-    logger.warn('#1244: política de reutilização ilegível, usando o padrão (5):', error.message);
-    return { ...DEFAULT_REUSE_POLICY };
+    logger.warn('#1244/#1246: política de senha ilegível, usando os padrões:', error.message);
+    return { ...DEFAULT_PASSWORD_POLICY };
   }
+}
+
+// What a client may be told before it submits a password: the strength rules
+// only. The reuse keys stay server-side.
+function publicStrengthRules(policy) {
+  const { minLength, requireUppercase, requireLowercase, requireNumbers, requireSpecialChars } = policy;
+  return { minLength, requireUppercase, requireLowercase, requireNumbers, requireSpecialChars };
 }
 
 // The history holds the passwords BEFORE the current one, newest first, to the
@@ -99,8 +149,11 @@ function isPasswordExpired(user) {
 
 module.exports = {
   DEFAULT_REUSE_POLICY,
+  DEFAULT_STRENGTH_POLICY,
+  DEFAULT_PASSWORD_POLICY,
   validateStrength,
-  resolveReusePolicy,
+  resolvePasswordPolicy,
+  publicStrengthRules,
   nextPasswordHistory,
   validateReuse,
   isPasswordExpired

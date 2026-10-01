@@ -63,6 +63,8 @@ const TOKEN_OPTIONAL_ROUTES = [
   '/auth/password-reset/reset',
   '/auth/two-factor/qr-first-login',
   '/auth/two-factor/enable-first-login',
+  // #1246: the password rules, read by the reset page before any session.
+  '/auth/password-policy',
   // #809: participant-facing consent-token endpoints. Whoever follows a bulk
   // consent invitation has no account and no session -- the 64-char token in
   // the emailed link is the credential. Without these entries the request
@@ -790,6 +792,8 @@ export const authService = {
     api.post('/auth/two-factor/qr-first-login', { username, password }),
   enableTwoFactorFirstLogin: (code: string, username: string, password: string) => 
     api.post('/auth/two-factor/enable-first-login', { code, username, password }),
+  // #1246: passwordRules strength keys in force (no session needed)
+  getPasswordPolicy: () => api.get('/auth/password-policy'),
   // Recuperação de senha
   requestPasswordReset: (email: string) => 
     api.post('/auth/password-reset/request', { email }),

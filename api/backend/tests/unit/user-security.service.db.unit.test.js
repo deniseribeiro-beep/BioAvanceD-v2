@@ -276,6 +276,26 @@ describe('UserSecurityService DB-backed methods', () => {
       expect(update.$set.passwordHistory).toEqual([currentHash]);
     });
 
+    // #1246: this route had its own 12-character validator with no digit
+    // rule; it now checks the passwordRules policy like every other write.
+    it('#1246: checks strength against passwordRules, not a fixed 12', async () => {
+      const currentHash = await bcrypt.hash('correct-pass', 4);
+      const user = { _id: USER_ID, password: currentHash, passwordHistory: [] };
+      const strict = buildCollection({
+        findOne: vi.fn().mockResolvedValue({ _id: 'main', passwordRules: { minLength: 14 } })
+      });
+      const users = buildCollection({ findOne: vi.fn().mockResolvedValue(user) });
+      await expect(
+        userSecurityService.updatePassword(buildDb({ users, security_config: strict }), USER_ID, 'correct-pass', 'Abcdef1!xyz12')
+      ).rejects.toThrow('pelo menos 14 caracteres');
+
+      // The default policy (no document): 8 characters with a digit pass,
+      // which the old validator refused for being under 12.
+      const users2 = buildCollection({ findOne: vi.fn().mockResolvedValue(user) });
+      await userSecurityService.updatePassword(buildDb({ users: users2 }), USER_ID, 'correct-pass', 'Abcde1!x');
+      expect(users2.updateOne).toHaveBeenCalledTimes(1);
+    });
+
     it('updates the password and rotates history on success', async () => {
       const currentHash = await bcrypt.hash('correct-pass', 10);
       const users = buildCollection({

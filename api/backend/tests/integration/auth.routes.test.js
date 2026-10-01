@@ -777,3 +777,36 @@ describe('auth.routes.js (integration, real router mounted)', () => {
     });
   });
 });
+
+// #1246: the forms read the strength rules the server will enforce. Public by
+// design (the reset page has no session), and the reuse keys stay out.
+describe('GET /api/auth/password-policy (#1246)', () => {
+  function dbWithConfig(config) {
+    return { collection: vi.fn(() => ({ findOne: vi.fn().mockResolvedValue(config) })) };
+  }
+
+  it('serves the stored strength rules without a session, and no reuse keys', async () => {
+    const db = dbWithConfig({
+      _id: 'main',
+      passwordRules: { minLength: 12, requireUppercase: true, requireLowercase: true, requireNumbers: false, requireSpecialChars: true, preventReuse: true, maxReuseHistory: 7 },
+    });
+    const res = await request(buildApp(loadAuthRoutes(), db)).get('/api/auth/password-policy');
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual({
+      minLength: 12, requireUppercase: true, requireLowercase: true, requireNumbers: false, requireSpecialChars: true,
+    });
+  });
+
+  it('serves the defaults when no config document exists', async () => {
+    const res = await request(buildApp(loadAuthRoutes(), dbWithConfig(null))).get('/api/auth/password-policy');
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual({
+      minLength: 8, requireUppercase: true, requireLowercase: true, requireNumbers: true, requireSpecialChars: true,
+    });
+  });
+
+  it('answers 503 with no database', async () => {
+    const res = await request(buildApp(loadAuthRoutes(), undefined)).get('/api/auth/password-policy');
+    expect(res.status).toBe(503);
+  });
+});

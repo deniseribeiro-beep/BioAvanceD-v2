@@ -275,9 +275,9 @@ test.describe('User management (RF003) — real backend', () => {
 
     const tecnicoSession = await completeFirstLoginMfa(request, apiBaseURL!, username, initialPassword);
 
-    // Rejection case: a new password failing PasswordValidator's complexity
-    // rules (min 12 chars, upper+lower+special) is refused — too short and
-    // missing a special character.
+    // Rejection case: a new password failing the passwordRules policy (#1246;
+    // by default 8 chars with upper, lower, digit and symbol) is refused —
+    // here, missing a special character.
     const weakAttempt = await request.put(`${apiBaseURL}/api/user/security/password`, {
       headers: { Authorization: `Bearer ${tecnicoSession.token}` },
       data: { currentPassword: initialPassword, newPassword: 'Weak1234567' },
@@ -900,6 +900,55 @@ test.describe('Security policy management (RF014) — real backend', () => {
       await request.put(`${apiBaseURL}/api/security/config`, {
         headers: auth,
         data: { passwordRules: { preventReuse: originalRules.preventReuse, maxReuseHistory: originalRules.maxReuseHistory } },
+      }).catch(() => {});
+    }
+  });
+
+  // #1246: the strength keys were stored and never read, and two backend
+  // validators disagreed (8 with a digit, 12 without). One policy now drives
+  // every write, and the public password-policy route tells the forms.
+  test('#1246: password strength follows passwordRules on a live set, and the public policy route reports it (criterion 2)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const before = await request.get(`${apiBaseURL}/api/security/config`, { headers: auth });
+    expect(before.ok()).toBeTruthy();
+    const originalRules = (await before.json()).data.passwordRules;
+
+    const username = `tecnico.1246.${Date.now()}`;
+    const register = await request.post(`${apiBaseURL}/api/users/register`, {
+      headers: auth,
+      data: { name: '#1246 strength Fixture', email: `${username}@example.com`, username, password: 'Strength@1246a', accessType: 2, roleName: 'Técnico' },
+    });
+    expect(register.ok(), await register.text()).toBeTruthy();
+    const userID = (await register.json()).data?._id;
+    expect(userID).toBeTruthy();
+
+    try {
+      const strict = await request.put(`${apiBaseURL}/api/security/config`, {
+        headers: auth,
+        data: { passwordRules: { minLength: 14, requireNumbers: false } },
+      });
+      expect(strict.ok(), await strict.text()).toBeTruthy();
+
+      // No session: the reset page reads this before anyone logs in.
+      const policy = await request.get(`${apiBaseURL}/api/auth/password-policy`);
+      expect(policy.ok(), await policy.text()).toBeTruthy();
+      const rules = (await policy.json()).data;
+      expect(rules).toMatchObject({ minLength: 14, requireNumbers: false });
+      expect(rules).not.toHaveProperty('maxReuseHistory');
+
+      const tooShort = await request.post(`${apiBaseURL}/api/users/${userID}/set-password`, { headers: auth, data: { password: 'Strength@abc' } });
+      expect(tooShort.status()).toBe(422);
+      expect((await tooShort.json()).message).toContain('pelo menos 14 caracteres');
+      // 14 characters and no digit: allowed, since the policy turned digits off.
+      const ok = await request.post(`${apiBaseURL}/api/users/${userID}/set-password`, { headers: auth, data: { password: 'Strength@abcde' } });
+      expect(ok.status(), await ok.text()).toBe(200);
+    } finally {
+      await request.put(`${apiBaseURL}/api/security/config`, {
+        headers: auth,
+        data: { passwordRules: { minLength: originalRules.minLength, requireNumbers: originalRules.requireNumbers } },
       }).catch(() => {});
     }
   });

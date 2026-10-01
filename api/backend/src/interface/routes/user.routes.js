@@ -1444,10 +1444,10 @@ router.post('/:id/set-password', authenticate, requirePermission('setUserPasswor
 
     const newPassword = req.body?.password;
     const passwordService = require('../../services/password.service');
-    const reusePolicy = await passwordService.resolveReusePolicy(db);
+    const passwordPolicy = await passwordService.resolvePasswordPolicy(db);
     try {
-      passwordService.validateStrength(newPassword);
-      await passwordService.validateReuse(newPassword, targetUser, reusePolicy);
+      passwordService.validateStrength(newPassword, passwordPolicy);
+      await passwordService.validateReuse(newPassword, targetUser, passwordPolicy);
     } catch (validationError) {
       return res.status(422).json({ success: false, error: 'Dados inválidos', message: validationError.message });
     }
@@ -1458,7 +1458,7 @@ router.post('/:id/set-password', authenticate, requirePermission('setUserPasswor
       $set: {
         password: await bcrypt.hash(newPassword, 10),
         // #1244: the same policy depth validateReuse checks.
-        passwordHistory: passwordService.nextPasswordHistory(targetUser, reusePolicy),
+        passwordHistory: passwordService.nextPasswordHistory(targetUser, passwordPolicy),
         lastPasswordChange: now,
         forceReset: true,
         updatedAt: now,

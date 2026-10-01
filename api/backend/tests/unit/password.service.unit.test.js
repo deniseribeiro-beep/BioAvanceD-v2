@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 const bcrypt = require('bcryptjs');
 const {
-  validateStrength, validateReuse, isPasswordExpired, nextPasswordHistory, resolveReusePolicy, DEFAULT_REUSE_POLICY,
+  validateStrength, validateReuse, isPasswordExpired, nextPasswordHistory, resolvePasswordPolicy,
+  DEFAULT_REUSE_POLICY, DEFAULT_PASSWORD_POLICY, publicStrengthRules,
 } = require('../../src/services/password.service');
 
 describe('validateStrength', () => {
@@ -39,6 +40,30 @@ describe('validateStrength', () => {
 
   it('does not throw for minimum-length strong password', () => {
     expect(() => validateStrength('Secure1!')).not.toThrow();
+  });
+
+  // #1246: the rules come from passwordRules (dict-02 P1X-0284..0288).
+  it('#1246: a policy minLength of 12 refuses an 11-character password and names 12', () => {
+    const policy = { ...DEFAULT_PASSWORD_POLICY, minLength: 12 };
+    expect(() => validateStrength('Secure1!abc', policy)).toThrow('pelo menos 12 caracteres');
+    expect(() => validateStrength('Secure1!abcd', policy)).not.toThrow();
+  });
+
+  it('#1246: a class the policy turns off is not required', () => {
+    const policy = { ...DEFAULT_PASSWORD_POLICY, requireNumbers: false, requireSpecialChars: false };
+    expect(() => validateStrength('Password', policy)).not.toThrow();
+    expect(() => validateStrength('password', policy)).toThrow('letra maiúscula e letra minúscula');
+  });
+
+  it('#1246: the default message is unchanged', () => {
+    expect(() => validateStrength('short')).toThrow(
+      'Senha deve ter pelo menos 8 caracteres, com letra maiúscula, letra minúscula, número e símbolo'
+    );
+  });
+
+  it('#1246: an out-of-range policy minLength falls back to 8', () => {
+    expect(() => validateStrength('Secure1!', { ...DEFAULT_PASSWORD_POLICY, minLength: 2 })).not.toThrow();
+    expect(() => validateStrength('Secur1!', { ...DEFAULT_PASSWORD_POLICY, minLength: 2 })).toThrow();
   });
 });
 
@@ -124,7 +149,7 @@ describe('#1244 nextPasswordHistory', () => {
   });
 });
 
-describe('#1244 resolveReusePolicy', () => {
+describe('#1244/#1246 resolvePasswordPolicy', () => {
   function dbWith(findOne) {
     const collection = vi.fn(() => ({ findOne }));
     return { db: { collection }, collection };
@@ -133,24 +158,47 @@ describe('#1244 resolveReusePolicy', () => {
   it('reads passwordRules from security_config main', async () => {
     const findOne = vi.fn().mockResolvedValue({ passwordRules: { preventReuse: true, maxReuseHistory: 8 } });
     const { db, collection } = dbWith(findOne);
-    await expect(resolveReusePolicy(db)).resolves.toEqual({ preventReuse: true, maxReuseHistory: 8 });
+    await expect(resolvePasswordPolicy(db)).resolves.toEqual({ ...DEFAULT_PASSWORD_POLICY, preventReuse: true, maxReuseHistory: 8 });
     expect(collection).toHaveBeenCalledWith('security_config');
     expect(findOne).toHaveBeenCalledWith({ _id: 'main' });
   });
 
   it('only an explicit false relaxes preventReuse', async () => {
     const off = dbWith(vi.fn().mockResolvedValue({ passwordRules: { preventReuse: false } }));
-    expect((await resolveReusePolicy(off.db)).preventReuse).toBe(false);
+    expect((await resolvePasswordPolicy(off.db)).preventReuse).toBe(false);
     const truthy = dbWith(vi.fn().mockResolvedValue({ passwordRules: { preventReuse: 0 } }));
-    expect((await resolveReusePolicy(truthy.db)).preventReuse).toBe(true);
+    expect((await resolvePasswordPolicy(truthy.db)).preventReuse).toBe(true);
   });
 
   it('fails closed to the default when no config exists or the read throws', async () => {
     const missing = dbWith(vi.fn().mockResolvedValue(null));
-    await expect(resolveReusePolicy(missing.db)).resolves.toEqual(DEFAULT_REUSE_POLICY);
+    await expect(resolvePasswordPolicy(missing.db)).resolves.toEqual(DEFAULT_PASSWORD_POLICY);
     const broken = dbWith(vi.fn().mockRejectedValue(new Error('down')));
-    await expect(resolveReusePolicy(broken.db)).resolves.toEqual(DEFAULT_REUSE_POLICY);
+    await expect(resolvePasswordPolicy(broken.db)).resolves.toEqual(DEFAULT_PASSWORD_POLICY);
     expect(DEFAULT_REUSE_POLICY).toEqual({ preventReuse: true, maxReuseHistory: 5 });
+    // #1246: getDefaultConfig()'s strength values.
+    expect(DEFAULT_PASSWORD_POLICY).toMatchObject({
+      minLength: 8, requireUppercase: true, requireLowercase: true, requireNumbers: true, requireSpecialChars: true,
+    });
+  });
+
+  it('#1246: reads the strength keys, and an out-of-range minLength falls back to 8', async () => {
+    const custom = dbWith(vi.fn().mockResolvedValue({
+      passwordRules: { minLength: 12, requireUppercase: false, requireLowercase: true, requireNumbers: false, requireSpecialChars: false },
+    }));
+    await expect(resolvePasswordPolicy(custom.db)).resolves.toMatchObject({
+      minLength: 12, requireUppercase: false, requireLowercase: true, requireNumbers: false, requireSpecialChars: false,
+    });
+    for (const minLength of [5, 129, 7.5, 'x']) {
+      const bad = dbWith(vi.fn().mockResolvedValue({ passwordRules: { minLength } }));
+      expect((await resolvePasswordPolicy(bad.db)).minLength).toBe(8);
+    }
+  });
+
+  it('#1246: publicStrengthRules exposes the strength keys and never the reuse keys', () => {
+    expect(publicStrengthRules(DEFAULT_PASSWORD_POLICY)).toEqual({
+      minLength: 8, requireUppercase: true, requireLowercase: true, requireNumbers: true, requireSpecialChars: true,
+    });
   });
 });
 
