@@ -82,6 +82,12 @@ async function resolveSessionPolicy(db) {
     const session = (config && config.session) || {};
     const minutes = positiveNumber(session.timeoutMinutes);
     if (minutes) policy.inactiveTimeoutMs = minutes * 60 * 1000;
+    // #1247: enhancedSecurity.sessionTimeoutMinutes (dict-02 P1X-0313,
+    // "Timeout substitutivo no perfil reforçado") replaces it while the mode
+    // (P1X-0310 enabled, default false) is on.
+    const enhanced = config && config.enhancedSecurity;
+    const enhancedMinutes = enhanced && enhanced.enabled === true && positiveNumber(enhanced.sessionTimeoutMinutes);
+    if (enhancedMinutes) policy.inactiveTimeoutMs = enhancedMinutes * 60 * 1000;
     const hours = positiveNumber(session.maxSessionDurationHours);
     if (hours) policy.maxSessionDurationMs = hours * 60 * 60 * 1000;
     policy.autoRenewal = session.autoRenewal !== false;

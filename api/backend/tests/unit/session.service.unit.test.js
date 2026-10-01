@@ -162,6 +162,21 @@ describe('#914: session.timeoutMinutes drives inactiveTimeout', () => {
     expect(session.inactiveTimeout).toBe(45 * 60 * 1000);
   });
 
+  // #1247: dict-02 P1X-0313, "Timeout substitutivo no perfil reforçado".
+  it('takes enhancedSecurity.sessionTimeoutMinutes while the mode is on', async () => {
+    const collection = makeCollection();
+    const db = dbWith({ _id: 'main', session: { timeoutMinutes: 45 }, enhancedSecurity: { enabled: true, sessionTimeoutMinutes: 15 } }, collection);
+    const session = await sessionService.createSession(db, 'user-1', 'a', 'r', null);
+    expect(session.inactiveTimeout).toBe(15 * 60 * 1000);
+  });
+
+  it('ignores enhancedSecurity.sessionTimeoutMinutes while the mode is off', async () => {
+    const collection = makeCollection();
+    const db = dbWith({ _id: 'main', session: { timeoutMinutes: 45 }, enhancedSecurity: { enabled: false, sessionTimeoutMinutes: 15 } }, collection);
+    const session = await sessionService.createSession(db, 'user-1', 'a', 'r', null);
+    expect(session.inactiveTimeout).toBe(45 * 60 * 1000);
+  });
+
   it('falls back to 30 minutes when the policy is unreadable, rather than locking everyone out', async () => {
     const collection = makeCollection();
     const db = {

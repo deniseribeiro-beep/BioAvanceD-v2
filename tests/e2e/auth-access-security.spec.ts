@@ -1168,6 +1168,72 @@ test.describe('Security policy management (RF014) — real backend', () => {
     }
   });
 
+  // #1247: the enhancedSecurity group is read only while its enabled switch is
+  // on. Under the mode an unenrolled Administrador is sent to MFA enrolment,
+  // the mode's session timeout replaces the ordinary one, and the strict
+  // password policy holds every composition flag on.
+  test('#1247: the enhanced-security mode enrols an Administrador in MFA, replaces the session timeout and holds the strict password policy (criteria 1, 2, 3)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const before = await request.get(`${apiBaseURL}/api/security/config`, { headers: auth });
+    expect(before.ok()).toBeTruthy();
+    const originalConfig = (await before.json()).data;
+    const original = originalConfig.enhancedSecurity;
+
+    const username = `admin.1247.${Date.now()}`;
+    const password = 'Enhanced@1247pass';
+    const register = await request.post(`${apiBaseURL}/api/users/register`, {
+      headers: auth,
+      data: { name: '#1247 enhanced Fixture', email: `${username}@example.com`, username, password, accessType: 4, roleName: 'Administrador' },
+    });
+    expect(register.ok(), await register.text()).toBeTruthy();
+    const userID = (await register.json()).data?._id;
+
+    try {
+      // Control: mode off, the Administrador logs straight in without MFA.
+      const offLogin = await request.post(`${apiBaseURL}/api/auth/login`, { data: { username, password } });
+      expect((await offLogin.json()).data?.token, 'mode off: no enrolment').toBeTruthy();
+
+      const on = await request.put(`${apiBaseURL}/api/security/config`, {
+        headers: auth,
+        data: {
+          // requireStrongPassword off, so only the mode's strict policy refuses the weak password below.
+          authentication: { requireStrongPassword: false },
+          enhancedSecurity: { enabled: true, requireMFAForAll: true, strictPasswordPolicy: true, sessionTimeoutMinutes: 15 },
+        },
+      });
+      expect(on.ok(), await on.text()).toBeTruthy();
+
+      // The account has logged in before; the mode still enrols it.
+      const onLogin = await request.post(`${apiBaseURL}/api/auth/login`, { data: { username, password } });
+      const onBody = await onLogin.json();
+      expect(onBody.requiresMFASetup).toBe(true);
+      expect(onBody.data?.token).toBeFalsy();
+
+      const enrolled = await completeFirstLoginMfa(request, apiBaseURL!, username, password);
+      expect(enrolled.token).toBeTruthy();
+      const session = await findLatestSession(userID);
+      expect(session!.inactiveTimeout).toBe(15 * 60 * 1000);
+
+      const weak = await request.post(`${apiBaseURL}/api/users/register`, {
+        headers: auth,
+        data: { name: '#1247 weak Fixture', email: `weak.${username}@example.com`, username: `weak.${username}`, password: 'onlylowercase', accessType: 4, roleName: 'Administrador' },
+      });
+      expect(weak.ok(), 'the strict policy refuses a one-class password').toBeFalsy();
+    } finally {
+      await request.put(`${apiBaseURL}/api/security/config`, {
+        headers: auth,
+        data: {
+          authentication: { requireStrongPassword: originalConfig.authentication.requireStrongPassword },
+          enhancedSecurity: original,
+        },
+      }).catch(() => {});
+      await closeSessionsDb();
+    }
+  });
+
   // #648: AC#4 was genuinely absent (no code path at all) as of the test
   // above — built separately so this criterion's own admin-action + login-
   // gate + real-UI-blocking round trip gets its own real-backend proof.

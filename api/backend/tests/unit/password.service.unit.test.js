@@ -228,6 +228,21 @@ describe('#1249 authentication keys in resolvePasswordPolicy', () => {
   });
 });
 
+describe('#1247 enhancedSecurity.strictPasswordPolicy', () => {
+  const dbWith = (config) => ({ collection: vi.fn(() => ({ findOne: vi.fn().mockResolvedValue(config) })) });
+  const RELAXED = { authentication: { requireStrongPassword: false }, passwordRules: { requireNumbers: false } };
+
+  it('holds every composition flag on while the mode is on', async () => {
+    const policy = await resolvePasswordPolicy(dbWith({ ...RELAXED, enhancedSecurity: { enabled: true, strictPasswordPolicy: true } }));
+    expect(policy).toMatchObject({ requireUppercase: true, requireLowercase: true, requireNumbers: true, requireSpecialChars: true });
+  });
+
+  it('changes nothing while the mode is off', async () => {
+    const policy = await resolvePasswordPolicy(dbWith({ ...RELAXED, enhancedSecurity: { enabled: false, strictPasswordPolicy: true } }));
+    expect(policy).toMatchObject({ requireUppercase: false, requireNumbers: false });
+  });
+});
+
 describe('isPasswordExpired (#1251)', () => {
   const daysAgo = (n) => new Date(Date.now() - n * 24 * 60 * 60 * 1000);
 

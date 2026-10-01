@@ -95,13 +95,18 @@ async function resolvePasswordPolicy(db) {
     const config = await db.collection('security_config').findOne({ _id: 'main' });
     const rules = (config && config.passwordRules) || {};
     const authentication = (config && config.authentication) || {};
+    // #1247: enhancedSecurity.strictPasswordPolicy (dict-02 P1X-0312), while
+    // the mode is on, holds every composition flag on whatever the rest say.
+    const enhanced = (config && config.enhancedSecurity) || {};
+    const strict = enhanced.enabled === true && enhanced.strictPasswordPolicy !== false;
     const strong = authentication.requireStrongPassword !== false;
+    const flag = (value) => strict || (strong && value !== false);
     return {
       minLength: strengthMinLength(rules.minLength),
-      requireUppercase: strong && rules.requireUppercase !== false,
-      requireLowercase: strong && rules.requireLowercase !== false,
-      requireNumbers: strong && rules.requireNumbers !== false,
-      requireSpecialChars: strong && rules.requireSpecialChars !== false,
+      requireUppercase: flag(rules.requireUppercase),
+      requireLowercase: flag(rules.requireLowercase),
+      requireNumbers: flag(rules.requireNumbers),
+      requireSpecialChars: flag(rules.requireSpecialChars),
       preventReuse: rules.preventReuse !== false,
       maxReuseHistory: reuseDepth(rules.maxReuseHistory),
       expirationDays: expirationDays(rules.expirationDays),

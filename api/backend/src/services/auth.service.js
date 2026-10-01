@@ -184,17 +184,26 @@ function clearedLockoutFields() {
  * mandatory, which is also exactly the behaviour before this read existed.
  * Only an explicit boolean `false` relaxes it.
  *
- * enhancedSecurity.requireMFAForAll is deliberately NOT read here. Its default
- * is `true` and it would extend the enrolment to Administrador, which #1011's
- * decision (2026-09-25) keeps optional until that posture is revisited.
+ * #1247: enhancedSecurity.requireMFAForAll (dict-02 P1X-0311) is read only
+ * while enhancedSecurity.enabled (P1X-0310, default false) is true. #1011's
+ * decision keeps Administrador MFA optional and says to revisit it "via
+ * config (not a silent code flip)": the mode is that config. Under it, every
+ * user without MFA configured is sent to enrolment at login, Administrador
+ * included and not only on a first login, so an account that predates the
+ * mode is enrolled too. Fails to `false`: an unreadable mode is the default
+ * (off), and requireMFA's own fail-closed read still applies.
  */
-async function isMfaEnrolmentRequired(db) {
+async function resolveMfaEnrolmentPolicy(db) {
   try {
     const config = await db.collection('security_config').findOne({ _id: 'main' });
-    return !(config && config.authentication && config.authentication.requireMFA === false);
+    const enhanced = (config && config.enhancedSecurity) || {};
+    return {
+      requireMFA: !(config && config.authentication && config.authentication.requireMFA === false),
+      requireMFAForAll: enhanced.enabled === true && enhanced.requireMFAForAll !== false,
+    };
   } catch (error) {
     logger.warn('#914: política de MFA ilegível, mantendo MFA obrigatório:', error.message);
-    return true;
+    return { requireMFA: true, requireMFAForAll: false };
   }
 }
 
@@ -647,7 +656,11 @@ class AuthService {
       // MFA obrigatório apenas para não-admin no primeiro login
       // Admin com MFA habilitado também precisa configurar no primeiro login se não estiver configurado
       // #914: and only while the policy requires it (authentication.requireMFA).
-      if (!isAdmin && isFirstLogin && mfaNotConfigured && await isMfaEnrolmentRequired(db)) {
+      // #1247: the enhanced mode's requireMFAForAll widens it to every user.
+      const mfaPolicy = mfaNotConfigured ? await resolveMfaEnrolmentPolicy(db) : null;
+      const enrolmentDue = mfaNotConfigured
+        && (mfaPolicy.requireMFAForAll || (!isAdmin && isFirstLogin && mfaPolicy.requireMFA));
+      if (enrolmentDue) {
         // Primeiro login - MFA obrigatório
         // Gera token temporário apenas para setup MFA
         // #433: accessType resolved from the live RBAC assignment, not the

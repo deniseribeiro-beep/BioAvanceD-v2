@@ -188,6 +188,52 @@ describe('AuthService.processLogin', () => {
     expect(result.token).toBeTruthy();
   });
 
+  // #1247: enhancedSecurity.requireMFAForAll, read only while the mode is on.
+  describe('#1247: the enhanced-security mode widens MFA enrolment to every user', () => {
+    function dbWithMode(enhancedSecurity, { admin = false } = {}) {
+      const db = makeDb();
+      const config = { findOne: vi.fn().mockResolvedValue({ _id: 'main', enhancedSecurity }) };
+      db.collection.mockImplementation((name) => {
+        if (name === 'security_config') return config;
+        if (admin && name === 'roles') return { findOne: vi.fn(), find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([{ roleId: 'role-admin', roleCode: 'administrator', roleStatus: 'active' }]) }) };
+        if (admin && name === 'userRoleAssignments') return { findOne: vi.fn(), find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([{ userAccountId: 'user-1', roleId: 'role-admin', assignmentStatus: 'active', validUntil: null }]) }) };
+        return db._collectionApi;
+      });
+      return db;
+    }
+    const ADMIN = { ...BASE_USER, accessType: 4, roleName: 'Administrador', mfaEnabled: false };
+
+    it('sends an unenrolled Administrador to enrolment while the mode is on', async () => {
+      vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+      const db = dbWithMode({ enabled: true, requireMFAForAll: true }, { admin: true });
+      const result = await authService.processLogin(db, ADMIN, 'pw', null, db.collection(), {});
+      expect(result.requiresMFASetup).toBe(true);
+      expect(result.token).toBeUndefined();
+    });
+
+    it('enrols an account that has logged in before, not only a first login', async () => {
+      vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+      const db = dbWithMode({ enabled: true, requireMFAForAll: true });
+      const result = await authService.processLogin(db, { ...BASE_USER }, 'pw', null, db.collection(), {});
+      expect(result.requiresMFASetup).toBe(true);
+    });
+
+    it('leaves the Administrador optional while the mode is off, whatever requireMFAForAll says', async () => {
+      vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+      const db = dbWithMode({ enabled: false, requireMFAForAll: true }, { admin: true });
+      const result = await authService.processLogin(db, { ...ADMIN, lastLogin: null }, 'pw', null, db.collection(), {});
+      expect(result.requiresMFASetup).toBeUndefined();
+      expect(result.token).toBeTruthy();
+    });
+
+    it('requireMFAForAll false under the mode keeps the ordinary rule', async () => {
+      vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+      const db = dbWithMode({ enabled: true, requireMFAForAll: false }, { admin: true });
+      const result = await authService.processLogin(db, ADMIN, 'pw', null, db.collection(), {});
+      expect(result.requiresMFASetup).toBeUndefined();
+    });
+  });
+
   it('asks for MFA code when mfaEnabled and none provided', async () => {
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
     const db = makeDb();
