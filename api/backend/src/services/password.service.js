@@ -74,28 +74,56 @@ function reuseDepth(value) {
     : DEFAULT_REUSE_POLICY.maxReuseHistory;
 }
 
-const DEFAULT_PASSWORD_POLICY = Object.freeze({ ...DEFAULT_STRENGTH_POLICY, ...DEFAULT_REUSE_POLICY, expirationDays: 90 });
+const DEFAULT_PASSWORD_POLICY = Object.freeze({
+  ...DEFAULT_STRENGTH_POLICY,
+  ...DEFAULT_REUSE_POLICY,
+  expirationDays: 90,
+  allowPasswordReset: true,
+});
 
 // One read for every passwordRules key a password write needs (#1244, #1246).
 // Only an explicit boolean false relaxes a flag.
+//
+// #1249: two authentication keys belong to the same policy. dict-02 P1X-0283
+// requireStrongPassword "Habilita política forte de senha" is the master
+// switch over the four composition flags (minLength stays its own key), and
+// P1X-0280 allowPasswordReset "Permite fluxo de redefinição de senha" gates
+// the emailed-token reset. Both default to true, so nothing changes until an
+// administrator turns one off.
 async function resolvePasswordPolicy(db) {
   try {
     const config = await db.collection('security_config').findOne({ _id: 'main' });
     const rules = (config && config.passwordRules) || {};
+    const authentication = (config && config.authentication) || {};
+    const strong = authentication.requireStrongPassword !== false;
     return {
       minLength: strengthMinLength(rules.minLength),
-      requireUppercase: rules.requireUppercase !== false,
-      requireLowercase: rules.requireLowercase !== false,
-      requireNumbers: rules.requireNumbers !== false,
-      requireSpecialChars: rules.requireSpecialChars !== false,
+      requireUppercase: strong && rules.requireUppercase !== false,
+      requireLowercase: strong && rules.requireLowercase !== false,
+      requireNumbers: strong && rules.requireNumbers !== false,
+      requireSpecialChars: strong && rules.requireSpecialChars !== false,
       preventReuse: rules.preventReuse !== false,
       maxReuseHistory: reuseDepth(rules.maxReuseHistory),
       expirationDays: expirationDays(rules.expirationDays),
+      allowPasswordReset: authentication.allowPasswordReset !== false,
     };
   } catch (error) {
     logger.warn('#1244/#1246: política de senha ilegível, usando os padrões:', error.message);
     return { ...DEFAULT_PASSWORD_POLICY };
   }
+}
+
+// #1249: the emailed-token reset and the self-service reset request refuse
+// while allowPasswordReset is off. An administrator's set-password and a
+// forced change at login are not this flow and stay available.
+const PASSWORD_RESET_DISABLED = Object.freeze({
+  success: false,
+  code: 'PASSWORD_RESET_DISABLED',
+  error: 'Redefinição de senha desativada pela política de segurança'
+});
+
+async function isPasswordResetAllowed(db) {
+  return (await resolvePasswordPolicy(db)).allowPasswordReset;
 }
 
 // What a client may be told before it submits a password: the strength rules
@@ -180,6 +208,8 @@ module.exports = {
   validateStrength,
   resolvePasswordPolicy,
   publicStrengthRules,
+  PASSWORD_RESET_DISABLED,
+  isPasswordResetAllowed,
   nextPasswordHistory,
   validateReuse,
   passwordChangedAt,

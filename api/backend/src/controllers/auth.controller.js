@@ -220,6 +220,10 @@ class AuthController {
         });
       }
 
+      if (!(await passwordService.isPasswordResetAllowed(db))) {
+        return res.status(403).json(passwordService.PASSWORD_RESET_DISABLED);
+      }
+
       const { email } = req.body;
       if (!email) {
         return res.status(400).json({
@@ -256,6 +260,10 @@ class AuthController {
           success: false,
           error: 'Banco de dados não disponível'
         });
+      }
+
+      if (!(await passwordService.isPasswordResetAllowed(db))) {
+        return res.status(403).json(passwordService.PASSWORD_RESET_DISABLED);
       }
 
       const { token, newPassword } = req.body;

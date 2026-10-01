@@ -670,6 +670,26 @@ describe('auth.routes.js (integration, real router mounted)', () => {
       expect(res.status).toBe(401);
     });
 
+    // #1249: session.autoRenewal off -- no renewal; the session ends as an expiry.
+    it('refuses to renew, ends the session and clears the cookie while session.autoRenewal is off', async () => {
+      const userId = new ObjectId();
+      vi.spyOn(sessionService, 'getSessionByRefreshToken').mockResolvedValue({ userID: userId.toString(), sessionID: 's9' });
+      const rotateSpy = vi.spyOn(sessionService, 'rotateSessionTokens').mockResolvedValue(true);
+      const invalidateSpy = vi.spyOn(sessionService, 'invalidateSession').mockResolvedValue(undefined);
+      const app = appWithDb(makeDb({ _id: 'main', session: { autoRenewal: false } }));
+      const refreshToken = jwt.sign({ userID: userId.toString(), type: 'refresh' }, JWT_REFRESH_SECRET, { expiresIn: '7d' });
+
+      const res = await request(app)
+        .post('/api/auth/refresh')
+        .set('Cookie', `refresh_token=${refreshToken}`);
+
+      expect(res.status).toBe(401);
+      expect(res.body.code).toBe('SESSION_RENEWAL_DISABLED');
+      expect(invalidateSpy).toHaveBeenCalledWith(expect.anything(), 's9', 'expiration', 'system');
+      expect(rotateSpy).not.toHaveBeenCalled();
+      expect(res.headers['set-cookie']?.some((c) => c.startsWith('refresh_token=;'))).toBe(true);
+    });
+
     it('rotates tokens and returns a new access token on the happy path', async () => {
       const userId = new ObjectId();
       vi.spyOn(sessionService, 'getSessionByRefreshToken').mockResolvedValue({ userID: userId.toString(), sessionID: 's9' });
@@ -794,6 +814,7 @@ describe('GET /api/auth/password-policy (#1246)', () => {
     expect(res.status).toBe(200);
     expect(res.body.data).toEqual({
       minLength: 12, requireUppercase: true, requireLowercase: true, requireNumbers: false, requireSpecialChars: true,
+      allowPasswordReset: true,
     });
   });
 
@@ -802,6 +823,18 @@ describe('GET /api/auth/password-policy (#1246)', () => {
     expect(res.status).toBe(200);
     expect(res.body.data).toEqual({
       minLength: 8, requireUppercase: true, requireLowercase: true, requireNumbers: true, requireSpecialChars: true,
+      allowPasswordReset: true,
+    });
+  });
+
+  // #1249: authentication.requireStrongPassword off relaxes the composition
+  // flags, and allowPasswordReset off is reported so the login page hides the link.
+  it('reports requireStrongPassword and allowPasswordReset from the authentication group', async () => {
+    const db = dbWithConfig({ _id: 'main', authentication: { requireStrongPassword: false, allowPasswordReset: false }, passwordRules: { minLength: 10 } });
+    const res = await request(buildApp(loadAuthRoutes(), db)).get('/api/auth/password-policy');
+    expect(res.body.data).toEqual({
+      minLength: 10, requireUppercase: false, requireLowercase: false, requireNumbers: false, requireSpecialChars: false,
+      allowPasswordReset: false,
     });
   });
 

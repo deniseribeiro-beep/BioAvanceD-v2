@@ -285,9 +285,8 @@ export default function SecurityPage() {
                     value={localConfig.authentication.mfaMethod}
                     onChange={(e) => handleConfigChange('authentication.mfaMethod', e.target.value)}
                   >
+                    {/* #1249: TOTP is the only method implemented. */}
                     <option value="totp">{t('security.mfa.methodTotp')}</option>
-                    <option value="sms">{t('security.mfa.methodSms')}</option>
-                    <option value="email">{t('security.mfa.methodEmail')}</option>
                   </select>
                 </div>
                 <label className="config-switch">
@@ -510,14 +509,16 @@ export default function SecurityPage() {
             <Card className="security-section">
               <h2>{t('security.login.title')}</h2>
               <div className="config-group">
+                {/* #1249: the attempt limit and lockout are the authentication
+                    keys the lockout reads; loginAttempts' copies follow them. */}
                 <div className="config-field">
                   <label>{t('security.login.maxAttempts')}</label>
                   <input title="security-input"
                     type="number"
                     min="1"
                     max="10"
-                    value={localConfig.loginAttempts.maxAttempts}
-                    onChange={(e) => handleConfigChange('loginAttempts.maxAttempts', parseInt(e.target.value))}
+                    value={localConfig.authentication.maxLoginAttempts}
+                    onChange={(e) => handleConfigChange('authentication.maxLoginAttempts', parseInt(e.target.value))}
                   />
                 </div>
                 <div className="config-field">
@@ -526,8 +527,8 @@ export default function SecurityPage() {
                     type="number"
                     min="1"
                     max="1440"
-                    value={localConfig.loginAttempts.lockoutDurationMinutes}
-                    onChange={(e) => handleConfigChange('loginAttempts.lockoutDurationMinutes', parseInt(e.target.value))}
+                    value={localConfig.authentication.lockoutDurationMinutes}
+                    onChange={(e) => handleConfigChange('authentication.lockoutDurationMinutes', parseInt(e.target.value))}
                   />
                 </div>
                 <label className="config-switch">

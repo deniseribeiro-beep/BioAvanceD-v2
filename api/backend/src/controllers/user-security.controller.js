@@ -3,6 +3,7 @@ const logger = require('../utils/logger');
 const auditLogger = require('../utils/auditLogger');
 const { ObjectId } = require('mongodb');
 const sessionService = require('../services/session.service');
+const passwordService = require('../services/password.service');
 
 /**
  * Controller de Segurança do Usuário
@@ -379,6 +380,10 @@ class UserSecurityController {
           success: false,
           error: (req.t && req.t('errors.databaseUnavailable')) || 'Banco de dados não disponível'
         });
+      }
+
+      if (!(await passwordService.isPasswordResetAllowed(db))) {
+        return res.status(403).json(passwordService.PASSWORD_RESET_DISABLED);
       }
 
       const { expirationHours = 1 } = req.body; // Padrão: 1 hora

@@ -117,6 +117,13 @@ describe('SecurityService.validateConfig', () => {
     })).toThrow('inválidas');
   });
 
+  // #1249: TOTP is the only method implemented.
+  it('throws for sms and email, which no code implements', () => {
+    for (const mfaMethod of ['sms', 'email']) {
+      expect(() => securityService.validateConfig({ authentication: { mfaMethod } })).toThrow('inválidas');
+    }
+  });
+
   it('throws for invalid mfaMethod', () => {
     expect(() => securityService.validateConfig({
       authentication: { mfaMethod: 'fingerprint' },
@@ -290,6 +297,28 @@ describe('SecurityService.updateConfig', () => {
 
     expect(logSpy).toHaveBeenCalledTimes(1);
     expect(logSpy.mock.calls[0][0].resourceType).toBe('SecurityConfiguration');
+  });
+
+  // #1249: loginAttempts.maxAttempts/lockoutDurationMinutes duplicate the
+  // authentication pair the lockout reads; the stored copy follows it.
+  it('stores the loginAttempts duplicate pair equal to the enforced authentication pair', async () => {
+    const updateOne = vi.fn().mockResolvedValue({});
+    const db = { collection: vi.fn(() => ({ updateOne })) };
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+    vi.spyOn(auditLogger, 'log').mockResolvedValue({});
+
+    const currentConfig = {
+      authentication: { maxLoginAttempts: 5, lockoutDurationMinutes: 30 },
+      loginAttempts: { maxAttempts: 5, lockoutDurationMinutes: 30, trackIP: true },
+      configVersion: 1,
+    };
+    const result = await securityService.updateConfig(db, {
+      authentication: { maxLoginAttempts: 3, lockoutDurationMinutes: 60 },
+      loginAttempts: { maxAttempts: 9 },
+    }, currentConfig, {});
+
+    expect(result.loginAttempts).toEqual({ maxAttempts: 3, lockoutDurationMinutes: 60, trackIP: true });
+    expect(updateOne.mock.calls[0][1].$set.loginAttempts).toEqual({ maxAttempts: 3, lockoutDurationMinutes: 60, trackIP: true });
   });
 
   it('uses SYSTEM as lastUpdatedBy when req has no user', async () => {

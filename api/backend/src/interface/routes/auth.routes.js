@@ -443,6 +443,18 @@ router.post('/refresh', async (req, res) => {
       });
     }
 
+    // #1249: session.autoRenewal off -- the session is not renewed, so it ends
+    // with its access token, recorded as an expiry.
+    if (!(await sessionService.resolveSessionPolicy(db)).autoRenewal) {
+      await sessionService.invalidateSession(db, session.sessionID, 'expiration', 'system');
+      clearRefreshCookie(res);
+      return res.status(401).json({
+        success: false,
+        code: 'SESSION_RENEWAL_DISABLED',
+        error: 'Renovação automática de sessão desativada pela política de segurança'
+      });
+    }
+
     const usersCollection = db.collection('users');
     const { ObjectId } = require('mongodb');
     const user = await usersCollection.findOne({ _id: new ObjectId(decoded.userID) });
@@ -499,7 +511,12 @@ router.get('/password-policy', async (req, res) => {
   }
   const passwordService = require('../../services/password.service');
   const policy = await passwordService.resolvePasswordPolicy(db);
-  return res.status(200).json({ success: true, data: passwordService.publicStrengthRules(policy) });
+  // #1249: allowPasswordReset rides along so the login page can hide the
+  // forgot-password link while the flow is switched off.
+  return res.status(200).json({
+    success: true,
+    data: { ...passwordService.publicStrengthRules(policy), allowPasswordReset: policy.allowPasswordReset }
+  });
 });
 
 // Password reset

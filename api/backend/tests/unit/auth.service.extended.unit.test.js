@@ -172,6 +172,31 @@ describe('AuthService.registerUser', () => {
   // #1057 (Denise, 2026-09-25): #998's hierarchy floor moved from
   // user.routes.js into registerUser, so no route reaching the service can
   // drift from it again, which is what #1037 was.
+  // #1249: registration followed the default strength policy, not the stored one.
+  describe('#1249: registration checks strength against the stored passwordRules', () => {
+    function makeDbWithConfig(config) {
+      const db = makeDb();
+      const inner = db.collection.getMockImplementation();
+      const securityConfig = { findOne: vi.fn().mockResolvedValue(config) };
+      db.collection.mockImplementation((name) => (name === 'security_config' ? securityConfig : inner(name)));
+      return db;
+    }
+
+    it('accepts a one-class password while requireStrongPassword is off', async () => {
+      const db = makeDbWithConfig({ _id: 'main', authentication: { requireStrongPassword: false } });
+      await expect(authService.registerUser(db, { ...VALID_USER, password: 'onlylowercase' }, 'system')).resolves.toBeTruthy();
+    });
+
+    it('refuses a password shorter than a raised minLength', async () => {
+      const db = makeDbWithConfig({ _id: 'main', passwordRules: { minLength: 16 } });
+      await expect(authService.registerUser(db, VALID_USER, 'system')).rejects.toThrow(/password/);
+    });
+
+    it('keeps the default policy when no config is stored', async () => {
+      await expect(authService.registerUser(makeDb(), { ...VALID_USER, password: 'onlylowercase' }, 'system')).rejects.toThrow(/password/);
+    });
+  });
+
   describe('#1057: hierarchy floor inside registerUser', () => {
     it('refuses a missing grantedBy before any read or write -- no silent fall-through to system', async () => {
       const insertOne = vi.fn();

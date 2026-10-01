@@ -13,6 +13,8 @@ vi.mock('../contexts/LanguageContext', () => ({
   useLanguage: () => ({ t: (key: string) => key }),
 }));
 vi.mock('../components/LanguageSelector', () => ({ default: () => null }));
+const getPasswordPolicy = vi.fn();
+vi.mock('../services/api', () => ({ authService: { getPasswordPolicy: () => getPasswordPolicy() } }));
 
 import LoginPage from './LoginPage';
 
@@ -28,6 +30,7 @@ async function submit() {
 describe('LoginPage MFA code across a required password change (#1252)', () => {
   beforeEach(() => {
     login.mockReset();
+    getPasswordPolicy.mockResolvedValue({ data: { data: { allowPasswordReset: true } } });
   });
 
   async function reachPasswordChange() {
@@ -85,5 +88,29 @@ describe('LoginPage MFA code across a required password change (#1252)', () => {
     await submit();
 
     expect(login).toHaveBeenLastCalledWith('admin2', 'Old@pass1234', undefined, 'New@pass12345');
+  });
+});
+
+// #1249: authentication.allowPasswordReset, served by the public password-policy route.
+describe('LoginPage forgot-password link (#1249)', () => {
+  function renderPage() {
+    render(
+      <MemoryRouter>
+        <LoginPage />
+      </MemoryRouter>
+    );
+  }
+
+  it('is hidden while the policy turns the reset flow off', async () => {
+    getPasswordPolicy.mockResolvedValue({ data: { data: { allowPasswordReset: false } } });
+    renderPage();
+    await waitFor(() => expect(screen.queryByTestId('login-forgot-password-button')).toBeNull());
+  });
+
+  it('shows by default, and when the policy cannot be read', async () => {
+    getPasswordPolicy.mockRejectedValue(new Error('offline'));
+    renderPage();
+    await waitFor(() => expect(getPasswordPolicy).toHaveBeenCalled());
+    expect(screen.getByTestId('login-forgot-password-button')).toBeTruthy();
   });
 });

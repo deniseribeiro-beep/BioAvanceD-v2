@@ -1653,8 +1653,6 @@
     },
     "mfa": {
       "defaultMethod": "Método padrão de MFA",
-      "methodEmail": "Email",
-      "methodSms": "SMS",
       "methodTotp": "TOTP (Google Authenticator)",
       "requireMFA": "Exigir MFA para todos os usuários"
     },

@@ -3,7 +3,9 @@
  * Inclui suporte a MFA (RF001) e RBAC (RNF008)
  */
 class UserModel {
-  static validate(data) {
+  // passwordPolicy: the caller's resolvePasswordPolicy(db) result; without
+  // one the strength check uses the default policy.
+  static validate(data, { passwordPolicy } = {}) {
     const errors = [];
 
     // Campos obrigatórios (exceto telefone e instituição)
@@ -43,7 +45,7 @@ class UserModel {
     if (data.password) {
       const passwordService = require('../services/password.service');
       try {
-        passwordService.validateStrength(data.password);
+        passwordService.validateStrength(data.password, passwordPolicy);
       } catch (err) {
         errors.push(`password: ${err.message}`);
       }

@@ -8,6 +8,7 @@ import LanguageSelector from '../components/LanguageSelector';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { authService } from '../services/api';
+import { usePasswordResetAllowed } from '../hooks/usePasswordPolicy';
 import { getPostLoginRoute } from '../utils/rolePermissions';
 import { Mail, CheckCircle, AlertCircle } from 'lucide-react';
 import { LIMITS } from '../config/constants/limits.constants';
@@ -35,6 +36,8 @@ export default function LoginPage() {
   const [forgotPasswordSuccess, setForgotPasswordSuccess] = useState(false);
   const [forgotPasswordError, setForgotPasswordError] = useState('');
   const [resetLink, setResetLink] = useState('');
+  // #1249: the forgot-password link shows unless the policy turns the flow off.
+  const allowPasswordReset = usePasswordResetAllowed();
   const { login, isAuthenticated, user } = useAuth();
   const { t } = useLanguage();
   const navigate = useNavigate();
@@ -242,16 +245,18 @@ export default function LoginPage() {
                 : t('auth.login')}
             </Button>
 
-            <div className="forgot-password-link">
-              <button
-                type="button"
-                onClick={() => setShowForgotPassword(true)}
-                className="link-button"
-                data-testid="login-forgot-password-button"
-              >
-                {t('auth.forgotPassword')}
-              </button>
-            </div>
+            {allowPasswordReset && (
+              <div className="forgot-password-link">
+                <button
+                  type="button"
+                  onClick={() => setShowForgotPassword(true)}
+                  className="link-button"
+                  data-testid="login-forgot-password-button"
+                >
+                  {t('auth.forgotPassword')}
+                </button>
+              </div>
+            )}
           </form>
 
           <div className="login-language-selector">

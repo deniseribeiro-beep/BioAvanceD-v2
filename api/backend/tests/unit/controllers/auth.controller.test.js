@@ -471,6 +471,28 @@ describe('AuthController.requestPasswordReset', () => {
   });
 });
 
+// #1249: authentication.allowPasswordReset off refuses the emailed-token flow.
+describe('password reset while authentication.allowPasswordReset is off', () => {
+  const disabledDb = { collection: () => ({ findOne: async () => ({ _id: 'main', authentication: { allowPasswordReset: false } }) }) };
+
+  it('requestPasswordReset answers 403 PASSWORD_RESET_DISABLED and sends nothing', async () => {
+    const spy = vi.spyOn(authService, 'requestPasswordReset');
+    const res = createRes();
+    await authController.requestPasswordReset(createReq({ app: { locals: { db: disabledDb } }, body: { email: 'a@b.com' } }), res);
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json.mock.calls[0][0].code).toBe('PASSWORD_RESET_DISABLED');
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('resetPassword answers 403 PASSWORD_RESET_DISABLED and changes nothing', async () => {
+    const spy = vi.spyOn(authService, 'resetPassword');
+    const res = createRes();
+    await authController.resetPassword(createReq({ app: { locals: { db: disabledDb } }, body: { token: 't', newPassword: 'NewStr0ng!' } }), res);
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(spy).not.toHaveBeenCalled();
+  });
+});
+
 describe('AuthController.resetPassword', () => {
   it('returns 503 when db is unavailable', async () => {
     const req = NO_DB_REQ({ body: { token: 't', newPassword: 'p' } });

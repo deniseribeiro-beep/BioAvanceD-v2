@@ -25,7 +25,7 @@ import { useUserSecurity } from '../hooks/useUserSecurity';
 import { useToast } from '../components/UI/ToastContainer';
 import { validatePasswordAndGetError } from '../utils/passwordValidator';
 import { getPasswordIssues, passwordRequirementItems } from '../utils/passwordRules';
-import { usePasswordPolicy } from '../hooks/usePasswordPolicy';
+import { usePasswordPolicy, usePasswordResetAllowed } from '../hooks/usePasswordPolicy';
 import { useAuth } from '../contexts/AuthContext';
 import { userSecurityService } from '../services/api';
 import './UserSecurityPage.css';
@@ -134,6 +134,8 @@ export default function UserSecurityPage() {
 
   // #1246: the server's passwordRules, not a fixed copy.
   const passwordRules = usePasswordPolicy();
+  // #1249: the reset request is hidden while the policy turns the flow off.
+  const allowPasswordReset = usePasswordResetAllowed();
   const passwordIssues = getPasswordIssues(newPassword.new, passwordRules);
   const confirmMismatch = newPassword.new && newPassword.confirm && newPassword.new !== newPassword.confirm;
 
@@ -441,6 +443,7 @@ export default function UserSecurityPage() {
               <Lock size={18} />
               {t('userSecurity.password.change')}
             </Button>
+            {allowPasswordReset && (
             <Button 
               variant="secondary" 
               data-testid="request-password-reset-button"
@@ -459,6 +462,7 @@ export default function UserSecurityPage() {
               <Key size={18} />
               {t('userSecurity.password.requestReset')}
             </Button>
+            )}
           </div>
           <div className="password-policy">
             <p>{t('userSecurity.password.policy')}</p>

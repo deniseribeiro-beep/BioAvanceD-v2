@@ -1084,6 +1084,90 @@ test.describe('Security policy management (RF014) — real backend', () => {
     }
   });
 
+  // #1249: four security_config keys were stored and read by nothing.
+  // allowPasswordReset gates the emailed-token flow, requireStrongPassword is
+  // the master switch over the composition flags, autoRenewal decides whether
+  // a session is renewed, and logExpiration audits the expiry that follows.
+  test('#1249: allowPasswordReset, requireStrongPassword, autoRenewal and logExpiration act on a live system (criteria 1, 2)', async ({
+    page,
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const before = await request.get(`${apiBaseURL}/api/security/config`, { headers: auth });
+    expect(before.ok()).toBeTruthy();
+    const original = (await before.json()).data;
+
+    const username = `admin.1249.${Date.now()}`;
+    const password = 'Policy@1249pass';
+    const register = await request.post(`${apiBaseURL}/api/users/register`, {
+      headers: auth,
+      data: { name: '#1249 policy Fixture', email: `${username}@example.com`, username, password, accessType: 4, roleName: 'Administrador' },
+    });
+    expect(register.ok(), await register.text()).toBeTruthy();
+    const userID = (await register.json()).data?._id;
+    expect(userID).toBeTruthy();
+
+    try {
+      const off = await request.put(`${apiBaseURL}/api/security/config`, {
+        headers: auth,
+        data: { authentication: { allowPasswordReset: false, requireStrongPassword: false }, session: { autoRenewal: false } },
+      });
+      expect(off.ok(), await off.text()).toBeTruthy();
+
+      const policy = (await (await request.get(`${apiBaseURL}/api/auth/password-policy`)).json()).data;
+      expect(policy).toMatchObject({ allowPasswordReset: false, requireUppercase: false, requireNumbers: false, requireSpecialChars: false });
+
+      const resetRequest = await request.post(`${apiBaseURL}/api/auth/password-reset/request`, { data: { email: `${username}@example.com` } });
+      expect(resetRequest.status()).toBe(403);
+      expect((await resetRequest.json()).code).toBe('PASSWORD_RESET_DISABLED');
+
+      await page.goto('/login');
+      await expect(page.getByTestId('login-form')).toBeVisible();
+      await expect(page.getByTestId('login-forgot-password-button')).toHaveCount(0);
+
+      // requireStrongPassword off: a password with one character class is accepted.
+      const weak = await request.post(`${apiBaseURL}/api/users/register`, {
+        headers: auth,
+        data: { name: '#1249 weak Fixture', email: `weak.${username}@example.com`, username: `weak.${username}`, password: 'onlylowercase', accessType: 4, roleName: 'Administrador' },
+      });
+      expect(weak.ok(), await weak.text()).toBeTruthy();
+
+      // autoRenewal off: the refresh is refused and the session ends as an expiry.
+      const login = await request.post(`${apiBaseURL}/api/auth/login`, { data: { username, password } });
+      expect(login.ok(), await login.text()).toBeTruthy();
+      const refreshCookie = /refresh_token=[^;]+/.exec(login.headers()['set-cookie'] || '')?.[0];
+      expect(refreshCookie, 'login must set the refresh cookie').toBeTruthy();
+      const refreshed = await request.post(`${apiBaseURL}/api/auth/refresh`, { headers: { Cookie: refreshCookie! } });
+      expect(refreshed.status()).toBe(401);
+      expect((await refreshed.json()).code).toBe('SESSION_RENEWAL_DISABLED');
+
+      const expiredRows = await request.get(`${apiBaseURL}/api/logs/sessions?userId=${userID}&revocationReason=expiration`, { headers: auth });
+      const expiredData = (await expiredRows.json()).data;
+      expect(expiredData.total).toBe(1);
+
+      // logExpiration is on by default: the expiry has its audit row.
+      const sessionAudit = await request.get(`${apiBaseURL}/api/logs?resourceType=Session&limit=200`, { headers: auth });
+      const auditBody = (await sessionAudit.json()).data;
+      const auditRows: Array<{ message: string; resourceId: string }> = auditBody.logs || auditBody;
+      const expiryAudit = auditRows.find(
+        (row) => row.resourceId === expiredData.sessions[0].user && String(row.message).includes('motivo expiration')
+      );
+      expect(expiryAudit, 'no Session audit row carrying motivo expiration for this account').toBeTruthy();
+    } finally {
+      await request.put(`${apiBaseURL}/api/security/config`, {
+        headers: auth,
+        data: {
+          authentication: {
+            allowPasswordReset: original.authentication.allowPasswordReset,
+            requireStrongPassword: original.authentication.requireStrongPassword,
+          },
+          session: { autoRenewal: original.session.autoRenewal },
+        },
+      }).catch(() => {});
+    }
+  });
+
   // #648: AC#4 was genuinely absent (no code path at all) as of the test
   // above — built separately so this criterion's own admin-action + login-
   // gate + real-UI-blocking round trip gets its own real-backend proof.

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 const bcrypt = require('bcryptjs');
 const {
-  validateStrength, validateReuse, isPasswordExpired, nextPasswordHistory, resolvePasswordPolicy,
+  validateStrength, validateReuse, isPasswordExpired, nextPasswordHistory, resolvePasswordPolicy, isPasswordResetAllowed,
   DEFAULT_REUSE_POLICY, DEFAULT_PASSWORD_POLICY, publicStrengthRules,
 } = require('../../src/services/password.service');
 
@@ -205,6 +205,29 @@ describe('#1244/#1246 resolvePasswordPolicy', () => {
 // #1251: expirationDays (dict-02 P1X-0289) anchored on passwordChangedAt
 // (P1X-0204). An account that cannot be dated is NOT expired: the old reading
 // (no date means expired) would force a change on every such account.
+describe('#1249 authentication keys in resolvePasswordPolicy', () => {
+  const dbWith = (config) => ({ collection: vi.fn(() => ({ findOne: vi.fn().mockResolvedValue(config) })) });
+
+  it('requireStrongPassword false turns the four composition flags off and keeps minLength', async () => {
+    const policy = await resolvePasswordPolicy(dbWith({ authentication: { requireStrongPassword: false }, passwordRules: { minLength: 10 } }));
+    expect(policy).toMatchObject({ minLength: 10, requireUppercase: false, requireLowercase: false, requireNumbers: false, requireSpecialChars: false });
+    expect(() => validateStrength('alllowercase', policy)).not.toThrow();
+    expect(() => validateStrength('short', policy)).toThrow();
+  });
+
+  it('requireStrongPassword true leaves each passwordRules flag in charge', async () => {
+    const policy = await resolvePasswordPolicy(dbWith({ authentication: { requireStrongPassword: true }, passwordRules: { requireNumbers: false } }));
+    expect(policy).toMatchObject({ requireUppercase: true, requireNumbers: false });
+  });
+
+  it('allowPasswordReset follows the stored key, true unless explicitly false', async () => {
+    expect((await resolvePasswordPolicy(dbWith({ authentication: { allowPasswordReset: false } }))).allowPasswordReset).toBe(false);
+    expect((await resolvePasswordPolicy(dbWith({ authentication: { allowPasswordReset: 'no' } }))).allowPasswordReset).toBe(true);
+    expect((await resolvePasswordPolicy(dbWith(null))).allowPasswordReset).toBe(true);
+    expect(await isPasswordResetAllowed(dbWith({ authentication: { allowPasswordReset: false } }))).toBe(false);
+  });
+});
+
 describe('isPasswordExpired (#1251)', () => {
   const daysAgo = (n) => new Date(Date.now() - n * 24 * 60 * 60 * 1000);
 

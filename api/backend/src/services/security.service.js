@@ -211,6 +211,16 @@ class SecurityService {
         }
       }
 
+      // #1249: loginAttempts.maxAttempts and lockoutDurationMinutes duplicate
+      // the authentication pair the lockout reads (#952, resolveLockoutPolicy).
+      // The stored copy follows the enforced one on every save, so the two
+      // never disagree; the Security page edits only the authentication keys.
+      if (mergedConfig.authentication && mergedConfig.loginAttempts) {
+        const { maxLoginAttempts, lockoutDurationMinutes } = mergedConfig.authentication;
+        if (maxLoginAttempts !== undefined) mergedConfig.loginAttempts.maxAttempts = maxLoginAttempts;
+        if (lockoutDurationMinutes !== undefined) mergedConfig.loginAttempts.lockoutDurationMinutes = lockoutDurationMinutes;
+      }
+
       // #953: flat, per dict-02 P1X-0321/0322/0323. Note these are assigned
       // AFTER the knownGroups loop above, which copies only the eight group
       // objects -- so a caller-supplied configVersion/lastUpdatedAt/lastUpdatedBy
@@ -353,8 +363,10 @@ class SecurityService {
       if (config.authentication.maxLoginAttempts && (config.authentication.maxLoginAttempts < 1 || config.authentication.maxLoginAttempts > 10)) {
         errors.push('maxLoginAttempts deve estar entre 1 e 10');
       }
-      if (config.authentication.mfaMethod && !['totp', 'sms', 'email'].includes(config.authentication.mfaMethod)) {
-        errors.push('mfaMethod deve ser: totp, sms ou email');
+      // #1249: TOTP is the only method implemented (dict-02 P1X-0279 says so),
+      // so the policy cannot name one that would never be offered.
+      if (config.authentication.mfaMethod && config.authentication.mfaMethod !== 'totp') {
+        errors.push('mfaMethod deve ser: totp (único método implementado)');
       }
     }
 

@@ -33,3 +33,25 @@ export function usePasswordPolicy(): PasswordStrengthRules {
 
   return rules;
 }
+
+// #1249: authentication.allowPasswordReset, from the same public route. True
+// until the policy says otherwise, and on any failure; the server refuses the
+// flow on its own either way.
+export function usePasswordResetAllowed(): boolean {
+  const [allowed, setAllowed] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    authService
+      .getPasswordPolicy()
+      .then((response) => {
+        if (active && response?.data?.data?.allowPasswordReset === false) setAllowed(false);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  return allowed;
+}

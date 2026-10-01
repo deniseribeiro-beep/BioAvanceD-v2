@@ -42,7 +42,7 @@ const extractResponseData = <T>(response: unknown): T | null => {
 export interface SecurityConfig {
   authentication: {
     requireMFA: boolean;
-    mfaMethod: 'totp' | 'sms' | 'email';
+    mfaMethod: 'totp';
     allowPasswordReset: boolean;
     maxLoginAttempts: number;
     lockoutDurationMinutes: number;

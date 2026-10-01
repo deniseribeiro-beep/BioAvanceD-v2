@@ -64,10 +64,18 @@ function positiveNumber(value) {
   return Number.isFinite(number) && number > 0 ? number : null;
 }
 
+// #1249: dict-02 P1X-0295 session.autoRenewal "Permite renovação automática
+// controlada" decides whether POST /api/auth/refresh renews a session; off, a
+// session ends with its access token. P1X-0296 session.logExpiration
+// "Registra expirações no AuditEvent" decides whether an expiry writes the
+// audit row every other revocation writes (#1020). Both default to true, and
+// only an explicit false turns one off.
 async function resolveSessionPolicy(db) {
   const policy = {
     inactiveTimeoutMs: DEFAULT_INACTIVE_TIMEOUT_MS,
-    maxSessionDurationMs: DEFAULT_MAX_SESSION_DURATION_MS
+    maxSessionDurationMs: DEFAULT_MAX_SESSION_DURATION_MS,
+    autoRenewal: true,
+    logExpiration: true
   };
   try {
     const config = await db.collection('security_config').findOne({ _id: 'main' });
@@ -76,6 +84,8 @@ async function resolveSessionPolicy(db) {
     if (minutes) policy.inactiveTimeoutMs = minutes * 60 * 1000;
     const hours = positiveNumber(session.maxSessionDurationHours);
     if (hours) policy.maxSessionDurationMs = hours * 60 * 60 * 1000;
+    policy.autoRenewal = session.autoRenewal !== false;
+    policy.logExpiration = session.logExpiration !== false;
   } catch (error) {
     logger.warn('#914: política de sessão ilegível, usando os padrões (30 min / 12 h):', error.message);
   }
@@ -90,6 +100,11 @@ class SessionService {
   constructor() {
     // Cache in-memory de sessões (em produção, pode usar Redis)
     this.sessions = new Map();
+  }
+
+  // #1249: the refresh route reads autoRenewal through this.
+  resolveSessionPolicy(db) {
+    return resolveSessionPolicy(db);
   }
 
   getTokenHash(token) {
@@ -336,17 +351,20 @@ class SessionService {
    * pseudonym is kept out of `message` because sanitizeMessage's phone
    * pattern rewrites an all-digit USR-XXXXXXXX to "[telefone]".
    *
-   * 'expiration' is not audited: it is housekeeping on sessions that already
-   * timed out, not a decision anyone took, and it runs on every stale
-   * request. Nothing is written when no session actually changed.
+   * 'expiration' is audited while session.logExpiration is on (#1249, dict-02
+   * P1X-0296), which is the default; #1020 had left it out as housekeeping.
+   * It reaches here only when a session actually changed, so a stale session
+   * hit by many requests writes one row. Nothing is written when no session
+   * actually changed.
    *
    * The actor is `req`'s user when the caller has one, otherwise `revokedBy`
    * (a process name like 'system' is attributed to USR-SYSTEM). An audit
    * failure never undoes or fails the revocation.
    */
   async recordRevocationAudit(db, { reason, revokedBy = null, ownerID = null, count = 1, req = null } = {}) {
-    if (!count || reason === 'expiration') return;
+    if (!count) return;
     try {
+      if (reason === 'expiration' && !(await resolveSessionPolicy(db)).logExpiration) return;
       const auditLogger = require('../utils/auditLogger');
       auditLogger.init(db);
       const actorReq = req
@@ -359,8 +377,8 @@ class SessionService {
         severity: reason === 'risk' || reason === 'admin_action' ? 'warning' : 'info',
         message: `Sessão revogada: motivo ${reason || 'não informado'}; sessões afetadas ${count}`,
         req: actorReq,
-        // source stays the default 'api': every audited revocation is an API
-        // request's side effect ('expiration', the housekeeping one, is skipped).
+        // source stays the default 'api': every audited revocation, an expiry
+        // included, is found by an API request.
         module: 'Sessões',
       });
     } catch (error) {
@@ -384,7 +402,7 @@ class SessionService {
           { sessionID },
           { $set: { isActive: false, isRevoked: true, revokedAt: new Date(), revocationReason: reason, revokedBy: revokedBy == null ? revokedBy : String(revokedBy), updatedAt: new Date() } }
         );
-        if (result?.modifiedCount && reason !== 'expiration') {
+        if (result?.modifiedCount) {
           const ownerID = cachedOwner
             ?? (await sessionsCollection.findOne({ sessionID }, { projection: { userID: 1 } }))?.userID;
           await this.recordRevocationAudit(db, { reason, revokedBy, ownerID, count: 1, req });
@@ -458,7 +476,7 @@ class SessionService {
       // Limpa do banco
       try {
         const sessionsCollection = db.collection('sessions');
-        await sessionsCollection.updateMany(
+        const swept = await sessionsCollection.updateMany(
           {
             $or: [
               { expiresAt: { $lt: now } },
@@ -484,6 +502,7 @@ class SessionService {
           },
           { $set: { isActive: false, isRevoked: true, revokedAt: new Date(), revocationReason: 'expiration', revokedBy: 'system', updatedAt: new Date() } }
         );
+        await this.recordRevocationAudit(db, { reason: 'expiration', revokedBy: 'system', count: swept?.modifiedCount || 0 });
       } catch (dbError) {
         logger.warn('Erro ao limpar sessões expiradas no banco:', dbError.message);
       }

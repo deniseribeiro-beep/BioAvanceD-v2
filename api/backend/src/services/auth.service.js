@@ -306,7 +306,10 @@ class AuthService {
         throw new Error("registerUser requires grantedBy: the caller's userID, or 'system' for a trusted internal caller");
       }
 
-      const validation = UserModel.validate(userData);
+      // #1249: registration checks strength against the stored passwordRules
+      // policy, as every other password write has since #1246.
+      const passwordPolicy = await passwordService.resolvePasswordPolicy(db);
+      const validation = UserModel.validate(userData, { passwordPolicy });
       if (!validation.isValid) {
         throw new Error(validation.errors.join(', '));
       }

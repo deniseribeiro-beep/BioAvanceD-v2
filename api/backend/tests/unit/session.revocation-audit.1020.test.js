@@ -14,14 +14,16 @@ afterAll(() => {
   else process.env.USER_ANON_SALT = ORIGINAL_SALT;
 });
 
-function makeDb({ modifiedCount = 1, matchedCount = 1, sessionDoc = null } = {}) {
+function makeDb({ modifiedCount = 1, matchedCount = 1, sessionDoc = null, securityConfig = null } = {}) {
   const sessions = {
     updateOne: vi.fn(async () => ({ matchedCount, modifiedCount })),
     updateMany: vi.fn(async () => ({ matchedCount: modifiedCount, modifiedCount })),
     findOne: vi.fn(async () => sessionDoc),
   };
   const users = { findOne: vi.fn(async () => null) };
-  return { db: { collection: (name) => (name === 'sessions' ? sessions : users) }, sessions };
+  const config = { findOne: vi.fn(async () => securityConfig) };
+  const collection = (name) => (name === 'sessions' ? sessions : name === 'security_config' ? config : users);
+  return { db: { collection }, sessions };
 }
 
 let logSpy;
@@ -68,10 +70,37 @@ describe('session revocation audit rows (#1020)', () => {
     expect(logSpy).not.toHaveBeenCalled();
   });
 
-  it('does not audit expiration housekeeping', async () => {
-    const { db } = makeDb();
+  // #1249: dict-02 P1X-0296 session.logExpiration (default true) records
+  // expiries in the audit trail; #1020 had left them out.
+  it('audits an expiry while session.logExpiration is on, the default', async () => {
+    const { db } = makeDb({ sessionDoc: { userID: 'owner-1' } });
+    await sessionService.invalidateSession(db, 'sess-1', 'expiration', 'system');
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    expect(logSpy.mock.calls[0][0]).toMatchObject({
+      resourceId: generateAnonId('owner-1'),
+      severity: 'info',
+      message: 'Sessão revogada: motivo expiration; sessões afetadas 1',
+      req: null,
+    });
+  });
+
+  it('does not audit an expiry while session.logExpiration is off', async () => {
+    const { db } = makeDb({ securityConfig: { _id: 'main', session: { logExpiration: false } } });
     await sessionService.invalidateSession(db, 'sess-1', 'expiration', 'system');
     expect(logSpy).not.toHaveBeenCalled();
+  });
+
+  it('logExpiration off leaves every other reason audited', async () => {
+    const { db } = makeDb({ securityConfig: { _id: 'main', session: { logExpiration: false } } });
+    await sessionService.invalidateSession(db, 'sess-1', 'user_request', 'owner-1');
+    expect(logSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('the maintenance sweep writes one row with the count it expired', async () => {
+    const { db } = makeDb({ modifiedCount: 3 });
+    await sessionService.cleanupExpiredSessions(db);
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    expect(logSpy.mock.calls[0][0].message).toBe('Sessão revogada: motivo expiration; sessões afetadas 3');
   });
 
   it('invalidateSession (logout): owner read back from the stored session, reason user_request, severity info', async () => {
