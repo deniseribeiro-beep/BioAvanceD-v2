@@ -1642,6 +1642,8 @@
       "filterStartDate": "Fecha inicial",
       "fixedAlwaysAnonymized": "Siempre activo: las vistas de registros muestran identidades anonimizadas (LGPD).",
       "fixedAuditRequired": "Siempre activo: la auditoría registra estos eventos (RNF009).",
+      "fixedConsentNoExpiry": "No aplicado: un consentimiento no tiene vencimiento propio; es válido dentro de la vigencia de su política de consentimiento.",
+      "fixedConsentRequired": "Siempre activo: el consentimiento es una base legal para tratar datos de salud (LGPD art. 11 I).",
       "fixedNotApplied": "No aplicado: ninguna tarea aplica un plazo de retención o anonimización a datos distintos de los registros.",
       "governedByPolicy": "Definido por la política de retención activa (versión {{version}}); cámbielo allí.",
       "governedNoPolicy": "Ninguna política de retención activa cubre los registros, así que nada se depura.",

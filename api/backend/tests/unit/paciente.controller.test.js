@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
@@ -7,6 +7,7 @@ const controller = require('../../src/controllers/paciente.controller');
 const patientService = require('../../src/services/patient.service');
 const biomarkerObservationService = require('../../src/services/biomarker-observation.service');
 const auditLogger = require('../../src/utils/auditLogger');
+const securityService = require('../../src/services/security.service');
 const sampleComplianceSync = require('../../src/services/sampleComplianceSync.service');
 const { createDbMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
@@ -640,6 +641,42 @@ describe('paciente.controller', () => {
   });
 
   describe('deletar', () => {
+    // #1262: the delete reads lgpd.allowDataDeletion, and this file's db is a
+    // bare object that cannot answer it, so each case says it is allowed
+    // unless it tests the gate.
+    beforeEach(() => {
+      vi.spyOn(securityService, 'isDataDeletionAllowed').mockResolvedValue(true);
+    });
+
+    it('#1262: returns 403 and deletes nothing while lgpd.allowDataDeletion is false', async () => {
+      securityService.isDataDeletionAllowed.mockResolvedValue(false);
+      vi.spyOn(patientService, 'getPatient').mockResolvedValue({ participantId: '12345678' });
+      const deleteSpy = vi.spyOn(patientService, 'deletePatient').mockResolvedValue(true);
+      const req = createReq({ params: { id: '12345678' } });
+      const res = createRes();
+
+      await controller.deletar(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'Eliminação desabilitada' }));
+      expect(deleteSpy).not.toHaveBeenCalled();
+    });
+
+    it('#1262: the organization scope answers before the setting does', async () => {
+      securityService.isDataDeletionAllowed.mockResolvedValue(false);
+      vi.spyOn(patientService, 'getPatient').mockResolvedValue({ participantId: '12345678', clinicalUnitId: 'org-9' });
+      const req = createReq({
+        params: { id: '12345678' },
+        organizationScope: { scope: 'organization', organizationIds: ['org-1'] }
+      });
+      const res = createRes();
+
+      await controller.deletar(req, res);
+
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: 'Este paciente pertence a outra organização' }));
+      expect(securityService.isDataDeletionAllowed).not.toHaveBeenCalled();
+    });
+
     it('returns 503 when db is missing', async () => {
       const req = createReq({ app: { locals: {} }, params: { id: '1' } });
       const res = createRes();

@@ -16,6 +16,8 @@ const FIXED_HELP_KEYS: Record<string, string> = {
   'audit-required': 'security.logging.fixedAuditRequired',
   'always-anonymized': 'security.logging.fixedAlwaysAnonymized',
   'not-applied': 'security.logging.fixedNotApplied',
+  'consent-required': 'security.logging.fixedConsentRequired',
+  'consent-no-expiry': 'security.logging.fixedConsentNoExpiry',
 };
 function retentionGovernedHelp(t: (key: string, fallback?: string) => string, source?: GovernedSource): string {
   if (!source) return '';
@@ -889,10 +891,14 @@ export default function SecurityPage() {
                   <input title="security-input"
                     type="checkbox"
                     checked={localConfig.lgpd.requireConsent}
+                    disabled={Boolean(localConfig.governedBy?.['lgpd.requireConsent'])}
                     onChange={(e) => handleConfigChange('lgpd.requireConsent', e.target.checked)}
                   />
                   <span>{t('security.lgpd.requireConsent')}</span>
                 </label>
+                <span className="config-help">
+                  {retentionGovernedHelp(t, localConfig.governedBy?.['lgpd.requireConsent'])}
+                </span>
                 {localConfig.lgpd.requireConsent && (
                   <div className="config-field">
                     <label>{t('security.lgpd.consentExpirationDays')}</label>
@@ -900,9 +906,13 @@ export default function SecurityPage() {
                       type="number"
                       min="30"
                       max="3650"
-                      value={localConfig.lgpd.consentExpirationDays}
+                      value={localConfig.lgpd.consentExpirationDays ?? ''}
+                      disabled={Boolean(localConfig.governedBy?.['lgpd.consentExpirationDays'])}
                       onChange={(e) => handleConfigChange('lgpd.consentExpirationDays', parseInt(e.target.value))}
                     />
+                    <span className="config-help" data-testid="security-lgpd-fixed-help">
+                      {retentionGovernedHelp(t, localConfig.governedBy?.['lgpd.consentExpirationDays'])}
+                    </span>
                   </div>
                 )}
               </div>

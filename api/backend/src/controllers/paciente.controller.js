@@ -675,6 +675,18 @@ class PacienteController {
         });
       }
 
+      // #1262: lgpd.allowDataDeletion switches the elimination off. Checked
+      // after the scope check, so a caller outside the scope learns nothing
+      // about the setting.
+      const securityService = require('../services/security.service');
+      if (!(await securityService.isDataDeletionAllowed(db))) {
+        return res.status(403).json({
+          success: false,
+          error: 'Eliminação desabilitada',
+          message: 'A eliminação de dados está desabilitada na configuração LGPD'
+        });
+      }
+
       const result = await patientService.deletePatient(db, id);
 
       if (!result) {

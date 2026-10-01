@@ -1298,6 +1298,9 @@ test.describe('Security policy management (RF014) — real backend', () => {
       'privacy.anonymizeLogs': ['always-anonymized', true],
       'privacy.dataRetentionDays': ['not-applied', null],
       'privacy.anonymizeAfterDays': ['not-applied', null],
+      // #1262
+      'lgpd.requireConsent': ['consent-required', true],
+      'lgpd.consentExpirationDays': ['consent-no-expiry', null],
     };
     const valueAt = (config: Record<string, Record<string, unknown>>, path: string) => {
       const [group, key] = path.split('.');
@@ -1317,6 +1320,7 @@ test.describe('Security policy management (RF014) — real backend', () => {
           logging: { level: newLevel, logLoginAttempts: false, logAllActions: false },
           privacy: { anonymizeLogs: false, dataRetentionDays: 40, anonymizeAfterDays: 40 },
           enhancedSecurity: { logAllActions: false },
+          lgpd: { requireConsent: false, consentExpirationDays: 40 },
         },
       });
       expect(put.ok(), await put.text()).toBeTruthy();
@@ -1345,7 +1349,39 @@ test.describe('Security policy management (RF014) — real backend', () => {
     }
   });
 
-  // #1247:the enhancedSecurity group is read only while its enabled switch is
+  // #1262: lgpd.allowDataDeletion gates the patient delete. A participant id
+  // nothing holds answers 404 while deletion is allowed and 403 while it is
+  // not, because the gate runs before the lookup's result is used, so the
+  // spec needs no patient fixture and deletes nothing.
+  test('#1262: lgpd.allowDataDeletion switches the patient delete off', async ({ request }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const config = await request.get(`${apiBaseURL}/api/security/config`, { headers: auth });
+    expect(config.ok()).toBeTruthy();
+    const original = (await config.json()).data.lgpd?.allowDataDeletion !== false;
+    const setAllowed = async (value: boolean) => {
+      const res = await request.put(`${apiBaseURL}/api/security/config`, {
+        headers: auth,
+        data: { lgpd: { allowDataDeletion: value } },
+      });
+      expect(res.ok(), await res.text()).toBeTruthy();
+    };
+    const missingId = '99999998';
+    try {
+      await setAllowed(false);
+      const refused = await request.delete(`${apiBaseURL}/api/patients/${missingId}`, { headers: auth });
+      expect(refused.status(), await refused.text()).toBe(403);
+      expect((await refused.json()).error).toBe('Eliminação desabilitada');
+
+      await setAllowed(true);
+      const allowed = await request.delete(`${apiBaseURL}/api/patients/${missingId}`, { headers: auth });
+      expect(allowed.status(), await allowed.text()).toBe(404);
+    } finally {
+      await setAllowed(original);
+    }
+  });
+
+  // #1247: the enhancedSecurity group is read only while its enabled switch is
   // on. Under the mode an unenrolled Administrador is sent to MFA enrolment,
   // the mode's session timeout replaces the ordinary one, and the strict
   // password policy holds every composition flag on.

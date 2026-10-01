@@ -1642,6 +1642,8 @@
       "filterStartDate": "Data Inicial",
       "fixedAlwaysAnonymized": "Sempre ativo: as consultas de logs mostram identidades anonimizadas (LGPD).",
       "fixedAuditRequired": "Sempre ativo: a trilha de auditoria registra esses eventos (RNF009).",
+      "fixedConsentNoExpiry": "Não aplicado: o consentimento não tem expiração própria; vale dentro da vigência da sua política de consentimento.",
+      "fixedConsentRequired": "Sempre ativo: o consentimento é uma base legal para tratar dados de saúde (LGPD art. 11 I).",
       "fixedNotApplied": "Não aplicado: nenhuma rotina aplica prazo de retenção ou anonimização a dados além dos logs.",
       "governedByPolicy": "Definido pela política de retenção ativa (versão {{version}}); altere-o lá.",
       "governedNoPolicy": "Nenhuma política de retenção ativa cobre os logs, então nada é expurgado.",

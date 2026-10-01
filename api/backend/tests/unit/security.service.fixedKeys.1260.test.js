@@ -16,6 +16,7 @@ const stored = () => ({
   logging: { level: 'warning', logLoginAttempts: false, logAllActions: false, retentionDays: 365 },
   privacy: { anonymizeLogs: false, dataRetentionDays: 30, autoPurge: false, purgeAfterDays: 730, anonymizeAfterDays: 10 },
   enhancedSecurity: { enabled: false, logAllActions: false },
+  lgpd: { allowDataExport: true, allowDataDeletion: false, anonymizeOnExport: true, requireConsent: false, consentExpirationDays: 30 },
   configVersion: 3,
 });
 
@@ -54,6 +55,15 @@ describe('#1260 #1261 getConfig shows the fixed keys at their fixed values', () 
     );
     expect(config.governedBy['privacy.anonymizeLogs'].fixed).toBe('always-anonymized');
     expect(config.governedBy['privacy.dataRetentionDays'].fixed).toBe('not-applied');
+    // #1262
+    expect(config.lgpd.requireConsent).toBe(true);
+    expect(config.lgpd.consentExpirationDays).toBeNull();
+    expect(config.governedBy['lgpd.requireConsent'].fixed).toBe('consent-required');
+    expect(config.governedBy['lgpd.consentExpirationDays'].fixed).toBe('consent-no-expiry');
+    // allowDataDeletion is a real input, and the export pair is #1266's.
+    expect(config.lgpd.allowDataDeletion).toBe(false);
+    expect(config.governedBy['lgpd.allowDataDeletion']).toBeUndefined();
+    expect(config.governedBy['lgpd.allowDataExport']).toBeUndefined();
   });
 
   it('does not invent a group the document lacks', async () => {
@@ -71,6 +81,7 @@ describe('#1260 #1261 updateConfig drops writes to the fixed keys', () => {
       logging: { level: 'error', logLoginAttempts: false, logAllActions: false },
       privacy: { anonymizeLogs: false, dataRetentionDays: 7, anonymizeAfterDays: 7 },
       enhancedSecurity: { logAllActions: false },
+      lgpd: { requireConsent: false, consentExpirationDays: 9 },
     }, current, { user: { userID: 'admin' } });
 
     const set = db._c.updateOne.mock.calls[0][1].$set;
@@ -80,6 +91,8 @@ describe('#1260 #1261 updateConfig drops writes to the fixed keys', () => {
     expect(set.privacy.anonymizeLogs).toBe(true);
     expect(set.privacy.dataRetentionDays).toBeNull();
     expect(set.privacy.anonymizeAfterDays).toBeNull();
+    expect(set.lgpd.requireConsent).toBe(true);
+    expect(set.lgpd.consentExpirationDays).toBeNull();
 
     const auditedPaths = auditLogger.log.mock.calls.map(([entry]) => entry.payload.path);
     // Control: a real change in the same PUT is audited.
@@ -142,5 +155,22 @@ describe('#1260 the logger honours the minimum level', () => {
     logLevel.setMinLevel('error');
     expect(logLevel.setMinLevel('verbose')).toBe(false);
     expect(logLevel.getMinLevel()).toBe('error');
+  });
+});
+
+describe('#1262 isDataDeletionAllowed reads lgpd.allowDataDeletion', () => {
+  const dbWith = (doc) => ({ collection: () => ({ findOne: vi.fn().mockResolvedValue(doc) }) });
+
+  it('false only when the key is false; absent document or key is the default, true', async () => {
+    expect(await securityService.isDataDeletionAllowed(dbWith({ lgpd: { allowDataDeletion: false } }))).toBe(false);
+    expect(await securityService.isDataDeletionAllowed(dbWith({ lgpd: { allowDataDeletion: true } }))).toBe(true);
+    expect(await securityService.isDataDeletionAllowed(dbWith({ lgpd: {} }))).toBe(true);
+    expect(await securityService.isDataDeletionAllowed(dbWith(null))).toBe(true);
+  });
+
+  it('an unreadable document refuses the deletion', async () => {
+    vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    const broken = { collection: () => ({ findOne: vi.fn().mockRejectedValue(new Error('down')) }) };
+    expect(await securityService.isDataDeletionAllowed(broken)).toBe(false);
   });
 });

@@ -109,6 +109,16 @@ async function resolveRetentionGoverned(db) {
 //    data other than logs; the RetentionPolicy sweep covers only Log and
 //    AuditEvent (#1248). The page says so rather than offer a period that
 //    nothing enforces.
+// #1262, the lgpd group:
+//  - 'consent-required': consent.enforcement and the lineage consent gate
+//    enforce consent unconditionally. Consent for sensitive health data is a
+//    legal basis (LGPD art. 11 I), not a preference, so requireConsent
+//    (P1X-0319) is true.
+//  - 'consent-no-expiry': a PatientConsent carries no expiry; its validity
+//    is the ConsentPolicy's validFrom/validTo window. P1X-0320 applies "when
+//    defined by the policy", and none defines a per-consent period.
+// lgpd.allowDataDeletion is not here: the patient delete reads it.
+// allowDataExport and anonymizeOnExport are carried in #1266.
 const FIXED_PATHS = {
   'logging.logLoginAttempts': { value: true, reason: 'audit-required' },
   'logging.logAllActions': { value: true, reason: 'audit-required' },
@@ -116,6 +126,8 @@ const FIXED_PATHS = {
   'privacy.anonymizeLogs': { value: true, reason: 'always-anonymized' },
   'privacy.dataRetentionDays': { value: null, reason: 'not-applied' },
   'privacy.anonymizeAfterDays': { value: null, reason: 'not-applied' },
+  'lgpd.requireConsent': { value: true, reason: 'consent-required' },
+  'lgpd.consentExpirationDays': { value: null, reason: 'consent-no-expiry' },
 };
 const GOVERNED_PATHS = [...RETENTION_GOVERNED_PATHS, ...Object.keys(FIXED_PATHS)];
 
@@ -279,6 +291,24 @@ class SecurityService {
       applyLogLevel(doc);
     } catch (error) {
       logger.warn(`#1260: nível de log não sincronizado: ${error.message}`);
+    }
+  }
+
+  /**
+   * #1262: lgpd.allowDataDeletion (P1X-0317, "permite execução de eliminação
+   * quando juridicamente aplicável") gates the patient delete. Read directly,
+   * for the reason syncLogLevel gives. An absent key is the default, true.
+   * An unreadable document refuses: a deletion cannot be undone, so the
+   * failure falls on the side that can be retried.
+   */
+  async isDataDeletionAllowed(db) {
+    try {
+      const doc = await db.collection('security_config')
+        .findOne({ _id: 'main' }, { projection: { 'lgpd.allowDataDeletion': 1 } });
+      return doc?.lgpd?.allowDataDeletion !== false;
+    } catch (error) {
+      logger.warn(`#1262: configuração LGPD ilegível, eliminação recusada: ${error.message}`);
+      return false;
     }
   }
 

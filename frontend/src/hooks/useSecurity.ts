@@ -99,7 +99,8 @@ export interface SecurityConfig {
     allowDataDeletion: boolean;
     anonymizeOnExport: boolean;
     requireConsent: boolean;
-    consentExpirationDays: number;
+    // #1262: fixed at null; a PatientConsent carries no expiry.
+    consentExpirationDays: number | null;
   };
   // #1248: the keys the active RetentionPolicy decides, read-only here.
   governedBy?: Record<string, {
@@ -109,7 +110,7 @@ export interface SecurityConfig {
     postRetentionAction?: string;
     unavailable?: boolean;
     // #1260, #1261: set for a key whose behaviour is fixed, naming why.
-    fixed?: 'audit-required' | 'always-anonymized' | 'not-applied';
+    fixed?: 'audit-required' | 'always-anonymized' | 'not-applied' | 'consent-required' | 'consent-no-expiry';
   }>;
   // #953: flat, per dict-02 P1X-0321/0322/0323.
   configVersion?: number;
