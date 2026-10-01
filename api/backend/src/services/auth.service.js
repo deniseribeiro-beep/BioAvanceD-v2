@@ -1154,6 +1154,15 @@ class AuthService {
       // The enrolment stands -- it is the user's own second factor -- but no
       // token is issued: the next login, now with MFA, reaches processLogin's
       // forceReset branch and its password change.
+      //
+      // #1253 item 3: an administrator who knows the password they set can
+      // enrol their own authenticator here first, and the real user then
+      // meets an MFA they did not enrol. That grants nothing the role lacks:
+      // with or without this enrolment, an administrator who sets a password
+      // can log in with it and complete the forced change, which is
+      // set-password's own exposure, and the same administrator can reset-mfa
+      // for the user. Set-password, reset-mfa and this enrolment (the row
+      // above) are all audited.
       if (user.forceReset) {
         return {
           requiresPasswordChange: true,

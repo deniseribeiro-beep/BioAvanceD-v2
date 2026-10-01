@@ -5,6 +5,7 @@ const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
 const logger = require("./src/utils/logger");
 const env = require("./src/config/env");
+const { skipAuthBudget } = require("./src/infrastructure/middleware/authLimiterSkip");
 
 const app = express();
 
@@ -221,6 +222,8 @@ const authLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   skipSuccessfulRequests: false,
+  // #1253: the public password-policy read verifies no secret; see authLimiterSkip.
+  skip: skipAuthBudget,
 });
 
 // #823/#832: six routes on the e-consent router carry no `authenticate` --

@@ -124,6 +124,13 @@ describe('SecurityService.validateConfig', () => {
     }
   });
 
+  // #1253: NIST SP 800-63B §5.1.1.2 floor.
+  it('throws for a passwordRules.minLength below 8, and accepts 8', () => {
+    expect(() => securityService.validateConfig({ passwordRules: { minLength: 7 } })).toThrow('inválidas');
+    expect(() => securityService.validateConfig({ passwordRules: { minLength: 6 } })).toThrow('inválidas');
+    expect(() => securityService.validateConfig({ passwordRules: { minLength: 8 } })).not.toThrow();
+  });
+
   it('throws for invalid mfaMethod', () => {
     expect(() => securityService.validateConfig({
       authentication: { mfaMethod: 'fingerprint' },

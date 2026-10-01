@@ -365,7 +365,7 @@ export default function SecurityPage() {
                   <label>{t('security.password.minLength')}</label>
                   <input title="security-input"
                     type="number"
-                    min="6"
+                    min="8"
                     max="128"
                     value={localConfig.passwordRules.minLength}
                     onChange={(e) => handleConfigChange('passwordRules.minLength', parseInt(e.target.value))}

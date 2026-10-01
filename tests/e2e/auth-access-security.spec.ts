@@ -889,13 +889,16 @@ test.describe('Security policy management (RF014) — real backend', () => {
       });
       expect(outOfRange.status()).toBeGreaterThanOrEqual(400);
 
-      // preventReuse=false: even the current password may be set again.
+      // preventReuse=false: the history is no longer checked, so passwords[2],
+      // the one just replaced, may be set again. #1253: the current password
+      // is still refused, since "changing" to it is not a change.
       const off = await request.put(`${apiBaseURL}/api/security/config`, {
         headers: auth,
         data: { passwordRules: { preventReuse: false } },
       });
       expect(off.ok(), await off.text()).toBeTruthy();
-      expect((await setPassword(passwords[0])).status()).toBe(200);
+      expect((await setPassword(passwords[0])).status()).toBe(422);
+      expect((await setPassword(passwords[2])).status()).toBe(200);
     } finally {
       await request.put(`${apiBaseURL}/api/security/config`, {
         headers: auth,

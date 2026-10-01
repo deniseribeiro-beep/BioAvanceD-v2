@@ -10,8 +10,14 @@ const logger = require('../utils/logger');
 //
 // The defaults are getDefaultConfig()'s, which the frontend and this file's
 // old regex already enforced; the 12-character validator was the outlier.
-// Same direct read and fail-closed shape as the reuse keys below. 6..128 is
+// Same direct read and fail-closed shape as the reuse keys below. 8..128 is
 // validateConfig's own minLength range.
+//
+// #1253: the floor is 8, not 6. NIST SP 800-63B (June 2017, updated
+// 2020-03-02) §5.1.1.2: memorized secrets chosen by the subscriber "SHALL be
+// at least 8 characters in length". The same section says verifiers "SHOULD
+// NOT impose other composition rules", so a policy with every class off is
+// within the standard. A stored 6 or 7 now reads as the default 8.
 const DEFAULT_STRENGTH_POLICY = Object.freeze({
   minLength: 8,
   requireUppercase: true,
@@ -23,7 +29,7 @@ const SPECIAL_CHARACTER = /[!@#$%^&*()_\-+=[\]{};':"\\|,.<>/?]/;
 
 function strengthMinLength(value) {
   const length = Number(value);
-  return Number.isInteger(length) && length >= 6 && length <= 128 ? length : DEFAULT_STRENGTH_POLICY.minLength;
+  return Number.isInteger(length) && length >= 8 && length <= 128 ? length : DEFAULT_STRENGTH_POLICY.minLength;
 }
 
 function validateStrength(password, policy = DEFAULT_STRENGTH_POLICY) {
@@ -147,20 +153,22 @@ function nextPasswordHistory(user = {}, policy = DEFAULT_REUSE_POLICY) {
   return previous.slice(0, reuseDepth(policy.maxReuseHistory));
 }
 
+// #1253: the current password counts even while preventReuse is off.
+// preventReuse (dict-02 P1X-0290) and maxReuseHistory (P1X-0291, "hashes
+// anteriores") govern the history. "Changing" to the current password is not
+// a change, and it used to clear forceReset and restart the expiry clock with
+// the same secret in place.
 async function validateReuse(newPassword, user = {}, policy = DEFAULT_REUSE_POLICY) {
-  if (policy.preventReuse === false) {
-    return;
-  }
-
   const history = Array.isArray(user.passwordHistory) ? user.passwordHistory : [];
   const hashesToCheck = [];
 
-  // The current password always counts: "changing" to it is not a change.
   if (user.password) {
     hashesToCheck.push(user.password);
   }
 
-  hashesToCheck.push(...history.slice(0, reuseDepth(policy.maxReuseHistory)));
+  if (policy.preventReuse !== false) {
+    hashesToCheck.push(...history.slice(0, reuseDepth(policy.maxReuseHistory)));
+  }
 
   for (const hash of hashesToCheck) {
     if (hash && await bcrypt.compare(newPassword, hash)) {

@@ -115,10 +115,12 @@ describe('validateReuse', () => {
     await expect(validateReuse('Pass2!Aa', user, policy)).resolves.toBeUndefined();
   });
 
-  it('#1244: preventReuse false checks nothing, the current password included', async () => {
+  // #1253: preventReuse governs the history; the current password always
+  // counts, or a forced or expired change could keep the same secret.
+  it('#1244/#1253: preventReuse false skips the history but still refuses the current password', async () => {
     const user = { password: await bcrypt.hash('Current1!', 4), passwordHistory: await historyOf(1) };
     const policy = { preventReuse: false, maxReuseHistory: 5 };
-    await expect(validateReuse('Current1!', user, policy)).resolves.toBeUndefined();
+    await expect(validateReuse('Current1!', user, policy)).rejects.toThrow('utilizada recentemente');
     await expect(validateReuse('Pass1!Aa', user, policy)).resolves.toBeUndefined();
   });
 
@@ -189,7 +191,8 @@ describe('#1244/#1246 resolvePasswordPolicy', () => {
     await expect(resolvePasswordPolicy(custom.db)).resolves.toMatchObject({
       minLength: 12, requireUppercase: false, requireLowercase: true, requireNumbers: false, requireSpecialChars: false,
     });
-    for (const minLength of [5, 129, 7.5, 'x']) {
+    // #1253: 6 and 7 are below NIST SP 800-63B's floor of 8.
+    for (const minLength of [5, 6, 7, 129, 7.5, 'x']) {
       const bad = dbWith(vi.fn().mockResolvedValue({ passwordRules: { minLength } }));
       expect((await resolvePasswordPolicy(bad.db)).minLength).toBe(8);
     }

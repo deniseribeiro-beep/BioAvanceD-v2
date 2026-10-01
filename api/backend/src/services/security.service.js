@@ -372,8 +372,9 @@ class SecurityService {
 
     // Validações de senha
     if (config.passwordRules) {
-      if (config.passwordRules.minLength && (config.passwordRules.minLength < 6 || config.passwordRules.minLength > 128)) {
-        errors.push('minLength deve estar entre 6 e 128');
+      // #1253: 8 is NIST SP 800-63B §5.1.1.2's floor (see password.service).
+      if (config.passwordRules.minLength && (config.passwordRules.minLength < 8 || config.passwordRules.minLength > 128)) {
+        errors.push('minLength deve estar entre 8 e 128');
       }
       if (config.passwordRules.expirationDays && (config.passwordRules.expirationDays < 0 || config.passwordRules.expirationDays > 365)) {
         errors.push('expirationDays deve estar entre 0 e 365');

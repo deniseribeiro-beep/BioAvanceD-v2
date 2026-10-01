@@ -1407,14 +1407,24 @@ describe('AuthService.resetPassword', () => {
     expect(update.$set.forceReset).toBe(false);
   });
 
-  it('#1244: preventReuse false lets the reset reuse the current password', async () => {
+  // #1253: preventReuse false skips the history, never the current password.
+  it('#1244/#1253: preventReuse false skips the history, so only the current password is compared', async () => {
     vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'password-reset', userID: '507f1f77bcf86cd799439011' });
-    const compare = vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+    const compare = vi.spyOn(bcrypt, 'compare').mockResolvedValue(false);
     const { db, usersApi } = resetDb(BASE_USER, { _id: 'main', passwordRules: { preventReuse: false } });
     const result = await authService.resetPassword(db, 'tok', 'NewPass123!@#', {});
     expect(result.success).toBe(true);
-    expect(compare).not.toHaveBeenCalled();
+    expect(compare).toHaveBeenCalledTimes(1);
+    expect(compare).toHaveBeenCalledWith('NewPass123!@#', BASE_USER.password);
     expect(usersApi.updateOne).toHaveBeenCalled();
+  });
+
+  it('#1253: preventReuse false still refuses a reset to the current password', async () => {
+    vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'password-reset', userID: '507f1f77bcf86cd799439011' });
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+    const { db, usersApi } = resetDb(BASE_USER, { _id: 'main', passwordRules: { preventReuse: false } });
+    await expect(authService.resetPassword(db, 'tok', 'NewPass123!@#', {})).rejects.toThrow('utilizada recentemente');
+    expect(usersApi.updateOne).not.toHaveBeenCalled();
   });
 });
 
