@@ -171,6 +171,30 @@ function clearedLockoutFields() {
 }
 
 /**
+ * #1258 item 5: the account-status gate, lifted from processLogin so the two
+ * unauthenticated first-login endpoints apply the same one. They had none:
+ * an inactive, suspended or blocked account that had not enrolled MFA got a
+ * full session from enable-first-login, and neither authenticate nor
+ * issueSessionTokens reads the status. #1247's requireMFAForAll sends every
+ * returning unenrolled account down that path, which is how the review
+ * found it.
+ *
+ * Called after the password check at every site, as processLogin always
+ * did: whoever does not know the password must not learn the status.
+ */
+function assertAccountActive(user) {
+  const normalizedStatus = UserModel.normalizeStatus(user.status);
+  if (normalizedStatus !== 'active') {
+    const statusMessages = {
+      'inactive': 'Usuário inativo',
+      'suspended': 'Usuário suspenso',
+      'blocked': 'Usuário bloqueado'
+    };
+    throw new Error(statusMessages[normalizedStatus] || 'Usuário não pode fazer login');
+  }
+}
+
+/**
  * #914 / RF001 ("aplicar autenticação multifator conforme a política de
  * segurança"), RF014 AC#3. authentication.requireMFA (dict-02 P1X-0278,
  * "Exige MFA segundo a política global") was one of the SecurityConfiguration
@@ -628,15 +652,8 @@ class AuthService {
       }
 
       // Verifica status do usuário - impede login se não estiver ativo
-      const normalizedStatus = UserModel.normalizeStatus(user.status);
-      if (normalizedStatus !== 'active') {
-        const statusMessages = {
-          'inactive': 'Usuário inativo',
-          'suspended': 'Usuário suspenso',
-          'blocked': 'Usuário bloqueado'
-        };
-        throw new Error(statusMessages[normalizedStatus] || 'Usuário não pode fazer login');
-      }
+      // #1258: shared with the first-login endpoints (assertAccountActive).
+      assertAccountActive(user);
 
       // #683 (RF003): bloqueio de MFA por força bruta. O contador acima grava
       // mfaLocked após 5 códigos errados, mas nada lia a flag: a tentativa
@@ -985,6 +1002,9 @@ class AuthService {
         throw new Error('Credenciais inválidas');
       }
 
+      // #1258 item 5: an account that may not log in may not enrol either.
+      assertAccountActive(user);
+
       // #1072: a `mfaNotConfigured` binding sat here, computed and never
       // read -- dead, and a live trap for anyone editing this function
       // believing it gated something. Removed with the rename rather than
@@ -1134,6 +1154,10 @@ class AuthService {
         throw new Error('Credenciais inválidas');
       }
 
+      // #1258 item 5: this path issues a full session, so it applies the
+      // status gate processLogin applies.
+      assertAccountActive(user);
+
       // #1072: ciphertext presence gates reachability; the decrypt happens
       // only inside the verify call below.
       if (!user.mfaSecretCiphertext) {
@@ -1199,10 +1223,18 @@ class AuthService {
       // set-password's own exposure, and the same administrator can reset-mfa
       // for the user. Set-password, reset-mfa and this enrolment (the row
       // above) are all audited.
-      if (user.forceReset) {
+      //
+      // #1258 item 5: an expired password (#1251) withholds the session the
+      // same way. Under requireMFAForAll every returning unenrolled account
+      // comes through here, and its password may have expired long ago.
+      const passwordExpired = passwordService.isPasswordExpired(user, await passwordService.resolvePasswordPolicy(db));
+      if (user.forceReset || passwordExpired) {
         return {
           requiresPasswordChange: true,
-          message: 'Alteração de senha obrigatória antes de continuar'
+          ...(passwordExpired && !user.forceReset ? { reason: 'expired' } : {}),
+          message: passwordExpired && !user.forceReset
+            ? 'Senha expirada: defina uma nova senha para continuar'
+            : 'Alteração de senha obrigatória antes de continuar'
         };
       }
 
