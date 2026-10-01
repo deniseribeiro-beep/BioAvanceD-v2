@@ -1304,6 +1304,54 @@ describe('Users and Access routes', () => {
     expect(mfaRows).toHaveLength(0);
   });
 
+  // #1245 item 4: the level floor and changeUserRole read accessType through
+  // Number(), so a JSON string '4' promotes -- ROLE_CODE_BY_ACCESS_TYPE['4']
+  // resolves -- while isBecomingAdmin compared it with === 4 and missed it.
+  // That promotion skipped #1011's confirmed enrolment clear and its
+  // promotion_clear row.
+  it("#1245: a promotion sent as accessType '4' (a string) is a promotion", async () => {
+    const handler = getHandler(userRoutes, 'put', '/:id');
+    const targetUser = {
+      _id: 'user-target-string-4',
+      name: 'Alvo String',
+      email: 'alvo-string@bioavanced.com.br',
+      username: 'alvostring',
+      status: 'active',
+      mfaEnabled: true,
+      mfaSecretCiphertext: 'SEGREDO-A-SER-LIMPO',
+    };
+    usersCollection.findOne
+      .mockResolvedValueOnce(targetUser)
+      .mockResolvedValueOnce(targetUser);
+    usersCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
+
+    const rbacCollections = buildRbacCollections([
+      { userAccountId: '507f1f77bcf86cd799439011', accessType: 4 },
+      { userAccountId: 'user-target-string-4', accessType: 3 },
+    ]);
+    const dbWithTarget = {
+      collection: vi.fn((name) => {
+        if (name === 'users') return usersCollection;
+        if (rbacCollections[name]) return rbacCollections[name];
+        return db.collection(name);
+      }),
+    };
+
+    const req = createRequest({ params: { id: 'user-target-string-4' }, body: { accessType: '4' } });
+    req.app.locals.db = dbWithTarget;
+    const res = createResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    const setPayload = usersCollection.updateOne.mock.calls[0][1].$set;
+    expect(setPayload.mfaEnabled).toBe(false);
+    expect(setPayload.mfaSecretCiphertext).toBeNull();
+    const mfaRows = auditSpies.log.mock.calls.filter(([entry]) => entry && entry.action === 'MFA');
+    expect(mfaRows).toHaveLength(1);
+    expect(mfaRows[0][0].payload).toMatchObject({ operation: 'promotion_clear' });
+  });
+
   it('#914/#1011: promoting a user with NO enrolment writes no MFA row -- there was nothing to clear', async () => {
     const handler = getHandler(userRoutes, 'put', '/:id');
     const targetUser = {

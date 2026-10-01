@@ -451,7 +451,9 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
     // echoes roleName on every save, so without `!isAdmin` a plain edit of an
     // existing Administrador counted as one and the clear below destroyed
     // their MFA enrolment -- #1021's defect through a second field.
-    const isBecomingAdmin = !isAdmin && (requestedAccessType === 4 || req.body.roleName === 'Administrador');
+    // #1245: Number(), as the level floor and changeUserRole read it. A JSON
+    // string '4' promotes, and `=== 4` let that promotion skip the clear.
+    const isBecomingAdmin = !isAdmin && (Number(requestedAccessType) === 4 || req.body.roleName === 'Administrador');
 
     // #998 (RF003, RNF008 AC#1): a caller may not raise anyone -- including
     // themselves -- above their own level. requirePermission('createUser') was
@@ -1416,6 +1418,16 @@ router.post('/:id/force-password-reset', authenticate, requirePermission('forceP
 // branch). It also sets forceReset, because the administrator now knows the
 // password, so the owner must replace it at next login (RF014 AC#4's
 // mechanism). #982's revocation moved here from the PUT.
+//
+// #1245 item 1: an Administrador target is allowed, with no hierarchy floor,
+// deliberately. Denise's Axis E log (#686, CONFIRM) settles the sibling:
+// force-password-reset "may target Administrador", the asymmetry with the old
+// reset-mfa refusal being intentional. What this route adds is that the caller
+// knows the new password, and forceReset makes that knowledge unusable on its
+// own: processLogin's forceReset branch issues no token until a NEW password is
+// set, so the caller can only get in by replacing the password again. That
+// locks the real owner out, visibly, and leaves this route's warning row, the
+// admin_action revocation and a password_change revocation on the trail.
 router.post('/:id/set-password', authenticate, requirePermission('setUserPassword', 'UPDATE'), async (req, res) => {
   try {
     const db = req.app.locals.db;
