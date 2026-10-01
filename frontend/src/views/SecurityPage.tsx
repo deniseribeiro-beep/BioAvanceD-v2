@@ -8,6 +8,16 @@ import { useLanguage } from '../contexts/LanguageContext';
 import { useToast } from '../components/UI/ToastContainer';
 import './SecurityPage.css';
 
+// #1248: the retention keys are decided by the active RetentionPolicy, so
+// they render read-only with a line naming it.
+type GovernedSource = NonNullable<SecurityConfig['governedBy']>[string];
+function retentionGovernedHelp(t: (key: string, fallback?: string) => string, source?: GovernedSource): string {
+  if (!source) return '';
+  if (source.unavailable) return t('security.logging.governedUnavailable');
+  if (!source.policyId) return t('security.logging.governedNoPolicy');
+  return t('security.logging.governedByPolicy').replace('{{version}}', source.version ?? '');
+}
+
 export default function SecurityPage() {
   const { user, isLoading: authLoading, hasRole } = useAuth();
   const { t } = useLanguage();
@@ -580,9 +590,13 @@ export default function SecurityPage() {
                     type="number"
                     min="30"
                     max="3650"
-                    value={localConfig.logging.retentionDays}
+                    value={localConfig.logging.retentionDays ?? ''}
+                    disabled={Boolean(localConfig.governedBy?.['logging.retentionDays'])}
                     onChange={(e) => handleConfigChange('logging.retentionDays', parseInt(e.target.value))}
                   />
+                  <span className="config-help" data-testid="security-retention-governed-help">
+                    {retentionGovernedHelp(t, localConfig.governedBy?.['logging.retentionDays'])}
+                  </span>
                 </div>
               </div>
               
@@ -706,10 +720,14 @@ export default function SecurityPage() {
                   <input title="security-input"
                     type="checkbox"
                     checked={localConfig.privacy.autoPurge}
+                    disabled={Boolean(localConfig.governedBy?.['privacy.autoPurge'])}
                     onChange={(e) => handleConfigChange('privacy.autoPurge', e.target.checked)}
                   />
                   <span>{t('security.privacy.autoPurge')}</span>
                 </label>
+                <span className="config-help">
+                  {retentionGovernedHelp(t, localConfig.governedBy?.['privacy.autoPurge'])}
+                </span>
                 {localConfig.privacy.autoPurge && (
                   <>
                     <div className="config-field">
@@ -718,7 +736,8 @@ export default function SecurityPage() {
                         type="number"
                         min="90"
                         max="3650"
-                        value={localConfig.privacy.purgeAfterDays}
+                        value={localConfig.privacy.purgeAfterDays ?? ''}
+                        disabled={Boolean(localConfig.governedBy?.['privacy.purgeAfterDays'])}
                         onChange={(e) => handleConfigChange('privacy.purgeAfterDays', parseInt(e.target.value))}
                       />
                     </div>

@@ -75,13 +75,14 @@ export interface SecurityConfig {
     level: 'info' | 'warning' | 'error' | 'critical';
     logLoginAttempts: boolean;
     logAllActions: boolean;
-    retentionDays: number;
+    // #1248: derived from the active RetentionPolicy; null when none applies.
+    retentionDays: number | null;
   };
   privacy: {
     anonymizeLogs: boolean;
     dataRetentionDays: number;
     autoPurge: boolean;
-    purgeAfterDays: number;
+    purgeAfterDays: number | null;
     anonymizeAfterDays: number;
   };
   enhancedSecurity: {
@@ -99,6 +100,14 @@ export interface SecurityConfig {
     requireConsent: boolean;
     consentExpirationDays: number;
   };
+  // #1248: the keys the active RetentionPolicy decides, read-only here.
+  governedBy?: Record<string, {
+    entity: string;
+    policyId: string | null;
+    version: string | null;
+    postRetentionAction?: string;
+    unavailable?: boolean;
+  }>;
   // #953: flat, per dict-02 P1X-0321/0322/0323.
   configVersion?: number;
   lastUpdatedAt?: Date | string;

@@ -1213,6 +1213,69 @@ test.describe('Security policy management (RF014) — real backend', () => {
     }
   });
 
+  // #1248: logging.retentionDays, privacy.autoPurge and privacy.purgeAfterDays
+  // restated the active RetentionPolicy and were followed by nothing. They are
+  // derived from it now, a write to them is dropped, and the Security page
+  // shows them read-only. The spec reads whichever policy the stack has active
+  // (other specs create them), so it asserts the derivation, not one value.
+  test('#1248: the retention keys follow the active RetentionPolicy, ignore writes, and render read-only (criterion 2)', async ({
+    page,
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+
+    const activeRes = await request.get(`${apiBaseURL}/api/retention-policies/active`, { headers: auth });
+    const active = activeRes.ok() ? (await activeRes.json()).data : null;
+    const covers = Boolean(active && (active.applicableEntityTypes || []).some((type: string) => type === 'Log' || type === 'AuditEvent'));
+    const dayMatch = covers ? /^P(\d+)D$/.exec(active.retentionPeriod) : null;
+
+    const read = async () => {
+      const res = await request.get(`${apiBaseURL}/api/security/config`, { headers: auth });
+      expect(res.ok()).toBeTruthy();
+      return (await res.json()).data;
+    };
+    const before = await read();
+
+    for (const path of ['logging.retentionDays', 'privacy.autoPurge', 'privacy.purgeAfterDays']) {
+      expect(before.governedBy?.[path]?.entity, path).toBe('RetentionPolicy');
+      expect(before.governedBy?.[path]?.policyId ?? null).toBe(covers ? String(active._id) : null);
+    }
+    if (!covers) {
+      expect(before.privacy.autoPurge).toBe(false);
+      expect(before.logging.retentionDays).toBeNull();
+    } else {
+      expect(before.privacy.autoPurge).toBe(['destroy', 'archive'].includes(active.postRetentionAction));
+      if (dayMatch) expect(before.logging.retentionDays).toBe(Number(dayMatch[1]));
+      expect(before.privacy.purgeAfterDays).toBe(active.postRetentionAction === 'destroy' ? before.logging.retentionDays : null);
+    }
+
+    // A write to the governed keys is dropped; the response and a fresh read
+    // still carry the policy's values.
+    const put = await request.put(`${apiBaseURL}/api/security/config`, {
+      headers: auth,
+      data: {
+        logging: { retentionDays: 31 },
+        privacy: { autoPurge: !before.privacy.autoPurge, purgeAfterDays: 91 },
+      },
+    });
+    expect(put.ok(), await put.text()).toBeTruthy();
+    const after = await read();
+    expect(after.logging.retentionDays).toBe(before.logging.retentionDays);
+    expect(after.privacy.autoPurge).toBe(before.privacy.autoPurge);
+    expect(after.privacy.purgeAfterDays).toBe(before.privacy.purgeAfterDays);
+
+    // The page renders the key read-only, with the line naming its source.
+    await seedRealAuth(page, admin);
+    await page.goto('/system-management?tab=security');
+    await page.getByTestId('security-nav-logging').click();
+    const help = page.getByTestId('security-retention-governed-help');
+    await expect(help).toBeVisible();
+    await expect(help).not.toBeEmpty();
+    if (covers && active.version) await expect(help).toContainText(String(active.version));
+    await expect(page.locator('.config-field').filter({ has: help }).locator('input')).toBeDisabled();
+  });
+
   // #1247: the enhancedSecurity group is read only while its enabled switch is
   // on. Under the mode an unenrolled Administrador is sent to MFA enrolment,
   // the mode's session timeout replaces the ordinary one, and the strict

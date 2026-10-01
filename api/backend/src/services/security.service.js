@@ -44,6 +44,77 @@ const SERVER_OWNED_KEYS = ['configVersion', 'lastUpdatedAt', 'lastUpdatedBy'];
 // severity would mean a future logging tweak starts or stops logging people out.
 const SESSION_INVALIDATING_PATHS = ['session.timeoutMinutes', 'session.maxSessionDurationHours'];
 
+// #1248: three keys of the logging and privacy groups restate what the active
+// RetentionPolicy (retentionPolicy.service, #440) already decides, and
+// retentionSweep.service applies it nightly to `logs` and `audit_events`.
+// dict-02 keeps them as SecurityConfiguration fields (P1X-0304 says
+// logging.retentionDays "deve alinhar-se a RetentionPolicy"), so they stay in
+// the document, but they are derived from the policy rather than edited:
+//  - logging.retentionDays: the policy's retentionPeriod, in days.
+//  - privacy.autoPurge: whether the sweep removes anything from the live
+//    collections, which it does for 'destroy' and 'archive' (#1259).
+//  - privacy.purgeAfterDays: the same period, while the action is 'destroy'.
+// With no active policy covering Log or AuditEvent, nothing is purged:
+// autoPurge is false and the two periods are null. A second retention
+// authority is what #1248 rules out, so a write to these paths is dropped.
+const RETENTION_GOVERNED_PATHS = ['logging.retentionDays', 'privacy.autoPurge', 'privacy.purgeAfterDays'];
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+async function resolveRetentionGoverned(db) {
+  const retentionPolicyService = require('./retentionPolicy.service');
+  const { iso8601DurationToMs } = require('../utils/iso8601Duration');
+  const unset = { 'logging.retentionDays': null, 'privacy.autoPurge': false, 'privacy.purgeAfterDays': null };
+  try {
+    const policy = await retentionPolicyService.getActivePolicy(db);
+    const covered = policy && Array.isArray(policy.applicableEntityTypes)
+      && policy.applicableEntityTypes.some((type) => type === 'Log' || type === 'AuditEvent');
+    if (!covered) return { source: { entity: 'RetentionPolicy', policyId: null, version: null }, values: unset };
+    const days = Math.round(iso8601DurationToMs(policy.retentionPeriod) / DAY_MS);
+    return {
+      source: {
+        entity: 'RetentionPolicy',
+        policyId: String(policy._id),
+        version: policy.version || null,
+        postRetentionAction: policy.postRetentionAction,
+      },
+      values: {
+        'logging.retentionDays': days,
+        'privacy.autoPurge': ['destroy', 'archive'].includes(policy.postRetentionAction),
+        'privacy.purgeAfterDays': policy.postRetentionAction === 'destroy' ? days : null,
+      },
+    };
+  } catch (error) {
+    // The paths stay governed (read-only); only their values are unknown.
+    logger.warn(`#1248: política de retenção ilegível: ${error.message}`);
+    return { source: { entity: 'RetentionPolicy', policyId: null, version: null, unavailable: true }, values: null };
+  }
+}
+
+function applyRetentionGoverned(config, governed) {
+  const out = { ...config, governedBy: {} };
+  for (const path of RETENTION_GOVERNED_PATHS) {
+    const [group, key] = path.split('.');
+    out.governedBy[path] = governed.source;
+    if (governed.values) {
+      out[group] = { ...(out[group] || {}), [key]: governed.values[path] };
+    }
+  }
+  return out;
+}
+
+function withoutRetentionGoverned(config) {
+  const out = { ...config };
+  for (const path of RETENTION_GOVERNED_PATHS) {
+    const [group, key] = path.split('.');
+    if (out[group] && Object.prototype.hasOwnProperty.call(out[group], key)) {
+      const { [key]: _dropped, ...rest } = out[group];
+      out[group] = rest;
+    }
+  }
+  delete out.governedBy;
+  return out;
+}
+
 function requiresSessionRevocation(changes) {
   return changes.some((change) => {
     if (!SESSION_INVALIDATING_PATHS.includes(change.path)) return false;
@@ -163,12 +234,13 @@ class SecurityService {
           createdAt: new Date(),
           updatedAt: new Date()
         });
-        return defaultConfig;
+        return applyRetentionGoverned(defaultConfig, await resolveRetentionGoverned(db));
       }
 
       // Remove _id e campos internos antes de retornar
       const { _id, createdAt, ...configData } = config;
-      return configData;
+      // #1248: the retention keys come from the active RetentionPolicy.
+      return applyRetentionGoverned(configData, await resolveRetentionGoverned(db));
     } catch (error) {
       logger.error('Erro ao buscar configurações de segurança:', error.message);
       throw error;
@@ -182,6 +254,12 @@ class SecurityService {
     try {
       const configCollection = db.collection('security_config');
       
+      // #1248: the retention keys are not this document's to set. Dropped
+      // before change detection, so no audit row claims a change that
+      // never applies; currentConfig loses governedBy for the same reason.
+      newConfig = withoutRetentionGoverned(newConfig || {});
+      currentConfig = withoutRetentionGoverned(currentConfig || {});
+
       // Detecta mudanças para auditoria
       const changes = this.detectChanges(currentConfig, newConfig);
       
@@ -227,6 +305,17 @@ class SecurityService {
       // in newConfig is still ignored, exactly as the `...currentConfig.metadata`
       // spread used to guarantee. The protection survives the flattening, but for
       // a different reason, which is why it is stated here.
+      // #1248: the stored copy of the retention keys follows the policy on
+      // every save, the way #1249's loginAttempts pair follows the enforced
+      // one, so the document never disagrees with what the sweep does.
+      const governed = await resolveRetentionGoverned(db);
+      if (governed.values) {
+        for (const path of RETENTION_GOVERNED_PATHS) {
+          const [group, key] = path.split('.');
+          if (mergedConfig[group]) mergedConfig[group][key] = governed.values[path];
+        }
+      }
+
       mergedConfig.configVersion = (currentConfig.configVersion || 1) + 1;
       mergedConfig.lastUpdatedAt = new Date();
       mergedConfig.lastUpdatedBy = req.user?.userID || 'SYSTEM';
@@ -289,7 +378,7 @@ class SecurityService {
         }
       }
 
-      return mergedConfig;
+      return applyRetentionGoverned(mergedConfig, governed);
     } catch (error) {
       logger.error('Erro ao atualizar configurações de segurança:', error.message);
       throw error;
@@ -545,4 +634,5 @@ class SecurityService {
 }
 
 module.exports = new SecurityService();
+module.exports.RETENTION_GOVERNED_PATHS = RETENTION_GOVERNED_PATHS;
 
