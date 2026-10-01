@@ -370,6 +370,17 @@ class SecurityService {
       }
     }
 
+    // #1255: ipAttempt.service reads this now. 0 tracks without blocking
+    // (dict-02 P1X-0300 is 0..1 Condicional); a fraction or a negative would
+    // be silently read as 0, so it is refused here instead.
+    if (config.loginAttempts) {
+      const blockAfter = config.loginAttempts.blockIPAfterAttempts;
+      if (blockAfter !== undefined && blockAfter !== null
+        && !(Number.isInteger(blockAfter) && blockAfter >= 0 && blockAfter <= 100)) {
+        errors.push('blockIPAfterAttempts deve ser um inteiro entre 0 e 100');
+      }
+    }
+
     // Validações de senha
     if (config.passwordRules) {
       // #1253: 8 is NIST SP 800-63B §5.1.1.2's floor (see password.service).

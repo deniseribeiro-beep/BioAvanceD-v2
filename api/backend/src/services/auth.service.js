@@ -13,6 +13,7 @@ const { encryptValue, decryptValue, assertFieldEncryptionConfigured } = require(
 const passwordService = require('./password.service');
 const { grantRoleForAccessType, assertGrantPreconditions, isAdministrator, isAuditReader, resolveRoleDisplayName, resolveUserHierarchyLevel, ROLE_CODE_BY_ACCESS_TYPE } = require('./rbac-assignment.service');
 const notificationDispatchService = require('./notificationDispatch.service');
+const ipAttemptService = require('./ipAttempt.service');
 
 /**
  * #1072: the ONE place that turns a stored MFA envelope back into a TOTP seed.
@@ -473,6 +474,15 @@ class AuthService {
         throw new Error(translate('auth.emailAndPasswordRequired', lang));
       }
 
+      // #1255: the source-address gate, before the lookup so it covers an
+      // unknown identifier too, and before any compare for #952's reason.
+      // The generic message, like the account lockout's: a distinct "address
+      // blocked" answer would say the block exists, and every caller from the
+      // address gets the same one, so it names no account.
+      if (await ipAttemptService.isSourceBlocked(db, req)) {
+        throw new Error('Credenciais inválidas');
+      }
+
       // Remove espaços do termo de busca
       const searchTerm = email.trim();
       // #1052: the raw caller-supplied identifier is NOT echoed here. The
@@ -516,6 +526,10 @@ class AuthService {
         // anonymous caller could force, which sat INSIDE the window #1036's
         // equalizer below exists to keep constant.
         logger.warn('Tentativa de login falhou: identificador não encontrado');
+        // #1255: an unknown name counts against the source. It is what a
+        // credential-stuffing list is full of, and #1256's detector counts
+        // the distinct names one source tries.
+        await ipAttemptService.recordFailedSourceAttempt(db, req, `name:${searchTerm}`);
         // #1036: the same residual on the highest-traffic endpoint. A user
         // that exists reaches processLogin's real compare; one that does not
         // returned from here without one.
@@ -607,6 +621,8 @@ class AuthService {
         // #986: extracted to recordFailedPasswordAttempt() so the two
         // first-login endpoints count identically. Behaviour here is unchanged.
         await recordFailedPasswordAttempt(db, usersCollection, user);
+        // #1255: and against the source address.
+        await ipAttemptService.recordFailedSourceAttempt(db, req, `id:${user._id}`);
 
         throw new Error('Credenciais inválidas');
       }
@@ -730,6 +746,8 @@ class AuthService {
             { _id: user._id },
             { $set: { mfaFailedAttempts: failedAttempts } }
           );
+          // #1255: a wrong code counts against the source as well.
+          await ipAttemptService.recordFailedSourceAttempt(db, req, `id:${user._id}`);
 
           if (failedAttempts >= 5) {
             await usersCollection.updateOne(
@@ -872,7 +890,7 @@ class AuthService {
   /**
    * Configura MFA para primeiro login (sem autenticação)
    */
-  async setupMFAFirstLogin(db, credentials) {
+  async setupMFAFirstLogin(db, credentials, req) {
     try {
       const { username, password } = credentials;
 
@@ -889,6 +907,11 @@ class AuthService {
       }
       const usernameTerm = username.trim();
 
+      // #1255: the source-address gate, as in login().
+      if (await ipAttemptService.isSourceBlocked(db, req)) {
+        throw new Error('Credenciais inválidas');
+      }
+
       const usersCollection = db.collection('users');
       const user = await usersCollection.findOne({
         $or: [
@@ -898,6 +921,8 @@ class AuthService {
       });
 
       if (!user) {
+        // #1255: an unknown name counts against the source, as in login().
+        await ipAttemptService.recordFailedSourceAttempt(db, req, `name:${usernameTerm}`);
         // #1036: equalize with the enrolled/not-enrolled branches below.
         await burnPasswordComparison(password);
         throw new Error('Credenciais inválidas');
@@ -956,6 +981,7 @@ class AuthService {
         // attacker who knows a username could guess passwords here forever
         // without ever incrementing failedLoginAttempts.
         await recordFailedPasswordAttempt(db, usersCollection, user);
+        await ipAttemptService.recordFailedSourceAttempt(db, req, `id:${user._id}`);
         throw new Error('Credenciais inválidas');
       }
 
@@ -1038,6 +1064,11 @@ class AuthService {
       }
       const usernameTerm = username.trim();
 
+      // #1255: the source-address gate, as in login().
+      if (await ipAttemptService.isSourceBlocked(db, req)) {
+        throw new Error('Credenciais inválidas');
+      }
+
       if (!mfaCode) {
         throw new Error('Código MFA é obrigatório');
       }
@@ -1053,6 +1084,8 @@ class AuthService {
       });
 
       if (!user) {
+        // #1255: an unknown name counts against the source, as in login().
+        await ipAttemptService.recordFailedSourceAttempt(db, req, `name:${usernameTerm}`);
         // #1036: equalize with the enrolled/not-enrolled branches below.
         await burnPasswordComparison(password);
         throw new Error('Credenciais inválidas');
@@ -1097,6 +1130,7 @@ class AuthService {
       const passwordMatch = await bcrypt.compare(password, user.password);
       if (!passwordMatch) {
         await recordFailedPasswordAttempt(db, usersCollection, user);
+        await ipAttemptService.recordFailedSourceAttempt(db, req, `id:${user._id}`);
         throw new Error('Credenciais inválidas');
       }
 
@@ -1114,6 +1148,8 @@ class AuthService {
       });
 
       if (!verified) {
+        // #1255: a wrong enrolment code counts against the source.
+        await ipAttemptService.recordFailedSourceAttempt(db, req, `id:${user._id}`);
         throw new Error('Código MFA inválido');
       }
 

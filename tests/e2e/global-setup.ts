@@ -3,6 +3,26 @@ import type { FullConfig } from '@playwright/test';
 import { readFileSync } from 'fs';
 import { resolve as resolvePath } from 'path';
 import { mockLogin } from './helpers/mockAuth';
+import { clearLoginAttempts, closeLoginAttemptsDb } from './helpers/queryLoginAttempts';
+
+// #1255: every spec reaches the backend from one source address
+// (TRUST_PROXY=0), and failed logins count against it for 30 minutes. A run
+// started inside that window would inherit the last run's failures and could
+// block itself, so each run starts from an empty store. Only where
+// E2E_MONGO_URI names the stack's Mongo (the in-container runner); a mocked
+// run has no backend to clear. Best-effort: a missed clear leaves the
+// specs' own per-test clears (helpers/queryLoginAttempts.ts) in place.
+async function clearSourceAttemptStore(): Promise<void> {
+  if (!process.env.E2E_MONGO_URI) return;
+  try {
+    const removed = await clearLoginAttempts();
+    if (removed > 0) console.log(`[global-setup] #1255: cleared ${removed} login_ip_attempts row(s)`);
+  } catch (error) {
+    console.warn(`[global-setup] #1255: could not clear login_ip_attempts: ${(error as Error).message}`);
+  } finally {
+    await closeLoginAttemptsDb().catch(() => {});
+  }
+}
 
 // #819/#894/#930: Playwright global setup -- optionally warms every
 // lazy-loaded route once, before any spec runs.
@@ -134,6 +154,8 @@ function warnIfWarmListDrifted(): void {
 }
 
 export default async function globalSetup(_config: FullConfig): Promise<void> {
+  await clearSourceAttemptStore();
+
   // Opt-in (#930): the warm-up only runs when explicitly requested. Return
   // before the drift check too, so a Docker/CI run that never opts in does
   // not pay for (or get warned about) a list it is not using.

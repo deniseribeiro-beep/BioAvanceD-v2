@@ -1610,6 +1610,7 @@
     },
     "enhanced": {
       "blockUnusualActivity": "Block unusual activity",
+      "blockUnusualActivityHelp": "Blocks a source address that fails logins against as many different accounts as the maximum login attempts, within the lockout duration. Needs IP tracking on.",
       "enable": "Enable enhanced security mode",
       "logAllActions": "Log all actions",
       "requireMFAForAll": "Require MFA for all users",

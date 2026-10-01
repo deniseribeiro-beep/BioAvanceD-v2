@@ -1610,6 +1610,7 @@
     },
     "enhanced": {
       "blockUnusualActivity": "Bloquear atividade incomum",
+      "blockUnusualActivityHelp": "Bloqueia um endereço de origem que falha logins contra tantas contas diferentes quanto o máximo de tentativas de login, dentro da duração do bloqueio. Requer o rastreamento por IP ativado.",
       "enable": "Ativar modo de segurança reforçado",
       "logAllActions": "Registrar todas as ações",
       "requireMFAForAll": "Exigir MFA para todos os usuários",

@@ -326,26 +326,6 @@ export default function SecurityPage() {
                   />
                   <span className="config-help">{t('security.authentication.lockoutDurationHelp')}</span>
                 </div>
-                <label className="config-switch">
-                  <input title="security-input"
-                    type="checkbox"
-                    checked={localConfig.loginAttempts.trackIP}
-                    onChange={(e) => handleConfigChange('loginAttempts.trackIP', e.target.checked)}
-                  />
-                  <span>{t('security.login.trackIP')}</span>
-                </label>
-                {localConfig.loginAttempts.trackIP && (
-                  <div className="config-field">
-                    <label>{t('security.login.blockIPAfterAttempts')}</label>
-                    <input title="security-input"
-                      type="number"
-                      min="5"
-                      max="100"
-                      value={localConfig.loginAttempts.blockIPAfterAttempts}
-                      onChange={(e) => handleConfigChange('loginAttempts.blockIPAfterAttempts', parseInt(e.target.value))}
-                    />
-                  </div>
-                )}
               </div>
               <div className="config-actions">
                 <Button data-testid="security-save-config-button" onClick={handleSaveConfig} disabled={saving}>
@@ -544,7 +524,7 @@ export default function SecurityPage() {
                     <label>{t('security.login.blockIPAfterAttempts')}</label>
                     <input title="security-input"
                       type="number"
-                      min="5"
+                      min="0"
                       max="100"
                       value={localConfig.loginAttempts.blockIPAfterAttempts}
                       onChange={(e) => handleConfigChange('loginAttempts.blockIPAfterAttempts', parseInt(e.target.value))}
@@ -821,6 +801,7 @@ export default function SecurityPage() {
                       />
                       <span>{t('security.enhanced.blockUnusualActivity')}</span>
                     </label>
+                    <span className="config-help">{t('security.enhanced.blockUnusualActivityHelp')}</span>
                   </>
                 )}
               </div>

@@ -439,7 +439,7 @@ class AuthController {
         });
       }
 
-      const result = await authService.setupMFAFirstLogin(db, { username, password });
+      const result = await authService.setupMFAFirstLogin(db, { username, password }, req);
 
       logger.info('QR Code gerado com sucesso para primeiro login:', { username });
 

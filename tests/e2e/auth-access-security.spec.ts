@@ -3,6 +3,7 @@ import { realLogin, realAuthLogin, seedRealAuth } from './helpers/realAuth';
 import { watchAuditTrail, assertAuditEventRecorded } from './helpers/assertAuditEvent';
 import { completeFirstLoginMfa } from './helpers/completeFirstLoginMfa';
 import { computeTotp } from './helpers/totp';
+import { listLoginAttemptRows, listLoginAttemptIndexes, clearLoginAttempts, closeLoginAttemptsDb } from './helpers/queryLoginAttempts';
 import { findLatestSession, closeSessionsDb, listSessionIndexNames, setPasswordChangedAt } from './helpers/querySessions';
 
 // Real backend + real frontend only — see backend-integration.spec.ts for the
@@ -1168,6 +1169,47 @@ test.describe('Security policy management (RF014) — real backend', () => {
           session: { autoRenewal: original.session.autoRenewal },
         },
       }).catch(() => {});
+    }
+  });
+
+  // #1255: loginAttempts.trackIP and blockIPAfterAttempts were shown and read
+  // by nothing. A failed login now counts against its source address in
+  // login_ip_attempts, keyed by an HMAC of the address. The block itself is
+  // pinned by unit tests and a real-Mongo probe: the test stack has one
+  // source address (TRUST_PROXY=0), so blocking it here would block every
+  // spec that runs after this one.
+  test('#1255: a failed login is counted against its source, stored as a keyed hash with an expiry (criterion 2)', async ({
+    request,
+  }) => {
+    try {
+      const before = new Map((await listLoginAttemptRows()).map((row) => [row._id, row.failures]));
+      const probeName = `ip-probe-${Date.now()}@example.com`;
+      const failed = await request.post(`${apiBaseURL}/api/auth/login`, {
+        data: { username: probeName, password: 'Not@TheRight1255' },
+      });
+      expect(failed.status()).toBe(401);
+
+      const after = await listLoginAttemptRows();
+      const counted = after.filter((row) => row.failures > (before.get(row._id) ?? 0));
+      expect(counted, 'exactly one source row counted the failure').toHaveLength(1);
+      const [row] = counted;
+
+      expect(row._id).toMatch(/^[0-9a-f]{64}$/);
+      for (const account of row.accounts) expect(account).toMatch(/^[0-9a-f]{64}$/);
+      const stored = JSON.stringify(after);
+      expect(stored, 'no IPv4 address is stored').not.toMatch(/\b\d{1,3}(\.\d{1,3}){3}\b/);
+      expect(stored).not.toContain('ip-probe-');
+      expect(row.blockedUntil ?? null).toBeNull();
+
+      const msLeft = new Date(row.expiresAt).getTime() - Date.now();
+      expect(msLeft).toBeGreaterThan(25 * 60 * 1000);
+      expect(msLeft).toBeLessThanOrEqual(30 * 60 * 1000 + 5_000);
+      const ttl = (await listLoginAttemptIndexes()).find((index) => index.name === 'login_ip_attempts_ttl');
+      expect(ttl?.expireAfterSeconds).toBe(0);
+    } finally {
+      // The runner's row is shared by every spec; give the failure back.
+      await clearLoginAttempts();
+      await closeLoginAttemptsDb();
     }
   });
 

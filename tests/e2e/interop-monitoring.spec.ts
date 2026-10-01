@@ -13,6 +13,7 @@ import {
 import { queryTemperaturePoints } from './helpers/queryInflux';
 import { realLogin } from './helpers/realAuth';
 import { computeTotp } from './helpers/totp';
+import { clearLoginAttempts, closeLoginAttemptsDb } from './helpers/queryLoginAttempts';
 import { createRealParticipant, closeSeedDb as closeSeedParticipantDb } from './helpers/seedParticipant';
 import { seedSampleNode, readSampleStatus, removeSampleNodes, closeNeo4jDriver } from './helpers/queryNeo4j';
 import {
@@ -1049,6 +1050,12 @@ test.describe('Alertas e notificações (RF015) — real backend', () => {
       lastLoginBody = await loginRes.json();
     }
     expect(lastLoginBody.message).toContain('MFA bloqueado');
+
+    // #1255: these five deliberate failures also count against the runner's
+    // source address, which every spec shares (TRUST_PROXY=0). Clear them so
+    // they do not spend the suite's blockIPAfterAttempts budget.
+    await clearLoginAttempts();
+    await closeLoginAttemptsDb();
 
     const findNotification = async () => {
       const res = await request.get(

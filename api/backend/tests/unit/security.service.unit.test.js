@@ -124,6 +124,16 @@ describe('SecurityService.validateConfig', () => {
     }
   });
 
+  // #1255: ipAttempt.service reads blockIPAfterAttempts; 0 tracks without blocking.
+  it('accepts blockIPAfterAttempts 0..100 as an integer and refuses anything else', () => {
+    for (const ok of [0, 1, 10, 100]) {
+      expect(() => securityService.validateConfig({ loginAttempts: { blockIPAfterAttempts: ok } })).not.toThrow();
+    }
+    for (const bad of [-1, 101, 2.5, '10']) {
+      expect(() => securityService.validateConfig({ loginAttempts: { blockIPAfterAttempts: bad } })).toThrow('inválidas');
+    }
+  });
+
   // #1253: NIST SP 800-63B §5.1.1.2 floor.
   it('throws for a passwordRules.minLength below 8, and accepts 8', () => {
     expect(() => securityService.validateConfig({ passwordRules: { minLength: 7 } })).toThrow('inválidas');
