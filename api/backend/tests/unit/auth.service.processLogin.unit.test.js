@@ -617,6 +617,24 @@ describe('AuthService.enableMFAFirstLogin', () => {
     const result = await authService.enableMFAFirstLogin(db, { username: 'user1', password: 'pw' }, '123456', {});
     expect(result.user.accessType).toBe(3);
   });
+
+  // #1250 (RF014 AC#4): processLogin sends a first-login non-admin here before
+  // its forceReset branch, so this path issued a session on an
+  // administrator-set password. The enrolment stands; the session does not.
+  it('#1250: with forceReset set, enrols MFA but issues no session and asks for the password change', async () => {
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+    vi.spyOn(speakeasy.totp, 'verify').mockReturnValue(true);
+    const issue = vi.spyOn(authService, 'issueSessionTokens');
+    const usersMock = createMatchingCollection([{ ...BASE_USER, forceReset: true, mfaSecretCiphertext: encryptValue('SECRET') }]);
+    const db = makeDb(usersMock);
+
+    const result = await authService.enableMFAFirstLogin(db, { username: 'user1', password: 'pw' }, '123456', {});
+
+    expect(result).toEqual({ requiresPasswordChange: true, message: expect.any(String) });
+    expect(issue).not.toHaveBeenCalled();
+    const enrolment = usersMock.updateOne.mock.calls.find(([, update]) => update.$set && update.$set.mfaEnabled === true);
+    expect(enrolment).toBeTruthy();
+  });
 });
 
 describe('AuthService.setupMFA', () => {
@@ -1293,6 +1311,8 @@ describe('AuthService.resetPassword', () => {
     const update = usersApi.updateOne.mock.calls[0][1];
     expect(update.$set.passwordHistory).toEqual([HASHED, 'h1']);
     expect(update.$set.lastPasswordChange).toBeInstanceOf(Date);
+    // #1250: the owner replaced it, which is what a forced reset asks for.
+    expect(update.$set.forceReset).toBe(false);
   });
 
   it('#1244: preventReuse false lets the reset reuse the current password', async () => {

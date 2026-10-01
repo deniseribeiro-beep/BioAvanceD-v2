@@ -27,6 +27,7 @@
     "loginError": "Erro ao fazer login. Verifique suas credenciais.",
     "loginSuccess": "Login realizado com sucesso",
     "logout": "Sair",
+    "mfaEnrolledPasswordChange": "MFA configurado. Entre novamente com o código do autenticador para definir uma nova senha.",
     "mfaLockedContactAdmin": "Sua autenticação de dois fatores está bloqueada após muitas tentativas falhas. Entre em contato com um administrador para desbloqueá-la.",
     "mfaRequired": "Código de autenticação necessário",
     "mfaSetupRequired": "Configuração de MFA obrigatória no primeiro acesso",

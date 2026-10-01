@@ -289,6 +289,8 @@ describe('UserSecurityService DB-backed methods', () => {
       const [, update] = users.updateOne.mock.calls[0];
       expect(update.$set.passwordHistory).toEqual([currentHash]);
       expect(await bcrypt.compare('NewPassw0rd!123', update.$set.password)).toBe(true);
+      // #1250: the owner's own change satisfies a forced reset.
+      expect(update.$set.forceReset).toBe(false);
       // #995: this route is the fifth site verifying a user-supplied password.
       // It wrote neither lockout field, so it could only ever count up. A
       // successful change clears the counter AND the lock, the same pairing

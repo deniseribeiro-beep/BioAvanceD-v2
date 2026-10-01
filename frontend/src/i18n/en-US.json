@@ -27,6 +27,7 @@
     "loginError": "Login error. Please check your credentials.",
     "loginSuccess": "Login successful",
     "logout": "Logout",
+    "mfaEnrolledPasswordChange": "MFA is set up. Sign in again with your authenticator code to set a new password.",
     "mfaLockedContactAdmin": "Your two-factor authentication is locked after too many failed attempts. Contact an administrator to unlock it.",
     "mfaRequired": "Authentication code required",
     "mfaSetupRequired": "MFA setup required on first access",

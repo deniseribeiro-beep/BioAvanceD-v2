@@ -1111,8 +1111,6 @@ class AuthService {
         }
       );
 
-      const tokenBundle = await this.issueSessionTokens(db, user, req);
-
       // Registra log (anonimizado via auditLogger)
       const auditLogger = require('../utils/auditLogger');
       auditLogger.init(db);
@@ -1125,6 +1123,21 @@ class AuthService {
         req: req,
         module: 'Autenticação'
       });
+
+      // #1250 (RF014 AC#4): processLogin sends a first-login non-admin here
+      // BEFORE it reaches its forceReset branch, so this path used to issue a
+      // full session on a password an administrator had just set or forced.
+      // The enrolment stands -- it is the user's own second factor -- but no
+      // token is issued: the next login, now with MFA, reaches processLogin's
+      // forceReset branch and its password change.
+      if (user.forceReset) {
+        return {
+          requiresPasswordChange: true,
+          message: 'Alteração de senha obrigatória antes de continuar'
+        };
+      }
+
+      const tokenBundle = await this.issueSessionTokens(db, user, req);
 
       return {
         success: true,
@@ -1506,6 +1519,9 @@ class AuthService {
             password: hashedPassword,
             passwordHistory: passwordService.nextPasswordHistory(user, reusePolicy),
             lastPasswordChange: new Date(),
+            // #1250: the owner just replaced the password through their own
+            // mailbox, which is what a forced reset asks for.
+            forceReset: false,
             ...clearedLockoutFields(),
             updatedAt: new Date()
           },

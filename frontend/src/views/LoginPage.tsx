@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, useLocation, Link } from 'react-router-dom';
 import Card from '../components/UI/Card';
 import Button from '../components/UI/Button';
 import Input from '../components/UI/Input';
@@ -15,7 +15,11 @@ import { VALIDATION_PATTERNS } from '../config/constants/validation.constants';
 import './LoginPage.css';
 
 export default function LoginPage() {
-  const [username, setUsername] = useState('');
+  // #1250: MFASetupPage returns here after a first-login enrolment whose
+  // password an administrator set; the next login asks for the new one.
+  const location = useLocation();
+  const loginState = (location.state || {}) as { username?: string; notice?: string };
+  const [username, setUsername] = useState(loginState.username || '');
   const [password, setPassword] = useState('');
   const [twoFactorCode, setTwoFactorCode] = useState('');
   const [requiresTwoFactor, setRequiresTwoFactor] = useState(false);
@@ -136,6 +140,11 @@ export default function LoginPage() {
             {error && (
               <div className="error-message" data-testid="login-error">
                 {error}
+              </div>
+            )}
+            {!error && loginState.notice === 'mfaEnrolledPasswordChange' && (
+              <div role="status" data-testid="login-notice" style={{ marginBottom: '1rem' }}>
+                {t('auth.mfaEnrolledPasswordChange')}
               </div>
             )}
 

@@ -27,6 +27,7 @@
     "loginError": "Error al iniciar sesión. Verifica tus credenciales.",
     "loginSuccess": "Inicio de sesión exitoso",
     "logout": "Cerrar sesión",
+    "mfaEnrolledPasswordChange": "MFA configurado. Inicie sesión de nuevo con el código del autenticador para definir una nueva contraseña.",
     "mfaLockedContactAdmin": "Tu autenticación de dos factores está bloqueada tras demasiados intentos fallidos. Contacta a un administrador para desbloquearla.",
     "mfaRequired": "Se requiere código de autenticación",
     "mfaSetupRequired": "Configuración de MFA obligatoria en el primer acceso",

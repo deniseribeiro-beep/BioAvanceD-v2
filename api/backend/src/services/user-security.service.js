@@ -489,6 +489,9 @@ class UserSecurityService {
             password: newPasswordHash,
             passwordHistory: newPasswordHistory,
             passwordChangedAt: new Date(),
+            // #1250: the owner replaced it, which is what forceReset asks
+            // for; auth.controller's changePassword clears it the same way.
+            forceReset: false,
             // #995: a successful change clears the counter AND the lock, the
             // same pairing processLogin's success path uses. This site cleared
             // neither, so it could only ever count up.

@@ -1217,4 +1217,61 @@ test.describe('Administrator password set (RF003 criteria 2 and 5, #1013) — re
     expect(reuse.status()).toBe(422);
     expect((await reuse.json()).message).toContain('Senha já utilizada recentemente');
   });
+
+  // #1250: a never-logged-in non-admin is sent to MFA enrolment before
+  // processLogin reaches its forceReset branch, and enable-first-login issued
+  // a full session on the administrator-set password. Now the enrolment
+  // completes, no session is issued, and the next login forces the change.
+  test('#1250: a first-login MFA enrolment on an administrator-set password issues no session until the password is replaced', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const username = `tecnico.1250.${Date.now()}`;
+    const register = await request.post(`${apiBaseURL}/api/users/register`, {
+      headers: auth,
+      data: { name: '#1250 first-login Fixture', email: `${username}@example.com`, username, password: 'Initial@1250pass', accessType: 2, roleName: 'Técnico' },
+    });
+    expect(register.ok(), await register.text()).toBeTruthy();
+    const userID = (await register.json()).data?._id;
+    expect(userID).toBeTruthy();
+
+    const adminSet = 'AdminSet@1250pass';
+    const set = await request.post(`${apiBaseURL}/api/users/${userID}/set-password`, { headers: auth, data: { password: adminSet } });
+    expect(set.status(), await set.text()).toBe(200);
+
+    // The first login goes to enrolment (requireMFA is the canonical default).
+    const first = await request.post(`${apiBaseURL}/api/auth/login`, { data: { username, password: adminSet } });
+    expect(first.ok(), await first.text()).toBeTruthy();
+    expect((await first.json()).requiresMFASetup).toBe(true);
+
+    const qr = await request.post(`${apiBaseURL}/api/auth/two-factor/qr-first-login`, { data: { username, password: adminSet } });
+    expect(qr.ok(), await qr.text()).toBeTruthy();
+    const secret = (await qr.json()).data?.secret;
+    expect(secret).toBeTruthy();
+
+    const enable = await request.post(`${apiBaseURL}/api/auth/two-factor/enable-first-login`, {
+      data: { username, password: adminSet, code: computeTotp(secret) },
+    });
+    expect(enable.ok(), await enable.text()).toBeTruthy();
+    const enableBody = await enable.json();
+    expect(enableBody.data?.requiresPasswordChange).toBe(true);
+    expect(enableBody.data?.token).toBeFalsy();
+    expect(enable.headers()['set-cookie'] || '').not.toContain('refresh_token=');
+
+    // The enrolment stands: the next login asks for the code, then for the change.
+    const withCode = await request.post(`${apiBaseURL}/api/auth/login`, {
+      data: { username, password: adminSet, mfaCode: computeTotp(secret) },
+    });
+    expect(withCode.ok(), await withCode.text()).toBeTruthy();
+    const withCodeBody = await withCode.json();
+    expect(withCodeBody.requiresPasswordChange).toBe(true);
+    expect(withCodeBody.data?.token).toBeFalsy();
+
+    const changed = await request.post(`${apiBaseURL}/api/auth/login`, {
+      data: { username, password: adminSet, mfaCode: computeTotp(secret), newPassword: 'Owner@1250chosen' },
+    });
+    expect(changed.ok(), await changed.text()).toBeTruthy();
+    expect((await changed.json()).data?.token).toBeTruthy();
+  });
 });
