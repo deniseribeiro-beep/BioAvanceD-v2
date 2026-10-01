@@ -26,11 +26,31 @@ const { iso8601DurationToMs } = require('../utils/iso8601Duration');
 const AUDIT_EVENTS_COLLECTION = 'audit_events';
 const AUDIT_EVENTS_ARCHIVE_COLLECTION = 'audit_events_archive';
 const LOGS_COLLECTION = 'logs';
+const LOGS_ARCHIVE_COLLECTION = 'logs_archive';
 
 class RetentionSweepService {
-  async sweepLogs(db, cutoff) {
-    const result = await db.collection(LOGS_COLLECTION).deleteMany({ createdAt: { $lt: cutoff } });
-    return { deleted: result.deletedCount || 0 };
+  // #1259: this deleted on every postRetentionAction, so an 'archive',
+  // 'review' or 'anonymize' policy destroyed log rows it was meant to keep.
+  // It now follows the action, as sweepAuditEvents does: 'destroy' deletes,
+  // 'archive' moves the row unchanged to logs_archive, and the two actions no
+  // code implements for logs remove nothing.
+  async sweepLogs(db, policy, cutoff) {
+    const logs = db.collection(LOGS_COLLECTION);
+    if (policy.postRetentionAction === 'destroy') {
+      const result = await logs.deleteMany({ createdAt: { $lt: cutoff } });
+      return { deleted: result.deletedCount || 0 };
+    }
+    if (policy.postRetentionAction === 'archive') {
+      const expired = await logs.find({ createdAt: { $lt: cutoff } }).toArray();
+      if (!expired.length) return { archived: 0, skipped: false };
+      await db.collection(LOGS_ARCHIVE_COLLECTION).insertMany(expired.map((doc) => ({ ...doc, archivedAt: new Date() })));
+      await logs.deleteMany({ _id: { $in: expired.map((doc) => doc._id) } });
+      return { archived: expired.length, skipped: false };
+    }
+    logger.warn(
+      `Sweep de retenção: postRetentionAction "${policy.postRetentionAction}" não é implementado para Log -- nenhum log removido.`
+    );
+    return { deleted: 0, skipped: true, reason: `unsupported_post_retention_action:${policy.postRetentionAction}` };
   }
 
   async sweepAuditEvents(db, policy, cutoff) {
@@ -70,7 +90,7 @@ class RetentionSweepService {
     };
 
     if (policy.applicableEntityTypes.includes('Log')) {
-      result.logs = await this.sweepLogs(db, cutoff);
+      result.logs = await this.sweepLogs(db, policy, cutoff);
     }
     if (policy.applicableEntityTypes.includes('AuditEvent')) {
       result.auditEvents = await this.sweepAuditEvents(db, policy, cutoff);
@@ -105,3 +125,4 @@ module.exports = new RetentionSweepService();
 module.exports.AUDIT_EVENTS_COLLECTION = AUDIT_EVENTS_COLLECTION;
 module.exports.AUDIT_EVENTS_ARCHIVE_COLLECTION = AUDIT_EVENTS_ARCHIVE_COLLECTION;
 module.exports.LOGS_COLLECTION = LOGS_COLLECTION;
+module.exports.LOGS_ARCHIVE_COLLECTION = LOGS_ARCHIVE_COLLECTION;
