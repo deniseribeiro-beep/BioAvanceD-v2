@@ -1026,7 +1026,7 @@ describe('Users and Access routes', () => {
       const setPayload = usersCollection.updateOne.mock.calls[0][1].$set;
       expect(bcrypt.compareSync('NovaSenh@2026', setPayload.password)).toBe(true);
       expect(setPayload.passwordHistory).toEqual([target.password]);
-      expect(setPayload.lastPasswordChange).toBeInstanceOf(Date);
+      expect(setPayload.passwordChangedAt).toBeInstanceOf(Date);
       // The administrator knows this password; the owner must replace it.
       expect(setPayload.forceReset).toBe(true);
       expect(sessionsCollection.updateMany).toHaveBeenCalledWith(

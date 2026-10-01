@@ -203,16 +203,16 @@ describe('UserModel - Unit Tests', () => {
       expect(result.isValid).toBe(true);
     });
 
-    it('deve rejeitar lastPasswordChange com data inválida', () => {
-      validUserData.lastPasswordChange = 'data-invalida';
+    it('deve rejeitar passwordChangedAt com data inválida', () => {
+      validUserData.passwordChangedAt = 'data-invalida';
       const result = UserModel.validate(validUserData);
 
       expect(result.isValid).toBe(false);
-      expect(result.errors.some(e => e.includes('lastPasswordChange deve ser uma data válida'))).toBe(true);
+      expect(result.errors.some(e => e.includes('passwordChangedAt deve ser uma data válida'))).toBe(true);
     });
 
-    it('deve aceitar lastPasswordChange válida', () => {
-      validUserData.lastPasswordChange = new Date().toISOString();
+    it('deve aceitar passwordChangedAt válida', () => {
+      validUserData.passwordChangedAt = new Date().toISOString();
       const result = UserModel.validate(validUserData);
 
       expect(result.isValid).toBe(true);
@@ -284,7 +284,7 @@ describe('UserModel - Unit Tests', () => {
         mfaLocked: true,
         anonId: 'anon-1',
         passwordHistory: ['h1'],
-        lastPasswordChange: '2026-01-01',
+        passwordChangedAt: '2026-01-01',
         forceReset: true,
         failedLoginAttempts: 5
       };
@@ -303,7 +303,7 @@ describe('UserModel - Unit Tests', () => {
       expect(user.mfaLocked).toBe(true);
       expect(user.anonId).toBe('anon-1');
       expect(user.passwordHistory).toEqual(['h1']);
-      expect(user.lastPasswordChange).toBe('2026-01-01');
+      expect(user.passwordChangedAt).toBe('2026-01-01');
       expect(user.forceReset).toBe(true);
       expect(user.failedLoginAttempts).toBe(5);
       expect(user.createdAt).toBeInstanceOf(Date);
@@ -331,7 +331,7 @@ describe('UserModel - Unit Tests', () => {
       expect(user.mfaLocked).toBe(false);
       expect(user.anonId).toBeNull();
       expect(user.passwordHistory).toEqual([]);
-      expect(user.lastPasswordChange).toBeInstanceOf(Date);
+      expect(user.passwordChangedAt).toBeInstanceOf(Date);
       expect(user.forceReset).toBe(false);
       expect(user.failedLoginAttempts).toBe(0);
     });

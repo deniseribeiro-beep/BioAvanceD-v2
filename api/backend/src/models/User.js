@@ -53,8 +53,9 @@ class UserModel {
       errors.push('passwordHistory deve ser um array');
     }
 
-    if (data.lastPasswordChange && isNaN(new Date(data.lastPasswordChange))) {
-      errors.push('lastPasswordChange deve ser uma data válida');
+    // #1251: dict-02 P1X-0204 passwordChangedAt (was lastPasswordChange).
+    if (data.passwordChangedAt && isNaN(new Date(data.passwordChangedAt))) {
+      errors.push('passwordChangedAt deve ser uma data válida');
     }
 
     if (data.forceReset !== undefined && typeof data.forceReset !== 'boolean') {
@@ -131,7 +132,7 @@ class UserModel {
       updatedAt: new Date(),
       lastLogin: null,
       passwordHistory: Array.isArray(data.passwordHistory) ? data.passwordHistory : [],
-      lastPasswordChange: data.lastPasswordChange || new Date(),
+      passwordChangedAt: data.passwordChangedAt || new Date(),
       forceReset: data.forceReset || false,
       failedLoginAttempts: data.failedLoginAttempts || 0,
       // #952 / #985: a LOCAL EXTENSION of UserAccount, not a dictionary

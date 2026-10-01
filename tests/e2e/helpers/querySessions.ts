@@ -40,3 +40,16 @@ export async function findLatestSession(userID: string) {
   const db = await getDb();
   return db.collection('sessions').findOne({ userID: String(userID) }, { sort: { createdAt: -1 } });
 }
+
+/**
+ * #1251: back-dates a user's passwordChangedAt, so passwordRules.expirationDays
+ * can be exercised on a live login. No API sets the field to a past date.
+ */
+export async function setPasswordChangedAt(userID: string, date: Date): Promise<void> {
+  const { ObjectId } = await import('mongodb');
+  const db = await getDb();
+  const result = await db.collection('users').updateOne({ _id: new ObjectId(userID) }, { $set: { passwordChangedAt: date } });
+  if (result.matchedCount !== 1) {
+    throw new Error(`setPasswordChangedAt: no user ${userID}`);
+  }
+}

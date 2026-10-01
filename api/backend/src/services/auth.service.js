@@ -759,15 +759,23 @@ class AuthService {
       // set. Mirrors changePassword's validate/hash/history update
       // (auth.controller.js) inlined here, since this path has no prior
       // authenticated session to call that endpoint with.
-      if (user.forceReset) {
+      //
+      // #1251: an expired password (passwordRules.expirationDays) takes the
+      // same branch. After MFA, like forceReset, so an expiry never hands a
+      // password change to someone holding only the password.
+      const passwordPolicy = await passwordService.resolvePasswordPolicy(db);
+      const passwordExpired = passwordService.isPasswordExpired(user, passwordPolicy);
+      if (user.forceReset || passwordExpired) {
         if (!newPassword) {
           return {
             requiresPasswordChange: true,
-            message: 'Alteração de senha obrigatória antes de continuar'
+            ...(passwordExpired && !user.forceReset ? { reason: 'expired' } : {}),
+            message: passwordExpired && !user.forceReset
+              ? 'Senha expirada: defina uma nova senha para continuar'
+              : 'Alteração de senha obrigatória antes de continuar'
           };
         }
 
-        const passwordPolicy = await passwordService.resolvePasswordPolicy(db);
         passwordService.validateStrength(newPassword, passwordPolicy);
         await passwordService.validateReuse(newPassword, user, passwordPolicy);
 
@@ -780,7 +788,7 @@ class AuthService {
             $set: {
               password: newHash,
               passwordHistory: updatedHistory,
-              lastPasswordChange: new Date(),
+              passwordChangedAt: new Date(),
               forceReset: false,
               updatedAt: new Date()
             }
@@ -1518,7 +1526,7 @@ class AuthService {
           $set: {
             password: hashedPassword,
             passwordHistory: passwordService.nextPasswordHistory(user, passwordPolicy),
-            lastPasswordChange: new Date(),
+            passwordChangedAt: new Date(),
             // #1250: the owner just replaced the password through their own
             // mailbox, which is what a forced reset asks for.
             forceReset: false,

@@ -153,10 +153,15 @@ class UserSecurityService {
       const strength = this.calculatePasswordStrength(user.password);
       const strengthScore = strength === 'strong' ? 5 : strength === 'medium' ? 3 : 1;
       
-      // Calcula expiração (90 dias padrão)
-      const lastChanged = user.passwordChangedAt || user.createdAt || new Date();
-      const lastChangedDate = lastChanged instanceof Date ? lastChanged : new Date(lastChanged);
-      const expiresAt = new Date(lastChangedDate.getTime() + 90 * 24 * 60 * 60 * 1000);
+      // #1251: the policy's expirationDays and the same anchor login uses
+      // (passwordChangedAt, then the pre-rename lastPasswordChange, then
+      // createdAt). 0 days means no expiry, reported as null.
+      const passwordService = require('./password.service');
+      const policy = await passwordService.resolvePasswordPolicy(db);
+      const lastChanged = passwordService.passwordChangedAt(user) || new Date();
+      const expiresAt = policy.expirationDays === 0
+        ? null
+        : new Date(lastChanged.getTime() + policy.expirationDays * 24 * 60 * 60 * 1000);
       
       return {
         lastChanged: lastChanged,

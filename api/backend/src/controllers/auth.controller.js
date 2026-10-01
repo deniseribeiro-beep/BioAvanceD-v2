@@ -83,6 +83,9 @@ class AuthController {
         return res.status(200).json({
           success: true,
           requiresPasswordChange: true,
+          // #1251: 'expired' when passwordRules.expirationDays, not an
+          // administrator, asks for the change.
+          ...(result.reason ? { reason: result.reason } : {}),
           message: (req.t && req.t('auth.passwordChangeRequired')) || result.message
         });
       }
@@ -367,7 +370,7 @@ class AuthController {
           $set: {
             password: newHash,
             passwordHistory: updatedHistory,
-            lastPasswordChange: new Date(),
+            passwordChangedAt: new Date(),
             forceReset: false,
             // #995: this was the literal `failedLoginAttempts: 0` alone. The
             // lockout gate (auth.service.js) reads accountLockedUntil and never

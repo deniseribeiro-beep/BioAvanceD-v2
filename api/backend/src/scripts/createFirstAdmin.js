@@ -79,7 +79,7 @@ async function createFirstAdmin(options = {}) {
       lastLogin: null,
       createdAt: now,
       updatedAt: now,
-      lastPasswordChange: now,
+      passwordChangedAt: now,
       createdBy: 'BOOTSTRAP_SYSTEM',
       bootstrapSource: 'admin:create-first',
     };

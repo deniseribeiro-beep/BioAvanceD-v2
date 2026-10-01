@@ -74,7 +74,7 @@ function reuseDepth(value) {
     : DEFAULT_REUSE_POLICY.maxReuseHistory;
 }
 
-const DEFAULT_PASSWORD_POLICY = Object.freeze({ ...DEFAULT_STRENGTH_POLICY, ...DEFAULT_REUSE_POLICY });
+const DEFAULT_PASSWORD_POLICY = Object.freeze({ ...DEFAULT_STRENGTH_POLICY, ...DEFAULT_REUSE_POLICY, expirationDays: 90 });
 
 // One read for every passwordRules key a password write needs (#1244, #1246).
 // Only an explicit boolean false relaxes a flag.
@@ -90,6 +90,7 @@ async function resolvePasswordPolicy(db) {
       requireSpecialChars: rules.requireSpecialChars !== false,
       preventReuse: rules.preventReuse !== false,
       maxReuseHistory: reuseDepth(rules.maxReuseHistory),
+      expirationDays: expirationDays(rules.expirationDays),
     };
   } catch (error) {
     logger.warn('#1244/#1246: política de senha ilegível, usando os padrões:', error.message);
@@ -135,16 +136,41 @@ async function validateReuse(newPassword, user = {}, policy = DEFAULT_REUSE_POLI
   }
 }
 
-function isPasswordExpired(user) {
-  if (!user || !user.lastPasswordChange) {
-    return true;
+// #1251: passwordRules.expirationDays (dict-02 P1X-0289, "zero pode
+// representar sem expiração"), anchored on UserAccount.passwordChangedAt
+// (P1X-0204, "usada para expiração e auditoria"). Before this the window was a
+// hard-coded 90 days, nothing called this function, and four writers stored
+// the date as lastPasswordChange, which is not the canonical name.
+//
+// The anchor falls back to lastPasswordChange (documents written before the
+// rename) and then createdAt. A user with none of the three cannot be dated
+// and is NOT expired: the old reading (no date means expired) would have
+// forced a change on every such account at its next login. 0..365 is
+// validateConfig's own range; anything else falls back to the default 90.
+const DEFAULT_EXPIRATION_DAYS = 90;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function expirationDays(value) {
+  const days = Number(value);
+  return Number.isInteger(days) && days >= 0 && days <= 365 ? days : DEFAULT_EXPIRATION_DAYS;
+}
+
+function passwordChangedAt(user) {
+  for (const value of [user && user.passwordChangedAt, user && user.lastPasswordChange, user && user.createdAt]) {
+    if (value) {
+      const time = new Date(value).getTime();
+      if (!Number.isNaN(time)) return new Date(time);
+    }
   }
-  const ninetyDaysMs = 90 * 24 * 60 * 60 * 1000;
-  const lastChange = new Date(user.lastPasswordChange).getTime();
-  if (Number.isNaN(lastChange)) {
-    return true;
-  }
-  return (Date.now() - lastChange) > ninetyDaysMs;
+  return null;
+}
+
+function isPasswordExpired(user, policy = { expirationDays: DEFAULT_EXPIRATION_DAYS }, now = Date.now()) {
+  const days = expirationDays(policy.expirationDays);
+  if (days === 0) return false;
+  const changedAt = passwordChangedAt(user);
+  if (!changedAt) return false;
+  return now - changedAt.getTime() > days * DAY_MS;
 }
 
 module.exports = {
@@ -156,5 +182,6 @@ module.exports = {
   publicStrengthRules,
   nextPasswordHistory,
   validateReuse,
+  passwordChangedAt,
   isPasswordExpired
 };

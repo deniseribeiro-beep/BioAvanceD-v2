@@ -202,26 +202,43 @@ describe('#1244/#1246 resolvePasswordPolicy', () => {
   });
 });
 
-describe('isPasswordExpired', () => {
-  it('returns true when user is null', () => {
-    expect(isPasswordExpired(null)).toBe(true);
+// #1251: expirationDays (dict-02 P1X-0289) anchored on passwordChangedAt
+// (P1X-0204). An account that cannot be dated is NOT expired: the old reading
+// (no date means expired) would force a change on every such account.
+describe('isPasswordExpired (#1251)', () => {
+  const daysAgo = (n) => new Date(Date.now() - n * 24 * 60 * 60 * 1000);
+
+  it('an account with no usable date is not expired', () => {
+    expect(isPasswordExpired(null)).toBe(false);
+    expect(isPasswordExpired({})).toBe(false);
+    expect(isPasswordExpired({ passwordChangedAt: 'not-a-date' })).toBe(false);
   });
 
-  it('returns true when lastPasswordChange is missing', () => {
-    expect(isPasswordExpired({})).toBe(true);
+  it('defaults to 90 days on passwordChangedAt', () => {
+    expect(isPasswordExpired({ passwordChangedAt: daysAgo(10) })).toBe(false);
+    expect(isPasswordExpired({ passwordChangedAt: daysAgo(91) })).toBe(true);
   });
 
-  it('returns true when lastPasswordChange is invalid date', () => {
-    expect(isPasswordExpired({ lastPasswordChange: 'not-a-date' })).toBe(true);
+  it('falls back to the pre-rename lastPasswordChange, then createdAt', () => {
+    expect(isPasswordExpired({ lastPasswordChange: daysAgo(91).toISOString() })).toBe(true);
+    expect(isPasswordExpired({ createdAt: daysAgo(91) })).toBe(true);
+    // passwordChangedAt wins over an older createdAt.
+    expect(isPasswordExpired({ passwordChangedAt: daysAgo(1), createdAt: daysAgo(400) })).toBe(false);
   });
 
-  it('returns false when password was changed recently', () => {
-    const recentDate = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000); // 10 days ago
-    expect(isPasswordExpired({ lastPasswordChange: recentDate.toISOString() })).toBe(false);
+  it('follows the policy expirationDays, and 0 means never', () => {
+    expect(isPasswordExpired({ passwordChangedAt: daysAgo(31) }, { expirationDays: 30 })).toBe(true);
+    expect(isPasswordExpired({ passwordChangedAt: daysAgo(29) }, { expirationDays: 30 })).toBe(false);
+    expect(isPasswordExpired({ passwordChangedAt: daysAgo(4000) }, { expirationDays: 0 })).toBe(false);
   });
 
-  it('returns true when password was changed 91 days ago', () => {
-    const oldDate = new Date(Date.now() - 91 * 24 * 60 * 60 * 1000); // 91 days ago
-    expect(isPasswordExpired({ lastPasswordChange: oldDate.toISOString() })).toBe(true);
+  it('an out-of-range expirationDays falls back to 90', () => {
+    expect(isPasswordExpired({ passwordChangedAt: daysAgo(91) }, { expirationDays: 400 })).toBe(true);
+    expect(isPasswordExpired({ passwordChangedAt: daysAgo(89) }, { expirationDays: -1 })).toBe(false);
+  });
+
+  it('resolvePasswordPolicy reads expirationDays', async () => {
+    const db = { collection: vi.fn(() => ({ findOne: vi.fn().mockResolvedValue({ passwordRules: { expirationDays: 0 } }) })) };
+    expect((await resolvePasswordPolicy(db)).expirationDays).toBe(0);
   });
 });

@@ -3,7 +3,7 @@ import { realLogin, realAuthLogin, seedRealAuth } from './helpers/realAuth';
 import { watchAuditTrail, assertAuditEventRecorded } from './helpers/assertAuditEvent';
 import { completeFirstLoginMfa } from './helpers/completeFirstLoginMfa';
 import { computeTotp } from './helpers/totp';
-import { findLatestSession, closeSessionsDb, listSessionIndexNames } from './helpers/querySessions';
+import { findLatestSession, closeSessionsDb, listSessionIndexNames, setPasswordChangedAt } from './helpers/querySessions';
 
 // Real backend + real frontend only — see backend-integration.spec.ts for the
 // same skip rationale. Run via `npm run test:e2e:docker` against the compose
@@ -950,6 +950,62 @@ test.describe('Security policy management (RF014) — real backend', () => {
         headers: auth,
         data: { passwordRules: { minLength: originalRules.minLength, requireNumbers: originalRules.requireNumbers } },
       }).catch(() => {});
+    }
+  });
+
+  // #1251: passwordRules.expirationDays was stored and enforced nowhere; an
+  // expired password now takes the forced-change branch at login. An
+  // Administrador target, as in the criterion-4 test, has no MFA onboarding.
+  test('#1251: an expired password forces a change at login, and expirationDays 0 turns expiry off (criterion 2)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const before = await request.get(`${apiBaseURL}/api/security/config`, { headers: auth });
+    expect(before.ok()).toBeTruthy();
+    const originalDays = (await before.json()).data.passwordRules.expirationDays;
+
+    const username = `expiry1251.${Date.now()}`;
+    const password = 'Expiry@1251pass';
+    const register = await request.post(`${apiBaseURL}/api/users/register`, {
+      headers: auth,
+      data: { name: '#1251 expiry Fixture', email: `${username}@example.com`, username, password, accessType: 4, roleName: 'Administrador' },
+    });
+    expect(register.ok(), await register.text()).toBeTruthy();
+    const userID = (await register.json()).data?._id;
+    expect(userID).toBeTruthy();
+
+    try {
+      await setPasswordChangedAt(userID, new Date(Date.now() - 100 * 24 * 60 * 60 * 1000));
+
+      // Control: expiry off, and the 100-day-old password logs straight in.
+      const off = await request.put(`${apiBaseURL}/api/security/config`, { headers: auth, data: { passwordRules: { expirationDays: 0 } } });
+      expect(off.ok(), await off.text()).toBeTruthy();
+      const offLogin = await request.post(`${apiBaseURL}/api/auth/login`, { data: { username, password } });
+      expect(offLogin.ok(), await offLogin.text()).toBeTruthy();
+      expect((await offLogin.json()).data?.token).toBeTruthy();
+
+      const on = await request.put(`${apiBaseURL}/api/security/config`, { headers: auth, data: { passwordRules: { expirationDays: 90 } } });
+      expect(on.ok(), await on.text()).toBeTruthy();
+      const expired = await request.post(`${apiBaseURL}/api/auth/login`, { data: { username, password } });
+      expect(expired.ok(), await expired.text()).toBeTruthy();
+      const expiredBody = await expired.json();
+      expect(expiredBody.requiresPasswordChange).toBe(true);
+      expect(expiredBody.reason).toBe('expired');
+      expect(expiredBody.data?.token).toBeFalsy();
+
+      const changed = await request.post(`${apiBaseURL}/api/auth/login`, { data: { username, password, newPassword: 'Renewed@1251pass' } });
+      expect(changed.ok(), await changed.text()).toBeTruthy();
+      expect((await changed.json()).data?.token).toBeTruthy();
+      // The change reset the clock: the new password logs straight in.
+      const again = await request.post(`${apiBaseURL}/api/auth/login`, { data: { username, password: 'Renewed@1251pass' } });
+      expect((await again.json()).data?.token).toBeTruthy();
+    } finally {
+      await request.put(`${apiBaseURL}/api/security/config`, {
+        headers: auth,
+        data: { passwordRules: { expirationDays: originalDays } },
+      }).catch(() => {});
+      await closeSessionsDb();
     }
   });
 

@@ -1459,7 +1459,7 @@ router.post('/:id/set-password', authenticate, requirePermission('setUserPasswor
         password: await bcrypt.hash(newPassword, 10),
         // #1244: the same policy depth validateReuse checks.
         passwordHistory: passwordService.nextPasswordHistory(targetUser, passwordPolicy),
-        lastPasswordChange: now,
+        passwordChangedAt: now,
         forceReset: true,
         updatedAt: now,
       },
@@ -1481,7 +1481,7 @@ router.post('/:id/set-password', authenticate, requirePermission('setUserPasswor
       // audit-v2 keeps `message` and drops `payload` (#1005), so the
       // operation is named here.
       message: 'Senha definida por administrador; troca obrigatória no próximo login',
-      payload: { operation: 'setUserPassword', fieldsSet: ['password', 'passwordHistory', 'lastPasswordChange', 'forceReset'] },
+      payload: { operation: 'setUserPassword', fieldsSet: ['password', 'passwordHistory', 'passwordChangedAt', 'forceReset'] },
       req,
       module: 'Usuários',
     });

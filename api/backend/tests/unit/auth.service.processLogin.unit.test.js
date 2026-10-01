@@ -456,6 +456,52 @@ describe('AuthService.processLogin', () => {
       })
     );
   });
+
+  // #1251: passwordRules.expirationDays takes the forceReset branch.
+  const daysAgo = (n) => new Date(Date.now() - n * 24 * 60 * 60 * 1000);
+
+  it('#1251: an expired password asks for the change with reason expired and issues no token', async () => {
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+    const db = makeDb();
+    const user = { ...BASE_USER, passwordChangedAt: daysAgo(91) };
+    const result = await authService.processLogin(db, user, 'pw', null, db.collection(), {});
+    expect(result.requiresPasswordChange).toBe(true);
+    expect(result.reason).toBe('expired');
+    expect(result.token).toBeUndefined();
+  });
+
+  it('#1251: a password inside the window logs in normally', async () => {
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+    const db = makeDb();
+    const user = { ...BASE_USER, passwordChangedAt: daysAgo(89) };
+    const result = await authService.processLogin(db, user, 'pw', null, db.collection(), {});
+    expect(result.requiresPasswordChange).toBeUndefined();
+    expect(result.token).toBeTruthy();
+  });
+
+  it('#1251: expirationDays 0 never expires', async () => {
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+    const db = makeDb();
+    const configApi = { findOne: vi.fn().mockResolvedValue({ _id: 'main', passwordRules: { expirationDays: 0 } }) };
+    const base = db.collection;
+    db.collection = vi.fn((name) => (name === 'security_config' ? configApi : base(name)));
+    const user = { ...BASE_USER, passwordChangedAt: daysAgo(4000) };
+    const result = await authService.processLogin(db, user, 'pw', null, db.collection('users'), {});
+    expect(result.requiresPasswordChange).toBeUndefined();
+    expect(result.token).toBeTruthy();
+  });
+
+  it('#1251: an expired password changed through login gets a fresh passwordChangedAt and a session', async () => {
+    vi.spyOn(bcrypt, 'compare').mockImplementation(async (candidate) => candidate === 'pw');
+    const collectionApi = { findOne: vi.fn(), updateOne: vi.fn().mockResolvedValue({}), find: vi.fn(), insertOne: vi.fn().mockResolvedValue({ insertedId: { toString: () => 'sess-1' } }) };
+    const db = makeDb(collectionApi);
+    const user = { ...BASE_USER, passwordChangedAt: daysAgo(200) };
+    const before = Date.now();
+    const result = await authService.processLogin(db, user, 'pw', null, db.collection(), {}, 'NewStrongPass1!');
+    expect(result.token).toBeTruthy();
+    const set = collectionApi.updateOne.mock.calls.find(([, update]) => update.$set && update.$set.password)[1].$set;
+    expect(set.passwordChangedAt.getTime()).toBeGreaterThanOrEqual(before);
+  });
 });
 
 describe('AuthService.setupMFAFirstLogin', () => {
@@ -1310,7 +1356,7 @@ describe('AuthService.resetPassword', () => {
     await authService.resetPassword(db, 'tok', 'NewPass123!@#', {});
     const update = usersApi.updateOne.mock.calls[0][1];
     expect(update.$set.passwordHistory).toEqual([HASHED, 'h1']);
-    expect(update.$set.lastPasswordChange).toBeInstanceOf(Date);
+    expect(update.$set.passwordChangedAt).toBeInstanceOf(Date);
     // #1250: the owner replaced it, which is what a forced reset asks for.
     expect(update.$set.forceReset).toBe(false);
   });
