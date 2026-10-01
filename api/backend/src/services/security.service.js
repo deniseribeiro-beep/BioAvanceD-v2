@@ -377,6 +377,10 @@ class SecurityService {
       // #1248: the retention keys are not this document's to set. Dropped
       // before change detection, so no audit row claims a change that
       // never applies; currentConfig loses governedBy for the same reason.
+      // Dropped rather than rejected (#1264 item 6): SecurityPage sends the
+      // whole config, governed and fixed keys included, on every save, so a
+      // 4xx on their presence would refuse every save. The response carries
+      // the real values and governedBy, so an API caller sees what applied.
       newConfig = withoutRetentionGoverned(newConfig || {});
       currentConfig = withoutRetentionGoverned(currentConfig || {});
 
