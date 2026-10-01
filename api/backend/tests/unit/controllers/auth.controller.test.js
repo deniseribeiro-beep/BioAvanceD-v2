@@ -886,10 +886,12 @@ describe('AuthController.setupMFAFirstLogin', () => {
 
     await authController.setupMFAFirstLogin(req, res);
 
-    expect(authService.setupMFAFirstLogin).toHaveBeenCalledWith(req.app.locals.db, {
-      username: 'alice',
-      password: 'p',
-    });
+    // req is passed through so the service's source-address gate sees req.ip (#1255).
+    expect(authService.setupMFAFirstLogin).toHaveBeenCalledWith(
+      req.app.locals.db,
+      { username: 'alice', password: 'p' },
+      req
+    );
     expect(res.status).toHaveBeenCalledWith(200);
     expect(res.json).toHaveBeenCalledWith({
       success: true,
