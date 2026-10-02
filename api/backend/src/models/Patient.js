@@ -201,6 +201,22 @@ ParticipantModel.validateUpdateTypes = function validateUpdateTypes(patch = {}) 
 
 ParticipantModel.FIELD_TYPES = FIELD_TYPES;
 
+// #1281: canonical fields only the server writes. The consent flows set the
+// status and the consent* fields through their own service paths, and the
+// timestamps are the record's own. PUT /api/patients/:id refuses them: with
+// status, consentTokenHash and consentTokenExpiresAt writable there, a caller
+// could mint a token of its own and accept a consent for the participant.
+ParticipantModel.SERVER_MANAGED_FIELDS = [
+  'status',
+  'consentTokenHash',
+  'consentTokenCreatedAt',
+  'consentTokenExpiresAt',
+  'consentNotifiedAt',
+  'consentAcceptedAt',
+  'createdAt',
+  'updatedAt'
+];
+
 /**
  * #1045: removes the consent CREDENTIAL from a participant document on its way
  * out of the API.

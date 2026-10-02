@@ -573,6 +573,20 @@ class PacienteController {
         });
       }
 
+      // #1281: the consent lifecycle's fields and the timestamps are written
+      // by the server only, never through this route.
+      const serverManaged = PatientModel.SERVER_MANAGED_FIELDS.filter((field) =>
+        Object.prototype.hasOwnProperty.call(req.body || {}, field));
+      if (serverManaged.length > 0) {
+        return res.status(422).json({
+          success: false,
+          error: 'Campos gerenciados pelo servidor',
+          message: `Não é permitido alterar: ${serverManaged.join(', ')}`,
+          code: 'SERVER_MANAGED_FIELD',
+          fields: serverManaged
+        });
+      }
+
       // #626: mirrors sample.routes.js's PUT /:id out-of-scope 403
       // pattern — the scope check runs before the mutation, not just
       // before a read.
