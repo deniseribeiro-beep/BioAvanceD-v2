@@ -15,8 +15,9 @@ edits.
 
 ## The new milestone
 
-Alongside the existing coverage milestone (90% statements/branches/
-functions/lines on the backend unit/integration suite — see `HANDOFF.md`),
+Alongside the existing coverage milestone (statements/branches/
+functions/lines on the backend unit/integration suite — GitHub milestone 1,
+"100% Test Coverage"),
 BioAvanceD-v2 now has a second, independent milestone:
 
 > **Translate every testable requirement in the v3.0.0 requirements doc
