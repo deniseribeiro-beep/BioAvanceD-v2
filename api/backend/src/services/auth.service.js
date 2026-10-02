@@ -1346,6 +1346,17 @@ class AuthService {
         throw new Error('Código MFA inválido');
       }
 
+      // #1270: processLogin hands a first-login account its setup tempToken
+      // before its forceReset/expiry branch, and the middleware admits that
+      // token here, so this is a second door onto completing a first login.
+      // It applies enable-first-login's gates: the status before any write
+      // (#1258), and forceReset or an expired password (#1250, #1251) below,
+      // where the enrolment stands but no session is issued.
+      const isFirstLogin = user.lastLogin === null;
+      if (isFirstLogin) {
+        assertAccountActive(user);
+      }
+
       // Ativa MFA e atualiza último login (primeiro acesso completo)
       const updateData = {
         mfaEnabled: true,
@@ -1364,7 +1375,18 @@ class AuthService {
       );
 
         // Se for primeiro login, gera tokens de sessão completos
-      if (user.lastLogin === null) {
+      if (isFirstLogin) {
+        const passwordExpired = passwordService.isPasswordExpired(user, await passwordService.resolvePasswordPolicy(db));
+        if (user.forceReset || passwordExpired) {
+          return {
+            requiresPasswordChange: true,
+            ...(passwordExpired && !user.forceReset ? { reason: 'expired' } : {}),
+            message: passwordExpired && !user.forceReset
+              ? 'Senha expirada: defina uma nova senha para continuar'
+              : 'Alteração de senha obrigatória antes de continuar'
+          };
+        }
+
         const tokenBundle = await this.issueSessionTokens(db, user, null);
 
         return { 

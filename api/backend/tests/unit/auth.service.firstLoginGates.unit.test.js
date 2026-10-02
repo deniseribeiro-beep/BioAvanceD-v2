@@ -89,6 +89,66 @@ describe('#1258 item 5: account status at the first-login endpoints', () => {
     const db = makeDb(enrollingUser({ status: 'blocked' }));
     await expect(authService.enableMFAFirstLogin(db, { username: 'tecnico1258', password: 'wrong' }, '123456', {})).rejects.toThrow('Credenciais inválidas');
   });
+
+  // #1270 item 1: the same at qr-first-login, for every non-active status.
+  for (const status of ['inactive', 'suspended', 'blocked']) {
+    it(`qr-first-login answers a wrong password on a ${status} account with the generic message`, async () => {
+      const db = makeDb(enrollingUser({ status, mfaSecretCiphertext: null }));
+      await expect(authService.setupMFAFirstLogin(db, { username: 'tecnico1258', password: 'wrong' }, {})).rejects.toThrow(/^Credenciais inválidas$/);
+      expect(db.users.updateOne).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ $set: expect.objectContaining({ mfaSecretCiphertext: expect.anything() }) }));
+    });
+  }
+});
+
+// #1270 item 2: processLogin hands a first-login account its setup tempToken
+// BEFORE it reaches the forceReset/expiry branch, and the middleware admits
+// that token at POST /two-factor/enable and /mfa/enable. enableMFA issued a
+// full session there for lastLogin null, applying neither the expiry, nor
+// forceReset, nor the account status, so that route completed a first login
+// enable-first-login (#1250, #1258) refuses.
+describe('#1270 item 2: the authenticated enrolment (enableMFA) completes a first login under the same gates', () => {
+  const policy = { _id: 'main', passwordRules: { expirationDays: 90 } };
+  const USER_ID = '507f1f77bcf86cd799439011';
+  const byId = (user, securityConfig = null) => {
+    const db = makeDb(user, securityConfig);
+    db.users.findOne = vi.fn(async (filter) => (filter && filter._id ? user : null));
+    return db;
+  };
+
+  it('control: an active account with a current password gets its session', async () => {
+    const result = await authService.enableMFA(byId(enrollingUser(), policy), USER_ID, '123456');
+    expect(result.token).toBe('t');
+    expect(issue).toHaveBeenCalledTimes(1);
+  });
+
+  it('an expired password enrols, but withholds the session and asks for the change', async () => {
+    const db = byId(enrollingUser({ passwordChangedAt: new Date(Date.now() - 200 * DAY) }), policy);
+    const result = await authService.enableMFA(db, USER_ID, '123456');
+    expect(result).toEqual(expect.objectContaining({ requiresPasswordChange: true, reason: 'expired' }));
+    expect(result.token).toBeUndefined();
+    expect(issue).not.toHaveBeenCalled();
+    expect(db.users.updateOne).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ $set: expect.objectContaining({ mfaEnabled: true }) }));
+  });
+
+  it('forceReset withholds the session with its own message and no reason', async () => {
+    const result = await authService.enableMFA(byId(enrollingUser({ forceReset: true })), USER_ID, '123456');
+    expect(result.requiresPasswordChange).toBe(true);
+    expect(result.reason).toBeUndefined();
+    expect(issue).not.toHaveBeenCalled();
+  });
+
+  it('a suspended account is refused and nothing is written', async () => {
+    const db = byId(enrollingUser({ status: 'suspended' }));
+    await expect(authService.enableMFA(db, USER_ID, '123456')).rejects.toThrow('Usuário suspenso');
+    expect(issue).not.toHaveBeenCalled();
+    expect(db.users.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('control: an enrolled account enabling again (not a first login) is untouched by the gates', async () => {
+    const db = byId(enrollingUser({ lastLogin: new Date(), passwordChangedAt: new Date(Date.now() - 200 * DAY), forceReset: true }), policy);
+    expect(await authService.enableMFA(db, USER_ID, '123456')).toEqual({ success: true });
+    expect(issue).not.toHaveBeenCalled();
+  });
 });
 
 describe('#1258 item 5: an expired password at enable-first-login (#1251)', () => {
