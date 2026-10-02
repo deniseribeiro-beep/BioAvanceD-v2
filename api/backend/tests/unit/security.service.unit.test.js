@@ -196,6 +196,56 @@ describe('SecurityService.validateConfig', () => {
       passwordRules: { minLength: 12, expirationDays: 90 },
     })).not.toThrow();
   });
+
+  // #909: the schema over getDefaultConfig()'s groups.
+  it('accepts the whole default document, the shape SecurityPage sends back', () => {
+    expect(() => securityService.validateConfig(securityService.getDefaultConfig())).not.toThrow();
+  });
+
+  it('refuses a key the group does not declare, naming its path', () => {
+    expect(() => securityService.validateConfig({ authentication: { maxLoginAtempts: 3 } }))
+      .toThrow('authentication.maxLoginAtempts não é uma configuração conhecida');
+  });
+
+  it.each([
+    ['authentication', 'maxLoginAttempts', '5', 'um número'],
+    ['session', 'timeoutMinutes', null, 'um número'],
+    ['session', 'timeoutMinutes', Number.NaN, 'um número'],
+    ['enhancedSecurity', 'enabled', 'true', 'verdadeiro ou falso'],
+    ['lgpd', 'allowDataExport', 1, 'verdadeiro ou falso'],
+    ['logging', 'level', 3, 'um texto'],
+  ])('refuses %s.%s = %j as not %s', (group, key, value, typeName) => {
+    expect(() => securityService.validateConfig({ [group]: { [key]: value } }))
+      .toThrow(`${group}.${key} deve ser ${typeName}`);
+  });
+
+  it.each([['x'], [[]], [null], [5]])('refuses a group that is not an object: %j', (value) => {
+    expect(() => securityService.validateConfig({ session: value })).toThrow('session deve ser um objeto');
+  });
+
+  it('range-checks 0, which the truthiness guards used to skip', () => {
+    expect(() => securityService.validateConfig({ authentication: { maxLoginAttempts: 0 } })).toThrow('maxLoginAttempts deve estar entre 1 e 10');
+    expect(() => securityService.validateConfig({ session: { timeoutMinutes: 0 } })).toThrow('timeoutMinutes deve estar entre 5 e 480');
+    expect(() => securityService.validateConfig({ passwordRules: { minLength: 0 } })).toThrow('minLength deve estar entre 8 e 128');
+    expect(() => securityService.validateConfig({ passwordRules: { expirationDays: 0 } })).not.toThrow();
+  });
+
+  it('lets an unchanged echo of the stored document through, and nothing else', () => {
+    const stored = { authentication: { legacyFlag: true }, session: { timeoutMinutes: null } };
+    expect(() => securityService.validateConfig(
+      { authentication: { legacyFlag: true, maxLoginAttempts: 4 }, session: { timeoutMinutes: null } },
+      stored
+    )).not.toThrow();
+    // Control: the same keys with a new value are the caller's own.
+    expect(() => securityService.validateConfig({ authentication: { legacyFlag: false } }, stored))
+      .toThrow('authentication.legacyFlag não é uma configuração conhecida');
+    expect(() => securityService.validateConfig({ session: { timeoutMinutes: '30' } }, stored))
+      .toThrow('session.timeoutMinutes deve ser um número');
+  });
+
+  it('ignores top-level keys outside the eight groups, which updateConfig never stores', () => {
+    expect(() => securityService.validateConfig({ configVersion: 'x', governedBy: {}, updatedAt: 'y' })).not.toThrow();
+  });
 });
 
 describe('SecurityService.formatLogsAsCSV', () => {

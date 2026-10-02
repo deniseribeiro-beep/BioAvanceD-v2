@@ -1,3 +1,4 @@
+const { isDeepStrictEqual } = require('util');
 const logger = require('../utils/logger');
 const auditLogger = require('../utils/auditLogger');
 const sessionService = require('./session.service');
@@ -12,6 +13,29 @@ const logLevel = require('../utils/logLevel');
 // rewritten on every save by definition. Before the flattening these lived under
 // a `metadata` object and were skipped by the typeof-object branch instead.
 const SERVER_OWNED_KEYS = ['configVersion', 'lastUpdatedAt', 'lastUpdatedBy'];
+
+// The eight policy groups. updateConfig merges only these, one level deep
+// (#904), so any other top-level key a caller sends is never stored.
+const CONFIG_GROUPS = [
+  'authentication',
+  'passwordRules',
+  'session',
+  'loginAttempts',
+  'logging',
+  'privacy',
+  'enhancedSecurity',
+  'lgpd'
+];
+
+const TYPE_NAMES = { number: 'um número', boolean: 'verdadeiro ou falso', string: 'um texto' };
+
+function isPlainObject(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) && !(value instanceof Date);
+}
+
+function isNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value);
+}
 
 // #649 / RF014 AC#8: "Revogar sessoes quando a alteracao exigir." The
 // requirement is deliberately conditional -- "quando a alteracao exigir" -- and
@@ -388,23 +412,12 @@ class SecurityService {
       const changes = this.detectChanges(currentConfig, newConfig);
       
       // Valida configurações
-      this.validateConfig(newConfig);
-      
+      this.validateConfig(newConfig, currentConfig);
+
       // Mescla com configuração atual, grupo a grupo (um nível de profundidade),
       // para não apagar flags do grupo que o chamador não enviou (#904)
-      const knownGroups = [
-        'authentication',
-        'passwordRules',
-        'session',
-        'loginAttempts',
-        'logging',
-        'privacy',
-        'enhancedSecurity',
-        'lgpd'
-      ];
-
       const mergedConfig = {};
-      for (const group of knownGroups) {
+      for (const group of CONFIG_GROUPS) {
         if (currentConfig[group] || newConfig[group]) {
           mergedConfig[group] = {
             ...currentConfig[group],
@@ -574,17 +587,53 @@ class SecurityService {
   /**
    * Valida configurações antes de salvar
    */
-  validateConfig(config) {
+  validateConfig(config, currentConfig = {}) {
     const errors = [];
+
+    // #909: a path-aware schema over getDefaultConfig()'s groups. Every key a
+    // group carries must be one the default declares, holding the default's
+    // type: a finite number, a boolean or a string. Before this, an unknown key
+    // or a wrong type was merged and stored (a null from an emptied numeric
+    // input included), and the readers fell back to their own defaults
+    // without saying so.
+    //
+    // An unchanged echo passes: SecurityPage sends the whole document back on
+    // every save, so a value identical to the stored one (a legacy key, or a
+    // null an older build stored) is not the caller's to fix in this request.
+    // updateConfig strips the governed and fixed keys before calling this.
+    const defaults = this.getDefaultConfig();
+    for (const group of CONFIG_GROUPS) {
+      if (!Object.prototype.hasOwnProperty.call(config, group) || config[group] === undefined) continue;
+      const values = config[group];
+      if (!isPlainObject(values)) {
+        errors.push(`${group} deve ser um objeto`);
+        continue;
+      }
+      const stored = isPlainObject(currentConfig && currentConfig[group]) ? currentConfig[group] : {};
+      for (const [key, value] of Object.entries(values)) {
+        if (value === undefined) continue;
+        if (Object.prototype.hasOwnProperty.call(stored, key) && isDeepStrictEqual(stored[key], value)) continue;
+        if (!Object.prototype.hasOwnProperty.call(defaults[group], key)) {
+          errors.push(`${group}.${key} não é uma configuração conhecida`);
+          continue;
+        }
+        const expected = typeof defaults[group][key];
+        const ok = expected === 'number' ? isNumber(value) : typeof value === expected;
+        if (!ok) errors.push(`${group}.${key} deve ser ${TYPE_NAMES[expected]}`);
+      }
+    }
+
+    // The ranges below check a number whenever one is present, 0 included;
+    // until #909 each was guarded by truthiness, so 0 skipped it.
 
     // Validações de autenticação
     if (config.authentication) {
-      if (config.authentication.maxLoginAttempts && (config.authentication.maxLoginAttempts < 1 || config.authentication.maxLoginAttempts > 10)) {
+      if (isNumber(config.authentication.maxLoginAttempts) && (config.authentication.maxLoginAttempts < 1 || config.authentication.maxLoginAttempts > 10)) {
         errors.push('maxLoginAttempts deve estar entre 1 e 10');
       }
       // #1249: TOTP is the only method implemented (dict-02 P1X-0279 says so),
       // so the policy cannot name one that would never be offered.
-      if (config.authentication.mfaMethod && config.authentication.mfaMethod !== 'totp') {
+      if (typeof config.authentication.mfaMethod === 'string' && config.authentication.mfaMethod !== 'totp') {
         errors.push('mfaMethod deve ser: totp (único método implementado)');
       }
     }
@@ -603,10 +652,10 @@ class SecurityService {
     // Validações de senha
     if (config.passwordRules) {
       // #1253: 8 is NIST SP 800-63B §5.1.1.2's floor (see password.service).
-      if (config.passwordRules.minLength && (config.passwordRules.minLength < 8 || config.passwordRules.minLength > 128)) {
+      if (isNumber(config.passwordRules.minLength) && (config.passwordRules.minLength < 8 || config.passwordRules.minLength > 128)) {
         errors.push('minLength deve estar entre 8 e 128');
       }
-      if (config.passwordRules.expirationDays && (config.passwordRules.expirationDays < 0 || config.passwordRules.expirationDays > 365)) {
+      if (isNumber(config.passwordRules.expirationDays) && (config.passwordRules.expirationDays < 0 || config.passwordRules.expirationDays > 365)) {
         errors.push('expirationDays deve estar entre 0 e 365');
       }
       // #1244: password.service now reads this depth, so an out-of-range
@@ -621,17 +670,17 @@ class SecurityService {
 
     // Validações de sessão
     if (config.session) {
-      if (config.session.timeoutMinutes && (config.session.timeoutMinutes < 5 || config.session.timeoutMinutes > 480)) {
+      if (isNumber(config.session.timeoutMinutes) && (config.session.timeoutMinutes < 5 || config.session.timeoutMinutes > 480)) {
         errors.push('timeoutMinutes deve estar entre 5 e 480');
       }
-      if (config.session.maxSessionDurationHours && (config.session.maxSessionDurationHours < 1 || config.session.maxSessionDurationHours > 24)) {
+      if (isNumber(config.session.maxSessionDurationHours) && (config.session.maxSessionDurationHours < 1 || config.session.maxSessionDurationHours > 24)) {
         errors.push('maxSessionDurationHours deve estar entre 1 e 24 horas');
       }
     }
 
     // Validações de logs
     if (config.logging) {
-      if (config.logging.level && !['info', 'warning', 'error', 'critical'].includes(config.logging.level)) {
+      if (typeof config.logging.level === 'string' && !['info', 'warning', 'error', 'critical'].includes(config.logging.level)) {
         errors.push('level deve ser: info, warning, error ou critical');
       }
     }
