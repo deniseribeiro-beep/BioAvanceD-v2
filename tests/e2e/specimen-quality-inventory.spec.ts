@@ -16,6 +16,7 @@ import {
   type SeededStorageBox,
 } from './helpers/seedParticipant';
 import { watchAuditTrail, assertAuditEventRecorded } from './helpers/assertAuditEvent';
+import { deleteOrganizations } from './helpers/listOrganizations';
 
 // Real backend only — see backend-integration.spec.ts for the same skip
 // rationale. Run via `npm run test:e2e:docker` against the compose test
@@ -1225,6 +1226,8 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
   // through seedStorageBoxLocation() -- cleaned up via the API (like
   // human-showcase.spec.ts's own equipment fixture), not cleanupStorageBoxLocation.
   const equipmentIdsToDelete: string[] = [];
+  // #1282: the laboratories these tests create, deleted last.
+  const organizationIdsToDelete: string[] = [];
 
   test.afterAll(async ({ request }) => {
     await Promise.all(
@@ -1242,6 +1245,7 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
         );
       }
     }
+    await deleteOrganizations(request, apiBaseURL!, organizationIdsToDelete);
     await closeSeedDb();
   });
 
@@ -1299,6 +1303,7 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
     });
     expect(orgRes.status(), await orgRes.text()).toBe(201);
     const organizationId = (await orgRes.json()).data.organizationId;
+    organizationIdsToDelete.push(organizationId);
 
     const assayRes = await request.post(`${apiBaseURL}/api/assays`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -1355,6 +1360,7 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
     });
     expect(orgRes.status(), await orgRes.text()).toBe(201);
     const organizationId = (await orgRes.json()).data.organizationId;
+    organizationIdsToDelete.push(organizationId);
 
     return { specimenId, operatorId: String(admin.user._id), organizationId };
   }

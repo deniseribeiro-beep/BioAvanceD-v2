@@ -1,4 +1,5 @@
 import { APIRequestContext, expect } from '@playwright/test';
+import { realLogin } from './realAuth';
 
 const PAGE_SIZE = 500;
 const MAX_PAGES = 100;
@@ -26,4 +27,29 @@ export async function findOrganizationInList(
     if (items.length < PAGE_SIZE) return undefined;
   }
   return undefined;
+}
+
+/**
+ * #1282: deletes the organizations a spec created, so the persistent test
+ * volume stops collecting them. Call it from the spec's afterAll, after the
+ * spec's own cleanup of the records that reference them (storage trees,
+ * equipment). Best effort, like the other afterAll cleanups: a failed delete
+ * never fails the run. DELETE /api/organizations/:id checks no references, so
+ * users, samples and assays the spec leaves behind keep the id.
+ */
+export async function deleteOrganizations(
+  request: APIRequestContext,
+  apiBaseURL: string,
+  organizationIds: string[],
+): Promise<void> {
+  if (organizationIds.length === 0) return;
+  const admin = await realLogin(request).catch(() => null);
+  if (!admin) return;
+  await Promise.all(
+    organizationIds.map((id) =>
+      request.delete(`${apiBaseURL}/api/organizations/${id}`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+      }).catch(() => {})
+    )
+  );
 }

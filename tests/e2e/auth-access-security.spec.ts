@@ -3,6 +3,7 @@ import { realLogin, realAuthLogin, seedRealAuth } from './helpers/realAuth';
 import { watchAuditTrail, assertAuditEventRecorded } from './helpers/assertAuditEvent';
 import { completeFirstLoginMfa } from './helpers/completeFirstLoginMfa';
 import { computeTotp } from './helpers/totp';
+import { deleteOrganizations } from './helpers/listOrganizations';
 import { listLoginAttemptRows, listLoginAttemptIndexes, clearLoginAttempts, closeLoginAttemptsDb, findLogRows } from './helpers/queryLoginAttempts';
 import { findLatestSession, closeSessionsDb, listSessionIndexNames, setPasswordChangedAt } from './helpers/querySessions';
 
@@ -133,6 +134,13 @@ test.describe('Dashboard & authorization (RF002) — real backend', () => {
 });
 
 test.describe('User management (RF003) — real backend', () => {
+  // #1282: the organizations these tests create, deleted once they are done.
+  const organizationIds: string[] = [];
+
+  test.afterAll(async ({ request }) => {
+    await deleteOrganizations(request, apiBaseURL!, organizationIds);
+  });
+
   test('admin creates a user (criterion 1 happy path), the creation is audited (criterion 6), and a duplicate email/username is rejected (criterion 1 edge case)', async ({
     request,
   }) => {
@@ -336,12 +344,14 @@ test.describe('User management (RF003) — real backend', () => {
     });
     expect(orgA.ok(), await orgA.text()).toBeTruthy();
     const orgAId = (await orgA.json()).data?.organizationId;
+    organizationIds.push(orgAId);
     const orgB = await request.post(`${apiBaseURL}/api/organizations`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: { officialName: `Biobanco Norte ${orgSuffix}`, countryCode: 'BR' },
     });
     expect(orgB.ok(), await orgB.text()).toBeTruthy();
     const orgBId = (await orgB.json()).data?.organizationId;
+    organizationIds.push(orgBId);
 
     // Admin assigns the role with a validity period (already in the past —
     // proves enforcement, not just storage) and an organizational scope.

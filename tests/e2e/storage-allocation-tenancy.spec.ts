@@ -1,5 +1,6 @@
 import { test, expect, type APIRequestContext } from '@playwright/test';
 import { realLogin } from './helpers/realAuth';
+import { deleteOrganizations } from './helpers/listOrganizations';
 import { completeFirstLoginMfa } from './helpers/completeFirstLoginMfa';
 import {
   createRealParticipant,
@@ -39,12 +40,15 @@ function validSampleFields() {
 test.describe('Storage allocation is bounded by the caller organization (#1211) — real backend', () => {
   const authored: SeededStorageBox[] = [];
   const sensorIds: string[] = [];
+  // #1282: the organizations the tests create, deleted after the trees under them.
+  const organizationIds: string[] = [];
 
-  test.afterAll(async () => {
+  test.afterAll(async ({ request }) => {
     await Promise.all(authored.map((t) => cleanupStorageBoxLocation(t).catch(() => {})));
     await Promise.all(
       sensorIds.map((id, i) => removeSensorRegistration(id, authored[i]?.freezerId ?? '000000000000000000000000').catch(() => {}))
     );
+    await deleteOrganizations(request, apiBaseURL!, organizationIds);
     await Promise.all([closeSeedDb(), closeSeedSensorDb()]);
   });
 
@@ -108,7 +112,9 @@ test.describe('Storage allocation is bounded by the caller organization (#1211) 
         data: { officialName: `#1211 ${label} ${suffix}`, countryCode: 'BR' },
       });
       expect(res.ok(), await res.text()).toBeTruthy();
-      return (await res.json()).data.organizationId as string;
+      const organizationId = (await res.json()).data.organizationId as string;
+      organizationIds.push(organizationId);
+      return organizationId;
     };
     const ownOrg = await makeOrg('own');
     const otherOrg = await makeOrg('other');

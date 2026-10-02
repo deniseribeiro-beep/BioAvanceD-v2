@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { realLogin } from './helpers/realAuth';
+import { deleteOrganizations } from './helpers/listOrganizations';
 import { completeFirstLoginMfa } from './helpers/completeFirstLoginMfa';
 import {
   createRealParticipant,
@@ -36,8 +37,10 @@ function validSampleFields() {
 test.describe('Storage topology authoring through the API (#1124) — real backend', () => {
   const authored: SeededStorageBox[] = [];
   const sensorIds: string[] = [];
+  // #1282: the organizations the tests create, deleted after the trees under them.
+  const organizationIds: string[] = [];
 
-  test.afterAll(async () => {
+  test.afterAll(async ({ request }) => {
     await Promise.all(authored.map((t) => cleanupStorageBoxLocation(t).catch(() => {})));
     // cleanupStorageBoxLocation deletes sensors by a numeric locationId; the
     // API stores it as a string, and it never touches sensorMetadata, whose
@@ -45,6 +48,7 @@ test.describe('Storage topology authoring through the API (#1124) — real backe
     await Promise.all(
       sensorIds.map((id, i) => removeSensorRegistration(id, authored[i]?.freezerId ?? '000000000000000000000000').catch(() => {}))
     );
+    await deleteOrganizations(request, apiBaseURL!, organizationIds);
     await Promise.all([closeSeedDb(), closeSeedSensorDb()]);
   });
 
@@ -133,7 +137,9 @@ test.describe('Storage topology authoring through the API (#1124) — real backe
         data: { officialName: `#1210 ${label} ${suffix}`, countryCode: 'BR' },
       });
       expect(res.ok(), await res.text()).toBeTruthy();
-      return (await res.json()).data.organizationId as string;
+      const organizationId = (await res.json()).data.organizationId as string;
+      organizationIds.push(organizationId);
+      return organizationId;
     };
     const ownOrg = await makeOrg('own');
     const otherOrg = await makeOrg('other');
