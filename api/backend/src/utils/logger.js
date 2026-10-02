@@ -18,7 +18,12 @@ const log = {
   },
 
   warn: (message, ...args) => {
-    if (!isEnabled('warn')) return;
+    // #1274: a warning tagged [SECURITY] prints at any level, as errors do.
+    // It is a security event, and OWASP's logging guidance (Logging Cheat
+    // Sheet; ASVS V7) requires those logged, so an operator quietening the
+    // log must not silence an unencrypted write or a blocked source.
+    const security = typeof message === 'string' && message.startsWith('[SECURITY]');
+    if (!security && !isEnabled('warn')) return;
     console.warn(`[WARN] ${new Date().toISOString()} - ${message}`, ...args);
   },
 

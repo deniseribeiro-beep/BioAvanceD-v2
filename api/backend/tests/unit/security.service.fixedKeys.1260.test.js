@@ -151,6 +151,22 @@ describe('#1260 the logger honours the minimum level', () => {
     expect(out).toHaveBeenCalledTimes(1);
   });
 
+  // #1274 item 1: a security warning is a security event, and OWASP's
+  // logging guidance requires those logged, so the level cannot silence it.
+  it.each(['error', 'critical'])('a [SECURITY] warning prints at %s; an untagged one does not', (level) => {
+    const warnOut = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    logLevel.setMinLevel(level);
+    logger.warn('[SECURITY][AES256] ENCRYPTION_KEY ausente.');
+    logger.warn('[SECURITY] origem bloqueada');
+    logger.warn('untagged');
+    logger.warn('text mentioning [SECURITY] later');
+    expect(warnOut).toHaveBeenCalledTimes(2);
+    expect(warnOut.mock.calls.map((c) => c[0])).toEqual([
+      expect.stringContaining('[SECURITY][AES256]'),
+      expect.stringContaining('[SECURITY] origem bloqueada'),
+    ]);
+  });
+
   it('an unknown level is refused and changes nothing', () => {
     logLevel.setMinLevel('error');
     expect(logLevel.setMinLevel('verbose')).toBe(false);

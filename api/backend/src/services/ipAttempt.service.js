@@ -160,7 +160,7 @@ async function reportUnusualActivityBlock(db, req, row) {
       module: 'Autenticação',
     });
   } catch (error) {
-    logger.warn(`#1256: auditoria do bloqueio por atividade incomum falhou: ${error.message}`);
+    logger.warn(`[SECURITY] #1256: auditoria do bloqueio por atividade incomum falhou: ${error.message}`);
   }
   // #650's shape for the MFA lockout: fire-and-forget with an explicit catch,
   // so a missing NotificationRule never delays the block (#685).
@@ -226,7 +226,7 @@ async function recordFailedSourceAttempt(db, req, identifier) {
       { _id: key },
       { $set: { blockedUntil, blockReason: reason, expiresAt: blockedUntil } }
     );
-    logger.warn(`#1255: origem bloqueada até ${blockedUntil.toISOString()} (${reason})`);
+    logger.warn(`[SECURITY] #1255: origem bloqueada até ${blockedUntil.toISOString()} (${reason})`);
     if (reason === 'unusual_activity') {
       await reportUnusualActivityBlock(db, req, { ...row, blockedUntil });
     }

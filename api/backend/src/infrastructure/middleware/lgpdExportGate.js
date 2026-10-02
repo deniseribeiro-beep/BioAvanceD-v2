@@ -3,6 +3,15 @@
  * autorização") switches the personal-data exports off. Mounted after
  * authentication and the route's own permission or scope checks, so a caller
  * those refuse learns nothing about the setting.
+ *
+ * #1274: on the sample-file exports, requireOrganizationScope refuses only a
+ * caller with no organization. Whether this sample is in the caller's scope
+ * is the controller's check, after this gate. So a caller with an
+ * organization, asking for another organization's file, is told exports are
+ * off. That leaks nothing: the switch is site-wide, and the same caller reads
+ * it from any export of their own. With exports off it also hides whether the
+ * file is in or out of scope, so no answer here is more specific than the
+ * controller's own.
  */
 async function requireDataExportAllowed(req, res, next) {
   try {
