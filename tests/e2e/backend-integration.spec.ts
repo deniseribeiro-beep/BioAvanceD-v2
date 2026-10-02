@@ -89,14 +89,23 @@ test.describe('Real backend integration', () => {
     expect(createBody.data.officialName).toBe(officialName);
     expect(createBody.data.countryCode).toBe('BR');
 
-    const listResponse = await request.get(`${apiBaseURL}/api/organizations`, {
-      headers: { Authorization: `Bearer ${authToken}` },
-    });
-    expect(listResponse.ok()).toBeTruthy();
+    try {
+      // #1279: the list is sorted by officialName and capped (default 100,
+      // max 500) on a volume that persists across runs, so ask for the
+      // largest page and delete the fixture below.
+      const listResponse = await request.get(`${apiBaseURL}/api/organizations?limit=500`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      expect(listResponse.ok()).toBeTruthy();
 
-    const listBody = await listResponse.json();
-    const found = listBody.data.find((org: any) => org.organizationId === createBody.data.organizationId);
-    expect(found).toBeTruthy();
-    expect(found.officialName).toBe(officialName);
+      const listBody = await listResponse.json();
+      const found = listBody.data.find((org: any) => org.organizationId === createBody.data.organizationId);
+      expect(found).toBeTruthy();
+      expect(found.officialName).toBe(officialName);
+    } finally {
+      await request.delete(`${apiBaseURL}/api/organizations/${createBody.data.organizationId}`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      }).catch(() => {});
+    }
   });
 });

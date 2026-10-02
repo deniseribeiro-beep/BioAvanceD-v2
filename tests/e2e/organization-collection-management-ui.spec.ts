@@ -43,7 +43,9 @@ test.describe('Organizations CRUD through the real UI (#606, #608)', () => {
     // organizationId is server-generated (buildOrganizationSubmissionPayload
     // strips it from the create payload) — resolve it from the real backend
     // to target this row's edit/delete buttons, which are keyed by that id.
-    const listResponse = await request.get(`${apiBaseURL}/api/organizations`, {
+    // The list is sorted by officialName and capped (default 100, max 500),
+    // so ask for the largest page (#1279).
+    const listResponse = await request.get(`${apiBaseURL}/api/organizations?limit=500`, {
       headers: { Authorization: `Bearer ${session.token}` },
     });
     expect(listResponse.ok()).toBeTruthy();

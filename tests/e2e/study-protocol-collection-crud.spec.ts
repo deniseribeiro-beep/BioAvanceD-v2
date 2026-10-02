@@ -121,8 +121,9 @@ test.describe('protocol version/approvalStatus round-trip (#326)', () => {
 
 // #325 (RF020, narrowed — see issue comment: full MIABIS-institutional
 // scope split out to #576 since organization.routes.js has no PUT/DELETE
-// and Collection is Fase-1-only). Covers the organization operations that
-// actually exist today: create + list via /api/organizations.
+// and Collection is Fase-1-only). Covers create + list via
+// /api/organizations; GET /:id and DELETE /:id have since landed and serve
+// the read-back and the cleanup (#1279).
 test.describe('organizations create+list (#325)', () => {
   test('creates and lists an organization, and records it on the audit trail', async ({ request }) => {
     const admin = await realLogin(request);
@@ -137,15 +138,33 @@ test.describe('organizations create+list (#325)', () => {
     expect(createResponse.status()).toBe(201);
     const created = await createResponse.json();
     expect(created.data.officialName).toBe(officialName);
+    const organizationId = created.data.organizationId as string;
 
-    await assertAuditEventRecorded(request, apiBaseURL!, admin.token, watch);
+    try {
+      await assertAuditEventRecorded(request, apiBaseURL!, admin.token, watch);
 
-    const listResponse = await request.get(`${apiBaseURL}/api/organizations`, {
-      headers: { Authorization: `Bearer ${admin.token}` },
-    });
-    expect(listResponse.status()).toBe(200);
-    const list = await listResponse.json();
-    expect(list.data.some((item: Record<string, unknown>) => item.officialName === officialName)).toBe(true);
+      const getResponse = await request.get(`${apiBaseURL}/api/organizations/${organizationId}`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+      });
+      expect(getResponse.status()).toBe(200);
+      expect((await getResponse.json()).data.officialName).toBe(officialName);
+
+      // #1279: the list is sorted by officialName and capped (default 100,
+      // max 500), and the test volume persists across runs. At the default
+      // page this fixture fell past row 100 once other specs' organizations
+      // sorted ahead of it. Ask for the largest page, and delete the fixture
+      // below so this spec stops adding to the count.
+      const listResponse = await request.get(`${apiBaseURL}/api/organizations?limit=500`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+      });
+      expect(listResponse.status()).toBe(200);
+      const list = await listResponse.json();
+      expect(list.data.some((item: Record<string, unknown>) => item.organizationId === organizationId)).toBe(true);
+    } finally {
+      await request.delete(`${apiBaseURL}/api/organizations/${organizationId}`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+      }).catch(() => {});
+    }
   });
 
   test('rejects creating an organization missing its required countryCode', async ({ request }) => {
