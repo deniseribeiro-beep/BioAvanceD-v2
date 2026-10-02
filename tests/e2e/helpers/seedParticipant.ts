@@ -29,7 +29,11 @@ let client: MongoClient | null = null;
 
 async function getDb(): Promise<Db> {
   if (!client) {
-    client = new MongoClient(mongoUri);
+    // #1227: the driver's default server selection waits 30 s, the same as a
+    // Playwright hook's budget, so a stalled connect surfaced as an anonymous
+    // "afterAll hook timeout" instead of the driver's own error. 10 s leaves
+    // the hook time to report what actually stalled.
+    client = new MongoClient(mongoUri, { serverSelectionTimeoutMS: 10_000 });
     await client.connect();
   }
   return client.db(mongoDbName);
@@ -221,16 +225,33 @@ export async function seedStorageBoxLocation(): Promise<SeededStorageBox> {
  * Wave 2 finally block). This is the missing counterpart.
  */
 export async function cleanupStorageBoxLocation(seeded: SeededStorageBox): Promise<void> {
-  const db = await getDb();
-  await db.collection('storageBoxes').deleteOne({ _id: new ObjectId(seeded.boxId) });
-  await db.collection('storageContainers').deleteMany({
-    _id: { $in: [seeded.rackId, seeded.shelfId, seeded.freezerId].map((id) => new ObjectId(id)) },
-  });
-  await db.collection('equipment').deleteOne({ _id: new ObjectId(seeded.equipmentId) });
-  // The sensor doc has no id of its own in SeededStorageBox -- it shares
-  // containerID (via its locationId field) with the equipment doc, so
-  // that's what identifies it for deletion instead.
-  await db.collection('sensors').deleteMany({ locationId: seeded.containerID });
+  // #1227: every caller but one swallows this function's rejection, so the
+  // step that failed is logged here first, with the fixture it leaves behind.
+  // A full run's output then says which call stalled: grep "[e2e-cleanup]".
+  let step = 'connect';
+  try {
+    const db = await getDb();
+    step = 'storageBoxes.deleteOne';
+    await db.collection('storageBoxes').deleteOne({ _id: new ObjectId(seeded.boxId) });
+    step = 'storageContainers.deleteMany';
+    await db.collection('storageContainers').deleteMany({
+      _id: { $in: [seeded.rackId, seeded.shelfId, seeded.freezerId].map((id) => new ObjectId(id)) },
+    });
+    step = 'equipment.deleteOne';
+    await db.collection('equipment').deleteOne({ _id: new ObjectId(seeded.equipmentId) });
+    // The sensor doc has no id of its own in SeededStorageBox -- it shares
+    // containerID (via its locationId field) with the equipment doc, so
+    // that's what identifies it for deletion instead.
+    step = 'sensors.deleteMany';
+    await db.collection('sensors').deleteMany({ locationId: seeded.containerID });
+  } catch (error) {
+    const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+    console.error(
+      `[e2e-cleanup] ${new Date().toISOString()} cleanupStorageBoxLocation failed at ${step} ` +
+        `(box ${seeded.boxId}, containerID ${seeded.containerID}): ${message}`
+    );
+    throw error;
+  }
 }
 
 /**
