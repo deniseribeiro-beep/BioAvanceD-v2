@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import { realLogin } from './helpers/realAuth';
 import { watchAuditTrail, assertAuditEventRecorded } from './helpers/assertAuditEvent';
 import { createRealParticipant, seedStudy, closeSeedDb } from './helpers/seedParticipant';
+import { findOrganizationInList } from './helpers/listOrganizations';
 
 // Real backend only — see specimen-quality-inventory.spec.ts for the same
 // skip rationale. Run via `npm run test:e2e:docker` against the compose
@@ -149,17 +150,14 @@ test.describe('organizations create+list (#325)', () => {
       expect(getResponse.status()).toBe(200);
       expect((await getResponse.json()).data.officialName).toBe(officialName);
 
-      // #1279: the list is sorted by officialName and capped (default 100,
-      // max 500), and the test volume persists across runs. At the default
-      // page this fixture fell past row 100 once other specs' organizations
-      // sorted ahead of it. Ask for the largest page, and delete the fixture
-      // below so this spec stops adding to the count.
-      const listResponse = await request.get(`${apiBaseURL}/api/organizations?limit=500`, {
-        headers: { Authorization: `Bearer ${admin.token}` },
-      });
-      expect(listResponse.status()).toBe(200);
-      const list = await listResponse.json();
-      expect(list.data.some((item: Record<string, unknown>) => item.organizationId === organizationId)).toBe(true);
+      // #1279: the list is sorted by officialName and paged, and the test
+      // volume persists across runs. At the default page this fixture fell
+      // past row 100 once other specs' organizations sorted ahead of it.
+      // Page through the list (#1282), and delete the fixture below so this
+      // spec stops adding to the count.
+      const listed = await findOrganizationInList(request, apiBaseURL!, admin.token,
+        (item) => item.organizationId === organizationId);
+      expect(listed).toBeTruthy();
     } finally {
       await request.delete(`${apiBaseURL}/api/organizations/${organizationId}`, {
         headers: { Authorization: `Bearer ${admin.token}` },

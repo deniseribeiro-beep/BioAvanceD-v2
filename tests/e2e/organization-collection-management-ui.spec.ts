@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { realLogin, seedRealAuth } from './helpers/realAuth';
+import { findOrganizationInList } from './helpers/listOrganizations';
 
 // Real-backend proof for #608 (RF020, tracker #605, seed #576):
 // #606/#607 built the Organizations/Collections CRUD UI in
@@ -43,16 +44,12 @@ test.describe('Organizations CRUD through the real UI (#606, #608)', () => {
     // organizationId is server-generated (buildOrganizationSubmissionPayload
     // strips it from the create payload) — resolve it from the real backend
     // to target this row's edit/delete buttons, which are keyed by that id.
-    // The list is sorted by officialName and capped (default 100, max 500),
-    // so ask for the largest page (#1279).
-    const listResponse = await request.get(`${apiBaseURL}/api/organizations?limit=500`, {
-      headers: { Authorization: `Bearer ${session.token}` },
-    });
-    expect(listResponse.ok()).toBeTruthy();
-    const list = await listResponse.json();
-    const created = list.data.find((org: Record<string, unknown>) => org.officialName === officialName);
+    // The list is sorted by officialName and paged, so page through it
+    // (#1279, #1282).
+    const created = await findOrganizationInList(request, apiBaseURL!, session.token,
+      (org) => org.officialName === officialName);
     expect(created).toBeTruthy();
-    const organizationId = created.organizationId;
+    const organizationId = created!.organizationId;
 
     try {
       await page.getByTestId(`edit-organization-button-${organizationId}`).click();

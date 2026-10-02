@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { findOrganizationInList } from './helpers/listOrganizations';
 
 // Unlike the other specs in this folder, this one does NOT mock the backend.
 // It talks to the real API (mongodb-backed) so it only makes sense when run
@@ -90,18 +91,13 @@ test.describe('Real backend integration', () => {
     expect(createBody.data.countryCode).toBe('BR');
 
     try {
-      // #1279: the list is sorted by officialName and capped (default 100,
-      // max 500) on a volume that persists across runs, so ask for the
-      // largest page and delete the fixture below.
-      const listResponse = await request.get(`${apiBaseURL}/api/organizations?limit=500`, {
-        headers: { Authorization: `Bearer ${authToken}` },
-      });
-      expect(listResponse.ok()).toBeTruthy();
-
-      const listBody = await listResponse.json();
-      const found = listBody.data.find((org: any) => org.organizationId === createBody.data.organizationId);
+      // #1279: the list is sorted by officialName and paged on a volume that
+      // persists across runs, so page through it (#1282) and delete the
+      // fixture below.
+      const found = await findOrganizationInList(request, apiBaseURL!, authToken,
+        (org) => org.organizationId === createBody.data.organizationId);
       expect(found).toBeTruthy();
-      expect(found.officialName).toBe(officialName);
+      expect(found!.officialName).toBe(officialName);
     } finally {
       await request.delete(`${apiBaseURL}/api/organizations/${createBody.data.organizationId}`, {
         headers: { Authorization: `Bearer ${authToken}` },
