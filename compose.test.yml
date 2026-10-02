@@ -346,6 +346,14 @@ services:
     environment:
       <<: *test-env
       RUN_SERVER_IN_TEST: "1"
+      # #1263: trust X-Forwarded-For only from loopback, which in this
+      # container's network namespace is trusted-hop-test below and nothing
+      # else. The runner, the frontend and the host's published 3000 all
+      # connect from other addresses, so their requests keep their socket
+      # address as req.ip, exactly as under TRUST_PROXY=0. Test stack only:
+      # production keeps TRUST_PROXY=0 (.env.production.example) unless a
+      # real proxy that clients cannot reach is in front.
+      TRUST_PROXY: loopback
       # #981: TSA_URL was set here and read by NOTHING -- git grep over the
       # whole tracked tree found this line and no reader. The variable the
       # code actually reads is AUDIT_RFC3161_TSA_URL, which 67ac5405 moved
@@ -392,14 +400,42 @@ services:
         condition: service_healthy
     ports:
       - "${BACKEND_HOST_PORT:-3000}:3000"
+      # #1263: trusted-hop-test shares this service's network namespace, so
+      # its port is published here (a network_mode service cannot publish).
+      - "${TRUSTED_HOP_HOST_PORT:-3100}:3100"
     expose:
       - "3000"
+      - "3100"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health >/dev/null"]
       interval: 10s
       timeout: 5s
       retries: 20
     networks: [bioavanced-test]
+
+  # #1263: the one hop the backend trusts (TRUST_PROXY: loopback above). It
+  # runs in backend-app-test's network namespace and forwards :3100 to the
+  # backend's 127.0.0.1:3000 byte for byte, so a request sent through it
+  # reaches Express from loopback with its own X-Forwarded-For intact, and
+  # req.ip becomes the address the spec chose. That gives a spec a source
+  # address of its own, so it can drive the source-address and
+  # unusual-activity blocks without blocking the one address every other
+  # spec shares. Never copy this into a production stack: it lets any caller
+  # that reaches :3100 choose its address.
+  trusted-hop-test:
+    image: node:22-alpine
+    command: ["node", "/hop/loopback-forward.cjs", "0.0.0.0:3100=127.0.0.1:3000"]
+    volumes:
+      - ./tests/e2e/docker:/hop:ro
+    network_mode: "service:backend-app-test"
+    depends_on:
+      backend-app-test:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3100/api/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
 
   admin-bootstrap-test:
     build:
@@ -851,10 +887,16 @@ services:
       # which reaches the published ports only from the host, not from here.
       E2E_NEO4J_URI: bolt://neo4j-test:7687
       E2E_INFLUXDB_URL: http://influxdb-test:8086
+      # #1263: the trusted hop. Reached by service name, not through the
+      # loopback forwarder: only API calls go to it, never the browser. The
+      # spec's default, http://localhost:3100, is the host-side form.
+      E2E_TRUSTED_HOP_URL: http://backend-app-test:3100
     depends_on:
       frontend-app-test:
         condition: service_healthy
       backend-app-test:
+        condition: service_healthy
+      trusted-hop-test:
         condition: service_healthy
       mongodb-test:
         condition: service_healthy

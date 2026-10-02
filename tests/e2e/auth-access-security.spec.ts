@@ -1,9 +1,9 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, APIRequestContext } from '@playwright/test';
 import { realLogin, realAuthLogin, seedRealAuth } from './helpers/realAuth';
 import { watchAuditTrail, assertAuditEventRecorded } from './helpers/assertAuditEvent';
 import { completeFirstLoginMfa } from './helpers/completeFirstLoginMfa';
 import { computeTotp } from './helpers/totp';
-import { listLoginAttemptRows, listLoginAttemptIndexes, clearLoginAttempts, closeLoginAttemptsDb } from './helpers/queryLoginAttempts';
+import { listLoginAttemptRows, listLoginAttemptIndexes, clearLoginAttempts, closeLoginAttemptsDb, findLogRows } from './helpers/queryLoginAttempts';
 import { findLatestSession, closeSessionsDb, listSessionIndexNames, setPasswordChangedAt } from './helpers/querySessions';
 
 // Real backend + real frontend only — see backend-integration.spec.ts for the
@@ -1174,10 +1174,10 @@ test.describe('Security policy management (RF014) — real backend', () => {
 
   // #1255: loginAttempts.trackIP and blockIPAfterAttempts were shown and read
   // by nothing. A failed login now counts against its source address in
-  // login_ip_attempts, keyed by an HMAC of the address. The block itself is
-  // pinned by unit tests and a real-Mongo probe: the test stack has one
-  // source address (TRUST_PROXY=0), so blocking it here would block every
-  // spec that runs after this one.
+  // login_ip_attempts, keyed by an HMAC of the address. The blocks
+  // themselves are driven through the trusted hop in the #1263 tests below:
+  // the runner's own address is shared by every spec, so blocking it here
+  // would block every spec that runs after this one.
   test('#1255: a failed login is counted against its source, stored as a keyed hash with an expiry (criterion 2)', async ({
     request,
   }) => {
@@ -1208,6 +1208,176 @@ test.describe('Security policy management (RF014) — real backend', () => {
       expect(ttl?.expireAfterSeconds).toBe(0);
     } finally {
       // The runner's row is shared by every spec; give the failure back.
+      await clearLoginAttempts();
+      await closeLoginAttemptsDb();
+    }
+  });
+
+  // #1263: the blocks themselves, on the live stack. Every spec shares the
+  // runner's source address, so these go through trusted-hop-test, the one
+  // hop the test backend trusts (TRUST_PROXY: loopback), and name their own
+  // TEST-NET-3 address (RFC 5737) in X-Forwarded-For. Each test also sends
+  // the blocked address straight to the backend and expects it ignored: the
+  // header is honoured from the hop only, never from a client.
+  const trustedHopURL = process.env.E2E_TRUSTED_HOP_URL || 'http://localhost:3100';
+  const genericLoginFailure = async (request: APIRequestContext, address: string) => {
+    const res = await request.post(`${trustedHopURL}/api/auth/login`, {
+      headers: { 'X-Forwarded-For': address },
+      data: { username: `ip-generic-${Date.now()}@example.com`, password: 'Not@TheRight1263' },
+    });
+    expect(res.status()).toBe(401);
+    return res.json();
+  };
+
+  test('#1263: a source past blockIPAfterAttempts is refused even with the right password, and another source is not', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const credentials = { username: process.env.TEST_USER || 'admin', password: process.env.TEST_PASS || 'Admin@123' };
+    const blocked = '203.0.113.10';
+    const other = '203.0.113.11';
+    try {
+      const config = (await (await request.get(`${apiBaseURL}/api/security/config`, { headers: auth })).json()).data;
+      expect(config.loginAttempts.trackIP, 'precondition: trackIP on').toBe(true);
+      const blockAfter = Number(config.loginAttempts.blockIPAfterAttempts);
+      expect(blockAfter, 'precondition: blockIPAfterAttempts is positive').toBeGreaterThan(0);
+      await clearLoginAttempts();
+
+      // One unknown name throughout, so #1256's distinct-account detector
+      // never fires and the block can only be the attempt count's.
+      const name = `ip-block-${Date.now()}@example.com`;
+      for (let attempt = 1; attempt <= blockAfter; attempt += 1) {
+        const res = await request.post(`${trustedHopURL}/api/auth/login`, {
+          headers: { 'X-Forwarded-For': blocked },
+          data: { username: name, password: 'Not@TheRight1263' },
+        });
+        expect(res.status(), `failure ${attempt} of ${blockAfter}`).toBe(401);
+      }
+      const rows = await listLoginAttemptRows();
+      const blockedRows = rows.filter((row) => row.blockedUntil && new Date(row.blockedUntil).getTime() > Date.now());
+      expect(blockedRows, 'exactly one source is blocked').toHaveLength(1);
+      expect(blockedRows[0].blockReason).toBe('attempts');
+      expect(blockedRows[0].failures).toBe(blockAfter);
+
+      // The right password from the blocked source: the generic answer.
+      const refused = await request.post(`${trustedHopURL}/api/auth/login`, {
+        headers: { 'X-Forwarded-For': blocked },
+        data: credentials,
+      });
+      expect(refused.status()).toBe(401);
+      const refusedBody = await refused.json();
+      expect(refusedBody.data?.token).toBeFalsy();
+      expect(refusedBody.message).toBe((await genericLoginFailure(request, other)).message);
+
+      // Another source logs in with the same password.
+      const allowed = await request.post(`${trustedHopURL}/api/auth/login`, {
+        headers: { 'X-Forwarded-For': other },
+        data: credentials,
+      });
+      expect(allowed.status(), await allowed.text()).toBe(200);
+      expect((await allowed.json()).data?.token).toBeTruthy();
+
+      // A client that names the blocked address itself, straight to the
+      // backend, is not that address.
+      const spoofed = await request.post(`${apiBaseURL}/api/auth/login`, {
+        headers: { 'X-Forwarded-For': blocked },
+        data: credentials,
+      });
+      expect(spoofed.status(), 'X-Forwarded-For from an untrusted socket is ignored').toBe(200);
+    } finally {
+      await clearLoginAttempts();
+      await closeLoginAttemptsDb();
+    }
+  });
+
+  test('#1263: failures against maxLoginAttempts distinct accounts block the source under the enhanced mode, with a critical audit row and a notification', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const source = '203.0.113.20';
+    // A little slack for clock skew between the runner and the backend.
+    const started = new Date(Date.now() - 2_000);
+
+    const before = await request.get(`${apiBaseURL}/api/security/config`, { headers: auth });
+    expect(before.ok()).toBeTruthy();
+    const originalConfig = (await before.json()).data;
+    const threshold = Number(originalConfig.authentication.maxLoginAttempts);
+    expect(originalConfig.loginAttempts.trackIP, 'precondition: trackIP on').toBe(true);
+    // The count's own block must not land first.
+    const blockAfter = Number(originalConfig.loginAttempts.blockIPAfterAttempts);
+    expect(blockAfter === 0 || blockAfter > threshold, 'precondition: blockIPAfterAttempts above maxLoginAttempts').toBe(true);
+
+    const ruleRes = await request.post(`${apiBaseURL}/api/notification-rules`, {
+      headers: auth,
+      data: {
+        eventType: 'unusual_activity_block',
+        channels: ['in_app'],
+        recipientRoleCodes: ['administrator'],
+        sensitiveFieldsAllowlist: ['distinctAccounts', 'failures'],
+        maxDeliveryMinutes: 2,
+      },
+    });
+    expect(ruleRes.ok(), await ruleRes.text()).toBeTruthy();
+
+    try {
+      const on = await request.put(`${apiBaseURL}/api/security/config`, {
+        headers: auth,
+        data: { enhancedSecurity: { enabled: true, blockUnusualActivity: true, requireMFAForAll: false } },
+      });
+      expect(on.ok(), await on.text()).toBeTruthy();
+      await clearLoginAttempts();
+
+      const stamp = Date.now();
+      for (let i = 1; i <= threshold; i += 1) {
+        const res = await request.post(`${trustedHopURL}/api/auth/login`, {
+          headers: { 'X-Forwarded-For': source },
+          data: { username: `spray-${stamp}-${i}@example.com`, password: 'Not@TheRight1263' },
+        });
+        expect(res.status(), `account ${i} of ${threshold}`).toBe(401);
+      }
+
+      const rows = await listLoginAttemptRows();
+      const blockedRows = rows.filter((row) => row.blockedUntil && new Date(row.blockedUntil).getTime() > Date.now());
+      expect(blockedRows, 'exactly one source is blocked').toHaveLength(1);
+      expect(blockedRows[0].blockReason).toBe('unusual_activity');
+      expect(blockedRows[0].accounts).toHaveLength(threshold);
+
+      const credentials = { username: process.env.TEST_USER || 'admin', password: process.env.TEST_PASS || 'Admin@123' };
+      const refused = await request.post(`${trustedHopURL}/api/auth/login`, {
+        headers: { 'X-Forwarded-For': source },
+        data: credentials,
+      });
+      expect(refused.status(), 'the blocked source is refused the right password too').toBe(401);
+
+      const audit = await findLogRows({
+        action: 'LOGIN',
+        severity: 'critical',
+        'payload.reason': 'unusual_activity',
+        timestamp: { $gte: started },
+      });
+      expect(audit, 'one critical LOGIN audit row for the block').toHaveLength(1);
+      expect(audit[0].payload.distinctAccounts).toBe(threshold);
+      expect(audit[0].metadata?.tracking?.ip, 'the audit row names the forwarded address').toBe(source);
+
+      const findNotification = async () => {
+        const res = await request.get(`${apiBaseURL}/api/notifications?eventType=unusual_activity_block&limit=50`, { headers: auth });
+        if (!res.ok()) return null;
+        const body = await res.json();
+        return (body.data || []).find((n: any) => new Date(n.createdAt).getTime() >= started.getTime()) || null;
+      };
+      await expect.poll(findNotification, { timeout: 15_000 }).toBeTruthy();
+      const notification = await findNotification();
+      expect(notification.status).toBe('delivered');
+      expect(notification.deliveredChannel).toBe('in_app');
+      expect(notification.sourceEventType).toBe('Authentication');
+      expect(notification.payload).toEqual({ distinctAccounts: threshold, failures: threshold });
+    } finally {
+      await request.put(`${apiBaseURL}/api/security/config`, {
+        headers: auth,
+        data: { enhancedSecurity: originalConfig.enhancedSecurity },
+      }).catch(() => {});
       await clearLoginAttempts();
       await closeLoginAttemptsDb();
     }

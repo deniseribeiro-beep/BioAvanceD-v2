@@ -6,8 +6,8 @@ import { MongoClient, Db } from 'mongodb';
  * specs read it from the same Mongo the stack uses, the pattern
  * queryFoundationData.ts and querySessions.ts already follow.
  *
- * The test stack runs with TRUST_PROXY=0, so every API call from the runner
- * shares one source address. The suite's own deliberate failures (wrong MFA
+ * The test backend trusts X-Forwarded-For from trusted-hop-test only (#1263),
+ * so every API call the runner sends it directly shares one source address. The suite's own deliberate failures (wrong MFA
  * codes, old-password checks) therefore accumulate on one row, and
  * clearLoginAttempts() is called from global-setup so a re-run inside the
  * 30-minute window starts from zero instead of inheriting the last run's
@@ -53,6 +53,17 @@ export async function listLoginAttemptRows(): Promise<LoginAttemptRow[]> {
 export async function listLoginAttemptIndexes(): Promise<Array<{ name: string; expireAfterSeconds?: number }>> {
   const db = await getDb();
   return (await db.collection(COLLECTION).indexes()) as Array<{ name: string; expireAfterSeconds?: number }>;
+}
+
+/**
+ * #1263: audit rows from the `logs` collection, newest first. The unusual-
+ * activity spec reads metadata.tracking.ip here, which GET /api/logs does not
+ * promise to return, to prove the row names the address the trusted hop
+ * forwarded.
+ */
+export async function findLogRows(filter: Record<string, unknown>): Promise<Array<Record<string, any>>> {
+  const db = await getDb();
+  return db.collection('logs').find(filter).sort({ timestamp: -1 }).limit(20).toArray();
 }
 
 export async function clearLoginAttempts(): Promise<number> {

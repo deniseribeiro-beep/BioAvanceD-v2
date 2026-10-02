@@ -6,7 +6,7 @@ import { mockLogin } from './helpers/mockAuth';
 import { clearLoginAttempts, closeLoginAttemptsDb } from './helpers/queryLoginAttempts';
 
 // #1255: every spec reaches the backend from one source address
-// (TRUST_PROXY=0), and failed logins count against it for 30 minutes. A run
+// (only trusted-hop-test may forward one, #1263), and failed logins count against it for 30 minutes. A run
 // started inside that window would inherit the last run's failures and could
 // block itself, so each run starts from an empty store. Only where
 // E2E_MONGO_URI names the stack's Mongo (the in-container runner); a mocked

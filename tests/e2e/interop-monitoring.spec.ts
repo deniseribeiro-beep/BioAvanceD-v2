@@ -1052,7 +1052,7 @@ test.describe('Alertas e notificações (RF015) — real backend', () => {
     expect(lastLoginBody.message).toContain('MFA bloqueado');
 
     // #1255: these five deliberate failures also count against the runner's
-    // source address, which every spec shares (TRUST_PROXY=0). Clear them so
+    // source address, which every direct spec call shares. Clear them so
     // they do not spend the suite's blockIPAfterAttempts budget.
     await clearLoginAttempts();
     await closeLoginAttemptsDb();
