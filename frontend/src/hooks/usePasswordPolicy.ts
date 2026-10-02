@@ -18,6 +18,7 @@ export function usePasswordPolicy(): PasswordStrengthRules {
         if (active && data && Number.isInteger(data.minLength)) {
           setRules({
             minLength: data.minLength,
+            ...(Number.isInteger(data.minLengthWithMFA) ? { minLengthWithMFA: data.minLengthWithMFA } : {}),
             requireUppercase: data.requireUppercase !== false,
             requireLowercase: data.requireLowercase !== false,
             requireNumbers: data.requireNumbers !== false,

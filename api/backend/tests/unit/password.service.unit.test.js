@@ -5,6 +5,20 @@ const {
   DEFAULT_REUSE_POLICY, DEFAULT_PASSWORD_POLICY, publicStrengthRules,
 } = require('../../src/services/password.service');
 
+// #1257: the four composition flags default off now, so the tests of those
+// flags pass a policy that turns them on.
+const STRICT = {
+  ...DEFAULT_PASSWORD_POLICY, minLength: 8, requireUppercase: true, requireLowercase: true, requireNumbers: true, requireSpecialChars: true,
+};
+// #1257: how a stored security_config document with no passwordRules keys
+// reads: the values in force before the defaults moved.
+const STORED_FALLBACK = {
+  minLength: 8, minLengthWithMFA: 8,
+  requireUppercase: true, requireLowercase: true, requireNumbers: true, requireSpecialChars: true,
+  preventReuse: true, maxReuseHistory: 5, expirationDays: 90, allowPasswordReset: true,
+};
+const MFA_ACCOUNT = { mfaEnabled: true, mfaSecretCiphertext: 'ciphertext' };
+
 describe('validateStrength', () => {
   it('throws when password is null', () => {
     expect(() => validateStrength(null)).toThrow('obrigatória');
@@ -19,27 +33,27 @@ describe('validateStrength', () => {
   });
 
   it('throws when password has no uppercase letter', () => {
-    expect(() => validateStrength('password1!')).toThrow();
+    expect(() => validateStrength('password1!', STRICT)).toThrow();
   });
 
   it('throws when password has no lowercase letter', () => {
-    expect(() => validateStrength('PASSWORD1!')).toThrow();
+    expect(() => validateStrength('PASSWORD1!', STRICT)).toThrow();
   });
 
   it('throws when password has no digit', () => {
-    expect(() => validateStrength('Password!')).toThrow();
+    expect(() => validateStrength('Password!', STRICT)).toThrow();
   });
 
   it('throws when password has no special character', () => {
-    expect(() => validateStrength('Password1')).toThrow();
+    expect(() => validateStrength('Password1', STRICT)).toThrow();
   });
 
   it('does not throw for strong password', () => {
-    expect(() => validateStrength('SecurePass123!')).not.toThrow();
+    expect(() => validateStrength('SecurePass123!', STRICT)).not.toThrow();
   });
 
   it('does not throw for minimum-length strong password', () => {
-    expect(() => validateStrength('Secure1!')).not.toThrow();
+    expect(() => validateStrength('Secure1!', STRICT)).not.toThrow();
   });
 
   // #1246: the rules come from passwordRules (dict-02 P1X-0284..0288).
@@ -50,20 +64,43 @@ describe('validateStrength', () => {
   });
 
   it('#1246: a class the policy turns off is not required', () => {
-    const policy = { ...DEFAULT_PASSWORD_POLICY, requireNumbers: false, requireSpecialChars: false };
+    const policy = { ...STRICT, requireNumbers: false, requireSpecialChars: false };
     expect(() => validateStrength('Password', policy)).not.toThrow();
     expect(() => validateStrength('password', policy)).toThrow('letra maiúscula e letra minúscula');
   });
 
-  it('#1246: the default message is unchanged', () => {
-    expect(() => validateStrength('short')).toThrow(
+  it('#1246: a policy with every class on names them all', () => {
+    expect(() => validateStrength('short', STRICT)).toThrow(
       'Senha deve ter pelo menos 8 caracteres, com letra maiúscula, letra minúscula, número e símbolo'
     );
   });
 
-  it('#1246: an out-of-range policy minLength falls back to 8', () => {
-    expect(() => validateStrength('Secure1!', { ...DEFAULT_PASSWORD_POLICY, minLength: 2 })).not.toThrow();
-    expect(() => validateStrength('Secur1!', { ...DEFAULT_PASSWORD_POLICY, minLength: 2 })).toThrow();
+  it('#1257: an out-of-range policy minLength falls back to the default 15', () => {
+    expect(() => validateStrength('fifteen chars!!', { ...DEFAULT_PASSWORD_POLICY, minLength: 2 })).not.toThrow();
+    expect(() => validateStrength('fourteen chars', { ...DEFAULT_PASSWORD_POLICY, minLength: 2 })).toThrow('pelo menos 15 caracteres');
+  });
+
+  // #1257: NIST SP 800-63B-4 §3.1.1.2.
+  it('#1257: the default takes a 15-character password with no composition rule, and refuses 14', () => {
+    expect(() => validateStrength('correcthorsebat')).not.toThrow();
+    expect(() => validateStrength('correcthorseba')).toThrow('Senha deve ter pelo menos 15 caracteres');
+  });
+
+  it('#1257: an account enrolled in MFA takes minLengthWithMFA, 8 by default', () => {
+    expect(() => validateStrength('eightchr', DEFAULT_PASSWORD_POLICY, MFA_ACCOUNT)).not.toThrow();
+    expect(() => validateStrength('sevench', DEFAULT_PASSWORD_POLICY, MFA_ACCOUNT)).toThrow('pelo menos 8 caracteres');
+  });
+
+  it('#1257: MFA switched on with no secret is not enrolled, so the single-factor floor applies', () => {
+    expect(() => validateStrength('eightchr', DEFAULT_PASSWORD_POLICY, { mfaEnabled: true, mfaSecretCiphertext: null }))
+      .toThrow('pelo menos 15 caracteres');
+    expect(() => validateStrength('eightchr', DEFAULT_PASSWORD_POLICY, { mfaEnabled: false, mfaSecretCiphertext: 'x' }))
+      .toThrow('pelo menos 15 caracteres');
+  });
+
+  it('#1257: minLengthWithMFA never exceeds minLength', () => {
+    const policy = { ...DEFAULT_PASSWORD_POLICY, minLength: 10, minLengthWithMFA: 20 };
+    expect(() => validateStrength('tenchars!!', policy, MFA_ACCOUNT)).not.toThrow();
   });
 });
 
@@ -160,7 +197,7 @@ describe('#1244/#1246 resolvePasswordPolicy', () => {
   it('reads passwordRules from security_config main', async () => {
     const findOne = vi.fn().mockResolvedValue({ passwordRules: { preventReuse: true, maxReuseHistory: 8 } });
     const { db, collection } = dbWith(findOne);
-    await expect(resolvePasswordPolicy(db)).resolves.toEqual({ ...DEFAULT_PASSWORD_POLICY, preventReuse: true, maxReuseHistory: 8 });
+    await expect(resolvePasswordPolicy(db)).resolves.toEqual({ ...STORED_FALLBACK, preventReuse: true, maxReuseHistory: 8 });
     expect(collection).toHaveBeenCalledWith('security_config');
     expect(findOne).toHaveBeenCalledWith({ _id: 'main' });
   });
@@ -172,16 +209,27 @@ describe('#1244/#1246 resolvePasswordPolicy', () => {
     expect((await resolvePasswordPolicy(truthy.db)).preventReuse).toBe(true);
   });
 
-  it('fails closed to the default when no config exists or the read throws', async () => {
+  it('falls to the default when no config exists (a new deployment) or the read throws', async () => {
     const missing = dbWith(vi.fn().mockResolvedValue(null));
     await expect(resolvePasswordPolicy(missing.db)).resolves.toEqual(DEFAULT_PASSWORD_POLICY);
     const broken = dbWith(vi.fn().mockRejectedValue(new Error('down')));
     await expect(resolvePasswordPolicy(broken.db)).resolves.toEqual(DEFAULT_PASSWORD_POLICY);
     expect(DEFAULT_REUSE_POLICY).toEqual({ preventReuse: true, maxReuseHistory: 5 });
-    // #1246: getDefaultConfig()'s strength values.
+    // #1257: getDefaultConfig()'s values, after SP 800-63B-4.
     expect(DEFAULT_PASSWORD_POLICY).toMatchObject({
-      minLength: 8, requireUppercase: true, requireLowercase: true, requireNumbers: true, requireSpecialChars: true,
+      minLength: 15, minLengthWithMFA: 8,
+      requireUppercase: false, requireLowercase: false, requireNumbers: false, requireSpecialChars: false,
+      expirationDays: 0,
     });
+  });
+
+  it('#1257: a stored document keeps reading as before, and minLengthWithMFA follows minLength until one is stored', async () => {
+    const older = dbWith(vi.fn().mockResolvedValue({ passwordRules: { minLength: 10 } }));
+    await expect(resolvePasswordPolicy(older.db)).resolves.toMatchObject({ minLength: 10, minLengthWithMFA: 10, expirationDays: 90 });
+    const stored = dbWith(vi.fn().mockResolvedValue({ passwordRules: { minLength: 15, minLengthWithMFA: 9 } }));
+    await expect(resolvePasswordPolicy(stored.db)).resolves.toMatchObject({ minLength: 15, minLengthWithMFA: 9 });
+    const above = dbWith(vi.fn().mockResolvedValue({ passwordRules: { minLength: 12, minLengthWithMFA: 20 } }));
+    expect((await resolvePasswordPolicy(above.db)).minLengthWithMFA).toBe(12);
   });
 
   it('#1246: reads the strength keys, and an out-of-range minLength falls back to 8', async () => {
@@ -200,7 +248,8 @@ describe('#1244/#1246 resolvePasswordPolicy', () => {
 
   it('#1246: publicStrengthRules exposes the strength keys and never the reuse keys', () => {
     expect(publicStrengthRules(DEFAULT_PASSWORD_POLICY)).toEqual({
-      minLength: 8, requireUppercase: true, requireLowercase: true, requireNumbers: true, requireSpecialChars: true,
+      minLength: 15, minLengthWithMFA: 8,
+      requireUppercase: false, requireLowercase: false, requireNumbers: false, requireSpecialChars: false,
     });
   });
 });
@@ -255,16 +304,23 @@ describe('isPasswordExpired (#1251)', () => {
     expect(isPasswordExpired({ passwordChangedAt: 'not-a-date' })).toBe(false);
   });
 
-  it('defaults to 90 days on passwordChangedAt', () => {
-    expect(isPasswordExpired({ passwordChangedAt: daysAgo(10) })).toBe(false);
-    expect(isPasswordExpired({ passwordChangedAt: daysAgo(91) })).toBe(true);
+  // #1257: SP 800-63B-4 forbids periodic change, so the default is 0.
+  it('#1257: with no policy the default 0 never expires', () => {
+    expect(isPasswordExpired({ passwordChangedAt: daysAgo(4000) })).toBe(false);
+  });
+
+  it('counts the days on passwordChangedAt', () => {
+    const policy = { expirationDays: 90 };
+    expect(isPasswordExpired({ passwordChangedAt: daysAgo(10) }, policy)).toBe(false);
+    expect(isPasswordExpired({ passwordChangedAt: daysAgo(91) }, policy)).toBe(true);
   });
 
   it('falls back to the pre-rename lastPasswordChange, then createdAt', () => {
-    expect(isPasswordExpired({ lastPasswordChange: daysAgo(91).toISOString() })).toBe(true);
-    expect(isPasswordExpired({ createdAt: daysAgo(91) })).toBe(true);
+    const policy = { expirationDays: 90 };
+    expect(isPasswordExpired({ lastPasswordChange: daysAgo(91).toISOString() }, policy)).toBe(true);
+    expect(isPasswordExpired({ createdAt: daysAgo(91) }, policy)).toBe(true);
     // passwordChangedAt wins over an older createdAt.
-    expect(isPasswordExpired({ passwordChangedAt: daysAgo(1), createdAt: daysAgo(400) })).toBe(false);
+    expect(isPasswordExpired({ passwordChangedAt: daysAgo(1), createdAt: daysAgo(400) }, policy)).toBe(false);
   });
 
   it('follows the policy expirationDays, and 0 means never', () => {
@@ -273,9 +329,14 @@ describe('isPasswordExpired (#1251)', () => {
     expect(isPasswordExpired({ passwordChangedAt: daysAgo(4000) }, { expirationDays: 0 })).toBe(false);
   });
 
-  it('an out-of-range expirationDays falls back to 90', () => {
-    expect(isPasswordExpired({ passwordChangedAt: daysAgo(91) }, { expirationDays: 400 })).toBe(true);
-    expect(isPasswordExpired({ passwordChangedAt: daysAgo(89) }, { expirationDays: -1 })).toBe(false);
+  it('#1257: an out-of-range expirationDays falls back to the default 0', () => {
+    expect(isPasswordExpired({ passwordChangedAt: daysAgo(4000) }, { expirationDays: 400 })).toBe(false);
+    expect(isPasswordExpired({ passwordChangedAt: daysAgo(4000) }, { expirationDays: -1 })).toBe(false);
+  });
+
+  it('#1257: a stored document with no expirationDays still reads 90', async () => {
+    const db = { collection: vi.fn(() => ({ findOne: vi.fn().mockResolvedValue({ passwordRules: {} }) })) };
+    expect((await resolvePasswordPolicy(db)).expirationDays).toBe(90);
   });
 
   it('resolvePasswordPolicy reads expirationDays', async () => {

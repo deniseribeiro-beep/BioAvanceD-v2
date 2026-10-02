@@ -33,7 +33,7 @@ describe('UserModel - Unit Tests', () => {
       name: 'João Silva',
       email: 'joao@example.com',
       username: 'joaosilva',
-      password: 'Senha@123',
+      password: 'Senha@123456789',
       accessType: 1,
       phone: '11987654321',
       organizationId: 'org-uuid-1',
@@ -92,7 +92,7 @@ describe('UserModel - Unit Tests', () => {
     it('deve validar password quando fornecido', () => {
       // password.service é chamado quando senha é fornecida
       // O comportamento exato depende do mock estar available
-      validUserData.password = 'Senha@123';
+      validUserData.password = 'Senha@123456789';
       delete validUserData._id; // Novo usuário
       const result = UserModel.validate(validUserData);
 
@@ -275,7 +275,7 @@ describe('UserModel - Unit Tests', () => {
         phone: '11987654321',
         organizationId: 'org-uuid-1',
         username: 'joaosilva',
-        password: 'Senha@123',
+        password: 'Senha@123456789',
         status: 'Ativo',
         mfaEnabled: true,
         mfaSecretCiphertext: 'secret123',
@@ -317,7 +317,7 @@ describe('UserModel - Unit Tests', () => {
         name: 'Maria',
         email: 'maria@example.com',
         username: 'maria',
-        password: 'Senha@123'
+        password: 'Senha@123456789'
       };
 
       const user = UserModel.create(data);
@@ -342,7 +342,7 @@ describe('UserModel - Unit Tests', () => {
         name: 'Maria',
         email: 'maria@example.com',
         username: 'maria',
-        password: 'Senha@123',
+        password: 'Senha@123456789',
         passwordHistory: 'not-an-array'
       };
 

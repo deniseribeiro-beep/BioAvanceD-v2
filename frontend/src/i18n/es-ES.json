@@ -1673,6 +1673,7 @@
       "expirationDays": "Expiración (días, 0 = nunca)",
       "maxReuseHistory": "Historial de contraseñas (cantidad)",
       "minLength": "Longitud mínima (caracteres)",
+      "minLengthWithMFA": "Longitud mínima con MFA (caracteres)",
       "preventReuse": "Evitar reutilización",
       "requireLowercase": "Requerir minúsculas",
       "requireNumbers": "Requerir números",

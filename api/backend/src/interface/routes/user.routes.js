@@ -1448,7 +1448,7 @@ router.post('/:id/set-password', authenticate, requirePermission('setUserPasswor
     const passwordService = require('../../services/password.service');
     const passwordPolicy = await passwordService.resolvePasswordPolicy(db);
     try {
-      passwordService.validateStrength(newPassword, passwordPolicy);
+      passwordService.validateStrength(newPassword, passwordPolicy, targetUser);
       await passwordService.validateReuse(newPassword, targetUser, passwordPolicy);
     } catch (validationError) {
       return res.status(422).json({ success: false, error: 'Dados inválidos', message: validationError.message });

@@ -3,8 +3,13 @@
 // the backend's own default (security.service getDefaultConfig), used until the
 // policy arrives or when it cannot be read, so a form never shows looser rules
 // than the server's default. The symbol class is password.service's.
+//
+// #1257: minLength is the floor for an account that signs in without MFA, and
+// minLengthWithMFA the floor for one enrolled in MFA (NIST SP 800-63B-4
+// §3.1.1.2). rulesForAccount picks the one that applies.
 export interface PasswordStrengthRules {
   minLength: number;
+  minLengthWithMFA?: number;
   requireUppercase: boolean;
   requireLowercase: boolean;
   requireNumbers: boolean;
@@ -12,12 +17,20 @@ export interface PasswordStrengthRules {
 }
 
 export const DEFAULT_PASSWORD_RULES: PasswordStrengthRules = Object.freeze({
-  minLength: 8,
-  requireUppercase: true,
-  requireLowercase: true,
-  requireNumbers: true,
-  requireSpecialChars: true,
+  minLength: 15,
+  minLengthWithMFA: 8,
+  requireUppercase: false,
+  requireLowercase: false,
+  requireNumbers: false,
+  requireSpecialChars: false,
 });
+
+// #1257: the rules for one account. Without MFA, or with no MFA floor served,
+// minLength; never above minLength either way, as the server caps it.
+export function rulesForAccount(rules: PasswordStrengthRules, signsInWithMfa: boolean): PasswordStrengthRules {
+  if (!signsInWithMfa || !Number.isInteger(rules.minLengthWithMFA)) return rules;
+  return { ...rules, minLength: Math.min(rules.minLengthWithMFA as number, rules.minLength) };
+}
 
 const SPECIAL_CHARACTER = /[!@#$%^&*()_\-+=[\]{};':"\\|,.<>/?]/;
 

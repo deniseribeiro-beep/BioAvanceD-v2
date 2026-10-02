@@ -768,9 +768,14 @@ describe('AuthController.changePassword', () => {
 
     await authController.changePassword(req, res);
 
-    // #1244/#1246: no security_config document here, so the default policy.
-    expect(passwordService.validateStrength).toHaveBeenCalledWith('NewStr0ng!', passwordService.DEFAULT_PASSWORD_POLICY);
-    expect(passwordService.validateReuse).toHaveBeenCalledWith('NewStr0ng!', user, passwordService.DEFAULT_PASSWORD_POLICY);
+    // #1244/#1246: the resolved policy. This mock answers every collection's
+    // findOne, the security_config read included, with the user, which reads
+    // as a stored document with no passwordRules (#1257).
+    // #1257: and the account, whose MFA enrolment decides the length floor.
+    const policy = passwordService.validateStrength.mock.calls[0][1];
+    expect(policy).toMatchObject({ minLength: 8, minLengthWithMFA: 8, preventReuse: true });
+    expect(passwordService.validateStrength).toHaveBeenCalledWith('NewStr0ng!', policy, user);
+    expect(passwordService.validateReuse).toHaveBeenCalledWith('NewStr0ng!', user, policy);
     expect(bcrypt.hash).toHaveBeenCalledWith('NewStr0ng!', 10);
     expect(usersCollection.updateOne).toHaveBeenCalledWith(
       { _id: 'u1' },

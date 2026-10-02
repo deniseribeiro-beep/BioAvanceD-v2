@@ -472,7 +472,7 @@ class UserSecurityService {
       const passwordPolicy = await passwordService.resolvePasswordPolicy(db);
       // #1246: the policy's strength rules, as every other password write
       // checks them; this site had its own 12-character validator.
-      passwordService.validateStrength(newPassword, passwordPolicy);
+      passwordService.validateStrength(newPassword, passwordPolicy, user);
       try {
         await passwordService.validateReuse(newPassword, user, passwordPolicy);
       } catch (reuseError) {

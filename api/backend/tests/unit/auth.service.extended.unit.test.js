@@ -30,7 +30,8 @@ describe('AuthService.registerUser', () => {
     name: 'Test User',
     email: 'test@example.com',
     username: 'testuser',
-    password: 'SecurePass123!',
+    // #1257: 15 or more, the single-factor floor of a new deployment.
+    password: 'SecurePass12345!',
     accessType: 2,
   };
 
@@ -188,7 +189,7 @@ describe('AuthService.registerUser', () => {
     });
 
     it('refuses a password shorter than a raised minLength', async () => {
-      const db = makeDbWithConfig({ _id: 'main', passwordRules: { minLength: 16 } });
+      const db = makeDbWithConfig({ _id: 'main', passwordRules: { minLength: 20 } });
       await expect(authService.registerUser(db, VALID_USER, 'system')).rejects.toThrow(/password/);
     });
 

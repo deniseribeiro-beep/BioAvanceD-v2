@@ -17,27 +17,72 @@ const logger = require('../utils/logger');
 // 2020-03-02) §5.1.1.2: memorized secrets chosen by the subscriber "SHALL be
 // at least 8 characters in length". The same section says verifiers "SHOULD
 // NOT impose other composition rules", so a policy with every class off is
-// within the standard. A stored 6 or 7 now reads as the default 8.
+// within the standard. A stored 6 or 7 now reads as the floor 8.
+//
+// #1257: the defaults follow NIST SP 800-63B-4 (2025-08-26) §3.1.1.2.
+// "Verifiers and CSPs SHALL require passwords that are used as a single-factor
+// authentication mechanism to be a minimum of 15 characters in length", MAY
+// allow passwords used only with MFA to be shorter but not below 8, "SHALL NOT
+// impose other composition rules" and "SHALL NOT require subscribers to change
+// passwords periodically". So minLength (dict-02 P1X-0284) is the floor for an
+// account that signs in without MFA, minLengthWithMFA the floor for one
+// enrolled in MFA, the four composition flags default off, and expirationDays
+// defaults to 0.
+//
+// These are a NEW deployment's values: no security_config document yet, which
+// is also what getDefaultConfig() stores. A stored document reads exactly as
+// it did before, so nothing changes for an existing deployment until an
+// administrator changes it: a key it lacks or holds out of range reads as the
+// old default (STORED_DOCUMENT_FALLBACK, and a flag as on), and
+// minLengthWithMFA, which no older document holds, as minLength.
 const DEFAULT_STRENGTH_POLICY = Object.freeze({
-  minLength: 8,
-  requireUppercase: true,
-  requireLowercase: true,
-  requireNumbers: true,
-  requireSpecialChars: true,
+  minLength: 15,
+  minLengthWithMFA: 8,
+  requireUppercase: false,
+  requireLowercase: false,
+  requireNumbers: false,
+  requireSpecialChars: false,
 });
+const MIN_LENGTH_FLOOR = 8;
+const STORED_DOCUMENT_FALLBACK = Object.freeze({ minLength: 8, expirationDays: 90 });
 const SPECIAL_CHARACTER = /[!@#$%^&*()_\-+=[\]{};':"\\|,.<>/?]/;
 
-function strengthMinLength(value) {
+function lengthInRange(value) {
   const length = Number(value);
-  return Number.isInteger(length) && length >= 8 && length <= 128 ? length : DEFAULT_STRENGTH_POLICY.minLength;
+  return Number.isInteger(length) && length >= MIN_LENGTH_FLOOR && length <= 128 ? length : null;
 }
 
-function validateStrength(password, policy = DEFAULT_STRENGTH_POLICY) {
+function strengthMinLength(value, fallback = DEFAULT_STRENGTH_POLICY.minLength) {
+  return lengthInRange(value) ?? fallback;
+}
+
+// #1257: never above the single-factor floor, since a second factor never
+// makes the password rule stricter. Absent or out of range, it is minLength.
+function mfaMinLength(value, minLength) {
+  const length = lengthInRange(value);
+  return length === null ? minLength : Math.min(length, minLength);
+}
+
+// #1257: an account signs in with MFA when it is enrolled, the same test the
+// login's MFA challenge applies (auth.service). Anything else, an account not
+// yet created included, is single-factor and takes minLength.
+function signsInWithMfa(account) {
+  return Boolean(account && account.mfaEnabled && account.mfaSecretCiphertext);
+}
+
+function minLengthFor(policy, account) {
+  const minLength = strengthMinLength(policy.minLength);
+  return signsInWithMfa(account) ? mfaMinLength(policy.minLengthWithMFA, minLength) : minLength;
+}
+
+// account: the user whose password this is, when one exists. Without it the
+// single-factor floor applies.
+function validateStrength(password, policy = DEFAULT_STRENGTH_POLICY, account = null) {
   if (!password || typeof password !== 'string') {
     throw new Error('Senha é obrigatória');
   }
 
-  const minLength = strengthMinLength(policy.minLength);
+  const minLength = minLengthFor(policy, account);
   const required = [
     [policy.requireUppercase !== false, /[A-Z]/, 'letra maiúscula'],
     [policy.requireLowercase !== false, /[a-z]/, 'letra minúscula'],
@@ -83,7 +128,7 @@ function reuseDepth(value) {
 const DEFAULT_PASSWORD_POLICY = Object.freeze({
   ...DEFAULT_STRENGTH_POLICY,
   ...DEFAULT_REUSE_POLICY,
-  expirationDays: 90,
+  expirationDays: 0,
   allowPasswordReset: true,
 });
 
@@ -99,6 +144,9 @@ const DEFAULT_PASSWORD_POLICY = Object.freeze({
 async function resolvePasswordPolicy(db) {
   try {
     const config = await db.collection('security_config').findOne({ _id: 'main' });
+    // #1257: no document is a new deployment, so it gets the new defaults
+    // rather than the stored-document reading of absent keys below.
+    if (!config) return { ...DEFAULT_PASSWORD_POLICY };
     const rules = (config && config.passwordRules) || {};
     const authentication = (config && config.authentication) || {};
     // #1247: enhancedSecurity.strictPasswordPolicy (dict-02 P1X-0312), while
@@ -107,15 +155,17 @@ async function resolvePasswordPolicy(db) {
     const strict = enhanced.enabled === true && enhanced.strictPasswordPolicy !== false;
     const strong = authentication.requireStrongPassword !== false;
     const flag = (value) => strict || (strong && value !== false);
+    const minLength = strengthMinLength(rules.minLength, STORED_DOCUMENT_FALLBACK.minLength);
     return {
-      minLength: strengthMinLength(rules.minLength),
+      minLength,
+      minLengthWithMFA: mfaMinLength(rules.minLengthWithMFA, minLength),
       requireUppercase: flag(rules.requireUppercase),
       requireLowercase: flag(rules.requireLowercase),
       requireNumbers: flag(rules.requireNumbers),
       requireSpecialChars: flag(rules.requireSpecialChars),
       preventReuse: rules.preventReuse !== false,
       maxReuseHistory: reuseDepth(rules.maxReuseHistory),
-      expirationDays: expirationDays(rules.expirationDays),
+      expirationDays: expirationDays(rules.expirationDays, STORED_DOCUMENT_FALLBACK.expirationDays),
       allowPasswordReset: authentication.allowPasswordReset !== false,
     };
   } catch (error) {
@@ -141,7 +191,8 @@ async function isPasswordResetAllowed(db) {
 // only. The reuse keys stay server-side.
 function publicStrengthRules(policy) {
   const { minLength, requireUppercase, requireLowercase, requireNumbers, requireSpecialChars } = policy;
-  return { minLength, requireUppercase, requireLowercase, requireNumbers, requireSpecialChars };
+  const minLengthWithMFA = mfaMinLength(policy.minLengthWithMFA, strengthMinLength(minLength));
+  return { minLength, minLengthWithMFA, requireUppercase, requireLowercase, requireNumbers, requireSpecialChars };
 }
 
 // The history holds the passwords BEFORE the current one, newest first, to the
@@ -187,13 +238,16 @@ async function validateReuse(newPassword, user = {}, policy = DEFAULT_REUSE_POLI
 // rename) and then createdAt. A user with none of the three cannot be dated
 // and is NOT expired: the old reading (no date means expired) would have
 // forced a change on every such account at its next login. 0..365 is
-// validateConfig's own range; anything else falls back to the default 90.
-const DEFAULT_EXPIRATION_DAYS = 90;
+// validateConfig's own range; anything else falls back to the default.
+//
+// #1257: the default is 0, no expiry (SP 800-63B-4 §3.1.1.2, above). A forced
+// change on evidence of compromise is forceReset's job, and stays available.
+const DEFAULT_EXPIRATION_DAYS = 0;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-function expirationDays(value) {
+function expirationDays(value, fallback = DEFAULT_EXPIRATION_DAYS) {
   const days = Number(value);
-  return Number.isInteger(days) && days >= 0 && days <= 365 ? days : DEFAULT_EXPIRATION_DAYS;
+  return Number.isInteger(days) && days >= 0 && days <= 365 ? days : fallback;
 }
 
 function passwordChangedAt(user) {
@@ -219,6 +273,7 @@ module.exports = {
   DEFAULT_STRENGTH_POLICY,
   DEFAULT_PASSWORD_POLICY,
   validateStrength,
+  signsInWithMfa,
   resolvePasswordPolicy,
   publicStrengthRules,
   PASSWORD_RESET_DISABLED,

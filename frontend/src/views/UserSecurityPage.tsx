@@ -24,7 +24,7 @@ import {
 import { useUserSecurity } from '../hooks/useUserSecurity';
 import { useToast } from '../components/UI/ToastContainer';
 import { validatePasswordAndGetError } from '../utils/passwordValidator';
-import { getPasswordIssues, passwordRequirementItems } from '../utils/passwordRules';
+import { getPasswordIssues, passwordRequirementItems, rulesForAccount } from '../utils/passwordRules';
 import { usePasswordPolicy, usePasswordResetAllowed } from '../hooks/usePasswordPolicy';
 import { useAuth } from '../contexts/AuthContext';
 import { userSecurityService } from '../services/api';
@@ -133,7 +133,8 @@ export default function UserSecurityPage() {
   };
 
   // #1246: the server's passwordRules, not a fixed copy.
-  const passwordRules = usePasswordPolicy();
+  // #1257: an account enrolled in MFA has the shorter MFA floor.
+  const passwordRules = rulesForAccount(usePasswordPolicy(), Boolean(mfaStatus?.primaryEnabled));
   // #1249: the reset request is hidden while the policy turns the flow off.
   const allowPasswordReset = usePasswordResetAllowed();
   const passwordIssues = getPasswordIssues(newPassword.new, passwordRules);

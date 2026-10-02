@@ -834,7 +834,7 @@ class AuthService {
           };
         }
 
-        passwordService.validateStrength(newPassword, passwordPolicy);
+        passwordService.validateStrength(newPassword, passwordPolicy, user);
         await passwordService.validateReuse(newPassword, user, passwordPolicy);
 
         const newHash = await bcrypt.hash(newPassword, 10);
@@ -1564,8 +1564,9 @@ class AuthService {
 
       // #1246: the policy's strength rules, the same check every other
       // password write uses (this path had its own 12-character validator).
+      // #1257: checked below, once the token names the account, because its
+      // MFA enrolment decides its length floor.
       const passwordPolicy = await passwordService.resolvePasswordPolicy(db);
-      passwordService.validateStrength(newPassword, passwordPolicy);
 
       // Verifica e decodifica token
       let decoded;
@@ -1625,6 +1626,7 @@ class AuthService {
       // reuse nor kept history -- a forgotten-password link could set the
       // current password again, or any earlier one. After the token checks,
       // so an invalid link never learns whether a password was reused.
+      passwordService.validateStrength(newPassword, passwordPolicy, user);
       await passwordService.validateReuse(newPassword, user, passwordPolicy);
 
       // Hash da nova senha

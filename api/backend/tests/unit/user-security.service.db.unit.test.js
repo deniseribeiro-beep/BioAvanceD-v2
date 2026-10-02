@@ -99,7 +99,11 @@ describe('UserSecurityService DB-backed methods', () => {
           passwordChangedAt: new Date('2026-01-01T00:00:00.000Z')
         })
       });
-      const db = buildDb({ users });
+      // #1257: a new deployment's default is 0 (no expiry), so this stores 90.
+      const security_config = buildCollection({
+        findOne: vi.fn().mockResolvedValue({ _id: 'main', passwordRules: { expirationDays: 90 } })
+      });
+      const db = buildDb({ users, security_config });
 
       const result = await userSecurityService.getPasswordStatus(db, USER_ID);
 
@@ -130,6 +134,17 @@ describe('UserSecurityService DB-backed methods', () => {
       await expect(userSecurityService.getPasswordStatus(db, USER_ID)).rejects.toThrow('Usuário não encontrado');
     });
 
+    it('#1257: a new deployment (no stored policy) reports no expiry', async () => {
+      const users = buildCollection({
+        findOne: vi.fn().mockResolvedValue({ _id: USER_ID, password: 'short', passwordChangedAt: new Date('2020-01-01T00:00:00.000Z') })
+      });
+      const security_config = buildCollection({ findOne: vi.fn().mockResolvedValue(null) });
+
+      const result = await userSecurityService.getPasswordStatus(buildDb({ users, security_config }), USER_ID);
+
+      expect(result.expiresAt).toBeNull();
+    });
+
     it('parses passwordChangedAt when stored as a non-Date value', async () => {
       const users = buildCollection({
         findOne: vi.fn().mockResolvedValue({
@@ -138,7 +153,11 @@ describe('UserSecurityService DB-backed methods', () => {
           passwordChangedAt: '2026-01-01T00:00:00.000Z'
         })
       });
-      const db = buildDb({ users });
+      // #1257: a new deployment's default is 0 (no expiry), so this stores 90.
+      const security_config = buildCollection({
+        findOne: vi.fn().mockResolvedValue({ _id: 'main', passwordRules: { expirationDays: 90 } })
+      });
+      const db = buildDb({ users, security_config });
 
       const result = await userSecurityService.getPasswordStatus(db, USER_ID);
 
@@ -289,11 +308,34 @@ describe('UserSecurityService DB-backed methods', () => {
         userSecurityService.updatePassword(buildDb({ users, security_config: strict }), USER_ID, 'correct-pass', 'Abcdef1!xyz12')
       ).rejects.toThrow('pelo menos 14 caracteres');
 
-      // The default policy (no document): 8 characters with a digit pass,
-      // which the old validator refused for being under 12.
+      // A stored policy of 8: 8 characters with a digit pass, which the old
+      // validator refused for being under 12.
+      const eight = buildCollection({
+        findOne: vi.fn().mockResolvedValue({ _id: 'main', passwordRules: { minLength: 8 } })
+      });
       const users2 = buildCollection({ findOne: vi.fn().mockResolvedValue(user) });
-      await userSecurityService.updatePassword(buildDb({ users: users2 }), USER_ID, 'correct-pass', 'Abcde1!x');
+      await userSecurityService.updatePassword(buildDb({ users: users2, security_config: eight }), USER_ID, 'correct-pass', 'Abcde1!x');
       expect(users2.updateOne).toHaveBeenCalledTimes(1);
+    });
+
+    // #1257: a new deployment's floor depends on the account: 15 without MFA,
+    // 8 for an account enrolled in MFA (NIST SP 800-63B-4 §3.1.1.2).
+    it('#1257: with no stored policy, 15 characters without MFA and 8 with it', async () => {
+      const currentHash = await bcrypt.hash('correct-pass', 4);
+      const none = () => buildCollection({ findOne: vi.fn().mockResolvedValue(null) });
+      const single = buildCollection({ findOne: vi.fn().mockResolvedValue({ _id: USER_ID, password: currentHash, passwordHistory: [] }) });
+      await expect(
+        userSecurityService.updatePassword(buildDb({ users: single, security_config: none() }), USER_ID, 'correct-pass', 'eightchr')
+      ).rejects.toThrow('pelo menos 15 caracteres');
+      expect(single.updateOne).not.toHaveBeenCalled();
+
+      const enrolled = buildCollection({
+        findOne: vi.fn().mockResolvedValue({
+          _id: USER_ID, password: currentHash, passwordHistory: [], mfaEnabled: true, mfaSecretCiphertext: 'ciphertext'
+        })
+      });
+      await userSecurityService.updatePassword(buildDb({ users: enrolled, security_config: none() }), USER_ID, 'correct-pass', 'eightchr');
+      expect(enrolled.updateOne).toHaveBeenCalledTimes(1);
     });
 
     it('updates the password and rotates history on success', async () => {

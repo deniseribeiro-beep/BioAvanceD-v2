@@ -1673,6 +1673,7 @@
       "expirationDays": "Expiração (dias, 0 = nunca)",
       "maxReuseHistory": "Histórico de senhas (quantidade)",
       "minLength": "Tamanho mínimo (caracteres)",
+      "minLengthWithMFA": "Tamanho mínimo com MFA (caracteres)",
       "preventReuse": "Impedir reutilização de senhas",
       "requireLowercase": "Exigir letras minúsculas",
       "requireNumbers": "Exigir números",

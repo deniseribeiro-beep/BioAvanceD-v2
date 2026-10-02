@@ -50,6 +50,8 @@ export interface SecurityConfig {
   };
   passwordRules: {
     minLength: number;
+    // #1257: absent from a document stored before it existed.
+    minLengthWithMFA?: number;
     requireUppercase: boolean;
     requireLowercase: boolean;
     requireNumbers: boolean;

@@ -505,10 +505,26 @@ describe('AuthService.processLogin', () => {
 
   // #1251: passwordRules.expirationDays takes the forceReset branch.
   const daysAgo = (n) => new Date(Date.now() - n * 24 * 60 * 60 * 1000);
+  // #1257: a new deployment's default is 0, so the expiry tests store 90.
+  function withExpiry(db, expirationDays = 90) {
+    const configApi = { findOne: vi.fn().mockResolvedValue({ _id: 'main', passwordRules: { expirationDays } }) };
+    const base = db.collection;
+    db.collection = vi.fn((name) => (name === 'security_config' ? configApi : base(name)));
+    return db;
+  }
+
+  it('#1257: a new deployment (no stored policy) never expires a password', async () => {
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+    const db = makeDb();
+    const user = { ...BASE_USER, passwordChangedAt: daysAgo(4000) };
+    const result = await authService.processLogin(db, user, 'pw', null, db.collection(), {});
+    expect(result.requiresPasswordChange).toBeUndefined();
+    expect(result.token).toBeTruthy();
+  });
 
   it('#1251: an expired password asks for the change with reason expired and issues no token', async () => {
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
-    const db = makeDb();
+    const db = withExpiry(makeDb());
     const user = { ...BASE_USER, passwordChangedAt: daysAgo(91) };
     const result = await authService.processLogin(db, user, 'pw', null, db.collection(), {});
     expect(result.requiresPasswordChange).toBe(true);
@@ -518,7 +534,7 @@ describe('AuthService.processLogin', () => {
 
   it('#1251: a password inside the window logs in normally', async () => {
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
-    const db = makeDb();
+    const db = withExpiry(makeDb());
     const user = { ...BASE_USER, passwordChangedAt: daysAgo(89) };
     const result = await authService.processLogin(db, user, 'pw', null, db.collection(), {});
     expect(result.requiresPasswordChange).toBeUndefined();
@@ -540,7 +556,7 @@ describe('AuthService.processLogin', () => {
   it('#1251: an expired password changed through login gets a fresh passwordChangedAt and a session', async () => {
     vi.spyOn(bcrypt, 'compare').mockImplementation(async (candidate) => candidate === 'pw');
     const collectionApi = { findOne: vi.fn(), updateOne: vi.fn().mockResolvedValue({}), find: vi.fn(), insertOne: vi.fn().mockResolvedValue({ insertedId: { toString: () => 'sess-1' } }) };
-    const db = makeDb(collectionApi);
+    const db = withExpiry(makeDb(collectionApi));
     const user = { ...BASE_USER, passwordChangedAt: daysAgo(200) };
     const before = Date.now();
     const result = await authService.processLogin(db, user, 'pw', null, db.collection(), {}, 'NewStrongPass1!');
@@ -1120,7 +1136,7 @@ describe('AuthService.resetPassword', () => {
 
   it('throws when token missing', async () => {
     const db = makeDb();
-    await expect(authService.resetPassword(db, null, 'NewPass123!@#', {})).rejects.toThrow('não fornecido');
+    await expect(authService.resetPassword(db, null, 'NewPass123!@#long', {})).rejects.toThrow('não fornecido');
   });
 
   it('throws when newPassword missing', async () => {
@@ -1137,7 +1153,7 @@ describe('AuthService.resetPassword', () => {
     vi.spyOn(jwt, 'verify').mockImplementation(() => { throw new Error('bad token'); });
     const db = makeDb();
     await expect(
-      authService.resetPassword(db, 'bad-token', 'NewPass123!@#', {})
+      authService.resetPassword(db, 'bad-token', 'NewPass123!@#long', {})
     ).rejects.toThrow('Token de recuperação inválido');
   });
 
@@ -1149,7 +1165,7 @@ describe('AuthService.resetPassword', () => {
     });
     const db = makeDb();
     await expect(
-      authService.resetPassword(db, 'expired-token', 'NewPass123!@#', {})
+      authService.resetPassword(db, 'expired-token', 'NewPass123!@#long', {})
     ).rejects.toThrow('expirado');
   });
 
@@ -1157,7 +1173,7 @@ describe('AuthService.resetPassword', () => {
     vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'access', userID: '507f1f77bcf86cd799439011' });
     const db = makeDb();
     await expect(
-      authService.resetPassword(db, 'tok', 'NewPass123!@#', {})
+      authService.resetPassword(db, 'tok', 'NewPass123!@#long', {})
     ).rejects.toThrow('Token inválido');
   });
 
@@ -1165,7 +1181,7 @@ describe('AuthService.resetPassword', () => {
     vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'password-reset', userID: '507f1f77bcf86cd799439011' });
     const db = makeDb();
     await expect(
-      authService.resetPassword(db, 'tok', 'NewPass123!@#', {})
+      authService.resetPassword(db, 'tok', 'NewPass123!@#long', {})
     ).rejects.toThrow('Usuário não encontrado');
   });
 
@@ -1175,7 +1191,7 @@ describe('AuthService.resetPassword', () => {
       findOne: vi.fn().mockResolvedValue({ ...BASE_USER, passwordResetTokenHash: hashToken('a-different-token') }),
     });
     await expect(
-      authService.resetPassword(db, 'tok', 'NewPass123!@#', {})
+      authService.resetPassword(db, 'tok', 'NewPass123!@#long', {})
     ).rejects.toThrow('já utilizado');
   });
 
@@ -1200,7 +1216,7 @@ describe('AuthService.resetPassword', () => {
     const db = makeDb(collectionApi);
 
     await expect(
-      authService.resetPassword(db, 'tok', 'NewPass123!@#', {})
+      authService.resetPassword(db, 'tok', 'NewPass123!@#long', {})
     ).rejects.toThrow('já utilizado');
     expect(collectionApi.updateOne).not.toHaveBeenCalled();
   });
@@ -1216,7 +1232,7 @@ describe('AuthService.resetPassword', () => {
     const db = makeDb(collectionApi);
 
     await expect(
-      authService.resetPassword(db, 'tok', 'NewPass123!@#', {})
+      authService.resetPassword(db, 'tok', 'NewPass123!@#long', {})
     ).rejects.toThrow('expirado');
     expect(collectionApi.updateOne).not.toHaveBeenCalled();
   });
@@ -1238,7 +1254,7 @@ describe('AuthService.resetPassword', () => {
     };
     const db = makeDb(collectionApi);
 
-    const result = await authService.resetPassword(db, 'tok', 'NewPass123!@#', {});
+    const result = await authService.resetPassword(db, 'tok', 'NewPass123!@#long', {});
     expect(result.success).toBe(true);
     expect(collectionApi.updateOne).toHaveBeenCalled();
   });
@@ -1263,7 +1279,7 @@ describe('AuthService.resetPassword', () => {
     };
     const db = makeDb(collectionApi);
 
-    const result = await authService.resetPassword(db, 'tok', 'NewPass123!@#', {});
+    const result = await authService.resetPassword(db, 'tok', 'NewPass123!@#long', {});
 
     expect(result.success).toBe(true);
     expect(collectionApi.updateOne).toHaveBeenCalledWith(
@@ -1294,7 +1310,7 @@ describe('AuthService.resetPassword', () => {
     };
     const db = makeDb(collectionApi);
 
-    const result = await authService.resetPassword(db, 'tok', 'NewPass123!@#', {});
+    const result = await authService.resetPassword(db, 'tok', 'NewPass123!@#long', {});
 
     expect(result.success).toBe(true);
     expect(collectionApi.updateOne).toHaveBeenCalledWith(
@@ -1323,7 +1339,7 @@ describe('AuthService.resetPassword', () => {
     const db = makeDb(collectionApi);
 
     await expect(
-      authService.resetPassword(db, 'tok', 'NewPass123!@#', {})
+      authService.resetPassword(db, 'tok', 'NewPass123!@#long', {})
     ).rejects.toThrow('já utilizado');
     expect(collectionApi.updateOne).not.toHaveBeenCalled();
   });
@@ -1338,7 +1354,7 @@ describe('AuthService.resetPassword', () => {
       }),
     });
     await expect(
-      authService.resetPassword(db, 'tok', 'NewPass123!@#', {})
+      authService.resetPassword(db, 'tok', 'NewPass123!@#long', {})
     ).rejects.toThrow('expirado');
   });
 
@@ -1355,7 +1371,7 @@ describe('AuthService.resetPassword', () => {
       insertOne: vi.fn(),
     };
     const db = makeDb(collectionApi);
-    const result = await authService.resetPassword(db, 'tok', 'NewPass123!@#', {});
+    const result = await authService.resetPassword(db, 'tok', 'NewPass123!@#long', {});
     expect(result.success).toBe(true);
     expect(collectionApi.updateOne).toHaveBeenCalledWith(
       { _id: BASE_USER._id },
@@ -1389,7 +1405,7 @@ describe('AuthService.resetPassword', () => {
     vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'password-reset', userID: '507f1f77bcf86cd799439011' });
     vi.spyOn(bcrypt, 'compare').mockImplementation(async (_plain, hash) => hash === HASHED);
     const { db, usersApi } = resetDb(BASE_USER);
-    await expect(authService.resetPassword(db, 'tok', 'NewPass123!@#', {})).rejects.toThrow('utilizada recentemente');
+    await expect(authService.resetPassword(db, 'tok', 'NewPass123!@#long', {})).rejects.toThrow('utilizada recentemente');
     expect(usersApi.updateOne).not.toHaveBeenCalled();
   });
 
@@ -1399,7 +1415,7 @@ describe('AuthService.resetPassword', () => {
       { ...BASE_USER, passwordHistory: ['h1', 'h2', 'h3'] },
       { _id: 'main', passwordRules: { preventReuse: true, maxReuseHistory: 2 } },
     );
-    await authService.resetPassword(db, 'tok', 'NewPass123!@#', {});
+    await authService.resetPassword(db, 'tok', 'NewPass123!@#long', {});
     const update = usersApi.updateOne.mock.calls[0][1];
     expect(update.$set.passwordHistory).toEqual([HASHED, 'h1']);
     expect(update.$set.passwordChangedAt).toBeInstanceOf(Date);
@@ -1412,10 +1428,10 @@ describe('AuthService.resetPassword', () => {
     vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'password-reset', userID: '507f1f77bcf86cd799439011' });
     const compare = vi.spyOn(bcrypt, 'compare').mockResolvedValue(false);
     const { db, usersApi } = resetDb(BASE_USER, { _id: 'main', passwordRules: { preventReuse: false } });
-    const result = await authService.resetPassword(db, 'tok', 'NewPass123!@#', {});
+    const result = await authService.resetPassword(db, 'tok', 'NewPass123!@#long', {});
     expect(result.success).toBe(true);
     expect(compare).toHaveBeenCalledTimes(1);
-    expect(compare).toHaveBeenCalledWith('NewPass123!@#', BASE_USER.password);
+    expect(compare).toHaveBeenCalledWith('NewPass123!@#long', BASE_USER.password);
     expect(usersApi.updateOne).toHaveBeenCalled();
   });
 
@@ -1423,7 +1439,7 @@ describe('AuthService.resetPassword', () => {
     vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'password-reset', userID: '507f1f77bcf86cd799439011' });
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
     const { db, usersApi } = resetDb(BASE_USER, { _id: 'main', passwordRules: { preventReuse: false } });
-    await expect(authService.resetPassword(db, 'tok', 'NewPass123!@#', {})).rejects.toThrow('utilizada recentemente');
+    await expect(authService.resetPassword(db, 'tok', 'NewPass123!@#long', {})).rejects.toThrow('utilizada recentemente');
     expect(usersApi.updateOne).not.toHaveBeenCalled();
   });
 });
@@ -1460,7 +1476,7 @@ describe('#958: password changes revoke sessions', () => {
     });
 
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(false); // #1244: a fresh password
-    await authService.resetPassword(db, 'tok', 'NewPass123!@#', {});
+    await authService.resetPassword(db, 'tok', 'NewPass123!@#long', {});
 
     expect(sessionsCollection.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({ userID: 'user-1', isActive: true }),

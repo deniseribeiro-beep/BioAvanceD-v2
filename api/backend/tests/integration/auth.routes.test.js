@@ -813,16 +813,17 @@ describe('GET /api/auth/password-policy (#1246)', () => {
     const res = await request(buildApp(loadAuthRoutes(), db)).get('/api/auth/password-policy');
     expect(res.status).toBe(200);
     expect(res.body.data).toEqual({
-      minLength: 12, requireUppercase: true, requireLowercase: true, requireNumbers: false, requireSpecialChars: true,
+      minLength: 12, minLengthWithMFA: 12, requireUppercase: true, requireLowercase: true, requireNumbers: false, requireSpecialChars: true,
       allowPasswordReset: true,
     });
   });
 
+  // #1257: a new deployment's defaults, after NIST SP 800-63B-4.
   it('serves the defaults when no config document exists', async () => {
     const res = await request(buildApp(loadAuthRoutes(), dbWithConfig(null))).get('/api/auth/password-policy');
     expect(res.status).toBe(200);
     expect(res.body.data).toEqual({
-      minLength: 8, requireUppercase: true, requireLowercase: true, requireNumbers: true, requireSpecialChars: true,
+      minLength: 15, minLengthWithMFA: 8, requireUppercase: false, requireLowercase: false, requireNumbers: false, requireSpecialChars: false,
       allowPasswordReset: true,
     });
   });
@@ -833,7 +834,7 @@ describe('GET /api/auth/password-policy (#1246)', () => {
     const db = dbWithConfig({ _id: 'main', authentication: { requireStrongPassword: false, allowPasswordReset: false }, passwordRules: { minLength: 10 } });
     const res = await request(buildApp(loadAuthRoutes(), db)).get('/api/auth/password-policy');
     expect(res.body.data).toEqual({
-      minLength: 10, requireUppercase: false, requireLowercase: false, requireNumbers: false, requireSpecialChars: false,
+      minLength: 10, minLengthWithMFA: 10, requireUppercase: false, requireLowercase: false, requireNumbers: false, requireSpecialChars: false,
       allowPasswordReset: false,
     });
   });

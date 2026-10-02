@@ -371,6 +371,18 @@ export default function SecurityPage() {
                     onChange={(e) => handleConfigChange('passwordRules.minLength', parseInt(e.target.value))}
                   />
                 </div>
+                {/* #1257: the floor for an account enrolled in MFA; a stored
+                    document from before the key existed reads it as minLength. */}
+                <div className="config-field">
+                  <label>{t('security.password.minLengthWithMFA')}</label>
+                  <input title="security-input"
+                    type="number"
+                    min="8"
+                    max={localConfig.passwordRules.minLength}
+                    value={localConfig.passwordRules.minLengthWithMFA ?? localConfig.passwordRules.minLength}
+                    onChange={(e) => handleConfigChange('passwordRules.minLengthWithMFA', parseInt(e.target.value))}
+                  />
+                </div>
                 <label className="config-switch">
                   <input title="security-input"
                     type="checkbox"

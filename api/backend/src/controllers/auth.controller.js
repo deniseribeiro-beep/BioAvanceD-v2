@@ -366,7 +366,7 @@ class AuthController {
       }
 
       const passwordPolicy = await passwordService.resolvePasswordPolicy(db);
-      passwordService.validateStrength(newPassword, passwordPolicy);
+      passwordService.validateStrength(newPassword, passwordPolicy, user);
       await passwordService.validateReuse(newPassword, user, passwordPolicy);
 
       const newHash = await bcrypt.hash(newPassword, 10);

@@ -249,13 +249,18 @@ class SecurityService {
       },
       
       // Regras de Senha
+      // #1257: NIST SP 800-63B-4 §3.1.1.2 (see password.service): 15 for an
+      // account that signs in without MFA, 8 for one enrolled in MFA, no
+      // composition rules and no periodic expiry. A new deployment's values;
+      // a stored document keeps its own.
       passwordRules: {
-        minLength: 8,
-        requireUppercase: true,
-        requireLowercase: true,
-        requireNumbers: true,
-        requireSpecialChars: true,
-        expirationDays: 90,
+        minLength: 15,
+        minLengthWithMFA: 8,
+        requireUppercase: false,
+        requireLowercase: false,
+        requireNumbers: false,
+        requireSpecialChars: false,
+        expirationDays: 0,
         preventReuse: true,
         maxReuseHistory: 5
       },
@@ -654,6 +659,21 @@ class SecurityService {
       // #1253: 8 is NIST SP 800-63B §5.1.1.2's floor (see password.service).
       if (isNumber(config.passwordRules.minLength) && (config.passwordRules.minLength < 8 || config.passwordRules.minLength > 128)) {
         errors.push('minLength deve estar entre 8 e 128');
+      }
+      // #1257: the same 8 floor, which SP 800-63B-4 sets for a password used
+      // with MFA. Above minLength is refused rather than silently capped
+      // (password.service caps it), so the page never shows a value not in
+      // force; an unchanged minLength is read from the stored document.
+      const mfaMin = config.passwordRules.minLengthWithMFA;
+      if (isNumber(mfaMin)) {
+        const singleFactorMin = isNumber(config.passwordRules.minLength)
+          ? config.passwordRules.minLength
+          : currentConfig?.passwordRules?.minLength;
+        if (mfaMin < 8 || mfaMin > 128) {
+          errors.push('minLengthWithMFA deve estar entre 8 e 128');
+        } else if (isNumber(singleFactorMin) && mfaMin > singleFactorMin) {
+          errors.push('minLengthWithMFA não pode exceder minLength');
+        }
       }
       if (isNumber(config.passwordRules.expirationDays) && (config.passwordRules.expirationDays < 0 || config.passwordRules.expirationDays > 365)) {
         errors.push('expirationDays deve estar entre 0 e 365');

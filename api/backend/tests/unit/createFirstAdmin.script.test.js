@@ -6,7 +6,12 @@ const { buildMutableRbacCollections } = require('../factories/rbac.factory');
 const bcrypt = require('bcryptjs');
 const { createFirstAdmin, requireBootstrapEnv } = require('../../src/scripts/createFirstAdmin');
 
-function createMockDb(usersCount = 0) {
+// #1257: securityConfig is the stored security_config document, or null for
+// a new deployment, which takes the code defaults.
+function createMockDb(usersCount = 0, securityConfig = null) {
+  const securityConfigCollection = {
+    findOne: vi.fn().mockResolvedValue(securityConfig),
+  };
   const users = {
     createIndex: vi.fn().mockResolvedValue('idx'),
     countDocuments: vi.fn().mockResolvedValue(usersCount),
@@ -29,6 +34,7 @@ function createMockDb(usersCount = 0) {
       collection: vi.fn((name) => {
         if (name === 'users') return users;
         if (name === 'systemBootstrap') return systemBootstrap;
+        if (name === 'security_config') return securityConfigCollection;
         if (rbacCollections[name]) return rbacCollections[name];
         throw new Error(`Unexpected collection ${name}`);
       }),
@@ -71,7 +77,7 @@ const validEnv = {
   BOOTSTRAP_ADMIN_NAME: 'Primeiro Admin',
   BOOTSTRAP_ADMIN_EMAIL: 'Admin.Seguro@BioAvanceD.test',
   BOOTSTRAP_ADMIN_USERNAME: 'admin-seguro',
-  BOOTSTRAP_ADMIN_TEMP_PASSWORD: 'SenhaForte@123',
+  BOOTSTRAP_ADMIN_TEMP_PASSWORD: 'SenhaForte@12345',
 };
 
 describe('createFirstAdmin', () => {
@@ -172,13 +178,42 @@ describe('createFirstAdmin', () => {
     expect(logs).not.toContain(validEnv.BOOTSTRAP_ADMIN_TEMP_PASSWORD);
   });
 
-  it('rejeita senha temporaria fraca antes de tocar o banco', async () => {
+  it('rejeita senha temporaria fraca sem criar o admin', async () => {
     const { db, users } = createMockDb(0);
     const env = { ...validEnv, BOOTSTRAP_ADMIN_TEMP_PASSWORD: 'fraca' };
 
     await expect(createFirstAdmin({ db, env, logger: { info: vi.fn() } })).rejects.toThrow();
-    expect(db.collection).not.toHaveBeenCalled();
-    expect(users.countDocuments).not.toHaveBeenCalled();
+    expect(users.insertOne).not.toHaveBeenCalled();
+  });
+
+  // #1257: a new deployment (no security_config) takes the defaults, and the
+  // bootstrap admin has no MFA, so 15 characters is its floor.
+  it('#1257: a new deployment refuses a 14-character temporary password, the single-factor floor being 15', async () => {
+    const { db, users } = createMockDb(0, null);
+    const env = { ...validEnv, BOOTSTRAP_ADMIN_TEMP_PASSWORD: 'SenhaForte@123' };
+
+    await expect(createFirstAdmin({ db, env, logger: { info: vi.fn() } })).rejects.toThrow('pelo menos 15 caracteres');
+    expect(users.insertOne).not.toHaveBeenCalled();
+  });
+
+  it('#1257: a stored policy decides the floor, so a deployment that stored minLength 8 keeps it', async () => {
+    const { db, users } = createMockDb(0, { _id: 'main', passwordRules: { minLength: 8 } });
+    const env = { ...validEnv, BOOTSTRAP_ADMIN_TEMP_PASSWORD: 'SenhaForte@123' };
+
+    await expect(createFirstAdmin({ db, env, logger: { info: vi.fn() } })).resolves.toMatchObject({ status: 'created' });
+    expect(users.insertOne).toHaveBeenCalledTimes(1);
+  });
+
+  // #1257: the check used to run before the users check, against the code
+  // default. An existing deployment re-running its bootstrap with the
+  // password it was made with must still skip, whatever the default says.
+  it('#1257: an existing deployment skips without checking the temporary password', async () => {
+    const { db, users } = createMockDb(1);
+    const env = { ...validEnv, BOOTSTRAP_ADMIN_TEMP_PASSWORD: 'Admin@123' };
+
+    await expect(createFirstAdmin({ db, env, logger: { info: vi.fn() } }))
+      .resolves.toEqual({ status: 'skipped', reason: 'users_exist', usersCount: 1 });
+    expect(users.insertOne).not.toHaveBeenCalled();
   });
 
   // #1028: the seed used to sit BETWEEN insertOne and grantRoleForAccessType,

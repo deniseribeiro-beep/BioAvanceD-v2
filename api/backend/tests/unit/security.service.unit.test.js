@@ -230,6 +230,26 @@ describe('SecurityService.validateConfig', () => {
     expect(() => securityService.validateConfig({ passwordRules: { expirationDays: 0 } })).not.toThrow();
   });
 
+  // #1257: the MFA floor is a known key, 8..128, and never above minLength,
+  // whether minLength arrives in the same request or is the stored one.
+  it('#1257: range-checks minLengthWithMFA and refuses one above minLength', () => {
+    expect(() => securityService.validateConfig({ passwordRules: { minLength: 15, minLengthWithMFA: 8 } })).not.toThrow();
+    expect(() => securityService.validateConfig({ passwordRules: { minLengthWithMFA: 7 } })).toThrow('minLengthWithMFA deve estar entre 8 e 128');
+    expect(() => securityService.validateConfig({ passwordRules: { minLength: 10, minLengthWithMFA: 12 } }))
+      .toThrow('minLengthWithMFA não pode exceder minLength');
+    expect(() => securityService.validateConfig({ passwordRules: { minLengthWithMFA: 12 } }, { passwordRules: { minLength: 10 } }))
+      .toThrow('minLengthWithMFA não pode exceder minLength');
+    expect(() => securityService.validateConfig({ passwordRules: { minLengthWithMFA: 12 } }, { passwordRules: { minLength: 15 } })).not.toThrow();
+  });
+
+  it('#1257: a new deployment stores the NIST SP 800-63B-4 defaults', () => {
+    expect(securityService.getDefaultConfig().passwordRules).toMatchObject({
+      minLength: 15, minLengthWithMFA: 8,
+      requireUppercase: false, requireLowercase: false, requireNumbers: false, requireSpecialChars: false,
+      expirationDays: 0,
+    });
+  });
+
   it('lets an unchanged echo of the stored document through, and nothing else', () => {
     const stored = { authentication: { legacyFlag: true }, session: { timeoutMinutes: null } };
     expect(() => securityService.validateConfig(
