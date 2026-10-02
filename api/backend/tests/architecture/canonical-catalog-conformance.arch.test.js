@@ -88,7 +88,12 @@ const KNOWN_DRIFT = {
         note: 'TODO(#967): 0..1 Essencial -- not emitted.'
       }
     ],
-    extra: []
+    extra: [
+      {
+        key: 'passwordRules.minLengthWithMFA',
+        note: '#1257: deliberate. NIST SP 800-63B-4 section 3.1.1.2 sets two length floors, 15 for a password used as a single factor and 8 for one used with MFA, and dict-02 has one minLength (P1X-0284), which carries the single-factor floor. The MFA floor has no canonical row.'
+      }
+    ]
   },
   DerivedScore: {
     absent: [],
