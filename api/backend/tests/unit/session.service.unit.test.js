@@ -313,6 +313,61 @@ describe('SessionService.createSession', () => {
 
     await expect(sessionService.createSession(db, 'user-1', 'a', 'r')).rejects.toThrow('db down');
   });
+
+  // #1254: dict-02 P1X-0294 session.allowMultipleSessions. Off, a sign-in ends
+  // the user's other active sessions, with reason admin_action (P1X-0267).
+  describe('#1254: session.allowMultipleSessions', () => {
+    function dbWithPolicy(session, otherActive) {
+      const sessions = makeCollection({ countDocuments: vi.fn().mockResolvedValue(otherActive) });
+      const config = makeCollection({ findOne: vi.fn().mockResolvedValue(session === undefined ? null : { _id: 'main', session }) });
+      const db = { collection: vi.fn((name) => (name === 'security_config' ? config : sessions)) };
+      return { db, sessions };
+    }
+
+    it('off: the new sign-in ends the user\'s other active sessions, after storing its own', async () => {
+      const revoke = vi.spyOn(sessionService, 'revokeAllOtherSessions').mockResolvedValue(undefined);
+      const { db, sessions } = dbWithPolicy({ allowMultipleSessions: false }, 2);
+
+      await sessionService.createSession(db, 'user-1', 'access-tok', 'refresh-tok', null);
+
+      expect(sessions.countDocuments).toHaveBeenCalledWith({
+        userID: 'user-1', isActive: true, tokenHash: { $ne: sessionService.getTokenHash('access-tok') },
+      });
+      expect(revoke).toHaveBeenCalledWith(db, 'user-1', 'access-tok', 'admin_action', 'system', { req: null });
+      expect(sessions.insertOne.mock.invocationCallOrder[0]).toBeLessThan(revoke.mock.invocationCallOrder[0]);
+      revoke.mockRestore();
+    });
+
+    it('off with no other session: nothing to end, so no revocation and no audit row', async () => {
+      const revoke = vi.spyOn(sessionService, 'revokeAllOtherSessions').mockResolvedValue(undefined);
+      const { db } = dbWithPolicy({ allowMultipleSessions: false }, 0);
+
+      await sessionService.createSession(db, 'user-1', 'access-tok', 'refresh-tok', null);
+
+      expect(revoke).not.toHaveBeenCalled();
+      revoke.mockRestore();
+    });
+
+    it.each([
+      ['on', { allowMultipleSessions: true }],
+      ['absent from a stored document', {}],
+      ['a new deployment (no document)', undefined],
+    ])('%s: other sessions stay', async (_label, session) => {
+      const revoke = vi.spyOn(sessionService, 'revokeAllOtherSessions').mockResolvedValue(undefined);
+      const { db, sessions } = dbWithPolicy(session, 3);
+
+      await sessionService.createSession(db, 'user-1', 'access-tok', 'refresh-tok', null);
+
+      expect(sessions.countDocuments).not.toHaveBeenCalled();
+      expect(revoke).not.toHaveBeenCalled();
+      revoke.mockRestore();
+    });
+
+    it('an unreadable policy ends nobody\'s sessions', async () => {
+      const policy = await sessionService.resolveSessionPolicy({ collection: vi.fn(() => { throw new Error('down'); }) });
+      expect(policy.allowMultipleSessions).toBe(true);
+    });
+  });
 });
 
 describe('SessionService.updateActivity', () => {

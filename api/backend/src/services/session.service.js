@@ -70,12 +70,18 @@ function positiveNumber(value) {
 // "Registra expirações no AuditEvent" decides whether an expiry writes the
 // audit row every other revocation writes (#1020). Both default to true, and
 // only an explicit false turns one off.
+//
+// #1254: P1X-0294 session.allowMultipleSessions "Permite múltiplas sessões
+// concorrentes". Off, a new sign-in ends the user's other active sessions
+// (createSession). Same default and reading: true, and only an explicit false
+// turns it off, so an unreadable policy never ends anyone's sessions.
 async function resolveSessionPolicy(db) {
   const policy = {
     inactiveTimeoutMs: DEFAULT_INACTIVE_TIMEOUT_MS,
     maxSessionDurationMs: DEFAULT_MAX_SESSION_DURATION_MS,
     autoRenewal: true,
-    logExpiration: true
+    logExpiration: true,
+    allowMultipleSessions: true
   };
   try {
     const config = await db.collection('security_config').findOne({ _id: 'main' });
@@ -92,6 +98,7 @@ async function resolveSessionPolicy(db) {
     if (hours) policy.maxSessionDurationMs = hours * 60 * 60 * 1000;
     policy.autoRenewal = session.autoRenewal !== false;
     policy.logExpiration = session.logExpiration !== false;
+    policy.allowMultipleSessions = session.allowMultipleSessions !== false;
   } catch (error) {
     logger.warn('#914: política de sessão ilegível, usando os padrões (30 min / 12 h):', error.message);
   }
@@ -213,6 +220,23 @@ class SessionService {
       // Salva no banco (opcional, para persistência)
       const sessionsCollection = db.collection('sessions');
       await sessionsCollection.insertOne(session);
+
+      // #1254: under a single-session policy this sign-in ends the user's
+      // other active sessions, after the new one is stored so the user is never
+      // left with none. The reason is admin_action (dict-02 P1X-0267's closed
+      // vocabulary): the administrator's policy ends them, not the user. Only
+      // when there is one to end, so a sign-in with nothing else open writes no
+      // revocation row.
+      if (policy.allowMultipleSessions === false) {
+        const others = await sessionsCollection.countDocuments({
+          userID: String(userID),
+          isActive: true,
+          tokenHash: { $ne: accessTokenHash }
+        });
+        if (others > 0) {
+          await this.revokeAllOtherSessions(db, userID, accessToken, 'admin_action', 'system', { req });
+        }
+      }
 
       return session;
     } catch (error) {

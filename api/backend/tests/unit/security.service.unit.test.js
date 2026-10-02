@@ -725,3 +725,85 @@ describe('SecurityService.updateConfig session revocation (#649)', () => {
     expect(sessions.updateMany).not.toHaveBeenCalled();
   });
 });
+
+// #1254: a stored allowMultipleSessions false that no audit row shows an
+// administrator setting is the old code default, and is rewritten to true once.
+describe('SecurityService.reconcileAllowMultipleSessions (#1254)', () => {
+  let auditSpy;
+  beforeEach(() => {
+    auditSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+    vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  function makeDb({ marker = null, config = null, liveRow = null, archivedRow = null } = {}) {
+    const collections = {
+      systemBootstrap: { findOne: vi.fn().mockResolvedValue(marker), updateOne: vi.fn().mockResolvedValue({}) },
+      security_config: { findOne: vi.fn().mockResolvedValue(config), updateOne: vi.fn().mockResolvedValue({ modifiedCount: 1 }) },
+      logs: { findOne: vi.fn().mockResolvedValue(liveRow) },
+      logs_archive: { findOne: vi.fn().mockResolvedValue(archivedRow) },
+    };
+    return { db: { collection: vi.fn((name) => collections[name]) }, ...collections };
+  }
+
+  it('rewrites an unchosen false to true, audits it, and marks the rewrite done', async () => {
+    const { db, security_config, systemBootstrap, logs } = makeDb({ config: { _id: 'main', session: { allowMultipleSessions: false } } });
+
+    await expect(securityService.reconcileAllowMultipleSessions(db)).resolves.toEqual({ status: 'rewritten' });
+
+    expect(logs.findOne).toHaveBeenCalledWith({
+      resourceType: { $in: ['SecurityConfiguration', 'SecurityConfig'] },
+      'payload.path': 'session.allowMultipleSessions',
+    });
+    expect(security_config.updateOne).toHaveBeenCalledWith(
+      { _id: 'main', 'session.allowMultipleSessions': false },
+      { $set: expect.objectContaining({ 'session.allowMultipleSessions': true }) }
+    );
+    expect(auditSpy).toHaveBeenCalledWith(expect.objectContaining({
+      resourceType: 'SecurityConfiguration',
+      payload: expect.objectContaining({ path: 'session.allowMultipleSessions', oldValue: false, newValue: true }),
+    }));
+    expect(systemBootstrap.updateOne).toHaveBeenCalledWith(
+      { _id: 'allow_multiple_sessions_default_v1' },
+      { $set: expect.objectContaining({ status: 'rewritten' }) },
+      { upsert: true }
+    );
+  });
+
+  it.each([
+    ['the live trail', { liveRow: { _id: 'l1' } }],
+    ['the archive', { archivedRow: { _id: 'a1' } }],
+  ])('keeps a false an administrator set, found in %s', async (_where, rows) => {
+    const { db, security_config } = makeDb({ config: { _id: 'main', session: { allowMultipleSessions: false } }, ...rows });
+
+    await expect(securityService.reconcileAllowMultipleSessions(db)).resolves.toEqual({ status: 'kept_administrator_choice' });
+    expect(security_config.updateOne).not.toHaveBeenCalled();
+    expect(auditSpy).not.toHaveBeenCalled();
+  });
+
+  it('runs once: with the marker present it reads and writes nothing else', async () => {
+    const { db, security_config, systemBootstrap } = makeDb({
+      marker: { _id: 'allow_multiple_sessions_default_v1' },
+      config: { _id: 'main', session: { allowMultipleSessions: false } },
+    });
+
+    await expect(securityService.reconcileAllowMultipleSessions(db)).resolves.toEqual({ status: 'already_reconciled' });
+    expect(security_config.findOne).not.toHaveBeenCalled();
+    expect(systemBootstrap.updateOne).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['true', { _id: 'main', session: { allowMultipleSessions: true } }, 'kept'],
+    ['no document (a new deployment)', null, 'no_document'],
+  ])('leaves %s alone and still marks it done', async (_label, config, status) => {
+    const { db, security_config, systemBootstrap } = makeDb({ config });
+
+    await expect(securityService.reconcileAllowMultipleSessions(db)).resolves.toEqual({ status });
+    expect(security_config.updateOne).not.toHaveBeenCalled();
+    expect(systemBootstrap.updateOne).toHaveBeenCalledTimes(1);
+  });
+
+  it('a new deployment stores true', () => {
+    expect(securityService.getDefaultConfig().session.allowMultipleSessions).toBe(true);
+  });
+});

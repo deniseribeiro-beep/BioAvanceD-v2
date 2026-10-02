@@ -149,6 +149,16 @@ async function startServer() {
     await securityService.syncLogLevel(db);
     setInterval(() => securityService.syncLogLevel(db), 60 * 1000).unref();
 
+    // #1254: before any sign-in reads session.allowMultipleSessions, a stored
+    // false no administrator chose becomes true, once. Non-fatal: on a failure
+    // the next boot tries again, and the stored value stays as it was.
+    try {
+      const { status } = await securityService.reconcileAllowMultipleSessions(db);
+      logger.info(`#1254: session.allowMultipleSessions: ${status}`);
+    } catch (reconcileError) {
+      logger.error("#1254: falha ao reconciliar session.allowMultipleSessions:", reconcileError.message);
+    }
+
     // #916: the RBAC catalog reached a live database ONLY at first-admin
     // bootstrap -- createFirstAdmin early-returns on `users_exist`, and the
     // two standalone scripts have no npm entry and no compose service. So a

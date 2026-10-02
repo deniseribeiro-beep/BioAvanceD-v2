@@ -69,6 +69,24 @@ function isNumber(value) {
 // severity would mean a future logging tweak starts or stops logging people out.
 const SESSION_INVALIDATING_PATHS = ['session.timeoutMinutes', 'session.maxSessionDurationHours'];
 
+// #1254: every security_config document stored before the key was wired holds
+// session.allowMultipleSessions false, the old code default, while the system
+// allowed several sessions per user. Read as stored, the switch would make every
+// such deployment single-session at its next boot, a flip no administrator
+// chose (#1011 kept administrator MFA optional for the same reason). So a stored
+// false that no audit row shows an administrator setting is rewritten to true,
+// once. The marker in systemBootstrap makes it once: after it, a false is an
+// administrator's choice, even after the retention sweep has moved or deleted
+// the row that recorded it.
+const ALLOW_MULTIPLE_SESSIONS_MARKER = 'allow_multiple_sessions_default_v1';
+const ALLOW_MULTIPLE_SESSIONS_PATH = 'session.allowMultipleSessions';
+// #1116 renamed the audit rows' resourceType; rows written before keep the old
+// spelling. logs_archive holds the rows the retention sweep moved (#1259).
+const SECURITY_CONFIG_AUDIT_FILTER = Object.freeze({
+  resourceType: { $in: ['SecurityConfiguration', 'SecurityConfig'] },
+  'payload.path': ALLOW_MULTIPLE_SESSIONS_PATH,
+});
+
 // #1248: three keys of the logging and privacy groups restate what the active
 // RetentionPolicy (retentionPolicy.service, #440) already decides, and
 // retentionSweep.service applies it nightly to `logs` and `audit_events`.
@@ -269,7 +287,10 @@ class SecurityService {
       session: {
         timeoutMinutes: 30, // timeout por inatividade
         maxSessionDurationHours: 12,
-        allowMultipleSessions: false,
+        // #1254: true, what the system has always done. dict-02 P1X-0294 states
+        // no default and its example is true; false is an administrator's
+        // choice (session.service ends the other sessions at sign-in).
+        allowMultipleSessions: true,
         autoRenewal: true, // renovação automática enquanto usuário estiver ativo
         logExpiration: true // registrar logs quando sessão for expirada
       },
@@ -363,6 +384,56 @@ class SecurityService {
    */
   async isDataExportAllowed(db) {
     return readLgpdSwitch(db, 'allowDataExport');
+  }
+
+  /**
+   * #1254: the one-time rewrite of an unchosen allowMultipleSessions false
+   * (see ALLOW_MULTIPLE_SESSIONS_MARKER). Run at boot; idempotent.
+   */
+  async reconcileAllowMultipleSessions(db) {
+    const bootstrap = db.collection('systemBootstrap');
+    if (await bootstrap.findOne({ _id: ALLOW_MULTIPLE_SESSIONS_MARKER })) {
+      return { status: 'already_reconciled' };
+    }
+
+    const configCollection = db.collection('security_config');
+    const config = await configCollection.findOne({ _id: 'main' });
+    let outcome = 'no_document';
+    if (config) {
+      outcome = 'kept';
+      if (config.session && config.session.allowMultipleSessions === false) {
+        const chosen = await db.collection('logs').findOne(SECURITY_CONFIG_AUDIT_FILTER)
+          || await db.collection('logs_archive').findOne(SECURITY_CONFIG_AUDIT_FILTER);
+        if (chosen) {
+          outcome = 'kept_administrator_choice';
+        } else {
+          await configCollection.updateOne(
+            { _id: 'main', [ALLOW_MULTIPLE_SESSIONS_PATH]: false },
+            { $set: { [ALLOW_MULTIPLE_SESSIONS_PATH]: true, updatedAt: new Date() } }
+          );
+          outcome = 'rewritten';
+          auditLogger.init(db);
+          await auditLogger.log({
+            action: 'UPDATE',
+            resourceType: 'SecurityConfiguration',
+            resourceId: 'main',
+            status: 'success',
+            severity: this.getSeverityForChange(ALLOW_MULTIPLE_SESSIONS_PATH),
+            message: `Configuração de segurança alterada: ${ALLOW_MULTIPLE_SESSIONS_PATH} (padrão sem escolha de administrador corrigido)`,
+            payload: { path: ALLOW_MULTIPLE_SESSIONS_PATH, oldValue: false, newValue: true, reason: 'unchosen_default' },
+            req: null,
+            module: 'Segurança'
+          });
+        }
+      }
+    }
+
+    await bootstrap.updateOne(
+      { _id: ALLOW_MULTIPLE_SESSIONS_MARKER },
+      { $set: { status: outcome, completedAt: new Date() } },
+      { upsert: true }
+    );
+    return { status: outcome };
   }
 
   /**
