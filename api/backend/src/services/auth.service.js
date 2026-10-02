@@ -503,6 +503,13 @@ class AuthService {
       // The generic message, like the account lockout's: a distinct "address
       // blocked" answer would say the block exists, and every caller from the
       // address gets the same one, so it names no account.
+      //
+      // #1268: and fast, with no equalizing compare, for the account lockout's
+      // reason (#952, and #1036's note above burnPasswordComparison): a dummy
+      // round here would hand back the work the block exists to refuse. The
+      // speed says only "this address is blocked", the same for every name it
+      // tries, so it tells the caller nothing about any account.
+      // auth.ipBlock.parity.1268.test.js pins the parity on all three endpoints.
       if (await ipAttemptService.isSourceBlocked(db, req)) {
         throw new Error('Credenciais inválidas');
       }
