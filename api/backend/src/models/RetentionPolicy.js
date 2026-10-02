@@ -14,8 +14,20 @@
  * define a janela de retenção. Substitui o rascunho Fase 1
  * `retentionDurationDays` (inteiro de dias), que não tinha linha própria
  * no dicionário.
+ *
+ * #1271: archiveRetentionPeriod and archiveRetentionBasis, optional and only
+ * with postRetentionAction 'archive'. Archived rows still carry pseudonymised
+ * personal data, and LGPD art. 16 ends their treatment when its purpose ends
+ * unless one of its four grounds applies; for audit logs only I ("cumprimento
+ * de obrigação legal ou regulatória pelo controlador") can. So the archive keeps
+ * a row only for the period of an obligation the deployment cites: the period
+ * mirrors ELM-0410 retentionPeriod (ISO 8601, counted from the row's own
+ * createdAt, so never shorter than retentionPeriod), and the basis mirrors
+ * ELM-0409 retentionBasis ("Base ética, legal, contratual ou científica").
+ * The two come together or not at all. Without them the sweep deletes instead
+ * of archiving (retentionSweep.service).
  */
-const { isValidISO8601Duration } = require('../utils/iso8601Duration');
+const { isValidISO8601Duration, iso8601DurationToMs } = require('../utils/iso8601Duration');
 
 const POST_RETENTION_ACTIONS = ['review', 'destroy', 'archive', 'anonymize'];
 
@@ -72,6 +84,29 @@ class RetentionPolicyModel {
       errors.push('active deve ser booleano');
     }
 
+    // #1271: the archive's own period and the obligation it rests on.
+    const hasArchivePeriod = data.archiveRetentionPeriod !== undefined && data.archiveRetentionPeriod !== null;
+    const hasArchiveBasis = data.archiveRetentionBasis !== undefined && data.archiveRetentionBasis !== null;
+    if (hasArchivePeriod || hasArchiveBasis) {
+      if (data.postRetentionAction !== 'archive') {
+        errors.push('archiveRetentionPeriod e archiveRetentionBasis só se aplicam a postRetentionAction "archive"');
+      }
+      if (!hasArchivePeriod || !hasArchiveBasis) {
+        errors.push('archiveRetentionPeriod e archiveRetentionBasis vêm juntos: o prazo do arquivo é o da obrigação legal ou regulatória citada');
+      }
+      if (hasArchiveBasis && (typeof data.archiveRetentionBasis !== 'string' || data.archiveRetentionBasis.trim().length === 0)) {
+        errors.push('archiveRetentionBasis deve citar a obrigação legal ou regulatória (texto não vazio)');
+      }
+      if (hasArchivePeriod) {
+        if (!isValidISO8601Duration(data.archiveRetentionPeriod)) {
+          errors.push('archiveRetentionPeriod deve ser uma duração ISO 8601 válida (ex.: "P5Y")');
+        } else if (isValidISO8601Duration(data.retentionPeriod)
+          && iso8601DurationToMs(data.archiveRetentionPeriod) < iso8601DurationToMs(data.retentionPeriod)) {
+          errors.push('archiveRetentionPeriod não pode ser menor que retentionPeriod: ambos contam a partir do registro');
+        }
+      }
+    }
+
     return {
       isValid: errors.length === 0,
       errors
@@ -91,6 +126,8 @@ class RetentionPolicyModel {
         end: data.effectivePeriod.end ? new Date(data.effectivePeriod.end) : null
       },
       active: data.active === undefined ? true : data.active,
+      archiveRetentionPeriod: data.archiveRetentionPeriod || null,
+      archiveRetentionBasis: typeof data.archiveRetentionBasis === 'string' ? data.archiveRetentionBasis.trim() : null,
       createdAt: new Date(),
       updatedAt: new Date()
     };

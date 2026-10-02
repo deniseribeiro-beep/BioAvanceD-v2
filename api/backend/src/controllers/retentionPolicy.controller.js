@@ -26,6 +26,8 @@ class RetentionPolicyController {
             triggerEvent: policy.triggerEvent,
             postRetentionAction: policy.postRetentionAction,
             retentionPeriod: policy.retentionPeriod,
+            archiveRetentionPeriod: policy.archiveRetentionPeriod,
+            archiveRetentionBasis: policy.archiveRetentionBasis,
             version: policy.version,
             active: policy.active
           },
@@ -73,6 +75,8 @@ class RetentionPolicyController {
             triggerEvent: policy.triggerEvent,
             postRetentionAction: policy.postRetentionAction,
             retentionPeriod: policy.retentionPeriod,
+            archiveRetentionPeriod: policy.archiveRetentionPeriod,
+            archiveRetentionBasis: policy.archiveRetentionBasis,
             version: policy.version,
             active: policy.active,
             previousPolicyId: policy.previousPolicyId || null

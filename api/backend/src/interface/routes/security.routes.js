@@ -99,7 +99,8 @@ router.get('/logs/export', async (req, res) => {
       startDate: req.query.startDate,
       endDate: req.query.endDate,
       action: req.query.action,
-      entity: req.query.entity
+      entity: req.query.entity,
+      source: req.query.source // #1271: 'archive' exports logs_archive
     };
 
     const exportData = await securityService.exportLogs(db, filters, format);
@@ -127,6 +128,10 @@ router.get('/logs/export', async (req, res) => {
       return res.status(200).json(exportData);
     }
   } catch (error) {
+    // #1271: an unknown ?source= (log.service's logSourceCollection).
+    if (error.statusCode === 422) {
+      return res.status(422).json({ success: false, error: 'Dados inválidos', message: error.message });
+    }
     logger.error('Erro ao exportar logs:', error.message);
     return res.status(500).json({
       success: false,

@@ -786,7 +786,9 @@ class SecurityService {
    */
   async exportLogs(db, filters, format = 'csv') {
     try {
-      const logsCollection = db.collection('logs');
+      // #1271: source=archive exports logs_archive (log.service).
+      const { logSourceCollection } = require('./log.service');
+      const logsCollection = db.collection(logSourceCollection(filters.source));
       const query = {};
 
       // Aplica filtros

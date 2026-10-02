@@ -100,6 +100,39 @@ describe('logs.routes.js', () => {
     return appWithDb(db);
   }
 
+  // #1271: the archived trail, behind the same admin-or-auditor rule.
+  describe('#1271: GET /api/logs/archive and ?source=', () => {
+    it('serves logs_archive through getLogs with source archive', async () => {
+      const response = await request(appWithDb(dbWithRbac({ accessType: 4 }))).get('/api/logs/archive?action=LOGIN');
+      expect(response.status).toBe(200);
+      expect(logServiceMock.getLogs).toHaveBeenCalledWith(expect.anything(), { action: 'LOGIN', source: 'archive' });
+    });
+
+    it('refuses a reader who is not admin or auditor', async () => {
+      currentUser = { userID: TOKEN_USER_ID, accessType: 1 };
+      const response = await request(appWithDb(dbWithRbac({ accessType: 1 }))).get('/api/logs/archive');
+      expect(response.status).toBe(403);
+      expect(logServiceMock.getLogs).not.toHaveBeenCalled();
+    });
+
+    it('answers 422 for an unknown source, on the list and on the export', async () => {
+      const invalid = Object.assign(new Error('source deve ser "live" ou "archive"'), { statusCode: 422 });
+      logServiceMock.getLogs.mockRejectedValue(invalid);
+      const app = appWithDb(dbWithRbac({ accessType: 4 }));
+      for (const path of ['/api/logs?source=archived', '/api/logs/export/csv?source=archived']) {
+        const response = await request(app).get(path);
+        expect(response.status).toBe(422);
+        expect(response.body.message).toBe('source deve ser "live" ou "archive"');
+      }
+    });
+
+    it('names an archive export after the archive', async () => {
+      const response = await request(appWithDb(dbWithRbac({ accessType: 4 }))).get('/api/logs/export/csv?source=archive');
+      expect(response.status).toBe(200);
+      expect(response.headers['content-disposition']).toMatch(/filename=logs_archive_/);
+    });
+  });
+
   describe('requireAuditReader', () => {
     it('permite acesso para usuário com role administrator ativa', async () => {
       currentUser = { userID: TOKEN_USER_ID, accessType: 4 };
