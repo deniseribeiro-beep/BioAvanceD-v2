@@ -129,7 +129,11 @@ class UserModel {
       mfaActivationDate: data.mfaActivationDate || null,
       mfaFailedAttempts: data.mfaFailedAttempts || 0,
       mfaLocked: data.mfaLocked || false,
-      anonId: data.anonId || null, // Identificador anonimizado para LGPD (gerado após inserção)
+      // Identificador anonimizado para LGPD (gerado após inserção). #1275
+      // follow-up: never taken from input. Log reads honour a stored anonId
+      // (dict-02 P1X-0194), so a chosen one could make this user's rows read
+      // as another's.
+      anonId: null,
       createdAt: new Date(),
       updatedAt: new Date(),
       lastLogin: null,

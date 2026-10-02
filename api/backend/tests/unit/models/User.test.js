@@ -301,7 +301,8 @@ describe('UserModel - Unit Tests', () => {
       expect(user.mfaActivationDate).toBe('2026-01-01');
       expect(user.mfaFailedAttempts).toBe(2);
       expect(user.mfaLocked).toBe(true);
-      expect(user.anonId).toBe('anon-1');
+      // #1275 follow-up: never taken from input; generateAnonId writes it.
+      expect(user.anonId).toBeNull();
       expect(user.passwordHistory).toEqual(['h1']);
       expect(user.passwordChangedAt).toBe('2026-01-01');
       expect(user.forceReset).toBe(true);

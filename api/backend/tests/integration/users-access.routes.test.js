@@ -914,7 +914,7 @@ describe('Users and Access routes', () => {
 
     const req = createRequest({
       params: { id: 'user-target-8' },
-      body: { name: 'Alvo Renomeado', injected: 'x', mfaLocked: false, userID: 999, failedLoginAttempts: 0, accountLockedUntil: null },
+      body: { name: 'Alvo Renomeado', injected: 'x', mfaLocked: false, userID: 999, failedLoginAttempts: 0, accountLockedUntil: null, anonId: 'USR-OTHER001' },
     });
     req.app.locals.db = dbWithTarget;
     const res = createResponse();
@@ -934,6 +934,9 @@ describe('Users and Access routes', () => {
     // for; that one had a test and this one did not.
     expect(setPayload).not.toHaveProperty('failedLoginAttempts');
     expect(setPayload).not.toHaveProperty('accountLockedUntil');
+    // #1275 follow-up: log reads now honour a stored anonId, so a caller who
+    // could set it could make one user's audit rows read as another's.
+    expect(setPayload).not.toHaveProperty('anonId');
     expect(Object.keys(setPayload).sort()).toEqual(['name', 'updatedAt']);
   });
 

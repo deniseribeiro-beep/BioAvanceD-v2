@@ -629,7 +629,9 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
       // #1013: 'password' is gone -- POST /:id/set-password owns it.
       'status',
       'mfaEnabled', 'mfaSecretCiphertext', 'mfaActivationDate',
-      'anonId',
+      // #1275 follow-up: 'anonId' is gone. Log reads now honour the stored
+      // pseudonym, so setting it would relabel this user's audit rows as
+      // another user's. Only generateAnonId writes it.
       // #952: 'failedLoginAttempts' was HERE and is deliberately gone. It is now
       // load-bearing (RF001 AC#2), so leaving it client-writable would let any
       // createUser holder clear a target's brute-force counter through a generic
