@@ -56,6 +56,53 @@ describe('GET /api/organizations', () => {
     expect(res.body.success).toBe(true);
     expect(Array.isArray(res.body.data)).toBe(true);
   });
+
+  // #1280: without an offset no client could read past the 500th row.
+  describe('paging (#1280)', () => {
+    function givenCursor() {
+      const cursor = {
+        toArray: vi.fn().mockResolvedValue([]),
+        sort: vi.fn().mockReturnThis(),
+        skip: vi.fn().mockReturnThis(),
+        limit: vi.fn().mockReturnThis(),
+      };
+      app.locals.db = createDbMock({
+        organizations: createCollectionMock({ find: vi.fn().mockReturnValue(cursor) }),
+        ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]),
+      });
+      return cursor;
+    }
+
+    it('applies skip and limit over a name order with _id as the tie-break', async () => {
+      const cursor = givenCursor();
+
+      const res = await request(app)
+        .get('/api/organizations?limit=500&skip=500')
+        .set('Authorization', `Bearer ${makeToken()}`);
+
+      expect(res.status).toBe(200);
+      expect(cursor.sort).toHaveBeenCalledWith({ officialName: 1, _id: 1 });
+      expect(cursor.skip).toHaveBeenCalledWith(500);
+      expect(cursor.limit).toHaveBeenCalledWith(500);
+    });
+
+    it.each([
+      ['', 0, 100],
+      ['?skip=-5&limit=9999', 0, 500],
+      ['?skip=abc&limit=0', 0, 100],
+      ['?skip=2.7', 2, 100],
+    ])('normalizes %s to skip %i, limit %i', async (query, skip, limit) => {
+      const cursor = givenCursor();
+
+      const res = await request(app)
+        .get(`/api/organizations${query}`)
+        .set('Authorization', `Bearer ${makeToken()}`);
+
+      expect(res.status).toBe(200);
+      expect(cursor.skip).toHaveBeenCalledWith(skip);
+      expect(cursor.limit).toHaveBeenCalledWith(limit);
+    });
+  });
 });
 
 describe('GET /api/organizations/:id', () => {

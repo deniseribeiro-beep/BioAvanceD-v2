@@ -36,7 +36,10 @@ router.get('/', authenticate, async (req, res) => {
     await ensureIndexes(collection);
 
     const limit = Math.max(1, Math.min(Number(req.query.limit) || 100, 500));
-    const items = await collection.find({}).sort({ officialName: 1 }).limit(limit).toArray();
+    // #1280: an offset, so a client can read past the first page. _id breaks
+    // ties so consecutive pages neither repeat nor skip a row.
+    const skip = Math.max(0, Math.floor(Number(req.query.skip)) || 0);
+    const items = await collection.find({}).sort({ officialName: 1, _id: 1 }).skip(skip).limit(limit).toArray();
 
     return res.status(200).json({ success: true, data: items });
   } catch (error) {

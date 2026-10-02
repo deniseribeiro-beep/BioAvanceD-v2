@@ -575,7 +575,9 @@ export const userService = {
 
 // ========== ORGANIZATION SERVICES ==========
 export const organizationService = {
-  getAll: () => api.get<ApiEnvelope<Organization[]>>('/organizations'),
+  // #1280: the route returns one sorted page (limit at most 500); useOrganizations pages through it.
+  getAll: (params?: { limit?: number; skip?: number }) =>
+    api.get<ApiEnvelope<Organization[]>>('/organizations', { params }),
   create: (data: Partial<Organization>) => api.post<Organization>('/organizations', data),
   update: (id: string, data: Partial<Organization>) => api.put<Organization>(`/organizations/${id}`, data),
   delete: (id: string) => api.delete(`/organizations/${id}`),
