@@ -402,7 +402,9 @@ services:
       - "${BACKEND_HOST_PORT:-3000}:3000"
       # #1263: trusted-hop-test shares this service's network namespace, so
       # its port is published here (a network_mode service cannot publish).
-      - "${TRUSTED_HOP_HOST_PORT:-3100}:3100"
+      # Host loopback only: the hop lets its caller choose a source address,
+      # so it is not offered to the host's network the way 3000 is.
+      - "127.0.0.1:${TRUSTED_HOP_HOST_PORT:-3100}:3100"
     expose:
       - "3000"
       - "3100"
