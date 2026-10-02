@@ -959,6 +959,25 @@ class PatientService {
   async updatePatient(db, participantId, updateData, options = {}) {
     let submittedPhone = null;
     try {
+      // #1277: every declared field the patch carries must hold its type,
+      // checked on the raw input before anything below coerces it. Before
+      // this, only the fields named below were checked, and a wrong type in
+      // any other (sex, status, studyId, anamneseGeral, a consent date) went
+      // straight into the $set.
+      const typeErrors = PatientModel.validateUpdateTypes(updateData);
+      if (typeErrors.length > 0) {
+        const error = new Error(typeErrors.join(', '));
+        error.statusCode = 422;
+        error.code = 'INVALID_FIELD_TYPE';
+        error.fields = typeErrors;
+        throw error;
+      }
+      // A date given as a string is stored as a Date, as create() stores it.
+      // birthDate is converted where it is routed to ParticipantIdentity.
+      for (const field of ['consentTokenCreatedAt', 'consentTokenExpiresAt', 'consentNotifiedAt', 'consentAcceptedAt', 'createdAt']) {
+        if (typeof updateData[field] === 'string') updateData[field] = new Date(updateData[field]);
+      }
+
       const patientsCollection = await this.getPatientsCollection(db);
 
       if (updateData.unitAcronym !== undefined) {

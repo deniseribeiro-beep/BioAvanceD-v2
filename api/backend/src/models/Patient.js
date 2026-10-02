@@ -122,6 +122,85 @@ class ParticipantModel {
 
 ParticipantModel.CANONICAL_FIELDS = CANONICAL_FIELDS;
 
+// #1277: the value type each field an update may carry must hold. Every
+// CANONICAL_FIELDS entry is here, plus the three civil-identity fields the
+// update payload still routes on to ParticipantIdentity (#575). `nullable`
+// fields may be cleared with null; the others are required on create.
+// A date accepts a Date or a string that parses as one.
+const FIELD_TYPES = {
+  participantId: { type: 'string' },
+  sex: { type: 'string' },
+  email: { type: 'string', nullable: true },
+  phone: { type: 'string', nullable: true },
+  recordNumber: { type: 'string', nullable: true },
+  clinicalUnitId: { type: 'string', nullable: true },
+  clinicalUnit: { type: 'string', nullable: true },
+  unitAcronym: { type: 'string', nullable: true },
+  isDeceased: { type: 'boolean' },
+  representativeName: { type: 'string', nullable: true },
+  representativeEmail: { type: 'string', nullable: true },
+  representativeIdentityDocument: { type: 'string', nullable: true },
+  representativePhone: { type: 'string', nullable: true },
+  consentTemplateId: { type: 'string' },
+  status: { type: 'string' },
+  consentTokenHash: { type: 'string', nullable: true },
+  consentTokenCreatedAt: { type: 'date', nullable: true },
+  consentTokenExpiresAt: { type: 'date', nullable: true },
+  consentNotifiedAt: { type: 'date', nullable: true },
+  consentAcceptedAt: { type: 'date', nullable: true },
+  createdAt: { type: 'date' },
+  updatedAt: { type: 'date' },
+  anamneseGeral: { type: 'object', nullable: true },
+  dadosEspecificos: { type: 'array' },
+  studyId: { type: 'string', nullable: true },
+  patientName: { type: 'string', nullable: true },
+  birthDate: { type: 'date', nullable: true },
+  identityDocument: { type: 'string', nullable: true }
+};
+
+const TYPE_NAMES = {
+  string: 'um texto',
+  boolean: 'verdadeiro ou falso',
+  date: 'uma data',
+  object: 'um objeto',
+  array: 'uma lista'
+};
+
+function holdsType(value, type) {
+  switch (type) {
+    case 'string': return typeof value === 'string';
+    case 'boolean': return typeof value === 'boolean';
+    case 'date':
+      if (value instanceof Date) return !Number.isNaN(value.getTime());
+      return typeof value === 'string' && value.trim() !== '' && !Number.isNaN(new Date(value).getTime());
+    case 'object': return typeof value === 'object' && value !== null && !Array.isArray(value) && !(value instanceof Date);
+    case 'array': return Array.isArray(value);
+    default: return false;
+  }
+}
+
+/**
+ * #1277: the type errors of an update patch, one per offending field, naming
+ * it. Only the keys FIELD_TYPES declares are checked; whether a key is
+ * allowed at all is the controller's allow-list (rejectCanonicalAliases).
+ * An undefined value is an absent key.
+ */
+ParticipantModel.validateUpdateTypes = function validateUpdateTypes(patch = {}) {
+  const errors = [];
+  for (const [field, value] of Object.entries(patch)) {
+    if (value === undefined || !Object.prototype.hasOwnProperty.call(FIELD_TYPES, field)) continue;
+    const { type, nullable } = FIELD_TYPES[field];
+    if (value === null) {
+      if (!nullable) errors.push(`${field} não pode ser nulo`);
+      continue;
+    }
+    if (!holdsType(value, type)) errors.push(`${field} deve ser ${TYPE_NAMES[type]}`);
+  }
+  return errors;
+};
+
+ParticipantModel.FIELD_TYPES = FIELD_TYPES;
+
 /**
  * #1045: removes the consent CREDENTIAL from a participant document on its way
  * out of the API.
