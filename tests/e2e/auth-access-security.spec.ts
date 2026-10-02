@@ -1849,4 +1849,56 @@ test.describe('Administrator password set (RF003 criteria 2 and 5, #1013) — re
     expect(changed.ok(), await changed.text()).toBeTruthy();
     expect((await changed.json()).data?.token).toBeTruthy();
   });
+
+  // #1270: the same first login, through the authenticated enrolment the
+  // login's setup tempToken admits. GET /two-factor/qr and POST
+  // /two-factor/enable issued a full session on the administrator-set
+  // password; they now withhold it exactly as enable-first-login does.
+  test('#1270: the setup tempToken cannot complete a first login past a forced password change', async ({ request }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const username = `tecnico.1270.${Date.now()}`;
+    const register = await request.post(`${apiBaseURL}/api/users/register`, {
+      headers: auth,
+      data: { name: '#1270 first-login Fixture', email: `${username}@example.com`, username, password: 'Initial@1270pass', accessType: 2, roleName: 'Técnico' },
+    });
+    expect(register.ok(), await register.text()).toBeTruthy();
+    const userID = (await register.json()).data?._id;
+    expect(userID).toBeTruthy();
+
+    const adminSet = 'AdminSet@1270pass';
+    const set = await request.post(`${apiBaseURL}/api/users/${userID}/set-password`, { headers: auth, data: { password: adminSet } });
+    expect(set.status(), await set.text()).toBe(200);
+
+    const first = await request.post(`${apiBaseURL}/api/auth/login`, { data: { username, password: adminSet } });
+    expect(first.ok(), await first.text()).toBeTruthy();
+    const firstBody = await first.json();
+    expect(firstBody.requiresMFASetup).toBe(true);
+    const temp = { Authorization: `Bearer ${firstBody.data?.tempToken}` };
+    expect(firstBody.data?.tempToken).toBeTruthy();
+
+    const qr = await request.get(`${apiBaseURL}/api/auth/two-factor/qr`, { headers: temp });
+    expect(qr.ok(), await qr.text()).toBeTruthy();
+    const secret = (await qr.json()).data?.secret;
+    expect(secret).toBeTruthy();
+
+    const enable = await request.post(`${apiBaseURL}/api/auth/two-factor/enable`, {
+      headers: temp,
+      data: { code: computeTotp(secret) },
+    });
+    expect(enable.ok(), await enable.text()).toBeTruthy();
+    const enableBody = await enable.json();
+    expect(enableBody.data?.requiresPasswordChange).toBe(true);
+    expect(enableBody.data?.token).toBeFalsy();
+    expect(enable.headers()['set-cookie'] || '').not.toContain('refresh_token=');
+
+    // The enrolment stands, and the next login still forces the change.
+    const withCode = await request.post(`${apiBaseURL}/api/auth/login`, {
+      data: { username, password: adminSet, mfaCode: computeTotp(secret) },
+    });
+    expect(withCode.ok(), await withCode.text()).toBeTruthy();
+    const withCodeBody = await withCode.json();
+    expect(withCodeBody.requiresPasswordChange).toBe(true);
+    expect(withCodeBody.data?.token).toBeFalsy();
+  });
 });
