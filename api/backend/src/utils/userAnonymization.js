@@ -79,8 +79,12 @@ async function getUserAnonId(user, db = null) {
   if (db) {
     try {
       const usersCollection = db.collection('users');
+      // #1275: userID is a string here and user documents carry an ObjectId
+      // _id, so the string alone never matched and the stored pseudonym was
+      // never read.
+      const { ObjectId } = require('mongodb');
       const existingUser = await usersCollection.findOne(
-        { _id: userID },
+        { _id: ObjectId.isValid(userID) && String(new ObjectId(userID)) === userID ? new ObjectId(userID) : userID },
         { projection: { anonId: 1 } }
       );
       
