@@ -77,12 +77,17 @@ audit changed no code, so the run stands.
 
 ## For Dennis
 
-- Unchanged from the last note, and not re-checked this sitting: #284's
-  milestone line, #1222, #1225, #1220 step 5, the #941 re-close, #956,
-  #979, Denise's `docs/` deletions, and the go for a PR into `main`.
+- Carried from the last note: #284's milestone line, #1222, #1225, #1220
+  step 5, the #941 re-close, #956, #979, Denise's `docs/` deletions, and
+  the go for a PR into `main`. `[ran it]` 2026-10-02 `gh issue view
+  --json state,labels`: all seven issues are OPEN, and none carries a
+  `question` label. The deferral ladder (docs, then law, standards and
+  precedent) was **not** re-run on any of them this sitting, so whether
+  each truly waits on Dennis is a claim. The next sitting runs the ladder
+  before repeating any of them, and works any that a source or the repo's
+  pattern settles. Only the PR go is certainly his (a hard repo rule).
   The last note's #1228, #1218, #1231 and #1124 items are closed and
   dropped here.
-- **Re-check each against the tracker before repeating it.**
 
 ## Docker and the machine
 
