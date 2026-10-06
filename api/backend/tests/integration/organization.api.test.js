@@ -321,7 +321,10 @@ describe('DELETE /api/organizations/:id', () => {
   });
 
   it('deletes an organization for an Administrador', async () => {
-    const coll = createCollectionMock({ deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }) });
+    const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue({ _id: 'mongo-org-1', organizationId: 'org-1' }),
+      deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }),
+    });
     app.locals.db = createDbMock({
       organizations: coll,
       ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]),
@@ -333,5 +336,39 @@ describe('DELETE /api/organizations/:id', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
+    expect(coll.deleteOne).toHaveBeenCalledWith({ _id: 'mongo-org-1' });
+  });
+
+  // #1284: the delete used to orphan every record naming the organization.
+  it('refuses with 409 and names the collections while records reference the organization', async () => {
+    const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue({ _id: 'mongo-org-1', organizationId: 'org-uuid-1' }),
+      deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }),
+    });
+    const equipment = createCollectionMock({ countDocuments: vi.fn().mockResolvedValue(1) });
+    const users = createCollectionMock({ countDocuments: vi.fn().mockResolvedValue(1) });
+    const samples = createCollectionMock({ countDocuments: vi.fn().mockResolvedValue(0) });
+    app.locals.db = createDbMock({
+      organizations: coll,
+      equipment,
+      users,
+      samples,
+      ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]),
+    });
+
+    const res = await request(app)
+      .delete('/api/organizations/mongo-org-1')
+      .set('Authorization', `Bearer ${makeToken(4)}`);
+
+    expect(res.status).toBe(409);
+    expect(res.body.references).toEqual(['equipment', 'users']);
+    expect(coll.deleteOne).not.toHaveBeenCalled();
+    // References carry Organization.organizationId, never the Mongo _id.
+    expect(equipment.countDocuments).toHaveBeenCalledWith({ organizationId: 'org-uuid-1' }, { limit: 1 });
+    expect(users.countDocuments).toHaveBeenCalledWith(
+      { $or: [{ organizationId: 'org-uuid-1' }, { organizationIds: 'org-uuid-1' }] },
+      { limit: 1 }
+    );
+    expect(samples.countDocuments).toHaveBeenCalledWith({ collectionSite: 'org-uuid-1' }, { limit: 1 });
   });
 });
