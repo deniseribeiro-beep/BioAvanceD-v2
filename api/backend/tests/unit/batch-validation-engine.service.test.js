@@ -647,10 +647,11 @@ describe('batch-validation-engine.service processBatchImport', () => {
 describe('#813 quarantine of rejected rows', () => {
   function quarantineDb() {
     const importBatches = {
-      insertOne: vi.fn(async () => ({ insertedId: 'batch-813' })),
+      insertOne: vi.fn(async (doc) => ({ insertedId: doc._id })),
     };
     const stagingRecords = {
       insertMany: vi.fn(async (docs) => ({ insertedCount: docs.length })),
+      deleteMany: vi.fn(async () => ({ deletedCount: 0 })),
     };
     const db = {
       collection: vi.fn((name) => {
@@ -690,9 +691,9 @@ describe('#813 quarantine of rejected rows', () => {
       counts: { total: 10, success: 8 },
     });
 
-    expect(batchId).toBe('batch-813');
     expect(importBatches.insertOne).toHaveBeenCalledTimes(1);
     const doc = importBatches.insertOne.mock.calls[0][0];
+    expect(batchId).toBe(doc._id);
     expect(doc).toMatchObject({
       status: 'QUARANTINED',
       source: 'ASYNC_BATCH',
@@ -710,7 +711,7 @@ describe('#813 quarantine of rejected rows', () => {
   it('writes one staging record per rejected row, carrying the original row data', async () => {
     const { db, stagingRecords } = quarantineDb();
 
-    await batchValidationEngine.quarantineRejectedRows(db, {
+    const batchId = await batchValidationEngine.quarantineRejectedRows(db, {
       jobId: 'job-813',
       dataType: 'samples',
       fileName: 'amostras.csv',
@@ -725,8 +726,8 @@ describe('#813 quarantine of rejected rows', () => {
     expect(stored[0].sealedPayload).toMatchObject({ alg: 'aes-256-gcm' });
     const docs = stored.map(revealStagedRecord);
     expect(docs).toHaveLength(2);
+    expect(docs[0].batchId).toBe(batchId);
     expect(docs[0]).toMatchObject({
-      batchId: 'batch-813',
       rowNumber: 2,
       status: 'ERROR',
       errors: ['sampleType inválido'],
@@ -767,7 +768,7 @@ describe('#813 quarantine of rejected rows', () => {
       counts: { total: 3, success: 2 },
     });
 
-    expect(batchId).toBe('batch-813');
+    expect(batchId).toBe(importBatches.insertOne.mock.calls[0][0]._id);
     expect(importBatches.insertOne.mock.calls[0][0]).toMatchObject({ type: 'ASYNC_BATCH_IMPORT', dataType: 'patients' });
     const stored = stagingRecords.insertMany.mock.calls[0][0];
     expect(stored).toHaveLength(1);
@@ -780,6 +781,43 @@ describe('#813 quarantine of rejected rows', () => {
   // Quarantine is a record-keeping step appended to an import that already
   // ran. A failure to write it must not turn a partially-successful import
   // into a failed one -- same posture as the LGPD path's own writer.
+  // #1295: the batch was written before its rows, so a reader that found the
+  // batch (the e2e spec polling by jobId, or the quarantine route) could read
+  // it with no rows yet. The rows go first; the batch makes them visible.
+  it('writes the staging rows before the batch that points at them', async () => {
+    const { db, importBatches, stagingRecords } = quarantineDb();
+
+    const batchId = await batchValidationEngine.quarantineRejectedRows(db, {
+      jobId: 'job-1295',
+      dataType: 'samples',
+      fileName: 'amostras.csv',
+      rejected: REJECTED,
+      counts: { total: 10, success: 8 },
+    });
+
+    expect(stagingRecords.insertMany.mock.invocationCallOrder[0]).toBeLessThan(
+      importBatches.insertOne.mock.invocationCallOrder[0]
+    );
+    expect(revealStagedRecord(stagingRecords.insertMany.mock.calls[0][0][0]).batchId).toBe(batchId);
+  });
+
+  it('removes the written rows when the batch itself cannot be written', async () => {
+    const { db, importBatches, stagingRecords } = quarantineDb();
+    importBatches.insertOne.mockRejectedValue(new Error('mongo down'));
+
+    const batchId = await batchValidationEngine.quarantineRejectedRows(db, {
+      jobId: 'job-1295',
+      dataType: 'samples',
+      fileName: 'amostras.csv',
+      rejected: REJECTED,
+      counts: { total: 10, success: 8 },
+    });
+
+    expect(batchId).toBeNull();
+    const stagedBatchId = revealStagedRecord(stagingRecords.insertMany.mock.calls[0][0][0]).batchId;
+    expect(stagingRecords.deleteMany).toHaveBeenCalledWith({ batchId: stagedBatchId });
+  });
+
   it('swallows a staging failure instead of failing the import', async () => {
     const { db, importBatches } = quarantineDb();
     importBatches.insertOne.mockRejectedValue(new Error('mongo down'));

@@ -993,26 +993,13 @@ class BatchValidationEngine {
     // por isso `row` e selado em repouso (stagedRowCrypto), como os mesmos
     // valores ja sao em participantIdentities (#566).
 
+    // #1295: as linhas sao gravadas ANTES do lote. Quem encontra o lote (a
+    // rota de quarentena, ou quem espera pelo jobId) encontra tambem as suas
+    // linhas; na ordem inversa havia uma janela com o lote visivel e vazio.
+    const batchId = new ObjectId();
+    let rowsWritten = false;
     try {
       const now = new Date();
-
-      const batchResult = await db.collection('import_batches').insertOne({
-        type: 'ASYNC_BATCH_IMPORT',
-        source: 'ASYNC_BATCH',
-        status: 'QUARANTINED',
-        jobId: jobId ? String(jobId) : null,
-        fileName: fileName ? String(fileName) : null,
-        dataType,
-        counts: {
-          total: counts.total ?? null,
-          success: counts.success ?? null,
-          errors: rejected.length,
-        },
-        createdAt: now,
-        updatedAt: now,
-      });
-
-      const batchId = batchResult.insertedId;
 
       await db.collection('import_staging_records').insertMany(
         rejected.map((rejection) => sealStagedRecord({
@@ -1033,6 +1020,24 @@ class BatchValidationEngine {
           updatedAt: now,
         }))
       );
+      rowsWritten = true;
+
+      await db.collection('import_batches').insertOne({
+        _id: batchId,
+        type: 'ASYNC_BATCH_IMPORT',
+        source: 'ASYNC_BATCH',
+        status: 'QUARANTINED',
+        jobId: jobId ? String(jobId) : null,
+        fileName: fileName ? String(fileName) : null,
+        dataType,
+        counts: {
+          total: counts.total ?? null,
+          success: counts.success ?? null,
+          errors: rejected.length,
+        },
+        createdAt: now,
+        updatedAt: now,
+      });
 
       logger.warn(
         `[BATCH_IMPORT] ${rejected.length} linha(s) rejeitada(s) colocadas em quarentena (batch ${batchId})`
@@ -1046,6 +1051,10 @@ class BatchValidationEngine {
         'Falha ao colocar linhas rejeitadas em quarentena (RNF011 AC#4):',
         stagingError.message || stagingError
       );
+      // #1295: sem o lote, as linhas gravadas nao tem quem as leia.
+      if (rowsWritten) {
+        await db.collection('import_staging_records').deleteMany({ batchId }).catch(() => {});
+      }
       return null;
     }
   }
