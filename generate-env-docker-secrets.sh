@@ -33,7 +33,17 @@ if [[ "$UPGRADE" -eq 1 && ! -e "$OUT" ]]; then
 fi
 
 command -v openssl >/dev/null || { echo "openssl é obrigatório" >&2; exit 1; }
-command -v python3 >/dev/null || { echo "python3 é obrigatório" >&2; exit 1; }
+# Probe by running, not by name: on Windows, python3 can be the Microsoft Store
+# execution alias, which `command -v` finds and which exits 49 with an install
+# prompt instead of running anything. Fall back to `python` when it is Python 3.
+PYTHON=""
+for cand in python3 python; do
+  if "$cand" -c 'import sys; sys.exit(0 if sys.version_info[0] == 3 else 1)' >/dev/null 2>&1; then
+    PYTHON="$cand"
+    break
+  fi
+done
+[[ -n "$PYTHON" ]] || { echo "python3 é obrigatório" >&2; exit 1; }
 
 tok() { openssl rand -base64 "$1" | tr -d '\n' | tr '+/' '-_' | tr -d '='; }
 
@@ -142,7 +152,7 @@ openssl pkey -in "$KEY_FILE" -pubout -out "$TMP/public.pem"
 # processTimestampBacklog verifies every signed root against it and stamps a mismatch
 # FAILED / signature_unknown_key_id, so a key with no matching registry entry yields a
 # stack that signs correctly and reports every artifact invalid.
-PUBLIC_JSON="$(python3 - "$KEY_ID" "$TMP/public.pem" <<'PY'
+PUBLIC_JSON="$("$PYTHON" - "$KEY_ID" "$TMP/public.pem" <<'PY'
 from pathlib import Path
 import json, sys
 print(json.dumps({sys.argv[1]: Path(sys.argv[2]).read_text()}, separators=(",",":")))
