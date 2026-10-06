@@ -46,6 +46,12 @@ class RetentionSweepService {
   // deleted at the policy's own period instead, and so are rows an earlier
   // policy archived, which are past that period too.
   //
+  // #1286: RF012 AC#5 (requisitos v4.0.0) says the application must prevent
+  // the alteration and deletion of audit events. These deletes do not break
+  // it: they run only under an approved RetentionPolicy (RF026 AC#1, bound to
+  // a basis and a period), and LGPD art. 16 is binding law, which a project
+  // requirement cannot override. No route or handler deletes a log row.
+  //
   // Reading the archive: GET /api/logs/archive and the export routes'
   // source=archive, behind the same audit-reader rule as the live trail
   // (log.service, logs.routes, security.routes).

@@ -26,6 +26,28 @@
  * ELM-0409 retentionBasis ("Base ética, legal, contratual ou científica").
  * The two come together or not at all. Without them the sweep deletes instead
  * of archiving (retentionSweep.service).
+ *
+ * #1286: which obligation a deployment can cite for audit logs, from the
+ * primary texts as read on 2026-10-06. RF026 AC#1 binds a policy to its
+ * jurisdiction, basis, period and starting event; these are the bases.
+ * - Resolução CNS nº 441/2011, item 11, I: every five years from its
+ *   constitution, or whenever CONEP asks, the institution responsible for a
+ *   biobank reports to CEP/CONEP the number of research subjects included in
+ *   the period and the research that used stored samples. The audit rows
+ *   evidencing sample inclusion and use are what that report rests on, so an
+ *   archive policy for them can cite this item with archiveRetentionPeriod
+ *   "P5Y". The resolution sets a reporting period, not a log-retention
+ *   period, so P5Y is the floor it implies, and citing it is the deployment's
+ *   call.
+ * - Lei nº 12.965/2014 (Marco Civil da Internet), art. 15: six months of
+ *   application access records ("P6M"), but only for a provider that is a
+ *   legal entity acting "profissionalmente e com fins econômicos". CNS 441's
+ *   item 1, I defines a biobank as "sem fins comerciais", so a biobank's
+ *   operator cites it only if it is in fact such a provider. Its §1 and §2
+ *   (a court order, or an authority's request, to keep specific records) are
+ *   holds on named records, not a standing period.
+ * - Health-record retention (Lei nº 13.787/2018, CFM resolutions) was not
+ *   checked: it binds a patient record, and this audit trail is not one.
  */
 const { isValidISO8601Duration, iso8601DurationToMs } = require('../utils/iso8601Duration');
 
