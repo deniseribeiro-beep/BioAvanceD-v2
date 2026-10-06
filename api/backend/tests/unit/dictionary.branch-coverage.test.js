@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest';
 import { createRequire } from 'module';
 import express from 'express';
 import request from 'supertest';
@@ -76,6 +76,17 @@ function buildFallbackDb({ disease = null, terminologyRows = [] } = {}) {
     }),
   };
 }
+
+// Each case re-requires only the route and its Neo4j module; the rest of the
+// route's module graph loads once, cold, and that load used to land inside
+// the first case's 5000 ms budget (825 ms alone, over 5000 ms under five
+// parallel workers, #1296). Pay it here, under its own timeout.
+beforeAll(() => {
+  loadRouteWithMocks({ session: fakeSession([]) });
+  vi.restoreAllMocks();
+  delete require.cache[neo4jModulePath];
+  delete require.cache[dictionaryRoutePath];
+}, 30000);
 
 describe('dictionary.js branch coverage - Neo4j success-path display fallbacks', () => {
   afterEach(() => {

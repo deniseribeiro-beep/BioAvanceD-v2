@@ -10,7 +10,7 @@
 // routers together (no stub inner router, unlike
 // intakeWizard.routes.governance.test.js) to prove the write site is already
 // governed end-to-end, rather than assuming it from reading the code.
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest';
 import { createRequire } from 'module';
 import express from 'express';
 import request from 'supertest';
@@ -187,6 +187,21 @@ const VALID_PAYLOAD = {
   clinical: {},
   biomarkers: [],
 };
+
+// Each case clears only the modules it mocks; the rest of the two routers'
+// module graph loads once, cold, and that load used to land inside the first
+// case's 5000 ms budget (1157 ms alone, over 5000 ms under five parallel
+// workers, #1297). Compose the app once here, under its own timeout.
+beforeAll(() => {
+  loadApp({
+    consentActive: true,
+    samplesCollection: {},
+    quarantineActionsCollection: buildQuarantineActionsCollection(),
+    patientsCollection: {},
+  });
+  vi.restoreAllMocks();
+  clearCache();
+}, 30000);
 
 describe('intake-wizard governance write path (real wrapper + real inner router composed)', () => {
   afterEach(() => {
