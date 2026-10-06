@@ -371,4 +371,27 @@ describe('DELETE /api/organizations/:id', () => {
     );
     expect(samples.countDocuments).toHaveBeenCalledWith({ collectionSite: 'org-uuid-1' }, { limit: 1 });
   });
+
+  // A deleted sensor's alerts keep its organizationId: they alone must refuse.
+  it('refuses with 409 while only alerts reference the organization', async () => {
+    const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue({ _id: 'mongo-org-1', organizationId: 'org-uuid-1' }),
+      deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }),
+    });
+    const alerts = createCollectionMock({ countDocuments: vi.fn().mockResolvedValue(1) });
+    app.locals.db = createDbMock({
+      organizations: coll,
+      alerts,
+      ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]),
+    });
+
+    const res = await request(app)
+      .delete('/api/organizations/mongo-org-1')
+      .set('Authorization', `Bearer ${makeToken(4)}`);
+
+    expect(res.status).toBe(409);
+    expect(res.body.references).toEqual(['alerts']);
+    expect(coll.deleteOne).not.toHaveBeenCalled();
+    expect(alerts.countDocuments).toHaveBeenCalledWith({ organizationId: 'org-uuid-1' }, { limit: 1 });
+  });
 });
