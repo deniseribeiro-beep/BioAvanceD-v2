@@ -82,7 +82,7 @@ router.post('/', authenticate, requirePermission('manageOrganizations'), async (
 
     const validation = OrganizationModel.validate(payload);
     if (!validation.isValid) {
-      return res.status(422).json({ success: false, error: 'Dados inválidos', message: validation.errors.join(', ') });
+      return res.status(422).json({ success: false, error: 'Dados inválidos', message: validation.errors.join(', '), details: validation.errors });
     }
 
     const db = req.app.locals.db;
@@ -186,7 +186,7 @@ router.put('/:id', authenticate, requirePermission('manageOrganizations'), async
 
     const validation = OrganizationModel.validate(payload);
     if (!validation.isValid) {
-      return res.status(422).json({ success: false, error: 'Dados inválidos', message: validation.errors.join(', ') });
+      return res.status(422).json({ success: false, error: 'Dados inválidos', message: validation.errors.join(', '), details: validation.errors });
     }
 
     const update = {

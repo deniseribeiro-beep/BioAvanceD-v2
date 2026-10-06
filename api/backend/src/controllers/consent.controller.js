@@ -115,7 +115,8 @@ class ConsentController {
       return res.status(error.statusCode === 422 ? 422 : 400).json({
         success: false,
         error: 'Erro ao criar política de consentimento',
-        message: error.message
+        message: error.message,
+        details: error.details
       });
     }
   }
@@ -251,7 +252,8 @@ class ConsentController {
       return res.status(error.statusCode === 422 ? 422 : 400).json({
         success: false,
         error: 'Erro ao atualizar política de consentimento',
-        message: error.message
+        message: error.message,
+        details: error.details
       });
     }
   }
@@ -324,7 +326,8 @@ class ConsentController {
       return res.status(error.statusCode === 422 ? 422 : 400).json({
         success: false,
         error: 'Erro ao criar template de consentimento',
-        message: error.message
+        message: error.message,
+        details: error.details
       });
     }
   }
@@ -787,7 +790,8 @@ class ConsentController {
       if (patientService.isConsentManifestationRejection(error)) {
         return res.status(422).json({
           success: false,
-          error: 'Respostas do termo inválidas ou termo atualizado'
+          error: 'Respostas do termo inválidas ou termo atualizado',
+          details: ['Respostas do termo inválidas ou termo atualizado']
         });
       }
       // #1127: worse on this route than on validate. The write recording the

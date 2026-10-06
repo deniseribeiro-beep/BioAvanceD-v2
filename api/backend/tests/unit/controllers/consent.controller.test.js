@@ -1317,6 +1317,8 @@ describe('ConsentController.acceptConsentToken', () => {
     expect(res.json).toHaveBeenCalledWith({
       success: false,
       error: 'Respostas do termo inválidas ou termo atualizado',
+      // #1299: the same fixed string as a list; nothing from the service leaks.
+      details: ['Respostas do termo inválidas ou termo atualizado'],
     });
   });
 

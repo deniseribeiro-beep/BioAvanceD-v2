@@ -434,7 +434,13 @@ describe('logs.routes.js', () => {
       const response = await request(appWithDb(dbWithRbac({ accessType: 4 })))
         .get('/api/logs/sessions?revocationReason=nope');
       expect(response.status).toBe(422);
-      expect(response.body).toEqual({ success: false, error: 'Dados inválidos', message: 'revocationReason inválido' });
+      // #1299: every 422 carries the failures as a list too.
+      expect(response.body).toEqual({
+        success: false,
+        error: 'Dados inválidos',
+        message: 'revocationReason inválido',
+        details: ['revocationReason inválido'],
+      });
     });
 
     it('maps any other failure to 500', async () => {

@@ -242,7 +242,8 @@ router.post('/', authenticate, requirePermission('manageStorageTopology'), requi
       return res.status(422).json({
         success: false,
         error: 'Dados inválidos',
-        message: validation.errors.join(', ')
+        message: validation.errors.join(', '),
+        details: validation.errors
       });
     }
 
@@ -444,7 +445,8 @@ router.put('/:id', authenticate, requirePermission('manageStorageTopology'), req
       return res.status(422).json({
         success: false,
         error: 'Dados inválidos',
-        message: introducedErrors.join(', ')
+        message: introducedErrors.join(', '),
+        details: introducedErrors
       });
     }
 

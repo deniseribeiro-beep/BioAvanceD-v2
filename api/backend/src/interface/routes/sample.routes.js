@@ -143,7 +143,8 @@ function validateCreateSamplePayload(req, res, next) {
     return res.status(422).json({
       success: false,
       error: 'NON_CANONICAL_FIELD',
-      fields: [...new Set(aliasFields)]
+      fields: [...new Set(aliasFields)],
+      details: [...new Set(aliasFields)].map((field) => `${field}: campo não canônico`)
     });
   }
 
@@ -467,7 +468,8 @@ router.post('/',
         return res.status(error.status || error.statusCode).json({
           success: false,
           error: req.t?.('samples.createError') || 'Erro ao criar amostra',
-          message: errorMessage
+          message: errorMessage,
+          details: error.details
         });
       }
 
@@ -530,7 +532,8 @@ router.get('/', authenticate, requireOrganizationScope, async (req, res) => {
       return res.status(422).json({
         success: false,
         error: 'NON_CANONICAL_FIELD',
-        fields: [...new Set(queryAliases)]
+        fields: [...new Set(queryAliases)],
+        details: [...new Set(queryAliases)].map((field) => `${field}: campo não canônico`)
       });
     }
 

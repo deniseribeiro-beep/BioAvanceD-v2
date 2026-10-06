@@ -45,6 +45,8 @@ class TemperatureService {
         error.auditReason = 'invalid_payload';
         // RNF018 (#1300): a validation failure answers 422.
         error.statusCode = 422;
+
+        error.details = validation.errors;
         throw error;
       }
       await assertOrganizationIdResolves(db, temperatureData.organizationId);

@@ -166,7 +166,8 @@ class PacienteController {
       return res.status(statusCode).json({
         success: false,
         error: req.t('errors.serverError'),
-        message: error.message || req.t('errors.generic')
+        message: error.message || req.t('errors.generic'),
+        details: error.details
       });
     }
   }
@@ -583,7 +584,8 @@ class PacienteController {
           error: 'Campos gerenciados pelo servidor',
           message: `Não é permitido alterar: ${serverManaged.join(', ')}`,
           code: 'SERVER_MANAGED_FIELD',
-          fields: serverManaged
+          fields: serverManaged,
+          details: serverManaged.map((field) => `${field}: campo gerenciado pelo servidor`)
         });
       }
 

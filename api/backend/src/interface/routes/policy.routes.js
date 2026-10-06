@@ -251,7 +251,8 @@ router.post('/', authenticate, requirePermission('manageTemperaturePolicy'), asy
       return res.status(422).json({
         success: false,
         error: 'Dados inválidos',
-        message: validation.errors.join(', ')
+        message: validation.errors.join(', '),
+        details: validation.errors
       });
     }
 
@@ -320,7 +321,8 @@ router.put('/:id', authenticate, requirePermission('manageTemperaturePolicy'), a
       return res.status(422).json({
         success: false,
         error: 'Dados inválidos',
-        message: TEMPERATURE_UNIT_ERROR
+        message: TEMPERATURE_UNIT_ERROR,
+        details: [TEMPERATURE_UNIT_ERROR]
       });
     }
     const period = req.body.effectivePeriod;

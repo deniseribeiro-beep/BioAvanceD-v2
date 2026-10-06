@@ -242,14 +242,16 @@ const RETIRED_KEY_EXEMPT = new Set([
   'interface/routes/result.routes.js:177',
   // :440 -> :451 when #1082's destination scope check added 11 lines to
   // POST /upload, above POST /'s own legacy-resolution tier.
-  'interface/routes/result.routes.js:451',
+  'interface/routes/result.routes.js:452',
   // :522 -> :543 when #875's allowlist rework added ~21 lines above the
   // link-sample legacy-resolution tier (the entry itself is #628's
   // deliberate _id -> specimenId -> legacy sampleID fallback; #804 owns
   // sampleID's eventual retirement).
   // :543 -> :599 (#875 era) -> :652 when #1082 added the source scope
   // checks to PUT /:id and link-sample above this site.
-  'interface/routes/result.routes.js:652',
+  // :451/:652 -> :452/:654 when #1299 added `details` to the 422 bodies
+  // above each site.
+  'interface/routes/result.routes.js:654',
   'services/result-specimenid-backfill.service.js:56',
   // #857: _id -> specimenId -> legacy sampleID/sampleId/barcode.
   // :619/:696/:789 -> :683/:760/:853, a uniform +64 shift, when #789 added
@@ -264,9 +266,11 @@ const RETIRED_KEY_EXEMPT = new Set([
   // specimenId to POST /'s response and audit payload.
   // :695/:772/:865 -> :697/:774/:867, a uniform +2, when #1266 added the
   // export-gate require at the top of the file.
-  'interface/routes/sample.routes.js:697',
-  'interface/routes/sample.routes.js:774',
-  'interface/routes/sample.routes.js:867',
+  // :697/:774/:867 -> :700/:777/:870, a uniform +3, when #1299 added
+  // `details` to the 422 bodies above all three sites.
+  'interface/routes/sample.routes.js:700',
+  'interface/routes/sample.routes.js:777',
+  'interface/routes/sample.routes.js:870',
   'services/analysisValidation.service.js:29'
 ]);
 

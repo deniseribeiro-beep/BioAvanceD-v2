@@ -37,7 +37,7 @@ async function requireAuditReader(req, res, next) {
 
 // #1271: an unknown ?source= (log.service's logSourceCollection).
 function sendInvalidSource(res, error) {
-  return res.status(422).json({ success: false, error: 'Dados inválidos', message: error.message });
+  return res.status(422).json({ success: false, error: 'Dados inválidos', message: error.message, details: error.details || [error.message] });
 }
 
 function buildCsv(logs = []) {
@@ -201,7 +201,7 @@ router.get('/sessions', authenticate, requireAuditReader, async (req, res) => {
     return res.status(200).json({ success: true, data: result });
   } catch (error) {
     if (error.statusCode === 422) {
-      return res.status(422).json({ success: false, error: 'Dados inválidos', message: error.message });
+      return res.status(422).json({ success: false, error: 'Dados inválidos', message: error.message, details: error.details || [error.message] });
     }
     logger.error('Erro ao buscar sessões:', error.message || error);
     return res.status(500).json({ success: false, error: 'Erro ao buscar sessões', message: error.message });

@@ -130,7 +130,7 @@ router.get('/logs/export', async (req, res) => {
   } catch (error) {
     // #1271: an unknown ?source= (log.service's logSourceCollection).
     if (error.statusCode === 422) {
-      return res.status(422).json({ success: false, error: 'Dados inválidos', message: error.message });
+      return res.status(422).json({ success: false, error: 'Dados inválidos', message: error.message, details: error.details || [error.message] });
     }
     logger.error('Erro ao exportar logs:', error.message);
     return res.status(500).json({

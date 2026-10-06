@@ -795,7 +795,7 @@ async function handleIntakeWizard(req, res) {
     ];
 
     if (canonicalViolations.length > 0) {
-      return res.status(422).json({ error: 'NON_CANONICAL_FIELD', fields: canonicalViolations });
+      return res.status(422).json({ error: 'NON_CANONICAL_FIELD', fields: canonicalViolations, details: canonicalViolations.map((field) => `${field}: campo não canônico`) });
     }
 
     const validation = validate('canonical.v1.intake', data);
@@ -805,7 +805,7 @@ async function handleIntakeWizard(req, res) {
         const field = issue.instancePath?.replace(/^\//, '').replace(/\//g, '.') || issue.params?.missingProperty || null;
         if (field) fields.push(field);
       }
-      return res.status(422).json({ error: 'NON_CANONICAL_FIELD', fields: [...new Set(fields)] });
+      return res.status(422).json({ error: 'NON_CANONICAL_FIELD', fields: [...new Set(fields)], details: [...new Set(fields)].map((field) => `${field}: campo não canônico`) });
     }
 
     const db = req.app.locals.db;
@@ -973,6 +973,7 @@ async function handleIntakeWizard(req, res) {
     return res.status(error?.statusCode || error?.status || 500).json({
       success: false,
       error: error?.message || 'Erro desconhecido ao finalizar o Intake Wizard.',
+      details: error?.details,
     });
   }
 }

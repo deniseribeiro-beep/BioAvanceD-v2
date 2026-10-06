@@ -42,6 +42,7 @@ class AccessRequestController {
         success: false,
         error: 'Erro ao registrar solicitação de acesso',
         message: error.message,
+        details: error.details,
       });
     }
   }

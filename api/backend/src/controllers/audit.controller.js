@@ -38,6 +38,7 @@ class AuditController {
         return res.status(422).json({
           success: false,
           error: `Nenhum resultado Merkle válido para ${date}; nada foi selado.`,
+          details: [`Nenhum resultado Merkle válido para ${date}`],
         });
       }
 

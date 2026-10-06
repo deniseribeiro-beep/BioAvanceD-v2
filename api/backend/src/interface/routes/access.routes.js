@@ -85,7 +85,8 @@ router.post('/', authenticate, requirePermission('createUser'), async (req, res)
       return res.status(422).json({
         success: false,
         error: 'Dados inválidos',
-        message: validation.errors.join(', ')
+        message: validation.errors.join(', '),
+        details: validation.errors
       });
     }
 

@@ -155,6 +155,7 @@ class SampleService {
 
         const validationError = new Error(validationMessage);
         validationError.statusCode = 422;
+        validationError.details = Array.isArray(validation.errors) ? validation.errors : [];
         throw validationError;
       }
 

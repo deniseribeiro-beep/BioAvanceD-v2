@@ -39,6 +39,8 @@ class AccessRequestService {
       // keeps every other error on its own status.
       const validationError = new Error(validation.errors.join(', '));
       validationError.statusCode = 422;
+
+      validationError.details = validation.errors;
       throw validationError;
     }
 

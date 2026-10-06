@@ -168,7 +168,8 @@ router.post('/register',
       return res.status(error.statusCode === 422 ? 422 : 400).json({
         success: false,
         error: req.t('users.registerError'),
-        message: error.message
+        message: error.message,
+        details: error.details
       });
     }
   }
@@ -370,7 +371,8 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
       return res.status(422).json({
         success: false,
         error: req.t('errors.invalidInput'),
-        message: 'A senha não é alterada por esta rota; use POST /api/users/:id/set-password.'
+        message: 'A senha não é alterada por esta rota; use POST /api/users/:id/set-password.',
+        details: ['A senha não é alterada por esta rota; use POST /api/users/:id/set-password.']
       });
     }
     delete req.body.password;
@@ -393,7 +395,8 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
       return res.status(422).json({
         success: false,
         error: req.t('errors.invalidInput'),
-        message: validation.errors.join(', ')
+        message: validation.errors.join(', '),
+        details: validation.errors
       });
     }
 
@@ -949,7 +952,8 @@ router.post('/register-patient', authenticate, requirePermission('createPatient'
     return res.status(error.statusCode === 422 ? 422 : 400).json({
       success: false,
       error: req.t('users.registerPatientError'),
-      message: error.message
+      message: error.message,
+      details: error.details
     });
   }
 });
@@ -1031,7 +1035,8 @@ router.post('/register-sample', authenticate, requirePermission('createSample'),
     return res.status(error.statusCode === 422 ? 422 : 400).json({
       success: false,
       error: req.t('users.registerSampleError'),
-      message: error.message
+      message: error.message,
+      details: error.details
     });
   }
 });
@@ -1143,7 +1148,8 @@ router.post('/register-sensor', authenticate, requirePermission('manageSensor'),
     return res.status(error.statusCode === 422 ? 422 : 400).json({
       success: false,
       error: req.t('users.registerSensorError'),
-      message: error.message
+      message: error.message,
+      details: error.details
     });
   }
 });
@@ -1318,7 +1324,8 @@ router.post('/:id/revoke-sessions', authenticate, requirePermission('revokeSessi
       return res.status(422).json({
         success: false,
         error: 'Dados inválidos',
-        message: "reason deve ser 'admin_action' ou 'risk'"
+        message: "reason deve ser 'admin_action' ou 'risk'",
+        details: ["reason deve ser 'admin_action' ou 'risk'"]
       });
     }
 
@@ -1451,7 +1458,7 @@ router.post('/:id/set-password', authenticate, requirePermission('setUserPasswor
       passwordService.validateStrength(newPassword, passwordPolicy, targetUser);
       await passwordService.validateReuse(newPassword, targetUser, passwordPolicy);
     } catch (validationError) {
-      return res.status(422).json({ success: false, error: 'Dados inválidos', message: validationError.message });
+      return res.status(422).json({ success: false, error: 'Dados inválidos', message: validationError.message, details: validationError.details || [validationError.message] });
     }
 
     const bcrypt = require('bcryptjs');

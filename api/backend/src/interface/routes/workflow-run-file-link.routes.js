@@ -50,10 +50,10 @@ router.post('/', authenticate, requireRole(3, 4), async (req, res) => {
     const { fileId, direction } = req.body || {};
 
     if (!DIRECTIONS.includes(direction)) {
-      return res.status(422).json({ success: false, error: `direction deve ser um de: ${DIRECTIONS.join(', ')}` });
+      return res.status(422).json({ success: false, error: `direction deve ser um de: ${DIRECTIONS.join(', ')}`, details: [`direction deve ser um de: ${DIRECTIONS.join(', ')}`] });
     }
     if (!fileId || typeof fileId !== 'string' || fileId.trim() === '') {
-      return res.status(422).json({ success: false, error: 'fileId é obrigatório' });
+      return res.status(422).json({ success: false, error: 'fileId é obrigatório', details: ['fileId é obrigatório'] });
     }
 
     const workflowRun = await db.collection('workflowRuns').findOne(buildWorkflowRunQuery(String(req.params.workflowRunId)));

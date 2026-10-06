@@ -46,7 +46,8 @@ class RetentionPolicyController {
       return res.status(error.statusCode === 422 ? 422 : 400).json({
         success: false,
         error: 'Erro ao criar política de retenção',
-        message: error.message
+        message: error.message,
+        details: error.details
       });
     }
   }
@@ -96,7 +97,8 @@ class RetentionPolicyController {
       return res.status(error.statusCode === 422 ? 422 : 400).json({
         success: false,
         error: 'Erro ao atualizar política de retenção',
-        message: error.message
+        message: error.message,
+        details: error.details
       });
     }
   }

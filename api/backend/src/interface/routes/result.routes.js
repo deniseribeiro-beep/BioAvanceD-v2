@@ -243,7 +243,8 @@ router.post('/upload', authenticate, requirePermission('uploadFiles'), requireOr
       return res.status(422).json({
         success: false,
         error: 'Dados inválidos',
-        message: validation.errors.join(', ')
+        message: validation.errors.join(', '),
+        details: validation.errors
       });
     }
 
@@ -471,7 +472,8 @@ router.post('/', authenticate, requirePermission('createResult'), requireOrganiz
       return res.status(422).json({
         success: false,
         error: 'Dados inválidos',
-        message: validation.errors.join(', ')
+        message: validation.errors.join(', '),
+        details: validation.errors
       });
     }
 

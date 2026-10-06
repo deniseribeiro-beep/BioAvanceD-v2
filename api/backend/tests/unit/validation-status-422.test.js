@@ -51,6 +51,7 @@ function buildRes() {
 function validationError() {
   const error = new Error('campo obrigatório ausente');
   error.statusCode = 422;
+  error.details = ['campo obrigatório ausente'];
   return error;
 }
 
@@ -83,7 +84,12 @@ describe('service-layer validation failures answer 422 (#1300)', () => {
     await controller[handler](buildReq(), res);
 
     expect(res.status).toHaveBeenCalledWith(422);
-    expect(res.json.mock.calls[0][0]).toMatchObject({ success: false, message: 'campo obrigatório ausente' });
+    // #1299: the list rides beside the joined message.
+    expect(res.json.mock.calls[0][0]).toMatchObject({
+      success: false,
+      message: 'campo obrigatório ausente',
+      details: ['campo obrigatório ausente'],
+    });
   });
 
   it.each(CASES)('%s: an untagged error keeps its previous status', async (_label, controller, handler, service, method, previous) => {
@@ -116,6 +122,10 @@ describe('the service throw sites tag a validation failure with statusCode 422 (
     ['legalHold.imposeHold', legalHoldService, 'imposeHold'],
     ['nonconformance.open', nonconformanceService, 'open'],
   ])('%s', async (_label, service, method) => {
-    await expect(service[method]({}, {})).rejects.toMatchObject({ statusCode: 422 });
+    const failure = await service[method]({}, {}).catch((error) => error);
+    expect(failure).toMatchObject({ statusCode: 422 });
+    // #1299: the model's own error list, not only the joined message.
+    expect(Array.isArray(failure.details) && failure.details.length > 0).toBe(true);
+    expect(failure.message).toBe(failure.details.join(', '));
   });
 });
