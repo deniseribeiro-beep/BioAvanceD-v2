@@ -1076,6 +1076,8 @@ test.describe('Security policy management (RF014) — real backend', () => {
       await page.getByTestId('login-submit-button').click();
 
       await expect(page.getByTestId('force-password-change-section')).toBeVisible();
+      // #1291: an expiry says so, not that an administrator asked for it.
+      await expect(page.getByTestId('force-password-change-reason')).toHaveText(/expirou|expired|caducado/);
       await expect(page.getByTestId('two-factor-section')).toHaveCount(0);
       await page.getByTestId('login-new-password-input').fill(newPassword);
       await page.getByTestId('login-confirm-new-password-input').fill(newPassword);

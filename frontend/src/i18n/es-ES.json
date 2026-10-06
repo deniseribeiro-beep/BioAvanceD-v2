@@ -34,6 +34,8 @@
     "newPassword": "Nueva contraseña",
     "password": "Contraseña",
     "passwordChangeRequired": "Tu contraseña debe ser cambiada por un administrador. Define una nueva contraseña para continuar.",
+    "passwordChangeRequiredExpired": "Tu contraseña ha caducado. Define una nueva contraseña para continuar.",
+    "passwordChangeRequiredBelowPolicy": "Tu contraseña es más corta que la longitud mínima actual. Define una nueva contraseña para continuar.",
     "passwordResetComplete": "Contraseña restablecida con éxito",
     "passwordResetError": "Error al solicitar restablecimiento de contraseña",
     "passwordResetRequest": "Solicitar restablecimiento de contraseña",

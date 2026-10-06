@@ -34,6 +34,8 @@
     "newPassword": "Nova Senha",
     "password": "Password",
     "passwordChangeRequired": "Your password must be changed by an administrator. Set a new password to continue.",
+    "passwordChangeRequiredExpired": "Your password has expired. Set a new password to continue.",
+    "passwordChangeRequiredBelowPolicy": "Your password is shorter than the current minimum length. Set a new password to continue.",
     "passwordResetComplete": "Senha redefinida com sucesso",
     "passwordResetError": "Error requesting password reset",
     "passwordResetRequest": "Request Password Reset",

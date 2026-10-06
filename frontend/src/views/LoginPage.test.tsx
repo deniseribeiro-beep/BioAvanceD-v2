@@ -114,3 +114,33 @@ describe('LoginPage forgot-password link (#1249)', () => {
     expect(screen.getByTestId('login-forgot-password-button')).toBeTruthy();
   });
 });
+
+// #1291: only an administrator's forceReset is the administrator's request.
+describe('LoginPage forced-change reason (#1291)', () => {
+  beforeEach(() => {
+    login.mockReset();
+    getPasswordPolicy.mockResolvedValue({ data: { data: { allowPasswordReset: true } } });
+  });
+
+  async function reachWith(result: Record<string, unknown>) {
+    render(
+      <MemoryRouter>
+        <LoginPage />
+      </MemoryRouter>
+    );
+    login.mockResolvedValueOnce(result);
+    fill('login-username-input', 'tecnico');
+    fill('login-password-input', 'Old@pass1234');
+    await submit();
+    return screen.getByTestId('force-password-change-reason').textContent;
+  }
+
+  it.each([
+    [undefined, 'auth.passwordChangeRequired'],
+    ['expired', 'auth.passwordChangeRequiredExpired'],
+    ['below_policy', 'auth.passwordChangeRequiredBelowPolicy'],
+  ])('reason %s shows %s', async (reason, key) => {
+    const text = await reachWith({ requiresPasswordChange: true, ...(reason ? { passwordChangeReason: reason } : {}) });
+    expect(text).toBe(key);
+  });
+});

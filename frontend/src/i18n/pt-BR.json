@@ -34,6 +34,8 @@
     "newPassword": "Nova Senha",
     "password": "Senha",
     "passwordChangeRequired": "Sua senha precisa ser alterada pelo administrador. Defina uma nova senha para continuar.",
+    "passwordChangeRequiredExpired": "Sua senha expirou. Defina uma nova senha para continuar.",
+    "passwordChangeRequiredBelowPolicy": "Sua senha está abaixo do tamanho mínimo atual. Defina uma nova senha para continuar.",
     "passwordResetComplete": "Senha redefinida com sucesso",
     "passwordResetError": "Erro ao solicitar redefinição de senha",
     "passwordResetRequest": "Solicitar Redefinição de Senha",

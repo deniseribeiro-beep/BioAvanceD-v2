@@ -26,6 +26,7 @@ export default function LoginPage() {
   const [requiresTwoFactor, setRequiresTwoFactor] = useState(false);
   const [attemptsRemaining, setAttemptsRemaining] = useState<number | undefined>();
   const [requiresPasswordChange, setRequiresPasswordChange] = useState(false);
+  const [passwordChangeReason, setPasswordChangeReason] = useState<string | undefined>();
   const [newPassword, setNewPassword] = useState('');
   const [confirmNewPassword, setConfirmNewPassword] = useState('');
   const [error, setError] = useState('');
@@ -97,6 +98,7 @@ export default function LoginPage() {
       if (result && result.requiresPasswordChange) {
         setRequiresTwoFactor(false);
         setRequiresPasswordChange(true);
+        setPasswordChangeReason(result.passwordChangeReason);
         setLoading(false);
         return;
       }
@@ -179,8 +181,13 @@ export default function LoginPage() {
 
             {requiresPasswordChange && (
               <div className="two-factor-section" data-testid="force-password-change-section">
-                <p className="two-factor-info">
-                  {t('auth.passwordChangeRequired')}
+                <p className="two-factor-info" data-testid="force-password-change-reason">
+                  {/* #1291: only a forceReset is the administrator's request. */}
+                  {passwordChangeReason === 'expired'
+                    ? t('auth.passwordChangeRequiredExpired')
+                    : passwordChangeReason === 'below_policy'
+                      ? t('auth.passwordChangeRequiredBelowPolicy')
+                      : t('auth.passwordChangeRequired')}
                 </p>
                 <Input
                   data-testid="login-new-password-input"
