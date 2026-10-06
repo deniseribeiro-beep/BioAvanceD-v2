@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 const bcrypt = require('bcryptjs');
 const {
   validateStrength, validateReuse, isPasswordExpired, nextPasswordHistory, resolvePasswordPolicy, isPasswordResetAllowed,
-  DEFAULT_REUSE_POLICY, DEFAULT_PASSWORD_POLICY, publicStrengthRules,
+  DEFAULT_REUSE_POLICY, DEFAULT_PASSWORD_POLICY, publicStrengthRules, belowSingleFactorFloor,
 } = require('../../src/services/password.service');
 
 // #1257: the four composition flags default off now, so the tests of those
@@ -54,6 +54,20 @@ describe('validateStrength', () => {
 
   it('does not throw for minimum-length strong password', () => {
     expect(() => validateStrength('Secure1!', STRICT)).not.toThrow();
+  });
+
+  // NIST SP 800-63B-4 §3.1.1.2: each Unicode code point is one character.
+  // An emoji is two UTF-16 code units, so 8 of them must not meet a floor of 15.
+  it('counts code points, not UTF-16 code units, toward minLength', () => {
+    const policy = { ...DEFAULT_PASSWORD_POLICY, minLength: 15 };
+    expect(() => validateStrength('😀'.repeat(8), policy)).toThrow('15');
+    expect(() => validateStrength('😀'.repeat(15), policy)).not.toThrow();
+  });
+
+  it('belowSingleFactorFloor counts code points too', () => {
+    const policy = { ...DEFAULT_PASSWORD_POLICY, minLength: 15 };
+    expect(belowSingleFactorFloor('😀'.repeat(8), policy, null)).toBe(true);
+    expect(belowSingleFactorFloor('😀'.repeat(15), policy, null)).toBe(false);
   });
 
   // #1246: the rules come from passwordRules (dict-02 P1X-0284..0288).

@@ -83,7 +83,14 @@ function minLengthFor(policy, account) {
 // minLength reaches existing single-factor passwords the same way.
 function belowSingleFactorFloor(password, policy, account) {
   if (typeof password !== 'string' || signsInWithMfa(account)) return false;
-  return password.length < minLengthFor(policy, null);
+  return passwordLength(password) < minLengthFor(policy, null);
+}
+
+// NIST SP 800-63B-4 §3.1.1.2 counts each Unicode code point as one character.
+// String#length counts UTF-16 code units, so an emoji or any character outside
+// the Basic Multilingual Plane would count twice toward the floor.
+function passwordLength(password) {
+  return Array.from(password).length;
 }
 
 // account: the user whose password this is, when one exists. Without it the
@@ -101,7 +108,7 @@ function validateStrength(password, policy = DEFAULT_STRENGTH_POLICY, account = 
     [policy.requireSpecialChars !== false, SPECIAL_CHARACTER, 'símbolo'],
   ].filter(([on]) => on);
 
-  const tooShort = password.length < minLength;
+  const tooShort = passwordLength(password) < minLength;
   const missing = required.filter(([, pattern]) => !pattern.test(password));
   if (tooShort || missing.length > 0) {
     const classes = required.map(([, , label]) => label);
