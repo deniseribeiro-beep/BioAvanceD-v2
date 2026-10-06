@@ -116,7 +116,7 @@ describe('AuthService.login', () => {
     const db = makeLoginDb(vi.fn().mockResolvedValue(user));
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
 
-    const result = await authService.login(db, { email: 'exact@test.com', password: 'pw' }, {});
+    const result = await authService.login(db, { email: 'exact@test.com', password: 'pw-of-at-least-15' }, {});
 
     expect(result.token).toBeTruthy();
     expect(result.user.email).toBe('exact@test.com');
@@ -143,7 +143,7 @@ describe('AuthService.login', () => {
     const db = makeLoginDb(findOneImpl);
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
 
-    const result = await authService.login(db, { email: identifier, password: 'pw' }, {});
+    const result = await authService.login(db, { email: identifier, password: 'pw-of-at-least-15' }, {});
 
     expect(result.token).toBeTruthy();
     expect(result.user.username).toBe('johnsmith');
@@ -169,7 +169,7 @@ describe('AuthService.login', () => {
     const db = makeLoginDb(vi.fn().mockResolvedValue(null)); // never found -> exercises both stages
 
     await expect(
-      authService.login(db, { email: identifier, password: 'pw' }, {})
+      authService.login(db, { email: identifier, password: 'pw-of-at-least-15' }, {})
     ).rejects.toThrow('Credenciais inválidas');
 
     const lookupCalls = orLookupCalls(db.usersCollectionApi.findOne);
@@ -250,7 +250,7 @@ describe('AuthService.login -- #1052 no account identifiers in the application l
     const db = makeLoginDb(vi.fn().mockResolvedValue(null));
 
     await expect(
-      authService.login(db, { email: 'nobody@example.test', password: 'pw' }, {})
+      authService.login(db, { email: 'nobody@example.test', password: 'pw-of-at-least-15' }, {})
     ).rejects.toThrow('Credenciais inválidas');
 
     // The debug dump was the ONLY `find` the users collection saw on this
@@ -274,7 +274,7 @@ describe('AuthService.login -- #1052 no account identifiers in the application l
     });
 
     await expect(
-      authService.login(db, { email: 'nobody@example.test', password: 'pw' }, {})
+      authService.login(db, { email: 'nobody@example.test', password: 'pw-of-at-least-15' }, {})
     ).rejects.toThrow('Credenciais inválidas');
 
     const transcript = lines.join('\n');
@@ -288,7 +288,7 @@ describe('AuthService.login -- #1052 no account identifiers in the application l
     const db = makeLoginDb(vi.fn().mockResolvedValue(user));
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
 
-    const result = await authService.login(db, { email: SECRET_EMAIL, password: 'pw' }, {});
+    const result = await authService.login(db, { email: SECRET_EMAIL, password: 'pw-of-at-least-15' }, {});
     expect(result.token).toBeTruthy();
 
     const transcript = lines.join('\n');
@@ -304,7 +304,7 @@ describe('AuthService.login -- #1052 no account identifiers in the application l
     const db = makeLoginDb(vi.fn().mockResolvedValue(user));
 
     await expect(
-      authService.login(db, { email: SECRET_EMAIL, password: 'pw' }, {})
+      authService.login(db, { email: SECRET_EMAIL, password: 'pw-of-at-least-15' }, {})
     ).rejects.toThrow();
 
     const transcript = lines.join('\n');
@@ -321,7 +321,7 @@ describe('AuthService.login -- #1052 no account identifiers in the application l
     const db = makeLoginDb(vi.fn().mockResolvedValue(null));
 
     await expect(
-      authService.login(db, { email: forged, password: 'pw' }, {})
+      authService.login(db, { email: forged, password: 'pw-of-at-least-15' }, {})
     ).rejects.toThrow('Credenciais inválidas');
 
     const transcript = lines.join('\n');
@@ -335,7 +335,7 @@ describe('AuthService.login -- #1052 no account identifiers in the application l
     const db = makeLoginDb(vi.fn().mockResolvedValue(null));
 
     await expect(
-      authService.login(db, { email: 'nobody@example.test', password: 'pw' }, {})
+      authService.login(db, { email: 'nobody@example.test', password: 'pw-of-at-least-15' }, {})
     ).rejects.toThrow('Credenciais inválidas');
   });
 
@@ -344,7 +344,7 @@ describe('AuthService.login -- #1052 no account identifiers in the application l
     const db = makeLoginDb(vi.fn().mockResolvedValue(user));
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
 
-    const result = await authService.login(db, { email: user.email, password: 'pw' }, {});
+    const result = await authService.login(db, { email: user.email, password: 'pw-of-at-least-15' }, {});
 
     expect(result.token).toBeTruthy();
     expect(result.user.email).toBe(user.email);
@@ -373,7 +373,7 @@ describe('AuthService.login -- #914 authentication.requireMFA', () => {
     });
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
 
-    const result = await authService.login(db, { email: 'user@test.com', password: 'pw' }, {});
+    const result = await authService.login(db, { email: 'user@test.com', password: 'pw-of-at-least-15' }, {});
 
     expect(result.requiresMFASetup).toBeUndefined();
     expect(result.token).toBeTruthy();
@@ -385,7 +385,7 @@ describe('AuthService.login -- #914 authentication.requireMFA', () => {
     });
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
 
-    const result = await authService.login(db, { email: 'user@test.com', password: 'pw' }, {});
+    const result = await authService.login(db, { email: 'user@test.com', password: 'pw-of-at-least-15' }, {});
 
     expect(result.requiresMFASetup).toBe(true);
     expect(result.token).toBeUndefined();
@@ -395,7 +395,7 @@ describe('AuthService.login -- #914 authentication.requireMFA', () => {
     const db = withSecurityConfig(makeLoginDb(vi.fn().mockResolvedValue(firstLoginUser())), null);
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
 
-    const result = await authService.login(db, { email: 'user@test.com', password: 'pw' }, {});
+    const result = await authService.login(db, { email: 'user@test.com', password: 'pw-of-at-least-15' }, {});
 
     expect(result.requiresMFASetup).toBe(true);
   });
@@ -408,7 +408,7 @@ describe('AuthService.login -- #914 authentication.requireMFA', () => {
       : base(name)));
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
 
-    const result = await authService.login(db, { email: 'user@test.com', password: 'pw' }, {});
+    const result = await authService.login(db, { email: 'user@test.com', password: 'pw-of-at-least-15' }, {});
 
     expect(result.requiresMFASetup).toBe(true);
   });

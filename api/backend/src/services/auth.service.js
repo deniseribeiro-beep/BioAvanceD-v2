@@ -821,16 +821,24 @@ class AuthService {
       // #1251: an expired password (passwordRules.expirationDays) takes the
       // same branch. After MFA, like forceReset, so an expiry never hands a
       // password change to someone holding only the password.
+      //
+      // #1285: so does a single-factor sign-in whose password is under the
+      // single-factor floor, typically one set under the MFA floor before an
+      // MFA reset. Only this path holds the plaintext.
       const passwordPolicy = await passwordService.resolvePasswordPolicy(db);
       const passwordExpired = passwordService.isPasswordExpired(user, passwordPolicy);
-      if (user.forceReset || passwordExpired) {
+      const belowFloor = passwordService.belowSingleFactorFloor(password, passwordPolicy, user);
+      if (user.forceReset || passwordExpired || belowFloor) {
         if (!newPassword) {
+          const reason = user.forceReset ? null : (passwordExpired ? 'expired' : 'below_policy');
           return {
             requiresPasswordChange: true,
-            ...(passwordExpired && !user.forceReset ? { reason: 'expired' } : {}),
-            message: passwordExpired && !user.forceReset
+            ...(reason ? { reason } : {}),
+            message: reason === 'expired'
               ? 'Senha expirada: defina uma nova senha para continuar'
-              : 'Alteração de senha obrigatória antes de continuar'
+              : reason === 'below_policy'
+                ? 'Senha abaixo do tamanho mínimo atual: defina uma nova senha para continuar'
+                : 'Alteração de senha obrigatória antes de continuar'
           };
         }
 

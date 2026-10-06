@@ -75,6 +75,17 @@ function minLengthFor(policy, account) {
   return signsInWithMfa(account) ? mfaMinLength(policy.minLengthWithMFA, minLength) : minLength;
 }
 
+// #1285: a password set under the MFA floor stays valid when MFA later goes
+// (an administrator's reset, the role change to Administrador, a profile
+// update), and the account then signs in with it single-factor. NIST SP
+// 800-63B-4 §3.1.1.2 requires the single-factor floor of such a password, so
+// the sign-in, the one place holding the plaintext, checks it there. A raised
+// minLength reaches existing single-factor passwords the same way.
+function belowSingleFactorFloor(password, policy, account) {
+  if (typeof password !== 'string' || signsInWithMfa(account)) return false;
+  return password.length < minLengthFor(policy, null);
+}
+
 // account: the user whose password this is, when one exists. Without it the
 // single-factor floor applies.
 function validateStrength(password, policy = DEFAULT_STRENGTH_POLICY, account = null) {
@@ -274,6 +285,7 @@ module.exports = {
   DEFAULT_PASSWORD_POLICY,
   validateStrength,
   signsInWithMfa,
+  belowSingleFactorFloor,
   resolvePasswordPolicy,
   publicStrengthRules,
   PASSWORD_RESET_DISABLED,
