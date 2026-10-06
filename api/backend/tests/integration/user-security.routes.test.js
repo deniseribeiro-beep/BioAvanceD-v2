@@ -258,7 +258,7 @@ describe('User security routes', () => {
   });
 
   it('PUT /api/user/security/password deve atualizar senha quando payload é válido', async () => {
-    const req = createRequest({ body: { currentPassword: 'Senha@123', newPassword: 'NovaSenha@123' } });
+    const req = createRequest({ body: { currentPassword: 'Senha@123', newPassword: 'NovaSenha@123-forte' } });
     req.app.locals.db = db;
     usersCollection.findOne.mockResolvedValue({
       _id: '507f1f77bcf86cd799439011',
@@ -327,7 +327,7 @@ describe('User security routes', () => {
   // row a compliance artefact, so it is worth pinning that it is written and
   // written as critical.
   it('#1025: a successful password change writes a critical audit row through the spied auditLogger', async () => {
-    const req = createRequest({ body: { currentPassword: 'Senha@123', newPassword: 'NovaSenha@123' } });
+    const req = createRequest({ body: { currentPassword: 'Senha@123', newPassword: 'NovaSenha@123-forte' } });
     req.app.locals.db = db;
     usersCollection.findOne.mockResolvedValue({
       _id: '507f1f77bcf86cd799439011',

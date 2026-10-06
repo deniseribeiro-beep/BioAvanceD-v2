@@ -307,7 +307,7 @@ describe('Users and Access routes', () => {
         name: 'Novo Usuário',
         email: 'new@example.com',
         username: 'newuser',
-        password: 'Senha@123',
+        password: 'Senha@123-forte!',
         accessType: 2,
         status: 'Ativo',
         phone: '(11) 99876-5432',
@@ -334,7 +334,7 @@ describe('Users and Access routes', () => {
         name: 'Novo Usuário',
         email: 'new@example.com',
         username: 'newuser',
-        password: 'Senha@123',
+        password: 'Senha@123-forte!',
         accessType: 2,
         organizationId: 'org-inexistente',
       },
@@ -358,7 +358,7 @@ describe('Users and Access routes', () => {
         name: 'Novo Usuário',
         email: 'new@example.com',
         username: 'newuser',
-        password: 'Senha@123',
+        password: 'Senha@123-forte!',
         accessType: 2,
       },
     });
@@ -976,7 +976,7 @@ describe('Users and Access routes', () => {
 
     const req = createRequest({
       params: { id: 'user-target-9' },
-      body: { password: 'NovaSenh@2026' },
+      body: { password: 'NovaSenh@2026-forte' },
     });
     req.app.locals.db = dbWithTarget;
     const res = createResponse();
@@ -1022,12 +1022,12 @@ describe('Users and Access routes', () => {
     it('sets the hash, keeps the old one in history, forces a change at next login and revokes sessions', async () => {
       const target = seedTarget();
 
-      const res = await post({ password: 'NovaSenh@2026' });
+      const res = await post({ password: 'NovaSenh@2026-forte' });
 
       expect(res.statusCode).toBe(200);
       expect(usersCollection.updateOne).toHaveBeenCalledTimes(1);
       const setPayload = usersCollection.updateOne.mock.calls[0][1].$set;
-      expect(bcrypt.compareSync('NovaSenh@2026', setPayload.password)).toBe(true);
+      expect(bcrypt.compareSync('NovaSenh@2026-forte', setPayload.password)).toBe(true);
       expect(setPayload.passwordHistory).toEqual([target.password]);
       expect(setPayload.passwordChangedAt).toBeInstanceOf(Date);
       // The administrator knows this password; the owner must replace it.
@@ -1050,9 +1050,9 @@ describe('Users and Access routes', () => {
     });
 
     it('refuses a password in the target\'s recent history, writing nothing', async () => {
-      seedTarget({ passwordHistory: [bcrypt.hashSync('Antiga@2025x', 4)] });
+      seedTarget({ passwordHistory: [bcrypt.hashSync('Antiga@2025x-forte', 4)] });
 
-      const res = await post({ password: 'Antiga@2025x' });
+      const res = await post({ password: 'Antiga@2025x-forte' });
 
       expect(res.statusCode).toBe(422);
       expect(String(res.payload.message)).toContain('Senha já utilizada recentemente');
@@ -1072,7 +1072,7 @@ describe('Users and Access routes', () => {
     it('answers 404 for an unknown user', async () => {
       usersCollection.findOne.mockResolvedValue(null);
 
-      const res = await post({ password: 'NovaSenh@2026' });
+      const res = await post({ password: 'NovaSenh@2026-forte' });
 
       expect(res.statusCode).toBe(404);
       expect(usersCollection.updateOne).not.toHaveBeenCalled();
@@ -1695,7 +1695,7 @@ describe('Users and Access routes', () => {
       const handler = getHandler(userRoutes, 'post', '/register');
 
       const req = createRequest({
-        body: { name: 'Novo', email: 'novo@b.c', username: 'novo', password: 'Str0ng!Pass', roleName: 'Administrador' },
+        body: { name: 'Novo', email: 'novo@b.c', username: 'novo', password: 'Str0ng!Pass-forte', roleName: 'Administrador' },
         user: callerCoordenador(),
       });
       req.app.locals.db = dbWith([{ userAccountId: '507f1f77bcf86cd799439013', accessType: 3 }]);
