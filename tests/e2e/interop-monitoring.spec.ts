@@ -1008,7 +1008,7 @@ test.describe('Alertas e notificações (RF015) — real backend', () => {
     const rule = (await ruleRes.json()).data;
 
     const username = `tecnico.rf015sec.${Date.now()}`;
-    const password = 'Tecnico@123456';
+    const password = 'Tecnico@123456-forte';
     const registerRes = await request.post(`${apiBaseURL}/api/users/register`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: {

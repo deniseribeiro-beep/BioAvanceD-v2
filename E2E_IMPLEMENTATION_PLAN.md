@@ -67,7 +67,7 @@ shipped, including drift from the original plan below:
    originally assumed — `BOOTSTRAP_ADMIN_NAME`/`BOOTSTRAP_ADMIN_EMAIL` in
    addition to `BOOTSTRAP_ADMIN_USERNAME`/`BOOTSTRAP_ADMIN_TEMP_PASSWORD`.
    All four are in `compose.test.yml`'s `&test-env` anchor now (`admin` /
-   `Admin@123`, matching `TEST_USER`/`TEST_PASS`, plus a placeholder
+   `Admin@123-e2e-stack`, matching `TEST_USER`/`TEST_PASS`, plus a placeholder
    name/email). A new one-shot `admin-bootstrap-test` service runs `npm run
    admin:create-first` against `backend-app-test` once it's healthy — run
    explicitly via `docker compose run --rm admin-bootstrap-test` (not
@@ -189,7 +189,7 @@ every spec above instead (per the diagrams' `«include»` pattern).
 
 ## Verification
 
-- Per spec, while writing: `npx playwright test tests/e2e/<spec>.spec.ts --reporter=list` against the real stack — bring it up with `docker compose --env-file .env.test.example -f compose.test.yml up -d --wait mongodb-test neo4j-test redis-test mqtt-test influxdb-test smtp-test tsa-test witness-test backend-app-test worker-test frontend-app-test`, seed the admin with `docker compose --env-file .env.test.example -f compose.test.yml run --rm admin-bootstrap-test`, then either `npm run test:e2e:docker` filtered to that file, or set the same env vars directly (`PLAYWRIGHT_BASE_URL=http://localhost:5173 PLAYWRIGHT_API_BASE_URL=http://localhost:3000 PLAYWRIGHT_SKIP_WEBSERVER=1 TEST_USER=admin TEST_PASS=Admin@123`) before `npx playwright test <file> --reporter=list` — `node_modules/.bin` isn't always on `PATH` in a Git Bash session, so a bare `cross-env ...` invocation (as opposed to via an `npm run` script) can fail with `command not found`.
+- Per spec, while writing: `npx playwright test tests/e2e/<spec>.spec.ts --reporter=list` against the real stack — bring it up with `docker compose --env-file .env.test.example -f compose.test.yml up -d --wait mongodb-test neo4j-test redis-test mqtt-test influxdb-test smtp-test tsa-test witness-test backend-app-test worker-test frontend-app-test`, seed the admin with `docker compose --env-file .env.test.example -f compose.test.yml run --rm admin-bootstrap-test`, then either `npm run test:e2e:docker` filtered to that file, or set the same env vars directly (`PLAYWRIGHT_BASE_URL=http://localhost:5173 PLAYWRIGHT_API_BASE_URL=http://localhost:3000 PLAYWRIGHT_SKIP_WEBSERVER=1 TEST_USER=admin TEST_PASS=Admin@123-e2e-stack`) before `npx playwright test <file> --reporter=list` — `node_modules/.bin` isn't always on `PATH` in a Git Bash session, so a bare `cross-env ...` invocation (as opposed to via an `npm run` script) can fail with `command not found`.
 - Confirm the audit assertion actually fires (not a false-pass) by
   temporarily breaking it once per new helper usage — same "verify
   before trusting" discipline as any new assertion.

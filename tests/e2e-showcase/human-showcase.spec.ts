@@ -40,7 +40,7 @@ async function beat(page: Page, ms: number) {
 test.describe('Human-paced e2e showcase reel — Wave 2 (#331)', () => {
   test('login, RF020 organizations/collections CRUD via the real UI, samples list', async ({ page, request }) => {
     const testUser = process.env.TEST_USER || 'admin';
-    const testPass = process.env.TEST_PASS || 'Admin@123';
+    const testPass = process.env.TEST_PASS || 'Admin@123-e2e-stack';
 
     const officialName = `Showcase Org ${Date.now()}`;
     const collectionId = `showcase-collection-${Date.now()}`;
@@ -158,7 +158,7 @@ test.describe('Human-paced e2e showcase reel — Wave 3 (#646)', () => {
 
   test('login, RF014 security policy update via the real UI, RF017 equipment management, RF016 real sample labeling', async ({ page, request }) => {
     const testUser = process.env.TEST_USER || 'admin';
-    const testPass = process.env.TEST_PASS || 'Admin@123';
+    const testPass = process.env.TEST_PASS || 'Admin@123-e2e-stack';
 
     const equipmentDescription = `Showcase Freezer ${Date.now()}`;
     let originalSecurityConfig: Record<string, any> | null = null;
@@ -316,7 +316,7 @@ test.describe('Human-paced e2e showcase reel — Wave 4 (#743)', () => {
 
   test('login, RF008 report templates + CSV export via the real UI, RF013 backup run and policy edit', async ({ page, request }) => {
     const testUser = process.env.TEST_USER || 'admin';
-    const testPass = process.env.TEST_PASS || 'Admin@123';
+    const testPass = process.env.TEST_PASS || 'Admin@123-e2e-stack';
 
     let seededStorageBox: SeededStorageBox | null = null;
     let originalRetentionDays: number | null = null;
@@ -601,7 +601,7 @@ test.describe('Human-paced e2e showcase reel — Wave 5', () => {
 
   test('RNF011 AC#4 an operator imports a spreadsheet and the rejected row is quarantined, not dropped', async ({ page, request }) => {
     const testUser = process.env.TEST_USER || 'admin';
-    const testPass = process.env.TEST_PASS || 'Admin@123';
+    const testPass = process.env.TEST_PASS || 'Admin@123-e2e-stack';
 
     const createdParticipantIds: string[] = [];
     let batchId: string | null = null;

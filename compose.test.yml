@@ -53,7 +53,7 @@ x-test-env: &test-env
   BOOTSTRAP_ADMIN_NAME: "E2E Test Admin"
   BOOTSTRAP_ADMIN_EMAIL: e2e-admin@bioavanced.test
   BOOTSTRAP_ADMIN_USERNAME: admin
-  BOOTSTRAP_ADMIN_TEMP_PASSWORD: Admin@123
+  BOOTSTRAP_ADMIN_TEMP_PASSWORD: Admin@123-e2e-stack
   # RF014 AC#4 (#648): createFirstAdmin.js's forceReset:true is now actually
   # enforced at login (previously dormant) -- every spec here logs in
   # directly as TEST_USER/TEST_PASS via realLogin(), with no forced-reset
@@ -876,7 +876,7 @@ services:
       PLAYWRIGHT_BASE_URL: http://localhost:5173
       PLAYWRIGHT_API_BASE_URL: http://localhost:3000
       TEST_USER: admin
-      TEST_PASS: Admin@123
+      TEST_PASS: Admin@123-e2e-stack
       E2E_MONGO_URI: mongodb://mongodb-test:27017
       E2E_MONGO_DB: bioavanced_test
       TEST_SUPPORT_SECRET: e2e-test-support-secret

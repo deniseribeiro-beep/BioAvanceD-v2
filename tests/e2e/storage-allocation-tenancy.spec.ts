@@ -140,7 +140,7 @@ test.describe('Storage allocation is bounded by the caller organization (#1211) 
     const foreignSample = await createSample(otherOrg, 'A2');
 
     const username = `tec.1211.${Date.now()}`;
-    const password = 'Tecnico@12345';
+    const password = 'Tecnico@12345-forte';
     const registerRes = await request.post(`${apiBaseURL}/api/users/register`, {
       headers: adminAuth,
       data: {

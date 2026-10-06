@@ -149,7 +149,7 @@ npm run compose:seed-admin
 ```
 
 As credenciais vêm de `BOOTSTRAP_ADMIN_*` em `.env.docker` (por padrão
-`admin` / `Admin@123`, o mesmo login que `npm run test:e2e:docker` espera).
+`admin` / `Admin@123-e2e-stack`, o mesmo login que `npm run test:e2e:docker` espera).
 
 Serviços padrão:
 

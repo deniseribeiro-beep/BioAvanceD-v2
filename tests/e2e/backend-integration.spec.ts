@@ -23,7 +23,7 @@ test.describe('Real backend integration', () => {
 
   test('login with seeded admin user returns a usable session and lists samples', async ({ request }) => {
     const testUser = process.env.TEST_USER || 'admin';
-    const testPass = process.env.TEST_PASS || 'Admin@123';
+    const testPass = process.env.TEST_PASS || 'Admin@123-e2e-stack';
 
     const loginResponse = await request.post(`${apiBaseURL}/api/auth/login`, {
       data: { username: testUser, password: testPass },
@@ -54,7 +54,7 @@ test.describe('Real backend integration', () => {
 
   test('creates an Organization and lists it back from the real database (#346)', async ({ request }) => {
     const testUser = process.env.TEST_USER || 'admin';
-    const testPass = process.env.TEST_PASS || 'Admin@123';
+    const testPass = process.env.TEST_PASS || 'Admin@123-e2e-stack';
 
     const loginResponse = await request.post(`${apiBaseURL}/api/auth/login`, {
       data: { username: testUser, password: testPass },

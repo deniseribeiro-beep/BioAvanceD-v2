@@ -1378,7 +1378,7 @@ test.describe('Backup and restore (RF013) — real backend', () => {
     expect(unauthenticated.status()).toBe(401);
 
     const username = `tecnico.rf013.${Date.now()}`;
-    const password = 'Tecnico@123';
+    const password = 'Tecnico@123-forte';
     const registerResponse = await request.post(`${apiBaseURL}/api/users/register`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: {

@@ -20,7 +20,7 @@ test.describe('Auth & access security (RF001) — real backend', () => {
     request,
   }) => {
     const testUser = process.env.TEST_USER || 'admin';
-    const testPass = process.env.TEST_PASS || 'Admin@123';
+    const testPass = process.env.TEST_PASS || 'Admin@123-e2e-stack';
 
     // Bootstrap a token purely to read the audit trail before the UI login.
     // The action under test is the UI-driven login below, not this call.
@@ -86,7 +86,7 @@ test.describe('Dashboard & authorization (RF002) — real backend', () => {
         name: 'RF002 Técnico Fixture',
         email: `${username}@example.com`,
         username,
-        password: 'Tecnico@123',
+        password: 'Tecnico@123-forte',
         accessType: 2,
         roleName: 'Técnico',
       },
@@ -97,7 +97,7 @@ test.describe('Dashboard & authorization (RF002) — real backend', () => {
     // issues a usable session token at all (RF001's non-admin MFA gate) —
     // login returns a setup-only tempToken, not a full session.
     const loginResponse = await request.post(`${apiBaseURL}/api/auth/login`, {
-      data: { username, password: 'Tecnico@123' },
+      data: { username, password: 'Tecnico@123-forte' },
     });
     expect(loginResponse.ok(), await loginResponse.text()).toBeTruthy();
     const loginBody = await loginResponse.json();
@@ -118,7 +118,7 @@ test.describe('Dashboard & authorization (RF002) — real backend', () => {
     // a genuine non-admin session (see #293's completeFirstLoginMfa), and
     // confirm the backend's RBAC gate itself refuses it with a real 403 —
     // not just the setup-only tempToken's 401 above.
-    const tecnicoSession = await completeFirstLoginMfa(request, apiBaseURL!, username, 'Tecnico@123');
+    const tecnicoSession = await completeFirstLoginMfa(request, apiBaseURL!, username, 'Tecnico@123-forte');
     const forbiddenListUsersRbac = await request.get(`${apiBaseURL}/api/users`, {
       headers: { Authorization: `Bearer ${tecnicoSession.token}` },
     });
@@ -155,7 +155,7 @@ test.describe('User management (RF003) — real backend', () => {
         name: 'RF003 Técnico Fixture',
         email,
         username,
-        password: 'Tecnico@123',
+        password: 'Tecnico@123-forte',
         accessType: 2,
         roleName: 'Técnico',
       },
@@ -173,7 +173,7 @@ test.describe('User management (RF003) — real backend', () => {
         name: 'RF003 Duplicate Email',
         email,
         username: `${username}.dup`,
-        password: 'Tecnico@123',
+        password: 'Tecnico@123-forte',
         accessType: 2,
         roleName: 'Técnico',
       },
@@ -186,7 +186,7 @@ test.describe('User management (RF003) — real backend', () => {
         name: 'RF003 Duplicate Username',
         email: `${username}.dup@example.com`,
         username,
-        password: 'Tecnico@123',
+        password: 'Tecnico@123-forte',
         accessType: 2,
         roleName: 'Técnico',
       },
@@ -209,7 +209,7 @@ test.describe('User management (RF003) — real backend', () => {
         name: 'RNF008 Técnico Fixture',
         email: `${tecnicoUsername}@example.com`,
         username: tecnicoUsername,
-        password: 'Tecnico@123',
+        password: 'Tecnico@123-forte',
         accessType: 2,
         roleName: 'Técnico',
       },
@@ -217,7 +217,7 @@ test.describe('User management (RF003) — real backend', () => {
     expect(registerResponse.ok(), await registerResponse.text()).toBeTruthy();
 
     const loginResponse = await request.post(`${apiBaseURL}/api/auth/login`, {
-      data: { username: tecnicoUsername, password: 'Tecnico@123' },
+      data: { username: tecnicoUsername, password: 'Tecnico@123-forte' },
     });
     expect(loginResponse.ok(), await loginResponse.text()).toBeTruthy();
     const loginBody = await loginResponse.json();
@@ -230,7 +230,7 @@ test.describe('User management (RF003) — real backend', () => {
         name: 'Should Not Be Created',
         email: `blocked.${Date.now()}@example.com`,
         username: `blocked.${Date.now()}`,
-        password: 'Blocked@123',
+        password: 'Blocked@123-forte',
         accessType: 2,
         roleName: 'Técnico',
       },
@@ -243,14 +243,14 @@ test.describe('User management (RF003) — real backend', () => {
     // Stronger proof (#335): complete the Técnico's first-login MFA to get
     // a genuine non-admin session, and confirm createUser's RBAC gate
     // itself refuses it with a real 403 — not just the tempToken's 401.
-    const tecnicoSession = await completeFirstLoginMfa(request, apiBaseURL!, tecnicoUsername, 'Tecnico@123');
+    const tecnicoSession = await completeFirstLoginMfa(request, apiBaseURL!, tecnicoUsername, 'Tecnico@123-forte');
     const forbiddenRegisterRbac = await request.post(`${apiBaseURL}/api/users/register`, {
       headers: { Authorization: `Bearer ${tecnicoSession.token}` },
       data: {
         name: 'Should Not Be Created (RBAC)',
         email: `blocked.rbac.${Date.now()}@example.com`,
         username: `blocked.rbac.${Date.now()}`,
-        password: 'Blocked@123',
+        password: 'Blocked@123-forte',
         accessType: 2,
         roleName: 'Técnico',
       },
@@ -268,7 +268,7 @@ test.describe('User management (RF003) — real backend', () => {
     // route userSecurityService.updatePassword backs (see criterion 2's
     // complexity + history requirements).
     const username = `tecnico.rf003ac2.${Date.now()}`;
-    const initialPassword = 'Tecnico@123456';
+    const initialPassword = 'Tecnico@123456-forte';
     const registerResponse = await request.post(`${apiBaseURL}/api/users/register`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: {
@@ -296,7 +296,7 @@ test.describe('User management (RF003) — real backend', () => {
     // Happy path: a complying new password is accepted, and the change is
     // audited.
     const watch = await watchAuditTrail(request, apiBaseURL!, admin.token);
-    const newPassword = 'Tecnico!New456';
+    const newPassword = 'Tecnico!New456-forte';
     const changeResponse = await request.put(`${apiBaseURL}/api/user/security/password`, {
       headers: { Authorization: `Bearer ${tecnicoSession.token}` },
       data: { currentPassword: initialPassword, newPassword },
@@ -320,7 +320,7 @@ test.describe('User management (RF003) — real backend', () => {
     const watch = await watchAuditTrail(request, apiBaseURL!, admin.token);
 
     const username = `tecnico.rf003ac3.${Date.now()}`;
-    const password = 'Tecnico@123456';
+    const password = 'Tecnico@123456-forte';
     const registerResponse = await request.post(`${apiBaseURL}/api/users/register`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: {
@@ -421,7 +421,7 @@ test.describe('User management (RF003) — real backend', () => {
         name: 'RF003 AC4 Técnico Fixture',
         email: `${username}@example.com`,
         username,
-        password: 'Tecnico@123456',
+        password: 'Tecnico@123456-forte',
         accessType: 2,
         roleName: 'Técnico',
       },
@@ -451,7 +451,7 @@ test.describe('User management (RF003) — real backend', () => {
 
     // An inactivated account can no longer complete a fresh login.
     const loginResponse = await request.post(`${apiBaseURL}/api/auth/login`, {
-      data: { username, password: 'Tecnico@123456' },
+      data: { username, password: 'Tecnico@123456-forte' },
     });
     expect(loginResponse.ok()).toBeFalsy();
   });
@@ -462,7 +462,7 @@ test.describe('User management (RF003) — real backend', () => {
     const admin = await realLogin(request);
 
     const username = `tecnico.rf003ac5.${Date.now()}`;
-    const password = 'Tecnico@123456';
+    const password = 'Tecnico@123456-forte';
     const registerResponse = await request.post(`${apiBaseURL}/api/users/register`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: {
@@ -779,7 +779,7 @@ test.describe('Security policy management (RF014) — real backend', () => {
 
     async function registerTecnico(label: string) {
       const username = `tecnico.914.${label}.${Date.now()}`;
-      const password = 'Tecnico@123456';
+      const password = 'Tecnico@123456-forte';
       const response = await request.post(`${apiBaseURL}/api/users/register`, {
         headers: auth,
         data: { name: `#914 ${label} Fixture`, email: `${username}@example.com`, username, password, accessType: 2, roleName: 'Técnico' },
@@ -865,7 +865,7 @@ test.describe('Security policy management (RF014) — real backend', () => {
     const originalRules = (await before.json()).data.passwordRules;
 
     const username = `tecnico.1244.${Date.now()}`;
-    const passwords = ['Reuse@1244zero', 'Reuse@1244one', 'Reuse@1244two'];
+    const passwords = ['Reuse@1244zero-forte', 'Reuse@1244one-forte', 'Reuse@1244two-forte'];
     const register = await request.post(`${apiBaseURL}/api/users/register`, {
       headers: auth,
       data: { name: '#1244 reuse Fixture', email: `${username}@example.com`, username, password: passwords[0], accessType: 2, roleName: 'Técnico' },
@@ -933,7 +933,7 @@ test.describe('Security policy management (RF014) — real backend', () => {
     const username = `tecnico.1246.${Date.now()}`;
     const register = await request.post(`${apiBaseURL}/api/users/register`, {
       headers: auth,
-      data: { name: '#1246 strength Fixture', email: `${username}@example.com`, username, password: 'Strength@1246a', accessType: 2, roleName: 'Técnico' },
+      data: { name: '#1246 strength Fixture', email: `${username}@example.com`, username, password: 'Strength@1246a-forte', accessType: 2, roleName: 'Técnico' },
     });
     expect(register.ok(), await register.text()).toBeTruthy();
     const userID = (await register.json()).data?._id;
@@ -1244,7 +1244,7 @@ test.describe('Security policy management (RF014) — real backend', () => {
   }) => {
     const admin = await realLogin(request);
     const auth = { Authorization: `Bearer ${admin.token}` };
-    const credentials = { username: process.env.TEST_USER || 'admin', password: process.env.TEST_PASS || 'Admin@123' };
+    const credentials = { username: process.env.TEST_USER || 'admin', password: process.env.TEST_PASS || 'Admin@123-e2e-stack' };
     const blocked = '203.0.113.10';
     const other = '203.0.113.11';
     try {
@@ -1354,7 +1354,7 @@ test.describe('Security policy management (RF014) — real backend', () => {
       expect(blockedRows[0].blockReason).toBe('unusual_activity');
       expect(blockedRows[0].accounts).toHaveLength(threshold);
 
-      const credentials = { username: process.env.TEST_USER || 'admin', password: process.env.TEST_PASS || 'Admin@123' };
+      const credentials = { username: process.env.TEST_USER || 'admin', password: process.env.TEST_PASS || 'Admin@123-e2e-stack' };
       const refused = await request.post(`${trustedHopURL}/api/auth/login`, {
         headers: { 'X-Forwarded-For': source },
         data: credentials,
@@ -1742,7 +1742,7 @@ test.describe('Audit trail screen (RNF009, #1239) — real backend', () => {
     { accessType, roleName, label }: { accessType: number; roleName: string; label: string }
   ) {
     const username = `${label}.${Date.now()}`;
-    const password = 'Fixture@123456';
+    const password = 'Fixture@123456-forte';
     const register = await request.post(`${apiBaseURL}/api/users/register`, {
       headers: { Authorization: `Bearer ${adminToken}` },
       data: { name: `#1239 ${label}`, email: `${username}@example.com`, username, password, accessType, roleName },
@@ -1870,7 +1870,7 @@ test.describe('Administrator session revoke (RF003 criterion 5, #1020) — real 
   }) => {
     const admin = await realLogin(request);
     const username = `revoke1020.${Date.now()}`;
-    const password = 'Fixture@123456';
+    const password = 'Fixture@123456-forte';
     const register = await request.post(`${apiBaseURL}/api/users/register`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: { name: '#1020 revoke target', email: `${username}@example.com`, username, password, accessType: 2, roleName: 'Técnico' },

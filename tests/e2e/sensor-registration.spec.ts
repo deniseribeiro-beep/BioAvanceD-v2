@@ -23,7 +23,7 @@ test.describe('Sensor registration links SensorMetadata (#311)', () => {
 
   test('POST /api/sensors with macAddress + storageContainer upserts a resolvable sensorMetadata doc', async ({ request }) => {
     const testUser = process.env.TEST_USER || 'admin';
-    const testPass = process.env.TEST_PASS || 'Admin@123';
+    const testPass = process.env.TEST_PASS || 'Admin@123-e2e-stack';
 
     const loginResponse = await request.post(`${apiBaseURL}/api/auth/login`, {
       data: { username: testUser, password: testPass },
