@@ -284,14 +284,35 @@ test.describe('User management (RF003) — real backend', () => {
 
     const tecnicoSession = await completeFirstLoginMfa(request, apiBaseURL!, username, initialPassword);
 
-    // Rejection case: a new password failing the passwordRules policy (#1246;
-    // by default 8 chars with upper, lower, digit and symbol) is refused —
-    // here, missing a special character.
-    const weakAttempt = await request.put(`${apiBaseURL}/api/user/security/password`, {
-      headers: { Authorization: `Bearer ${tecnicoSession.token}` },
-      data: { currentPassword: initialPassword, newPassword: 'Weak1234567' },
-    });
-    expect(weakAttempt.status()).toBe(400);
+    // Rejection case: a new password failing the passwordRules policy (#1246)
+    // is refused — here, missing a special character. #1293: a new deployment
+    // has the composition flags off (#1257), so the test sets the rule it
+    // asserts and restores the stored values afterwards.
+    const adminAuth = { Authorization: `Bearer ${admin.token}` };
+    const before = await request.get(`${apiBaseURL}/api/security/config`, { headers: adminAuth });
+    expect(before.ok()).toBeTruthy();
+    const original = (await before.json()).data;
+    try {
+      const strict = await request.put(`${apiBaseURL}/api/security/config`, {
+        headers: adminAuth,
+        data: { authentication: { requireStrongPassword: true }, passwordRules: { requireSpecialChars: true } },
+      });
+      expect(strict.ok(), await strict.text()).toBeTruthy();
+
+      const weakAttempt = await request.put(`${apiBaseURL}/api/user/security/password`, {
+        headers: { Authorization: `Bearer ${tecnicoSession.token}` },
+        data: { currentPassword: initialPassword, newPassword: 'Weak1234567' },
+      });
+      expect(weakAttempt.status()).toBe(400);
+    } finally {
+      await request.put(`${apiBaseURL}/api/security/config`, {
+        headers: adminAuth,
+        data: {
+          authentication: { requireStrongPassword: original.authentication.requireStrongPassword },
+          passwordRules: { requireSpecialChars: original.passwordRules.requireSpecialChars },
+        },
+      }).catch(() => {});
+    }
 
     // Happy path: a complying new password is accepted, and the change is
     // audited.
@@ -1142,10 +1163,12 @@ test.describe('Security policy management (RF014) — real backend', () => {
       await expect(page.getByTestId('login-form')).toBeVisible();
       await expect(page.getByTestId('login-forgot-password-button')).toHaveCount(0);
 
-      // requireStrongPassword off: a password with one character class is accepted.
+      // requireStrongPassword off: a password with one character class is
+      // accepted. #1294: it is long enough for the 15-character single-factor
+      // floor (#1283), so only composition could refuse it.
       const weak = await request.post(`${apiBaseURL}/api/users/register`, {
         headers: auth,
-        data: { name: '#1249 weak Fixture', email: `weak.${username}@example.com`, username: `weak.${username}`, password: 'onlylowercase', accessType: 4, roleName: 'Administrador' },
+        data: { name: '#1249 weak Fixture', email: `weak.${username}@example.com`, username: `weak.${username}`, password: 'onlylowercaseletters', accessType: 4, roleName: 'Administrador' },
       });
       expect(weak.ok(), await weak.text()).toBeTruthy();
 
