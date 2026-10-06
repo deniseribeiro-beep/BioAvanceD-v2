@@ -109,6 +109,11 @@ Notas:
   do frontend é `tsc --noEmit`. Os aliases `api/backend run typecheck` e
   `frontend run lint`, que apenas repetiam esses dois comandos sob um segundo
   nome, foram removidos.
+- **Gate e2e completo** (#1298): `bash scripts/e2e-gate.sh <pasta de saída>`
+  constrói `compose.test.yml`, sobe a stack de teste, roda o bootstrap do
+  admin e a cadeia de dados de referência, confere que cada one-shot saiu
+  com 0 e roda o `playwright-runner` dentro do container. Use um volume de
+  teste novo (`docker compose -f compose.test.yml down --volumes` antes).
 - Vitest e Playwright legados permanecem fora do contrato atual.
 - As suítes reconstruídas no futuro deverão partir do estado canônico atual.
 
