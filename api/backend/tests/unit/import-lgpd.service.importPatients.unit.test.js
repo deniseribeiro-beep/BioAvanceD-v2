@@ -505,9 +505,11 @@ describe('ImportLGPDService.importPatients', () => {
       expect(importStagingRecordsCollection.insertMany).toHaveBeenCalledTimes(1);
       const staged = importStagingRecordsCollection.insertMany.mock.calls[0][0];
       expect(staged).toHaveLength(1);
-      expect(staged[0]).toMatchObject({ batchId: 'batch-1', rowNumber: 2, status: 'ERROR' });
+      // #1295: the rows carry the batch document's own id, generated before them.
+      const batchId = importBatchesCollection.insertOne.mock.calls[0][0]._id;
+      expect(staged[0]).toMatchObject({ batchId, rowNumber: 2, status: 'ERROR' });
 
-      expect(result.stagingBatchId).toBe('batch-1');
+      expect(result.stagingBatchId).toBe(batchId);
     });
 
     it('does not open a staging batch when every row imports cleanly', async () => {

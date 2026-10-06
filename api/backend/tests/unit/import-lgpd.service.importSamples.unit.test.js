@@ -969,7 +969,7 @@ describe('ImportLGPDService.importSamples', () => {
       const staged = importStagingRecordsCollection.insertMany.mock.calls[0][0];
       expect(staged).toHaveLength(1);
       expect(staged[0]).toMatchObject({
-        batchId: 'batch-1',
+        batchId: importBatchesCollection.insertOne.mock.calls[0][0]._id,
         rowNumber: 3,
         status: 'ERROR',
       });
@@ -985,7 +985,7 @@ describe('ImportLGPDService.importSamples', () => {
 
       // "sem correção silenciosa" cuts both ways: the rows have to be kept,
       // and the caller has to be told where they went.
-      expect(result.stagingBatchId).toBe('batch-1');
+      expect(result.stagingBatchId).toBe(importBatchesCollection.insertOne.mock.calls[0][0]._id);
     });
 
     it('preserves the rejected row data, not just the error message', async () => {

@@ -1262,8 +1262,11 @@ class ImportLGPDService {
         updatedAt: now,
       };
 
-      const batchResult = await db.collection('import_batches').insertOne(batchDoc);
-      const batchId = batchResult.insertedId;
+      // #1295: as linhas sao gravadas ANTES do lote, como no importador
+      // assincrono. Quem encontra o lote encontra tambem as suas linhas.
+      const { ObjectId } = require('mongodb');
+      const batchId = new ObjectId();
+      batchDoc._id = batchId;
 
       // #807: `row` is the pre-anonymisation spreadsheet row, so it and
       // `normalized` are sealed at rest (stagedRowCrypto) like every other
@@ -1301,6 +1304,13 @@ class ImportLGPDService {
       }));
 
       await db.collection('import_staging_records').insertMany(stagedRecords);
+      try {
+        await db.collection('import_batches').insertOne(batchDoc);
+      } catch (batchError) {
+        // Sem o lote, as linhas gravadas nao tem quem as leia.
+        await db.collection('import_staging_records').deleteMany({ batchId }).catch(() => {});
+        throw batchError;
+      }
 
       logger.warn(
         `[IMPORT_LGPD] ${stagedRecords.length} linha(s) rejeitada(s) colocadas em quarentena (batch ${batchId})`

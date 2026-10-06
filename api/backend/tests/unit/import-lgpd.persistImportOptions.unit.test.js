@@ -25,23 +25,32 @@ const { revealStagedRecord } = require('../../src/utils/stagedRowCrypto');
 
 /** Captures what quarantineRejectedSampleRows writes, without a real Mongo. */
 function createDb() {
-  const inserted = { batches: [], records: [] };
+  const inserted = { batches: [], records: [], order: [], deleted: [] };
   return {
     inserted,
+    failBatch: false,
     collection(name) {
+      const db = this;
       if (name === 'import_batches') {
         return {
           insertOne: vi.fn(async (doc) => {
+            if (db.failBatch) throw new Error('mongo down');
+            inserted.order.push('batch');
             inserted.batches.push(doc);
-            return { insertedId: 'batch-1' };
+            return { insertedId: doc._id };
           }),
         };
       }
       if (name === 'import_staging_records') {
         return {
           insertMany: vi.fn(async (docs) => {
+            inserted.order.push('records');
             inserted.records.push(...docs);
             return { insertedCount: docs.length };
+          }),
+          deleteMany: vi.fn(async (filter) => {
+            inserted.deleted.push(filter);
+            return { deletedCount: 0 };
           }),
         };
       }
@@ -178,12 +187,32 @@ describe('#794: quarantined batches record the import options they were produced
       importOptions: { startBoxId: 'box-1', autoIncrement: true, groupFields: {} },
     });
 
-    expect(batchId).toBe('batch-1');
+    // #1295: the id is the batch document's own, generated before the rows.
+    expect(batchId).toBe(db.inserted.batches[0]._id);
     expect(db.inserted.records).toHaveLength(1);
     expect(revealStagedRecord(db.inserted.records[0])).toMatchObject({
       rowNumber: 4,
       status: 'ERROR',
       row: { specimenId: 'S-3', participantId: '00000042' },
     });
+  });
+
+  // #1295: a reader that found the batch could read it before its rows were
+  // written. The rows go first; the batch makes them visible.
+  it('writes the staging rows before the batch that points at them', async () => {
+    const batchId = await importLGPDService.quarantineRejectedSampleRows(db, { fileName: 'a.csv', rows, results });
+
+    expect(db.inserted.order).toEqual(['records', 'batch']);
+    expect(revealStagedRecord(db.inserted.records[0]).batchId).toBe(batchId);
+  });
+
+  it('removes the written rows when the batch itself cannot be written', async () => {
+    db.failBatch = true;
+
+    const batchId = await importLGPDService.quarantineRejectedSampleRows(db, { fileName: 'a.csv', rows, results });
+
+    expect(batchId).toBeNull();
+    const stagedBatchId = revealStagedRecord(db.inserted.records[0]).batchId;
+    expect(db.inserted.deleted).toEqual([{ batchId: stagedBatchId }]);
   });
 });
