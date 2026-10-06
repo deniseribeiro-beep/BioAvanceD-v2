@@ -104,8 +104,8 @@ describe('RF003 - POST /api/users/register', () => {
       })
     );
 
-    // Then
-    expect(response.status).toBe(400);
+    // Then: a model-validation failure answers 422 (RNF018, #1300)
+    expect(response.status).toBe(422);
     expect(response.body.success).toBe(false);
     expect(String(response.body.message || '').toLowerCase()).toContain('password');
     expect(String(response.body.message || '').toLowerCase()).toContain('senha');

@@ -43,6 +43,8 @@ class TemperatureService {
         const error = new Error(validation.errors.join(', '));
         // #1120: the MQTT sibling's token for the same condition.
         error.auditReason = 'invalid_payload';
+        // RNF018 (#1300): a validation failure answers 422.
+        error.statusCode = 422;
         throw error;
       }
       await assertOrganizationIdResolves(db, temperatureData.organizationId);

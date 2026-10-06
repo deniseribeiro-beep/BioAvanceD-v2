@@ -165,7 +165,7 @@ router.post('/register',
           message: error.message
         });
       }
-      return res.status(400).json({
+      return res.status(error.statusCode === 422 ? 422 : 400).json({
         success: false,
         error: req.t('users.registerError'),
         message: error.message
@@ -946,7 +946,7 @@ router.post('/register-patient', authenticate, requirePermission('createPatient'
     });
   } catch (error) {
     logger.error('Erro ao registrar paciente:', error.message);
-    return res.status(400).json({
+    return res.status(error.statusCode === 422 ? 422 : 400).json({
       success: false,
       error: req.t('users.registerPatientError'),
       message: error.message
@@ -1028,7 +1028,7 @@ router.post('/register-sample', authenticate, requirePermission('createSample'),
       });
     }
 
-    return res.status(400).json({
+    return res.status(error.statusCode === 422 ? 422 : 400).json({
       success: false,
       error: req.t('users.registerSampleError'),
       message: error.message
@@ -1140,7 +1140,7 @@ router.post('/register-sensor', authenticate, requirePermission('manageSensor'),
     });
   } catch (error) {
     logger.error('Erro ao registrar sensor:', error.message);
-    return res.status(400).json({
+    return res.status(error.statusCode === 422 ? 422 : 400).json({
       success: false,
       error: req.t('users.registerSensorError'),
       message: error.message

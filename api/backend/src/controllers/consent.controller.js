@@ -112,7 +112,7 @@ class ConsentController {
       });
     } catch (error) {
       logger.error('Erro ao criar política de consentimento:', error.message);
-      return res.status(400).json({
+      return res.status(error.statusCode === 422 ? 422 : 400).json({
         success: false,
         error: 'Erro ao criar política de consentimento',
         message: error.message
@@ -248,7 +248,7 @@ class ConsentController {
       });
     } catch (error) {
       logger.error('Erro ao atualizar política de consentimento:', error.message);
-      return res.status(400).json({
+      return res.status(error.statusCode === 422 ? 422 : 400).json({
         success: false,
         error: 'Erro ao atualizar política de consentimento',
         message: error.message
@@ -321,7 +321,7 @@ class ConsentController {
       });
     } catch (error) {
       logger.error('Erro ao criar template de consentimento:', error.message);
-      return res.status(400).json({
+      return res.status(error.statusCode === 422 ? 422 : 400).json({
         success: false,
         error: 'Erro ao criar template de consentimento',
         message: error.message

@@ -32,7 +32,7 @@ class DispositionActionController {
     } catch (error) {
       logger.error('Erro ao registrar ação de destinação:', error.message);
       const blocked = /bloqueio legal ou ético ativo/.test(error.message);
-      return res.status(blocked ? 409 : 400).json({ success: false, error: 'Erro ao registrar ação de destinação', message: error.message });
+      return res.status(blocked ? 409 : error.statusCode === 422 ? 422 : 400).json({ success: false, error: 'Erro ao registrar ação de destinação', message: error.message });
     }
   }
 

@@ -71,7 +71,11 @@ class RetentionPolicyService {
 
       const validation = RetentionPolicyModel.validate(normalizedPayload);
       if (!validation.isValid) {
-        throw new Error(validation.errors.join(', '));
+        // RNF018 (#1300): a validation failure answers 422; the caller's catch
+        // keeps every other error on its own status.
+        const validationError = new Error(validation.errors.join(', '));
+        validationError.statusCode = 422;
+        throw validationError;
       }
 
       const collection = await getCollection(db, 'retentionPolicies');
