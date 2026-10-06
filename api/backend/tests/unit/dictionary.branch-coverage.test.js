@@ -63,6 +63,10 @@ function throwingSession() {
   };
 }
 
+// The release gate (#885) offers only phenotypes whose concept sits in an
+// active release. These cases test the fallback's normalization, so every
+// code resolves to an active, version-less concept: the gate keeps each
+// coding as built and adds no version.
 function buildFallbackDb({ disease = null, terminologyRows = [] } = {}) {
   return {
     collection: vi.fn((name) => {
@@ -71,6 +75,16 @@ function buildFallbackDb({ disease = null, terminologyRows = [] } = {}) {
       }
       if (name === 'terminologies') {
         return { find: vi.fn(() => cursor(terminologyRows)) };
+      }
+      if (name === 'terminologyConcepts') {
+        return {
+          find: vi.fn(({ systemUri, code }) => cursor([
+            { systemUri, code, conceptStatus: 'active', referenceDatasetReleaseId: 'rel-active' },
+          ])),
+        };
+      }
+      if (name === 'referenceDatasetReleases') {
+        return { findOne: vi.fn().mockResolvedValue({ referenceDatasetReleaseId: 'rel-active', releaseStatus: 'active' }) };
       }
       return { find: vi.fn(() => cursor([])), findOne: vi.fn().mockResolvedValue(null) };
     }),

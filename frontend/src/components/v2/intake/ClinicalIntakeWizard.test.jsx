@@ -291,3 +291,36 @@ describe('ClinicalIntakeWizard -- suggest-error retry (#871)', () => {
     expect(screen.queryByTestId('wizard-suggest-error-biomarkers')).not.toBeInTheDocument();
   });
 });
+
+describe('ClinicalIntakeWizard -- suggested phenotype terminology version (#885)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('shows the HPO release version /dictionary/suggest resolved beside the code, and the bare code when it resolved none', async () => {
+    mockApiClient({
+      suggestImpl: () => Promise.resolve({
+        data: {
+          disease: { system: 'http://www.orpha.net', code: '324', display: 'Doenca de Fabry' },
+          phenotypes: [
+            { system: 'http://purl.obolibrary.org/obo/hp.owl', code: 'HP:0001066', display: 'Angioqueratoma', version: '2026-08-01' },
+            { system: 'http://purl.obolibrary.org/obo/hp.owl', code: 'HP:0012471', display: 'Acroparestesia' },
+          ],
+          biomarkers: [],
+        },
+        status: 200,
+      }),
+    });
+    renderWizard();
+    await fillStep1();
+    await fillStep2();
+    await selectDiagnosis();
+
+    await waitFor(
+      () => expect(screen.getByText('Angioqueratoma')).toBeInTheDocument(),
+      { timeout: 2000 }
+    );
+    expect(screen.getByText('HPO 2026-08-01 · HP:0001066')).toBeInTheDocument();
+    expect(screen.getByText('HP:0012471')).toBeInTheDocument();
+  });
+});

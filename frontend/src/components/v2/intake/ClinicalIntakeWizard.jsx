@@ -644,9 +644,13 @@ function normalizeDiseaseBiomarker(item) {
 }
 
 function normalizeDiseasePhenotype(item) {
+  // #885: keep the terminology version /dictionary/suggest resolved, so the
+  // operator sees which HPO release the code is recorded against.
+  const version = String(item?.version || '').trim();
   return {
     hpoId: String(item?.hpoId || item?.code || '').trim(),
     label: String(item?.label || item?.display || '').trim(),
+    ...(version ? { version } : {}),
   };
 }
 
@@ -3754,7 +3758,11 @@ export default function ClinicalIntakeWizard(props) {
                       />
                       <span className="phenotype-card__content">
                         <span className="phenotype-card__label">{item.label}</span>
-                        {item.hpoId && <span className="phenotype-card__code">{item.hpoId}</span>}
+                        {item.hpoId && (
+                          <span className="phenotype-card__code">
+                            {item.version ? `HPO ${item.version} · ${item.hpoId}` : item.hpoId}
+                          </span>
+                        )}
                       </span>
                     </label>
                   ))}
