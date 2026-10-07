@@ -111,7 +111,9 @@ class UserSecurityService {
 
       return {
         primaryEnabled: user.mfaEnabled || false,
-        primarySetupDate: user.mfaSetupDate || null,
+        // dict-02 P1X-0198 mfaSetupAt; the writers still store it as
+        // mfaActivationDate (#1330). Nothing writes mfaSetupDate.
+        primarySetupDate: user.mfaSetupAt || user.mfaActivationDate || null,
         recoveryCodes: {
           remaining: RecoveryCodeSetModel.remainingOf(recoveryCodes),
           codes: null // Nunca retorna códigos em listagem

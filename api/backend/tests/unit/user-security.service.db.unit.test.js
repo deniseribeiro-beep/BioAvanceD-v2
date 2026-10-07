@@ -54,7 +54,10 @@ describe('UserSecurityService DB-backed methods', () => {
   describe('getMFAStatus', () => {
     it('returns MFA status with recovery codes info', async () => {
       const users = buildCollection({
-        findOne: vi.fn().mockResolvedValue({ _id: USER_ID, mfaEnabled: true, mfaSetupDate: '2026-01-01' })
+        // The field the MFA enrolment writes (auth.service). This double once
+        // carried mfaSetupDate, which no writer emits, and kept the screen's
+        // always-null setup date green.
+        findOne: vi.fn().mockResolvedValue({ _id: USER_ID, mfaEnabled: true, mfaActivationDate: '2026-01-01' })
       });
       const recoveryCodes = buildCollection({
         findOne: vi.fn().mockResolvedValue({ remaining: 3 })
@@ -79,6 +82,18 @@ describe('UserSecurityService DB-backed methods', () => {
 
       expect(result.primaryEnabled).toBe(false);
       expect(result.recoveryCodes.remaining).toBe(0);
+    });
+
+    it('prefers the canonical mfaSetupAt over mfaActivationDate for the setup date', async () => {
+      const users = buildCollection({
+        findOne: vi.fn().mockResolvedValue({ _id: USER_ID, mfaEnabled: true, mfaSetupAt: '2026-02-02', mfaActivationDate: '2026-01-01' })
+      });
+      const recoveryCodes = buildCollection({ findOne: vi.fn().mockResolvedValue(null) });
+      const db = buildDb({ users, recovery_codes: recoveryCodes });
+
+      const result = await userSecurityService.getMFAStatus(db, USER_ID);
+
+      expect(result.primarySetupDate).toBe('2026-02-02');
     });
 
     it('reads the canonical remainingCount, finding the set under either owner name', async () => {
