@@ -339,7 +339,16 @@ describe('SecurityService.getConfig', () => {
   });
 });
 
+// RF014 AC2: the release step is tested in configurationRelease.service's
+// own tests; the db doubles below model only the security_config document.
+function stubRelease() {
+  return vi.spyOn(securityService, 'activateRelease').mockResolvedValue({ configurationReleaseId: 'rel-test', effectivePeriod: { start: new Date(), end: null } });
+}
+
 describe('SecurityService.updateConfig', () => {
+  beforeEach(() => {
+    stubRelease();
+  });
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -649,6 +658,10 @@ it('#1149: the permission write methods no longer exist', () => {
 // the predicate itself, which is the part that will be wrong if anyone widens the
 // list without thinking about direction.
 describe('SecurityService.updateConfig session revocation (#649)', () => {
+  beforeEach(() => {
+    stubRelease();
+  });
+
   function makeDb() {
     const sessions = { updateMany: vi.fn().mockResolvedValue({ modifiedCount: 4 }) };
     const config = { updateOne: vi.fn().mockResolvedValue({}), insertOne: vi.fn().mockResolvedValue({}) };

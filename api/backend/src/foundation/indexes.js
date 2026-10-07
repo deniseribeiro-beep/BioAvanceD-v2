@@ -11,6 +11,7 @@
  * the helpers. `verifyFoundationIndexes` then reads the indexes back.
  */
 const { CANONICAL_COLLECTIONS } = require('../config/collections');
+const { ensureConfigurationReleaseIndexes } = require('../utils/configurationReleaseIndexes');
 const { ensureFacilityIndexes, ensureRoomIndexes } = require('../utils/facilityIndexes');
 const { ensureParticipantIdentityIndexes } = require('../utils/participantIdentityIndexes');
 const { ensureSampleIndexes } = require('../utils/sampleIndexes');
@@ -33,6 +34,7 @@ const INDEX_TARGETS = [
   { collection: 'storageContainers', ensure: ensureStorageContainerIndexes },
   { collection: 'storageBoxes', ensure: ensureStorageBoxIndexes },
   { collection: 'sensorMetadata', ensure: ensureSensorMetadataIndexes },
+  { collection: CANONICAL_COLLECTIONS.configurationReleases, ensure: ensureConfigurationReleaseIndexes },
 ];
 
 function recordingCollection(collection, builds, collectionName) {
@@ -64,7 +66,13 @@ async function buildFoundationIndexes(db, targets = INDEX_TARGETS) {
   const builds = [];
   for (const target of targets) {
     const collection = recordingCollection(db.collection(target.collection), builds, target.collection);
-    await target.ensure(collection);
+    try {
+      await target.ensure(collection);
+    } catch {
+      // A helper that awaits its builds and throws (the configuration
+      // release constraint does) has its failure on the build record
+      // already; the job reports it rather than dying on it.
+    }
   }
   // A helper may fire a build without awaiting it; wait for every one.
   await Promise.all(builds.map((build) => build.settled));

@@ -174,6 +174,50 @@ describe('Security routes', () => {
     expect(res.payload.success).toBe(false);
   });
 
+  it('PUT /config passa adiante o 409 de uma ativação concorrente (RF014 AC2)', async () => {
+    const handler = getHandler(securityRoutes, 'put', '/config');
+    vi.spyOn(securityService, 'getConfig').mockResolvedValue({});
+    vi.spyOn(securityService, 'updateConfig').mockRejectedValue(Object.assign(new Error('concorrente'), { statusCode: 409 }));
+    const res = createResponse();
+
+    await handler(createRequest({ body: { session: { timeoutMinutes: 20 } } }), res);
+
+    expect(res.statusCode).toBe(409);
+  });
+
+  it('GET /config/releases lista as releases, com o limite limitado a 200 (RF014 AC4)', async () => {
+    const handler = getHandler(securityRoutes, 'get', '/config/releases');
+    const list = vi.spyOn(securityService, 'listReleases').mockResolvedValue([{ configurationReleaseId: 'r2' }, { configurationReleaseId: 'r1' }]);
+    const res = createResponse();
+
+    await handler(createRequest({ query: { limit: '5000' } }), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.payload.data.map((row) => row.configurationReleaseId)).toEqual(['r2', 'r1']);
+    expect(list).toHaveBeenCalledWith(expect.anything(), { limit: 200 });
+  });
+
+  it('POST /config/rollback exige configurationReleaseId e devolve o status do serviço (RF014 AC4)', async () => {
+    const handler = getHandler(securityRoutes, 'post', '/config/rollback');
+    const rollback = vi.spyOn(securityService, 'rollbackConfig');
+
+    const missing = createResponse();
+    await handler(createRequest({ body: {} }), missing);
+    expect(missing.statusCode).toBe(400);
+    expect(rollback).not.toHaveBeenCalled();
+
+    rollback.mockRejectedValueOnce(Object.assign(new Error('não encontrada'), { statusCode: 404 }));
+    const unknown = createResponse();
+    await handler(createRequest({ body: { configurationReleaseId: 'nope' } }), unknown);
+    expect(unknown.statusCode).toBe(404);
+
+    rollback.mockResolvedValueOnce({ configurationReleaseId: 'r3' });
+    const ok = createResponse();
+    await handler(createRequest({ body: { configurationReleaseId: 'r1' } }), ok);
+    expect(ok.statusCode).toBe(200);
+    expect(rollback).toHaveBeenLastCalledWith(expect.anything(), 'r1', expect.anything());
+  });
+
   it('GET /logs/export deve retornar CSV e header correto', async () => {
     const handler = getHandler(securityRoutes, 'get', '/logs/export');
     vi.spyOn(securityService, 'exportLogs').mockResolvedValue('timestamp,userID\n2026-01-01,admin');

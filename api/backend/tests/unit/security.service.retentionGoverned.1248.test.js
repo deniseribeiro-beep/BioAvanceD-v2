@@ -35,6 +35,9 @@ beforeEach(() => {
   vi.spyOn(logger, 'warn').mockImplementation(() => {});
   vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
   vi.spyOn(auditLogger, 'log').mockResolvedValue({});
+  // RF014 AC2: the release step is tested in configurationRelease.service's
+  // own tests; this db double models only the security_config document.
+  vi.spyOn(securityService, 'activateRelease').mockResolvedValue({ configurationReleaseId: 'rel-test', effectivePeriod: { start: new Date(), end: null } });
 });
 
 afterEach(() => { vi.restoreAllMocks(); });

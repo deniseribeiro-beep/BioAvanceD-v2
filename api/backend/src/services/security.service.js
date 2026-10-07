@@ -1,7 +1,10 @@
+const crypto = require('crypto');
 const { isDeepStrictEqual } = require('util');
+const env = require('../config/env');
 const logger = require('../utils/logger');
 const auditLogger = require('../utils/auditLogger');
 const sessionService = require('./session.service');
+const configurationReleaseService = require('./configurationRelease.service');
 const logLevel = require('../utils/logLevel');
 
 /**
@@ -12,7 +15,26 @@ const logLevel = require('../utils/logLevel');
 // detectChanges must not report them as user-visible policy changes -- they are
 // rewritten on every save by definition. Before the flattening these lived under
 // a `metadata` object and were skipped by the typeof-object branch instead.
-const SERVER_OWNED_KEYS = ['configVersion', 'lastUpdatedAt', 'lastUpdatedBy'];
+// #966, RF014 AC2: the identity, environment, release and validity fields are
+// server-owned too, written from the active ConfigurationRelease.
+const SERVER_OWNED_KEYS = [
+  'configVersion', 'lastUpdatedAt', 'lastUpdatedBy',
+  'securityConfigId', 'environment', 'effectivePeriod', 'configurationReleaseId',
+];
+
+// RF014 AC2/AC4: every saved change is a ConfigurationRelease of this
+// profile, one per environment (plano §4 F1.2, "Uma release ativa por
+// ambiente"). The environment is the one the Foundation job records,
+// env.NODE_ENV (FoundationDataRun P1X-0399: development|test|staging|production).
+const SECURITY_PROFILE_NAME = 'security-configuration';
+
+function settingsOf(config) {
+  const settings = {};
+  for (const group of CONFIG_GROUPS) {
+    if (config && config[group]) settings[group] = { ...config[group] };
+  }
+  return settings;
+}
 
 // The eight policy groups. updateConfig merges only these, one level deep
 // (#904), so any other top-level key a caller sends is never stored.
@@ -344,7 +366,17 @@ class SecurityService {
       // appears nowhere in the dictionary, and renamed two of its three members.
       configVersion: 1,
       lastUpdatedAt: new Date(),
-      lastUpdatedBy: null
+      lastUpdatedBy: null,
+
+      // #966: P1X-0276 securityConfigId, a uuid assigned when the document
+      // is first stored (the Mongo _id stays 'main', which every reader
+      // keys on). P1X-0277 environment, the deployment it governs.
+      // P1X-0324 effectivePeriod, copied from the active release.
+      securityConfigId: null,
+      environment: env.NODE_ENV,
+      effectivePeriod: null,
+      // CFG-004: "Toda execução ou decisão registra configurationReleaseId".
+      configurationReleaseId: null
     };
   }
 
@@ -446,7 +478,7 @@ class SecurityService {
 
       if (!config) {
         // Se não existe, cria com valores padrão
-        const defaultConfig = this.getDefaultConfig();
+        const defaultConfig = { ...this.getDefaultConfig(), securityConfigId: crypto.randomUUID() };
         await configCollection.insertOne({
           _id: 'main',
           ...defaultConfig,
@@ -470,7 +502,7 @@ class SecurityService {
   /**
    * Atualiza configurações de segurança
    */
-  async updateConfig(db, newConfig, currentConfig, req) {
+  async updateConfig(db, newConfig, currentConfig, req, options = {}) {
     try {
       const configCollection = db.collection('security_config');
       
@@ -535,6 +567,22 @@ class SecurityService {
       mergedConfig.lastUpdatedAt = new Date();
       mergedConfig.lastUpdatedBy = req.user?.userID || 'SYSTEM';
 
+      // RF014 AC2/AC4: the change is a new ConfigurationRelease, activated
+      // before the document follows it, so a refused activation (409) leaves
+      // the configuration in force untouched. The document stays the read
+      // model every reader keys on ({ _id: 'main' }); the releases are the
+      // record of what was in force and when.
+      const release = await this.activateRelease(db, {
+        settings: settingsOf(mergedConfig),
+        actorId: mergedConfig.lastUpdatedBy,
+        changes,
+        rollbackTargetId: options.rollbackTargetId || null,
+      });
+      mergedConfig.securityConfigId = currentConfig.securityConfigId || crypto.randomUUID();
+      mergedConfig.environment = env.NODE_ENV;
+      mergedConfig.configurationReleaseId = release.configurationReleaseId;
+      mergedConfig.effectivePeriod = release.effectivePeriod;
+
       // Atualiza no banco
       await configCollection.updateOne(
         { _id: 'main' },
@@ -569,7 +617,9 @@ class SecurityService {
           payload: {
             path: change.path,
             oldValue: change.oldValue,
-            newValue: change.newValue
+            newValue: change.newValue,
+            configurationReleaseId: release.configurationReleaseId,
+            ...(options.rollbackTargetId ? { rollbackTargetId: options.rollbackTargetId } : {})
           },
           req: req,
           module: 'Segurança'
@@ -605,6 +655,71 @@ class SecurityService {
   }
 
   /**
+   * RF014: this environment's security-configuration profile, created on
+   * first use. Its settings name each group's keys and types (the shape
+   * validateConfig enforces); allowedValues stays empty until the setting
+   * catalog (RF014 AC1) exists.
+   */
+  async securityProfile(db) {
+    return configurationReleaseService.ensureEnvironmentProfile(db, {
+      profileName: SECURITY_PROFILE_NAME,
+      environment: env.NODE_ENV,
+      describe: () => {
+        const defaults = settingsOf(this.getDefaultConfig());
+        const settings = {};
+        for (const [group, values] of Object.entries(defaults)) {
+          settings[group] = Object.fromEntries(Object.entries(values).map(([key, value]) => [key, value === null ? 'null' : typeof value]));
+        }
+        return { settings, allowedValues: {}, defaults, ownerId: 'SYSTEM' };
+      },
+    });
+  }
+
+  /**
+   * Activates a release of `settings`. Before the first release, the stored
+   * document is recorded as the baseline release, so the first change can
+   * be rolled back.
+   */
+  async activateRelease(db, { settings, actorId, changes = [], rollbackTargetId = null }) {
+    const profile = await this.securityProfile(db);
+    const stored = await db.collection('security_config').findOne({ _id: 'main' });
+    const paths = changes.map((change) => change.path);
+    const impactSummary = rollbackTargetId
+      ? `Rollback para a release ${rollbackTargetId}${paths.length ? `: ${paths.join(', ')}` : ''}.`
+      : (paths.length ? `Alterado: ${paths.join(', ')}.` : 'Nenhuma chave alterada.');
+    return configurationReleaseService.activate(db, {
+      profileId: profile.profileId,
+      settings,
+      actorId,
+      impactSummary,
+      rollbackTargetId,
+      baseline: stored ? {
+        settings: settingsOf(stored),
+        approvedBy: stored.lastUpdatedBy || 'SYSTEM',
+        since: stored.lastUpdatedAt instanceof Date ? stored.lastUpdatedAt : undefined,
+      } : null,
+    });
+  }
+
+  /** RF014 AC4: this environment's releases, newest first. */
+  async listReleases(db, { limit = 50 } = {}) {
+    const profile = await this.securityProfile(db);
+    return configurationReleaseService.listReleases(db, profile.profileId, { limit });
+  }
+
+  /**
+   * RF014 AC4: governed rollback. Restores an earlier release's settings as
+   * a new release (rollbackTargetId names the one restored), through the
+   * same validation, audit and session revocation as any other change.
+   */
+  async rollbackConfig(db, configurationReleaseId, req) {
+    const profile = await this.securityProfile(db);
+    const target = await configurationReleaseService.rollbackTarget(db, profile.profileId, configurationReleaseId);
+    const currentConfig = await this.getConfig(db);
+    return this.updateConfig(db, target.settings, currentConfig, req, { rollbackTargetId: target.configurationReleaseId });
+  }
+
+  /**
    * Detecta mudanças entre configurações antigas e novas
    */
   detectChanges(oldConfig, newConfig) {
@@ -613,7 +728,10 @@ class SecurityService {
     const compareObjects = (oldObj, newObj, path = '') => {
       for (const key in newObj) {
         const currentPath = path ? `${path}.${key}` : key;
-        
+        // A server-owned object (effectivePeriod) is skipped whole: the page
+        // echoes it back as strings, and its parts are not policy.
+        if (!path && SERVER_OWNED_KEYS.includes(key)) continue;
+
         if (typeof newObj[key] === 'object' && newObj[key] !== null && !Array.isArray(newObj[key]) && !(newObj[key] instanceof Date)) {
           if (oldObj[key]) {
             compareObjects(oldObj[key], newObj[key], currentPath);

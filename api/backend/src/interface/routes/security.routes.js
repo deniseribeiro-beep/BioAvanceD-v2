@@ -70,9 +70,73 @@ router.put('/config', async (req, res) => {
     });
   } catch (error) {
     logger.error('Erro ao atualizar configurações de segurança:', error.message);
-    return res.status(400).json({
+    // A ConfigurationReleaseError carries its status (409: another change
+    // was activated first); anything else is a refused configuration.
+    return res.status(error.statusCode || 400).json({
       success: false,
       error: (req.t && req.t('security.updateConfigError')) || 'Erro ao atualizar configurações de segurança',
+      message: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/security/config/releases
+ * RF014 AC4: the ConfigurationRelease history of this environment's
+ * security configuration, newest first.
+ */
+router.get('/config/releases', async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({
+        success: false,
+        error: (req.t && req.t('errors.databaseUnavailable')) || 'Banco de dados não disponível'
+      });
+    }
+    const requested = Number.parseInt(req.query.limit, 10);
+    const limit = Number.isInteger(requested) && requested > 0 ? Math.min(requested, 200) : 50;
+    const releases = await securityService.listReleases(db, { limit });
+    return res.status(200).json({ success: true, data: releases });
+  } catch (error) {
+    logger.error('Erro ao listar releases de configuração:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: 'Erro ao listar releases de configuração',
+      message: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/security/config/rollback
+ * RF014 AC4: governed rollback to an earlier release, recorded as a new
+ * release. Body: { configurationReleaseId }.
+ */
+router.post('/config/rollback', async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({
+        success: false,
+        error: (req.t && req.t('errors.databaseUnavailable')) || 'Banco de dados não disponível'
+      });
+    }
+    const { configurationReleaseId } = req.body || {};
+    if (!configurationReleaseId || typeof configurationReleaseId !== 'string') {
+      return res.status(400).json({ success: false, error: 'configurationReleaseId é obrigatório' });
+    }
+    const updatedConfig = await securityService.rollbackConfig(db, configurationReleaseId, req);
+    return res.status(200).json({
+      success: true,
+      message: 'Configuração revertida para a release solicitada',
+      data: updatedConfig
+    });
+  } catch (error) {
+    logger.error('Erro ao reverter configuração de segurança:', error.message);
+    return res.status(error.statusCode || 400).json({
+      success: false,
+      error: 'Erro ao reverter configuração de segurança',
       message: error.message
     });
   }

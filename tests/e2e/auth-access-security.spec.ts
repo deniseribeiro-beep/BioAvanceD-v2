@@ -730,6 +730,42 @@ test.describe('Security policy management (RF014) — real backend', () => {
       expect(updated.configVersion).toBe(originalVersion + 1);
       expect(updated.lastUpdatedBy).toBeTruthy();
 
+      // RF014 AC2 — the update is a new, active ConfigurationRelease, and the
+      // release it replaced is kept, superseded, with its settings intact.
+      const history = await request.get(`${apiBaseURL}/api/security/config/releases`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+      });
+      expect(history.ok(), await history.text()).toBeTruthy();
+      const releases = (await history.json()).data;
+      expect(releases[0].configurationReleaseId).toBe(updated.configurationReleaseId);
+      expect(releases[0].status).toBe('active');
+      expect(releases[0].settings.session.timeoutMinutes).toBe(45);
+      const previous = releases[1];
+      expect(previous.status).toBe('superseded');
+      expect(previous.configurationReleaseId).toBe(releases[0].supersedesId);
+      expect(previous.settings.session.timeoutMinutes).toBe(originalConfig.session.timeoutMinutes);
+
+      // RF014 AC4 — a governed rollback restores the previous settings as a
+      // new release naming the one it restores; the active one is refused.
+      const refused = await request.post(`${apiBaseURL}/api/security/config/rollback`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+        data: { configurationReleaseId: updated.configurationReleaseId },
+      });
+      expect(refused.status()).toBe(409);
+      const rollback = await request.post(`${apiBaseURL}/api/security/config/rollback`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+        data: { configurationReleaseId: previous.configurationReleaseId },
+      });
+      expect(rollback.ok(), await rollback.text()).toBeTruthy();
+      const restored = (await rollback.json()).data;
+      expect(restored.session.timeoutMinutes).toBe(originalConfig.session.timeoutMinutes);
+      expect(restored.authentication.requireMFA).toBe(originalConfig.authentication.requireMFA);
+      const afterRollback = (await (await request.get(`${apiBaseURL}/api/security/config/releases`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+      })).json()).data;
+      expect(afterRollback[0].configurationReleaseId).toBe(restored.configurationReleaseId);
+      expect(afterRollback[0].rollbackTargetId).toBe(previous.configurationReleaseId);
+
       // Criterion 7 — the change is registered as a critical AuditEvent.
       // requireMFA is one of security.service.js's own criticalPaths, so
       // this isn't just "some audit event fired" (assertAuditEventRecorded

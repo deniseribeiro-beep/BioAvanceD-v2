@@ -7,8 +7,8 @@
 // canonical-dictionary/v2.js's own header) names the canonical
 // field for every entity, and nothing in the repo compared those names
 // against the shape the runtime code actually produces. This is that
-// comparison, for 18 entities: SecurityConfiguration (a service singleton's
-// getDefaultConfig()) plus 17 models exposing a pure `static fieldsOf(data =
+// comparison, for 21 entities: SecurityConfiguration (a service singleton's
+// getDefaultConfig()) plus 20 models exposing a pure `static fieldsOf(data =
 // {})`. It must stay green while recording every drift it finds explicitly,
 // in KNOWN_DRIFT -- both a new, undeclared drift and a KNOWN_DRIFT entry that
 // no longer matches reality are failures (see diffEntity below for how the
@@ -49,6 +49,9 @@ const ENTITY_TARGETS = {
   SecurityConfiguration: () => require('../../src/services/security.service').getDefaultConfig(),
   AllergyIntolerance: () => require('../../src/models/AllergyIntolerance').fieldsOf(),
   ClinicalObservation: () => require('../../src/models/ClinicalObservation').fieldsOf(),
+  ConfigurationChangeEvent: () => require('../../src/models/ConfigurationChangeEvent').fieldsOf(),
+  ConfigurationProfile: () => require('../../src/models/ConfigurationProfile').fieldsOf(),
+  ConfigurationRelease: () => require('../../src/models/ConfigurationRelease').fieldsOf(),
   ClinicalOutcome: () => require('../../src/models/ClinicalOutcome').fieldsOf(),
   Condition: () => require('../../src/models/Condition').fieldsOf(),
   DerivedScore: () => require('../../src/models/DerivedScore').fieldsOf(),
@@ -79,21 +82,12 @@ const ENTITY_TARGETS = {
 // `extra` entries are code keys with no canonical counterpart.
 const KNOWN_DRIFT = {
   SecurityConfiguration: {
-    absent: [
-      {
-        elementId: 'P1X-0276', field: 'securityConfigId',
-        note: "TODO(#967): 1..1 Core -- getDefaultConfig() carries no id field; the collection's Mongo _id: 'main' plays that role only at the persistence layer (security.service.js#getConfig), never in the object this test inspects."
-      },
-      {
-        elementId: 'P1X-0277', field: 'environment',
-        note: 'TODO(#967): 1..1 Core -- catalog wants an environment discriminator (e.g. prod/staging); getDefaultConfig() emits none.'
-      },
-      {
-        elementId: 'P1X-0324', field: 'effectivePeriod',
-        note: 'TODO(#967): 0..1 Essencial -- not emitted.'
-      }
-    ],
+    absent: [],
     extra: [
+      {
+        key: 'configurationReleaseId',
+        note: "v2.0.0 CFG-004: every execution or decision records the configurationReleaseId it ran under. SecurityConfiguration's 49 rows carry over from v1.3.0 and name no release field, so the active release's id sits beside them."
+      },
       {
         key: 'passwordRules.minLengthWithMFA',
         note: '#1257: deliberate. NIST SP 800-63B-4 section 3.1.1.2 sets two length floors, 15 for a password used as a single factor and 8 for one used with MFA, and dict-02 has one minLength (P1X-0284), which carries the single-factor floor. The MFA floor has no canonical row.'
