@@ -115,7 +115,7 @@ describe('#1095/#1119: HTTP machine-ingest rejections are audited, with the righ
     expect(row.payload.reason).toBe('unknown_sensor');
   });
 
-  it('#1120: the temperature sibling records invalid_payload on a model-validation 400', async () => {
+  it('#1120: the temperature sibling records invalid_payload on a model-validation 422', async () => {
     app.locals.db = createDbMock({
       sensors: createCollectionMock({
         findOne: vi.fn().mockResolvedValue({ sensorId: 'sensor-1', organizationId: null }),
@@ -127,7 +127,7 @@ describe('#1095/#1119: HTTP machine-ingest rejections are audited, with the righ
       .set('x-telemetry-ingest-secret', INGEST_SECRET)
       .send({ sensorId: 'sensor-1', temperatureValue: 'warm' });
 
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(422);
     await flushAudit();
     const row = soleRow();
 
