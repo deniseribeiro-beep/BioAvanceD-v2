@@ -212,7 +212,7 @@ describe('intake-wizard governance write path (real wrapper + real inner router 
   it('persists specimenStatus="available" and records no QuarantineAction when consent is active and quality allows release', async () => {
     const samplesCollection = {
       insertOne: vi.fn().mockResolvedValue({ insertedId: 'sample-1' }),
-      findOne: vi.fn().mockResolvedValue({ _id: 'sample-1', specimenId: 'spec-1', participantId: '12345678', lifecycleStatus: 'AVAILABLE' }),
+      findOne: vi.fn().mockResolvedValue({ _id: 'sample-1', specimenId: 'spec-1', participantId: '12345678', specimenStatus: 'available' }),
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
     };
     const quarantineActionsCollection = buildQuarantineActionsCollection();
@@ -236,7 +236,7 @@ describe('intake-wizard governance write path (real wrapper + real inner router 
   it('persists specimenStatus="quarantined" and records a QuarantineAction when consent is not active (governance-blocked create)', async () => {
     const samplesCollection = {
       insertOne: vi.fn().mockResolvedValue({ insertedId: 'sample-1' }),
-      findOne: vi.fn().mockResolvedValue({ _id: 'sample-1', specimenId: 'spec-1', participantId: '12345678', lifecycleStatus: 'BLOCKED' }),
+      findOne: vi.fn().mockResolvedValue({ _id: 'sample-1', specimenId: 'spec-1', participantId: '12345678', specimenStatus: 'available' }),
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
     };
     const quarantineActionsCollection = buildQuarantineActionsCollection();

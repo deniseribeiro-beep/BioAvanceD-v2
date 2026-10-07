@@ -63,10 +63,19 @@ describe('GET /api/analysis-files/validate/:sampleIdentifier', () => {
   });
 
   it('returns eligible: true when sample passes validation', async () => {
+    // The shape validateUploadEligibility returns on success.
     vi.spyOn(analysisValidationService, 'validateUploadEligibility').mockResolvedValue({
       success: true,
-      sample: { sampleID: 'SMP-001' },
-      patient: { patientID: 'PAT-001' },
+      eligible: true,
+      sample: {
+        _id: '507f1f77bcf86cd799439011',
+        specimenId: 'SMP-001',
+        barcode: 'BC-001',
+        participantId: '12345678',
+        sampleType: 'blood',
+        specimenStatus: 'available',
+      },
+      patient: { participantId: '12345678', consentStatus: 'ACTIVE', consentAcceptedAt: null },
     });
 
     const res = await request(app)
