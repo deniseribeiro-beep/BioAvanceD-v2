@@ -319,7 +319,8 @@ describe('BatchValidationEngine.buildPatientLinkageQuery', () => {
   it('builds criteria in participantId, cpf, recordNumber, _id order', () => {
     const criteria = engine.buildPatientLinkageQuery(
       {},
-      { patientID: '12345678', cpf: '12345678901', recordNumber: '42', _id: '507f1f77bcf86cd799439011' }
+      // patientData is parsePatientRow's output, which names the id participantId.
+      { participantId: '12345678', cpf: '12345678901', recordNumber: '42', _id: '507f1f77bcf86cd799439011' }
     );
 
     expect(criteria[0]).toEqual({ participantId: '12345678' });
@@ -359,8 +360,8 @@ describe('BatchValidationEngine.buildBiomarkerObservationPayloads', () => {
   it('returns a payload per valid biomarker field', () => {
     const { payloads, warnings } = engine.buildBiomarkerObservationPayloads(
       { biomarkers: 'alphaGal:12.5,lysoGb3:4.2' },
-      { patientID: 'P1', _id: 'patient-1' },
-      { sampleID: 'S1', _id: 'sample-1' }
+      { participantId: '12345678', _id: 'patient-1' },
+      { specimenId: 'S1', _id: 'sample-1' }
     );
 
     expect(payloads).toHaveLength(2);
@@ -399,15 +400,28 @@ describe('BatchValidationEngine.buildBiomarkerObservationPayloads', () => {
     expect(warnings).toEqual(['Biomarcador alphaGal foi ignorado por não informar valor.']);
   });
 
-  it('falls back through specimen sampleId/barcode and patient rawRow.patientID identifiers', () => {
+  // The patient is the one persistSample linked or created, and the specimen
+  // is createSample's return, so the ids come from their canonical fields; a
+  // patientID column on the row is only a linkage input.
+  it('takes the participantId from the linked patient and the specimenId from the created specimen', () => {
     const { payloads } = engine.buildBiomarkerObservationPayloads(
-      { patientID: 'raw-patient-id', biomarkers: 'alphaGal:1' },
-      {},
-      { sampleId: 'specimen-sample-id' }
+      { patientID: '99999999', biomarkers: 'alphaGal:1' },
+      { participantId: '12345678', _id: 'patient-1' },
+      { specimenId: 'BR-2026-000001', _id: 'sample-1' }
     );
 
-    expect(payloads[0].patientID).toBe('raw-patient-id');
-    expect(payloads[0].sampleID).toBe('specimen-sample-id');
+    expect(payloads[0].participantId).toBe('12345678');
+    expect(payloads[0].specimenId).toBe('BR-2026-000001');
+  });
+
+  it('falls back to the specimen _id when it carries no specimenId', () => {
+    const { payloads } = engine.buildBiomarkerObservationPayloads(
+      { biomarkers: 'alphaGal:1' },
+      { participantId: '12345678' },
+      { _id: 'sample-1' }
+    );
+
+    expect(payloads[0].specimenId).toBe('sample-1');
   });
 
   it('falls back to specimen.barcode when no other specimen identifier is present', () => {

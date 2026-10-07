@@ -84,6 +84,20 @@ describe('batch-validation-engine.service#buildSampleRow', () => {
     });
   });
 
+  // The #767 failure mode on the participant column: `patientid` mapped onto
+  // `patientID`, and parseSampleRow reads only `participantId`, so the id
+  // never reached the sample whichever header the file used.
+  it('maps every participant id header onto the field parseSampleRow actually reads', () => {
+    const importLGPDService = require('../../src/services/import-lgpd.service');
+
+    ['participantId', 'patientID', 'patient_id'].forEach((header) => {
+      const mapped = batchValidationEngine.buildSampleRow({ [header]: '12345678', sampleType: 'Sangue' });
+      const parsed = importLGPDService.parseSampleRow(mapped);
+
+      expect(parsed.participantId, `header: ${header}`).toBe('12345678');
+    });
+  });
+
   // #525: `locationid`/`idlocalizacao` headers used to map onto a
   // `locationID` field that import-lgpd.service.js#parseSampleRow never
   // reads (#459/#462 dropped the legacy field from runtime persistence in
@@ -119,7 +133,7 @@ describe('batch-validation-engine.service', () => {
   it('reutiliza paciente existente e persiste specimen e biomarcadores vinculados', async () => {
     const patient = {
       _id: 'patient-object-id-1',
-      patientID: '12345678',
+      participantId: '12345678',
       cpf: '12345678901',
       recordNumber: 'RN-001',
     };
@@ -132,7 +146,7 @@ describe('batch-validation-engine.service', () => {
     const createPatientSpy = vi.spyOn(patientService, 'createPatient');
     const createSampleSpy = vi.spyOn(sampleService, 'createSample').mockResolvedValue({
       _id: 'sample-object-id-1',
-      sampleID: 'sample-001',
+      specimenId: 'BR-2026-000001',
     });
     const createObservationSpy = vi.spyOn(biomarkerObservationService, 'createObservation').mockResolvedValue({
       _id: 'observation-object-id-1',
@@ -164,10 +178,13 @@ describe('batch-validation-engine.service', () => {
 
     expect(createPatientSpy).not.toHaveBeenCalled();
     expect(createSampleSpy).toHaveBeenCalledTimes(1);
+    // createSample and createObservation both refuse a payload without
+    // participantId (Sample.validate, BiomarkerObservation.validate), so the
+    // linked patient's id has to reach them under that name.
     expect(createSampleSpy).toHaveBeenCalledWith(
       db,
       expect.objectContaining({
-        patientID: '12345678',
+        participantId: '12345678',
         patientObjectId: 'patient-object-id-1',
       }),
       expect.objectContaining({
@@ -179,8 +196,9 @@ describe('batch-validation-engine.service', () => {
     expect(createObservationSpy).toHaveBeenCalledWith(
       db,
       expect.objectContaining({
-        patientID: '12345678',
+        participantId: '12345678',
         patientObjectId: 'patient-object-id-1',
+        specimenId: 'BR-2026-000001',
         specimenObjectId: 'sample-object-id-1',
         linkedResourceId: 'patient-object-id-1',
       })
@@ -199,11 +217,11 @@ describe('batch-validation-engine.service', () => {
 
     const createPatientSpy = vi.spyOn(patientService, 'createPatient').mockResolvedValue({
       _id: 'patient-object-id-2',
-      patientID: '87654321',
+      participantId: '87654321',
     });
     const createSampleSpy = vi.spyOn(sampleService, 'createSample').mockResolvedValue({
       _id: 'sample-object-id-2',
-      sampleID: 'sample-002',
+      specimenId: 'BR-2026-000002',
     });
     const createObservationSpy = vi.spyOn(biomarkerObservationService, 'createObservation').mockResolvedValue({
       _id: 'observation-object-id-2',
@@ -230,7 +248,18 @@ describe('batch-validation-engine.service', () => {
 
     expect(createPatientSpy).toHaveBeenCalledTimes(1);
     expect(createSampleSpy).toHaveBeenCalledTimes(1);
+    // The row carries no id; the participantId createPatient generated is the
+    // one the specimen and the observation are recorded against.
+    expect(createSampleSpy).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({ participantId: '87654321' }),
+      expect.anything()
+    );
     expect(createObservationSpy).toHaveBeenCalledTimes(1);
+    expect(createObservationSpy).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({ participantId: '87654321', specimenId: 'BR-2026-000002' })
+    );
     expect(result.classification).toBe('PARTIAL');
     expect(result.persistedIds).toContain('patient-object-id-2');
     expect(result.persistedIds).toContain('sample-object-id-2');
@@ -282,10 +311,43 @@ describe('batch-validation-engine.service', () => {
     expect(result.errors[0]).toMatch(/Paciente não encontrado/);
   });
 
+  it('links an existing patient from a participantId column, the header the import template uses', async () => {
+    const db = createDb({
+      patientID: '12345678',
+      patient: { _id: 'patient-object-id-6', participantId: '12345678' },
+    });
+    const createPatientSpy = vi.spyOn(patientService, 'createPatient');
+    const createSampleSpy = vi.spyOn(sampleService, 'createSample').mockResolvedValue({
+      _id: 'sample-object-id-6',
+      specimenId: 'BR-2026-000006',
+    });
+
+    const result = await batchValidationEngine.persistSample(
+      db,
+      {
+        participantId: '12345678',
+        sampleType: 'Sangue',
+        sampleOrigin: 'Coleta',
+        quantity: '1',
+      },
+      10
+    );
+
+    expect(db.collection('patients').findOne).toHaveBeenCalledWith({ participantId: '12345678' });
+    expect(createPatientSpy).not.toHaveBeenCalled();
+    expect(createSampleSpy).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({ participantId: '12345678', patientObjectId: 'patient-object-id-6' }),
+      expect.anything()
+    );
+    expect(result.classification).not.toBe('INVALID');
+    expect(result.persistedIds).toContain('sample-object-id-6');
+  });
+
   it('returns INVALID with the thrown error message when createSample rejects', async () => {
     const db = createDb({
       patientID: '12345678',
-      patient: { _id: 'patient-object-id-3', patientID: '12345678' },
+      patient: { _id: 'patient-object-id-3', participantId: '12345678' },
     });
 
     vi.spyOn(sampleService, 'createSample').mockRejectedValue(new Error('storage collision'));
@@ -308,7 +370,7 @@ describe('batch-validation-engine.service', () => {
   it('returns INVALID with a fallback message when the persist step throws a non-Error value', async () => {
     const db = createDb({
       patientID: '12345678',
-      patient: { _id: 'patient-object-id-4', patientID: '12345678' },
+      patient: { _id: 'patient-object-id-4', participantId: '12345678' },
     });
 
     vi.spyOn(sampleService, 'createSample').mockRejectedValue('a plain string rejection');
@@ -624,7 +686,7 @@ describe('batch-validation-engine.service processBatchImport', () => {
     vi.spyOn(StagingImport, 'updateOne').mockResolvedValue({});
     const db = createDb({
       patientID: '12345678',
-      patient: { _id: 'patient-object-id-5', patientID: '12345678' },
+      patient: { _id: 'patient-object-id-5', participantId: '12345678' },
     });
     vi.spyOn(sampleService, 'createSample').mockResolvedValue({ _id: 'sample-object-id-5' });
 
