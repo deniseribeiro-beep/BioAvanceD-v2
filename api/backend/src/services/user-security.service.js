@@ -3,6 +3,7 @@ const speakeasy = require('speakeasy');
 const logger = require('../utils/logger');
 const { ObjectId } = require('mongodb');
 const { hashToken } = require('../utils/tokenHash');
+const RecoveryCodeSetModel = require('../models/RecoveryCodeSet');
 
 /**
  * Service de Segurança do Usuário
@@ -529,18 +530,18 @@ class UserSecurityService {
         codes.map(code => bcrypt.hash(code, 10))
       );
       
-      // Remove códigos antigos e salva novos
+      // Remove códigos antigos e salva novos. The owner goes in the filter,
+      // so the upsert writes it; $set carries the rest of the set's shape.
+      const now = new Date();
+      const { userID: owner, ...set } = RecoveryCodeSetModel.fieldsOf({
+        userID: new ObjectId(userID),
+        codes: hashedCodes,
+        createdAt: now,
+        updatedAt: now
+      });
       await recoveryCodesCollection.updateOne(
-        { userID: new ObjectId(userID) },
-        {
-          $set: {
-            codes: hashedCodes,
-            remaining: 10,
-            usedCodes: [],
-            createdAt: new Date(),
-            updatedAt: new Date()
-          }
-        },
+        { userID: owner },
+        { $set: set },
         { upsert: true }
       );
       

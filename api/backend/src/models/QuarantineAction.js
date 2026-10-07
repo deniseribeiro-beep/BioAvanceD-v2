@@ -32,6 +32,8 @@ class QuarantineActionModel {
       reasonCodes: Array.isArray(data.reasonCodes) ? data.reasonCodes : [],
       actionStatus: data.actionStatus ? String(data.actionStatus).toLowerCase() : 'active',
       authorizedBy: data.authorizedBy ?? null,
+      startedAt: data.startedAt ? new Date(data.startedAt) : null,
+      releasedAt: data.releasedAt ? new Date(data.releasedAt) : null,
     };
   }
 
@@ -46,8 +48,7 @@ class QuarantineActionModel {
     const now = new Date();
     return {
       ...fields,
-      startedAt: data.startedAt ? new Date(data.startedAt) : now,
-      releasedAt: data.releasedAt ? new Date(data.releasedAt) : null,
+      startedAt: fields.startedAt || now,
       createdAt: now,
     };
   }

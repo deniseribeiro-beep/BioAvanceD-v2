@@ -113,7 +113,10 @@ class UserModel {
     };
   }
 
-  static create(data) {
+  // The stored user document's shape, pure: timestamps come from `data` or
+  // stay null, and create() fills them. The catalog conformance guard reads
+  // this to compare the document with dict-02 UserAccount (P1X-0182..0208).
+  static fieldsOf(data = {}) {
     return {
       name: data.name,
       email: data.email,
@@ -134,11 +137,11 @@ class UserModel {
       // (dict-02 P1X-0194), so a chosen one could make this user's rows read
       // as another's.
       anonId: null,
-      createdAt: new Date(),
-      updatedAt: new Date(),
+      createdAt: null,
+      updatedAt: null,
       lastLogin: null,
       passwordHistory: Array.isArray(data.passwordHistory) ? data.passwordHistory : [],
-      passwordChangedAt: data.passwordChangedAt || new Date(),
+      passwordChangedAt: data.passwordChangedAt || null,
       forceReset: data.forceReset || false,
       failedLoginAttempts: data.failedLoginAttempts || 0,
       // #952 / #985: a LOCAL EXTENSION of UserAccount, not a dictionary
@@ -153,6 +156,16 @@ class UserModel {
       roleValidFrom: data.roleValidFrom ? new Date(data.roleValidFrom) : null,
       roleValidUntil: data.roleValidUntil ? new Date(data.roleValidUntil) : null,
       organizationIds: Array.isArray(data.organizationIds) ? data.organizationIds : []
+    };
+  }
+
+  static create(data) {
+    const fields = this.fieldsOf(data);
+    return {
+      ...fields,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      passwordChangedAt: fields.passwordChangedAt || new Date()
     };
   }
 
