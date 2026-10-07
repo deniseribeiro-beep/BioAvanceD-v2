@@ -52,6 +52,7 @@ vi.spyOn(auditV2Service, 'createTreeHead').mockResolvedValue({ status: 'ok' });
 vi.spyOn(logger, 'info').mockImplementation(() => {});
 vi.spyOn(logger, 'warn').mockImplementation(() => {});
 vi.spyOn(logger, 'error').mockImplementation(() => {});
+const { createFakeDb } = require('./foundation/helpers/fake-db');
 
 // Single require: this is where the module's top-level auto scheduleNextRun() fires,
 // captured harmlessly by fake timers (see the dedicated test below for that assertion).
@@ -180,6 +181,24 @@ describe('daily-merkle.job', () => {
       expect(auditV2Service.createTreeHead).toHaveBeenCalledWith(
         expect.objectContaining({ logId: 'audit-2026-07-01', previousTreeHeadHash: 'priorhash' }),
         expect.anything()
+      );
+    });
+
+    // #841: makeFakeDb hands back its heads whatever sort it gets, so it
+    // cannot tell the largest tree from the first one stored. This store
+    // sorts, and holds the log's heads out of order beside another log's.
+    it('carries forward the largest tree head among heads stored out of order', async () => {
+      const db = createFakeDb();
+      const heads = db.collection('audit_tree_heads');
+      for (const [logId, treeSize] of [['audit-2026-07-01', 2], ['audit-2026-07-01', 5], ['audit-2026-07-01', 1], ['audit-2026-06-30', 9]]) {
+        await heads.insertOne({ logId, treeSize, rootHash: `${logId}-root-${treeSize}` });
+      }
+
+      await job.anchorDate(db, '2026-07-01');
+
+      expect(auditV2Service.createTreeHead).toHaveBeenCalledWith(
+        expect.objectContaining({ logId: 'audit-2026-07-01', previousTreeHeadHash: 'audit-2026-07-01-root-5' }),
+        db
       );
     });
   });

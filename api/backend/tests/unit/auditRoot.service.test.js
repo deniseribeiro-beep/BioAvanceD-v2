@@ -18,6 +18,7 @@ vi.spyOn(logger, 'warn').mockImplementation(() => {});
 vi.spyOn(logger, 'error').mockImplementation(() => {});
 
 const auditRootService = require('../../src/services/auditRoot.service');
+const { createFakeDb } = require('./foundation/helpers/fake-db');
 
 function makeCollection(overrides = {}) {
   return {
@@ -146,6 +147,23 @@ describe('auditRoot.service', () => {
       const [, update] = coll.updateOne.mock.calls[0];
       expect(update.$setOnInsert.chainIndex).toBe(4);
       expect(update.$setOnInsert.previousRootHash).toBe('prev-root');
+    });
+
+    // #841: the stub above hands back its one root whatever sort it gets, so
+    // it cannot tell the chain's last element from the first one stored.
+    // This store sorts, and holds the roots out of order.
+    it('chains off the highest chainIndex among roots stored out of order', async () => {
+      const db = createFakeDb();
+      const roots = db.collection('audit_roots');
+      for (const chainIndex of [1, 3, 0, 2]) {
+        await roots.insertOne({ date: `2026-06-0${chainIndex + 1}`, root: `root-${chainIndex}`, chainIndex });
+      }
+
+      await auditRootService.saveDailyRoot({ date: '2026-07-02', root: 'root-hash-2', db });
+
+      const saved = await roots.findOne({ date: '2026-07-02' });
+      expect(saved.chainIndex).toBe(4);
+      expect(saved.previousRootHash).toBe('root-3');
     });
 
     it('marks the timestamp FAILED with the verification reason when RFC3161 verification does not confirm', async () => {

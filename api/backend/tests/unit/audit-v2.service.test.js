@@ -29,6 +29,7 @@ vi.spyOn(tsa, 'requestTimestamp').mockResolvedValue({
 vi.spyOn(witness, 'publish').mockResolvedValue({ status: 'UNAVAILABLE', reason: 'not_attempted' });
 
 const auditV2Service = require('../../src/services/audit-v2.service');
+const { createFakeDb } = require('./foundation/helpers/fake-db');
 
 function makeCollection(overrides = {}) {
   return {
@@ -133,6 +134,40 @@ describe('audit-v2.service', () => {
       expect(result.treeSize).toBe(2);
       expect(mongo.connectDB).not.toHaveBeenCalled();
       expect(mongo.closeConnection).not.toHaveBeenCalled();
+    });
+
+    // #841: the stub above returns its one event whatever sort it is handed,
+    // so it cannot tell "the latest event" from "the first one stored". This
+    // store sorts, and holds the log's events out of order beside another
+    // log's higher sequence.
+    it('chains off the log\'s highest sequenceNumber, not the first event stored', async () => {
+      const db = createFakeDb();
+      const events = db.collection('audit_events');
+      const stored = (logId, sequenceNumber) => ({
+        logId,
+        sequenceNumber,
+        eventHash: `${logId}-hash-${sequenceNumber}`,
+        canonicalLeaf: { eventId: `${logId}-${sequenceNumber}`, logId, sequenceNumber },
+      });
+      for (const doc of [stored('log-1', 2), stored('log-1', 3), stored('log-1', 1), stored('log-2', 9)]) {
+        await events.insertOne(doc);
+      }
+
+      const result = await auditV2Service.createEvent({
+        logId: 'log-1',
+        occurredAt: '2026-01-03T00:00:00.000Z',
+        recordedAt: '2026-01-03T00:00:00.000Z',
+        actorPseudonym: 'user-1',
+        action: 'UPDATE',
+        entityType: 'Patient',
+        entityId: 'p-1',
+        result: 'success',
+        source: 'backend',
+        correlationId: 'corr-3',
+      }, db);
+
+      expect(result.sequenceNumber).toBe(4);
+      expect(result.previousEventHash).toBe('log-1-hash-3');
     });
   });
 
