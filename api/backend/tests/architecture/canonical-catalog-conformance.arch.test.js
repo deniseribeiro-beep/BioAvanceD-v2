@@ -2,8 +2,9 @@
 // contract here). Do not port to vitest's import/expect: that exact swap
 // caused #375. History: #138, #148, #182, #375, #393.
 //
-// #967: catalog.1.3.0.json (929 elements, generated from dict-02_DICIONARIO.md
-// -- see canonical-dictionary/index.js's own header) names the canonical
+// #967: catalog.2.0.0.json (the approved v2.0.0 release, 1644 elements,
+// generated from docs/extracted-v2.0.0/dict-DICIONARIO.md -- see
+// canonical-dictionary/v2.js's own header) names the canonical
 // field for every entity, and nothing in the repo compared those names
 // against the shape the runtime code actually produces. This is that
 // comparison, for 18 entities: SecurityConfiguration (a service singleton's
@@ -16,7 +17,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { loadCanonicalDictionary } = require('../../src/reference-data/canonical-dictionary');
+const { loadCanonicalDictionary } = require('../../src/reference-data/canonical-dictionary/v2');
 
 // Recurse only into a plain nested object. `null` (`typeof null === 'object'`)
 // and `Date` (`Object.entries(aDate)` is `[]`) both look like "nothing here"
@@ -65,8 +66,12 @@ const ENTITY_TARGETS = {
   UserRoleAssignment: () => require('../../src/models/UserRoleAssignment').fieldsOf(),
 };
 
-// Drift measured against catalog.1.3.0.json, 2026-09-02, via loadCanonicalDictionary()
-// and each ENTITY_TARGETS entry above. Every entry carries TODO(#967) and a
+// Drift measured against catalog.1.3.0.json, 2026-09-02, and re-measured
+// against catalog.2.0.0.json, 2026-10-07, via loadCanonicalDictionary() and
+// each ENTITY_TARGETS entry above. The v2.0.0 re-measure changed only
+// RCSAssessment: 16 V2E elements absent, which name the issue that builds
+// them (TODO(#1320)), and two former extras (finalGrade, gradeRoute) that
+// v2.0.0 made canonical. Every other entry carries TODO(#967) and a
 // one-line note of what the drift is, per the issue's own instruction --
 // populated from what running the diff actually produced, not from a list
 // handed down in advance. An entity absent from this table has zero measured
@@ -160,7 +165,7 @@ const KNOWN_DRIFT = {
   },
   RCSAssessment: {
     absent: [
-      { elementId: 'ELM-0160', field: 'rcsGrade', note: 'TODO(#967): 0..1 Core -- not emitted; scoreBasedGrade/finalGrade (both extras below) look like informal predecessors, not renames confirmed against dict-02.' },
+      { elementId: 'ELM-0160', field: 'rcsGrade', note: 'TODO(#967): 0..1 Core -- not emitted; finalGrade is its own v2.0.0 element (V2E-0541), so it is not a rename of this one.' },
       { elementId: 'ELM-0161', field: 'rcsModelVersion', note: 'TODO(#967): 1..1 Core -- code emits modelVersion (extra below), not this canonical name.' },
       { elementId: 'ELM-0162', field: 'sprecRcsMappingVersion', note: 'TODO(#967): 1..1 Core -- not emitted.' },
       { elementId: 'ELM-0163', field: 'rcsAxisResults', note: 'TODO(#967): 0..* Core -- code emits axisPenalties (extra below), not this canonical name.' },
@@ -170,20 +175,34 @@ const KNOWN_DRIFT = {
       { elementId: 'P1X-0060', field: 'rcsAssessmentId', note: 'TODO(#967): 1..1 Core -- RcsAssessmentModel has no id field of its own at all.' },
       { elementId: 'P1X-0062', field: 'sprecProfileId', note: 'TODO(#967): 1..1 Core -- not emitted; no reference back to the SpecimenPreanalytics snapshot this assessment was computed from.' },
       { elementId: 'P1X-0064', field: 'biologicalPenalty', note: 'TODO(#967): 0..1 Condicional -- not emitted.' },
-      { elementId: 'P1X-0066', field: 'decisionRoute', note: 'TODO(#967): 1..1 Core -- code emits gradeRoute (extra below), not this canonical name.' },
+      { elementId: 'P1X-0066', field: 'decisionRoute', note: 'TODO(#967): 1..1 Core -- not emitted; gradeRoute is its own v2.0.0 element (V2E-0542), so it is not a rename of this one.' },
       { elementId: 'P1X-0067', field: 'governanceChecks', note: 'TODO(#967): 1..* Core -- code emits governanceRuleCodes (extra below), not this canonical name.' },
       { elementId: 'P1X-0068', field: 'governanceFailureCodes', note: 'TODO(#967): 0..* Condicional -- code emits governanceFailureReasons (extra below), not this canonical name.' },
       { elementId: 'P1X-0069', field: 'inputSnapshotHash', note: 'TODO(#967): 1..1 Core -- not emitted.' },
       { elementId: 'P1X-0070', field: 'evidenceRefs', note: 'TODO(#967): 0..* Essencial -- not emitted.' },
-      { elementId: 'P1X-0071', field: 'calculationStatus', note: 'TODO(#967): 1..1 Core -- code emits calculationTrace (extra below), a free-form value, not this canonical status field.' }
+      { elementId: 'P1X-0071', field: 'calculationStatus', note: 'TODO(#967): 1..1 Core -- code emits calculationTrace (extra below), a free-form value, not this canonical status field.' },
+      { elementId: 'V2E-0439', field: 'qualificationContext', note: 'TODO(#1320): 1..1 Core -- v2.0.0 element (added), not emitted; RCS v4 builds it.' },
+      { elementId: 'V2E-0440', field: 'intendedUseCode', note: 'TODO(#1320): 1..1 Core -- v2.0.0 element (added), not emitted; RCS v4 builds it.' },
+      { elementId: 'V2E-0441', field: 'targetAnalyte', note: 'TODO(#1320): 1..1 Core -- v2.0.0 element (added), not emitted; RCS v4 builds it.' },
+      { elementId: 'V2E-0442', field: 'assayFamily', note: 'TODO(#1320): 1..1 Core -- v2.0.0 element (added), not emitted; RCS v4 builds it.' },
+      { elementId: 'V2E-0443', field: 'workflowProtocolId', note: 'TODO(#1320): 1..1 Core -- v2.0.0 element (added), not emitted; RCS v4 builds it.' },
+      { elementId: 'V2E-0444', field: 'workflowProtocolVersion', note: 'TODO(#1320): 1..1 Core -- v2.0.0 element (added), not emitted; RCS v4 builds it.' },
+      { elementId: 'V2E-0445', field: 'rulePackageVersion', note: 'TODO(#1320): 1..1 Core -- v2.0.0 element (added), not emitted; RCS v4 builds it.' },
+      { elementId: 'V2E-0446', field: 'rulePackageChecksum', note: 'TODO(#1320): 1..1 Core -- v2.0.0 element (added), not emitted; RCS v4 builds it.' },
+      { elementId: 'V2E-0447', field: 'inputSnapshotUri', note: 'TODO(#1320): 1..1 Core -- v2.0.0 element (added), not emitted; RCS v4 builds it.' },
+      { elementId: 'V2E-0448', field: 'sprecVersion', note: 'TODO(#1320): 1..1 Core -- v2.0.0 element (added), not emitted; RCS v4 builds it.' },
+      { elementId: 'V2E-0449', field: 'executionEnvironment', note: 'TODO(#1320): 1..1 Core -- v2.0.0 element (added), not emitted; RCS v4 builds it.' },
+      { elementId: 'V2E-0450', field: 'justifications', note: 'TODO(#1320): 1..* Core -- v2.0.0 element (added), not emitted; RCS v4 builds it.' },
+      { elementId: 'V2E-0538', field: 'inputSnapshotId', note: 'TODO(#1320): 1..1 Core -- v2.0.0 element (added), not emitted; RCS v4 builds it.' },
+      { elementId: 'V2E-0539', field: 'preanalyticalPenalty', note: 'TODO(#1320): 0..1 Conditional -- v2.0.0 element (added), not emitted; RCS v4 builds it.' },
+      { elementId: 'V2E-0540', field: 'score', note: 'TODO(#1320): 0..1 Conditional -- v2.0.0 element (added), not emitted; RCS v4 builds it.' },
+      { elementId: 'V2E-0543', field: 'routeReasons', note: 'TODO(#1320): 1..* Core -- v2.0.0 element (added), not emitted; RCS v4 builds it.' }
     ],
     extra: [
       { key: 'modelVersion', note: 'TODO(#967): no canonical counterpart; likely predecessor of rcsModelVersion (ELM-0161, absent above).' },
       { key: 'governanceStatus', note: 'TODO(#967): no canonical counterpart; likely predecessor of governanceGateResult (ELM-0164, absent above).' },
       { key: 'governanceFailureReasons', note: 'TODO(#967): no canonical counterpart; likely predecessor of governanceFailureCodes (P1X-0068, absent above).' },
       { key: 'governanceRuleCodes', note: 'TODO(#967): no canonical counterpart; likely predecessor of governanceChecks (P1X-0067, absent above).' },
-      { key: 'finalGrade', note: 'TODO(#967): no canonical counterpart; likely predecessor of rcsGrade (ELM-0160, absent above).' },
-      { key: 'gradeRoute', note: 'TODO(#967): no canonical counterpart; likely predecessor of decisionRoute (P1X-0066, absent above).' },
       { key: 'axisPenalties', note: 'TODO(#967): no canonical counterpart; likely predecessor of rcsAxisResults (ELM-0163, absent above).' },
       { key: 'calculationTrace', note: 'TODO(#967): no canonical counterpart; free-form trace value, not calculationStatus (P1X-0071, absent above).' }
     ]
@@ -297,7 +316,7 @@ test('#967: canonical catalog fields match the runtime shape ENTITY_TARGETS prod
   assert.deepEqual(
     messages,
     [],
-    'catalog.1.3.0.json field names and the runtime object the code actually '
+    'catalog.2.0.0.json field names and the runtime object the code actually '
       + 'produces disagree, in a way KNOWN_DRIFT does not (yet) account for. '
       + '1..1 Core absences are the serious class -- fix the code, or file the '
       + 'drift as a TODO(#967) KNOWN_DRIFT entry with a one-line note:\n  '
