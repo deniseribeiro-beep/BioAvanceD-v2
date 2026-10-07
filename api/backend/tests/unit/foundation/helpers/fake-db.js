@@ -1,7 +1,9 @@
 // An in-memory stand-in for the native driver's db/collection, with real
 // filter semantics for what the Foundation pipeline issues: exact-key and
-// dotted-path equality, `$in`, upsert with `$setOnInsert` returning the
-// upserted id, sort/limit cursors, counts, deletes and index listing. A
+// dotted-path equality, array membership, `$in`, `$ne`, `$gte`, `$lte`,
+// upsert with `$setOnInsert` returning the upserted id, multi-key
+// sort/skip/limit cursors, a sorted findOne, counts, deletes and index
+// listing. A
 // stub returning canned data would let the pipeline's own queries go
 // unchecked.
 
@@ -11,13 +13,38 @@ function valueAt(doc, path) {
   return path.split('.').reduce((value, key) => (value == null ? undefined : value[key]), doc);
 }
 
+// Equality as the driver applies it: an array field matches when any of its
+// elements does, and Dates compare by time.
+function equals(actual, expected) {
+  if (Array.isArray(actual) && !Array.isArray(expected)) return actual.some((item) => equals(item, expected));
+  if (actual instanceof Date && expected instanceof Date) return +actual === +expected;
+  return actual === expected;
+}
+
+const OPERATORS = {
+  $in: (actual, candidates) => candidates.some((candidate) => equals(actual, candidate)),
+  $ne: (actual, value) => !equals(actual, value),
+  $gte: (actual, bound) => actual != null && actual >= bound,
+  $lte: (actual, bound) => actual != null && actual <= bound,
+};
+
+// An operator this fake does not implement throws rather than matching
+// nothing, so a test cannot pass on a filter it never evaluated.
+function isOperatorObject(expected) {
+  if (!expected || typeof expected !== 'object' || expected instanceof Date || Array.isArray(expected)) return false;
+  const keys = Object.keys(expected);
+  const unknown = keys.filter((key) => key.startsWith('$') && !(key in OPERATORS));
+  if (unknown.length) throw new Error(`fake-db: unsupported filter operator ${unknown.join(', ')}`);
+  return keys.length > 0 && keys.every((key) => key in OPERATORS);
+}
+
 function matches(doc, filter = {}) {
   return Object.entries(filter).every(([path, expected]) => {
     const actual = valueAt(doc, path);
-    if (expected && typeof expected === 'object' && Array.isArray(expected.$in)) {
-      return expected.$in.some((candidate) => candidate === actual);
+    if (isOperatorObject(expected)) {
+      return Object.entries(expected).every(([op, operand]) => OPERATORS[op](actual, operand));
     }
-    return actual === expected;
+    return equals(actual, expected);
   });
 }
 
@@ -94,6 +121,11 @@ function createFakeCollection(name, hooks = {}) {
       docs.push(inserted);
       if (hooks.afterUpsert) await hooks.afterUpsert(inserted);
       return { matchedCount: 0, modifiedCount: 0, upsertedCount: 1, upsertedId: inserted._id };
+    },
+    async updateMany(filter, update) {
+      const hit = docs.filter((doc) => matches(doc, filter));
+      if (update.$set) hit.forEach((doc) => Object.assign(doc, update.$set));
+      return { matchedCount: hit.length, modifiedCount: update.$set ? hit.length : 0 };
     },
     async insertOne(doc) {
       docs.push(doc);
