@@ -6,6 +6,7 @@
 
 const logger = require('../utils/logger');
 const { ObjectId } = require('mongodb');
+const { getCollection } = require('../utils/collectionResolver');
 
 class ComplianceReportService {
   constructor() {
@@ -131,7 +132,9 @@ class ComplianceReportService {
    */
   async _getConsentMetrics(dateFilter) {
     try {
-      const consentsCollection = this.db.collection('patient_consents');
+      // Through the resolver, as the consent writers go: 'patient_consents'
+      // was a collection nothing writes, so every metric here read zero.
+      const consentsCollection = getCollection(this.db, 'consents');
 
       const total = await consentsCollection.countDocuments(dateFilter);
 
