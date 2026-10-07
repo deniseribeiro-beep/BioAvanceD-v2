@@ -18,12 +18,20 @@
  * rateLimit store (module cache is reset by vitest's `isolate: true` +
  * `pool: forks` between files, but not within one file's `describe`
  * blocks without an explicit cache clear).
+ *
+ * #1333: the first cold require of app.js loads the whole module graph
+ * (~2 s alone, measured 1923-2138 ms) and was paid inside the first test's
+ * timeout, more than six times over under a full parallel run. The graph
+ * is now loaded once at file level, as every other integration file does,
+ * so each test re-requires only app.js and env.js (~7 ms) and its budget
+ * covers the requests it proves.
  */
 import { describe, it, expect, afterEach } from 'vitest';
 const request = require('supertest');
 
 const appPath = require.resolve('../../app');
 const envPath = require.resolve('../../src/config/env');
+require('../../app');
 
 function loadAppWithEnv(nodeEnv, { relaxed = false } = {}) {
   delete require.cache[appPath];
@@ -58,12 +66,11 @@ async function postLoginAttempts(app, count) {
 describe('#359: authLimiter budget requires the explicit AUTH_RATE_LIMIT_RELAXED opt-in', () => {
   // #1038: this test measured at 3966ms of the default 5000ms budget (79%)
   // on an idle machine, and timed out under scheduling pressure in a full
-  // 458-file regression run. The duration is INHERENT to what the test
-  // proves: exhausting the strict (non-relaxed) budget requires actually
-  // firing enough real requests to exceed it, so this is real work, not a
-  // sleep to optimise away. 15000ms leaves generous headroom over the
-  // measured cost and matches this repo's convention for slow tests
-  // (see tests/unit/iot.controller.test.js).
+  // 458-file regression run. #1333 found most of that was the cold app
+  // load, now paid at file level (see the header). What remains is
+  // inherent: exhausting the strict budget fires 12 real logins (~70 ms
+  // each), so the 15000ms budget stays as headroom for that work under
+  // load (see tests/unit/iot.controller.test.js).
   it('stays strict under NODE_ENV=development alone, with no explicit opt-in set', async () => {
     const app = loadAppWithEnv('development', { relaxed: false });
 
