@@ -99,6 +99,7 @@ const sendEmailSpy = vi
   .mockResolvedValue();
 
 const incidentController = require('../../src/controllers/incident.controller');
+const { createFakeDb } = require('./foundation/helpers/fake-db');
 
 beforeEach(() => {
   tempCollection.findOne.mockReset();
@@ -343,6 +344,22 @@ describe('incident.controller.getIncidents', () => {
       limit: 50,
       skip: 0,
     });
+  });
+
+  // #1332: the chain above returns whatever it is handed, so it cannot see
+  // the sort. Here the incidents sit, out of order, in a store that sorts.
+  it('pages incidents by opening time, newest first', async () => {
+    const store = createFakeDb().collection('temperatureIncidents');
+    await store.insertOne({ _id: 'mid', openedAt: new Date('2026-02-02') });
+    await store.insertOne({ _id: 'newest', openedAt: new Date('2026-02-03') });
+    await store.insertOne({ _id: 'oldest', openedAt: new Date('2026-02-01') });
+    tempCollection.find.mockImplementation((filter) => store.find(filter));
+    tempCollection.countDocuments.mockImplementation((filter) => store.countDocuments(filter));
+
+    const res = buildRes();
+    await incidentController.getIncidents({ query: { limit: '2', skip: '1' } }, res);
+
+    expect(res.json.mock.calls[0][0].incidents.map((incident) => incident._id)).toEqual(['mid', 'oldest']);
   });
 
   it('honors explicit limit/skip query params, coercing to numbers', async () => {
