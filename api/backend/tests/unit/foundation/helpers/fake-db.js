@@ -21,20 +21,37 @@ function matches(doc, filter = {}) {
   });
 }
 
+// Compares on every key of the spec in order, as the driver does. Runs
+// written in the same millisecond tie on their timestamps; a full tie is
+// broken by insertion order in the first key's direction, so "newest" is
+// the one written last.
+function sortDocs(rows, spec) {
+  const keys = Object.entries(spec);
+  const order = new Map(rows.map((doc, index) => [doc, index]));
+  return [...rows].sort((a, b) => {
+    for (const [key, direction] of keys) {
+      const av = valueAt(a, key);
+      const bv = valueAt(b, key);
+      // A missing field sorts below every value, as null does in BSON order.
+      if (av == null || bv == null) {
+        if (av == null && bv == null) continue;
+        return (av == null ? -1 : 1) * direction;
+      }
+      if (!(+av === +bv || av === bv)) return (av > bv ? 1 : -1) * direction;
+    }
+    return (order.get(a) - order.get(b)) * keys[0][1];
+  });
+}
+
 function cursor(rows) {
   let list = [...rows];
   const api = {
     sort(spec) {
-      const [[key, direction]] = Object.entries(spec);
-      const order = new Map(list.map((doc, index) => [doc, index]));
-      // Runs written in the same millisecond tie on their timestamps; break
-      // the tie by insertion order, so "newest" is the one written last.
-      list.sort((a, b) => {
-        const av = valueAt(a, key);
-        const bv = valueAt(b, key);
-        if (+av === +bv || av === bv) return (order.get(a) - order.get(b)) * direction;
-        return (av > bv ? 1 : -1) * direction;
-      });
+      list = sortDocs(list, spec);
+      return api;
+    },
+    skip(n) {
+      list = list.slice(n);
       return api;
     },
     limit(n) {
@@ -61,8 +78,9 @@ function createFakeCollection(name, hooks = {}) {
     indexes,
     // Reads return copies, as the driver does: a caller holding a read
     // document must not see a later write through it.
-    async findOne(filter = {}) {
-      const doc = docs.find((d) => matches(d, filter));
+    async findOne(filter = {}, options = {}) {
+      const candidates = docs.filter((d) => matches(d, filter));
+      const doc = options.sort ? sortDocs(candidates, options.sort)[0] : candidates[0];
       return doc ? structuredClone(doc) : null;
     },
     async updateOne(filter, update, options = {}) {

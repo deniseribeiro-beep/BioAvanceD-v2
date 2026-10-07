@@ -194,3 +194,21 @@ describe('securityService: saving and rolling back the security configuration (R
     expect(securityService.detectChanges(saved, echoed)).toEqual([]);
   });
 });
+
+describe('configurationRelease.service.activationEventOf', () => {
+  // A release activated, rolled away from and re-activated has two
+  // activation events; a rollback must name the newest one. Stored out of
+  // occurredAt order, so insertion order cannot stand in for the sort.
+  it('returns the newest activation event of the release, ignoring other change types', async () => {
+    const db = createFakeDb();
+    const events = db.collection(CANONICAL_COLLECTIONS.configurationChangeEvents);
+    await events.insertOne({ eventId: 'reactivated', releaseId: 'r1', changeType: 'rolled_back', occurredAt: new Date('2026-03-01') });
+    await events.insertOne({ eventId: 'first', releaseId: 'r1', changeType: 'activated', occurredAt: new Date('2026-01-01') });
+    await events.insertOne({ eventId: 'later-note', releaseId: 'r1', changeType: 'superseded', occurredAt: new Date('2026-04-01') });
+    await events.insertOne({ eventId: 'other-release', releaseId: 'r2', changeType: 'activated', occurredAt: new Date('2026-05-01') });
+
+    const event = await configurationReleaseService.activationEventOf(db, 'r1');
+
+    expect(event.eventId).toBe('reactivated');
+  });
+});
