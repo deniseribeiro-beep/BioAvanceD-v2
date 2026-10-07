@@ -39,10 +39,12 @@ const SensorMetadataSchema = new mongoose.Schema(
 //
 // BOTH are nonetheless enforced now, natively: utils/storageIndexes.js
 // #ensureSensorMetadataIndexes builds sensor_metadata_sensorid_unique_v1
-// and sensor_metadata_macaddress_unique_v1, wired into the write path at
+// and sensor_metadata_macaddress_unique_v2, wired into the write path at
 // sensor.service.js#linkSensorMetadata on the utils/sampleIndexes.js
 // precedent. The declarations are kept as the schema-level statement of
-// intent; that helper is what makes them true. Change one, change both.
+// intent; that helper is what makes them true. Change one, change both:
+// tests/architecture/schema-index-built.arch.test.js fails a declaration
+// with no native build.
 //
 // Why each one matters: linkSensorMetadata does an updateOne({sensorId},
 // ..., {upsert:true}), which is correct GIVEN the sensorId index and racy
@@ -50,7 +52,7 @@ const SensorMetadataSchema = new mongoose.Schema(
 // {sensorId}, not {macAddress}, so two sensors could carry one MAC and the
 // "macAddress duplicado" error sensor.service.js documents was an E11000
 // the database could not produce. Its index is partial
-// (partialFilterExpression on $type string) because macAddress reaches the
+// (partialFilterExpression `macAddress: { $gt: '' }`, #1164) because macAddress reaches the
 // document only through $set, behind a guard in the caller -- see that
 // helper's module comment for why a plain unique index would be wrong.
 SensorMetadataSchema.index({ sensorId: 1 }, { unique: true });

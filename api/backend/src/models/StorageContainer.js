@@ -5,13 +5,14 @@ const StorageContainerSchema = new mongoose.Schema(
     // Identificação
     containerID: {
       type: Number,
-      // #941: INERT. mongoose connects with autoIndex:false
+      // #941: inert ON ITS OWN -- mongoose connects with autoIndex:false
       // (infrastructure/database/mongodb/connection.js) and nothing calls
-      // syncIndexes()/createIndexes(), so this declaration is never built on any
-      // stack. The constraint below is a real requirement with live writers -- it
-      // is not decorative -- but it is NOT enforced today. Do not read it as a
-      // guarantee. Building it means a native ensureIndexes helper on the
-      // utils/sampleIndexes.js precedent, wired into the write path.
+      // syncIndexes()/createIndexes(). The constraint is enforced natively:
+      // utils/storageIndexes.js#ensureStorageContainerIndexes builds
+      // storage_containers_containerid_unique_v3, partial on
+      // `containerID: { $exists: true }` (#1209). Change one, change both;
+      // tests/architecture/schema-index-built.arch.test.js fails a declaration
+      // with no native build.
       unique: true,
       sparse: true,
     },
