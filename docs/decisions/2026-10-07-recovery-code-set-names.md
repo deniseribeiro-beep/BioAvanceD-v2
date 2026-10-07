@@ -14,5 +14,5 @@ Dictionary: RecoveryCodeSet, P1X-0268..0275 (Dicionário de Dados v2.0.0). Requi
 
 ## Not decided here
 
-- Redeeming a code at sign-in, which is what moves a hash into `usedCodeHashes`, is not built (#1331).
+- Redeeming a code at sign-in, which is what moves a hash into `usedCodeHashes`, was built by #1331; its choices are in `2026-10-07-recovery-code-redemption.md`.
 - `invalidatedAt` (P1X-0275) has no writer. Nothing invalidates a set except a regeneration, which replaces it.
