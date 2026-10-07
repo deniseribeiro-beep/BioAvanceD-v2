@@ -725,7 +725,9 @@ router.get('/:id/label', authenticate, requireOrganizationScope, async (req, res
       });
     }
 
-    const sampleIdentifier = escapeXml(String(sample.sampleID || sample._id || req.params.id));
+    // The canonical specimenId, which SampleModel writes; sampleID is the
+    // retired name, kept as a fallback for rows written before the rename.
+    const sampleIdentifier = escapeXml(String(sample.specimenId || sample.sampleID || sample._id || req.params.id));
     const barcode = escapeXml(String(sample.barcode || sampleIdentifier));
     const title = escapeXml(String(sample.sampleType || 'AMOSTRA').slice(0, 32));
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="378" height="189" viewBox="0 0 378 189">
@@ -806,7 +808,8 @@ router.get('/:id/label/print-job', authenticate, requireOrganizationScope, async
       });
     }
 
-    const sampleIdentifier = String(sample.sampleID ?? sample._id);
+    // specimenId first, as the SVG label route above.
+    const sampleIdentifier = String(sample.specimenId ?? sample.sampleID ?? sample._id);
     const location = buildLocationLineFromSample(sample);
     const zpl = buildZplPrintJob({ sampleId: sampleIdentifier, barcode: sample.barcode, location });
 

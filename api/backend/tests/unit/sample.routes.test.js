@@ -909,7 +909,7 @@ describe('sample.routes', () => {
     it('returns an SVG label with XML-escaped fields', async () => {
       const { router } = loadRoute();
       const findOne = vi.fn().mockResolvedValue({
-        sampleID: 42,
+        specimenId: 'SPEC-42',
         barcode: 'BC<1>&"\'',
         sampleType: 'Sangue & Plasma',
       });
@@ -927,6 +927,20 @@ describe('sample.routes', () => {
       expect(svgText).toContain('&lt;1&gt;');
       expect(svgText).toContain('&amp;');
       expect(svgText).not.toContain('BC<1>&"\'');
+      // #1334: the label names the specimen by the specimenId SampleModel writes.
+      expect(svgText).toContain('SPEC-42');
+    });
+
+    it('prints a pre-rename row\'s sampleID when it has no specimenId (#1334)', async () => {
+      const { router } = loadRoute();
+      const findOne = vi.fn().mockResolvedValue({ _id: { toString: () => 'raw-id' }, sampleID: 42, barcode: 'BC1' });
+      const insertOne = vi.fn().mockResolvedValue({ insertedId: 'lg1' });
+      const app = buildApp(router, { collection: () => ({ findOne, insertOne }) });
+
+      const res = await request(app).get('/api/samples/000000000000000000000000/label/print-job');
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.sampleId).toBe('42');
     });
 
     it('falls back to _id, req.params.id, sampleIdentifier and "AMOSTRA" when sample fields are absent', async () => {
@@ -968,7 +982,7 @@ describe('sample.routes', () => {
 
     // #619: mirrors #340's GET /:id out-of-scope 403 for this sub-resource.
     it('returns 403 when the sample exists but is outside the caller\'s organization scope', async () => {
-      const findOne = vi.fn().mockResolvedValue({ sampleID: 42, collectionSite: 'org-other' });
+      const findOne = vi.fn().mockResolvedValue({ specimenId: 'SPEC-42', collectionSite: 'org-other' });
       const { router } = loadRoute({
         requireOrganizationScopeImpl: (req, res, next) => {
           req.organizationScope = { scope: 'organization', organizationIds: ['org-mine'] };
@@ -2755,7 +2769,7 @@ describe('sample.routes', () => {
     });
 
     it('returns 403 when the sample exists but is outside the caller\'s organization scope', async () => {
-      const findOne = vi.fn().mockResolvedValue({ sampleID: 42, barcode: 'BC1', collectionSite: 'org-other' });
+      const findOne = vi.fn().mockResolvedValue({ specimenId: 'SPEC-42', barcode: 'BC1', collectionSite: 'org-other' });
       const { router } = loadRoute({
         requireOrganizationScopeImpl: (req, res, next) => {
           req.organizationScope = { scope: 'organization', organizationIds: ['org-mine'] };
@@ -2771,7 +2785,7 @@ describe('sample.routes', () => {
 
     it('returns 409 when the sample has no barcode generated yet', async () => {
       const { router } = loadRoute();
-      const findOne = vi.fn().mockResolvedValue({ sampleID: 42 });
+      const findOne = vi.fn().mockResolvedValue({ specimenId: 'SPEC-42' });
       const app = buildApp(router, { collection: () => ({ findOne }) });
 
       const res = await request(app).get('/api/samples/000000000000000000000000/label/print-job');
@@ -2782,7 +2796,7 @@ describe('sample.routes', () => {
     it('returns ZPL with the barcode drawn via ^BC and audits the generation', async () => {
       const { router } = loadRoute();
       const findOne = vi.fn().mockResolvedValue({
-        sampleID: 42,
+        specimenId: 'SPEC-42',
         barcode: 'BC1',
         storageLocation: { boxName: 'Box A', position: 'A1' },
       });
@@ -2796,7 +2810,7 @@ describe('sample.routes', () => {
       expect(res.status).toBe(200);
       expect(res.body.data).toEqual(
         expect.objectContaining({
-          sampleId: '42',
+          sampleId: 'SPEC-42',
           barcode: 'BC1',
           format: 'zpl',
           printerLanguage: 'ZPL',
@@ -2812,7 +2826,7 @@ describe('sample.routes', () => {
 
     it('escapes ^ and ~ out of ZPL field data and omits the location line when absent', async () => {
       const { router } = loadRoute();
-      const findOne = vi.fn().mockResolvedValue({ sampleID: 42, barcode: 'BC^1~x' });
+      const findOne = vi.fn().mockResolvedValue({ specimenId: 'SPEC-42', barcode: 'BC^1~x' });
       const insertOne = vi.fn().mockResolvedValue({ insertedId: 'lg1' });
       const app = buildApp(router, { collection: () => ({ findOne, insertOne }) });
 

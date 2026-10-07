@@ -268,9 +268,11 @@ const RETIRED_KEY_EXEMPT = new Set([
   // export-gate require at the top of the file.
   // :697/:774/:867 -> :700/:777/:870, a uniform +3, when #1299 added
   // `details` to the 422 bodies above all three sites.
+  // :777/:870 -> :779/:873, +2 then +3, when #1334 commented the SVG and
+  // ZPL label routes' specimenId read; :700 sits above both.
   'interface/routes/sample.routes.js:700',
-  'interface/routes/sample.routes.js:777',
-  'interface/routes/sample.routes.js:870',
+  'interface/routes/sample.routes.js:779',
+  'interface/routes/sample.routes.js:873',
   'services/analysisValidation.service.js:29'
 ]);
 
