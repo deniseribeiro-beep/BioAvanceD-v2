@@ -107,7 +107,7 @@ function buildMongoCollections(seedIncidents = []) {
 
   const sensorsCollection = {
     find: vi.fn().mockReturnValue({
-      toArray: vi.fn().mockResolvedValue([{ sensorId: 'sensor-a1', locationID: FREEZER_CONTAINER_ID }]),
+      toArray: vi.fn().mockResolvedValue([{ sensorId: 'sensor-a1', locationId: FREEZER_CONTAINER_ID }]),
     }),
   };
 

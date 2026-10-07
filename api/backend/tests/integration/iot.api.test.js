@@ -75,7 +75,7 @@ function buildDb() {
 
   const sensorsCollection = {
     find: vi.fn().mockReturnValue({
-      toArray: vi.fn().mockResolvedValue([{ sensorId: 'sensor-1', locationID: FREEZER_CONTAINER_ID }]),
+      toArray: vi.fn().mockResolvedValue([{ sensorId: 'sensor-1', locationId: FREEZER_CONTAINER_ID }]),
     }),
   };
 
