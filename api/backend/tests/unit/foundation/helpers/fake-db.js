@@ -59,9 +59,15 @@ function createFakeCollection(name, hooks = {}) {
     collectionName: name,
     docs,
     indexes,
+    async findOne(filter = {}) {
+      return docs.find((doc) => matches(doc, filter)) || null;
+    },
     async updateOne(filter, update, options = {}) {
       const doc = docs.find((d) => matches(d, filter));
-      if (doc) return { matchedCount: 1, modifiedCount: 0, upsertedCount: 0, upsertedId: null };
+      if (doc) {
+        if (update.$set) Object.assign(doc, update.$set);
+        return { matchedCount: 1, modifiedCount: update.$set ? 1 : 0, upsertedCount: 0, upsertedId: null };
+      }
       if (!options.upsert) return { matchedCount: 0, modifiedCount: 0, upsertedCount: 0, upsertedId: null };
       const inserted = { _id: `id-${nextId++}`, ...(update.$setOnInsert || {}) };
       docs.push(inserted);

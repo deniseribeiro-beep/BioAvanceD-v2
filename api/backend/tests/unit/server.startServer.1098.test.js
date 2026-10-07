@@ -404,16 +404,18 @@ describe('#1098 server.js startServer() -- pinning the pre-I/O boot prologue', (
       expect(listenSpy).not.toHaveBeenCalled();
     });
 
-    it('starts on a ready report', async () => {
+    it('starts on a ready report, leaving the configuration seeds to the Foundation job (AC4)', async () => {
       fakeConnectDB.mockResolvedValue(await dbWithReport([{ gate: 'version', result: 'pass', p0: true }]));
 
       await loadServerAndStart();
 
       expect(exitSpy).not.toHaveBeenCalled();
       expect(listenSpy).toHaveBeenCalledTimes(1);
+      expect(fakeSeedRolesAndPermissions).not.toHaveBeenCalled();
+      expect(fakeSeedReportTemplates).not.toHaveBeenCalled();
     });
 
-    it('does not read a report at all when the flag is off', async () => {
+    it('does not read a report at all when the flag is off, and seeds at boot as before', async () => {
       env.FOUNDATION_READINESS_REQUIRED = false;
       fakeConnectDB.mockResolvedValue(await dbWithReport(null));
 
@@ -421,6 +423,8 @@ describe('#1098 server.js startServer() -- pinning the pre-I/O boot prologue', (
 
       expect(exitSpy).not.toHaveBeenCalled();
       expect(listenSpy).toHaveBeenCalledTimes(1);
+      expect(fakeSeedRolesAndPermissions).toHaveBeenCalledTimes(1);
+      expect(fakeSeedReportTemplates).toHaveBeenCalledTimes(1);
     });
   });
 

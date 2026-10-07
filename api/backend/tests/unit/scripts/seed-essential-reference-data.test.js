@@ -125,6 +125,31 @@ describe('Foundation job: apply', () => {
     expect(indexGates([unique], [unique])[0].result).toBe('fail');
   });
 
+  it('seeds the RBAC catalog and the report templates as its configuration step (AC4)', async () => {
+    const db = createFakeDb();
+    const { run } = await apply(db);
+
+    const rbac = run.steps.find((step) => step.step === 'rbac-catalog');
+    const templates = run.steps.find((step) => step.step === 'report-templates');
+    expect(rbac.plannedCounts.roles).toBeGreaterThan(0);
+    expect(rbac.plannedCounts.permissions).toBeGreaterThan(0);
+    expect(db.collection(CANONICAL_COLLECTIONS.roles).docs).toHaveLength(rbac.plannedCounts.roles);
+    expect(db.collection(CANONICAL_COLLECTIONS.permissions).docs).toHaveLength(rbac.plannedCounts.permissions);
+    expect(templates.plannedCounts.reportTemplates).toBeGreaterThan(0);
+  });
+
+  it('fails the apply, records it and blocks readiness when a configuration seed throws', async () => {
+    const db = createFakeDb();
+    const configurationSeeds = [{ step: 'rbac-catalog', seed: async () => { throw new Error('roles write refused'); }, count: () => ({}) }];
+
+    await expect(runSeed({ db, args: parseArgs([]), ...quiet, configurationSeeds })).rejects.toThrow('roles write refused');
+
+    const [run] = runsOf(db);
+    expect(run).toMatchObject({ runStatus: 'failed', dryRunResult: 'pass', applyResult: 'fail', verifyResult: 'not_run' });
+    expect(run.steps.at(-1)).toEqual({ step: 'rbac-catalog', status: 'failed' });
+    expect(reportsOf(db)[0]).toMatchObject({ status: 'blocked', blockers: ['apply_failed'] });
+  });
+
   it('blocks readiness when apply creates an operational record (AC8)', async () => {
     const db = createFakeDb({
       sampleTypes: (fakeDb) => ({

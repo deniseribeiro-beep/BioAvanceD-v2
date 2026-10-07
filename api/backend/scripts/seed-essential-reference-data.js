@@ -30,10 +30,30 @@ const { CANONICAL_MODEL_RELEASE_ID, MIGRATION_PLAN_ID, DEFERRED_P0_GATES } = req
 //               inserted, and blocks readiness until the next apply
 //   --list      prints the manifest, touches no database
 //
+// Apply also seeds the configuration catalogs (RBAC, system report
+// templates), which the API seeded at its own boot until RF022 AC4 moved
+// them here; the API still does when no Foundation job runs first.
+//
 // The essential manifest is the 3-entry set (#366); the full canonical
 // dictionary is loaded to pin dictionaryVersion/checksum/completeness
 // (RF022 AC1: v2.0.0, 1644 elements with the 929 historical ones). Mongo
 // schemas for the non-technical domain elements are out of scope here.
+
+// The configuration catalogs Foundation prepares (RF022 AC2, plano F1.2).
+// Lazily required: they pull the models and the collection resolver, which
+// --list never needs.
+const CONFIGURATION_SEEDS = [
+  {
+    step: 'rbac-catalog',
+    seed: (db) => require('../src/services/rbac-catalog-seed.service').seedRolesAndPermissions(db),
+    count: ({ roles, permissions }) => ({ roles: roles.length, permissions: permissions.length }),
+  },
+  {
+    step: 'report-templates',
+    seed: (db) => require('../src/services/report-template-seed.service').seedReportTemplates(db),
+    count: ({ templates }) => ({ reportTemplates: templates.length }),
+  },
+];
 
 // Operational collections the Foundation must leave untouched (RF022 AC8,
 // RNF031 C7): it counts them before and after apply.
@@ -263,7 +283,7 @@ async function newestRun(runs, filter) {
   return runs.find(filter).sort({ startedAt: -1 }).limit(1).next();
 }
 
-async function runApply({ db, args, environment, deploymentId, selected }) {
+async function runApply({ db, args, environment, deploymentId, selected, configurationSeeds }) {
   const runs = db.collection(CANONICAL_COLLECTIONS.foundationDataRuns);
   const previousRun = await newestRun(runs, { environment });
   const previousCompleted = await newestRun(runs, { environment, runStatus: 'completed' });
@@ -290,8 +310,10 @@ async function runApply({ db, args, environment, deploymentId, selected }) {
   const operationalBefore = await countOperational(db);
   const steps = [];
   let builds = [];
+  let currentStep = null;
   try {
     for (const { entry, docsByCollection, plannedCounts } of plan) {
+      currentStep = entry.key;
       console.log(JSON.stringify({ key: entry.key, mode: 'apply', plannedCounts }, null, 2));
       const insertedIds = {};
       for (const [collectionName, docs] of Object.entries(docsByCollection)) {
@@ -299,12 +321,22 @@ async function runApply({ db, args, environment, deploymentId, selected }) {
       }
       steps.push({ step: entry.key, system: entry.system, version: entry.version, status: 'completed', plannedCounts, checkpoint: { insertedIds } });
     }
+    // F1.2 configuration catalogs, which the API seeded at its own boot
+    // before RF022 AC4 separated the two. Both upserts are idempotent and
+    // reconcile catalog-owned fields, so a re-run is safe; a failure here is
+    // fatal for the run, where it was only logged at boot.
+    for (const { step, seed, count } of configurationSeeds) {
+      currentStep = step;
+      const result = await seed(db);
+      steps.push({ step, status: 'completed', plannedCounts: count(result) });
+    }
+    currentStep = 'indexes';
     builds = await buildFoundationIndexes(db);
     steps.push({ step: 'indexes', status: 'completed', plannedCounts: { indexes: builds.length } });
   } catch (error) {
     const run = finishRun({
       ...base, startedAt, completedAt: new Date(), runStatus: 'failed', dryRunResult: 'pass', applyResult: 'fail', verifyResult: 'not_run', rollbackResult: 'not_required',
-      steps: [...steps, { step: plan[steps.length]?.entry.key || 'indexes', status: 'failed' }],
+      steps: [...steps, { step: currentStep || 'unknown', status: 'failed' }],
       validationSummary: { passed: steps.length, failed: 1, dictionaryCompleteness },
       // P1X-0409: errorSummary must stay sanitized (no secrets/tokens/raw
       // payloads) — truncate defensively since a Mongo write-error message
@@ -449,9 +481,10 @@ async function runRollback({ db, args, environment, deploymentId, selected }) {
  * Core pipeline logic, factored out from `main()` so it can run against an
  * injected `db` (a real Mongo handle from the CLI entrypoint, or a fake
  * collection in tests) instead of always opening a live connection.
- * Returns { run, report }, or null for --list.
+ * Returns { run, report }, or null for --list. `configurationSeeds` defaults
+ * to the RBAC catalog and the system report templates.
  */
-async function runSeed({ db, args, environment, deploymentId }) {
+async function runSeed({ db, args, environment, deploymentId, configurationSeeds = CONFIGURATION_SEEDS }) {
   if (args.list) {
     for (const entry of getManifest()) {
       console.log(`${entry.key}\t${entry.system}\t${entry.version}\t${entry.description}`);
@@ -459,7 +492,7 @@ async function runSeed({ db, args, environment, deploymentId }) {
     return null;
   }
   const selected = selectEntries(args);
-  const context = { db, args, environment, deploymentId, selected };
+  const context = { db, args, environment, deploymentId, selected, configurationSeeds };
   const mode = args.mode || 'apply';
   if (mode === 'dry_run') return runDryRun(context);
   if (mode === 'validate') return runVerify(context);
@@ -505,4 +538,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { runSeed, parseArgs, checksumFor, exitCodeFor, indexGates, OPERATIONAL_COLLECTIONS };
+module.exports = { runSeed, parseArgs, checksumFor, exitCodeFor, indexGates, OPERATIONAL_COLLECTIONS, CONFIGURATION_SEEDS };

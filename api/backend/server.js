@@ -190,27 +190,36 @@ async function startServer() {
     // granted to an existing role" case. Permitted on the boot
     // path -- seed-boundary.arch.test.js fences off seed-essential-reference-
     // data specifically, not this. Non-fatal, same shape as the seed below.
-    try {
-      const { roles, permissions } = await seedRolesAndPermissions(db);
-      logger.info(`🔑 Catálogo RBAC garantido: ${roles.length} papéis, ${permissions.length} permissões`);
-    } catch (rbacSeedError) {
-      logger.error("Erro ao semear catálogo RBAC:", rbacSeedError.message);
-    }
+    //
+    // RF022 AC4: where the Foundation job runs first
+    // (FOUNDATION_READINESS_REQUIRED), it seeds this catalog and the report
+    // templates below as its configuration step, and the ready report checked
+    // above proves it did, so the API's startup leaves both to it.
+    if (env.FOUNDATION_READINESS_REQUIRED) {
+      logger.info("🔑 Catálogo RBAC e modelos de relatório preparados pelo Foundation Data Pipeline");
+    } else {
+      try {
+        const { roles, permissions } = await seedRolesAndPermissions(db);
+        logger.info(`🔑 Catálogo RBAC garantido: ${roles.length} papéis, ${permissions.length} permissões`);
+      } catch (rbacSeedError) {
+        logger.error("Erro ao semear catálogo RBAC:", rbacSeedError.message);
+      }
 
-    // #737: reports.routes.js's buildPreviewData (#726) dispatches only via a
-    // ReportTemplate lookup by code -- with the system rows missing, every
-    // report type returns the no-preview fallback and CSV export is empty.
-    // Guaranteed at boot (idempotent by code; a later hand-edit to a seeded
-    // row survives) instead of a script a human has to remember -- the same
-    // self-sufficiency #437 gave the RBAC catalog. Not the essential
-    // reference-data seed (seed-boundary.arch.test.js keeps that off the
-    // boot path by contract): 14 config rows, no manifest, no data files.
-    // Non-fatal: a seed failure is logged and the server still starts.
-    try {
-      const { templates } = await seedReportTemplates(db);
-      logger.info(`📄 Modelos de relatório do sistema garantidos: ${templates.length}`);
-    } catch (seedError) {
-      logger.error("Erro ao semear modelos de relatório:", seedError.message);
+      // #737: reports.routes.js's buildPreviewData (#726) dispatches only via a
+      // ReportTemplate lookup by code -- with the system rows missing, every
+      // report type returns the no-preview fallback and CSV export is empty.
+      // Guaranteed at boot (idempotent by code; a later hand-edit to a seeded
+      // row survives) instead of a script a human has to remember -- the same
+      // self-sufficiency #437 gave the RBAC catalog. Not the essential
+      // reference-data seed (seed-boundary.arch.test.js keeps that off the
+      // boot path by contract): 14 config rows, no manifest, no data files.
+      // Non-fatal: a seed failure is logged and the server still starts.
+      try {
+        const { templates } = await seedReportTemplates(db);
+        logger.info(`📄 Modelos de relatório do sistema garantidos: ${templates.length}`);
+      } catch (seedError) {
+        logger.error("Erro ao semear modelos de relatório:", seedError.message);
+      }
     }
 
     // Iniciar scheduler (backup + monitoramento + sync de consentimento)
