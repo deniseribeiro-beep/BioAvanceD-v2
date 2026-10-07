@@ -1,6 +1,6 @@
 // An in-memory stand-in for the native driver's db/collection, with real
 // filter semantics for what the Foundation pipeline issues: exact-key and
-// dotted-path equality, array membership, `$in`, `$ne`, `$gte`, `$lte`,
+// dotted-path equality, array membership, `$in`, `$ne`, `$gte`, `$lte`, `$exists`,
 // upsert with `$setOnInsert` returning the upserted id, multi-key
 // sort/skip/limit cursors, a sorted findOne, counts, deletes and index
 // listing. A
@@ -26,6 +26,7 @@ const OPERATORS = {
   $ne: (actual, value) => !equals(actual, value),
   $gte: (actual, bound) => actual != null && actual >= bound,
   $lte: (actual, bound) => actual != null && actual <= bound,
+  $exists: (actual, wanted) => (actual !== undefined) === Boolean(wanted),
 };
 
 // An operator this fake does not implement throws rather than matching

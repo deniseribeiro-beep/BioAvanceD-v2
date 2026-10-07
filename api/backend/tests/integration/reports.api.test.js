@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 const express = require('express');
 const request = require('supertest');
 const { SYSTEM_REPORT_TEMPLATES } = require('../../src/services/report-template-seed.service');
+const { createFakeDb } = require('../unit/foundation/helpers/fake-db');
 
 const modulePaths = {
   auth: require.resolve('../../src/infrastructure/middleware/auth'),
@@ -1421,6 +1422,82 @@ describe('Reports API integration', () => {
       const body = JSON.stringify(response.body);
       expect(body).toContain('ONLY_IN_LOGS');
       expect(body).not.toContain('ONLY_IN_AUDIT_EVENTS');
+    });
+
+    // Nested here for appWithDb and the salt the audit export needs.
+    describe('#1332: ordered reads, against a store that sorts', () => {
+      // buildCollectionDb's sort returns the rows as stored. Here the read
+      // collection is the sorting fake DB, holding rows out of order.
+      function withSortingStore(name, rows) {
+        const { db } = buildCollectionDb();
+        const store = createFakeDb().collection(name);
+        rows.forEach((row) => store.docs.push(row));
+        return { collection: (requested) => (requested === name ? store : db.collection(requested)) };
+      }
+
+      const exportedColumn = (text) => text.trim().split('\n').slice(1).map((line) => line.split(',')[0].replace(/"/g, ''));
+
+      it('GET /audit/export lists events newest first, by sequence within one instant', async () => {
+        const at = (iso, eventId, sequenceNumber) => ({ ...EVENT_ROWS[0], eventId, sequenceNumber, occurredAt: iso });
+        const db = withSortingStore('audit_events', [
+          at('2026-01-02T10:00:00.000Z', 'E-mid-1', 4),
+          at('2026-01-03T10:00:00.000Z', 'E-new', 6),
+          at('2026-01-01T10:00:00.000Z', 'E-old', 1),
+          at('2026-01-02T10:00:00.000Z', 'E-mid-2', 5),
+        ]);
+
+        const response = await request(appWithDb(db)).get('/api/reports/audit/export');
+
+        expect(response.status).toBe(200);
+        expect(exportedColumn(response.text)).toEqual(['E-new', 'E-mid-2', 'E-mid-1', 'E-old']);
+      });
+
+      it('GET /temperature/export lists readings newest first', async () => {
+        // resolveCollection takes the first candidate name, 'temperature'.
+        const db = withSortingStore('temperature', [
+          { readingId: 'R-mid', sensorId: 'T1', temperatureValue: -80, timestamp: new Date('2026-01-02T00:00:00Z') },
+          { readingId: 'R-new', sensorId: 'T1', temperatureValue: -79, timestamp: new Date('2026-01-03T00:00:00Z') },
+          { readingId: 'R-old', sensorId: 'T1', temperatureValue: -81, timestamp: new Date('2026-01-01T00:00:00Z') },
+        ]);
+
+        const response = await request(appWithDb(db)).get('/api/reports/temperature/export');
+
+        expect(response.status).toBe(200);
+        const text = response.text;
+        expect([text.indexOf('-79'), text.indexOf('-80'), text.indexOf('-81')].every((at) => at > 0)).toBe(true);
+        expect(text.indexOf('-79')).toBeLessThan(text.indexOf('-80'));
+        expect(text.indexOf('-80')).toBeLessThan(text.indexOf('-81'));
+      });
+
+      // The harness's buildDb sorts reports by reportID whatever spec it is
+      // handed, so it cannot see either read's sort.
+      it('GET / lists saved reports newest first, by creation within one generation time', async () => {
+        const db = withSortingStore('reports', [
+          { reportID: 1, reportType: 'equipment', generatedAt: new Date('2026-01-02'), createdAt: new Date('2026-01-02T01:00:00Z') },
+          { reportID: 2, reportType: 'equipment', generatedAt: new Date('2026-01-03'), createdAt: new Date('2026-01-03') },
+          { reportID: 3, reportType: 'equipment', generatedAt: new Date('2026-01-01'), createdAt: new Date('2026-01-01') },
+          { reportID: 4, reportType: 'equipment', generatedAt: new Date('2026-01-02'), createdAt: new Date('2026-01-02T05:00:00Z') },
+        ]);
+
+        const response = await request(appWithDb(db)).get('/api/reports');
+
+        expect(response.status).toBe(200);
+        expect(response.body.map((report) => report.reportID)).toEqual([2, 4, 1, 3]);
+      });
+
+      it('POST /generate numbers a new report one past the highest reportID stored', async () => {
+        const db = withSortingStore('reports', [
+          { reportID: 7, reportType: 'equipment' },
+          { reportID: 12, reportType: 'equipment' },
+          { reportType: 'equipment' },
+          { reportID: 3, reportType: 'equipment' },
+        ]);
+
+        const response = await request(appWithDb(db)).post('/api/reports/generate').send({ reportType: 'equipment' });
+
+        expect(response.status).toBe(201);
+        expect(response.body.reportID).toBe(13);
+      });
     });
 
     it('GET /audit/export declares the AuditEvent columns and omits entity ids and the hash chain', async () => {
