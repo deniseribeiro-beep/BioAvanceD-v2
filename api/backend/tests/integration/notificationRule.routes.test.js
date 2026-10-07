@@ -114,8 +114,9 @@ describe('POST /api/notification-rules', () => {
       .set('Authorization', `Bearer ${makeToken(4)}`)
       .send({ ...VALID_PAYLOAD, channels: ['sms'] });
 
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(422);
     expect(res.body.message).toMatch(/channels/);
+    expect(res.body.details).toEqual(expect.arrayContaining([expect.stringMatching(/channels/)]));
   });
 
   it('creates a versioned rule (v1, active)', async () => {
