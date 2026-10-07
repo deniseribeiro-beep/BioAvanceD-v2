@@ -1,5 +1,6 @@
 const fhirService = require('../../services/fhir.service');
 const logger = require('../../utils/logger');
+const { getCollection } = require('../../utils/collectionResolver');
 const fs = require('fs');
 const path = require('path');
 const yauzl = require('yauzl');
@@ -239,7 +240,7 @@ class ResultWorker {
       }
 
       // Busca amostra
-      const samplesCollection = db.collection('amostras');
+      const samplesCollection = getCollection(db, 'samples');
       const sample = await samplesCollection.findOne({
         $or: [
           { specimenId: row.specimenId },

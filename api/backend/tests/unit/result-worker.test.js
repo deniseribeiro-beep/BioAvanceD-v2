@@ -15,7 +15,10 @@ function makeDb({ sample = null, insertedId = 'result-1' } = {}) {
     collection: vi.fn((name) => {
       if (!collections[name]) {
         collections[name] = {
-          findOne: vi.fn().mockResolvedValue(sample),
+          // Only the samples collection holds the sample. Every collection
+          // used to return it, so the worker's read of 'amostras', a
+          // collection nothing writes, passed here and found nothing live.
+          findOne: vi.fn().mockResolvedValue(name === 'samples' ? sample : null),
           insertOne: vi.fn().mockResolvedValue({ insertedId }),
           updateOne: vi.fn().mockResolvedValue({ modifiedCount: 1 }),
         };

@@ -39,7 +39,7 @@ function createFakeCollection() {
 }
 
 function createFakeDb(seed = {}) {
-  const collections = { results: createFakeCollection(), amostras: createFakeCollection() };
+  const collections = { results: createFakeCollection(), samples: createFakeCollection() };
   for (const [key, docs] of Object.entries(seed)) {
     for (const doc of docs) collections[key].docs.push(doc);
   }
@@ -56,7 +56,7 @@ describe('result-specimenid-backfill.service', () => {
   it('resolves via the Sample _id shape (POST /upload\'s pre-#628 write path) and sets specimenId, removing the legacy field', async () => {
     const sampleOid = new ObjectId().toString();
     const db = createFakeDb({
-      amostras: [{ _id: sampleOid, specimenId: 'SPEC-1' }],
+      samples: [{ _id: sampleOid, specimenId: 'SPEC-1' }],
       results: [{ _id: 'result-1', sampleID: sampleOid }],
     });
 
@@ -70,7 +70,7 @@ describe('result-specimenid-backfill.service', () => {
 
   it('resolves via a Sample.specimenId shape (a caller-supplied specimenId, pre-#628 POST / write path)', async () => {
     const db = createFakeDb({
-      amostras: [{ _id: 'sample-1', specimenId: 'SPEC-2' }],
+      samples: [{ _id: 'sample-1', specimenId: 'SPEC-2' }],
       results: [{ _id: 'result-1', sampleID: 'SPEC-2' }],
     });
 
@@ -80,21 +80,24 @@ describe('result-specimenid-backfill.service', () => {
     expect(db.collections.results.docs[0].specimenId).toBe('SPEC-2');
   });
 
-  it('resolves via the legacy numeric Sample.sampleID shape', async () => {
+  // Nothing writes a numeric sampleID to the samples collection, so a Result
+  // holding one is left for manual follow-up rather than looked up on it.
+  it('leaves a Result holding a legacy numeric Sample.sampleID unresolved', async () => {
     const db = createFakeDb({
-      amostras: [{ _id: 'sample-1', specimenId: 'SPEC-3', sampleID: 42 }],
+      samples: [{ _id: 'sample-1', specimenId: 'SPEC-3', sampleID: 42 }],
       results: [{ _id: 'result-1', sampleID: 42 }],
     });
 
     const { summary } = await backfillResultSpecimenIds(db);
 
-    expect(summary.migrated).toBe(1);
-    expect(db.collections.results.docs[0].specimenId).toBe('SPEC-3');
+    expect(summary.migrated).toBe(0);
+    expect(summary.unresolved).toBe(1);
+    expect(db.collections.results.docs[0].specimenId).toBeUndefined();
   });
 
   it('also checks the sampleId (lowercase d) spelling', async () => {
     const db = createFakeDb({
-      amostras: [{ _id: 'sample-1', specimenId: 'SPEC-4' }],
+      samples: [{ _id: 'sample-1', specimenId: 'SPEC-4' }],
       results: [{ _id: 'result-1', sampleId: 'SPEC-4' }],
     });
 
@@ -132,7 +135,7 @@ describe('result-specimenid-backfill.service', () => {
   it('counts as unresolved when the matched sample itself has no specimenId', async () => {
     const sampleOid = new ObjectId().toString();
     const db = createFakeDb({
-      amostras: [{ _id: sampleOid }],
+      samples: [{ _id: sampleOid }],
       results: [{ _id: 'result-1', sampleID: sampleOid }],
     });
 
@@ -154,7 +157,7 @@ describe('result-specimenid-backfill.service', () => {
 
   it('is idempotent -- running twice does not re-process already-migrated documents', async () => {
     const db = createFakeDb({
-      amostras: [{ _id: 'sample-1', specimenId: 'SPEC-1' }],
+      samples: [{ _id: 'sample-1', specimenId: 'SPEC-1' }],
       results: [{ _id: 'result-1', sampleID: 'SPEC-1' }],
     });
 
@@ -167,7 +170,7 @@ describe('result-specimenid-backfill.service', () => {
 
   it('processes a mixed batch, tallying each outcome independently', async () => {
     const db = createFakeDb({
-      amostras: [{ _id: 'sample-1', specimenId: 'SPEC-1' }],
+      samples: [{ _id: 'sample-1', specimenId: 'SPEC-1' }],
       results: [
         { _id: 'result-1', sampleID: 'SPEC-1' },
         { _id: 'result-2', specimenId: 'SPEC-ALREADY' },

@@ -1,4 +1,5 @@
 const { ObjectId } = require('mongodb');
+const { getCollection } = require('../utils/collectionResolver');
 
 /**
  * #628 — one-time backfill: `Result.specimenId` replaces the legacy
@@ -8,10 +9,12 @@ const { ObjectId } = require('mongodb');
  * caller-supplied value (POST /, PUT /:id/link-sample, pre-#628), or
  * occasionally the Sample's own legacy numeric `sampleID` field.
  *
- * Resolves each affected Result's linked Sample the same three-tier way
- * result.routes.js's live write paths now do (_id, then Sample.specimenId,
- * then the legacy numeric Sample.sampleID), sets `specimenId` to that
- * Sample's own canonical `specimenId`, and removes the legacy field.
+ * Resolves each affected Result's linked Sample the same way
+ * result.routes.js's live write paths now do (_id, then Sample.specimenId),
+ * sets `specimenId` to that Sample's own canonical `specimenId`, and
+ * removes the legacy field. A Result holding a numeric Sample.sampleID
+ * stays unresolved: nothing writes that key to the samples collection, so
+ * no lookup on it can match.
  *
  * Only touches Result documents missing the `specimenId` own-property
  * (same idempotency check `sealed-snapshot-backfill.service.js` uses) —
@@ -20,12 +23,10 @@ const { ObjectId } = require('mongodb');
  * for manual follow-up rather than a silent drop.
  */
 async function backfillResultSpecimenIds(db) {
-  // Same literal collection names result.routes.js's own write paths use
-  // (not the config-driven `getCollection(db, 'samples')` resolver) --
-  // this must resolve against the exact same physical collections those
-  // live write paths do.
+  // The same resolver result.routes.js and the sample writers use, so this
+  // resolves against the physical collection samples are written to.
   const resultsCollection = db.collection('results');
-  const samplesCollection = db.collection('amostras');
+  const samplesCollection = getCollection(db, 'samples');
 
   const results = await resultsCollection.find({}).toArray();
 
@@ -51,9 +52,6 @@ async function backfillResultSpecimenIds(db) {
     }
     if (!sample) {
       sample = await samplesCollection.findOne({ specimenId: String(legacyId) });
-    }
-    if (!sample && !Number.isNaN(Number(legacyId))) {
-      sample = await samplesCollection.findOne({ sampleID: Number(legacyId) });
     }
 
     if (!sample || !sample.specimenId) {

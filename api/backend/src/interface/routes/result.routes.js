@@ -9,6 +9,7 @@ const { requirePermission, requireOrganizationScope } = require('../../infrastru
 const { applyOrganizationScopeFilter, isRecordInOrganizationScope } = require('../../services/rbac-assignment.service');
 const { enforceCommercialConsent } = require('../../infrastructure/middleware/consent.enforcement');
 const logger = require('../../utils/logger');
+const { getCollection } = require('../../utils/collectionResolver');
 const ResultModel = require('../../models/Result');
 const { STORAGE_BASE } = require('../../config/uploadConfig');
 
@@ -24,7 +25,7 @@ const { STORAGE_BASE } = require('../../config/uploadConfig');
 const isResultInOrganizationScope = async (db, result, scope) => {
   if (!scope || scope.scope === 'global') return true;
   if (!result || !result.specimenId) return false;
-  const sample = await db.collection('amostras').findOne({ specimenId: result.specimenId });
+  const sample = await getCollection(db, 'samples').findOne({ specimenId: result.specimenId });
   if (!sample) return false;
   return isRecordInOrganizationScope(sample, scope, 'collectionSite');
 };
@@ -105,7 +106,7 @@ router.get('/', authenticate, requireOrganizationScope, async (req, res) => {
     // sample is in the caller's organization scope; 'global' is left unfiltered,
     // the same bypass every other RBAC gate gives Administrador.
     if (req.organizationScope && req.organizationScope.scope !== 'global') {
-      const inScopeSpecimenIds = await db.collection('amostras')
+      const inScopeSpecimenIds = await getCollection(db, 'samples')
         .distinct('specimenId', applyOrganizationScopeFilter({}, req.organizationScope, 'collectionSite'));
       query.specimenId = { $in: inScopeSpecimenIds };
     }
@@ -161,10 +162,9 @@ router.post('/upload', authenticate, requirePermission('uploadFiles'), requireOr
     // #628: resolve the referenced Sample first, then store its own
     // specimenId (business identifier) on the Result -- never the
     // caller-supplied identifier verbatim, whatever shape it's in.
-    // Tries _id, then the canonical specimenId, then the legacy numeric
-    // sampleID -- same three-tier resolution consent.validator.js's
-    // validateAccess already uses for the same kind of caller-supplied id.
-    const samplesCollection = db.collection('amostras');
+    // Tries _id, then the canonical specimenId. The legacy numeric sampleID
+    // tier is gone: nothing writes that key to the samples collection.
+    const samplesCollection = getCollection(db, 'samples');
     const { ObjectId } = require('mongodb');
     let sample = null;
     if (ObjectId.isValid(String(specimenId))) {
@@ -172,9 +172,6 @@ router.post('/upload', authenticate, requirePermission('uploadFiles'), requireOr
     }
     if (!sample) {
       sample = await samplesCollection.findOne({ specimenId: String(specimenId) });
-    }
-    if (!sample) {
-      sample = await samplesCollection.findOne({ sampleID: Number(specimenId) });
     }
 
     if (!sample) {
@@ -440,16 +437,13 @@ router.post('/', authenticate, requirePermission('createResult'), requireOrganiz
     // resolution POST /upload uses -- never trust the caller-supplied
     // specimenId verbatim, whatever shape it's in.
     const { ObjectId } = require('mongodb');
-    const samplesCollection = db.collection('amostras');
+    const samplesCollection = getCollection(db, 'samples');
     let sample = null;
     if (ObjectId.isValid(String(req.body?.specimenId))) {
       sample = await samplesCollection.findOne({ _id: new ObjectId(req.body.specimenId) });
     }
     if (!sample) {
       sample = await samplesCollection.findOne({ specimenId: String(req.body?.specimenId || '') });
-    }
-    if (!sample) {
-      sample = await samplesCollection.findOne({ sampleID: Number(req.body?.specimenId) });
     }
     if (!sample) {
       return res.status(404).json({
@@ -642,16 +636,13 @@ router.put('/:id/link-sample', authenticate, requirePermission('editResult'), re
     // #628: resolve the referenced Sample first, same three-tier
     // resolution the create paths use -- never trust the caller-supplied
     // specimenId verbatim, whatever shape it's in.
-    const samplesCollection = db.collection('amostras');
+    const samplesCollection = getCollection(db, 'samples');
     let sample = null;
     if (ObjectId.isValid(String(specimenId))) {
       sample = await samplesCollection.findOne({ _id: new ObjectId(specimenId) });
     }
     if (!sample) {
       sample = await samplesCollection.findOne({ specimenId: String(specimenId) });
-    }
-    if (!sample) {
-      sample = await samplesCollection.findOne({ sampleID: Number(specimenId) });
     }
     if (!sample) {
       return res.status(404).json({

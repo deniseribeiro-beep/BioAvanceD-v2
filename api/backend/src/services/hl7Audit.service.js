@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const logger = require('../utils/logger');
+const { getCollection } = require('../utils/collectionResolver');
 const fs = require('fs');
 
 function sha256Hex(input) {
@@ -12,7 +13,7 @@ class HL7AuditService {
   }
 
   async _hashFHIRResources(db, date) {
-    const samplesCol = db.collection('amostras');
+    const samplesCol = getCollection(db, 'samples');
     // search for samples with a 'fhir' field and createdAt on date
     const start = new Date(date + 'T00:00:00.000Z');
     const end = new Date(date + 'T23:59:59.999Z');
