@@ -65,9 +65,23 @@ describe('move-sample.controller', () => {
   });
 
   it('returns 200 with the use-case result on success', async () => {
+    // The shape MoveSampleUseCase.execute really returns, so the echo below
+    // is a body the endpoint can produce.
+    const moved = {
+      success: true,
+      movementID: 'MOV-1',
+      specimenId: 'S1',
+      from: { boxId: 'B0', position: 'C3' },
+      to: { boxId: 'B1', position: 'A1' },
+      movedAt: '2026-10-07T00:00:00.000Z',
+      lineageSynced: true,
+      lineageValidated: true,
+      lineagePersisted: true,
+      lineageEventId: null
+    };
     const executeSpy = vi
       .spyOn(MoveSampleUseCase.prototype, 'execute')
-      .mockResolvedValue({ sampleId: 'S1', targetBoxId: 'B1', targetPosition: 'A1' });
+      .mockResolvedValue(moved);
     const req = buildReq({
       body: { sampleId: 'S1', targetBoxId: 'B1', targetPosition: 'A1', reason: 'relocation', notes: 'n/a' },
       user: { id: 'u1', name: 'Alice', roleName: 'admin' },
@@ -95,7 +109,7 @@ describe('move-sample.controller', () => {
     expect(res.status).toHaveBeenCalledWith(200);
     expect(res.json).toHaveBeenCalledWith({
       success: true,
-      data: { sampleId: 'S1', targetBoxId: 'B1', targetPosition: 'A1' },
+      data: moved,
       message: 'Amostra movida com sucesso'
     });
   });
