@@ -159,7 +159,7 @@ describe('intakeWizard routes', () => {
 
       const db = {
         collection: (name) => {
-          if (name === 'sensors') return { find: () => makeCursor([{ locationId: 'EQ-1', status: 'ok' }]) };
+          if (name === 'sensors') return { find: () => makeCursor([{ sensorId: 'SEN-1', sensorType: 'temperature', locationId: 'EQ-1', maintenanceStatus: 'operational' }]) };
           if (name === 'equipment') return { findOne: vi.fn().mockResolvedValue({ equipmentID: 'EQ-1', status: 'active' }) };
           if (name === 'storageBoxes') {
             return {
@@ -243,7 +243,7 @@ describe('intakeWizard routes', () => {
       });
       const db = {
         collection: (name) => {
-          if (name === 'sensors') return { find: () => makeCursor([{ locationId: 'EQ-1', status: 'ok' }]) };
+          if (name === 'sensors') return { find: () => makeCursor([{ sensorId: 'SEN-1', sensorType: 'temperature', locationId: 'EQ-1', maintenanceStatus: 'operational' }]) };
           if (name === 'equipment') return { findOne: vi.fn().mockResolvedValue({ equipmentID: 'EQ-1', status: 'active' }) };
           if (name === 'storageBoxes') {
             return { find: () => makeCursor([{ _id: 'box-1', name: 'Box A', status: 'ACTIVE', dimension: { rows: 1, cols: 1 }, currentOccupancy: 0, occupancyGrid: {}, parent_id: 'rack-1' }]) };
@@ -314,7 +314,7 @@ describe('intakeWizard routes', () => {
 
       const db = {
         collection: (name) => {
-          if (name === 'sensors') return { find: () => makeCursor([{ locationId: 'EQ-1', status: 'ok' }]) };
+          if (name === 'sensors') return { find: () => makeCursor([{ sensorId: 'SEN-1', sensorType: 'temperature', locationId: 'EQ-1', maintenanceStatus: 'operational' }]) };
           if (name === 'equipment') return { findOne: vi.fn().mockResolvedValue({ equipmentID: 'EQ-1', status: 'active' }) };
           if (name === 'storageBoxes') {
             return {
@@ -525,7 +525,7 @@ function defaultStorageContainersFindOne({ _id }) {
 
       const db = {
         collection: (name) => {
-          if (name === 'sensors') return { find: sensorsFind || (() => makeCursor([{ locationId: 'EQ-1', status: 'ok' }])) };
+          if (name === 'sensors') return { find: sensorsFind || (() => makeCursor([{ sensorId: 'SEN-1', sensorType: 'temperature', locationId: 'EQ-1', maintenanceStatus: 'operational' }])) };
           if (name === 'equipment') return { findOne: equipmentFindOne || vi.fn().mockResolvedValue({ equipmentID: 'EQ-1', status: 'active' }) };
           if (name === 'storageBoxes') {
             return {

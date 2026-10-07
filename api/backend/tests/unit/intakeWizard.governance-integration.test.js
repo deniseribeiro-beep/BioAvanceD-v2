@@ -143,7 +143,7 @@ function loadApp({ consentActive, samplesCollection, quarantineActionsCollection
   app.use(express.json());
   app.locals.db = {
     collection: (name) => {
-      if (name === 'sensors') return { find: () => makeCursor([{ locationId: 'EQ-1', status: 'ok' }]) };
+      if (name === 'sensors') return { find: () => makeCursor([{ sensorId: 'SEN-1', sensorType: 'temperature', locationId: 'EQ-1', maintenanceStatus: 'operational' }]) };
       if (name === 'equipment') return { findOne: vi.fn().mockResolvedValue({ equipmentID: 'EQ-1', status: 'active' }) };
       if (name === 'storageBoxes') {
         return {
