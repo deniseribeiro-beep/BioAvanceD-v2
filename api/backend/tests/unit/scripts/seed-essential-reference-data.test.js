@@ -1,12 +1,13 @@
 import { describe, it, expect } from 'vitest';
 const { runSeed } = require('../../../scripts/seed-essential-reference-data');
-const canonicalDictionary = require('../../../src/reference-data/canonical-dictionary');
+const canonicalDictionary = require('../../../src/reference-data/canonical-dictionary/v2');
 const { CANONICAL_COLLECTIONS } = require('../../../src/config/collections');
 
 /**
  * RF022 follow-up (#381): before this landed, FoundationDataRun.dictionaryChecksum
  * hashed the 3-entry essential manifest as a stopgap (see this script's own
- * former top comment) instead of the actual 929-element canonical dictionary.
+ * former top comment) instead of the actual canonical dictionary, now the
+ * approved v2.0.0 release (RF022 AC1: 1644 elements, 929 historical).
  * These assertions are that stopgap being retired — the checksum recorded on
  * a run must match the canonical-dictionary catalog, and the run must carry
  * a real completeness verdict instead of just an entry count.
@@ -66,7 +67,8 @@ describe('seed-essential-reference-data runSeed', () => {
 
     const runDoc = fakeDb.collections[CANONICAL_COLLECTIONS.foundationDataRuns].docs[0];
     expect(runDoc.runStatus).toBe('completed');
-    expect(runDoc.dictionaryVersion).toBe(canonicalDictionary.DICTIONARY_VERSION);
+    expect(runDoc.dictionaryVersion).toBe('2.0.0');
+    expect(runDoc.schemaVersion).toBe('2.0.0');
     expect(runDoc.dictionaryChecksum).toBe(canonicalDictionary.dictionaryChecksum());
   });
 
@@ -77,8 +79,11 @@ describe('seed-essential-reference-data runSeed', () => {
 
     const runDoc = fakeDb.collections[CANONICAL_COLLECTIONS.foundationDataRuns].docs[0];
     expect(runDoc.validationSummary.dictionaryCompleteness).toMatchObject({
-      expectedTotal: 929,
-      loadedTotal: 929,
+      dictionaryVersion: '2.0.0',
+      expectedTotal: 1644,
+      loadedTotal: 1644,
+      historicalTotal: 929,
+      missingHistoricalIds: [],
       verified: true,
     });
   });

@@ -24,6 +24,7 @@ import {
 import {
   countEssentialReferenceDocs,
   countFoundationDataRuns,
+  latestFoundationDataRun,
   countReferenceDatasetReleases,
   countTerminologyConcepts,
   countReferenceDatasetReleasesByDatasetCode,
@@ -227,7 +228,7 @@ test.describe('Outbox → Neo4j projection (RF028 AC9) — real backend', () => 
 });
 
 // dict-07/dict-08 (#329, "Gap crítico"): the target Foundation Data Pipeline
-// is a one-shot, idempotent bootstrap of the full 929-element dictionary
+// is a one-shot, idempotent bootstrap of the full canonical dictionary
 // across six technical entities, executed automatically after the stack's
 // healthchecks pass — not a script a human has to remember to run.
 // api/backend/scripts/seed-essential-reference-data.js is wired as exactly
@@ -251,6 +252,22 @@ test.describe('Foundation Data Pipeline bootstrap (RF022) — real backend', () 
   test('the bootstrap records an idempotent FoundationDataRun, not just ad-hoc upserts', async () => {
     const runs = await countFoundationDataRuns();
     expect(runs).toBeGreaterThan(0);
+  });
+
+  // RF022 AC1 (Requisitos v4.0.0): Foundation validates the approved v2.0.0
+  // dictionary, 1644 elements including the 929 historical ones.
+  test('the bootstrap run validated the v2.0.0 dictionary: 1644 elements, 929 historical', async () => {
+    const run = await latestFoundationDataRun();
+    expect(run).not.toBeNull();
+    expect(run!.dictionaryVersion).toBe('2.0.0');
+    expect(run!.validationSummary.dictionaryCompleteness).toMatchObject({
+      dictionaryVersion: '2.0.0',
+      loadedTotal: 1644,
+      uniqueTotal: 1644,
+      historicalTotal: 929,
+      missingHistoricalIds: [],
+      verified: true,
+    });
   });
 });
 

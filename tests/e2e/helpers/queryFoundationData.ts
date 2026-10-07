@@ -58,6 +58,15 @@ export async function countFoundationDataRuns(): Promise<number> {
 }
 
 /**
+ * RF022 AC1: the newest FoundationDataRun, for the dictionary release and
+ * completeness verdict the bootstrap recorded on it.
+ */
+export async function latestFoundationDataRun(): Promise<Record<string, any> | null> {
+  const db = await getDb();
+  return db.collection('foundationDataRuns').find({}).sort({ startedAt: -1 }).limit(1).next();
+}
+
+/**
  * RF028 (#330) fixture: dict-08_MAIN_GAPS.md's "Reference data pipeline" row
  * names ReferenceDatasetRelease as the entity a Fase 2 importer must write
  * before any concept/relation load is considered valid (RF028 AC 1, 8) —

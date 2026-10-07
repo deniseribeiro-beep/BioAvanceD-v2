@@ -9,13 +9,14 @@ const miabisSeed = require('../src/reference-data/miabis.min.json');
 const sprecSeed = require('../src/reference-data/sprec.min.json');
 const rcsReferenceData = require('../src/services/rcs-reference-data');
 const FoundationDataRunModel = require('../src/models/FoundationDataRun');
-const canonicalDictionary = require('../src/reference-data/canonical-dictionary');
+const canonicalDictionary = require('../src/reference-data/canonical-dictionary/v2');
 const { CANONICAL_COLLECTIONS } = require('../src/config/collections');
 
 // This bootstrap only wires the 3-entry essential manifest (#366); the full
-// 929-element canonical dictionary (dict-02_DICIONARIO.md v1.3.0) is loaded
-// separately from `canonical-dictionary` (#381) purely to pin
-// dictionaryVersion/dictionaryChecksum/completeness on each run — Mongo
+// canonical dictionary is loaded separately (#381) purely to pin
+// dictionaryVersion/dictionaryChecksum/completeness on each run. RF022 AC1
+// (Requisitos v4.0.0) names the approved v2.0.0 release, 1644 elements with
+// the 929 historical ones, so that is the catalog it pins — Mongo
 // schemas for the ~817 non-technical domain elements are still out of scope
 // (dict-08_MAIN_GAPS.md's per-domain rows, tracked independently).
 
@@ -126,8 +127,8 @@ async function runSeed({ db, args, environment, deploymentId }) {
   const runs = db.collection(CANONICAL_COLLECTIONS.foundationDataRuns);
   const previousRun = await runs.find({ environment }).sort({ startedAt: -1 }).limit(1).next();
   const steps = [];
-  // #381: the completeness gate dict-08_MAIN_GAPS.md names for the
-  // Foundation Data Pipeline row ("929 elementos verificados") — computed
+  // #381, RF022 AC1: the dictionary completeness check (v2.0.0: 1644
+  // elements, every historical id present) — computed
   // once per run and recorded regardless of manifest-step outcome, since it
   // verifies the dictionary artifact itself, not this run's manifest steps.
   const dictionaryCompleteness = canonicalDictionary.checkCompleteness();
