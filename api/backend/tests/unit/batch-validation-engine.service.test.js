@@ -114,6 +114,26 @@ describe('batch-validation-engine.service#buildSampleRow', () => {
     });
   });
 
+  // The same failure mode on the storage pair, and the one that kept every
+  // valid row out: parseSampleRow reads boxId and positionCode, but the
+  // header map had no entry for either, so createSample's required-location
+  // check rejected every sample the async importer handed it.
+  it('maps the boxId and positionCode headers onto the pair parseSampleRow reads', () => {
+    const importLGPDService = require('../../src/services/import-lgpd.service');
+    const boxId = '64b000000000000000000001';
+
+    [
+      { boxId, positionCode: 'A1' },
+      { boxid: boxId, position: 'A1' },
+      { box_id: boxId, wellPosition: 'A1' },
+    ].forEach((row) => {
+      const parsed = importLGPDService.parseSampleRow(batchValidationEngine.buildSampleRow({ ...row, sampleType: 'Sangue' }));
+
+      expect(parsed.boxId, JSON.stringify(row)).toBe(boxId);
+      expect(parsed.positionCode, JSON.stringify(row)).toBe('A1');
+    });
+  });
+
   it('leaves sourceRecordId null when the file carries no specimen id', () => {
     const importLGPDService = require('../../src/services/import-lgpd.service');
 

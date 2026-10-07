@@ -423,6 +423,14 @@ class BatchValidationEngine {
       // Recognizing the header names is still useful for detectDataType()'s
       // sample-vs-patient heuristic below, so they stay out of that list;
       // they just no longer feed a dead target field here.
+      //
+      // The canonical pair itself was never mapped, so it was dropped the
+      // same way, and createSample, which requires a box and a position,
+      // rejected every row this importer handed it.
+      boxid: 'boxId',
+      positioncode: 'positionCode',
+      position: 'positionCode',
+      wellposition: 'positionCode',
       linkedproject: 'linkedProject',
       projetovinculado: 'linkedProject',
       currentstatus: 'currentStatus',
