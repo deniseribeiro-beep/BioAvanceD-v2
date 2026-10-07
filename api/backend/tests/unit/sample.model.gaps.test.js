@@ -220,3 +220,15 @@ describe('SampleModel.create - field normalization', () => {
     expect(sample.totalReturned).toBe(0);
   });
 });
+
+describe('Sample.create - sourceRecordId (v2.0.0 ELM-0011)', () => {
+  it('keeps the source system id apart from the internal specimenId', () => {
+    const created = Sample.create({ ...validData, sourceRecordId: 'LIMS-0042' });
+    expect(created.sourceRecordId).toBe('LIMS-0042');
+    expect(created.specimenId).toBe('SPEC-001');
+  });
+
+  it('defaults sourceRecordId to null when none was imported', () => {
+    expect(Sample.create(validData).sourceRecordId).toBeNull();
+  });
+});

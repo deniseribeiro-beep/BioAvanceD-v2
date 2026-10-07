@@ -689,7 +689,8 @@ class SampleService {
       // recognized or not, sailed through untouched. Use an allowlist
       // instead, derived from SampleModel.create()'s field set
       // (src/models/Sample.js:184-246), excluding identity (specimenId,
-      // participantId), the 5 status fields above (already handled/
+      // participantId, and sourceRecordId, the source system's id an
+      // import recorded), the 5 status fields above (already handled/
       // recomputed), and _id/createdAt/updatedAt (this service owns
       // updatedAt below). Add a field to Sample.create() and this list
       // together.

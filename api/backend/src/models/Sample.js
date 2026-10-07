@@ -34,6 +34,9 @@ const SampleSchema = new Schema({
   // accurate; what they are not is self-executing.
   specimenId: { type: String, required: true, index: true },
   participantId: { type: String, required: true, index: true },
+  // v2.0.0 ELM-0011: the id the sample carried in the system it was
+  // imported from, kept for reconciliation. Never the specimenId.
+  sourceRecordId: { type: String, default: null },
   sampleType: { type: String, required: true },
   sampleOrigin: { type: String, required: true },
   extractionProtocol: { type: String, required: true },
@@ -189,6 +192,7 @@ class SampleModel {
     return {
       specimenId: String(data.specimenId),
       participantId: String(data.participantId),
+      sourceRecordId: data.sourceRecordId ? String(data.sourceRecordId) : null,
       sampleType: data.sampleType,
       sampleOrigin: data.sampleOrigin,
       extractionProtocol: data.extractionProtocol,

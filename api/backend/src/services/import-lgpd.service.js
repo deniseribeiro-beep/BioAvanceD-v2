@@ -2099,6 +2099,11 @@ class ImportLGPDService {
 
     return {
       participantId: row.participantId?.trim() || null, // Aceita participantId, participantId ou patient_id
+      // ID da amostra no sistema de origem (v2.0.0 ELM-0011, RF029 AC#2).
+      // Nao vira specimenId, que e o ID interno gerado pelo createSample.
+      sourceRecordId: row.sourceRecordId !== undefined && row.sourceRecordId !== null && String(row.sourceRecordId).trim() !== ''
+        ? String(row.sourceRecordId).trim()
+        : null,
       patientName: row.patientName?.trim() || row.nomePaciente?.trim() || row.nome?.trim() || null,
       patientBirthDate: this.parseBirthDate(row.birthDate || row.dataNascimento || row.patientBirthDate),
       patientEmail: row.email ? String(row.email).trim().toLowerCase() : null,

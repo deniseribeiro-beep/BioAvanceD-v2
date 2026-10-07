@@ -98,6 +98,31 @@ describe('batch-validation-engine.service#buildSampleRow', () => {
     });
   });
 
+  // The same failure mode on the specimen column: `sampleid`/`specimenid`
+  // mapped onto `sampleID`, which parseSampleRow never reads, so the file's
+  // own id was dropped and createSample generated one with no trace of it.
+  // It lands in sourceRecordId (v2.0.0 ELM-0011), never in specimenId.
+  it('maps every specimen id header onto sourceRecordId, which parseSampleRow reads', () => {
+    const importLGPDService = require('../../src/services/import-lgpd.service');
+
+    ['sampleID', 'specimenId', 'specimen_id', 'sourceRecordId'].forEach((header) => {
+      const mapped = batchValidationEngine.buildSampleRow({ [header]: ' LIMS-0042 ', sampleType: 'Sangue' });
+      const parsed = importLGPDService.parseSampleRow(mapped);
+
+      expect(parsed.sourceRecordId, `header: ${header}`).toBe('LIMS-0042');
+      expect(parsed.specimenId, `header: ${header}`).toBeUndefined();
+    });
+  });
+
+  it('leaves sourceRecordId null when the file carries no specimen id', () => {
+    const importLGPDService = require('../../src/services/import-lgpd.service');
+
+    const parsed = importLGPDService.parseSampleRow(batchValidationEngine.buildSampleRow({ sampleType: 'Sangue' }));
+    expect(parsed.sourceRecordId).toBeNull();
+    expect(importLGPDService.parseSampleRow({ sourceRecordId: '  ' }).sourceRecordId).toBeNull();
+    expect(importLGPDService.parseSampleRow({ sourceRecordId: 4217 }).sourceRecordId).toBe('4217');
+  });
+
   // #525: `locationid`/`idlocalizacao` headers used to map onto a
   // `locationID` field that import-lgpd.service.js#parseSampleRow never
   // reads (#459/#462 dropped the legacy field from runtime persistence in

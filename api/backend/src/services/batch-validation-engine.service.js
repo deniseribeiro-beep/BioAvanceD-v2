@@ -386,8 +386,15 @@ class BatchValidationEngine {
       // so no batch-imported sample carried its participant's id.
       participantid: 'participantId',
       patientid: 'participantId',
-      sampleid: 'sampleID',
-      specimenid: 'sampleID',
+      // The same failure mode on the specimen column: these targeted
+      // 'sampleID', which parseSampleRow never reads, so a file's own id was
+      // dropped silently. specimenId is the system's internal id (v2.0.0
+      // ELM-0114) and createSample generates it; the source system's id is
+      // BaseRecord.sourceRecordId (ELM-0011), which RF029 AC#2 requires an
+      // ingestion to keep.
+      sampleid: 'sourceRecordId',
+      specimenid: 'sourceRecordId',
+      sourcerecordid: 'sourceRecordId',
       sampletype: 'sampleType',
       tipodeamostra: 'sampleType',
       sampleorigin: 'sampleOrigin',
