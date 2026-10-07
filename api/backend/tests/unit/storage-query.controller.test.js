@@ -88,9 +88,21 @@ describe('storage-query.controller.searchSamplesController', () => {
   const controller = createSearchSamplesController();
 
   it('passes req.query.q through to the use case and returns 200', async () => {
+    // One row in the shape enrichSamplesWithConsent really returns.
+    const found = [{
+      _id: 'oid-1',
+      specimenId: 'S1',
+      barcode: 'BC1',
+      participantId: 'P1',
+      sampleType: 'blood',
+      specimenStatus: 'available',
+      consentValid: true,
+      consentStatus: 'CONSENT_ACTIVE',
+      canAllocate: true
+    }];
     const executeSpy = vi
       .spyOn(SearchAllocatableSamplesUseCase.prototype, 'execute')
-      .mockResolvedValue([{ sampleId: 'S1' }]);
+      .mockResolvedValue(found);
     const req = buildReq({ query: { q: 'blood' } });
     const res = buildRes();
 
@@ -98,7 +110,7 @@ describe('storage-query.controller.searchSamplesController', () => {
 
     expect(executeSpy).toHaveBeenCalledWith({ query: 'blood', scopeFilter: {} });
     expect(res.status).toHaveBeenCalledWith(200);
-    expect(res.json).toHaveBeenCalledWith({ success: true, data: [{ sampleId: 'S1' }] });
+    expect(res.json).toHaveBeenCalledWith({ success: true, data: found });
   });
 
   it('defaults query to an empty string when req.query.q is absent', async () => {

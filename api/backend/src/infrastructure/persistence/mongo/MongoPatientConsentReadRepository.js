@@ -60,6 +60,7 @@ class MongoPatientConsentReadRepository {
 
       return {
         _id: sample._id,
+        specimenId: sample.specimenId,
         barcode: sample.barcode,
         participantId: sample.participantId,
         sampleType: sample.sampleType,
