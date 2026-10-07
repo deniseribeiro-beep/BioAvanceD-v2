@@ -376,7 +376,7 @@ describe('sample.routes', () => {
 
     it('accepts a boolean isRareDisease', async () => {
       const executeMock = vi.fn().mockResolvedValue({
-        sample: { _id: { toString: () => 's1' }, patientID: '12345678' },
+        sample: { _id: { toString: () => 's1' }, participantId: '12345678' },
         strictMode: true,
         topology: {},
       });
@@ -392,7 +392,7 @@ describe('sample.routes', () => {
 
     it('accepts a valid boxId/positionCode pair, per issue #462', async () => {
       const executeMock = vi.fn().mockResolvedValue({
-        sample: { _id: { toString: () => 's1' }, patientID: '12345678' },
+        sample: { _id: { toString: () => 's1' }, participantId: '12345678' },
         strictMode: true,
         topology: {},
       });
@@ -529,7 +529,7 @@ describe('sample.routes', () => {
 
     it('returns 201 on success', async () => {
       const executeMock = vi.fn().mockResolvedValue({
-        sample: { _id: { toString: () => 'sample-1' }, patientID: '12345678', sampleType: 'Sangue', barcode: 'BC1' },
+        sample: { _id: { toString: () => 'sample-1' }, participantId: '12345678', sampleType: 'Sangue', barcode: 'BC1' },
         strictMode: true,
         topology: { synced: true, fallbackQueued: false },
       });
@@ -548,7 +548,7 @@ describe('sample.routes', () => {
 
     it('returns 202 when topology sync falls back to quarantine', async () => {
       const executeMock = vi.fn().mockResolvedValue({
-        sample: { _id: { toString: () => 'sample-1' }, patientID: '12345678' },
+        sample: { _id: { toString: () => 'sample-1' }, participantId: '12345678' },
         strictMode: false,
         topology: { synced: false, fallbackQueued: true },
       });
@@ -663,7 +663,7 @@ describe('sample.routes', () => {
 
     it('uses req.t fallback strings and quality=null when req.t is absent and sample.quality is undefined', async () => {
       const executeMock = vi.fn().mockResolvedValue({
-        sample: { _id: { toString: () => 'sample-1' }, patientID: '12345678', quality: undefined },
+        sample: { _id: { toString: () => 'sample-1' }, participantId: '12345678', quality: undefined },
         strictMode: true,
         topology: { synced: true, fallbackQueued: false },
       });
@@ -686,7 +686,7 @@ describe('sample.routes', () => {
 
     it('uses the partial-success message suffix when topology sync falls back to quarantine', async () => {
       const executeMock = vi.fn().mockResolvedValue({
-        sample: { _id: { toString: () => 'sample-1' }, patientID: '12345678', quality: null },
+        sample: { _id: { toString: () => 'sample-1' }, participantId: '12345678', quality: null },
         strictMode: false,
         topology: { synced: false, fallbackQueued: true },
       });
@@ -723,7 +723,7 @@ describe('sample.routes', () => {
 
     it('falls back to null actor fields when req.user is absent entirely (no audit log write)', async () => {
       const executeMock = vi.fn().mockResolvedValue({
-        sample: { _id: { toString: () => 's1' }, patientID: '12345678' },
+        sample: { _id: { toString: () => 's1' }, participantId: '12345678' },
         strictMode: true,
         topology: {},
       });
@@ -812,7 +812,7 @@ describe('sample.routes', () => {
 
     it('uses the req.t fallback in the partial-success (202) message', async () => {
       const executeMock = vi.fn().mockResolvedValue({
-        sample: { _id: { toString: () => 'sample-1' }, patientID: '12345678' },
+        sample: { _id: { toString: () => 'sample-1' }, participantId: '12345678' },
         strictMode: false,
         topology: { synced: false, fallbackQueued: true },
       });
@@ -2064,14 +2064,14 @@ describe('sample.routes', () => {
     });
 
     it('returns 200 with the sample', async () => {
-      const getSample = vi.fn().mockResolvedValue({ _id: '1', patientID: 'P1' });
+      const getSample = vi.fn().mockResolvedValue({ _id: '1', participantId: 'P1' });
       const { router } = loadRoute({ sampleServiceOverrides: { getSample } });
       const app = buildApp(router, {});
 
       const res = await request(app).get('/api/samples/000000000000000000000000');
 
       expect(res.status).toBe(200);
-      expect(res.body.data).toEqual({ _id: '1', patientID: 'P1' });
+      expect(res.body.data).toEqual({ _id: '1', participantId: 'P1' });
     });
 
     // #340: an existing sample outside the caller's organization scope
