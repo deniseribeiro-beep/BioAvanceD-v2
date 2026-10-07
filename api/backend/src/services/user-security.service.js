@@ -2,7 +2,9 @@ const bcrypt = require('bcryptjs');
 const speakeasy = require('speakeasy');
 const logger = require('../utils/logger');
 const { ObjectId } = require('mongodb');
+const { randomUUID, randomInt } = require('crypto');
 const { hashToken } = require('../utils/tokenHash');
+const RecoveryCodeSetModel = require('../models/RecoveryCodeSet');
 
 /**
  * Service de Segurança do Usuário
@@ -103,13 +105,17 @@ class UserSecurityService {
 
       // Busca recovery codes
       const recoveryCodesCollection = db.collection('recovery_codes');
-      const recoveryCodes = await recoveryCodesCollection.findOne({ userID: new ObjectId(userID) });
-      
+      const recoveryCodes = await recoveryCodesCollection.findOne(
+        RecoveryCodeSetModel.ownerFilter(new ObjectId(userID))
+      );
+
       return {
         primaryEnabled: user.mfaEnabled || false,
-        primarySetupDate: user.mfaSetupDate || null,
+        // dict-02 P1X-0198 mfaSetupAt; the writers still store it as
+        // mfaActivationDate (#1330). Nothing writes mfaSetupDate.
+        primarySetupDate: user.mfaSetupAt || user.mfaActivationDate || null,
         recoveryCodes: {
-          remaining: recoveryCodes?.remaining || 0,
+          remaining: RecoveryCodeSetModel.remainingOf(recoveryCodes),
           codes: null // Nunca retorna códigos em listagem
         }
       };
@@ -153,10 +159,15 @@ class UserSecurityService {
       const strength = this.calculatePasswordStrength(user.password);
       const strengthScore = strength === 'strong' ? 5 : strength === 'medium' ? 3 : 1;
       
-      // Calcula expiração (90 dias padrão)
-      const lastChanged = user.passwordChangedAt || user.createdAt || new Date();
-      const lastChangedDate = lastChanged instanceof Date ? lastChanged : new Date(lastChanged);
-      const expiresAt = new Date(lastChangedDate.getTime() + 90 * 24 * 60 * 60 * 1000);
+      // #1251: the policy's expirationDays and the same anchor login uses
+      // (passwordChangedAt, then the pre-rename lastPasswordChange, then
+      // createdAt). 0 days means no expiry, reported as null.
+      const passwordService = require('./password.service');
+      const policy = await passwordService.resolvePasswordPolicy(db);
+      const lastChanged = passwordService.passwordChangedAt(user) || new Date();
+      const expiresAt = policy.expirationDays === 0
+        ? null
+        : new Date(lastChanged.getTime() + policy.expirationDays * 24 * 60 * 60 * 1000);
       
       return {
         lastChanged: lastChanged,
@@ -459,25 +470,27 @@ class UserSecurityService {
         throw new Error('Senha atual incorreta');
       }
 
-      // Valida complexidade da senha
-      const PasswordValidator = require('../utils/passwordValidator');
-      PasswordValidator.validateOrThrow(newPassword);
-      
-      // Verifica se não está reutilizando senha (últimas 5)
-      const passwordHistory = user.passwordHistory || [];
-      for (const oldHash of passwordHistory) {
-        const isReused = await bcrypt.compare(newPassword, oldHash);
-        if (isReused) {
-          throw new Error('Você não pode reutilizar uma senha recente');
-        }
+      // #1244: reuse follows passwordRules through the one shared check.
+      // This site used to compare every stored hash but never the current
+      // password, and kept 5 where the others kept 3. Its own message is
+      // kept, since UserSecurityPage shows it.
+      const passwordService = require('./password.service');
+      const passwordPolicy = await passwordService.resolvePasswordPolicy(db);
+      // #1246: the policy's strength rules, as every other password write
+      // checks them; this site had its own 12-character validator.
+      passwordService.validateStrength(newPassword, passwordPolicy, user);
+      try {
+        await passwordService.validateReuse(newPassword, user, passwordPolicy);
+      } catch (reuseError) {
+        throw new Error('Você não pode reutilizar uma senha recente');
       }
-      
+
       // Hash da nova senha
       const saltRounds = 12;
       const newPasswordHash = await bcrypt.hash(newPassword, saltRounds);
-      
+
       // Atualiza senha e histórico
-      const newPasswordHistory = [user.password, ...passwordHistory].slice(0, 5);
+      const newPasswordHistory = passwordService.nextPasswordHistory(user, passwordPolicy);
       
       await usersCollection.updateOne(
         { _id: new ObjectId(userID) },
@@ -486,6 +499,9 @@ class UserSecurityService {
             password: newPasswordHash,
             passwordHistory: newPasswordHistory,
             passwordChangedAt: new Date(),
+            // #1250: the owner replaced it, which is what forceReset asks
+            // for; auth.controller's changePassword clears it the same way.
+            forceReset: false,
             // #995: a successful change clears the counter AND the lock, the
             // same pairing processLogin's success path uses. This site cleared
             // neither, so it could only ever count up.
@@ -519,18 +535,24 @@ class UserSecurityService {
         codes.map(code => bcrypt.hash(code, 10))
       );
       
-      // Remove códigos antigos e salva novos
+      // Remove códigos antigos e salva novos: a new set replaces the user's
+      // previous one in place, under the canonical names, and drops the
+      // pre-dictionary ones a document written before them still carries.
+      const owner = new ObjectId(userID);
+      const filter = RecoveryCodeSetModel.ownerFilter(owner);
+      const previous = await recoveryCodesCollection.findOne(filter);
+      const now = new Date();
+      const set = RecoveryCodeSetModel.fieldsOf({
+        recoveryCodeSetId: randomUUID(),
+        userAccountId: owner,
+        codeHashes: hashedCodes,
+        generatedAt: now,
+        regeneratedAt: previous ? now : null
+      });
+      const unset = Object.fromEntries(RecoveryCodeSetModel.LEGACY_FIELDS.map((field) => [field, '']));
       await recoveryCodesCollection.updateOne(
-        { userID: new ObjectId(userID) },
-        {
-          $set: {
-            codes: hashedCodes,
-            remaining: 10,
-            usedCodes: [],
-            createdAt: new Date(),
-            updatedAt: new Date()
-          }
-        },
+        filter,
+        { $set: set, $unset: unset },
         { upsert: true }
       );
       
@@ -547,9 +569,12 @@ class UserSecurityService {
    */
   generateRecoveryCode() {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Remove I, O, 0, 1 para evitar confusão
+    // #1331: a code now signs in, so it is drawn from the CSPRNG, not
+    // Math.random. Sign-in recognises this alphabet and length
+    // (auth.service.js asRecoveryCode); change them together.
     let code = '';
     for (let i = 0; i < 8; i++) {
-      code += chars.charAt(Math.floor(Math.random() * chars.length));
+      code += chars.charAt(randomInt(chars.length));
     }
     return code;
   }
@@ -685,8 +710,17 @@ class UserSecurityService {
         }
       );
 
-      // Aqui você pode enviar o email com o link de reset
-      // Por enquanto, apenas retorna o token (em produção, enviar por email)
+      // #1203: the second instance of that issue's bug. The route answers
+      // "Link de reset de senha enviado com sucesso" and nothing was sent;
+      // the controller strips resetToken from the response, so the link
+      // reached nobody. AWAITED here, unlike auth.service's unauthenticated
+      // sibling: the caller is the authenticated account owner, so there is
+      // no existence to hide, and a failed send must surface as the route's
+      // 400 rather than as a success toast.
+      const resetLink = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/reset-password?token=${resetToken}`;
+      const notificationService = require('./NotificationService');
+      await notificationService.sendPasswordReset(user.email, resetLink, { expiresInMinutes: Math.round(expirationHours * 60) });
+
       logger.info(`Token de reset de senha gerado para usuário ${userID}, expira em ${expirationHours} horas`);
 
       return {

@@ -3,8 +3,9 @@ const logger = require('./logger');
 /**
  * #1102: indexes for `participantIdentities`, which had none of any kind.
  *
- * The collection is absent from `scripts/create-db.js` (this repo's index
- * list) and has no model file -- it is reached through the raw driver via
+ * The collection was absent from the retired `create-db.js` index list
+ * (now `docs/historical/create-db.js`, #1055) and has no model file -- it
+ * is reached through the raw driver via
  * `getCollection(db, 'participantIdentities')` -- so unlike #936/#941 there
  * was not even an inert `Schema.index(...)` declaration to build. Every
  * query against it is a collection scan today.
@@ -25,7 +26,8 @@ const logger = require('./logger');
  * - `identityDocumentHash` and `birthDateHash` are the blind-index siblings
  *   #574 added so the identity-matching sites could stop querying plaintext.
  *   A deterministic blind index whose entire purpose is to be queryable, and
- *   which is not indexed, is only half the construct.
+ *   which is not indexed, is only half the construct. `patientNameHash`
+ *   joined them in #1104, for listPatients' exact name filter.
  * - `participantId` is what every *other* reader of this collection matches
  *   on -- `eConsent.js:131`, `consent.service.js:552`, `patient.service.js:588`,
  *   `intakeWizard.js:1008` and `getIdentityByParticipantId`.
@@ -39,18 +41,21 @@ const logger = require('./logger');
  * ciphertext-only, its plaintext arm has been removed from all four matching
  * sites, and those queries are now a single indexed condition.
  *
- * `identity_document_hash` is **not** yet, and it would be wrong to imply
- * otherwise. identityDocument is still dual-written, so its matching sites
- * query `{ $or: [{ identityDocumentHash: { $in: [...] } }, { <plaintext arm> }] }`,
- * and Mongo can only serve an `$or` from indexes when EVERY arm is indexed.
- * Until that plaintext column is dropped (#1104) that union still scans.
+ * `identity_document_hash` and `patient_name_hash` are too, as of #1104's
+ * cutover of the last two civil-identity fields. Both are ciphertext-only.
+ * The `$or` plaintext arms on identityDocument are gone, because Mongo can
+ * only serve an `$or` from indexes when EVERY arm is indexed. listPatients'
+ * `$regex` on patientName became an exact match on `patientNameHash`. The
+ * plaintext conditions that remain are the keyless-stack branch (#1083),
+ * reached only when no ENCRYPTION_KEY is configured and the plaintext is
+ * therefore the only thing written.
  *
- * The plaintext arms are deliberately left unindexed rather than indexed to
- * close that gap: they are the columns being removed, so indexing them buys
- * write amplification on a field with a scheduled deletion date. This is the
- * cost half of the sequencing argument #1099 makes about correctness -- the
- * index has to exist *before* the plaintext arm goes, or the day it goes is
- * the day every import-path dedup becomes an unindexed scan per row.
+ * The plaintext columns were deliberately never indexed: they were the
+ * columns being removed, so indexing them would have bought write
+ * amplification on a field with a scheduled deletion date. This is the cost
+ * half of the sequencing argument #1099 makes about correctness -- the index
+ * had to exist *before* the plaintext arm went, or the day it went would have
+ * been the day every import-path dedup became an unindexed scan per row.
  *
  * #1102 originally cited "#574/#1072" for that removal. Both are CLOSED and
  * #1072 is about mfaSecret, not identity -- #574 shipped only its own
@@ -71,6 +76,23 @@ const logger = require('./logger');
  * the planner declines to use it -- which would leave exactly the collection
  * scans this exists to remove.
  *
+ * ## The one exception: phoneHash is UNIQUE and partial (#1166 slice 3)
+ *
+ * Everything above is about lookup cost. `phoneHash` is a constraint: phone
+ * uniqueness (#1165) moves onto the identity side, over the digits-only blind
+ * index, because the plaintext `patients.phone` column it is enforced on
+ * today is being removed (#1166 slice 4). It is partial on `$gt: ''` for the
+ * reason #1165 gives: a participant with no phone -- a null or absent hash,
+ * and every identity row written before #1166 slice 1 has none -- must not
+ * collide with every other one, and `$ne` is not a legal partial-filter
+ * operator. `[ran it]` on mongo:7: builds, rejects a duplicate hash with
+ * E11000 keyPattern { phoneHash: 1 }, admits any number of null, missing or
+ * empty hashes.
+ *
+ * Because rows without a hash are outside it, this does not yet cover
+ * participants written before slice 1; `patients_phone_unique_sanitized_v2`
+ * still does, and stays until slice 4 backfills their hash.
+ *
  * ## Failure posture
  *
  * Best-effort and logged, like the two precedents: a failed index build must
@@ -79,7 +101,7 @@ const logger = require('./logger');
  * happening at all, leaving every query a scan. A silent catch would make
  * that invisible, which is the whole defect this closes.
  *
- * One catch PER index, not one around the batch: `scripts/create-db.js:99`
+ * One catch PER index, not one around the batch: `docs/historical/create-db.js:119`
  * records that lesson (#1027) after a single failure took the rest of a
  * build down with it. `Promise.all` over per-index `try`/`catch` gives that
  * and one other thing the resolver depends on -- every `createIndex` is
@@ -89,8 +111,17 @@ const logger = require('./logger');
  */
 const PARTICIPANT_IDENTITY_INDEXES = [
   [{ identityDocumentHash: 1 }, { name: 'participant_identities_identity_document_hash_idx_v1' }],
+  [{ patientNameHash: 1 }, { name: 'participant_identities_patient_name_hash_idx_v1' }],
   [{ birthDateHash: 1 }, { name: 'participant_identities_birth_date_hash_idx_v1' }],
-  [{ participantId: 1 }, { name: 'participant_identities_participant_id_idx_v1' }]
+  [{ participantId: 1 }, { name: 'participant_identities_participant_id_idx_v1' }],
+  [
+    { phoneHash: 1 },
+    {
+      name: 'participant_identities_phone_hash_unique_v1',
+      unique: true,
+      partialFilterExpression: { phoneHash: { $gt: '' } }
+    }
+  ]
 ];
 
 async function ensureParticipantIdentityIndexes(collection) {

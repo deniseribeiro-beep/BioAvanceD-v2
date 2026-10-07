@@ -116,7 +116,7 @@ describe('AuthService.login', () => {
     const db = makeLoginDb(vi.fn().mockResolvedValue(user));
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
 
-    const result = await authService.login(db, { email: 'exact@test.com', password: 'pw' }, {});
+    const result = await authService.login(db, { email: 'exact@test.com', password: 'pw-of-at-least-15' }, {});
 
     expect(result.token).toBeTruthy();
     expect(result.user.email).toBe('exact@test.com');
@@ -143,7 +143,7 @@ describe('AuthService.login', () => {
     const db = makeLoginDb(findOneImpl);
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
 
-    const result = await authService.login(db, { email: identifier, password: 'pw' }, {});
+    const result = await authService.login(db, { email: identifier, password: 'pw-of-at-least-15' }, {});
 
     expect(result.token).toBeTruthy();
     expect(result.user.username).toBe('johnsmith');
@@ -169,7 +169,7 @@ describe('AuthService.login', () => {
     const db = makeLoginDb(vi.fn().mockResolvedValue(null)); // never found -> exercises both stages
 
     await expect(
-      authService.login(db, { email: identifier, password: 'pw' }, {})
+      authService.login(db, { email: identifier, password: 'pw-of-at-least-15' }, {})
     ).rejects.toThrow('Credenciais inválidas');
 
     const lookupCalls = orLookupCalls(db.usersCollectionApi.findOne);
@@ -250,7 +250,7 @@ describe('AuthService.login -- #1052 no account identifiers in the application l
     const db = makeLoginDb(vi.fn().mockResolvedValue(null));
 
     await expect(
-      authService.login(db, { email: 'nobody@example.test', password: 'pw' }, {})
+      authService.login(db, { email: 'nobody@example.test', password: 'pw-of-at-least-15' }, {})
     ).rejects.toThrow('Credenciais inválidas');
 
     // The debug dump was the ONLY `find` the users collection saw on this
@@ -274,7 +274,7 @@ describe('AuthService.login -- #1052 no account identifiers in the application l
     });
 
     await expect(
-      authService.login(db, { email: 'nobody@example.test', password: 'pw' }, {})
+      authService.login(db, { email: 'nobody@example.test', password: 'pw-of-at-least-15' }, {})
     ).rejects.toThrow('Credenciais inválidas');
 
     const transcript = lines.join('\n');
@@ -288,7 +288,7 @@ describe('AuthService.login -- #1052 no account identifiers in the application l
     const db = makeLoginDb(vi.fn().mockResolvedValue(user));
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
 
-    const result = await authService.login(db, { email: SECRET_EMAIL, password: 'pw' }, {});
+    const result = await authService.login(db, { email: SECRET_EMAIL, password: 'pw-of-at-least-15' }, {});
     expect(result.token).toBeTruthy();
 
     const transcript = lines.join('\n');
@@ -304,7 +304,7 @@ describe('AuthService.login -- #1052 no account identifiers in the application l
     const db = makeLoginDb(vi.fn().mockResolvedValue(user));
 
     await expect(
-      authService.login(db, { email: SECRET_EMAIL, password: 'pw' }, {})
+      authService.login(db, { email: SECRET_EMAIL, password: 'pw-of-at-least-15' }, {})
     ).rejects.toThrow();
 
     const transcript = lines.join('\n');
@@ -321,7 +321,7 @@ describe('AuthService.login -- #1052 no account identifiers in the application l
     const db = makeLoginDb(vi.fn().mockResolvedValue(null));
 
     await expect(
-      authService.login(db, { email: forged, password: 'pw' }, {})
+      authService.login(db, { email: forged, password: 'pw-of-at-least-15' }, {})
     ).rejects.toThrow('Credenciais inválidas');
 
     const transcript = lines.join('\n');
@@ -335,7 +335,7 @@ describe('AuthService.login -- #1052 no account identifiers in the application l
     const db = makeLoginDb(vi.fn().mockResolvedValue(null));
 
     await expect(
-      authService.login(db, { email: 'nobody@example.test', password: 'pw' }, {})
+      authService.login(db, { email: 'nobody@example.test', password: 'pw-of-at-least-15' }, {})
     ).rejects.toThrow('Credenciais inválidas');
   });
 
@@ -344,9 +344,72 @@ describe('AuthService.login -- #1052 no account identifiers in the application l
     const db = makeLoginDb(vi.fn().mockResolvedValue(user));
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
 
-    const result = await authService.login(db, { email: user.email, password: 'pw' }, {});
+    const result = await authService.login(db, { email: user.email, password: 'pw-of-at-least-15' }, {});
 
     expect(result.token).toBeTruthy();
     expect(result.user.email).toBe(user.email);
+  });
+});
+
+// #914 / RF001, RF014 AC#3: authentication.requireMFA (dict-02 P1X-0278) decides
+// whether a non-admin's first login must enrol MFA. It was never read, so the
+// enrolment ran whatever the Administrador had configured.
+describe('AuthService.login -- #914 authentication.requireMFA', () => {
+  function withSecurityConfig(db, config) {
+    const base = db.collection;
+    db.collection = vi.fn((name) => (name === 'security_config'
+      ? { findOne: vi.fn().mockResolvedValue(config) }
+      : base(name)));
+    return db;
+  }
+
+  function firstLoginUser() {
+    return makeUser({ lastLogin: null, mfaEnabled: false });
+  }
+
+  it('requireMFA: false lets a non-admin first login through without the enrolment step', async () => {
+    const db = withSecurityConfig(makeLoginDb(vi.fn().mockResolvedValue(firstLoginUser())), {
+      _id: 'main', authentication: { requireMFA: false },
+    });
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+
+    const result = await authService.login(db, { email: 'user@test.com', password: 'pw-of-at-least-15' }, {});
+
+    expect(result.requiresMFASetup).toBeUndefined();
+    expect(result.token).toBeTruthy();
+  });
+
+  it('requireMFA: true keeps the mandatory first-login enrolment', async () => {
+    const db = withSecurityConfig(makeLoginDb(vi.fn().mockResolvedValue(firstLoginUser())), {
+      _id: 'main', authentication: { requireMFA: true },
+    });
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+
+    const result = await authService.login(db, { email: 'user@test.com', password: 'pw-of-at-least-15' }, {});
+
+    expect(result.requiresMFASetup).toBe(true);
+    expect(result.token).toBeUndefined();
+  });
+
+  it('no policy document keeps MFA mandatory -- the canonical default, and the behaviour before the read existed', async () => {
+    const db = withSecurityConfig(makeLoginDb(vi.fn().mockResolvedValue(firstLoginUser())), null);
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+
+    const result = await authService.login(db, { email: 'user@test.com', password: 'pw-of-at-least-15' }, {});
+
+    expect(result.requiresMFASetup).toBe(true);
+  });
+
+  it('an unreadable policy fails CLOSED, keeping MFA mandatory', async () => {
+    const db = makeLoginDb(vi.fn().mockResolvedValue(firstLoginUser()));
+    const base = db.collection;
+    db.collection = vi.fn((name) => (name === 'security_config'
+      ? { findOne: vi.fn().mockRejectedValue(new Error('config unavailable')) }
+      : base(name)));
+    vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
+
+    const result = await authService.login(db, { email: 'user@test.com', password: 'pw-of-at-least-15' }, {});
+
+    expect(result.requiresMFASetup).toBe(true);
   });
 });

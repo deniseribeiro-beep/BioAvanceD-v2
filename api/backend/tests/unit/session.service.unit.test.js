@@ -162,6 +162,21 @@ describe('#914: session.timeoutMinutes drives inactiveTimeout', () => {
     expect(session.inactiveTimeout).toBe(45 * 60 * 1000);
   });
 
+  // #1247: dict-02 P1X-0313, "Timeout substitutivo no perfil reforçado".
+  it('takes enhancedSecurity.sessionTimeoutMinutes while the mode is on', async () => {
+    const collection = makeCollection();
+    const db = dbWith({ _id: 'main', session: { timeoutMinutes: 45 }, enhancedSecurity: { enabled: true, sessionTimeoutMinutes: 15 } }, collection);
+    const session = await sessionService.createSession(db, 'user-1', 'a', 'r', null);
+    expect(session.inactiveTimeout).toBe(15 * 60 * 1000);
+  });
+
+  it('ignores enhancedSecurity.sessionTimeoutMinutes while the mode is off', async () => {
+    const collection = makeCollection();
+    const db = dbWith({ _id: 'main', session: { timeoutMinutes: 45 }, enhancedSecurity: { enabled: false, sessionTimeoutMinutes: 15 } }, collection);
+    const session = await sessionService.createSession(db, 'user-1', 'a', 'r', null);
+    expect(session.inactiveTimeout).toBe(45 * 60 * 1000);
+  });
+
   it('falls back to 30 minutes when the policy is unreadable, rather than locking everyone out', async () => {
     const collection = makeCollection();
     const db = {
@@ -191,6 +206,90 @@ describe('#914: session.timeoutMinutes drives inactiveTimeout', () => {
   });
 });
 
+// #914 / RF014 AC#1, RNF021 AC#3: session.maxSessionDurationHours (dict-02
+// P1X-0293, "Duração máxima absoluta") is carried by refreshExpiresAt, set once
+// at creation from sessionStartedAt and never extended by rotation. Before this,
+// rotateSessionTokens reset it to now + 7 days on every refresh, so no session
+// ever had to end.
+describe('#914: session.maxSessionDurationHours is an absolute cap', () => {
+  const HOUR = 60 * 60 * 1000;
+  beforeEach(() => { sessionService.sessions.clear(); });
+
+  function dbWith(securityConfig, collection) {
+    return {
+      collection: vi.fn((name) => (name === 'security_config'
+        ? { findOne: vi.fn().mockResolvedValue(securityConfig) }
+        : collection)),
+    };
+  }
+
+  it('sets refreshExpiresAt to sessionStartedAt + the configured cap, not + 7 days', async () => {
+    const db = dbWith({ _id: 'main', session: { maxSessionDurationHours: 4 } }, makeCollection());
+
+    const session = await sessionService.createSession(db, 'user-1', 'a', 'r', null);
+
+    expect(session.refreshExpiresAt.getTime() - session.createdAt.getTime()).toBe(4 * HOUR);
+    expect(session.expiresAt.getTime()).toBeLessThanOrEqual(session.refreshExpiresAt.getTime());
+  });
+
+  it("falls back to getDefaultConfig()'s 12 hours when the policy has no cap", async () => {
+    const db = dbWith(null, makeCollection());
+
+    const session = await sessionService.createSession(db, 'user-1', 'a', 'r', null);
+
+    expect(session.refreshExpiresAt.getTime() - session.createdAt.getTime()).toBe(12 * HOUR);
+  });
+
+  it('never lets the access token outlive the cap', async () => {
+    // The cap is reached 10 minutes from now: the next rotation must clamp the
+    // 15-minute access token to the cap, not issue one past it.
+    const collection = makeCollection();
+    const ceiling = new Date(Date.now() + 10 * 60 * 1000);
+
+    await sessionService.rotateSessionTokens(makeDb(collection), 's1', 'acc', 'ref', { sessionID: 's1', refreshExpiresAt: ceiling });
+
+    const [, { $set }] = collection.updateOne.mock.calls[0];
+    expect($set.refreshExpiresAt.getTime()).toBe(ceiling.getTime());
+    expect($set.expiresAt.getTime()).toBe(ceiling.getTime());
+  });
+
+  it("rotation keeps the session's ceiling instead of sliding it forward", async () => {
+    const collection = makeCollection();
+    const ceiling = new Date(Date.now() + 3 * HOUR);
+
+    await sessionService.rotateSessionTokens(makeDb(collection), 's1', 'acc', 'ref', { sessionID: 's1', refreshExpiresAt: ceiling });
+
+    const [, { $set }] = collection.updateOne.mock.calls[0];
+    expect($set.refreshExpiresAt.getTime()).toBe(ceiling.getTime());
+    expect($set.expiresAt.getTime() - Date.now()).toBeLessThanOrEqual(15 * 60 * 1000);
+  });
+
+  it('reads the ceiling from the stored session when the caller does not pass it', async () => {
+    const ceiling = new Date(Date.now() + 2 * HOUR);
+    const collection = makeCollection({ findOne: vi.fn().mockResolvedValue({ sessionID: 's1', refreshExpiresAt: ceiling }) });
+
+    await sessionService.rotateSessionTokens(makeDb(collection), 's1', 'acc', 'ref');
+
+    expect(collection.findOne).toHaveBeenCalledWith({ sessionID: 's1' });
+    const [, { $set }] = collection.updateOne.mock.calls[0];
+    expect($set.refreshExpiresAt.getTime()).toBe(ceiling.getTime());
+  });
+
+  it('a session already past its cap is refused by verifySession', async () => {
+    const now = Date.now();
+    const session = {
+      sessionID: 's-capped', userID: 'u1', tokenHash: sessionService.getTokenHash('capped-tok'),
+      isActive: true, isRevoked: false, lastActivity: new Date(now - 1000), inactiveTimeout: 30 * 60 * 1000,
+      createdAt: new Date(now - 5 * HOUR), expiresAt: new Date(now + 60 * 1000), refreshExpiresAt: new Date(now - 1000),
+    };
+    sessionService.sessions.set(session.sessionID, session);
+
+    const result = await sessionService.verifySession(makeDb(makeCollection()), 'capped-tok');
+
+    expect(result).toEqual({ valid: false, reason: 'session_expired' });
+  });
+});
+
 describe('SessionService.createSession', () => {
   beforeEach(() => {
     sessionService.sessions.clear();
@@ -213,6 +312,61 @@ describe('SessionService.createSession', () => {
     const db = { collection: vi.fn(() => { throw new Error('db down'); }) };
 
     await expect(sessionService.createSession(db, 'user-1', 'a', 'r')).rejects.toThrow('db down');
+  });
+
+  // #1254: dict-02 P1X-0294 session.allowMultipleSessions. Off, a sign-in ends
+  // the user's other active sessions, with reason admin_action (P1X-0267).
+  describe('#1254: session.allowMultipleSessions', () => {
+    function dbWithPolicy(session, otherActive) {
+      const sessions = makeCollection({ countDocuments: vi.fn().mockResolvedValue(otherActive) });
+      const config = makeCollection({ findOne: vi.fn().mockResolvedValue(session === undefined ? null : { _id: 'main', session }) });
+      const db = { collection: vi.fn((name) => (name === 'security_config' ? config : sessions)) };
+      return { db, sessions };
+    }
+
+    it('off: the new sign-in ends the user\'s other active sessions, after storing its own', async () => {
+      const revoke = vi.spyOn(sessionService, 'revokeAllOtherSessions').mockResolvedValue(undefined);
+      const { db, sessions } = dbWithPolicy({ allowMultipleSessions: false }, 2);
+
+      await sessionService.createSession(db, 'user-1', 'access-tok', 'refresh-tok', null);
+
+      expect(sessions.countDocuments).toHaveBeenCalledWith({
+        userID: 'user-1', isActive: true, tokenHash: { $ne: sessionService.getTokenHash('access-tok') },
+      });
+      expect(revoke).toHaveBeenCalledWith(db, 'user-1', 'access-tok', 'admin_action', 'system', { req: null });
+      expect(sessions.insertOne.mock.invocationCallOrder[0]).toBeLessThan(revoke.mock.invocationCallOrder[0]);
+      revoke.mockRestore();
+    });
+
+    it('off with no other session: nothing to end, so no revocation and no audit row', async () => {
+      const revoke = vi.spyOn(sessionService, 'revokeAllOtherSessions').mockResolvedValue(undefined);
+      const { db } = dbWithPolicy({ allowMultipleSessions: false }, 0);
+
+      await sessionService.createSession(db, 'user-1', 'access-tok', 'refresh-tok', null);
+
+      expect(revoke).not.toHaveBeenCalled();
+      revoke.mockRestore();
+    });
+
+    it.each([
+      ['on', { allowMultipleSessions: true }],
+      ['absent from a stored document', {}],
+      ['a new deployment (no document)', undefined],
+    ])('%s: other sessions stay', async (_label, session) => {
+      const revoke = vi.spyOn(sessionService, 'revokeAllOtherSessions').mockResolvedValue(undefined);
+      const { db, sessions } = dbWithPolicy(session, 3);
+
+      await sessionService.createSession(db, 'user-1', 'access-tok', 'refresh-tok', null);
+
+      expect(sessions.countDocuments).not.toHaveBeenCalled();
+      expect(revoke).not.toHaveBeenCalled();
+      revoke.mockRestore();
+    });
+
+    it('an unreadable policy ends nobody\'s sessions', async () => {
+      const policy = await sessionService.resolveSessionPolicy({ collection: vi.fn(() => { throw new Error('down'); }) });
+      expect(policy.allowMultipleSessions).toBe(true);
+    });
   });
 });
 

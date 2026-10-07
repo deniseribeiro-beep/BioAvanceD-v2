@@ -7,7 +7,7 @@ const { ObjectId } = require('mongodb');
 
 /**
  * Real query-matching fake (findOne exact-match, insertOne/updateOne),
- * per build-loop's native-only "real backend" proof bar. Mirrors
+ * per this repo's native-only "real backend" proof bar. Mirrors
  * sealed-snapshot-backfill.service.test.js's fake shape. Compares by
  * String() rather than strict equality so an ObjectId filter value
  * (backfillResultSpecimenIds' _id-tier lookup) matches a doc whose own

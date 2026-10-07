@@ -29,7 +29,11 @@ let client: MongoClient | null = null;
 
 async function getDb(): Promise<Db> {
   if (!client) {
-    client = new MongoClient(mongoUri);
+    // #1227: the driver's default server selection waits 30 s, the same as a
+    // Playwright hook's budget, so a stalled connect surfaced as an anonymous
+    // "afterAll hook timeout" instead of the driver's own error. 10 s leaves
+    // the hook time to report what actually stalled.
+    client = new MongoClient(mongoUri, { serverSelectionTimeoutMS: 10_000 });
     await client.connect();
   }
   return client.db(mongoDbName);
@@ -47,16 +51,27 @@ export async function seedActiveConsentTemplate(db: Db): Promise<string> {
   // Canonical name is `consent_templates` (snake_case), not the
   // `consentTemplates` field/param name used throughout the API layer —
   // see api/backend/src/config/collections.js's CANONICAL_COLLECTIONS map.
+  //
+  // One shared fixture, upserted, not a fresh insert per call: every caller
+  // only needs *an* active template id, and a per-call insert with no
+  // cleanup left 1317 active templates on the kept test volume, all served
+  // by GET /api/e-consent/consent-templates (~345 KB) on every wizard load.
   const templates = db.collection('consent_templates');
-  const result = await templates.insertOne({
-    title: `RF004 e2e consent template ${Date.now()}`,
-    content: 'Termo de Consentimento Livre e Esclarecido para testes e2e (RF004).',
-    version: 'v1',
-    active: true,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  });
-  return result.insertedId.toString();
+  const now = new Date();
+  const doc = await templates.findOneAndUpdate(
+    { e2eFixture: 'rf004-shared-consent-template' },
+    {
+      $setOnInsert: {
+        title: 'RF004 e2e consent template',
+        content: 'Termo de Consentimento Livre e Esclarecido para testes e2e (RF004).',
+        version: 'v1',
+        createdAt: now,
+      },
+      $set: { active: true, updatedAt: now },
+    },
+    { upsert: true, returnDocument: 'after' }
+  );
+  return String(doc?._id);
 }
 
 export interface SeededParticipant {
@@ -210,16 +225,33 @@ export async function seedStorageBoxLocation(): Promise<SeededStorageBox> {
  * Wave 2 finally block). This is the missing counterpart.
  */
 export async function cleanupStorageBoxLocation(seeded: SeededStorageBox): Promise<void> {
-  const db = await getDb();
-  await db.collection('storageBoxes').deleteOne({ _id: new ObjectId(seeded.boxId) });
-  await db.collection('storageContainers').deleteMany({
-    _id: { $in: [seeded.rackId, seeded.shelfId, seeded.freezerId].map((id) => new ObjectId(id)) },
-  });
-  await db.collection('equipment').deleteOne({ _id: new ObjectId(seeded.equipmentId) });
-  // The sensor doc has no id of its own in SeededStorageBox -- it shares
-  // containerID (via its locationId field) with the equipment doc, so
-  // that's what identifies it for deletion instead.
-  await db.collection('sensors').deleteMany({ locationId: seeded.containerID });
+  // #1227: every caller but one swallows this function's rejection, so the
+  // step that failed is logged here first, with the fixture it leaves behind.
+  // A full run's output then says which call stalled: grep "[e2e-cleanup]".
+  let step = 'connect';
+  try {
+    const db = await getDb();
+    step = 'storageBoxes.deleteOne';
+    await db.collection('storageBoxes').deleteOne({ _id: new ObjectId(seeded.boxId) });
+    step = 'storageContainers.deleteMany';
+    await db.collection('storageContainers').deleteMany({
+      _id: { $in: [seeded.rackId, seeded.shelfId, seeded.freezerId].map((id) => new ObjectId(id)) },
+    });
+    step = 'equipment.deleteOne';
+    await db.collection('equipment').deleteOne({ _id: new ObjectId(seeded.equipmentId) });
+    // The sensor doc has no id of its own in SeededStorageBox -- it shares
+    // containerID (via its locationId field) with the equipment doc, so
+    // that's what identifies it for deletion instead.
+    step = 'sensors.deleteMany';
+    await db.collection('sensors').deleteMany({ locationId: seeded.containerID });
+  } catch (error) {
+    const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+    console.error(
+      `[e2e-cleanup] ${new Date().toISOString()} cleanupStorageBoxLocation failed at ${step} ` +
+        `(box ${seeded.boxId}, containerID ${seeded.containerID}): ${message}`
+    );
+    throw error;
+  }
 }
 
 /**
@@ -624,4 +656,33 @@ export async function seedMedicationDictionaryEntry(options: {
     active: true,
     createdAt: new Date(),
   });
+}
+
+/**
+ * #1219 fixture: one QuarantineAction row naming the given specimen ids,
+ * in QuarantineAction.create()'s full field shape. There is no route that
+ * records an action with a chosen key, and the point of the fixture is to
+ * write the legacy _id-keyed form that code no longer produces.
+ */
+export async function seedQuarantineAction(specimenIds: string[], reasonCode: string): Promise<string> {
+  const db = await getDb();
+  const now = new Date();
+  const quarantineActionId = `e2e-1219-${reasonCode}-${now.getTime()}-${Math.random().toString(36).slice(2, 8)}`;
+  await db.collection('quarantineActions').insertOne({
+    quarantineActionId,
+    specimenIds,
+    reasonCodes: [reasonCode],
+    actionStatus: 'active',
+    authorizedBy: null,
+    startedAt: now,
+    releasedAt: null,
+    createdAt: now,
+  });
+  return quarantineActionId;
+}
+
+export async function cleanupQuarantineActions(quarantineActionIds: string[]): Promise<void> {
+  if (quarantineActionIds.length === 0) return;
+  const db = await getDb();
+  await db.collection('quarantineActions').deleteMany({ quarantineActionId: { $in: quarantineActionIds } });
 }

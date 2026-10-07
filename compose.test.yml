@@ -1,8 +1,12 @@
 name: bioavanced-test
 
+# #1157: audit-keygen-test writes the public-key registry for THIS key id, and
+# the backend/worker read the registry back by it. Anchored so the two cannot
+# drift into a silent signature_unknown_key_id.
+x-audit-key-id: &audit-key-id audit-ed25519-test-1
+
 x-test-env: &test-env
   NODE_ENV: test
-  TEST_ENVIRONMENT: "true"
   MONGO_URI: mongodb://mongodb-test:27017/bioavanced_test?replicaSet=rs0
   MONGO_DB: bioavanced_test
   MONGO_DB_NOVO: bioavanced_test
@@ -49,7 +53,7 @@ x-test-env: &test-env
   BOOTSTRAP_ADMIN_NAME: "E2E Test Admin"
   BOOTSTRAP_ADMIN_EMAIL: e2e-admin@bioavanced.test
   BOOTSTRAP_ADMIN_USERNAME: admin
-  BOOTSTRAP_ADMIN_TEMP_PASSWORD: Admin@123
+  BOOTSTRAP_ADMIN_TEMP_PASSWORD: Admin@123-e2e-stack
   # RF014 AC#4 (#648): createFirstAdmin.js's forceReset:true is now actually
   # enforced at login (previously dormant) -- every spec here logs in
   # directly as TEST_USER/TEST_PASS via realLogin(), with no forced-reset
@@ -85,6 +89,26 @@ x-test-env: &test-env
   AUDIT_RFC3161_TSA_URL: http://tsa-test:8095/tsa
   AUDIT_EXTERNAL_WITNESS_URL: http://witness-test:8096/witness
   AUDIT_EXTERNAL_WITNESS_PUBLIC_KEY: ""
+  # #959 item 2: both signing chains -- audit-signing.provider.js#loadPrivateKey
+  # and merkle-envelope.service.js#getPrivateKeyPem -- readFile() whatever this
+  # names and throw otherwise, and createTreeHead calls them inside a try/FINALLY,
+  # so the throw propagates and runOnce swallows it. Before this, POST
+  # /api/audit/anchor answered 500 "Audit signing key must be provided via
+  # AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE" and audit_tree_heads stayed empty on every
+  # stack that has ever run. The key itself is minted per stack by
+  # audit-keygen-test, never committed -- same posture as infra/witness, whose
+  # secrets/ directory tracks only a .gitkeep.
+  AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE: /run/secrets/merkle_signing_key.pem
+  AUDIT_MERKLE_SIGN_KEY_ID: *audit-key-id
+  # #1157: the registry has to be the SPKI half of a key that does not exist
+  # until audit-keygen-test runs, and compose resolves its environment at parse
+  # time -- so the JSON env var it used to be read from could never carry it,
+  # and every sealed root recorded publicKeyFingerprint: null while
+  # processTimestampBacklog would have stamped it FAILED/signature_unknown_key_id.
+  # The keygen one-shot now writes this file beside the private key, in the same
+  # volume, and the provider prefers it over the env var (which stays the
+  # fallback for the host-side generator the dev stack uses).
+  AUDIT_MERKLE_SIGN_PUBLIC_KEYS_FILE: /run/secrets/merkle_signing_public_keys.json
 
 services:
   mongodb-test:
@@ -111,7 +135,7 @@ services:
       # seed data directly (e.g. consentTemplates — no API seed path exists,
       # see issue #294). npm run test:e2e:docker runs Playwright from the
       # host, mirroring backend-app-test/frontend-app-test's published ports.
-      - "27017:27017"
+      - "${MONGO_HOST_PORT:-27017}:27017"
     healthcheck:
       test: ["CMD-SHELL", "mongosh --quiet --eval 'db.adminCommand({ ping: 1 })'"]
       interval: 10s
@@ -161,7 +185,7 @@ services:
       # Host-side access for e2e fixture helpers (tests/e2e/helpers/) that
       # query Neo4j directly to prove outbox projection (RF023, #292) — same
       # rationale as mongodb-test's/influxdb-test's published ports above.
-      - "7687:7687"
+      - "${NEO4J_BOLT_HOST_PORT:-7687}:7687"
     healthcheck:
       test: ["CMD-SHELL", "cypher-shell -u neo4j -p testpassword 'RETURN 1' >/dev/null 2>&1"]
       interval: 10s
@@ -202,7 +226,15 @@ services:
       # Host-side access for e2e fixture helpers (tests/e2e/helpers/) that
       # query InfluxDB directly to prove telemetry persistence (RF009, #289)
       # — same rationale as mongodb-test's published port above.
-      - "8086:8086"
+      # #1156: published host ports are overridable, as compose.dev.yml has always
+      # made all ten of its own. The default keeps every existing invocation and CI
+      # byte-identical. It matters because Windows reserves dynamic port ranges:
+      # 8086 fell inside 8010-8109 on a dev machine, the publish failed with "An
+      # attempt was made to access a socket in a way forbidden by its access
+      # permissions", and because one failed publish abandons a multi-service `up`,
+      # backend/worker/frontend/projection-worker were all left in Created. There was
+      # no supported way out: the port was a literal. Names match .env.docker.example.
+      - "${INFLUXDB_HOST_PORT:-8086}:8086"
     volumes:
       - influxdb-test-data:/var/lib/influxdb2
     healthcheck:
@@ -219,6 +251,49 @@ services:
       interval: 10s
       timeout: 5s
       retries: 20
+    networks: [bioavanced-test]
+
+  # #959 item 2: mints the Merkle signing key this stack signs tree heads with.
+  # Modelled on infra/witness/entrypoint.sh, which does the same for the witness
+  # key: generate on first use into a named volume, reuse it afterwards. Nothing
+  # is committed -- git tracks no key material anywhere in this repo, and
+  # infra/tsa/secrets and infra/witness/secrets hold only a .gitkeep.
+  #
+  # Reuse matters rather than being mere tidiness: audit_roots documents already
+  # signed under a key are verified against it later, so regenerating per bring-up
+  # would orphan every artifact a previous run produced on the same volume.
+  audit-keygen-test:
+    image: node:22-alpine
+    command:
+      - node
+      - -e
+      - |
+        const { generateKeyPairSync, createPrivateKey, createPublicKey } = require('crypto');
+        const { writeFileSync, readFileSync, existsSync, mkdirSync } = require('fs');
+        const path = '/run/secrets/merkle_signing_key.pem';
+        const registryPath = '/run/secrets/merkle_signing_public_keys.json';
+        const keyId = process.env.AUDIT_MERKLE_SIGN_KEY_ID;
+        mkdirSync('/run/secrets', { recursive: true });
+        if (existsSync(path)) {
+          console.log('audit signing key: reusing ' + path);
+        } else {
+          const { privateKey } = generateKeyPairSync('ed25519');
+          writeFileSync(path, privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(), { mode: 0o600 });
+          console.log('audit signing key: generated ' + path);
+        }
+        // #1157: derive the registry from whatever key is on disk on EVERY run,
+        // not only when minting. A volume created before this existed holds a
+        // key and no registry, and the reuse branch above is the path it takes.
+        const publicPem = createPublicKey(createPrivateKey(readFileSync(path, 'utf8')))
+          .export({ format: 'pem', type: 'spki' }).toString();
+        writeFileSync(registryPath, JSON.stringify({ [keyId]: publicPem }, null, 2));
+        console.log('audit public key registry: wrote ' + registryPath + ' for keyId ' + keyId);
+    environment:
+      # Only the key id: the registry this mints is keyed by it, and the app
+      # reads it back by the same anchor.
+      AUDIT_MERKLE_SIGN_KEY_ID: *audit-key-id
+    volumes:
+      - audit-signing-test-data:/run/secrets
     networks: [bioavanced-test]
 
   tsa-test:
@@ -271,12 +346,22 @@ services:
     environment:
       <<: *test-env
       RUN_SERVER_IN_TEST: "1"
+      # #1263: trust X-Forwarded-For only from loopback, which in this
+      # container's network namespace is trusted-hop-test below and nothing
+      # else. The runner, the frontend and the host's published 3000 all
+      # connect from other addresses, so their requests keep their socket
+      # address as req.ip, exactly as under TRUST_PROXY=0. Test stack only:
+      # production keeps TRUST_PROXY=0 (.env.production.example) unless a
+      # real proxy that clients cannot reach is in front.
+      TRUST_PROXY: loopback
       # #981: TSA_URL was set here and read by NOTHING -- git grep over the
       # whole tracked tree found this line and no reader. The variable the
       # code actually reads is AUDIT_RFC3161_TSA_URL, which 67ac5405 moved
       # onto the shared anchor above (with the load-bearing /tsa suffix this
       # line was missing). So this was a near-miss name carrying the exact
       # unsuffixed value that #959 item 4 had just finished fixing. Removed.
+      # RF022 AC9, RNF014 C7: refuse to start without a ready ReadinessReport.
+      FOUNDATION_READINESS_REQUIRED: "true"
     command: ["npm", "start"]
     # #828: the API writes the uploaded staging file to /app/uploads and the
     # worker reads it back by absolute path (staging-import.service.js ->
@@ -291,10 +376,23 @@ services:
     # real fix, and that change deletes this mount.
     volumes:
       - uploads-test-data:/app/uploads
+      # #959 item 2: read-only -- the app signs with this key and must never be
+      # able to rewrite it. POST /api/audit/anchor runs in THIS process and
+      # reaches the same signing chains as the nightly worker job, so the backend
+      # needs the key too, not just worker-test.
+      - audit-signing-test-data:/run/secrets:ro
     depends_on:
+      audit-keygen-test:
+        condition: service_completed_successfully
       mongodb-test:
         condition: service_healthy
       mongo-rs-init-test:
+        condition: service_completed_successfully
+      # RF022 AC4: the Foundation job before the API, never after it.
+      foundation-bootstrap-test:
+        condition: service_completed_successfully
+      # RF022 AC7: the essential reference set, loaded in Phase 2.
+      essential-reference-bootstrap-test:
         condition: service_completed_successfully
       neo4j-test:
         condition: service_healthy
@@ -309,15 +407,45 @@ services:
       witness-test:
         condition: service_healthy
     ports:
-      - "3000:3000"
+      - "${BACKEND_HOST_PORT:-3000}:3000"
+      # #1263: trusted-hop-test shares this service's network namespace, so
+      # its port is published here (a network_mode service cannot publish).
+      # Host loopback only: the hop lets its caller choose a source address,
+      # so it is not offered to the host's network the way 3000 is.
+      - "127.0.0.1:${TRUSTED_HOP_HOST_PORT:-3100}:3100"
     expose:
       - "3000"
+      - "3100"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health >/dev/null"]
       interval: 10s
       timeout: 5s
       retries: 20
     networks: [bioavanced-test]
+
+  # #1263: the one hop the backend trusts (TRUST_PROXY: loopback above). It
+  # runs in backend-app-test's network namespace and forwards :3100 to the
+  # backend's 127.0.0.1:3000 byte for byte, so a request sent through it
+  # reaches Express from loopback with its own X-Forwarded-For intact, and
+  # req.ip becomes the address the spec chose. That gives a spec a source
+  # address of its own, so it can drive the source-address and
+  # unusual-activity blocks without blocking the one address every other
+  # spec shares. Never copy this into a production stack: it lets any caller
+  # that reaches :3100 choose its address.
+  trusted-hop-test:
+    image: node:22-alpine
+    command: ["node", "/hop/loopback-forward.cjs", "0.0.0.0:3100=127.0.0.1:3000"]
+    volumes:
+      - ./tests/e2e/docker:/hop:ro
+    network_mode: "service:backend-app-test"
+    depends_on:
+      backend-app-test:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3100/api/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
 
   admin-bootstrap-test:
     build:
@@ -332,13 +460,15 @@ services:
     networks: [bioavanced-test]
 
   foundation-bootstrap-test:
-    # RF022 (#371): one-shot, idempotent essential-reference-data seed —
-    # mirrors compose.dev.yml's `foundation-bootstrap`, wired into the test
-    # stack so pipeline-continuity.spec.ts's RF022/RF028 real-backend
-    # assertions have something to find (#600's trace: zero without this).
-    # Runs once backend-app-test is healthy, same trigger foundation-bootstrap
-    # uses in the dev stack; upsertDocs's $setOnInsert makes repeat runs
-    # no-ops.
+    # RF022 (#371): the Foundation Data Pipeline's one-shot job, mirroring
+    # compose.dev.yml's `foundation-bootstrap`. RF022 AC4 and RNF014 C6/C7:
+    # it runs after the datastores are healthy and BEFORE the API, separate
+    # from the API's own startup. It does dry-run, apply and verify, writes a
+    # ReadinessReport, and exits non-zero when that report is blocked, so
+    # backend-app-test's service_completed_successfully dependency below
+    # holds the API back; the API also re-checks the report itself
+    # (FOUNDATION_READINESS_REQUIRED). It populates no reference data
+    # (RF022 AC7). pipeline-continuity.spec.ts asserts what it records.
     build:
       context: ./api/backend
       dockerfile: Dockerfile.dev
@@ -346,8 +476,28 @@ services:
       <<: *test-env
     command: ["npm", "run", "seed:essential"]
     depends_on:
-      backend-app-test:
+      mongodb-test:
         condition: service_healthy
+      mongo-rs-init-test:
+        condition: service_completed_successfully
+    networks: [bioavanced-test]
+
+  essential-reference-bootstrap-test:
+    # RF022 AC7, plano §5: Phase 2 for the essential reference set (MIABIS
+    # and SPREC minimal, RCS-GOV 1.0), which Foundation prepares and does
+    # not load. It runs on a ready ReadinessReport, exits 1 without one, and
+    # records a ReferenceImportRun per entry. backend-app-test waits for it,
+    # since sample registration reads these catalogs. $setOnInsert makes
+    # repeat runs insert nothing.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *test-env
+    command: ["npm", "run", "reference:load:essential"]
+    depends_on:
+      foundation-bootstrap-test:
+        condition: service_completed_successfully
     networks: [bioavanced-test]
 
   reference-data-bootstrap-test:
@@ -618,6 +768,8 @@ services:
     # #828: same volume as backend-app-test -- this is the reading half.
     volumes:
       - uploads-test-data:/app/uploads
+      # #959 item 2: the nightly daily-merkle job signs here.
+      - audit-signing-test-data:/run/secrets:ro
     healthcheck:
       test: ["CMD", "node", "-e", "const s=require('fs').statSync('/tmp/worker-heartbeat');if(Date.now()-s.mtimeMs>60000)process.exit(1)"]
       interval: 15s
@@ -625,6 +777,8 @@ services:
       retries: 4
       start_period: 60s
     depends_on:
+      audit-keygen-test:
+        condition: service_completed_successfully
       # #959: worker-test runs daily-merkle.job, which reaches the TSA and the
       # witness. It depended on neither, so on a cold bring-up the job could
       # fire against services that were not up yet.
@@ -683,7 +837,7 @@ services:
       backend-app-test:
         condition: service_healthy
     ports:
-      - "5173:5173"
+      - "${FRONTEND_HOST_PORT:-5173}:5173"
     expose:
       - "5173"
     healthcheck:
@@ -743,10 +897,16 @@ services:
     environment:
       CI: "true"
       PLAYWRIGHT_SKIP_WEBSERVER: "1"
-      PLAYWRIGHT_BASE_URL: http://frontend-app-test:5173
-      PLAYWRIGHT_API_BASE_URL: http://backend-app-test:3000
+      # #1233: the bundle's API base is baked as http://localhost:3000/api, so
+      # the browser here must load the app from localhost too. The image's CMD
+      # forwards this container's localhost:5173/:3000 to the two services,
+      # which makes origin, API base, CORS and cookies match a host-side run.
+      # The API base goes through the forwarder too: the e-consent specs assert
+      # the browser's API origin equals this one.
+      PLAYWRIGHT_BASE_URL: http://localhost:5173
+      PLAYWRIGHT_API_BASE_URL: http://localhost:3000
       TEST_USER: admin
-      TEST_PASS: Admin@123
+      TEST_PASS: Admin@123-e2e-stack
       E2E_MONGO_URI: mongodb://mongodb-test:27017
       E2E_MONGO_DB: bioavanced_test
       TEST_SUPPORT_SECRET: e2e-test-support-secret
@@ -755,10 +915,20 @@ services:
       # repeated here -- same reason TEST_SUPPORT_SECRET is repeated on the
       # line above.
       TELEMETRY_INGEST_SECRET: e2e-telemetry-ingest-secret
+      # #1233: the Neo4j and InfluxDB fixture helpers default to localhost,
+      # which reaches the published ports only from the host, not from here.
+      E2E_NEO4J_URI: bolt://neo4j-test:7687
+      E2E_INFLUXDB_URL: http://influxdb-test:8086
+      # #1263: the trusted hop. Reached by service name, not through the
+      # loopback forwarder: only API calls go to it, never the browser. The
+      # spec's default, http://localhost:3100, is the host-side form.
+      E2E_TRUSTED_HOP_URL: http://backend-app-test:3100
     depends_on:
       frontend-app-test:
         condition: service_healthy
       backend-app-test:
+        condition: service_healthy
+      trusted-hop-test:
         condition: service_healthy
       mongodb-test:
         condition: service_healthy
@@ -775,4 +945,7 @@ volumes:
   influxdb-test-data:
   # #828: shared /app/uploads for backend-app-test and worker-test.
   uploads-test-data:
+  # #959 item 2: holds the Merkle signing key audit-keygen-test mints. Named, so
+  # it survives a down/up and the key stays stable across runs of this stack.
+  audit-signing-test-data:
 

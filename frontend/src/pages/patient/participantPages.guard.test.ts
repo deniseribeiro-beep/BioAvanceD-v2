@@ -92,3 +92,17 @@ describe('every participant endpoint is token-optional', () => {
     expect(listBody).toContain(`'${endpoint}'`);
   });
 });
+
+describe('participant-facing pages map a failure from the whole error, not its status', () => {
+  // #1152, #1158: in a real outage there is no response. api.ts aborts at its
+  // own 10s timeout while the backend answers 503 only after 30s+, so a page
+  // that hands `err.response?.status` to a mapper passes `undefined` and loses
+  // the "no response at all" case. The *RequestError mappers take the error;
+  // their tests prove the copy, and this pins that the pages actually call them.
+  it.each(PARTICIPANT_PAGES)('%s passes no response status to an error mapper', (fileName) => {
+    const code = stripComments(readPage(fileName));
+
+    expect(code).not.toMatch(/response\?\.status/);
+    expect(code).toMatch(/RequestError\(err\)/);
+  });
+});

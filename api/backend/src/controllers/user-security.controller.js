@@ -3,6 +3,7 @@ const logger = require('../utils/logger');
 const auditLogger = require('../utils/auditLogger');
 const { ObjectId } = require('mongodb');
 const sessionService = require('../services/session.service');
+const passwordService = require('../services/password.service');
 
 /**
  * Controller de Segurança do Usuário
@@ -198,7 +199,7 @@ class UserSecurityController {
       // the current access token stays in the controller where it already is.
       const currentToken = (req.headers && req.headers.authorization || '').replace('Bearer ', '');
       await sessionService.revokeAllOtherSessions(
-        db, req.user.userID, currentToken, 'password_change', req.user.userID
+        db, req.user.userID, currentToken, 'password_change', req.user.userID, { req }
       );
 
       // Registra auditoria
@@ -301,7 +302,10 @@ class UserSecurityController {
         resourceId: id,
         status: 'success',
         severity: 'warning',
-        message: 'Sessão revogada',
+        // #1020: this path revokes through user-security.service, not the
+        // session.service helpers that audit themselves, so this row carries
+        // the reason, in `message`, the field the audit chain keeps.
+        message: 'Sessão revogada: motivo user_request; sessões afetadas 1',
         req: req,
         module: 'Segurança do Usuário'
       });
@@ -376,6 +380,10 @@ class UserSecurityController {
           success: false,
           error: (req.t && req.t('errors.databaseUnavailable')) || 'Banco de dados não disponível'
         });
+      }
+
+      if (!(await passwordService.isPasswordResetAllowed(db))) {
+        return res.status(403).json(passwordService.PASSWORD_RESET_DISABLED);
       }
 
       const { expirationHours = 1 } = req.body; // Padrão: 1 hora

@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 
 const SensorModel = require('../../src/models/Sensor');
 const TemperatureModel = require('../../src/models/Temperature');
-const PolicyModel = require('../../src/models/Policy');
 const TemperatureIncidentModel = require('../../src/models/TemperatureIncident');
 
 describe('SensorModel', () => {
@@ -110,56 +109,6 @@ describe('TemperatureModel', () => {
     expect(TemperatureModel.validateTemperatureUnit('CELSIUS')).toBe(false);
     expect(TemperatureModel.shouldGenerateAlert(9, 2, 8, 5)).toBe(true);
     expect(TemperatureModel.shouldGenerateAlert(5, 2, 8, 5)).toBe(false);
-  });
-});
-
-describe('PolicyModel', () => {
-  it('valida política com limites coerentes', () => {
-    const result = PolicyModel.validate({
-      minThreshold: 2,
-      maxThreshold: 8,
-      targetTemperature: 5,
-      temperatureUnit: '°C'
-    });
-
-    expect(result).toEqual({ isValid: true, errors: [] });
-  });
-
-  it('rejeita política com limites invertidos e unidade inválida', () => {
-    const result = PolicyModel.validate({
-      minThreshold: 8,
-      maxThreshold: 2,
-      targetTemperature: '5',
-      temperatureUnit: 'K'
-    });
-
-    expect(result.isValid).toBe(false);
-    expect(result.errors).toContain('minThreshold deve ser menor que maxThreshold');
-    expect(result.errors).toContain('targetTemperature é obrigatório e deve ser number');
-    expect(result.errors).toContain('temperatureUnit deve ser °C ou °F');
-  });
-
-  it('cria política com defaults esperados', () => {
-    const created = PolicyModel.create({
-      policyID: 'POL-10',
-      minThreshold: 2,
-      maxThreshold: 8,
-      targetTemperature: 5,
-      validFrom: '2024-01-10T00:00:00.000Z'
-    });
-
-    expect(created.policyId).toBe('POL-10');
-    expect(created.hysteresis).toBe(0.5);
-    expect(created.alertDelayMin).toBe(5);
-    expect(created.temperatureUnit).toBe('°C');
-    expect(created.validFrom).toBeInstanceOf(Date);
-    expect(created.createdAt).toBeInstanceOf(Date);
-    expect(created.updatedAt).toBeInstanceOf(Date);
-  });
-
-  it('compara faixas de temperatura corretamente', () => {
-    expect(PolicyModel.validateThresholds(2, 8)).toBe(true);
-    expect(PolicyModel.validateThresholds(8, 2)).toBe(false);
   });
 });
 

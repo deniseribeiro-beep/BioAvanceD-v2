@@ -43,6 +43,7 @@ async function resolveMachineIngestOrganization(db, body) {
   if (!sensor) {
     const error = new Error(`sensorId ${sensorId} não encontrado`);
     error.statusCode = 404;
+    error.auditReason = 'unknown_sensor';
     throw error;
   }
 
@@ -106,6 +107,14 @@ class TemperatureController {
       });
     } catch (error) {
       logger.error('Erro ao registrar temperatura:', error.message);
+      // #1120 (Axis E E3): this catch answers 404 and 400 for unrelated
+      // causes, and the global audit row recorded them identically. Throw
+      // sites that know the cause tag it; audit.middleware.js writes the tag
+      // into the row's payload.reason. An untagged failure (e.g. the insert
+      // itself) records no reason rather than a guessed one.
+      if (error.auditReason) {
+        res.locals.auditReason = error.auditReason;
+      }
       // #636: organizationId lookup failures throw statusCode:404.
       if (error.statusCode === 404) {
         return res.status(404).json({
@@ -114,10 +123,11 @@ class TemperatureController {
           message: error.message
         });
       }
-      return res.status(400).json({
+      return res.status(error.statusCode === 422 ? 422 : 400).json({
         success: false,
         error: 'Erro ao registrar temperatura',
-        message: error.message
+        message: error.message,
+        details: error.details
       });
     }
   }

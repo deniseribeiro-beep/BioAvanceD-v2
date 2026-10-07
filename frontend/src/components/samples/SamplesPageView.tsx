@@ -237,7 +237,7 @@ export default function SamplesPageView({
                         </div>
                       </td>
                       <td>{sample.sampleOrigin || 'N/A'}</td>
-                      <td style={{ fontFamily: 'monospace' }}>{sample.barcode || sample.sampleID || 'N/A'}</td>
+                      <td style={{ fontFamily: 'monospace' }}>{sample.barcode || sample.specimenId || 'N/A'}</td>
                       <td>
                         <SampleStatusBadge status={mapStatus(sample) as any} />
                       </td>
@@ -343,7 +343,7 @@ export default function SamplesPageView({
         <Modal isOpen title={t('samples.printLabels')} onClose={onClosePrintModal}>
           <div id="printable-area">
             {selectedSamples.map((sample) => {
-              const barcodeValue = sample.barcode || sample.sampleID || sample.id;
+              const barcodeValue = sample.barcode || sample.specimenId || sample.id;
               const participantId = sample.participantId ?? (sample as any).patient?.participantId;
 
               return (

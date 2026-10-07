@@ -307,7 +307,7 @@ describe('Users and Access routes', () => {
         name: 'Novo Usuário',
         email: 'new@example.com',
         username: 'newuser',
-        password: 'Senha@123',
+        password: 'Senha@123-forte!',
         accessType: 2,
         status: 'Ativo',
         phone: '(11) 99876-5432',
@@ -334,7 +334,7 @@ describe('Users and Access routes', () => {
         name: 'Novo Usuário',
         email: 'new@example.com',
         username: 'newuser',
-        password: 'Senha@123',
+        password: 'Senha@123-forte!',
         accessType: 2,
         organizationId: 'org-inexistente',
       },
@@ -358,7 +358,7 @@ describe('Users and Access routes', () => {
         name: 'Novo Usuário',
         email: 'new@example.com',
         username: 'newuser',
-        password: 'Senha@123',
+        password: 'Senha@123-forte!',
         accessType: 2,
       },
     });
@@ -914,7 +914,7 @@ describe('Users and Access routes', () => {
 
     const req = createRequest({
       params: { id: 'user-target-8' },
-      body: { name: 'Alvo Renomeado', injected: 'x', mfaLocked: false, userID: 999, failedLoginAttempts: 0, accountLockedUntil: null },
+      body: { name: 'Alvo Renomeado', injected: 'x', mfaLocked: false, userID: 999, failedLoginAttempts: 0, accountLockedUntil: null, anonId: 'USR-OTHER001' },
     });
     req.app.locals.db = dbWithTarget;
     const res = createResponse();
@@ -934,16 +934,19 @@ describe('Users and Access routes', () => {
     // for; that one had a test and this one did not.
     expect(setPayload).not.toHaveProperty('failedLoginAttempts');
     expect(setPayload).not.toHaveProperty('accountLockedUntil');
+    // #1275 follow-up: log reads now honour a stored anonId, so a caller who
+    // could set it could make one user's audit rows read as another's.
+    expect(setPayload).not.toHaveProperty('anonId');
     expect(Object.keys(setPayload).sort()).toEqual(['name', 'updatedAt']);
   });
 
-  // #982 (RF003 AC#5, "Revogar sessões"): PUT /api/users/:id hashes and $sets
-  // an inbound password, and until now revoked nothing. #958 fixed the four
-  // paths where the account OWNER changes their own password; this fifth one
-  // is an admin write and was outside its frame -- so an admin could replace a
-  // user's password while every session that user already held stayed live,
-  // authenticated with a password that no longer exists.
-  it('#982: PUT /api/users/:id com senha nova revoga as sessões do alvo', async () => {
+  // #1013: PUT /api/users/:id used to hash and $set an inbound password under
+  // createUser, with no reuse check, no history and a generic audit row. The
+  // administrator's password set is POST /:id/set-password now, and a PUT
+  // carrying one is refused rather than ignored, so a stale client cannot
+  // believe it changed a password. #982's session revocation moved with it
+  // (the set-password block below).
+  it('#1013: PUT /api/users/:id refuses a password and writes nothing', async () => {
     const handler = getHandler(userRoutes, 'put', '/:id');
     const targetUser = {
       _id: 'user-target-9',
@@ -973,33 +976,107 @@ describe('Users and Access routes', () => {
 
     const req = createRequest({
       params: { id: 'user-target-9' },
-      body: { password: 'NovaSenh@2026' },
+      body: { password: 'NovaSenh@2026-forte' },
     });
     req.app.locals.db = dbWithTarget;
     const res = createResponse();
 
     await handler(req, res);
 
-    expect(res.statusCode).toBe(200);
-    // The password really was written -- otherwise a revoke assertion could
-    // pass on a request that changed nothing.
-    const setPayload = usersCollection.updateOne.mock.calls[0][1].$set;
-    expect(setPayload.password).toEqual(expect.any(String));
-    expect(setPayload.password).not.toBe('NovaSenh@2026');
-    // Same filter-value discipline as the reset-mfa revoke above: sessions key
-    // their owner as a string, so revoking with a non-string id matches
-    // nothing, throws nothing and still returns 200.
-    expect(sessionsCollection.updateMany).toHaveBeenCalledWith(
-      { userID: 'user-target-9', isActive: true },
-      expect.objectContaining({
-        $set: expect.objectContaining({
-          isActive: false,
-          isRevoked: true,
-          revocationReason: 'admin_action',
-          revokedBy: '507f1f77bcf86cd799439011',
-        }),
-      })
-    );
+    expect(res.statusCode).toBe(422);
+    expect(String(res.payload.message)).toContain('set-password');
+    expect(usersCollection.updateOne).not.toHaveBeenCalled();
+    expect(sessionsCollection.updateMany).not.toHaveBeenCalled();
+  });
+
+  // #1013: the administrator's password set, with the bookkeeping the old PUT
+  // path skipped. #982's revocation (RF003 AC#5) moved here with it.
+  describe('#1013: POST /api/users/:id/set-password', () => {
+    const bcrypt = require2('bcryptjs');
+
+    function seedTarget(overrides = {}) {
+      const targetUser = {
+        _id: 'user-target-1013',
+        name: 'Alvo 1013',
+        email: 'alvo-1013@bioavanced.com.br',
+        username: 'alvo1013',
+        status: 'active',
+        password: bcrypt.hashSync('Atual@2026x', 4),
+        passwordHistory: [],
+        ...overrides,
+      };
+      usersCollection.findOne.mockResolvedValue(targetUser);
+      usersCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
+      return targetUser;
+    }
+
+    async function post(body) {
+      const handler = getHandler(userRoutes, 'post', '/:id/set-password');
+      const req = createRequest({ params: { id: 'user-target-1013' }, body });
+      req.app.locals.db = db;
+      const res = createResponse();
+      await handler(req, res);
+      return res;
+    }
+
+    it('sets the hash, keeps the old one in history, forces a change at next login and revokes sessions', async () => {
+      const target = seedTarget();
+
+      const res = await post({ password: 'NovaSenh@2026-forte' });
+
+      expect(res.statusCode).toBe(200);
+      expect(usersCollection.updateOne).toHaveBeenCalledTimes(1);
+      const setPayload = usersCollection.updateOne.mock.calls[0][1].$set;
+      expect(bcrypt.compareSync('NovaSenh@2026-forte', setPayload.password)).toBe(true);
+      expect(setPayload.passwordHistory).toEqual([target.password]);
+      expect(setPayload.passwordChangedAt).toBeInstanceOf(Date);
+      // The administrator knows this password; the owner must replace it.
+      expect(setPayload.forceReset).toBe(true);
+      expect(sessionsCollection.updateMany).toHaveBeenCalledWith(
+        { userID: 'user-target-1013', isActive: true },
+        expect.objectContaining({
+          $set: expect.objectContaining({
+            isRevoked: true,
+            revocationReason: 'admin_action',
+            revokedBy: '507f1f77bcf86cd799439011',
+          }),
+        })
+      );
+      expect(auditSpies.log).toHaveBeenCalledWith(expect.objectContaining({
+        action: 'UPDATE',
+        resourceType: 'User',
+        message: expect.stringContaining('Senha definida por administrador'),
+      }));
+    });
+
+    it('refuses a password in the target\'s recent history, writing nothing', async () => {
+      seedTarget({ passwordHistory: [bcrypt.hashSync('Antiga@2025x-forte', 4)] });
+
+      const res = await post({ password: 'Antiga@2025x-forte' });
+
+      expect(res.statusCode).toBe(422);
+      expect(String(res.payload.message)).toContain('Senha já utilizada recentemente');
+      expect(usersCollection.updateOne).not.toHaveBeenCalled();
+      expect(sessionsCollection.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('refuses a password that fails the strength policy, writing nothing', async () => {
+      seedTarget();
+
+      const res = await post({ password: 'fraca' });
+
+      expect(res.statusCode).toBe(422);
+      expect(usersCollection.updateOne).not.toHaveBeenCalled();
+    });
+
+    it('answers 404 for an unknown user', async () => {
+      usersCollection.findOne.mockResolvedValue(null);
+
+      const res = await post({ password: 'NovaSenh@2026-forte' });
+
+      expect(res.statusCode).toBe(404);
+      expect(usersCollection.updateOne).not.toHaveBeenCalled();
+    });
   });
 
   // #982: the mirror -- an update that carries no password must NOT revoke.
@@ -1167,6 +1244,156 @@ describe('Users and Access routes', () => {
     // #993's own point: the caller's value must not survive anywhere in the
     // write, not merely differ from it.
     expect(JSON.stringify(setPayload)).not.toContain('SEGREDO-DO-ATACANTE');
+    // #914 / #1011: the destroyed enrolment is on the trail as an MFA row, not
+    // only as a generic User update.
+    const mfaRows = auditSpies.log.mock.calls.filter(([entry]) => entry && entry.action === 'MFA');
+    expect(mfaRows).toHaveLength(1);
+    expect(mfaRows[0][0]).toMatchObject({
+      resourceId: 'user-target-12',
+      severity: 'critical',
+      payload: { operation: 'promotion_clear', enrolmentPreserved: false, secondFactorActive: false },
+    });
+  });
+
+  // Recurrence of #1021 by a new path: isBecomingAdmin was computed from the
+  // request alone, and NewUserPage echoes roleName on every save, so a plain
+  // rename of an EXISTING Administrador counted as a promotion and destroyed
+  // their MFA enrolment. A promotion is a change of level, as #1009 decided
+  // for changeUserRole.
+  it('an edit of an existing Administrador that echoes roleName keeps their MFA enrolment', async () => {
+    const handler = getHandler(userRoutes, 'put', '/:id');
+    const targetUser = {
+      _id: 'user-target-admin-echo',
+      name: 'Admin Existente',
+      email: 'admin-existente@bioavanced.com.br',
+      username: 'adminexistente',
+      status: 'active',
+      mfaEnabled: true,
+      mfaSecretCiphertext: 'SEGREDO-DO-ADMIN',
+      mfaActivationDate: new Date('2026-01-01T00:00:00.000Z'),
+    };
+    usersCollection.findOne
+      .mockResolvedValueOnce(targetUser)
+      .mockResolvedValueOnce(targetUser);
+    usersCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
+
+    const rbacCollections = buildRbacCollections([
+      { userAccountId: '507f1f77bcf86cd799439011', accessType: 4 },
+      { userAccountId: 'user-target-admin-echo', accessType: 4 },
+    ]);
+    const dbWithTarget = {
+      collection: vi.fn((name) => {
+        if (name === 'users') return usersCollection;
+        if (rbacCollections[name]) return rbacCollections[name];
+        return db.collection(name);
+      }),
+    };
+
+    const req = createRequest({
+      params: { id: 'user-target-admin-echo' },
+      body: { name: 'Admin Renomeado', roleName: 'Administrador', accessType: 4 },
+    });
+    req.app.locals.db = dbWithTarget;
+    const res = createResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    const setPayload = usersCollection.updateOne.mock.calls[0][1].$set;
+    expect(setPayload).not.toHaveProperty('mfaEnabled');
+    expect(setPayload).not.toHaveProperty('mfaSecretCiphertext');
+    expect(setPayload).not.toHaveProperty('mfaActivationDate');
+    const mfaRows = auditSpies.log.mock.calls.filter(([entry]) => entry && entry.action === 'MFA');
+    expect(mfaRows).toHaveLength(0);
+  });
+
+  // #1245 item 4: the level floor and changeUserRole read accessType through
+  // Number(), so a JSON string '4' promotes -- ROLE_CODE_BY_ACCESS_TYPE['4']
+  // resolves -- while isBecomingAdmin compared it with === 4 and missed it.
+  // That promotion skipped #1011's confirmed enrolment clear and its
+  // promotion_clear row.
+  it("#1245: a promotion sent as accessType '4' (a string) is a promotion", async () => {
+    const handler = getHandler(userRoutes, 'put', '/:id');
+    const targetUser = {
+      _id: 'user-target-string-4',
+      name: 'Alvo String',
+      email: 'alvo-string@bioavanced.com.br',
+      username: 'alvostring',
+      status: 'active',
+      mfaEnabled: true,
+      mfaSecretCiphertext: 'SEGREDO-A-SER-LIMPO',
+    };
+    usersCollection.findOne
+      .mockResolvedValueOnce(targetUser)
+      .mockResolvedValueOnce(targetUser);
+    usersCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
+
+    const rbacCollections = buildRbacCollections([
+      { userAccountId: '507f1f77bcf86cd799439011', accessType: 4 },
+      { userAccountId: 'user-target-string-4', accessType: 3 },
+    ]);
+    const dbWithTarget = {
+      collection: vi.fn((name) => {
+        if (name === 'users') return usersCollection;
+        if (rbacCollections[name]) return rbacCollections[name];
+        return db.collection(name);
+      }),
+    };
+
+    const req = createRequest({ params: { id: 'user-target-string-4' }, body: { accessType: '4' } });
+    req.app.locals.db = dbWithTarget;
+    const res = createResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    const setPayload = usersCollection.updateOne.mock.calls[0][1].$set;
+    expect(setPayload.mfaEnabled).toBe(false);
+    expect(setPayload.mfaSecretCiphertext).toBeNull();
+    const mfaRows = auditSpies.log.mock.calls.filter(([entry]) => entry && entry.action === 'MFA');
+    expect(mfaRows).toHaveLength(1);
+    expect(mfaRows[0][0].payload).toMatchObject({ operation: 'promotion_clear' });
+  });
+
+  it('#914/#1011: promoting a user with NO enrolment writes no MFA row -- there was nothing to clear', async () => {
+    const handler = getHandler(userRoutes, 'put', '/:id');
+    const targetUser = {
+      _id: 'user-target-13',
+      name: 'Alvo Sem MFA',
+      email: 'alvo-sem-mfa@bioavanced.com.br',
+      username: 'alvosemmfa',
+      status: 'active',
+      accessType: 3,
+      roleName: 'Coordenador',
+      mfaEnabled: false,
+      mfaSecretCiphertext: null,
+    };
+    usersCollection.findOne
+      .mockResolvedValueOnce(targetUser)
+      .mockResolvedValueOnce(targetUser);
+    usersCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
+
+    const rbacCollections = buildRbacCollections([
+      { userAccountId: '507f1f77bcf86cd799439011', accessType: 4 },
+      { userAccountId: 'user-target-13', accessType: 3 },
+    ]);
+    const dbWithTarget = {
+      collection: vi.fn((name) => {
+        if (name === 'users') return usersCollection;
+        if (rbacCollections[name]) return rbacCollections[name];
+        return db.collection(name);
+      }),
+    };
+
+    const req = createRequest({ params: { id: 'user-target-13' }, body: { accessType: 4 } });
+    req.app.locals.db = dbWithTarget;
+    const res = createResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    const mfaRows = auditSpies.log.mock.calls.filter(([entry]) => entry && entry.action === 'MFA');
+    expect(mfaRows).toHaveLength(0);
   });
 
   // #1021: a PUT that merely OMITS mfaEnabled destroyed an Administrador's
@@ -1329,6 +1556,64 @@ describe('Users and Access routes', () => {
     expect(accessCollection.insertOne).toHaveBeenCalled();
   });
 
+  // #1202: dict v2.0.0 AccessGrant fields on the written grant.
+  it('#1202: POST /api/access grava grantedBy do chamador e os campos canônicos, ignorando o corpo', async () => {
+    const handler = getHandler(accessRoutes, 'post', '/');
+    accessCollection.insertOne.mockResolvedValue({ insertedId: 'access-3' });
+
+    const req = createRequest({
+      body: { reportID: 7, reportType: 'Relatório', grantedBy: 'forged', grantStatus: 'revoked' },
+    });
+    req.app.locals.db = db;
+    const res = createResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(201);
+    const written = accessCollection.insertOne.mock.calls[0][0];
+    expect(written).toMatchObject({
+      resourceType: 'report',
+      resourceId: 7,
+      grantedBy: '507f1f77bcf86cd799439011',
+      grantStatus: 'active',
+      revokedAt: null,
+    });
+  });
+
+  it('#1202: DELETE /api/access/:id revoga a concessão em vez de apagá-la', async () => {
+    const handler = getHandler(accessRoutes, 'delete', '/:id');
+    accessCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
+
+    const req = createRequest({
+      params: { id: '507f1f77bcf86cd799439099' },
+      body: { revocationReason: '  fim do estudo  ' },
+    });
+    req.app.locals.db = db;
+    const res = createResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(accessCollection.deleteOne).not.toHaveBeenCalled();
+    const [filter, update] = accessCollection.updateOne.mock.calls[0];
+    expect(filter.grantStatus).toEqual({ $ne: 'revoked' });
+    expect(update.$set).toMatchObject({ grantStatus: 'revoked', revocationReason: 'fim do estudo' });
+    expect(update.$set.revokedAt).toBeInstanceOf(Date);
+  });
+
+  it('#1202: DELETE /api/access/:id de uma concessão já revogada responde 404', async () => {
+    const handler = getHandler(accessRoutes, 'delete', '/:id');
+    accessCollection.updateOne.mockResolvedValue({ matchedCount: 0 });
+
+    const req = createRequest({ params: { id: '507f1f77bcf86cd799439099' } });
+    req.app.locals.db = db;
+    const res = createResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(404);
+  });
+
   // #998 (RF003, RNF008 AC#1): role assignment is Administrador-only.
   //
   // requirePermission('createUser') is the ONLY gate on the three routes that
@@ -1410,7 +1695,7 @@ describe('Users and Access routes', () => {
       const handler = getHandler(userRoutes, 'post', '/register');
 
       const req = createRequest({
-        body: { name: 'Novo', email: 'novo@b.c', username: 'novo', password: 'Str0ng!Pass', roleName: 'Administrador' },
+        body: { name: 'Novo', email: 'novo@b.c', username: 'novo', password: 'Str0ng!Pass-forte', roleName: 'Administrador' },
         user: callerCoordenador(),
       });
       req.app.locals.db = dbWith([{ userAccountId: '507f1f77bcf86cd799439013', accessType: 3 }]);
@@ -1422,7 +1707,12 @@ describe('Users and Access routes', () => {
       // #1017: was `authServiceMock.registerUser`, which passed vacuously --
       // that mock was never installed, so the assertion held no matter what
       // the route did. Now a real spy on the module the route actually calls.
-      expect(registerUserSpy).not.toHaveBeenCalled();
+      //
+      // #1057: the floor moved INTO registerUser, so the service is now
+      // reached and refuses from inside. What has to hold is that no user
+      // was written: the refusal comes before the insert.
+      expect(registerUserSpy).toHaveBeenCalledTimes(1);
+      expect(usersCollection.insertOne).not.toHaveBeenCalled();
     });
 
     // The negative halves. Without these the pair above cannot distinguish a
@@ -1447,12 +1737,12 @@ describe('Users and Access routes', () => {
       expect(res.statusCode).toBe(200);
     });
 
-    // What separates the floor that shipped from an Administrador-only gate.
-    // RF003 points at Administrador-only, which is #998 direction 2 and a
-    // larger change; the floor closes the escalation without deciding whether
-    // Coordenador should hold createUser at all. If direction 2 later lands,
-    // this test is the one that must flip.
-    it('still allows a Coordenador to assign a level at or below their own', async () => {
+    // What separated the #998 floor from an Administrador-only gate. This
+    // comment said "if direction 2 later lands, this test is the one that
+    // must flip", and #1008 (Denise, 2026-09-25) landed it: assigning a role
+    // needs assignRole, seeded on the Administrador only. So a Coordenador is
+    // now refused even at or below their own level, and nothing is written.
+    it('#1008: refuses a Coordenador assigning a level even at or below their own', async () => {
       const handler = getHandler(userRoutes, 'put', '/:id');
       seedTarget('user-target-998d');
 
@@ -1469,7 +1759,9 @@ describe('Users and Access routes', () => {
 
       await handler(req, res);
 
-      expect(res.statusCode).toBe(200);
+      expect(res.statusCode).toBe(403);
+      expect(res.payload.message).toMatch(/Administrador/);
+      expect(usersCollection.updateOne).not.toHaveBeenCalled();
     });
 
     it('still allows a Coordenador to edit a user without touching their role', async () => {
@@ -1491,6 +1783,169 @@ describe('Users and Access routes', () => {
 
       expect(res.statusCode).toBe(200);
       expect(usersCollection.updateOne).toHaveBeenCalled();
+    });
+
+    // #1008: NewUserPage echoes the whole user back on every save, role and
+    // validity dates included. The gate counts a CHANGE, so this plain rename
+    // carrying the unchanged role, dates and auditor flag must still pass.
+    // Without it the refusals below cannot tell a change check from a
+    // presence check.
+    it('#1008 CONTROL: a Coordenador rename echoing the unchanged role and validity back still succeeds', async () => {
+      const handler = getHandler(userRoutes, 'put', '/:id');
+      const target = seedTarget('user-target-1008a');
+      target.roleValidUntil = new Date('2031-01-01T00:00:00.000Z');
+
+      const req = createRequest({
+        params: { id: 'user-target-1008a' },
+        body: {
+          name: 'Alvo Renomeado',
+          roleName: 'Técnico',
+          roleValidUntil: '2031-01-01T00:00:00.000Z',
+          auditorRole: false,
+        },
+        user: callerCoordenador(),
+      });
+      req.app.locals.db = dbWith([
+        { userAccountId: '507f1f77bcf86cd799439013', accessType: 3 },
+        { userAccountId: 'user-target-1008a', accessType: 2 },
+      ]);
+      const res = createResponse();
+
+      await handler(req, res);
+
+      expect(res.statusCode).toBe(200);
+      expect(usersCollection.updateOne).toHaveBeenCalled();
+    });
+
+    // middleware/auth.js enforces roleValidUntil, so re-dating a role is role
+    // assignment (RF003 AC#3, "atribuir papel com vigência"). Pulling it into
+    // the past would lock the target out.
+    it('#1008: refuses a Coordenador changing the validity window of a role', async () => {
+      const handler = getHandler(userRoutes, 'put', '/:id');
+      seedTarget('user-target-1008b');
+
+      const req = createRequest({
+        params: { id: 'user-target-1008b' },
+        body: { roleValidUntil: new Date(Date.now() - 1000).toISOString() },
+        user: callerCoordenador(),
+      });
+      req.app.locals.db = dbWith([
+        { userAccountId: '507f1f77bcf86cd799439013', accessType: 3 },
+        { userAccountId: 'user-target-1008b', accessType: 2 },
+      ]);
+      const res = createResponse();
+
+      await handler(req, res);
+
+      expect(res.statusCode).toBe(403);
+      expect(usersCollection.updateOne).not.toHaveBeenCalled();
+    });
+
+    it('#1008: refuses a Coordenador granting the additive auditor role', async () => {
+      const handler = getHandler(userRoutes, 'put', '/:id');
+      seedTarget('user-target-1008c');
+
+      const req = createRequest({
+        params: { id: 'user-target-1008c' },
+        body: { auditorRole: true },
+        user: callerCoordenador(),
+      });
+      req.app.locals.db = dbWith([
+        { userAccountId: '507f1f77bcf86cd799439013', accessType: 3 },
+        { userAccountId: 'user-target-1008c', accessType: 2 },
+      ]);
+      const res = createResponse();
+
+      await handler(req, res);
+
+      expect(res.statusCode).toBe(403);
+      expect(usersCollection.updateOne).not.toHaveBeenCalled();
+    });
+
+    it('#1008 CONTROL: an Administrador may change the validity window of a role', async () => {
+      const handler = getHandler(userRoutes, 'put', '/:id');
+      seedTarget('user-target-1008d');
+
+      const req = createRequest({
+        params: { id: 'user-target-1008d' },
+        body: { roleValidUntil: new Date(Date.now() + 3600 * 1000).toISOString() },
+      });
+      req.app.locals.db = dbWith([
+        { userAccountId: '507f1f77bcf86cd799439011', accessType: 4 },
+        { userAccountId: 'user-target-1008d', accessType: 2 },
+      ]);
+      const res = createResponse();
+
+      await handler(req, res);
+
+      expect(res.statusCode).toBe(200);
+      expect(usersCollection.updateOne).toHaveBeenCalled();
+    });
+  });
+
+  // #1008: the #998 floor covered granting above your own level, not
+  // DELETING a user above it, so a Coordenador could delete an Administrador.
+  describe('#1008: DELETE /:id hierarchy floor', () => {
+    const COORD = { userID: '507f1f77bcf86cd799439013', accessType: 3, roleName: 'Coordenador' };
+
+    function dbWithUsers(callers) {
+      const rbacCollections = buildRbacCollections(callers);
+      return {
+        collection: vi.fn((name) => {
+          if (name === 'users') return usersCollection;
+          if (rbacCollections[name]) return rbacCollections[name];
+          return db.collection(name);
+        }),
+      };
+    }
+
+    it('refuses a Coordenador deleting an Administrador, without deleting', async () => {
+      const handler = getHandler(userRoutes, 'delete', '/:id');
+      usersCollection.findOne.mockResolvedValueOnce({ _id: 'admin-target-1008', username: 'adm' });
+
+      const req = createRequest({ params: { id: 'admin-target-1008' }, user: COORD });
+      req.app.locals.db = dbWithUsers([
+        { userAccountId: COORD.userID, accessType: 3 },
+        { userAccountId: 'admin-target-1008', accessType: 4 },
+      ]);
+      const res = createResponse();
+
+      await handler(req, res);
+
+      expect(res.statusCode).toBe(403);
+      expect(usersCollection.deleteOne).not.toHaveBeenCalled();
+    });
+
+    it('CONTROL: a Coordenador may still delete a user at or below their level', async () => {
+      const handler = getHandler(userRoutes, 'delete', '/:id');
+      usersCollection.findOne.mockResolvedValueOnce({ _id: 'tec-target-1008', username: 'tec' });
+      usersCollection.deleteOne.mockResolvedValueOnce({ deletedCount: 1 });
+
+      const req = createRequest({ params: { id: 'tec-target-1008' }, user: COORD });
+      req.app.locals.db = dbWithUsers([
+        { userAccountId: COORD.userID, accessType: 3 },
+        { userAccountId: 'tec-target-1008', accessType: 2 },
+      ]);
+      const res = createResponse();
+
+      await handler(req, res);
+
+      expect(res.statusCode).toBe(200);
+      expect(usersCollection.deleteOne).toHaveBeenCalledTimes(1);
+    });
+
+    it('CONTROL: a missing target still answers 404', async () => {
+      const handler = getHandler(userRoutes, 'delete', '/:id');
+      usersCollection.findOne.mockResolvedValueOnce(null);
+      usersCollection.deleteOne.mockResolvedValueOnce({ deletedCount: 0 });
+
+      const req = createRequest({ params: { id: 'nobody-1008' }, user: COORD });
+      req.app.locals.db = dbWithUsers([{ userAccountId: COORD.userID, accessType: 3 }]);
+      const res = createResponse();
+
+      await handler(req, res);
+
+      expect(res.statusCode).toBe(404);
     });
   });
 
@@ -1659,6 +2114,132 @@ describe('Users and Access routes', () => {
         'user-target-1009c',
         expect.objectContaining({ accessType: { from: 2, to: 3 } })
       );
+    });
+
+    // #1240: the user form seeds itself from the list row and echoes every
+    // field back, so the list has to say who holds `auditor`, and an echoed
+    // flag equal to the current state is not a permission change -- the same
+    // trap #1009 closed for roleName.
+    describe('#1240: auditorRole is readable, and an echoed flag is not a change', () => {
+      function auditorAssignmentsFor(targetId) {
+        return [
+          ...assignmentsFor(targetId),
+          { assignmentId: 'assign-auditor-1240', userAccountId: targetId, roleId: 'role-auditor', assignmentStatus: 'active', validUntil: null },
+        ];
+      }
+
+      it('GET /api/users reports auditorRole for each user', async () => {
+        const handler = getHandler(userRoutes, 'get', '/');
+        usersCollection.find.mockReturnValue({
+          toArray: vi.fn().mockResolvedValue([
+            { _id: 'user-1240-holder', name: 'Holder', username: 'holder', status: 'active' },
+            { _id: 'user-1240-plain', name: 'Plain', username: 'plain', status: 'active' },
+          ]),
+        });
+        const assignmentDocs = [
+          ...auditorAssignmentsFor('user-1240-holder'),
+          { assignmentId: 'assign-plain-1240', userAccountId: 'user-1240-plain', roleId: 'role-technician', assignmentStatus: 'active', validUntil: null },
+        ];
+        const req = createRequest();
+        req.app.locals.db = dbWithAssignments(assignmentDocs);
+        const res = createResponse();
+
+        await handler(req, res);
+
+        expect(res.statusCode).toBe(200);
+        const byId = Object.fromEntries(res.payload.data.map((u) => [u.id, u]));
+        expect(byId['user-1240-holder'].auditorRole).toBe(true);
+        expect(byId['user-1240-plain'].auditorRole).toBe(false);
+      });
+
+      it('GET /api/users/:id reports auditorRole', async () => {
+        const handler = getHandler(userRoutes, 'get', '/:id');
+        usersCollection.findOne.mockResolvedValue({ _id: 'user-1240-one', name: 'One', username: 'one', status: 'active' });
+        const req = createRequest({ params: { id: 'user-1240-one' } });
+        req.app.locals.db = dbWithAssignments(auditorAssignmentsFor('user-1240-one'));
+        const res = createResponse();
+
+        await handler(req, res);
+
+        expect(res.statusCode).toBe(200);
+        expect(res.payload.data.auditorRole).toBe(true);
+      });
+
+      it('a rename echoing auditorRole=true for a holder writes no permission change', async () => {
+        const handler = getHandler(userRoutes, 'put', '/:id');
+        seedTargetWithoutAccessType('user-target-1240a');
+        const assignmentDocs = auditorAssignmentsFor('user-target-1240a');
+
+        const req = createRequest({
+          params: { id: 'user-target-1240a' },
+          body: { name: 'Renomeado', roleName: 'Técnico', auditorRole: true },
+        });
+        req.app.locals.db = dbWithAssignments(assignmentDocs);
+        const res = createResponse();
+
+        await handler(req, res);
+
+        expect(res.statusCode).toBe(200);
+        expect(assignmentDocs).toHaveLength(3);
+        const auditor = assignmentDocs.find((d) => d.assignmentId === 'assign-auditor-1240');
+        expect(auditor.assignmentStatus).toBe('active');
+        expect(auditSpies.logPermissionChange).not.toHaveBeenCalled();
+        expect(auditSpies.logUpdate).toHaveBeenCalled();
+        expect(res.payload.data.auditorRole).toBe(true);
+      });
+
+      // changeUserRole revokes EVERY active assignment, auditor included, so
+      // a level change that echoes auditorRole=true must re-grant it -- and
+      // the audit row must not claim the auditor flag changed.
+      it('a level change echoing auditorRole=true keeps the holder an auditor and logs only the level', async () => {
+        const handler = getHandler(userRoutes, 'put', '/:id');
+        seedTargetWithoutAccessType('user-target-1240b');
+        const assignmentDocs = auditorAssignmentsFor('user-target-1240b');
+
+        const req = createRequest({
+          params: { id: 'user-target-1240b' },
+          body: { roleName: 'Coordenador', auditorRole: true },
+        });
+        req.app.locals.db = dbWithAssignments(assignmentDocs);
+        const res = createResponse();
+
+        await handler(req, res);
+
+        expect(res.statusCode).toBe(200);
+        const active = assignmentDocs
+          .filter((d) => d.userAccountId === 'user-target-1240b' && d.assignmentStatus === 'active')
+          .map((d) => d.roleId)
+          .sort();
+        expect(active).toEqual(['role-auditor', 'role-coordinator']);
+        expect(auditSpies.logPermissionChange).toHaveBeenCalledTimes(1);
+        const changes = auditSpies.logPermissionChange.mock.calls[0][2];
+        expect(changes.accessType).toEqual({ from: 2, to: 3 });
+        expect(changes).not.toHaveProperty('auditorRole');
+      });
+
+      // Control: identical before and after the fix.
+      it('control: granting auditorRole to a non-holder grants it and logs the change', async () => {
+        const handler = getHandler(userRoutes, 'put', '/:id');
+        seedTargetWithoutAccessType('user-target-1240c');
+        const assignmentDocs = assignmentsFor('user-target-1240c');
+
+        const req = createRequest({
+          params: { id: 'user-target-1240c' },
+          body: { roleName: 'Técnico', auditorRole: true },
+        });
+        req.app.locals.db = dbWithAssignments(assignmentDocs);
+        const res = createResponse();
+
+        await handler(req, res);
+
+        expect(res.statusCode).toBe(200);
+        expect(assignmentDocs.some((d) => d.userAccountId === 'user-target-1240c' && d.roleId === 'role-auditor' && d.assignmentStatus === 'active')).toBe(true);
+        expect(auditSpies.logPermissionChange).toHaveBeenCalledWith(
+          expect.anything(),
+          'user-target-1240c',
+          expect.objectContaining({ auditorRole: true })
+        );
+      });
     });
   });
 });

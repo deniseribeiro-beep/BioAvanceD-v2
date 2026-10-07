@@ -74,3 +74,27 @@ describe('LogService.sanitizeLogData', () => {
     expect(() => logService.sanitizeLogData({})).not.toThrow();
   });
 });
+
+// #1271: the trail a read is served from.
+describe('LogService source (#1271)', () => {
+  it('maps none or live to logs, archive to logs_archive', () => {
+    expect(logService.logSourceCollection(undefined)).toBe('logs');
+    expect(logService.logSourceCollection('')).toBe('logs');
+    expect(logService.logSourceCollection('live')).toBe('logs');
+    expect(logService.logSourceCollection('archive')).toBe('logs_archive');
+  });
+
+  it('refuses any other source with a 422 rather than reading the live trail', () => {
+    for (const source of ['archived', 'toString', 'constructor']) {
+      expect(() => logService.logSourceCollection(source)).toThrow(expect.objectContaining({ statusCode: 422 }));
+    }
+  });
+
+  it('getLogs reads the collection the source names', async () => {
+    const names = [];
+    const db = { collection: (name) => { names.push(name); throw new Error('stop'); } };
+    await expect(logService.getLogs(db, { source: 'archive' })).rejects.toThrow('stop');
+    await expect(logService.getLogs(db, {})).rejects.toThrow('stop');
+    expect(names).toEqual(['logs_archive', 'logs']);
+  });
+});

@@ -50,3 +50,6 @@ frontend/playwright/.auth/
 *.p12
 *.pfx
 
+
+# A source directory named logs/ is code, not log output.
+!src/**/logs/

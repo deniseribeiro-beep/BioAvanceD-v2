@@ -1,20 +1,24 @@
 const SampleMovementModel = require('../models/SampleMovement');
 const { appendMovementWithHashChain } = require('../utils/sampleMovementLedger');
 const { getCollection } = require('../utils/collectionResolver');
+const { ensureStorageContainerIndexes, ensureStorageBoxIndexes } = require('../utils/storageIndexes');
 const quarantineActionService = require('./quarantine-action.service');
 const logger = require('../utils/logger');
 
+// #883: routine "Maintenance"/"Inactive" states are deliberately excluded
+// here. A sample-bearing freezer taken out of service for routine
+// maintenance, or marked inactive, must not silently bulk-quarantine every
+// sample stored under it -- quarantine is reserved for failure states that
+// actually threaten sample integrity (offline/powered-down, repair). Keeping
+// an out-of-service location from being used further is RF017 AC#7's job,
+// already enforced at the readiness gate -- not a reason to quarantine its
+// contents.
 const QUARANTINE_TRIGGER_STATUSES = new Set([
   'offline',
   'desligado',
-  'inactive',
-  'inativo',
   'repair',
-  'maintenance',
   'aguardando reparo',
-  'awaiting repair',
-  'manutencao',
-  'manutenção'
+  'awaiting repair'
 ]);
 
 function normalizeStatus(value) {
@@ -174,6 +178,9 @@ async function resolveFreezersByEquipmentIdentifiers(db, identifiers = [], optio
   }
 
   const storageContainersCollection = db.collection('storageContainers');
+  // #1163: the containerID lookup below is served by the unique index this
+  // helper builds, so it is ensured on the read path too.
+  ensureStorageContainerIndexes(storageContainersCollection);
   const sessionOptions = options.session ? { session: options.session } : undefined;
 
   return storageContainersCollection.find(
@@ -193,6 +200,9 @@ async function resolveFreezersByEquipmentIdentifiers(db, identifiers = [], optio
 async function findBoxIdsUnderFreezer(db, freezerId, options = {}) {
   const storageContainersCollection = db.collection('storageContainers');
   const storageBoxesCollection = db.collection('storageBoxes');
+  // #1163: the parent_id walk below is what the two lookup indexes serve.
+  ensureStorageContainerIndexes(storageContainersCollection);
+  ensureStorageBoxIndexes(storageBoxesCollection);
   const sessionOptions = options.session ? { session: options.session } : undefined;
 
   const shelves = await storageContainersCollection.find(
@@ -311,6 +321,15 @@ async function findBoxIdsBySensorKey(db, sensorKey, options = {}) {
         boxIds.push(...await findBoxIdsUnderFreezer(db, freezer._id, options));
       }
 
+      // #1208: registration (sensor.service.js linkSensorMetadata, #311)
+      // binds a sensor to its freezer by storageContainer, the FREEZER's
+      // _id -- the same link TelemetryMonitor.resolveRootSamples reads for
+      // the Neo4j COMPROMISED mark. Without this, a sensor registered that
+      // way resolved no boxes and a cold-chain excursion quarantined nothing.
+      if (metadata.storageContainer) {
+        boxIds.push(...await findBoxIdsUnderFreezer(db, metadata.storageContainer, options));
+      }
+
       const equipment = await findEquipmentByMetadata(db, metadata, options);
       if (equipment) {
         boxIds.push(...await findBoxIdsByEquipment(db, equipment, options));
@@ -395,18 +414,27 @@ async function quarantineSamplesByFilter(db, filter, context = {}) {
       updatePayload.locationStatus = 'Quarantine';
     }
 
-    await samplesCollection.updateOne(
+    const updateResult = await samplesCollection.updateOne(
       { _id: sample._id },
       { $set: updatePayload },
       queryOptions
     );
 
+    // #883: a sample counts as quarantined -- and gets a QuarantineAction and
+    // a ledger movement -- only when this update actually changed it. The
+    // find above already skips quarantined samples, so modifiedCount 0 means
+    // a concurrent writer got there first and recorded its own action and
+    // movement; writing them again would duplicate the audit trail. The
+    // reported count used to be a loop counter.
+    if (!(updateResult?.modifiedCount > 0)) {
+      continue;
+    }
+    quarantined += 1;
+
     await quarantineActionService.recordAction(db, {
-      specimenIds: [sampleId],
+      specimenIds: [quarantineActionService.canonicalSpecimenId(sample)],
       reasonCodes: [context.coldChainIncidentId ? 'COLD_CHAIN_INCIDENT' : (context.source || 'AUTOMATIC')],
     }, context.session);
-
-    quarantined += 1;
 
     const quantitySnapshot = Number(sample.currentQuantity ?? sample.quantity ?? 0);
     const movementID = await SampleMovementModel.generateMovementID(db);
@@ -604,7 +632,7 @@ async function markColdChainIncidentSamplesForReview(db, incident = {}, options 
   );
 
   for (const sample of matchedSamples) {
-    await quarantineActionService.markPendingReview(db, String(sample._id), options.session);
+    await quarantineActionService.markPendingReview(db, sample, options.session);
   }
 
   logger.warn('[QUARANTINE][COLD_CHAIN] Incidente resolvido; amostras mantidas para revisão pós-incidente', {
@@ -627,5 +655,8 @@ module.exports = {
   quarantineBySensorStatus,
   quarantineByColdChainIncident,
   markColdChainIncidentSamplesForReview,
-  findBoxIdsBySensorKey
+  findBoxIdsBySensorKey,
+  // #1163: exported so their index wiring can be pinned directly.
+  resolveFreezersByEquipmentIdentifiers,
+  findBoxIdsUnderFreezer
 };

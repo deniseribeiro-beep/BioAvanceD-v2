@@ -174,7 +174,8 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
     expect(persistedSet.status).toBeUndefined();
     expect(persistedSet.currentStatus).toBeUndefined();
     expect(quarantineActionsCollection.insertOne).toHaveBeenCalledWith(
-      expect.objectContaining({ specimenIds: ['sample-1'], reasonCodes: ['PENDING_SIGNATURE'] }),
+      // #1219: a new action names the specimen by its canonical specimenId.
+      expect.objectContaining({ specimenIds: ['spec-1'], reasonCodes: ['PENDING_SIGNATURE'] }),
       undefined
     );
   });
@@ -215,7 +216,7 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
     expect(res.body.sample.status).toBe('QUARANTINE');
     expect(res.body.sample.quarantineReason).toBe('QUALITY_GOVERNANCE_FAILURE');
     expect(quarantineActionsCollection.insertOne).toHaveBeenCalledWith(
-      expect.objectContaining({ specimenIds: ['sample-3'] }),
+      expect.objectContaining({ specimenIds: ['spec-3'] }),
       undefined
     );
   });

@@ -9,6 +9,7 @@ const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
+const { createFakeDb } = require('../unit/foundation/helpers/fake-db');
 
 const rbacCollectionsAdmin = buildRbacCollections([{ userAccountId: 'qa-1', accessType: 4 }]);
 // #913: real RBAC fixtures for the Técnico/Coordenador role-gate tests below --
@@ -60,6 +61,23 @@ describe('GET /api/measurement-units', () => {
       .set('Authorization', `Bearer ${makeToken(2)}`);
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
+  });
+
+  // #1332: the chain above ignores its sort; this store sorts.
+  it('lists items newest first', async () => {
+    const store = createFakeDb().collection('measurementUnits');
+    await store.insertOne({ _id: 'mid', name: 'mid', createdAt: new Date('2026-02-02') });
+    await store.insertOne({ _id: 'newest', name: 'newest', createdAt: new Date('2026-02-03') });
+    await store.insertOne({ _id: 'oldest', name: 'oldest', createdAt: new Date('2026-02-01') });
+    const coll = createCollectionMock({ find: vi.fn((filter) => store.find(filter)) });
+    app.locals.db = createDbMock({ measurementUnits: coll, ...rbacCollectionsAdmin });
+
+    const res = await request(app)
+      .get('/api/measurement-units')
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.map((item) => item.name)).toEqual(['newest', 'mid', 'oldest']);
   });
 });
 

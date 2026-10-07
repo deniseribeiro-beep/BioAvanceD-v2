@@ -6,7 +6,7 @@ const { authenticate } = require('../../infrastructure/middleware/auth');
 const { requirePermission, requireOrganizationScope } = require('../../infrastructure/middleware/rbac');
 
 // RF005 - Cadastro de paciente (Coordenador, Administrador)
-router.post('/', authenticate, requirePermission('createPatient'), patientController.cadastrar.bind(patientController));
+router.post('/', authenticate, requirePermission('createPatient'), requireOrganizationScope, patientController.cadastrar.bind(patientController));
 
 // Listar pacientes
 router.get('/', authenticate, requireOrganizationScope, patientController.listar.bind(patientController));
@@ -25,7 +25,9 @@ router.get('/search', authenticate, requireOrganizationScope, patientController.
 router.get('/operational', authenticate, requireOrganizationScope, patientController.listar.bind(patientController));
 
 // Buscar consentimento atual do paciente
-router.get('/:patientId/consent', authenticate, consentController.getPatientConsent.bind(consentController));
+// #1188: :participantId, the name the controller reads -- e2549bee renamed
+// the controller and left this route on :patientId, so it always got undefined.
+router.get('/:participantId/consent', authenticate, requireOrganizationScope, consentController.getPatientConsent.bind(consentController));
 
 // Reenviar notificações de consentimento
 router.post('/:id/consent/resend', authenticate, requirePermission('createPatient'), requireOrganizationScope, patientController.resendConsentNotification.bind(patientController));
@@ -50,7 +52,7 @@ router.delete('/:id', authenticate, requirePermission('createPatient'), requireO
 router.post('/validate-id', authenticate, patientController.validateID.bind(patientController));
 
 // Buscar paciente para edição (apenas módulo de cadastro)
-router.post('/find-for-edit', authenticate, requirePermission('createPatient'), patientController.findForEdit.bind(patientController));
+router.post('/find-for-edit', authenticate, requirePermission('createPatient'), requireOrganizationScope, patientController.findForEdit.bind(patientController));
 
 
 module.exports = router;

@@ -3,7 +3,9 @@
  * Inclui suporte a MFA (RF001) e RBAC (RNF008)
  */
 class UserModel {
-  static validate(data) {
+  // passwordPolicy: the caller's resolvePasswordPolicy(db) result; without
+  // one the strength check uses the default policy.
+  static validate(data, { passwordPolicy } = {}) {
     const errors = [];
 
     // Campos obrigatórios (exceto telefone e instituição)
@@ -43,7 +45,7 @@ class UserModel {
     if (data.password) {
       const passwordService = require('../services/password.service');
       try {
-        passwordService.validateStrength(data.password);
+        passwordService.validateStrength(data.password, passwordPolicy);
       } catch (err) {
         errors.push(`password: ${err.message}`);
       }
@@ -53,8 +55,9 @@ class UserModel {
       errors.push('passwordHistory deve ser um array');
     }
 
-    if (data.lastPasswordChange && isNaN(new Date(data.lastPasswordChange))) {
-      errors.push('lastPasswordChange deve ser uma data válida');
+    // #1251: dict-02 P1X-0204 passwordChangedAt (was lastPasswordChange).
+    if (data.passwordChangedAt && isNaN(new Date(data.passwordChangedAt))) {
+      errors.push('passwordChangedAt deve ser uma data válida');
     }
 
     if (data.forceReset !== undefined && typeof data.forceReset !== 'boolean') {
@@ -110,7 +113,10 @@ class UserModel {
     };
   }
 
-  static create(data) {
+  // The stored user document's shape, pure: timestamps come from `data` or
+  // stay null, and create() fills them. The catalog conformance guard reads
+  // this to compare the document with dict-02 UserAccount (P1X-0182..0208).
+  static fieldsOf(data = {}) {
     return {
       name: data.name,
       email: data.email,
@@ -126,18 +132,40 @@ class UserModel {
       mfaActivationDate: data.mfaActivationDate || null,
       mfaFailedAttempts: data.mfaFailedAttempts || 0,
       mfaLocked: data.mfaLocked || false,
-      anonId: data.anonId || null, // Identificador anonimizado para LGPD (gerado após inserção)
-      createdAt: new Date(),
-      updatedAt: new Date(),
+      // Identificador anonimizado para LGPD (gerado após inserção). #1275
+      // follow-up: never taken from input. Log reads honour a stored anonId
+      // (dict-02 P1X-0194), so a chosen one could make this user's rows read
+      // as another's.
+      anonId: null,
+      createdAt: null,
+      updatedAt: null,
       lastLogin: null,
       passwordHistory: Array.isArray(data.passwordHistory) ? data.passwordHistory : [],
-      lastPasswordChange: data.lastPasswordChange || new Date(),
+      passwordChangedAt: data.passwordChangedAt || null,
       forceReset: data.forceReset || false,
       failedLoginAttempts: data.failedLoginAttempts || 0,
-      accountLockedUntil: data.accountLockedUntil ? new Date(data.accountLockedUntil) : null, // #952
+      // #952 / #985: a LOCAL EXTENSION of UserAccount, not a dictionary
+      // element. The v2.0.0 dictionary (approved 2026-09-12) still declares
+      // no password-side lock expiry, while P1X-0282
+      // authentication.lockoutDurationMinutes is 1..1 Core and RF001 AC#2
+      // (requisitos v4.0.0) locks the account "temporariamente" -- so the
+      // duration needs somewhere to end. Shaped after P1X-0201 mfaLockedUntil
+      // (dateTime, 0..1), classed like the dictionary's own "Extensão local"
+      // rows (P1X-0188, P1X-0191).
+      accountLockedUntil: data.accountLockedUntil ? new Date(data.accountLockedUntil) : null,
       roleValidFrom: data.roleValidFrom ? new Date(data.roleValidFrom) : null,
       roleValidUntil: data.roleValidUntil ? new Date(data.roleValidUntil) : null,
       organizationIds: Array.isArray(data.organizationIds) ? data.organizationIds : []
+    };
+  }
+
+  static create(data) {
+    const fields = this.fieldsOf(data);
+    return {
+      ...fields,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      passwordChangedAt: fields.passwordChangedAt || new Date()
     };
   }
 

@@ -154,3 +154,28 @@ describe('enforceAppendOnlyCollection', () => {
     await expect(coll.bulkWrite(ops)).resolves.toBeDefined();
   });
 });
+
+// #841: the previous movement is read with a sort; a double that ignores it
+// cannot tell the specimen's latest movement from the first one stored. This
+// store sorts, and holds the specimen's movements out of order beside
+// another specimen's newer one.
+describe('appendMovementWithHashChain — chain head (#841)', () => {
+  it("chains off the specimen's newest movement, not the first one stored", async () => {
+    const { appendMovementWithHashChain } = require('../../src/utils/sampleMovementLedger');
+    const { createFakeDb } = require('./foundation/helpers/fake-db');
+    const movements = createFakeDb().collection('sample_movements');
+    const stored = [
+      ['SPC-1', '2026-07-02T10:00:00.000Z'],
+      ['SPC-1', '2026-07-02T12:00:00.000Z'],
+      ['SPC-1', '2026-07-02T08:00:00.000Z'],
+      ['SPC-2', '2026-07-03T00:00:00.000Z'],
+    ];
+    for (const [specimenId, at] of stored) {
+      await movements.insertOne({ specimenId, createdAt: new Date(at), hash: `${specimenId}@${at}` });
+    }
+
+    const result = await appendMovementWithHashChain(movements, { specimenId: 'SPC-1', movementType: 'move' });
+
+    expect(result.previousHash).toBe('SPC-1@2026-07-02T12:00:00.000Z');
+  });
+});

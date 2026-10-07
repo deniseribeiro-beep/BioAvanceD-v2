@@ -11,7 +11,7 @@ const {
 /**
  * Real query-matching fake (exact-match filter + sort), not a canned stub --
  * proves getEncountersForParticipant actually scopes by participantId and
- * orders by recency, per build-loop's native-only "real backend" proof bar.
+ * orders by recency, per this repo's native-only "real backend" proof bar.
  */
 function createFakeCollection() {
   const docs = [];

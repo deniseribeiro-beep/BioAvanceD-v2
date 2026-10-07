@@ -9,6 +9,7 @@ const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const { createDbMock, createCollectionMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
+const { createFakeDb } = require('../unit/foundation/helpers/fake-db');
 
 function givenSession() {
   vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 'session-1' } });
@@ -54,16 +55,14 @@ describe('GET /api/report-templates', () => {
   });
 
   it('returns 200 for any viewReports holder (Tecnico), sorted system-defined first then by name', async () => {
+    // #1332: held out of order in a store that sorts, so the order is checked.
+    const store = createFakeDb().collection('reportTemplates');
+    await store.insertOne({ code: 'custom_b', name: 'Custom B', isSystemDefined: false });
+    await store.insertOne({ code: 'storage', name: 'Armazenamento', isSystemDefined: true });
+    await store.insertOne({ code: 'custom_a', name: 'Custom A', isSystemDefined: false });
+    await store.insertOne({ code: 'sample', name: 'Amostras', isSystemDefined: true });
     app.locals.db = dbWithTemplates({
-      reportTemplates: createCollectionMock({
-        find: vi.fn(() => ({
-          sort: vi.fn().mockReturnThis(),
-          toArray: vi.fn().mockResolvedValue([
-            { code: 'custom_b', name: 'Custom B', isSystemDefined: false },
-            { code: 'sample', name: 'Amostras', isSystemDefined: true },
-          ]),
-        })),
-      }),
+      reportTemplates: createCollectionMock({ find: vi.fn((filter) => store.find(filter)) }),
     });
 
     const res = await request(app)
@@ -72,7 +71,7 @@ describe('GET /api/report-templates', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
-    expect(res.body.data).toHaveLength(2);
+    expect(res.body.data.map((template) => template.code)).toEqual(['sample', 'storage', 'custom_a', 'custom_b']);
   });
 
   it('returns 503 when db is unavailable', async () => {

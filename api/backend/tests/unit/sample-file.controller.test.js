@@ -1999,4 +1999,74 @@ describe('sample-file.controller', () => {
       expect(res.status).toHaveBeenCalledWith(200);
     });
   });
+  // #1216: the create response names a specimen by its canonical specimenId,
+  // and a file is keyed by the sample's _id string. The samples doubles
+  // honour their filter, so an unresolved specimenId misses instead of
+  // matching by accident. The old fallback looked it up as a Number.
+  describe('#1216: a specimenId in the URL', () => {
+    const SPECIMEN_ID = '3116768';
+    function samplesBySpecimenId(sample) {
+      return {
+        findOne: vi.fn(async (filter = {}) => {
+          if (filter.specimenId === SPECIMEN_ID) return sample;
+          if (filter._id && String(filter._id) === String(sample._id)) return sample;
+          return null;
+        })
+      };
+    }
+
+    it('listFiles resolves it and lists the files keyed by the sample _id', async () => {
+      const sample = { _id: new ObjectId(), specimenId: SPECIMEN_ID };
+      const find = vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) });
+      const db = createDb({ samples: samplesBySpecimenId(sample), sample_files: { find } });
+      const req = { app: { locals: { db } }, params: { specimenId: SPECIMEN_ID }, user: null };
+      const res = createRes();
+
+      await controller.listFiles(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(find).toHaveBeenCalledWith({ specimenId: sample._id.toString() });
+    });
+
+    it('downloadFile accepts it for a file keyed by the sample _id', async () => {
+      const sample = { _id: new ObjectId(), specimenId: SPECIMEN_ID };
+      const fileID = new ObjectId().toString();
+      const fileRecord = { _id: new ObjectId(fileID), specimenId: sample._id.toString(), storagePath: '/x/a.csv', fileName: 'a.csv' };
+      const db = createDb({
+        samples: samplesBySpecimenId(sample),
+        sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) }
+      });
+      const req = { app: { locals: { db } }, params: { specimenId: SPECIMEN_ID, fileID }, user: null };
+      const res = createRes();
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      const plaintext = Buffer.from('a.csv content');
+      vi.spyOn(fs, 'readFileSync').mockReturnValue(plaintext);
+
+      await controller.downloadFile(req, res);
+
+      expect(res.status).not.toHaveBeenCalledWith(403);
+      expect(res.send).toHaveBeenCalledWith(plaintext);
+    });
+
+    it('exportHL7v2 resolves it before the link check, so scope still decides', async () => {
+      const sample = { _id: new ObjectId(), specimenId: SPECIMEN_ID, collectionSite: 'org-9' };
+      const fileID = new ObjectId().toString();
+      const fileRecord = { _id: new ObjectId(fileID), specimenId: sample._id.toString(), fileName: 'a.csv' };
+      const db = createDb({
+        samples: samplesBySpecimenId(sample),
+        sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) }
+      });
+      const req = {
+        app: { locals: { db } },
+        params: { specimenId: SPECIMEN_ID, fileID },
+        organizationScope: { scope: 'organization', organizationIds: ['org-1'] }
+      };
+      const res = createRes();
+
+      await controller.exportHL7v2(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: 'Esta amostra pertence a outra organização' }));
+    });
+  });
 });

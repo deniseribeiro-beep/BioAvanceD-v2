@@ -83,6 +83,15 @@ class PacienteController {
       const pacienteData = this.sanitizePatientPayload(req.body);
       this.validateDeceasedRepresentative(pacienteData);
 
+      // #1185: #1071's create rule. An organization-scoped caller registers
+      // into its own organization whatever unit the body names -- by id or
+      // by clinicalUnit name, since createPatient resolves the id first. A
+      // global caller keeps the body's value, name-only lookup included.
+      if (req.organizationScope?.scope !== 'global') {
+        const { resolveOrganizationIdForCreate } = require('../services/rbac-assignment.service');
+        pacienteData.clinicalUnitId = resolveOrganizationIdForCreate(req.organizationScope, pacienteData.clinicalUnitId);
+      }
+
       // Validação básica
       if (!pacienteData || Object.keys(pacienteData).length === 0) {
         return res.status(400).json({
@@ -157,7 +166,8 @@ class PacienteController {
       return res.status(statusCode).json({
         success: false,
         error: req.t('errors.serverError'),
-        message: error.message || req.t('errors.generic')
+        message: error.message || req.t('errors.generic'),
+        details: error.details
       });
     }
   }
@@ -564,6 +574,21 @@ class PacienteController {
         });
       }
 
+      // #1281: the consent lifecycle's fields and the timestamps are written
+      // by the server only, never through this route.
+      const serverManaged = PatientModel.SERVER_MANAGED_FIELDS.filter((field) =>
+        Object.prototype.hasOwnProperty.call(req.body || {}, field));
+      if (serverManaged.length > 0) {
+        return res.status(422).json({
+          success: false,
+          error: 'Campos gerenciados pelo servidor',
+          message: `Não é permitido alterar: ${serverManaged.join(', ')}`,
+          code: 'SERVER_MANAGED_FIELD',
+          fields: serverManaged,
+          details: serverManaged.map((field) => `${field}: campo gerenciado pelo servidor`)
+        });
+      }
+
       // #626: mirrors sample.routes.js's PUT /:id out-of-scope 403
       // pattern — the scope check runs before the mutation, not just
       // before a read.
@@ -579,6 +604,16 @@ class PacienteController {
 
       const updatePayload = this.sanitizePatientPayload(req.body);
       this.validateDeceasedRepresentative(updatePayload);
+
+      // #1053: the check above proves the patient is CURRENTLY the caller's.
+      // clinicalUnitId is the field this module scopes on, and the payload
+      // can rewrite it directly or through a clinicalUnit name, so the
+      // destination is checked on the value updatePatient would resolve.
+      if (existingPatient && (updatePayload.clinicalUnitId !== undefined || updatePayload.clinicalUnit !== undefined)) {
+        const { assertOrganizationFieldNotReparented } = require('../services/rbac-assignment.service');
+        const destination = await patientService.resolveClinicalUnitSnapshot(db, updatePayload);
+        assertOrganizationFieldNotReparented(req.organizationScope, existingPatient.clinicalUnitId, destination?.clinicalUnitId ?? null, 'clinicalUnitId');
+      }
 
       const result = await patientService.updatePatient(db, id, updatePayload, {
         neo4jDriver: req.app.locals.neo4jDriver || null
@@ -653,6 +688,18 @@ class PacienteController {
           success: false,
           error: 'Acesso negado',
           message: 'Este paciente pertence a outra organização'
+        });
+      }
+
+      // #1262: lgpd.allowDataDeletion switches the elimination off. Checked
+      // after the scope check, so a caller outside the scope learns nothing
+      // about the setting.
+      const securityService = require('../services/security.service');
+      if (!(await securityService.isDataDeletionAllowed(db))) {
+        return res.status(403).json({
+          success: false,
+          error: 'Eliminação desabilitada',
+          message: 'A eliminação de dados está desabilitada na configuração LGPD'
         });
       }
 
@@ -837,6 +884,17 @@ class PacienteController {
         return res.status(404).json({
           success: false,
           error: 'Paciente não encontrado'
+        });
+      }
+
+      // #1185: buscar's #340 check. This handler returns the full patient
+      // for editing and had no scope test at all.
+      const { isRecordInOrganizationScope } = require('../services/rbac-assignment.service');
+      if (!isRecordInOrganizationScope(patient, req.organizationScope, 'clinicalUnitId')) {
+        return res.status(403).json({
+          success: false,
+          error: 'Acesso negado',
+          message: 'Este paciente pertence a outra organização'
         });
       }
 

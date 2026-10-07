@@ -5,6 +5,7 @@ const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
 const logger = require("./src/utils/logger");
 const env = require("./src/config/env");
+const { skipAuthBudget } = require("./src/infrastructure/middleware/authLimiterSkip");
 
 const app = express();
 
@@ -221,6 +222,8 @@ const authLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   skipSuccessfulRequests: false,
+  // #1253: the public password-policy read verifies no secret; see authLimiterSkip.
+  skip: skipAuthBudget,
 });
 
 // #823/#832: six routes on the e-consent router carry no `authenticate` --
@@ -240,6 +243,11 @@ const consentLimiter = rateLimit({
   skipSuccessfulRequests: false,
 });
 
+// #1230: every limiter mounts AFTER auditRequest (above), deliberately, so a
+// 429 is itself an audited request. RF012 records every AuditEvent with its
+// result, and the binding principle bars configuration from disabling audit,
+// so rows are neither aggregated nor skipped. Their volume is retention's
+// job (RF026, #667). Pinned by rateLimitAudit.composition.test.js.
 if (!isTest) {
   app.use(globalLimiter);
   app.use("/api/auth", authLimiter);
@@ -278,7 +286,7 @@ app.use("/api/measurement-units", createMasterDataRouter({
 // identifier, settled by #902, is the string MIABIS code the seed writes
 // on `id` -- src/reference-data/essential/manifest.js:12 declares
 // uniqueKeys: ['id'] and the seed uses it verbatim as the upsert filter;
-// scripts/create-db.js indexes `id` only; every KEYED backend lookup
+// every KEYED backend lookup
 // resolves on `id` (import-lgpd.service.js:1376 findOne({ id }), plus
 // master-data.routes.js:24's additive $or branch). idField is now 'id',
 // and the numeric generateId override (Date.now()) is removed so the
@@ -293,7 +301,7 @@ app.use("/api/quality-descriptions", createMasterDataRouter({
 // identifier, settled by #902, is the string MIABIS code the seed writes
 // on `id` -- src/reference-data/essential/manifest.js:12 declares
 // uniqueKeys: ['id'] and the seed uses it verbatim as the upsert filter;
-// scripts/create-db.js indexes `id` only; every KEYED backend lookup
+// every KEYED backend lookup
 // resolves on `id` (import-lgpd.service.js:1376 findOne({ id }), plus
 // master-data.routes.js:24's additive $or branch). idField is now 'id',
 // and the numeric generateId override (Date.now()) is removed so the
@@ -308,7 +316,7 @@ app.use("/api/sample-types", createMasterDataRouter({
 // identifier, settled by #902, is the string MIABIS code the seed writes
 // on `id` -- src/reference-data/essential/manifest.js:12 declares
 // uniqueKeys: ['id'] and the seed uses it verbatim as the upsert filter;
-// scripts/create-db.js indexes `id` only; every KEYED backend lookup
+// every KEYED backend lookup
 // resolves on `id` (import-lgpd.service.js:1376 findOne({ id }), plus
 // master-data.routes.js:24's additive $or branch). idField is now 'id',
 // and the numeric generateId override (Date.now()) is removed so the
@@ -323,7 +331,7 @@ app.use("/api/sample-origins", createMasterDataRouter({
 // identifier, settled by #902, is the string MIABIS code the seed writes
 // on `id` -- src/reference-data/essential/manifest.js:12 declares
 // uniqueKeys: ['id'] and the seed uses it verbatim as the upsert filter;
-// scripts/create-db.js indexes `id` only; every KEYED backend lookup
+// every KEYED backend lookup
 // resolves on `id` (import-lgpd.service.js:1376 findOne({ id }), plus
 // master-data.routes.js:24's additive $or branch). idField is now 'id',
 // and the numeric generateId override (Date.now()) is removed so the
@@ -377,7 +385,9 @@ app.use("/api/assays", createMasterDataRouter({
   collectionName: "assays",
   idField: "assayId",
   model: require("./src/models/Assay"),
-  validateReferences: require("./src/services/assayReferenceValidator").validateAssayReferences
+  validateReferences: require("./src/services/assayReferenceValidator").validateAssayReferences,
+  // #1182: Assay is the one mount with an organization field of its own.
+  scopeField: "laboratoryId"
 }));
 app.use("/api/reagent-lots", createMasterDataRouter({
   collectionName: "reagentLots",

@@ -475,7 +475,7 @@ class SampleGraphValidator {
       const currentOrder = SPECIMEN_STATUS_ORDER[currentSpecimenStatus] ?? SPECIMEN_STATUS_ORDER.available;
 
       if (targetOrder !== currentOrder) {
-        const existingActions = await quarantineActionService.getActionsForSpecimen(this.db, report.sampleId);
+        const existingActions = await quarantineActionService.getActionsForSpecimen(this.db, sample);
         latestActiveAction = existingActions.find((action) => action.actionStatus === 'active') || null;
       }
 
@@ -502,17 +502,17 @@ class SampleGraphValidator {
       // manual) is left untouched; this escalation's own action is recorded
       // alongside it.
       if (isComplianceGraphOwnedAction(latestActiveAction)) {
-        await quarantineActionService.releaseActiveAction(this.db, report.sampleId, 'SYSTEM_COMPLIANCE_GRAPH');
+        await quarantineActionService.releaseActiveAction(this.db, sample, 'SYSTEM_COMPLIANCE_GRAPH');
       }
       const reasonCodes = complianceGraphReasonCodes(graphPath);
       if (reasonCodes.length > 0) {
         await quarantineActionService.recordAction(this.db, {
-          specimenIds: [report.sampleId],
+          specimenIds: [quarantineActionService.canonicalSpecimenId(sample)],
           reasonCodes,
         });
       }
     } else if (downgraded) {
-      await quarantineActionService.releaseActiveAction(this.db, report.sampleId, 'SYSTEM_COMPLIANCE_GRAPH');
+      await quarantineActionService.releaseActiveAction(this.db, sample, 'SYSTEM_COMPLIANCE_GRAPH');
     }
 
     if (!isReleasable) {

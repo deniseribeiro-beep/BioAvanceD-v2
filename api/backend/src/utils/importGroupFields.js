@@ -57,4 +57,35 @@ function parseGroupFields(raw) {
   return { ok: true, value };
 }
 
-module.exports = { parseGroupFields };
+// #840: the four import endpoints that refuse a groupFields payload used to
+// answer three different ways -- one put the reason token inline in an
+// English-shaped `message`, the other three dropped the reason entirely and
+// always said "must be valid JSON" even when the payload parsed fine but had
+// the wrong shape or an unsafe key/value. One builder, called from all four
+// 400 sites, so the body can only drift by drifting here.
+const GROUP_FIELDS_ERROR_MESSAGES = {
+  malformed: 'groupFields deve ser um JSON válido',
+  shape: 'groupFields deve ser um objeto JSON',
+  value: 'groupFields aceita apenas chaves simples com valores texto, número ou booleano',
+};
+
+/**
+ * Builds the 400 body for a rejected groupFields, shared by all four import
+ * endpoints. `reason` is the machine-readable token from `parseGroupFields`;
+ * an unrecognized token falls back to the `malformed` sentence rather than
+ * throwing, since it is a defensive default, not a thing a caller chooses.
+ *
+ * @param {string} reason - one of `malformed | shape | value`.
+ * @returns {{ success: false, error: string, reason: string, message: string }}
+ */
+function groupFieldsErrorBody(reason) {
+  const message = GROUP_FIELDS_ERROR_MESSAGES[reason] || GROUP_FIELDS_ERROR_MESSAGES.malformed;
+  return {
+    success: false,
+    error: 'groupFields inválido',
+    reason,
+    message,
+  };
+}
+
+module.exports = { parseGroupFields, groupFieldsErrorBody };

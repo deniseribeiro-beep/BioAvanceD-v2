@@ -8,14 +8,16 @@ import {
   closeSeedSensorDb,
   seedSensorWithFreezerSample,
   removeSeededFreezerSample,
+  findFreezerSample,
 } from './helpers/seedSensor';
 import { queryTemperaturePoints } from './helpers/queryInflux';
 import { realLogin } from './helpers/realAuth';
 import { computeTotp } from './helpers/totp';
+import { clearLoginAttempts, closeLoginAttemptsDb } from './helpers/queryLoginAttempts';
 import { createRealParticipant, closeSeedDb as closeSeedParticipantDb } from './helpers/seedParticipant';
 import { seedSampleNode, readSampleStatus, removeSampleNodes, closeNeo4jDriver } from './helpers/queryNeo4j';
 import {
-  findStagingRecordBySpecimenId,
+  findStagingRecordsByBatch,
   findCommittedSample,
   findCommittedPatient,
   findCommittedParticipantIdentity,
@@ -141,6 +143,45 @@ test.describe('Telemetria e monitoramento ambiental (RF009) — real backend, in
 
     const incident = await findTemperatureIncident(sensor.sensorId);
     expect(incident).toBeNull();
+  });
+
+  // #1207: the cold-chain quarantine waits until an excursion has lasted the
+  // policy's minimumDuration, timed from the incident's excursionStartedAt.
+  // This proves the clock against real Mongo: an out-of-range reading starts
+  // it, and an in-range reading's `excursionStartedAt: { $ne: null }` update
+  // actually matches and clears it.
+  test('#1207: an out-of-range reading starts the incident excursion clock and an in-range reading stops it', async ({
+    request,
+  }) => {
+    const sensor = await seedSensorWithPolicy(2, 8);
+    try {
+      const breachAt = new Date(Date.now() - 60_000);
+      const breach = await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+        headers: ingestHeaders(),
+        data: { sensorId: sensor.sensorId, temperature: 25, timestamp: breachAt.toISOString() },
+      });
+      expect(breach.status()).toBe(200);
+
+      await expect
+        .poll(async () => (await findTemperatureIncident(sensor.sensorId))?.excursionStartedAt?.toISOString() ?? null, {
+          timeout: 15_000,
+        })
+        .toBe(breachAt.toISOString());
+
+      const recovery = await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+        headers: ingestHeaders(),
+        data: { sensorId: sensor.sensorId, temperature: 5, timestamp: new Date().toISOString() },
+      });
+      expect(recovery.status()).toBe(200);
+
+      await expect
+        .poll(async () => (await findTemperatureIncident(sensor.sensorId))?.excursionStartedAt, { timeout: 15_000 })
+        .toBeNull();
+      // The incident itself stays open: only a person resolves it.
+      expect((await findTemperatureIncident(sensor.sensorId)).status).toBe('open');
+    } finally {
+      await removeSeededSensor(sensor);
+    }
   });
 });
 
@@ -566,6 +607,36 @@ test.describe('Telemetria e monitoramento ambiental (RF009) — real Neo4j propa
       await removeSeededFreezerSample(sensor);
     }
   });
+
+  // #1207 + #1208: the Mongo cold-chain quarantine, end to end. The fixture
+  // binds the sensor to its freezer by SensorMetadata.storageContainer (how
+  // registration binds it, #311), which the quarantine never read before
+  // #1208. Its policy has no minimumDuration, so the 2-hour
+  // TELEMETRY_CRITICAL_DURATION_HOURS fallback governs (#1207): the first
+  // reading, 121 minutes ago, opens the incident and quarantines nothing,
+  // and the second, now, is past the limit.
+  test('#1207/#1208: a sustained excursion quarantines the Mongo Sample in the sensor\'s freezer, and the first reading does not', async ({
+    request,
+  }) => {
+    const sensor = await seedSensorWithFreezerSample(2, 8);
+    try {
+      await postReadingAt(request, sensor.sensorId, 25, new Date(Date.now() - 121 * 60_000));
+      await expect
+        .poll(async () => (await findTemperatureIncident(sensor.sensorId))?.excursionStartedAt ?? null, { timeout: 15_000 })
+        .not.toBeNull();
+      expect((await findFreezerSample(sensor))?.specimenStatus).not.toBe('quarantined');
+
+      await postReadingAt(request, sensor.sensorId, 25, new Date());
+      await expect
+        .poll(async () => (await findFreezerSample(sensor))?.specimenStatus ?? null, { timeout: 15_000 })
+        .toBe('quarantined');
+      const sample = await findFreezerSample(sensor);
+      expect(sample.quarantineReasonCode).toBe('COLD_CHAIN_INCIDENT');
+      expect(sample.coldChainSensorKey).toBe(sensor.sensorId);
+    } finally {
+      await removeSeededFreezerSample(sensor);
+    }
+  });
 });
 
 // RF011 (#324): the FHIR bundle staging pipeline (stage -> validate ->
@@ -637,6 +708,7 @@ test.describe('Interoperabilidade HL7 FHIR R4 (RF011) — real backend, staging 
     const { token } = await realLogin(request);
     const { patientId, specimenId, bundle } = buildFhirBundle(String(Date.now()));
 
+    let batchId: string | undefined;
     try {
       const stageResponse = await request.post(`${apiBaseURL}/api/import/fhir/stage`, {
         headers: { Authorization: `Bearer ${token}` },
@@ -662,7 +734,7 @@ test.describe('Interoperabilidade HL7 FHIR R4 (RF011) — real backend, staging 
       expect(record.normalized.biomarkers.length).toBeGreaterThanOrEqual(1);
       expect(record.normalized.biomarkers[0].biomarkerType).toBe('RF011 e2e biomarker');
 
-      const batchId = stageBody.batch._id;
+      batchId = stageBody.batch._id;
 
       const commitResponse = await request.post(`${apiBaseURL}/api/import/fhir/batches/${batchId}/commit`, {
         headers: { Authorization: `Bearer ${token}` },
@@ -676,8 +748,18 @@ test.describe('Interoperabilidade HL7 FHIR R4 (RF011) — real backend, staging 
       // canonical Patient document, only onto the segregated
       // ParticipantIdentity collection, so it's asserted there instead.
       await expect.poll(() => findCommittedPatient(patientId), { timeout: 10_000 }).not.toBeNull();
+      // #1104: patientName is ciphertext-only at rest, so the raw row holds
+      // no plaintext, and the name is read back through the one authorized
+      // re-identification path, which decrypts.
       const committedIdentity = await findCommittedParticipantIdentity(patientId);
-      expect(committedIdentity?.patientName).toContain('RF011 e2e patient');
+      expect(committedIdentity?.patientName ?? null).toBeNull();
+      expect(committedIdentity?.patientNameEncrypted).toBeTruthy();
+      const reidentifyResponse = await request.post(`${apiBaseURL}/api/patients/${patientId}/reidentify`, {
+        headers: { Authorization: `Bearer ${token}` },
+        data: { reason: 'RF011 e2e: confirm the committed participant name' },
+      });
+      expect(reidentifyResponse.status(), await reidentifyResponse.text()).toBe(200);
+      expect((await reidentifyResponse.json())?.data?.patientName).toContain('RF011 e2e patient');
 
       // Criteria 3, 5, 6: Specimen mapped, provenance recorded
       // (importBatchId/importedBy/importedAt), quarantine released once
@@ -697,7 +779,7 @@ test.describe('Interoperabilidade HL7 FHIR R4 (RF011) — real backend, staging 
       expect(committedLog?.participantId).toBe(patientId);
       expect(committedLog?.specimenId).toBe(specimenId);
     } finally {
-      await removeFhirImportFixtures(specimenId, patientId);
+      await removeFhirImportFixtures(specimenId, patientId, batchId);
     }
   });
 
@@ -724,6 +806,7 @@ test.describe('Interoperabilidade HL7 FHIR R4 (RF011) — real backend, staging 
     const specimenEntry = bundle.entry.find((entry) => entry.resource.resourceType === 'Specimen');
     delete (specimenEntry!.resource as { type?: unknown }).type;
 
+    let batchId: string | undefined;
     try {
       const stageResponse = await request.post(`${apiBaseURL}/api/import/fhir/stage`, {
         headers: { Authorization: `Bearer ${token}` },
@@ -735,20 +818,20 @@ test.describe('Interoperabilidade HL7 FHIR R4 (RF011) — real backend, staging 
       expect(record.status).toBe('ERROR');
       expect(record.errors.some((error: { field: string }) => error.field === 'sampleType')).toBe(true);
 
-      const batchId = stageBody.batch._id;
+      batchId = stageBody.batch._id;
       const commitResponse = await request.post(`${apiBaseURL}/api/import/fhir/batches/${batchId}/commit`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       const commitBody = await commitResponse.json();
       expect(commitBody.committed).toBe(0);
 
-      const stagingRecord = await findStagingRecordBySpecimenId(specimenId);
+      const [stagingRecord] = await findStagingRecordsByBatch(batchId!);
       expect(stagingRecord?.status).toBe('ERROR');
 
       const committedSample = await findCommittedSample(specimenId);
       expect(committedSample).toBeNull();
     } finally {
-      await removeFhirImportFixtures(specimenId, patientId);
+      await removeFhirImportFixtures(specimenId, patientId, batchId);
     }
   });
 });
@@ -844,16 +927,20 @@ test.describe('Alertas e notificações (RF015) — real backend', () => {
   }) => {
     const admin = await realLogin(request);
 
-    // coordinator resolves to zero recipients in this stack's seed data
-    // (only an Administrador bootstrap user exists) -- a real failure, not
-    // a simulated one, same technique notificationDispatch.service.test.js
-    // uses natively.
+    // A role code no user can hold resolves to zero recipients -- a real
+    // resolution failure, not a simulated one, same technique
+    // notificationDispatch.service.test.js uses natively. #1223: this was
+    // 'coordinator', which is empty only on a fresh volume; once any spec
+    // registers a Coordenador, the email channel resolves a recipient and
+    // nothing escalates. NotificationRule.validate does not check codes
+    // against the RBAC catalog, so a per-run code is accepted and empty by
+    // construction on any volume.
     const ruleRes = await request.post(`${apiBaseURL}/api/notification-rules`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: {
         eventType: 'environmental_excursion',
         channels: ['email'],
-        recipientRoleCodes: ['coordinator'],
+        recipientRoleCodes: [`e2e-no-holder-${Date.now()}`],
         sensitiveFieldsAllowlist: ['sensorId'],
         maxDeliveryMinutes: 2,
         escalation: { enabled: true, afterFailures: 1, channel: 'in_app' },
@@ -921,7 +1008,7 @@ test.describe('Alertas e notificações (RF015) — real backend', () => {
     const rule = (await ruleRes.json()).data;
 
     const username = `tecnico.rf015sec.${Date.now()}`;
-    const password = 'Tecnico@123456';
+    const password = 'Tecnico@123456-forte';
     const registerRes = await request.post(`${apiBaseURL}/api/users/register`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: {
@@ -963,6 +1050,12 @@ test.describe('Alertas e notificações (RF015) — real backend', () => {
       lastLoginBody = await loginRes.json();
     }
     expect(lastLoginBody.message).toContain('MFA bloqueado');
+
+    // #1255: these five deliberate failures also count against the runner's
+    // source address, which every direct spec call shares. Clear them so
+    // they do not spend the suite's blockIPAfterAttempts budget.
+    await clearLoginAttempts();
+    await closeLoginAttemptsDb();
 
     const findNotification = async () => {
       const res = await request.get(

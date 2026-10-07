@@ -14,7 +14,7 @@ const {
  * Real query-matching fake (exact-match filter + sort, plus $in for the
  * batched getCurrentProfilesForSpecimens path), not a canned stub — proves
  * getProfilesForSpecimen actually scopes by specimenId and orders by
- * recency, per build-loop's native-only "real backend" proof bar.
+ * recency, per this repo's native-only "real backend" proof bar.
  */
 function createFakeCollection() {
   const docs = [];

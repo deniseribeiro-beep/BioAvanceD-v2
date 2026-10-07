@@ -484,7 +484,7 @@ function createLinkedFileController(opts) {
       await logAudit(db, req, {
         action: 'file_replace',
         resourceId: fileRecord._id.toString(),
-        severity: 'medium',
+        severity: 'warning',
         message: `Substituição de arquivo: ${fileRecord.fileName} -> ${file.originalname}`,
         payload: {
           previousFileName: fileRecord.fileName,

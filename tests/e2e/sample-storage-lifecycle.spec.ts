@@ -27,6 +27,20 @@ test.skip(!apiBaseURL, 'PLAYWRIGHT_API_BASE_URL not set — run via npm run test
 // move/release calls, and inline-storage-movement.spec.ts only mocks those
 // HTTP calls, never exercising the real backend), so the transaction path
 // was never proven against the real stack.
+// #1216: the create response names the specimen by its canonical specimenId,
+// and every storage route resolves it. The allocate, auto-assign and move
+// responses still echo the sample's Mongo _id under the key specimenId
+// (#1219), so the echo assertions below compare against that _id.
+async function mongoIdOf(request: any, token: string, specimenId: string): Promise<string> {
+  const res = await request.get(`${apiBaseURL}/api/samples/${specimenId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  expect(res.status()).toBe(200);
+  const _id = String((await res.json()).data._id);
+  expect(_id).not.toBe(specimenId);
+  return _id;
+}
+
 function validSampleFields() {
   return {
     sampleType: 'PLASMA',
@@ -73,8 +87,9 @@ test.describe('Sample storage lifecycle (#321) — real backend, withTransaction
       },
     });
     expect([201, 202]).toContain(create.status());
-    const sampleId = (await create.json()).data.sampleID;
+    const sampleId = (await create.json()).data.specimenId;
     expect(sampleId).toBeTruthy();
+    const sampleObjectId = await mongoIdOf(request, admin.token, sampleId);
 
     // --- MoveSampleUseCase#execute -> withTransaction ---
     const moveWatch = await watchAuditTrail(request, apiBaseURL!, admin.token);
@@ -136,7 +151,7 @@ test.describe('Sample storage lifecycle (#321) — real backend, withTransaction
     const allocateBody = await allocate.json();
     expect(allocateBody.success).toBe(true);
     expect(allocateBody.data).toEqual({
-      specimenId: sampleId,
+      specimenId: sampleObjectId,
       boxId: boxA.boxId,
       position: boxA.positionCode,
     });
@@ -185,7 +200,7 @@ test.describe('Sample storage lifecycle (#321) — real backend, withTransaction
       },
     });
     expect([201, 202]).toContain(create2.status());
-    const sample2Id = (await create2.json()).data.sampleID;
+    const sample2Id = (await create2.json()).data.specimenId;
 
     const release2 = await request.delete(`${apiBaseURL}/api/storage/release/${sample2Id}`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -236,8 +251,9 @@ test.describe('Sample storage lifecycle (#321) — real backend, withTransaction
       },
     });
     expect([201, 202]).toContain(create.status());
-    const sampleId = (await create.json()).data.sampleID;
+    const sampleId = (await create.json()).data.specimenId;
     expect(sampleId).toBeTruthy();
+    const sampleObjectId = await mongoIdOf(request, admin.token, sampleId);
 
     // The only way to reach an unallocated sample: release it first, since
     // creation cannot skip boxId/positionCode.
@@ -267,7 +283,7 @@ test.describe('Sample storage lifecycle (#321) — real backend, withTransaction
     // auto-assign-sample.controller.js passes straight through as `data`
     // -- the key is `specimenId`, not `sampleId`.
     expect(autoAssignBody.data).toEqual({
-      specimenId: sampleId,
+      specimenId: sampleObjectId,
       boxId: autoBox.boxId,
       // autoBox is a fresh, empty 8x12 box. storagePositionGrid.js's
       // findFirstAvailablePosition scans getAllValidPositions row-major
@@ -343,7 +359,7 @@ test.describe('Sample storage lifecycle (#321) — real backend, withTransaction
     expect(secondAutoAssign.status()).toBe(201);
     const secondAutoAssignBody = await secondAutoAssign.json();
     expect(secondAutoAssignBody.data).toEqual({
-      specimenId: sampleId,
+      specimenId: sampleObjectId,
       boxId: autoBox.boxId,
       position: 'A1',
     });

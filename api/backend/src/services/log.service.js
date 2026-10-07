@@ -19,6 +19,20 @@ const securityAlertsService = require('./securityAlerts.service');
 // excluded: `timestampFormatted` (a pt-BR display string -- sorting it is
 // lexicographic on "dd/mm/yyyy" and meaningless), and the free-form/object
 // fields `message`, `payload`, `errorStack` and `metadata`.
+// #1271: the trail a read is served from. 'live' (or none) is `logs`;
+// 'archive' is `logs_archive`, where the retention sweep moves expired rows
+// (retentionSweep.service). Anything else is refused rather than read as the
+// live trail, so a mistyped source never answers with the wrong collection.
+const LOG_SOURCES = Object.freeze({ live: 'logs', archive: 'logs_archive' });
+
+function logSourceCollection(source) {
+  if (source === undefined || source === null || source === '') return LOG_SOURCES.live;
+  if (Object.prototype.hasOwnProperty.call(LOG_SOURCES, source)) return LOG_SOURCES[source];
+  const error = new Error('source deve ser "live" ou "archive"');
+  error.statusCode = 422;
+  throw error;
+}
+
 const SORTABLE_LOG_FIELDS = new Set([
   'logId',
   'dateTime',
@@ -161,7 +175,9 @@ class LogService {
    */
   async getLogs(db, filters = {}) {
     try {
-      const logsCollection = db.collection('logs');
+      // #1271: source=archive reads logs_archive, where the retention sweep
+      // moves expired rows, with the same filters and read-time handling.
+      const logsCollection = db.collection(logSourceCollection(filters.source));
       const query = {};
 
       // Filtro por usuário
@@ -600,3 +616,4 @@ class LogService {
 }
 
 module.exports = new LogService();
+module.exports.logSourceCollection = logSourceCollection;

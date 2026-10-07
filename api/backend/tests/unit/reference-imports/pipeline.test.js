@@ -7,8 +7,8 @@ const { normalizeRecord } = require('../../../src/reference-data/reference-impor
  * Small in-memory Mongo-collection fake matching the exact-key filters
  * pipeline.js actually issues (systemUri+code+version, datasetCode+
  * releaseStatus, idempotencyKey, etc.) — real query-matching for the shapes
- * this pipeline uses, not a stub returning canned data (per
- * build-loop's local-env "real backend" proof bar for a native-only slice).
+ * this pipeline uses, not a stub returning canned data (per this
+ * repo's "real backend" proof bar for a native-only slice).
  */
 function createFakeCollection() {
   const docs = [];

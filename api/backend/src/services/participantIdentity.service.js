@@ -1,5 +1,6 @@
 const { getCollection } = require('../utils/collectionResolver');
 const { encryptValue, decryptValue, hmacBlindIndex, hmacBlindIndexCandidates } = require('../utils/fieldEncryption');
+const logger = require('../utils/logger');
 
 // RF005/RNF007 (#560): read access to ParticipantIdentity, the segregated
 // civil-identity collection created by #363. Kept separate from
@@ -13,21 +14,30 @@ class ParticipantIdentityService {
   // RF005/RNF007 (#566), dict-07 row 1 ("cifrar"): the three civil-identity
   // fields that must be encrypted at rest.
   //
-  // #1104: this is no longer uniformly additive. getCiphertextOnlyFields()
-  // below names the fields that have completed the cutover and now match
-  // patient.service.js's getEncryptedFieldMap precedent -- the plaintext is
-  // nulled once the ciphertext exists. birthDate has; patientName and
-  // identityDocument have not, and that list carries the reason for each.
+  // #1104: every field here is ciphertext-only (getCiphertextOnlyFields),
+  // matching patient.service.js's getEncryptedFieldMap precedent -- the
+  // plaintext is nulled once the ciphertext exists.
   //
   // The original blocker was that #561-#564 migrated 10+ consumers to read
   // these off the plaintext fields while #566's own scope was storage only.
-  // Every reader now goes through decryptIdentity, which is what made the
-  // birthDate half safe to do.
+  // Every reader now goes through decryptIdentity, and every query matches
+  // on a blind index (getHashFieldMap), which is what made the cutover safe.
+  //
+  // #1166: plus the participant's contact, dict-02 P1X-0352/P1X-0353
+  // (ParticipantIdentity.email/phone, "MongoDB protegido"). This is its only
+  // home since slice 4, and it is ciphertext-only (getCiphertextOnlyFields).
   getEncryptedFieldMap() {
     return {
       patientName: 'patientNameEncrypted',
       birthDate: 'birthDateEncrypted',
-      identityDocument: 'identityDocumentEncrypted'
+      identityDocument: 'identityDocumentEncrypted',
+      email: 'emailEncrypted',
+      phone: 'phoneEncrypted',
+      // #1168: the legal representative, dict-02 P1X-0357..0360.
+      representativeName: 'representativeNameEncrypted',
+      representativeEmail: 'representativeEmailEncrypted',
+      representativeIdentityDocument: 'representativeIdentityDocumentEncrypted',
+      representativePhone: 'representativePhoneEncrypted'
     };
   }
 
@@ -117,19 +127,40 @@ class ParticipantIdentityService {
 
   // RF005/RNF007, dict-07 row 1 (#1104): the fields whose plaintext copy is
   // no longer written, so the ciphertext is the only representation at rest.
-  // Deliberately a LIST rather than the whole encryptedFieldMap -- this is a
-  // per-field cutover. patientName still has a live plaintext consumer
-  // (patient.service.js#listPatients' $regex substring search, which a blind
-  // index cannot serve) and identityDocument still has plaintext query arms,
-  // so both keep dual-writing until those are resolved.
+  // Kept as a LIST rather than derived from the whole encryptedFieldMap
+  // because the cutover went field by field, and a new encrypted field
+  // should be added here deliberately, once its readers decrypt.
+  // #1104: patientName's one plaintext query, listPatients' $regex substring
+  // search, became an exact match on patientNameHash. identityDocument's two
+  // $or plaintext arms became hash-only. #1166 slice 4: email and phone have
+  // no plaintext query anywhere (phone uniqueness is phoneHash), and every
+  // reader decrypts. #1168: nor do the representative fields, whose one
+  // reader (updatePatient) decrypts.
   getCiphertextOnlyFields() {
-    return ['birthDate'];
+    return [
+      'patientName',
+      'birthDate',
+      'identityDocument',
+      'email',
+      'phone',
+      'representativeName',
+      'representativeEmail',
+      'representativeIdentityDocument',
+      'representativePhone'
+    ];
   }
 
+  // #1166: phoneHash is what lets phone uniqueness (#1165) move off the
+  // plaintext `patients.phone` column once the ciphertext is all that's left.
+  // #1104: patientNameHash serves listPatients' name filter, which is an
+  // EXACT match on the normalized full name -- a blind index cannot serve a
+  // substring search, and no screen sent that filter.
   getHashFieldMap() {
     return {
+      patientName: 'patientNameHash',
       identityDocument: 'identityDocumentHash',
-      birthDate: 'birthDateHash'
+      birthDate: 'birthDateHash',
+      phone: 'phoneHash'
     };
   }
 
@@ -161,6 +192,27 @@ class ParticipantIdentityService {
     // identity.
     if (field === 'identityDocument') {
       return this.normalizeIdentityDocument(value);
+    }
+
+    // #1104: the same name comparison PatientIdentityService#normalizeName and
+    // intakeWizard's /patient-match already apply in memory -- accents
+    // stripped, lowercased, whitespace collapsed -- so "José  da Silva" and
+    // "jose da silva" are one name to the index as they are to those matchers.
+    if (field === 'patientName') {
+      const name = String(value)
+        .normalize('NFD')
+        .replace(/[̀-ͯ]/g, '')
+        .toLowerCase()
+        .replace(/\s+/g, ' ')
+        .trim();
+      return name || null;
+    }
+
+    // #1166: digits only, the spelling patient.service.js#normalizePhone
+    // stores, so a punctuated phone hashes the same as its stored form.
+    if (field === 'phone') {
+      const digits = String(value).replace(/\D/g, '');
+      return digits || null;
     }
 
     if (field === 'birthDate') {
@@ -217,6 +269,47 @@ class ParticipantIdentityService {
     }
 
     return doc;
+  }
+
+  // #1166: the participant's contact is identity data (dict-02
+  // P1X-0352/P1X-0353), so a reader takes it from the DECRYPTED identity
+  // record. Since slice 4 the Patient document is not a fallback: nothing
+  // writes the contact there, and a copy left on a row the backfill has not
+  // reached yet is stale by definition, so it is overwritten, not kept.
+  withIdentityContact(patient, identity) {
+    const doc = { ...(patient || {}) };
+    for (const field of ['email', 'phone']) {
+      const value = identity?.[field];
+      if (value !== undefined && value !== null && value !== '') {
+        doc[field] = value;
+      } else {
+        delete doc[field];
+      }
+    }
+    return doc;
+  }
+
+  // #1166 slice 3: every writer that creates a participant inserts the
+  // Patient row first and the identity row second, and none undid the first
+  // when the second failed -- leaving a Patient with no identity at all. With
+  // phone uniqueness enforced on the identity side (phoneHash), that failure
+  // is an ordinary duplicate-phone refusal rather than an outage. Undo the
+  // Patient insert, then rethrow the identity error unchanged so each
+  // caller's own handling (409, per-row import error) still applies.
+  async insertIdentityOrRollbackPatient(identityCollection, identityDoc, patientsCollection, patientInsertedId) {
+    try {
+      return await identityCollection.insertOne(identityDoc);
+    } catch (error) {
+      try {
+        await patientsCollection.deleteOne({ _id: patientInsertedId });
+      } catch (rollbackError) {
+        logger.error(
+          'Falha ao desfazer o paciente após erro na identidade (#1166):',
+          rollbackError?.message || rollbackError
+        );
+      }
+      throw error;
+    }
   }
 
   // RF005/RNF007 (#560/#566): the sole authorized re-identification access

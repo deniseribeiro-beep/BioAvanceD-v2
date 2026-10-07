@@ -18,9 +18,13 @@ const { authenticate } = require('../../infrastructure/middleware/auth');
 // #888: requireRole is no longer imported -- every gate on this router is now
 // a permission code. The role list it carried lives on as the grant list for
 // manageStorageAllocation in rbac-catalog-seed.service.js.
-const { requirePermission } = require('../../infrastructure/middleware/rbac');
+const { requirePermission, requireOrganizationScope } = require('../../infrastructure/middleware/rbac');
 const { ObjectId } = require('mongodb');
 const logger = require('../../utils/logger');
+const { StorageTopologyAuthoringService } = require('../../services/storage-topology-authoring.service');
+const { assertSampleInScope, assertBoxInScope, assertContainerInScope } = require('../../services/storage-scope.service');
+const { getCollection } = require('../../utils/collectionResolver');
+const { findSampleByAnyId } = require('../../utils/sampleLookup');
 
 /**
  * Storage Routes - Gerenciamento de Armazenagem Física (ISO 20387)
@@ -57,7 +61,8 @@ router.use((req, res, next) => {
 //     old MUTATION_ROLES [2, 3, 4] exactly, so the swap is behaviour-
 //     preserving rather than a re-authorization.
 //   manageStorageTopology (StorageContainer) -- WHAT the container tree is:
-//     PATCH /freezer/:freezerId/room. Granted to Coordenador +
+//     PATCH /freezer/:freezerId/room, and (#1124) POST /topology/containers
+//     and /topology/boxes. Granted to Coordenador +
 //     Administrador, which is both RF017's stated actor and, conveniently,
 //     'createPatient''s existing grant -- so that swap is a runtime no-op
 //     and stops recording a Patient-domain authorization for a freezer
@@ -73,6 +78,59 @@ router.use((req, res, next) => {
 // facility.routes.js, room.routes.js, routes/eConsent.js) are deliberately
 // left alone here -- see #888 for why folding them in would bury the
 // catalog change, which is the actually-risky part.
+
+// ==================== IDENTIFICADOR DA AMOSTRA (#1216) ====================
+// The create response names a specimen by its canonical specimenId, and the
+// storage repository looks samples up by _id. This rewrites a specimenId in
+// req.body.sampleId or req.params.sampleId to that sample's _id, ahead of
+// the scope check, so a specimenId is scoped as strictly as an _id. An
+// unknown id is left as sent, and the controller answers its own 404.
+function resolveSampleIdentifier(source) {
+  return async (req, res, next) => {
+    const db = req.app.locals.db;
+    const holder = source === 'params' ? req.params : req.body;
+    const raw = holder?.sampleId;
+    if (!db || raw === undefined || raw === null || raw === '') return next();
+    if (typeof raw === 'string' && raw.length === 24 && ObjectId.isValid(raw)) return next();
+    try {
+      const sample = await findSampleByAnyId(await getCollection(db, 'samples'), raw);
+      if (sample) holder.sampleId = sample._id.toString();
+      return next();
+    } catch (error) {
+      return next(error);
+    }
+  };
+}
+
+// ==================== ESCOPO ORGANIZACIONAL (#1211) ====================
+// The permission gate says WHO may allocate, move or release; it never said
+// WHOSE. Until #1211 a Tecnico of one organization could act on another
+// organization's specimen given its id, or place their own into another
+// organization's box. Runs after the organization-scope middleware and
+// before the controller, so a refusal never opens a transaction. See
+// storage-scope.service.js for the two scope keys.
+//
+// The reads carry it too: the six that name one specimen, box or freezer
+// answer 403 out of scope, and GET /freezers and /samples/search filter
+// their queries through the same service instead.
+function requireStorageTargetsInScope({ sample, box, container } = {}) {
+  return async (req, res, next) => {
+    const db = req.app.locals.db;
+    // No db: the controller answers its own 503 and writes nothing.
+    if (!db) return next();
+    try {
+      if (sample) await assertSampleInScope(db, sample(req), req.organizationScope);
+      if (box) await assertBoxInScope(db, box(req), req.organizationScope);
+      if (container) await assertContainerInScope(db, container(req), req.organizationScope);
+      return next();
+    } catch (error) {
+      if (error?.statusCode === 403) {
+        return res.status(403).json({ success: false, error: error.code, message: error.message });
+      }
+      return next(error);
+    }
+  };
+}
 
 // ==================== ENDPOINTS ====================
 
@@ -96,7 +154,7 @@ router.use((req, res, next) => {
  *   ]
  * }
  */
-router.get('/freezers', createListFreezersController());
+router.get('/freezers', requireOrganizationScope, createListFreezersController());
 
 /**
  * GET /api/storage/samples/search?q=termo
@@ -127,7 +185,7 @@ router.get('/freezers', createListFreezersController());
  *   ]
  * }
  */
-router.get('/samples/search', createSearchSamplesController());
+router.get('/samples/search', requireOrganizationScope, createSearchSamplesController());
 
 /**
  * POST /api/storage/allocate
@@ -159,7 +217,10 @@ router.get('/samples/search', createSearchSamplesController());
  *   "occupiedBySampleId": "507f..."
  * }
  */
-router.post('/allocate', requirePermission('manageStorageAllocation'), createAllocateSampleController());
+router.post('/allocate', requirePermission('manageStorageAllocation'), requireOrganizationScope,
+  resolveSampleIdentifier('body'),
+  requireStorageTargetsInScope({ sample: (req) => req.body?.sampleId, box: (req) => req.body?.boxId }),
+  createAllocateSampleController());
 
 /**
  * POST /api/storage/allocate/auto
@@ -204,7 +265,10 @@ router.post('/allocate', requirePermission('manageStorageAllocation'), createAll
  *   "message": "..."
  * }
  */
-router.post('/allocate/auto', requirePermission('manageStorageAllocation'), createAutoAssignSampleController());
+router.post('/allocate/auto', requirePermission('manageStorageAllocation'), requireOrganizationScope,
+  resolveSampleIdentifier('body'),
+  requireStorageTargetsInScope({ sample: (req) => req.body?.sampleId, box: (req) => req.body?.boxId }),
+  createAutoAssignSampleController());
 
 /**
  * POST /api/storage/move
@@ -219,7 +283,10 @@ router.post('/allocate/auto', requirePermission('manageStorageAllocation'), crea
  *   "notes": "Movido durante inventário"
  * }
  */
-router.post('/move', requirePermission('manageStorageAllocation'), createMoveSampleController());
+router.post('/move', requirePermission('manageStorageAllocation'), requireOrganizationScope,
+  resolveSampleIdentifier('body'),
+  requireStorageTargetsInScope({ sample: (req) => req.body?.sampleId, box: (req) => req.body?.targetBoxId }),
+  createMoveSampleController());
 
 /**
  * DELETE /api/storage/release/:sampleId
@@ -236,7 +303,10 @@ router.post('/move', requirePermission('manageStorageAllocation'), createMoveSam
  *   "message": "Amostra liberada de A1"
  * }
  */
-router.delete('/release/:sampleId', requirePermission('manageStorageAllocation'), createReleaseSampleController());
+router.delete('/release/:sampleId', requirePermission('manageStorageAllocation'), requireOrganizationScope,
+  resolveSampleIdentifier('params'),
+  requireStorageTargetsInScope({ sample: (req) => req.params.sampleId }),
+  createReleaseSampleController());
 
 /**
  * GET /api/storage/sample/:sampleId
@@ -262,7 +332,10 @@ router.delete('/release/:sampleId', requirePermission('manageStorageAllocation')
  *   }
  * }
  */
-router.get('/sample/:sampleId', createGetSampleLocationController());
+router.get('/sample/:sampleId', requireOrganizationScope,
+  resolveSampleIdentifier('params'),
+  requireStorageTargetsInScope({ sample: (req) => req.params.sampleId }),
+  createGetSampleLocationController());
 
 /**
  * GET /api/storage/box/:boxId/available
@@ -286,7 +359,9 @@ router.get('/sample/:sampleId', createGetSampleLocationController());
  *   }
  * }
  */
-router.get('/box/:boxId/available', createGetAvailablePositionsController());
+router.get('/box/:boxId/available', requireOrganizationScope,
+  requireStorageTargetsInScope({ box: (req) => req.params.boxId }),
+  createGetAvailablePositionsController());
 
 /**
  * GET /api/storage/validate/:boxId/:position
@@ -315,7 +390,9 @@ router.get('/box/:boxId/available', createGetAvailablePositionsController());
  *   "occupiedBySampleId": "507f..."
  * }
  */
-router.get('/validate/:boxId/:position', createValidatePositionController());
+router.get('/validate/:boxId/:position', requireOrganizationScope,
+  requireStorageTargetsInScope({ box: (req) => req.params.boxId }),
+  createValidatePositionController());
 
 /**
  * GET /api/storage/freezer/:freezerId/stats
@@ -346,7 +423,9 @@ router.get('/validate/:boxId/:position', createValidatePositionController());
  *   }
  * }
  */
-router.get('/freezer/:freezerId/stats', createGetFreezerStatsController());
+router.get('/freezer/:freezerId/stats', requireOrganizationScope,
+  requireStorageTargetsInScope({ container: (req) => req.params.freezerId }),
+  createGetFreezerStatsController());
 
 /**
  * GET /api/storage/box/:boxId/integrity
@@ -394,7 +473,9 @@ router.get('/freezer/:freezerId/stats', createGetFreezerStatsController());
  * tabela de codigos de `docs/STORAGE_API_EXAMPLES.js`, que lista
  * BOX_NOT_FOUND em "404 - Nao encontrado".
  */
-router.get('/box/:boxId/integrity', createCheckBoxIntegrityController());
+router.get('/box/:boxId/integrity', requireOrganizationScope,
+  requireStorageTargetsInScope({ box: (req) => req.params.boxId }),
+  createCheckBoxIntegrityController());
 
 /**
  * GET /api/storage/freezer/:freezerId/tree
@@ -461,7 +542,9 @@ router.get('/box/:boxId/integrity', createCheckBoxIntegrityController());
  *   }
  * }
  */
-router.get('/freezer/:freezerId/tree', createGetFreezerTreeController());
+router.get('/freezer/:freezerId/tree', requireOrganizationScope,
+  requireStorageTargetsInScope({ container: (req) => req.params.freezerId }),
+  createGetFreezerTreeController());
 
 /**
  * PATCH /api/storage/freezer/:freezerId/room
@@ -492,7 +575,8 @@ router.get('/freezer/:freezerId/tree', createGetFreezerTreeController());
  *   "error": "NOT_A_FREEZER"
  * }
  */
-router.patch('/freezer/:freezerId/room', authenticate, requirePermission('manageStorageTopology'), async (req, res) => {
+router.patch('/freezer/:freezerId/room', authenticate, requirePermission('manageStorageTopology'), requireOrganizationScope,
+  requireStorageTargetsInScope({ container: (req) => req.params.freezerId }), async (req, res) => {
   try {
     const db = req.app.locals.db;
 
@@ -561,6 +645,91 @@ router.patch('/freezer/:freezerId/room', authenticate, requirePermission('manage
       error: 'INTERNAL_ERROR',
       message: error.message
     });
+  }
+});
+
+// ==================== AUTORIA DE TOPOLOGIA (#1124) ====================
+// Until these, no request could create a StorageContainer or a StorageBox:
+// the legacy location-storage backfill held the only insertOne calls. Ported
+// from Denise's stabilize/v2.0.0-prototype (dd75ae70). They author the
+// container tree only; placing a specimen stays on POST /allocate under
+// manageStorageAllocation.
+
+function topologyActorId(req) {
+  return req.user?.userID || req.user?.userId || req.user?._id || null;
+}
+
+function sendTopologyError(res, error) {
+  const status = Number(error?.statusCode) || 500;
+  if (status >= 500) logger.error('[StorageTopology] Erro não tratado:', error);
+  return res.status(status).json({
+    success: false,
+    error: error?.code || 'INTERNAL_ERROR',
+    message: error?.message || 'Erro interno'
+  });
+}
+
+async function auditTopologyCreate(req, resourceType, resourceId, payload) {
+  const auditLogger = require('../../utils/auditLogger');
+  auditLogger.init(req.app.locals.db);
+  await auditLogger.log({
+    action: 'CREATE',
+    resourceType,
+    resourceId: String(resourceId),
+    status: 'success',
+    severity: 'info',
+    message: `${resourceType} criado pela superfície de autoria de topologia`,
+    payload,
+    req,
+    module: 'Armazenamento'
+  });
+}
+
+/**
+ * POST /api/storage/topology/containers
+ *
+ * Body: { name, containerType: FREEZER|SHELF|RACK|DRAWER, parentId?,
+ *         equipmentId? (FREEZER), roomId? (FREEZER), temperature? (FREEZER),
+ *         temperatureUnit?, capacity?, status?, description? }
+ *
+ * 201 { success, data }; 400 INVALID_INPUT | INVALID_HIERARCHY | ...;
+ * 404 PARENT_NOT_FOUND | EQUIPMENT_NOT_FOUND | ROOM_NOT_FOUND;
+ * 409 STORAGE_CONTAINER_CONFLICT (a FREEZER already holds that equipment).
+ */
+router.post('/topology/containers', requirePermission('manageStorageTopology'), requireOrganizationScope, async (req, res) => {
+  try {
+    const service = new StorageTopologyAuthoringService(req.app.locals.db);
+    const created = await service.createContainer(req.body || {}, topologyActorId(req), req.organizationScope);
+    await auditTopologyCreate(req, 'StorageContainerLayout', created._id, {
+      containerType: created.containerType,
+      parentId: created.parent_id ? String(created.parent_id) : null,
+      roomId: created.roomId ? String(created.roomId) : null,
+      equipmentId: created.containerID || null
+    });
+    return res.status(201).json({ success: true, data: created });
+  } catch (error) {
+    return sendTopologyError(res, error);
+  }
+});
+
+/**
+ * POST /api/storage/topology/boxes
+ *
+ * Body: { name, parentId (a RACK or DRAWER), dimension: { rows 1-26, cols 1-100 },
+ *         boxID?, status?, description? }
+ */
+router.post('/topology/boxes', requirePermission('manageStorageTopology'), requireOrganizationScope, async (req, res) => {
+  try {
+    const service = new StorageTopologyAuthoringService(req.app.locals.db);
+    const created = await service.createBox(req.body || {}, topologyActorId(req), req.organizationScope);
+    await auditTopologyCreate(req, 'StorageBoxLayout', created._id, {
+      parentId: String(created.parent_id),
+      dimension: created.dimension,
+      capacity: created.capacity
+    });
+    return res.status(201).json({ success: true, data: created });
+  } catch (error) {
+    return sendTopologyError(res, error);
   }
 });
 

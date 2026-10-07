@@ -79,8 +79,12 @@ async function getUserAnonId(user, db = null) {
   if (db) {
     try {
       const usersCollection = db.collection('users');
+      // #1275: userID is a string here and user documents carry an ObjectId
+      // _id, so the string alone never matched and the stored pseudonym was
+      // never read.
+      const { ObjectId } = require('mongodb');
       const existingUser = await usersCollection.findOne(
-        { _id: userID },
+        { _id: ObjectId.isValid(userID) && String(new ObjectId(userID)) === userID ? new ObjectId(userID) : userID },
         { projection: { anonId: 1 } }
       );
       
@@ -228,6 +232,36 @@ async function anonymizeLogs(logs, db = null) {
 }
 
 /**
+ * #1005: mascara um IP para exibição em telas de auditoria. dict-02 P1X-0256
+ * (mantido sem mudança na v2.0.0): "IP de origem; apresentação pode ser
+ * mascarada conforme LGPD". O valor armazenado não muda; só a apresentação.
+ *
+ * IPv4 perde o último octeto (10.0.3.17 -> 10.0.3.x). IPv6 mantém só o
+ * prefixo /48, os três primeiros grupos (2001:db8:85a3::x). Um IPv4 mapeado
+ * em IPv6 (::ffff:10.0.3.17) é tratado como IPv4. O resto identifica a rede,
+ * não a máquina, o que basta para ver de onde veio uma sessão sem expor o
+ * endereço do titular.
+ *
+ * @param {string} ip
+ * @returns {string|null}
+ */
+function maskIpAddress(ip) {
+  if (ip == null || ip === '') return null;
+  const value = String(ip).trim();
+  const mapped = value.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i);
+  const v4 = mapped ? mapped[1] : value;
+  const octets = v4.split('.');
+  if (octets.length === 4 && octets.every((o) => /^\d{1,3}$/.test(o))) {
+    return `${octets.slice(0, 3).join('.')}.x`;
+  }
+  if (value.includes(':')) {
+    const head = value.split('::')[0].split(':').filter(Boolean).slice(0, 3);
+    return `${head.join(':')}::x`;
+  }
+  return 'x';
+}
+
+/**
  * Mascara dados do usuário para exibição
  * Versão síncrona que não precisa do banco
  */
@@ -252,6 +286,7 @@ module.exports = {
   anonymizeLogUser,
   anonymizeLogs,
   maskUser,
+  maskIpAddress,
   sanitizePayload,
   sanitizeMessage
 };

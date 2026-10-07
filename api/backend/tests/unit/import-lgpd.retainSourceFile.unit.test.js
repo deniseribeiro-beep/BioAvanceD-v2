@@ -29,6 +29,7 @@ const path = require('path');
 
 const importLGPDService = require('../../src/services/import-lgpd.service');
 const controller = require('../../src/controllers/import-lgpd.controller');
+const { decryptFileBuffer } = require('../../src/utils/fileCrypto');
 
 /** A throwaway uploads/temp/ that mirrors multer's real layout. */
 function createUploadDir() {
@@ -73,7 +74,11 @@ describe('#792: retaining the LGPD import source file when rows were quarantined
       expect(fs.existsSync(file.path)).toBe(false);
       expect(retained).toBeTruthy();
       expect(fs.existsSync(retained.storedPath)).toBe(true);
-      expect(fs.readFileSync(retained.storedPath, 'utf8')).toContain('12345678900');
+      // #807: stored as ciphertext; the content survives behind the key.
+      expect(fs.readFileSync(retained.storedPath, 'utf8')).not.toContain('12345678900');
+      expect(
+        decryptFileBuffer(fs.readFileSync(retained.storedPath), retained).toString('utf8')
+      ).toContain('12345678900');
 
       // Named by batch id, never by the uploaded originalname.
       expect(path.basename(retained.storedPath)).toBe('batch-792.csv');

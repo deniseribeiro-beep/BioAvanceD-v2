@@ -2,12 +2,42 @@ const express = require('express');
 const { randomUUID } = require('crypto');
 const { ObjectId } = require('mongodb');
 const { authenticate } = require('../../infrastructure/middleware/auth');
-const { requireRole } = require('../../infrastructure/middleware/rbac');
+const { requireRole, requireOrganizationScope } = require('../../infrastructure/middleware/rbac');
+const {
+  applyOrganizationScopeFilter,
+  isRecordInOrganizationScope,
+  resolveOrganizationIdForCreate,
+  assertOrganizationFieldNotReparented,
+} = require('../../services/rbac-assignment.service');
 
-function createMasterDataRouter({ collectionName, idField, model, validateReferences, generateId = randomUUID }) {
+// #1182: `scopeField` opts ONE mount into organization scoping, on the named
+// field of its own records. Most of the 14 entities this factory serves are
+// shared vocabularies with no organization field in dict-02, so scoping is
+// per mount rather than on by default. Assay passes 'laboratoryId' (dict-02
+// ELM-0293), the field #644 already scopes its files on.
+function createMasterDataRouter({ collectionName, idField, model, validateReferences, generateId = randomUUID, scopeField = null }) {
   const router = express.Router();
 
   router.use(authenticate);
+  if (scopeField) {
+    router.use(requireOrganizationScope);
+  }
+
+  // #1182: fetch-then-check for the by-id routes, the #340/#623 shape. A
+  // post-fetch test rather than a scope-filtered query, so a record in
+  // another organization answers 403, not a 404 that hides it.
+  async function findScopedRecord(req, res, query) {
+    const item = await req.app.locals.db.collection(collectionName).findOne(query);
+    if (!item) {
+      res.status(404).json({ success: false, error: 'Registro não encontrado' });
+      return null;
+    }
+    if (scopeField && !isRecordInOrganizationScope(item, req.organizationScope, scopeField)) {
+      res.status(403).json({ success: false, error: 'Acesso negado', message: 'Este registro pertence a outra organização' });
+      return null;
+    }
+    return item;
+  }
 
   // #881: seeded rows carry a string business key on `id` (e.g. "PLASMA"),
   // separate from the collection's own `idField` (e.g. "sampleTypeID").
@@ -73,7 +103,8 @@ function createMasterDataRouter({ collectionName, idField, model, validateRefere
     try {
       const db = req.app.locals.db;
 
-      const items = await db.collection(collectionName).find({}).sort({ createdAt: -1, _id: -1 }).toArray();
+      const listQuery = scopeField ? applyOrganizationScopeFilter({}, req.organizationScope, scopeField) : {};
+      const items = await db.collection(collectionName).find(listQuery).sort({ createdAt: -1, _id: -1 }).toArray();
       return res.status(200).json({ success: true, data: items });
     } catch (error) {
       return res.status(500).json({ success: false, error: 'Erro ao listar dados mestre', message: error.message });
@@ -87,10 +118,8 @@ function createMasterDataRouter({ collectionName, idField, model, validateRefere
       const rawId = String(req.params.id);
       const query = buildIdQuery(rawId);
 
-      const item = await db.collection(collectionName).findOne(query);
-      if (!item) {
-        return res.status(404).json({ success: false, error: 'Registro não encontrado' });
-      }
+      const item = await findScopedRecord(req, res, query);
+      if (!item) return undefined;
 
       return res.status(200).json({ success: true, data: item });
     } catch (error) {
@@ -123,6 +152,11 @@ function createMasterDataRouter({ collectionName, idField, model, validateRefere
         // list route sorts on createdAt/_id).
         [idField]: req.body?.[idField] ?? generateId(),
       };
+      // #1182: an organization-scoped caller creates in its own organization,
+      // whatever the body names (#1071's rule for every other scoped create).
+      if (scopeField) {
+        payload[scopeField] = resolveOrganizationIdForCreate(req.organizationScope, req.body?.[scopeField]);
+      }
       const validation = model.validate(payload);
       if (!validation.isValid) {
         return res.status(422).json({ success: false, error: 'Payload inválido', details: validation.errors });
@@ -153,11 +187,26 @@ function createMasterDataRouter({ collectionName, idField, model, validateRefere
       const rawId = String(req.params.id);
       const query = buildIdQuery(rawId);
       const body = req.body || {};
+
+      if (scopeField) {
+        const existing = await findScopedRecord(req, res, query);
+        if (!existing) return undefined;
+        // #1182: the check above is the SOURCE; this is the destination.
+        assertOrganizationFieldNotReparented(req.organizationScope, existing[scopeField], body[scopeField], scopeField);
+      }
+
       const update = { updatedAt: new Date() };
       for (const key of allowedUpdateFields) {
         if (Object.prototype.hasOwnProperty.call(body, key)) {
           update[key] = body[key];
         }
+      }
+
+      // #1221: the create path's #664 reference check, over the keys this
+      // update carries. Without it an edit could point a record at a
+      // specimen, protocol, operator or lot that does not exist.
+      if (validateReferences) {
+        await validateReferences(db, update);
       }
 
       const result = await db.collection(collectionName).findOneAndUpdate(
@@ -172,6 +221,14 @@ function createMasterDataRouter({ collectionName, idField, model, validateRefere
 
       return res.status(200).json({ success: true, data: result });
     } catch (error) {
+      // #1182: a refused re-parent throws statusCode:403.
+      if (error.statusCode === 403) {
+        return res.status(403).json({ success: false, error: 'Acesso negado', message: error.message });
+      }
+      // #1221: an unresolved reference throws statusCode:404, as on create.
+      if (error.statusCode) {
+        return res.status(error.statusCode).json({ success: false, error: error.message, message: error.message });
+      }
       return res.status(500).json({ success: false, error: 'Erro ao atualizar dado mestre', message: error.message });
     }
   });
@@ -182,6 +239,8 @@ function createMasterDataRouter({ collectionName, idField, model, validateRefere
 
       const rawId = String(req.params.id);
       const query = buildIdQuery(rawId);
+
+      if (scopeField && !(await findScopedRecord(req, res, query))) return undefined;
 
       const result = await db.collection(collectionName).deleteOne(query);
       if (result.deletedCount === 0) {

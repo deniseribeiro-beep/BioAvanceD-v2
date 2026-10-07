@@ -376,7 +376,7 @@ describe('sample.routes', () => {
 
     it('accepts a boolean isRareDisease', async () => {
       const executeMock = vi.fn().mockResolvedValue({
-        sample: { _id: { toString: () => 's1' }, patientID: '12345678' },
+        sample: { _id: { toString: () => 's1' }, participantId: '12345678' },
         strictMode: true,
         topology: {},
       });
@@ -392,7 +392,7 @@ describe('sample.routes', () => {
 
     it('accepts a valid boxId/positionCode pair, per issue #462', async () => {
       const executeMock = vi.fn().mockResolvedValue({
-        sample: { _id: { toString: () => 's1' }, patientID: '12345678' },
+        sample: { _id: { toString: () => 's1' }, participantId: '12345678' },
         strictMode: true,
         topology: {},
       });
@@ -404,6 +404,61 @@ describe('sample.routes', () => {
         .send({ ...VALID_PAYLOAD, boxId: '507f1f77bcf86cd799439012' });
 
       expect(res.status).toBe(201);
+    });
+
+    // #1185: the create side of #1053's sample slice. POST / carried no
+    // organization scope and passed the body's collectionSite straight
+    // through, so a scoped caller could register a sample into another
+    // organization. #1071's rule: an organization scope stamps its own id.
+    describe('#1185: a scoped create stamps the caller organization as collectionSite', () => {
+      const created = () => vi.fn().mockResolvedValue({
+        sample: { _id: { toString: () => 's1' }, participantId: '12345678' },
+        strictMode: true,
+        topology: {},
+      });
+      const orgScoped = (req, res, next) => {
+        req.organizationScope = { scope: 'organization', organizationIds: ['org-mine'] };
+        next();
+      };
+
+      it('replaces a body collectionSite naming another organization', async () => {
+        const executeMock = created();
+        const { router } = loadRoute({ registerSampleUseCaseExecute: executeMock, requireOrganizationScopeImpl: orgScoped });
+        const app = buildApp(router, {});
+
+        const res = await request(app).post('/api/samples').send({ ...VALID_PAYLOAD, collectionSite: 'org-other' });
+
+        expect(res.status).toBe(201);
+        expect(executeMock).toHaveBeenCalledWith(expect.objectContaining({
+          sampleData: expect.objectContaining({ collectionSite: 'org-mine' }),
+        }));
+      });
+
+      it('stamps the caller organization when the body names no collectionSite', async () => {
+        const executeMock = created();
+        const { router } = loadRoute({ registerSampleUseCaseExecute: executeMock, requireOrganizationScopeImpl: orgScoped });
+        const app = buildApp(router, {});
+
+        const res = await request(app).post('/api/samples').send(VALID_PAYLOAD);
+
+        expect(res.status).toBe(201);
+        expect(executeMock).toHaveBeenCalledWith(expect.objectContaining({
+          sampleData: expect.objectContaining({ collectionSite: 'org-mine' }),
+        }));
+      });
+
+      it('CONTROL: a global scope keeps the body collectionSite', async () => {
+        const executeMock = created();
+        const { router } = loadRoute({ registerSampleUseCaseExecute: executeMock });
+        const app = buildApp(router, {});
+
+        const res = await request(app).post('/api/samples').send({ ...VALID_PAYLOAD, collectionSite: 'org-other' });
+
+        expect(res.status).toBe(201);
+        expect(executeMock).toHaveBeenCalledWith(expect.objectContaining({
+          sampleData: expect.objectContaining({ collectionSite: 'org-other' }),
+        }));
+      });
     });
 
     it('rejects a boxId that is not a valid ObjectId, per issue #462', async () => {
@@ -474,7 +529,7 @@ describe('sample.routes', () => {
 
     it('returns 201 on success', async () => {
       const executeMock = vi.fn().mockResolvedValue({
-        sample: { _id: { toString: () => 'sample-1' }, patientID: '12345678', sampleType: 'Sangue', barcode: 'BC1' },
+        sample: { _id: { toString: () => 'sample-1' }, participantId: '12345678', sampleType: 'Sangue', barcode: 'BC1' },
         strictMode: true,
         topology: { synced: true, fallbackQueued: false },
       });
@@ -493,7 +548,7 @@ describe('sample.routes', () => {
 
     it('returns 202 when topology sync falls back to quarantine', async () => {
       const executeMock = vi.fn().mockResolvedValue({
-        sample: { _id: { toString: () => 'sample-1' }, patientID: '12345678' },
+        sample: { _id: { toString: () => 'sample-1' }, participantId: '12345678' },
         strictMode: false,
         topology: { synced: false, fallbackQueued: true },
       });
@@ -608,7 +663,7 @@ describe('sample.routes', () => {
 
     it('uses req.t fallback strings and quality=null when req.t is absent and sample.quality is undefined', async () => {
       const executeMock = vi.fn().mockResolvedValue({
-        sample: { _id: { toString: () => 'sample-1' }, patientID: '12345678', quality: undefined },
+        sample: { _id: { toString: () => 'sample-1' }, participantId: '12345678', quality: undefined },
         strictMode: true,
         topology: { synced: true, fallbackQueued: false },
       });
@@ -631,7 +686,7 @@ describe('sample.routes', () => {
 
     it('uses the partial-success message suffix when topology sync falls back to quarantine', async () => {
       const executeMock = vi.fn().mockResolvedValue({
-        sample: { _id: { toString: () => 'sample-1' }, patientID: '12345678', quality: null },
+        sample: { _id: { toString: () => 'sample-1' }, participantId: '12345678', quality: null },
         strictMode: false,
         topology: { synced: false, fallbackQueued: true },
       });
@@ -668,7 +723,7 @@ describe('sample.routes', () => {
 
     it('falls back to null actor fields when req.user is absent entirely (no audit log write)', async () => {
       const executeMock = vi.fn().mockResolvedValue({
-        sample: { _id: { toString: () => 's1' }, patientID: '12345678' },
+        sample: { _id: { toString: () => 's1' }, participantId: '12345678' },
         strictMode: true,
         topology: {},
       });
@@ -757,7 +812,7 @@ describe('sample.routes', () => {
 
     it('uses the req.t fallback in the partial-success (202) message', async () => {
       const executeMock = vi.fn().mockResolvedValue({
-        sample: { _id: { toString: () => 'sample-1' }, patientID: '12345678' },
+        sample: { _id: { toString: () => 'sample-1' }, participantId: '12345678' },
         strictMode: false,
         topology: { synced: false, fallbackQueued: true },
       });
@@ -854,7 +909,7 @@ describe('sample.routes', () => {
     it('returns an SVG label with XML-escaped fields', async () => {
       const { router } = loadRoute();
       const findOne = vi.fn().mockResolvedValue({
-        sampleID: 42,
+        specimenId: 'SPEC-42',
         barcode: 'BC<1>&"\'',
         sampleType: 'Sangue & Plasma',
       });
@@ -872,6 +927,20 @@ describe('sample.routes', () => {
       expect(svgText).toContain('&lt;1&gt;');
       expect(svgText).toContain('&amp;');
       expect(svgText).not.toContain('BC<1>&"\'');
+      // #1334: the label names the specimen by the specimenId SampleModel writes.
+      expect(svgText).toContain('SPEC-42');
+    });
+
+    it('prints a pre-rename row\'s sampleID when it has no specimenId (#1334)', async () => {
+      const { router } = loadRoute();
+      const findOne = vi.fn().mockResolvedValue({ _id: { toString: () => 'raw-id' }, sampleID: 42, barcode: 'BC1' });
+      const insertOne = vi.fn().mockResolvedValue({ insertedId: 'lg1' });
+      const app = buildApp(router, { collection: () => ({ findOne, insertOne }) });
+
+      const res = await request(app).get('/api/samples/000000000000000000000000/label/print-job');
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.sampleId).toBe('42');
     });
 
     it('falls back to _id, req.params.id, sampleIdentifier and "AMOSTRA" when sample fields are absent', async () => {
@@ -913,7 +982,7 @@ describe('sample.routes', () => {
 
     // #619: mirrors #340's GET /:id out-of-scope 403 for this sub-resource.
     it('returns 403 when the sample exists but is outside the caller\'s organization scope', async () => {
-      const findOne = vi.fn().mockResolvedValue({ sampleID: 42, collectionSite: 'org-other' });
+      const findOne = vi.fn().mockResolvedValue({ specimenId: 'SPEC-42', collectionSite: 'org-other' });
       const { router } = loadRoute({
         requireOrganizationScopeImpl: (req, res, next) => {
           req.organizationScope = { scope: 'organization', organizationIds: ['org-mine'] };
@@ -982,6 +1051,29 @@ describe('sample.routes', () => {
       );
     });
 
+    // #1187: the search now filters on the caller's organizations, as
+    // GET / does.
+    it('filters the search to the caller organizations', async () => {
+      const { router } = loadRoute({
+        requireOrganizationScopeImpl: (req, res, next) => {
+          req.organizationScope = { scope: 'organization', organizationIds: ['org-mine'] };
+          next();
+        },
+      });
+      const toArray = vi.fn().mockResolvedValue([]);
+      const project = vi.fn().mockReturnValue({ toArray });
+      const limit = vi.fn().mockReturnValue({ project });
+      const find = vi.fn().mockReturnValue({ limit });
+      const app = buildApp(router, { collection: () => ({ find }) });
+
+      const res = await request(app).get('/api/samples/search/by-term').query({ q: 'BC1' });
+
+      expect(res.status).toBe(200);
+      expect(find).toHaveBeenCalledWith(
+        expect.objectContaining({ collectionSite: { $in: ['org-mine'] } })
+      );
+    });
+
     it('returns 500 when the collection lookup throws', async () => {
       const { router } = loadRoute();
       const find = vi.fn().mockImplementation(() => {
@@ -1037,6 +1129,40 @@ describe('sample.routes', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
+    });
+
+    // #1187: every other sample read 403s outside the caller's scope;
+    // this one returned the sample and its patient's name to anyone.
+    it('returns 403 when the sample belongs to a different organization', async () => {
+      const getSampleByBarcode = vi.fn().mockResolvedValue({ sample: { _id: { toString: () => 's1' }, collectionSite: 'org-other' } });
+      const { router } = loadRoute({
+        sampleServiceOverrides: { getSampleByBarcode },
+        requireOrganizationScopeImpl: (req, res, next) => {
+          req.organizationScope = { scope: 'organization', organizationIds: ['org-mine'] };
+          next();
+        },
+      });
+      const app = buildApp(router, {});
+
+      const res = await request(app).get('/api/samples/by-barcode/BC1');
+
+      expect(res.status).toBe(403);
+    });
+
+    it('CONTROL: returns 200 for a sample in the caller organization', async () => {
+      const getSampleByBarcode = vi.fn().mockResolvedValue({ sample: { _id: { toString: () => 's1' }, collectionSite: 'org-mine' } });
+      const { router } = loadRoute({
+        sampleServiceOverrides: { getSampleByBarcode },
+        requireOrganizationScopeImpl: (req, res, next) => {
+          req.organizationScope = { scope: 'organization', organizationIds: ['org-mine'] };
+          next();
+        },
+      });
+      const app = buildApp(router, {});
+
+      const res = await request(app).get('/api/samples/by-barcode/BC1');
+
+      expect(res.status).toBe(200);
     });
   });
 
@@ -1952,14 +2078,14 @@ describe('sample.routes', () => {
     });
 
     it('returns 200 with the sample', async () => {
-      const getSample = vi.fn().mockResolvedValue({ _id: '1', patientID: 'P1' });
+      const getSample = vi.fn().mockResolvedValue({ _id: '1', participantId: 'P1' });
       const { router } = loadRoute({ sampleServiceOverrides: { getSample } });
       const app = buildApp(router, {});
 
       const res = await request(app).get('/api/samples/000000000000000000000000');
 
       expect(res.status).toBe(200);
-      expect(res.body.data).toEqual({ _id: '1', patientID: 'P1' });
+      expect(res.body.data).toEqual({ _id: '1', participantId: 'P1' });
     });
 
     // #340: an existing sample outside the caller's organization scope
@@ -2118,6 +2244,84 @@ describe('sample.routes', () => {
       expect(res.status).toBe(403);
       expect(updateSample).not.toHaveBeenCalled();
     });
+
+    // #1053: the #623 check above is the SOURCE -- is this sample mine now.
+    // updateSample's allowlist contains collectionSite, the field this module
+    // scopes on, so an in-scope caller could still push their own sample into
+    // another organization with that check passing on the way through.
+    describe('#1053: a PUT cannot re-parent the sample to another collectionSite', () => {
+      const orgScoped = (req, res, next) => {
+        req.organizationScope = { scope: 'organization', organizationIds: ['org-mine'] };
+        next();
+      };
+
+      it('refuses a PUT that moves an in-scope sample to another organization', async () => {
+        const updateSample = vi.fn();
+        const getSample = vi.fn().mockResolvedValue({ _id: '1', collectionSite: 'org-mine' });
+        const { router } = loadRoute({
+          sampleServiceOverrides: { updateSample, getSample },
+          requireOrganizationScopeImpl: orgScoped,
+        });
+        const app = buildApp(router, {});
+
+        const res = await request(app).put('/api/samples/000000000000000000000000').send({ collectionSite: 'org-other' });
+
+        expect(res.status).toBe(403);
+        expect(updateSample).not.toHaveBeenCalled();
+      });
+
+      it('CONTROL: an update that does not name collectionSite still succeeds', async () => {
+        const updateSample = vi.fn().mockResolvedValue({ _id: '1', quantity: 1 });
+        const getSample = vi.fn().mockResolvedValue({ _id: '1', collectionSite: 'org-mine' });
+        const { router } = loadRoute({
+          sampleServiceOverrides: { updateSample, getSample },
+          requireOrganizationScopeImpl: orgScoped,
+        });
+        const app = buildApp(router, {});
+
+        const res = await request(app).put('/api/samples/000000000000000000000000').send({ quantity: 1 });
+
+        expect(res.status).toBe(200);
+        expect(updateSample).toHaveBeenCalled();
+      });
+
+      // The operator UI spreads the fetched record, so re-sending the
+      // sample's own collectionSite is what a normal edit sends.
+      it('CONTROL: re-sending the sample own collectionSite is allowed', async () => {
+        const updateSample = vi.fn().mockResolvedValue({ _id: '1', quantity: 1 });
+        const getSample = vi.fn().mockResolvedValue({ _id: '1', collectionSite: 'org-mine' });
+        const { router } = loadRoute({
+          sampleServiceOverrides: { updateSample, getSample },
+          requireOrganizationScopeImpl: orgScoped,
+        });
+        const app = buildApp(router, {});
+
+        const res = await request(app)
+          .put('/api/samples/000000000000000000000000')
+          .send({ collectionSite: 'org-mine', quantity: 1 });
+
+        expect(res.status).toBe(200);
+        expect(updateSample).toHaveBeenCalled();
+      });
+
+      it('CONTROL: a global scope may still move a sample between organizations', async () => {
+        const updateSample = vi.fn().mockResolvedValue({ _id: '1', collectionSite: 'org-other' });
+        const getSample = vi.fn().mockResolvedValue({ _id: '1', collectionSite: 'org-mine' });
+        const { router } = loadRoute({
+          sampleServiceOverrides: { updateSample, getSample },
+          requireOrganizationScopeImpl: (req, res, next) => {
+            req.organizationScope = { scope: 'global' };
+            next();
+          },
+        });
+        const app = buildApp(router, {});
+
+        const res = await request(app).put('/api/samples/000000000000000000000000').send({ collectionSite: 'org-other' });
+
+        expect(res.status).toBe(200);
+        expect(updateSample).toHaveBeenCalled();
+      });
+    });
   });
 
   describe('DELETE /:id', () => {
@@ -2206,7 +2410,7 @@ describe('sample.routes', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.data.withdrawnQuantity).toBe(2);
-      expect(auditLoggerModule.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'WITHDRAW', severity: 'high' }));
+      expect(auditLoggerModule.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'WITHDRAW', severity: 'warning' }));
     });
 
     it('returns 400 when consent validation rejects the request', async () => {
@@ -2302,7 +2506,7 @@ describe('sample.routes', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.data.returnedQuantity).toBe(1);
-      expect(auditLoggerModule.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'RETURN', severity: 'high' }));
+      expect(auditLoggerModule.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'RETURN', severity: 'warning' }));
     });
 
     it('returns 400 when the service throws', async () => {
@@ -2515,6 +2719,35 @@ describe('sample.routes', () => {
     });
   });
 
+  // #1216: the create response names a specimen by its specimenId, and these
+  // six handlers wrapped the URL id in new ObjectId(), which throws on
+  // anything but 24 hex characters. The service resolves either form, so
+  // the route must hand it the id as sent.
+  describe('#1216: id-taking handlers pass a specimenId through as sent', () => {
+    const SPECIMEN_ID = '3116768';
+    const cases = [
+      { name: 'GET /:id', service: 'getSample', value: { _id: 'x', specimenId: SPECIMEN_ID }, call: (app) => request(app).get(`/api/samples/${SPECIMEN_ID}`) },
+      { name: 'PUT /:id', service: 'updateSample', value: { _id: 'x', specimenId: SPECIMEN_ID }, call: (app) => request(app).put(`/api/samples/${SPECIMEN_ID}`).send({ quantity: 1 }) },
+      { name: 'DELETE /:id', service: 'deleteSample', value: true, call: (app) => request(app).delete(`/api/samples/${SPECIMEN_ID}`) },
+      { name: 'POST /:id/withdraw', service: 'withdrawSample', value: { withdrawnQuantity: 2, remainingQuantity: 3, movementID: 'm1' }, call: (app) => request(app).post(`/api/samples/${SPECIMEN_ID}/withdraw`).send({ withdrawalType: 'DISPOSAL', withdrawalResponsible: 'Dr. X' }) },
+      { name: 'POST /:id/return', service: 'returnSample', value: { returnedQuantity: 1, condition: 'OK', newAvailableQuantity: 4, movementID: 'm2' }, call: (app) => request(app).post(`/api/samples/${SPECIMEN_ID}/return`).send({}) },
+      { name: 'GET /:id/results', service: 'getSampleResults', value: [], call: (app) => request(app).get(`/api/samples/${SPECIMEN_ID}/results`) },
+    ];
+
+    it.each(cases)('$name', async ({ service, value, call }) => {
+      const serviceFn = vi.fn().mockResolvedValue(value);
+      const overrides = { [service]: serviceFn };
+      if (service !== 'getSample') overrides.getSample = vi.fn().mockResolvedValue(null);
+      const { router } = loadRoute({ sampleServiceOverrides: overrides });
+      const app = buildApp(router, {});
+
+      const res = await call(app);
+
+      expect(res.status).toBe(200);
+      expect(serviceFn.mock.calls.some(([, id]) => id === SPECIMEN_ID)).toBe(true);
+    });
+  });
+
   describe('GET /:id/label/print-job', () => {
     it('returns 503 when db is unavailable', async () => {
       const { router } = loadRoute();
@@ -2536,7 +2769,7 @@ describe('sample.routes', () => {
     });
 
     it('returns 403 when the sample exists but is outside the caller\'s organization scope', async () => {
-      const findOne = vi.fn().mockResolvedValue({ sampleID: 42, barcode: 'BC1', collectionSite: 'org-other' });
+      const findOne = vi.fn().mockResolvedValue({ specimenId: 'SPEC-42', barcode: 'BC1', collectionSite: 'org-other' });
       const { router } = loadRoute({
         requireOrganizationScopeImpl: (req, res, next) => {
           req.organizationScope = { scope: 'organization', organizationIds: ['org-mine'] };
@@ -2552,7 +2785,7 @@ describe('sample.routes', () => {
 
     it('returns 409 when the sample has no barcode generated yet', async () => {
       const { router } = loadRoute();
-      const findOne = vi.fn().mockResolvedValue({ sampleID: 42 });
+      const findOne = vi.fn().mockResolvedValue({ specimenId: 'SPEC-42' });
       const app = buildApp(router, { collection: () => ({ findOne }) });
 
       const res = await request(app).get('/api/samples/000000000000000000000000/label/print-job');
@@ -2563,7 +2796,7 @@ describe('sample.routes', () => {
     it('returns ZPL with the barcode drawn via ^BC and audits the generation', async () => {
       const { router } = loadRoute();
       const findOne = vi.fn().mockResolvedValue({
-        sampleID: 42,
+        specimenId: 'SPEC-42',
         barcode: 'BC1',
         storageLocation: { boxName: 'Box A', position: 'A1' },
       });
@@ -2577,7 +2810,7 @@ describe('sample.routes', () => {
       expect(res.status).toBe(200);
       expect(res.body.data).toEqual(
         expect.objectContaining({
-          sampleId: '42',
+          sampleId: 'SPEC-42',
           barcode: 'BC1',
           format: 'zpl',
           printerLanguage: 'ZPL',
@@ -2593,7 +2826,7 @@ describe('sample.routes', () => {
 
     it('escapes ^ and ~ out of ZPL field data and omits the location line when absent', async () => {
       const { router } = loadRoute();
-      const findOne = vi.fn().mockResolvedValue({ sampleID: 42, barcode: 'BC^1~x' });
+      const findOne = vi.fn().mockResolvedValue({ specimenId: 'SPEC-42', barcode: 'BC^1~x' });
       const insertOne = vi.fn().mockResolvedValue({ insertedId: 'lg1' });
       const app = buildApp(router, { collection: () => ({ findOne, insertOne }) });
 
@@ -2645,14 +2878,12 @@ describe('sample.routes', () => {
 // Re-derived against source (`git grep -n -E
 // "requirePermission[(]|requireRole[(]|requireOrganizationScope" --
 // api/backend/src/interface/routes/sample.routes.js`): the file has no
-// requireRole call at all. 27 routes are registered in total; 25 carry
-// requireOrganizationScope (8 of those also carry requirePermission) and 2
-// (GET /search/by-term, GET /by-barcode/:barcode) carry neither -- only
-// `authenticate`. That is 8 + 25 = 33 individual gate call sites, matching
-// the line count `git grep -c` reports (line count and site count agree
-// here only because two routes each carry both gates on one source line,
-// which offsets the handful of matched lines that are a comment or the
-// `requireOrganizationScope` import rather than a call site).
+// requireRole call at all. Recounted for #1187 by parsing each
+// router.<verb>( registration's middleware list: 28 routes, ALL 28 carrying
+// requireOrganizationScope, 8 of them also carrying requirePermission. The
+// earlier count here (27 routes, 25 scoped, GET /search/by-term and GET
+// /by-barcode/:barcode carrying only `authenticate`) predated one route and
+// both #1185's POST / scope and #1187's scoping of those two reads.
 describe('sample.routes authorization gates (issue #921)', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -2696,6 +2927,11 @@ describe('sample.routes authorization gates (issue #921)', () => {
   describe('requireOrganizationScope presence pinning', () => {
     // 25 of the file's 27 routes wire in requireOrganizationScope.
     const GATED_CASES = [
+      // #1185: the create stamps the caller's organization, so it needs the scope.
+      { label: 'POST /', method: 'post', path: '/' },
+      // #1187: the two reads that carried only `authenticate`.
+      { label: 'GET /search/by-term', method: 'get', path: '/search/by-term?q=BC1' },
+      { label: 'GET /by-barcode/:barcode', method: 'get', path: '/by-barcode/BC1' },
       { label: 'GET /:id/miabis-compliance', method: 'get', path: '/s1/miabis-compliance' },
       { label: 'GET /:id/compliance-graph', method: 'get', path: '/s1/compliance-graph' },
       { label: 'GET /', method: 'get', path: '/' },
@@ -2740,41 +2976,6 @@ describe('sample.routes authorization gates (issue #921)', () => {
       });
     }
 
-    // GET /search/by-term and GET /by-barcode/:barcode are the only two
-    // routes in the file with no gate beyond `authenticate` -- confirmed
-    // against source (sample.routes.js:1220, :1281). A denying
-    // requireOrganizationScope stub must never fire on either.
-    it('does not apply requireOrganizationScope on GET /search/by-term', async () => {
-      const requireOrganizationScopeImpl = denyingRequireOrganizationScope();
-      const { router } = loadRoute({ requireOrganizationScopeImpl });
-      const app = buildApp(router, {});
-
-      const res = await request(app).get('/api/samples/search/by-term').query({ q: 'a' });
-
-      // Not the 403/orgScope shape the denying stub would answer with if it
-      // had actually been reached -- this specific 400 is the route's own
-      // "term too short" validation, reached only because the gate never
-      // fired.
-      expect(res.status).toBe(400);
-      expect(res.body.gate).toBeUndefined();
-      expect(requireOrganizationScopeImpl.recordedCalls).toEqual([]);
-    });
-
-    it('does not apply requireOrganizationScope on GET /by-barcode/:barcode', async () => {
-      const getSampleByBarcode = vi.fn().mockResolvedValue({ sample: null });
-      const requireOrganizationScopeImpl = denyingRequireOrganizationScope();
-      const { router } = loadRoute({
-        sampleServiceOverrides: { getSampleByBarcode },
-        requireOrganizationScopeImpl,
-      });
-      const app = buildApp(router, {});
-
-      const res = await request(app).get('/api/samples/by-barcode/UNKNOWN');
-
-      expect(res.status).toBe(404);
-      expect(res.body.gate).toBeUndefined();
-      expect(requireOrganizationScopeImpl.recordedCalls).toEqual([]);
-    });
   });
 
   // Route-shadowing check (per issue #921's brief): Express matches

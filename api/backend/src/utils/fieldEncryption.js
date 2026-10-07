@@ -213,9 +213,9 @@ function isFieldEncryptionAvailable() {
  * This mirrors #938's assertFileEncryptionConfigured (fileCrypto.js) and
  * #734's assertEncryptionKeyConfigured (backup.service.js), for the same
  * reason and by the same means: encryptValue keeps returning null -- that
- * is right for participantIdentity.service, whose map is deliberately
- * additive pending #574 -- and the callers that must not degrade check up
- * front instead.
+ * is right for participantIdentity.service, which keeps the plaintext on a
+ * keyless stack by design and drops it only where it enciphered (#1104) --
+ * and the callers that must not degrade check up front instead.
  *
  * Takes the value so encryptValue's empty-input contract lives in one
  * file: '', null and undefined return null with or without a key, so no
@@ -245,5 +245,6 @@ module.exports = {
   hmacBlindIndex,
   hmacBlindIndexCandidates,
   isFieldEncryptionAvailable,
+  unencryptedFieldStorageAllowed,
   assertFieldEncryptionConfigured
 };

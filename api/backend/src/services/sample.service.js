@@ -22,6 +22,7 @@ const AllocateSampleUseCase = require('../core/use-cases/AllocateSampleUseCase')
 const MongoStorageRepository = require('../infrastructure/persistence/mongo/MongoStorageRepository');
 const MongoAuditRepository = require('../infrastructure/persistence/mongo/MongoAuditRepository');
 const LineageRepository = require('../infrastructure/database/neo4j/LineageRepository');
+const { recordSpecimenProjection } = require('./graphProjection.service');
 const { ObjectId } = require('mongodb');
 
 const { CRITICAL_SENSOR_STATUSES, isEquipmentBlocked } = require('../models/equipmentStatus');
@@ -30,20 +31,10 @@ const LOCATION_REQUIRED_MESSAGE = 'Localização física obrigatória para cadas
 // #470: imports the shared equipment-readiness constants (#774) — the
 // equipment-readiness half of RF004's gate, missing here until now.
 
-/**
- * Every caller (sample.routes.js) passes an already-cast ObjectId as
- * `specimenId` — but that field on Sample is a separate, server-generated
- * string (see sampleIDGenerator.js), so a bare `{ specimenId }` query never
- * matched it. Looks up by _id first (the real intent), falling back to the
- * specimenId field for any caller that does pass the string form.
- */
-async function findSampleByAnyId(samplesCollection, id) {
-  if (id instanceof ObjectId || (typeof id === 'string' && ObjectId.isValid(id) && String(id).length === 24)) {
-    const sample = await samplesCollection.findOne({ _id: new ObjectId(id) });
-    if (sample) return sample;
-  }
-  return samplesCollection.findOne({ specimenId: id });
-}
+// The route id may be the Mongo _id or the server-generated specimenId
+// string (see sampleIDGenerator.js). #1216 moved this lookup to a util so
+// the sample-file controller and the storage routes resolve it the same way.
+const { findSampleByAnyId } = require('../utils/sampleLookup');
 
 function createSampleValidationError(message, statusCode = 422) {
   const error = new Error(message);
@@ -164,6 +155,7 @@ class SampleService {
 
         const validationError = new Error(validationMessage);
         validationError.statusCode = 422;
+        validationError.details = Array.isArray(validation.errors) ? validation.errors : [];
         throw validationError;
       }
 
@@ -387,6 +379,12 @@ class SampleService {
       }
 
       sample.storageLocation = { boxId, position: positionCode };
+
+      await recordSpecimenProjection(db, {
+        specimenId: String(result.insertedId),
+        participantId: sample.participantId,
+        sourceService: 'sample.service'
+      });
 
       // #510: expose the canonical StorageAssignment (dict-02 ELM-0167-0178)
       // the allocation above just opened, alongside the legacy storageLocation
@@ -633,8 +631,8 @@ class SampleService {
       // #647 (same shape as #645's sensor-list bug): no sort meant Mongo's
       // natural (insertion) order decided which samples landed on the
       // default 50-item page -- once the collection passed that default
-      // (e2e fixtures accumulate across sessions, see docker-workflow's
-      // local-env), a freshly created sample silently never appeared in
+      // (e2e fixtures accumulate across sessions in the test stack's named
+      // volumes), a freshly created sample silently never appeared in
       // the list, so SampleDetailsPage's client-side find-by-id came up
       // empty for a sample that had just been created. Newest-first makes
       // a just-created record always land on page 1 regardless of backlog.
@@ -749,7 +747,11 @@ class SampleService {
   async deleteSample(db, specimenId) {
     try {
       const samplesCollection = await getCollection(db, 'samples');
-      const result = await samplesCollection.deleteOne({ specimenId });
+      // #1216: a bare { specimenId } filter never matched the ObjectId the
+      // route passed, so DELETE answered 404 for a sample that exists.
+      const sample = await findSampleByAnyId(samplesCollection, specimenId);
+      if (!sample) return false;
+      const result = await samplesCollection.deleteOne({ _id: sample._id });
       return result.deletedCount > 0;
     } catch (error) {
       logger.error('Erro ao deletar amostra:', error.message);
@@ -1113,11 +1115,12 @@ class SampleService {
     try {
       const samplesCollection = await getCollection(db, 'samples');
       const sample = await findSampleByAnyId(samplesCollection, specimenId);
-      const specimenIdStr = sample
-        ? sample.specimenId
-        : (specimenId.toString ? specimenId.toString() : specimenId);
-
-      return await quarantineActionService.getActionsForSpecimen(db, specimenIdStr);
+      // #1219: handed the sample, the lookup matches its specimenId and the
+      // _id every action recorded before #1219 carries.
+      return await quarantineActionService.getActionsForSpecimen(
+        db,
+        sample || (specimenId.toString ? specimenId.toString() : specimenId)
+      );
     } catch (error) {
       logger.error('Erro ao buscar ações de quarentena:', error.message);
       throw error;

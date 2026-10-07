@@ -25,28 +25,39 @@ class ConsentController {
         const pendingPatients = await patientsCollection.find({
           status: 'PENDING_CONSENT',
           consentTemplateId: policyId
-        }).project({ participantId: 1, email: 1, clinicalUnit: 1, consentNotifiedAt: 1 }).toArray();
+        }).project({ participantId: 1, clinicalUnit: 1, consentNotifiedAt: 1 }).toArray();
 
         // RF005/RNF007 (#562/#574): patientName is civil identity — resolved via
         // ParticipantIdentity, not read directly off Patient. Decrypted via
         // decryptIdentity so this keeps working once the plaintext field is
         // dropped in favor of the ciphertext-only sibling (#566).
+        // #1166: the email is identity data too, taken from the same
+        // decrypted record. `patients` no longer carries it (slice 4).
         const identitiesCollection = db.collection('participantIdentities');
         const participantIds = pendingPatients.map((patient) => patient.participantId).filter(Boolean);
         const identities = participantIds.length > 0
           ? await identitiesCollection.find({ participantId: { $in: participantIds } })
-            .project({ participantId: 1, patientName: 1, patientNameEncrypted: 1 }).toArray()
+            .project({
+              participantId: 1,
+              patientName: 1,
+              patientNameEncrypted: 1,
+              email: 1,
+              emailEncrypted: 1,
+            }).toArray()
           : [];
-        const nameByParticipantId = new Map(
+        const identityByParticipantId = new Map(
           identities.map((identity) => {
             const decrypted = participantIdentityService.decryptIdentity(identity);
-            return [decrypted.participantId, decrypted.patientName];
+            return [decrypted.participantId, decrypted];
           })
         );
-        const patientsWithNames = pendingPatients.map((patient) => ({
-          ...patient,
-          patientName: nameByParticipantId.get(patient.participantId) || null,
-        }));
+        const patientsWithNames = pendingPatients.map((patient) => {
+          const identity = identityByParticipantId.get(patient.participantId);
+          return {
+            ...participantIdentityService.withIdentityContact(patient, identity),
+            patientName: identity?.patientName || null,
+          };
+        });
 
         return res.status(200).json({
           success: true,
@@ -101,10 +112,11 @@ class ConsentController {
       });
     } catch (error) {
       logger.error('Erro ao criar política de consentimento:', error.message);
-      return res.status(400).json({
+      return res.status(error.statusCode === 422 ? 422 : 400).json({
         success: false,
         error: 'Erro ao criar política de consentimento',
-        message: error.message
+        message: error.message,
+        details: error.details
       });
     }
   }
@@ -237,10 +249,11 @@ class ConsentController {
       });
     } catch (error) {
       logger.error('Erro ao atualizar política de consentimento:', error.message);
-      return res.status(400).json({
+      return res.status(error.statusCode === 422 ? 422 : 400).json({
         success: false,
         error: 'Erro ao atualizar política de consentimento',
-        message: error.message
+        message: error.message,
+        details: error.details
       });
     }
   }
@@ -310,10 +323,11 @@ class ConsentController {
       });
     } catch (error) {
       logger.error('Erro ao criar template de consentimento:', error.message);
-      return res.status(400).json({
+      return res.status(error.statusCode === 422 ? 422 : 400).json({
         success: false,
         error: 'Erro ao criar template de consentimento',
-        message: error.message
+        message: error.message,
+        details: error.details
       });
     }
   }
@@ -610,7 +624,26 @@ class ConsentController {
         });
       }
 
-      const consent = await consentService.getPatientConsent(db, req.params.participantId);
+      // #1188: a Consent carries no organization field, so the scope check
+      // runs on its patient (#626), and the consent is read by the id of the
+      // patient that passed it.
+      const patient = await patientService.getPatient(db, req.params.participantId);
+      if (!patient) {
+        return res.status(404).json({
+          success: false,
+          error: 'Paciente não encontrado'
+        });
+      }
+      const { isRecordInOrganizationScope } = require('../services/rbac-assignment.service');
+      if (!isRecordInOrganizationScope(patient, req.organizationScope, 'clinicalUnitId')) {
+        return res.status(403).json({
+          success: false,
+          error: 'Acesso negado',
+          message: 'Este paciente pertence a outra organização'
+        });
+      }
+
+      const consent = await consentService.getPatientConsent(db, patient.participantId);
       if (!consent) {
         return res.status(404).json({
           success: false,
@@ -660,10 +693,15 @@ class ConsentController {
         // one would tell the participant their link is bad and send them to
         // request another, which would not help.
         logger.error('Erro ao carregar termo ativo do link de consentimento:', templateError.message);
+        // #1138: no `message` key. This route is unauthenticated, so the
+        // reasoning #823 gave for the 400 and #1127 for the two 503s below
+        // applies here unchanged -- whatever getActiveTemplate threw can name
+        // a host, a replica-set member or a schema path, and the caller is
+        // told a state, not a cause. The detail is in the log line above,
+        // which is where an operator reads it.
         return res.status(503).json({
           success: false,
-          error: 'Termo de consentimento indisponível',
-          message: templateError.message
+          error: 'Termo de consentimento indisponível'
         });
       }
 
@@ -693,6 +731,18 @@ class ConsentController {
       // detail stays in the log line above. Deliberately no `message` key --
       // the frontend maps this by status alone (mapConsentTokenError).
       logger.error('Erro ao validar token de consentimento:', error.message);
+      // #1127: and the split above has a second half. The four throws are the
+      // participant's request being wrong; a driver error inside the token
+      // check is not, and reporting it as one tells them their link is bad and
+      // sends them to request another that would not help. Same decision the
+      // template arm makes above, for the same audience. The detail stays in
+      // the log line -- an unauthenticated caller is told a state, not a cause.
+      if (!patientService.isConsentTokenRejection(error)) {
+        return res.status(503).json({
+          success: false,
+          error: 'Não foi possível validar o link de consentimento'
+        });
+      }
       return res.status(400).json({
         success: false,
         error: 'Link inválido ou expirado'
@@ -713,7 +763,14 @@ class ConsentController {
       const patientId = req.body.patientId || req.body.patientID || req.query.patientId || req.query.patientID;
       const token = req.body.token || req.query.token;
 
-      const result = await patientService.acceptConsentToken(db, String(patientId), String(token));
+      // #821: the manifestation itself -- the term the page showed and the
+      // participant's per-permission answers -- plus its origin (RF010 AC#4).
+      const result = await patientService.acceptConsentToken(db, String(patientId), String(token), {
+        consentTemplateId: req.body.consentTemplateId,
+        responses: req.body.responses,
+        ipAddress: req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress,
+        userAgent: req.headers['user-agent']
+      });
 
       return res.status(200).json({
         success: true,
@@ -727,6 +784,28 @@ class ConsentController {
       // the validate route; both leak, so both answer identically, which also
       // stops the PAIR of endpoints from distinguishing each other.
       logger.error('Erro ao aceitar consentimento:', error.message);
+      // #821: the link was good, the answers were not recordable as sent (none,
+      // not fitting the term, or the term was republished). Fixed body, same
+      // no-`message` rule as the 400: this route is unauthenticated.
+      if (patientService.isConsentManifestationRejection(error)) {
+        return res.status(422).json({
+          success: false,
+          error: 'Respostas do termo inválidas ou termo atualizado',
+          details: ['Respostas do termo inválidas ou termo atualizado']
+        });
+      }
+      // #1127: worse on this route than on validate. The write recording the
+      // acceptance can fail after a good token has been checked, and a 400
+      // then tells a participant who DID consent that their link was invalid
+      // -- so they believe they failed to consent when the system failed to
+      // record it. 503 is the honest answer and the one that asks them to
+      // retry rather than to get a new link.
+      if (!patientService.isConsentTokenRejection(error)) {
+        return res.status(503).json({
+          success: false,
+          error: 'Não foi possível registrar o consentimento'
+        });
+      }
       return res.status(400).json({
         success: false,
         error: 'Link inválido ou expirado'

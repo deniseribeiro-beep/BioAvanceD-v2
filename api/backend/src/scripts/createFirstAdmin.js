@@ -1,7 +1,7 @@
 const dotenv = require('dotenv');
 const bcrypt = require('bcryptjs');
 const { connectDB, closeConnection } = require('../database/mongo');
-const { validateStrength } = require('../services/password.service');
+const { validateStrength, resolvePasswordPolicy } = require('../services/password.service');
 const { generateAnonId } = require('../utils/userAnonymization');
 const { grantRoleForAccessType } = require('../services/rbac-assignment.service');
 const { seedRolesAndPermissions } = require('../services/rbac-catalog-seed.service');
@@ -33,7 +33,6 @@ async function createFirstAdmin(options = {}) {
   const env = options.env || process.env;
   const logger = options.logger || console;
   const config = requireBootstrapEnv(env);
-  validateStrength(config.password);
 
   const db = options.db || await connectDB();
   const shouldClose = !options.db;
@@ -50,6 +49,14 @@ async function createFirstAdmin(options = {}) {
       logger.info('[ADMIN_BOOTSTRAP] Users collection is not empty. No changes made.');
       return { status: 'skipped', reason: 'users_exist', usersCount };
     }
+
+    // #1257: the deployment's own policy, and only once an admin is about to
+    // be created. The bootstrap admin has no MFA, so the single-factor floor
+    // applies. Checked against the code default before this, ahead of the
+    // users check, so a stricter default would have stopped every existing
+    // deployment's bootstrap from re-running with the password it was made
+    // with.
+    validateStrength(config.password, await resolvePasswordPolicy(db));
 
     const now = new Date();
     const passwordHash = await bcrypt.hash(config.password, 10);
@@ -79,7 +86,7 @@ async function createFirstAdmin(options = {}) {
       lastLogin: null,
       createdAt: now,
       updatedAt: now,
-      lastPasswordChange: now,
+      passwordChangedAt: now,
       createdBy: 'BOOTSTRAP_SYSTEM',
       bootstrapSource: 'admin:create-first',
     };

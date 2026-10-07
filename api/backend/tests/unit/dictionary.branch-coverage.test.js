@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest';
 import { createRequire } from 'module';
 import express from 'express';
 import request from 'supertest';
@@ -63,6 +63,10 @@ function throwingSession() {
   };
 }
 
+// The release gate (#885) offers only phenotypes whose concept sits in an
+// active release. These cases test the fallback's normalization, so every
+// code resolves to an active, version-less concept: the gate keeps each
+// coding as built and adds no version.
 function buildFallbackDb({ disease = null, terminologyRows = [] } = {}) {
   return {
     collection: vi.fn((name) => {
@@ -72,10 +76,31 @@ function buildFallbackDb({ disease = null, terminologyRows = [] } = {}) {
       if (name === 'terminologies') {
         return { find: vi.fn(() => cursor(terminologyRows)) };
       }
+      if (name === 'terminologyConcepts') {
+        return {
+          find: vi.fn(({ systemUri, code }) => cursor([
+            { systemUri, code, conceptStatus: 'active', referenceDatasetReleaseId: 'rel-active' },
+          ])),
+        };
+      }
+      if (name === 'referenceDatasetReleases') {
+        return { findOne: vi.fn().mockResolvedValue({ referenceDatasetReleaseId: 'rel-active', releaseStatus: 'active' }) };
+      }
       return { find: vi.fn(() => cursor([])), findOne: vi.fn().mockResolvedValue(null) };
     }),
   };
 }
+
+// Each case re-requires only the route and its Neo4j module; the rest of the
+// route's module graph loads once, cold, and that load used to land inside
+// the first case's 5000 ms budget (825 ms alone, over 5000 ms under five
+// parallel workers, #1296). Pay it here, under its own timeout.
+beforeAll(() => {
+  loadRouteWithMocks({ session: fakeSession([]) });
+  vi.restoreAllMocks();
+  delete require.cache[neo4jModulePath];
+  delete require.cache[dictionaryRoutePath];
+}, 30000);
 
 describe('dictionary.js branch coverage - Neo4j success-path display fallbacks', () => {
   afterEach(() => {

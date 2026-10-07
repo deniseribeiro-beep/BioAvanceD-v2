@@ -15,7 +15,7 @@ function reloadBackfillService() {
 }
 
 /**
- * Real query-matching fake — exact-match on scalar fields, per build-loop's
+ * Real query-matching fake — exact-match on scalar fields, per this repo's
  * native-only "real backend" proof bar (this repo has no live-Mongo tier).
  */
 function createFakeCollection(name) {
@@ -246,6 +246,31 @@ describe('location-storage-backfill.service', () => {
 
     expect(ensureSpy).toHaveBeenCalledTimes(1);
     expect(ensureSpy.mock.calls[0][0]).toBe(db.collections.storageContainers);
+
+    ensureSpy.mockRestore();
+  });
+
+  // #1163: the same assertion for the storageBoxes helper, which #941's
+  // lookup-index work added beside the one above and which was unpinned --
+  // deleting its wiring line left the whole suite green, which is exactly
+  // the recurrence #1126 was closed to prevent.
+  it('#1163: ensures the storageBoxes indexes on the write path', async () => {
+    const ensureSpy = vi
+      .spyOn(storageIndexes, 'ensureStorageBoxIndexes')
+      .mockImplementation(() => {});
+    const { backfillLocationsToStorage: freshBackfill } = reloadBackfillService();
+
+    const db = createFakeDb({
+      locations: [
+        { locationID: 702, equipmentID: 5, block: 1, rack: 2, drawer: null, box: 3, wellPosition: 'A1' },
+      ],
+      samples: [],
+    });
+
+    await freshBackfill(db);
+
+    expect(ensureSpy).toHaveBeenCalledTimes(1);
+    expect(ensureSpy.mock.calls[0][0]).toBe(db.collections.storageBoxes);
 
     ensureSpy.mockRestore();
   });

@@ -8,4 +8,8 @@ RUN npm ci --no-audit --no-fund
 COPY playwright.config.ts ./
 COPY tests/e2e ./tests/e2e
 
-CMD ["npx", "playwright", "test"]
+# #1233: forward localhost:5173/:3000 to the compose services, so the bundle's
+# baked http://localhost:3000/api base resolves inside this container.
+CMD ["node", "tests/e2e/docker/loopback-forward.cjs", \
+     "5173=frontend-app-test:5173", "3000=backend-app-test:3000", \
+     "--", "npx", "playwright", "test"]

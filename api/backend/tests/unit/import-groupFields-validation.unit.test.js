@@ -3,7 +3,7 @@ import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 
-const { parseGroupFields } = require('../../src/utils/importGroupFields');
+const { parseGroupFields, groupFieldsErrorBody } = require('../../src/utils/importGroupFields');
 
 describe('parseGroupFields', () => {
   describe('empty input', () => {
@@ -111,6 +111,46 @@ describe('parseGroupFields', () => {
 
     it('accepts an empty object payload', () => {
       expect(parseGroupFields({})).toEqual({ ok: true, value: {} });
+    });
+  });
+});
+
+// #840: one builder shared by all four import 400 sites, so the body can
+// only drift by drifting here.
+describe('groupFieldsErrorBody', () => {
+  it('builds the malformed-reason body', () => {
+    expect(groupFieldsErrorBody('malformed')).toEqual({
+      success: false,
+      error: 'groupFields inválido',
+      reason: 'malformed',
+      message: 'groupFields deve ser um JSON válido',
+    });
+  });
+
+  it('builds the shape-reason body', () => {
+    expect(groupFieldsErrorBody('shape')).toEqual({
+      success: false,
+      error: 'groupFields inválido',
+      reason: 'shape',
+      message: 'groupFields deve ser um objeto JSON',
+    });
+  });
+
+  it('builds the value-reason body', () => {
+    expect(groupFieldsErrorBody('value')).toEqual({
+      success: false,
+      error: 'groupFields inválido',
+      reason: 'value',
+      message: 'groupFields aceita apenas chaves simples com valores texto, número ou booleano',
+    });
+  });
+
+  it('falls back to the malformed sentence for an unrecognized token, but keeps the token itself in "reason"', () => {
+    expect(groupFieldsErrorBody('bogus')).toEqual({
+      success: false,
+      error: 'groupFields inválido',
+      reason: 'bogus',
+      message: 'groupFields deve ser um JSON válido',
     });
   });
 });

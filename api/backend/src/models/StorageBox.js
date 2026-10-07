@@ -95,7 +95,11 @@ const StorageBoxSchema = new mongoose.Schema(
 
 // ==================== ÍNDICES ====================
 StorageBoxSchema.index({ parent_id: 1, status: 1 });
-StorageBoxSchema.index({ name: 1 });
+// #941: `index({ name: 1 })` deleted here, for the same measured reason as
+// StorageContainer.js -- never the winning plan, because the only
+// .sort({ name: 1 }) on this collection follows a parent_id filter. The
+// { parent_id, status } index above IS built now, natively, by
+// utils/storageIndexes.js#ensureStorageBoxIndexes.
 // #941: `index({ status: 1 })` deleted here. Not merely unbuilt -- unused:
 // every storageBoxes query in the tree filters on _id or parent_id, and the
 // only whole-collection reads sort on { name, boxID, _id }. Nothing anywhere

@@ -242,6 +242,47 @@ describe('#1083 field encryption-required gate', () => {
     });
   });
 
+  // #1168: the representative's document moved to ParticipantIdentity, whose
+  // encryption degrades to plaintext by design. The #1083 refusal must survive
+  // that move on the create path too, not only on update.
+  describe('PatientService.createPatient (create path, #1168)', () => {
+    const deceasedPatient = () => ({
+      participantId: '12345678',
+      patientName: 'Maria Silva',
+      birthDate: '01/01/1990',
+      sex: 'F',
+      consentTemplateId: '507f1f77bcf86cd799439011',
+      isDeceased: true,
+      representativeName: 'João Representante',
+      representativeEmail: 'joao@example.com',
+      representativeIdentityDocument: '529.982.247-25',
+      representativePhone: '11988887777'
+    });
+    const makeDb = () => makeFakeDb({
+      consent_templates: makeFakeCollection({ findOne: vi.fn().mockResolvedValue({ _id: '507f1f77bcf86cd799439011' }) })
+    });
+
+    it('THROWS instead of writing representativeIdentityDocument in plaintext when no key is configured', async () => {
+      withoutKey();
+
+      await expect(patientService.createPatient(makeDb(), deceasedPatient(), {
+        skipConsentNotification: true,
+        skipBiomarkerArtifacts: true
+      })).rejects.toThrow(/ENCRYPTION_KEY/);
+    });
+
+    // CONTROL: a participant with no representative is unaffected on a keyless stack.
+    it('does not throw on the encryption gate with no key when there is no representative', async () => {
+      withoutKey();
+      const { isDeceased, representativeName, representativeEmail, representativeIdentityDocument, representativePhone, ...alive } = deceasedPatient();
+
+      await expect(patientService.createPatient(makeDb(), alive, {
+        skipConsentNotification: true,
+        skipBiomarkerArtifacts: true
+      })).resolves.toMatchObject({ status: 'PENDING_CONSENT' });
+    });
+  });
+
   describe('BiomarkerObservationService.encryptObservationValue', () => {
     it('THROWS instead of leaving the observation value in plaintext when no key is configured', () => {
       withoutKey();

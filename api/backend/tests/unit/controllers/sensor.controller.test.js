@@ -516,7 +516,10 @@ describe('sensor.controller', () => {
       const notFound = new Error('organizationId org-x não encontrado');
       notFound.statusCode = 404;
       updateSensorMock.mockRejectedValue(notFound);
-      const req = createRequest({ params: { id: 's1' }, body: { organizationId: 'org-x' } });
+      // #1183: a scope is required once the body names organizationId --
+      // the route always supplies one. Global, so the move reaches the
+      // service and its 404 mapping is what this test observes.
+      const req = createRequest({ params: { id: 's1' }, body: { organizationId: 'org-x' }, organizationScope: { scope: 'global', organizationIds: [] } });
       const res = createResponse();
 
       await sensorController.update(req, res);

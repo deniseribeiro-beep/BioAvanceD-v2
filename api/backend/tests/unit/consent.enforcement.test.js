@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 
 // NOTE on mocking strategy: this repo's Vitest setup does not let vi.mock()
-// intercept CommonJS require() (see .claude/skills/testing-conventions/SKILL.md).
+// intercept CommonJS require().
 // consent.enforcement.js does plain `const consentValidator =
 // require('../../services/consent.validator')` at module scope, and that
 // module exports a singleton instance. Node's CJS module cache guarantees

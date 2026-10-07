@@ -117,9 +117,7 @@
     "getPermissionsError": "Erro ao buscar permissões",
     "logsExportMessage": "Exportação de logs realizada (formato: {format})",
     "updateConfigError": "Erro ao atualizar configurações de segurança",
-    "updateConfigSuccess": "Configurações de segurança atualizadas com sucesso",
-    "updatePermissionsError": "Erro ao atualizar permissões",
-    "updatePermissionsSuccess": "Permissões atualizadas com sucesso"
+    "updateConfigSuccess": "Configurações de segurança atualizadas com sucesso"
   },
   "users": {
     "deleteError": "Erro ao deletar usuário",

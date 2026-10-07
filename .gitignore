@@ -97,9 +97,10 @@ api/backend/uploads/quarantine/
 # storage/, so the ignore has to follow. The three siblings were never
 # ignored at all.
 #
-# Already-tracked files are unaffected by a gitignore rule, which matters
-# here: api/backend/storage/samples/<id>/files/ holds one committed PDF and
-# it stays tracked and versioned.
+# Already-tracked files are unaffected by a gitignore rule, which is why
+# api/backend/storage/samples/<id>/files/ still versioned a committed
+# personal PDF after this rule landed. #961 (Axis E E4) untracked it with
+# git rm --cached; per that decision it was NOT removed from history.
 api/backend/src/storage/
 api/backend/storage/
 
@@ -163,3 +164,8 @@ frontend/playwright/.auth/
 
 # Session handoffs (ephemeral cross-session notes, not durable conventions)
 .claude/handoffs/
+
+# A source directory named logs/ is code, not log output; the logs/ patterns
+# above would otherwise drop it from git add silently.
+!frontend/src/**/logs/
+!api/backend/src/**/logs/

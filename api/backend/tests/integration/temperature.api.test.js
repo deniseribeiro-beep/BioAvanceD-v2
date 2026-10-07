@@ -379,7 +379,11 @@ describe('#1062: an alert is stamped with the organization at write time', () =>
   it('checkPolicyAndAlert stamps the reading organization onto the alert', async () => {
     const insertOne = vi.fn().mockResolvedValue({ insertedId: 'alert-1' });
     const db = createDbMock({
-      policies: createCollectionMock({ findOne: vi.fn().mockResolvedValue({ policyId: 'P-1', minThreshold: -80, maxThreshold: -60 }) }),
+      // #1089: canonical collection name and canonical bound names. The
+      // key matters less than it looks -- createDbMock substring-matches,
+      // so 'policies' would still have resolved -- but the FIELD names are
+      // load-bearing: on the legacy ones both bounds read undefined.
+      temperaturePolicies: createCollectionMock({ findOne: vi.fn().mockResolvedValue({ policyId: 'P-1', minTemp: -80, maxTemp: -60 }) }),
       alerts: createCollectionMock({ insertOne }),
       temperature: createCollectionMock(),
     });
@@ -393,5 +397,9 @@ describe('#1062: an alert is stamped with the organization at write time', () =>
 
     expect(insertOne).toHaveBeenCalled();
     expect(insertOne.mock.calls[0][0].organizationId).toBe('org-a');
+    // #1089: without this the test passes on undefined bounds, because
+    // validateReading is false for those too. This is what makes the
+    // fixture above load-bearing rather than decorative.
+    expect(insertOne.mock.calls[0][0].threshold).toEqual({ min: -80, max: -60 });
   });
 });

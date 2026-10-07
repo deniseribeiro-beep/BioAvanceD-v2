@@ -8,7 +8,7 @@ const logService = require('../services/log.service');
 const logger = require('../utils/logger');
 const { sanitizePatientForLogs } = require('../utils/patientAnonymization');
 const { getCollection } = require('../utils/collectionResolver');
-const { parseGroupFields } = require('../utils/importGroupFields');
+const { parseGroupFields, groupFieldsErrorBody } = require('../utils/importGroupFields');
 const { parseImportMapping } = require('../utils/importMapping');
 const {
   SPECIMEN_TYPES,
@@ -416,11 +416,7 @@ class ImportLGPDController {
       const parsedGroupFields = parseGroupFields(req.body?.groupFields);
       if (!parsedGroupFields.ok) {
         importLGPDService.cleanupFile(file.path);
-        return res.status(400).json({
-          success: false,
-          error: 'groupFields inválido',
-          message: 'groupFields deve ser um JSON válido'
-        });
+        return res.status(400).json(groupFieldsErrorBody(parsedGroupFields.reason));
       }
       const groupFields = parsedGroupFields.value;
 
@@ -557,11 +553,7 @@ class ImportLGPDController {
       const parsedGroupFields = parseGroupFields(req.body?.groupFields);
       if (!parsedGroupFields.ok) {
         importLGPDService.cleanupFile(file.path);
-        return res.status(400).json({
-          success: false,
-          error: 'groupFields inválido',
-          message: 'groupFields deve ser um JSON válido'
-        });
+        return res.status(400).json(groupFieldsErrorBody(parsedGroupFields.reason));
       }
       const groupFields = parsedGroupFields.value;
 
@@ -784,11 +776,7 @@ class ImportLGPDController {
       const parsedGroupFields = parseGroupFields(req.body?.groupFields);
       if (!parsedGroupFields.ok) {
         importLGPDService.cleanupFile(file.path);
-        return res.status(400).json({
-          success: false,
-          error: 'groupFields inválido',
-          message: 'groupFields deve ser um JSON válido'
-        });
+        return res.status(400).json(groupFieldsErrorBody(parsedGroupFields.reason));
       }
       const groupFields = parsedGroupFields.value;
 

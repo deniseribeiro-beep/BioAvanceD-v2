@@ -7,6 +7,9 @@ export type SemanticCoding = {
   system: string;
   code: string;
   display: string;
+  // The active release's terminology version, which /dictionary/suggest
+  // stamps on every coding whose concept resolves active (#885).
+  version?: string;
 };
 
 export type SemanticCascadeState = {
@@ -34,7 +37,8 @@ function normalizeCoding(raw: any, fallbackSystem: string): SemanticCoding | nul
     return null;
   }
 
-  return { system, code, display };
+  const version = String(raw?.version || '').trim();
+  return version ? { system, code, display, version } : { system, code, display };
 }
 
 function isOrphaCoding(coding: SemanticCoding | null): coding is SemanticCoding {

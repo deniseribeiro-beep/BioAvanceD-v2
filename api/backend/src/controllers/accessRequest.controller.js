@@ -38,10 +38,11 @@ class AccessRequestController {
       });
     } catch (error) {
       logger.error('Erro ao registrar solicitação de acesso:', error.message);
-      return res.status(400).json({
+      return res.status(error.statusCode === 422 ? 422 : 400).json({
         success: false,
         error: 'Erro ao registrar solicitação de acesso',
         message: error.message,
+        details: error.details,
       });
     }
   }

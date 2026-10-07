@@ -41,9 +41,16 @@ class SensorService {
     try {
       const validation = SensorModel.validate(sensorData);
       if (!validation.isValid) {
-        throw new Error(validation.errors.join(', '));
+        // RNF018 (#1300): a validation failure answers 422; the caller's catch
+        // keeps every other error on its own status.
+        const validationError = new Error(validation.errors.join(', '));
+        validationError.statusCode = 422;
+
+        validationError.details = validation.errors;
+        throw validationError;
       }
       await assertOrganizationIdResolves(db, sensorData.organizationId);
+      await this.assertTemperaturePolicyExists(db, sensorData.temperaturePolicy);
 
       const sensorsCollection = db.collection('sensors');
       const sensor = SensorModel.create(sensorData);
@@ -54,7 +61,7 @@ class SensorService {
 
       let metadataLinked;
       if (sensor.macAddress) {
-        metadataLinked = await this.linkSensorMetadata(db, sensor.sensorId, sensor.macAddress, sensorData.storageContainer);
+        metadataLinked = await this.linkSensorMetadata(db, sensor.sensorId, sensor.macAddress, sensorData.storageContainer, sensorData.temperaturePolicy);
       }
 
       return {
@@ -71,7 +78,9 @@ class SensorService {
   /**
    * Vincula (upsert) o SensorMetadata correspondente ao Sensor recém-criado,
    * incluindo o StorageContainer (RF009 AC#3 - vincular cada leitura ao
-   * local de armazenamento). Sem macAddress não há SensorMetadata a criar
+   * local de armazenamento) e, desde #1140, a TemperaturePolicy que define
+   * os limites contra os quais as leituras do sensor são avaliadas.
+   * Sem macAddress não há SensorMetadata a criar
    * (campo obrigatório/único no schema), então o sensor básico segue criado
    * normalmente.
    *
@@ -79,7 +88,7 @@ class SensorService {
    * a falha (ex.: macAddress duplicado) sem reverter a criação do Sensor,
    * que já foi concluída neste ponto (#313).
    */
-  async linkSensorMetadata(db, sensorId, macAddress, storageContainerId) {
+  async linkSensorMetadata(db, sensorId, macAddress, storageContainerId, temperaturePolicyId) {
     try {
       const sensorMetadataCollection = db.collection('sensorMetadata');
       ensureSensorMetadataIndexes(sensorMetadataCollection);
@@ -90,11 +99,38 @@ class SensorService {
           : storageContainerId;
       }
 
+      // #1140: this field had no writer anywhere in src/ -- it was pinned
+      // null below and nothing ever set it, so the only real values in the
+      // tracked tree came from the e2e fixture helper. Both live consumers
+      // degraded silently: TelemetryMonitor's per-sensor minimumDuration
+      // (#688) fell back to the global threshold for every sensor, and
+      // iot.controller#resolveTemperaturePolicy gates its entire threshold
+      // comparison on the populated value, so machine ingest checked nothing.
+      //
+      // Bound at registration, the same shape and the same place be435d6c
+      // (#311) used for storageContainer above, on Dennis's call there.
+      if (temperaturePolicyId) {
+        set.temperaturePolicy = ObjectId.isValid(temperaturePolicyId)
+          ? new ObjectId(temperaturePolicyId)
+          : temperaturePolicyId;
+      }
+
+      // #1140: unlike storageContainer, this field ALSO has a null default
+      // below, and MongoDB rejects an update naming the same field in both
+      // $set and $setOnInsert (ConflictingUpdateOperators). So the default
+      // has to drop out exactly when a value is supplied -- copying the
+      // storageContainer pattern verbatim would have thrown on a real
+      // connection while passing against a mock.
+      const setOnInsert = { equipment: null, device: null, createdAt: new Date() };
+      if (!set.temperaturePolicy) {
+        setOnInsert.temperaturePolicy = null;
+      }
+
       await sensorMetadataCollection.updateOne(
         { sensorId },
         {
           $set: set,
-          $setOnInsert: { equipment: null, device: null, temperaturePolicy: null, createdAt: new Date() }
+          $setOnInsert: setOnInsert
         },
         { upsert: true }
       );
@@ -103,6 +139,75 @@ class SensorService {
       logger.error('Erro ao vincular SensorMetadata:', error.message);
       return false;
     }
+  }
+
+  /**
+   * #1179: a temperaturePolicy reference must name a real
+   * temperaturePolicies document. linkSensorMetadata used to bind any
+   * string, and a dangling one makes iot.controller#resolveTemperaturePolicy
+   * resolve null and check nothing -- the sensor looks governed and is not.
+   * Absent/empty is not checked here: it means "no policy".
+   */
+  async assertTemperaturePolicyExists(db, temperaturePolicyId) {
+    if (!temperaturePolicyId) return;
+    const filter = ObjectId.isValid(temperaturePolicyId)
+      ? { _id: new ObjectId(temperaturePolicyId) }
+      : { _id: temperaturePolicyId };
+    const policy = await db.collection('temperaturePolicies').findOne(filter, { projection: { _id: 1 } });
+    if (!policy) {
+      throw new Error(`temperaturePolicy não encontrada: ${temperaturePolicyId}`);
+    }
+  }
+
+  /**
+   * #1179: the storageContainer and temperaturePolicy bindings live on the
+   * sensor's SensorMetadata row, not on `sensors`, so updateSensor used to
+   * accept neither and the edit modal saved nothing for them. Returns the
+   * $set for that row, or null when the caller sent neither field. Throws
+   * BEFORE anything is written when the change cannot apply: no
+   * SensorMetadata row (the sensor was registered without a MAC address)
+   * or a policy that does not exist.
+   */
+  async prepareMetadataRebind(db, sensorKey, updateData) {
+    const has = (field) => Object.prototype.hasOwnProperty.call(updateData || {}, field);
+    const bindsSomething = has('storageContainer') || has('temperaturePolicy');
+    const changesMac = has('macAddress') && Boolean(updateData.macAddress);
+    if (!bindsSomething && !changesMac) return null;
+
+    const metadataCollection = db.collection('sensorMetadata');
+    const existing = await metadataCollection.findOne({ sensorId: sensorKey }, { projection: { _id: 1, macAddress: 1 } });
+    if (!existing) {
+      if (!bindsSomething) return null; // a MAC-only edit on a sensor with no row stays a sensors-only change
+      throw new Error('Sensor sem SensorMetadata (cadastrado sem macAddress): freezer e política não podem ser vinculados');
+    }
+
+    const toRef = (value) => {
+      if (!value) return null;
+      return ObjectId.isValid(value) ? new ObjectId(value) : value;
+    };
+    const set = { updatedAt: new Date() };
+    // #1179: the MAC is read off BOTH collections (equipment-sensor-quarantine's
+    // buildSensorLookup), so a MAC changed on `sensors` alone left the
+    // metadata row answering to the old one. The row carries a unique index
+    // (sensor_metadata_macaddress_unique_v2); a collision is refused here,
+    // before any write, rather than surfacing as an E11000 after the sensors
+    // document has already changed.
+    if (changesMac && updateData.macAddress !== existing.macAddress) {
+      const clash = await metadataCollection.findOne(
+        { macAddress: updateData.macAddress, sensorId: { $ne: sensorKey } },
+        { projection: { _id: 1 } }
+      );
+      if (clash) {
+        throw new Error(`macAddress já vinculado a outro sensor: ${updateData.macAddress}`);
+      }
+      set.macAddress = updateData.macAddress;
+    }
+    if (has('storageContainer')) set.storageContainer = toRef(updateData.storageContainer);
+    if (has('temperaturePolicy')) {
+      await this.assertTemperaturePolicyExists(db, updateData.temperaturePolicy);
+      set.temperaturePolicy = toRef(updateData.temperaturePolicy);
+    }
+    return set;
   }
 
   // #917: the `{ sensorID: sensorId }` branch is gone from all three lookups
@@ -163,8 +268,8 @@ class SensorService {
 
       // #645: no sort meant Mongo's natural (insertion) order decided which
       // page-1 sensors were visible -- once the collection passed the
-      // default limit of 50 (e2e fixtures accumulate across sessions, see
-      // docker-workflow's local-env), a freshly created sensor silently
+      // default limit of 50 (e2e fixtures accumulate across sessions in the
+      // test stack's named volumes), a freshly created sensor silently
       // never appeared in the default list/UI at all, read from a real
       // Playwright run as a "flaky locator timeout" (#645) rather than the
       // deterministic pagination bug it actually is. Newest-first makes the
@@ -177,6 +282,22 @@ class SensorService {
         .toArray();
 
       const total = await sensorsCollection.countDocuments(query);
+
+      // #1179: the edit form needs each sensor's current freezer and policy,
+      // which live on SensorMetadata. One batched read for the page.
+      const sensorIds = sensors.map((s) => s.sensorId).filter(Boolean);
+      if (sensorIds.length > 0) {
+        const metadataRows = await db.collection('sensorMetadata')
+          .find({ sensorId: { $in: sensorIds } }, { projection: { sensorId: 1, storageContainer: 1, temperaturePolicy: 1 } })
+          .toArray();
+        const bySensorId = new Map(metadataRows.map((m) => [m.sensorId, m]));
+        for (const sensor of sensors) {
+          const metadata = bySensorId.get(sensor.sensorId);
+          if (!metadata) continue;
+          if (metadata.storageContainer) sensor.storageContainer = String(metadata.storageContainer);
+          if (metadata.temperaturePolicy) sensor.temperaturePolicy = String(metadata.temperaturePolicy);
+        }
+      }
 
       return { sensors, total, limit, skip };
     } catch (error) {
@@ -234,6 +355,11 @@ class SensorService {
         throw new Error('Sensor não encontrado');
       }
 
+      // #1179: prepared (and refused, if it cannot apply) before the sensors
+      // write below, so a bad binding never leaves a half-applied edit.
+      const metadataKey = existingSensor.sensorId || sensorId;
+      const metadataSet = await this.prepareMetadataRebind(db, metadataKey, updateData);
+
       normalizedUpdateData.updatedAt = new Date();
 
       const mergedStatus =
@@ -289,6 +415,10 @@ class SensorService {
 
       if (result.matchedCount === 0) {
         throw new Error('Sensor não encontrado');
+      }
+
+      if (metadataSet) {
+        await db.collection('sensorMetadata').updateOne({ sensorId: metadataKey }, { $set: metadataSet });
       }
 
       if (quarantineResult && quarantineResult.triggered) {

@@ -11,9 +11,8 @@ export interface Patient {
   // only ever present via an authorized re-identification response.
   patientName?: string;
 
-  // Contato para envio do TCLE
-  email?: string;
-  phone?: string;
+  // #1166: the participant's contact (email/phone) is ParticipantIdentity
+  // data (dict-02 P1X-0352/P1X-0353) and is never returned on Patient.
 
   // 3. DATA_NASCIMENTO - Caractere - Data de nascimento (formato DD/MM/YYYY)
   // RF005/RNF007 (#575): civil identity — segregated to ParticipantIdentity,
@@ -34,10 +33,8 @@ export interface Patient {
   unitAcronym?: string;
 
   isDeceased?: boolean;
-  representativeName?: string;
-  representativeEmail?: string;
-  representativeIdentityDocument?: string;
-  representativePhone?: string;
+  // #1168: the legal representative is ParticipantIdentity data (dict-02
+  // P1X-0357..0360) and is never returned on Patient.
   
   // 8. SEXO - Caractere - Sexo do paciente (Masculino/Feminino)
   sex: string; // 'Masculino' | 'Feminino'
@@ -245,7 +242,9 @@ export interface SpecimenPreanalyticsProfile {
 export interface Sample {
   _id?: string; // MongoDB ID
   participantId: string;
-  sampleID?: number | null; // ID da amostra (pode ser null, usar _id como fallback)
+  // #1216: the canonical business id the API names every specimen by. The
+  // legacy sampleID field is prohibited on the wire and no writer sets it.
+  specimenId?: string;
   sampleType: string;
   sampleOrigin?: string;
   extractionProtocol?: string;
@@ -535,6 +534,7 @@ export const REPORT_TEMPLATE_HANDLER_KEYS = [
   'tissueOriginHistory',
   'extracellularNetwork',
   'accessLogs',
+  'auditEvents',
 ] as const;
 
 export type ReportTemplateHandlerKey = typeof REPORT_TEMPLATE_HANDLER_KEYS[number];
@@ -584,6 +584,12 @@ export interface User {
   password?: string; // Não deve ser retornado em respostas GET
   accessType?: number; // Mantido para compatibilidade (1: Básico, 2: Intermediário, 3: Completo)
   roleName?: 'Coordenador' | 'Técnico' | 'Administrador' | 'Usuário Externo'; // Role conforme diagrama de caso de uso
+  // #1239: the backend's audit-trail rule (administrator or the additive
+  // auditor role), sent on login and verify. roleName cannot express it.
+  isAuditReader?: boolean;
+  // #1240: whether this user holds the additive auditor role. Read on the
+  // user list and item; written through PUT /api/users/:id only.
+  auditorRole?: boolean;
   accessIDs?: number[]; // IDs dos Access permitidos (reportID da tabela Access)
   allowedReports?: string[]; // Tipos de relatórios permitidos (preenchido pelo backend)
   status?: string;
@@ -721,7 +727,10 @@ export interface Sensor {
   nextCalibration?: Date | string | null;
   calibrationCertificate?: string;
   locationID?: number; // Padronizado para Number (consistente com Sample e Location)
-  policyID?: number; // Padronizado para Number (consistente com Policy)
+  // #1145: _id da TemperaturePolicy, vinculado ao SensorMetadata no cadastro
+  // (é o que a telemetria lê). Substitui policyID, que gravava Sensor.policyId
+  // e não era lido por nenhum resolvedor. Exige macAddress.
+  temperaturePolicy?: string;
   macAddress?: string; // Opcional: presente => backend vincula um SensorMetadata (ver #311)
   storageContainer?: string; // ID do StorageContainer (freezer) vinculado ao SensorMetadata
   organizationId?: string | null; // Organization.organizationId (UUID) -- sem backfill, null = não escopado/legado (#634)
@@ -730,17 +739,23 @@ export interface Sensor {
 }
 
 export interface Policy {
-  _id?: string; // MongoDB ID
-  policyID: number;
-  policyName?: string;
-  minThreshold: number;
-  maxThreshold: number;
-  targetTemperature: number;
+  _id?: string; // MongoDB ID -- the id every policy route keys on (#1178)
+  // #1178: legacy numeric id. The API returns it as `policyId` (lowercase d)
+  // and it is null for any policy created since #1089, so nothing keys on it.
+  policyId?: number | null;
+  // #1139: the API's field names are the stored temperaturePolicies document's
+  // (dict-02 ThresholdProfile), with no translation in between.
+  name?: string; // dict-02 P1X-0106 profileName
+  minTemp: number; // P1X-0108 lowerLimit
+  maxTemp: number; // P1X-0109 upperLimit
   hysteresis?: number;
-  alertDelayMin?: number;
+  minimumDuration?: number | null; // P1X-0110, minutes before an excursion opens
   temperatureUnit?: string;
-  validFrom: Date | string;
-  validTo: Date | string;
+  effectivePeriod: {
+    // P1X-0111
+    start: Date | string;
+    end?: Date | string | null;
+  };
   createdAt?: Date | string;
   updatedAt?: Date | string;
 }

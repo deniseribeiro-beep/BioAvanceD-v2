@@ -17,8 +17,8 @@
   "artifacts": [
     {
       "file": "BioAvanceD_Modelo_Persistencia_Poliglota_v2.0.0.docx",
-      "sha256": "c538484c203daa386ed3ce117bfedf38663c0e59241826c3768f18bdf1263c66",
-      "bytes": 62351
+      "sha256": "d060dcb18900775a959b6894ba58ebb8120e548be850a5c57fef35e026fe52a5",
+      "bytes": 82283
     },
     {
       "file": "BioAvanceD_Pacote_Exemplos_JSON_Persistencia_Poliglota_v2.0.0.zip",
@@ -27,8 +27,8 @@
     },
     {
       "file": "BioAvanceD_Protocolo_Avaliacao_Ex_Ante_Identificacao_Fisica_v1.0.0.docx",
-      "sha256": "db8ba0e1810fda4292ef18b80b21bdf774dff705df8ec16b3bbda16477d6bad5",
-      "bytes": 47587
+      "sha256": "6ce782d763976a8ec4a106e6a212d13b2e838a0bd5b19db146418472a7c787f1",
+      "bytes": 46050
     },
     {
       "file": "BioAvanceD_Exemplos_Registros_Sinteticos_v2.0.0.json",
@@ -37,8 +37,8 @@
     },
     {
       "file": "BioAvanceD_Requisitos_Funcionais_Nao_Funcionais_v4.0.0.docx",
-      "sha256": "dbf2dfd99f53b34bb11171627d815fe80764afa4182ac4d84c73d97b7df694fd",
-      "bytes": 73529
+      "sha256": "305004fe176518e781875f5d99b93ca8c8084517b2f8fc416a8b3dcf63dda614",
+      "bytes": 94791
     },
     {
       "file": "BioAvanceD_Relatorio_Consistencia_Modelo_v2.0.0.docx",
@@ -47,18 +47,18 @@
     },
     {
       "file": "BioAvanceD_Plano_Integrado_Foundation_Data_Pipeline_v2.0.0.docx",
-      "sha256": "bc7fe633c3b5dbb5132bf408aa1450a32cb4d28279408b5ae4182dc100fe904d",
-      "bytes": 46550
+      "sha256": "139b678f60125ff11836c304cdb80a2717d64db837e6c39d3fc579e438a43f39",
+      "bytes": 45200
     },
     {
       "file": "BioAvanceD_Matriz_Rastreabilidade_Modelo_v2.0.0.xlsx",
-      "sha256": "100066ed3098915731083cdb7be9e8ffa97049705b8eee3a8c07bf4da9d8cafd",
-      "bytes": 97867
+      "sha256": "db70cdbe0607bb59a948b8c009fc944163e47551e9a0a696e3e817bf9f114656",
+      "bytes": 115355
     },
     {
       "file": "BioAvanceD_Dicionario_Dados_Consolidado_v2.0.0.xlsx",
-      "sha256": "b415ee52a24279975510a018ad1fdfa99220e891a41c5c26c025387d21887434",
-      "bytes": 397121
+      "sha256": "b25535b757b0e30283b2b8781a60f82c8cb176a2d2e736fe6986ecfb7380721d",
+      "bytes": 407401
     }
   ]
 }

@@ -53,6 +53,7 @@ const getNotificationService = () => require('../services/notification.service')
 let worker = null;
 let notificationWorker = null;
 let db = null;
+let logLevelPoll = null;
 
 /**
  * Inicializa worker
@@ -74,12 +75,21 @@ async function initWorker() {
     // Conecta ao banco
     db = await connectDB();
 
-    // #826: connectDB() abre apenas a conexão do driver nativo. Os modelos
-    // Mongoose alcançados por este worker (StagingImport, via
-    // batch-validation-engine) precisam da conexão do Mongoose -- sem ela o
-    // Mongoose enfileira cada operação e a rejeita após 10s, o job falha,
-    // retenta indefinidamente e o documento nunca sai de `status: queued`.
+    // #826: connectDB() abre apenas a conexão do driver nativo. Um modelo
+    // Mongoose sem conexão enfileira cada operação e a rejeita após 10s, em
+    // silêncio. #830 levou StagingImport para o driver nativo; o único modelo
+    // Mongoose que este worker ainda alcança é o registrado em
+    // models/Sample.js, que nada consulta. A conexão fica enquanto esse
+    // registro existir -- worker-mongoose-connection.arch.test.js exige isso.
     await connectMongoDB();
+
+    // #1260: the worker logs through the same logger as the API, so it
+    // follows security_config's logging.level the same way server.js does:
+    // once now, then on a poll. syncLogLevel never throws.
+    const securityService = require('../services/security.service');
+    await securityService.syncLogLevel(db);
+    logLevelPoll = setInterval(() => securityService.syncLogLevel(db), 60 * 1000);
+    logLevelPoll.unref();
 
     // Inicializa Redis (usa instância comum)
     const connection = initRedis();
@@ -451,7 +461,7 @@ async function initWorker() {
           }
 
           const notificationService = getNotificationService();
-          return notificationService.processConsentNotificationJob(job.data);
+          return notificationService.processConsentNotificationJob(job.data, db);
         },
         {
           connection,
@@ -511,6 +521,11 @@ async function updateJobStatus(db, jobID, status, progress, additionalData = {})
  * Fecha worker
  */
 async function closeWorker() {
+  if (logLevelPoll) {
+    clearInterval(logLevelPoll);
+    logLevelPoll = null;
+  }
+
   if (worker) {
     await worker.close();
     worker = null;

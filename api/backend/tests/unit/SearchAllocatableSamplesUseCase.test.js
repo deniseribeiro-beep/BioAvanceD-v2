@@ -29,7 +29,8 @@ describe('SearchAllocatableSamplesUseCase', () => {
 
     expect(result).toBe(enriched);
     expect(storageRepository.searchAllocatableSampleCandidates).toHaveBeenCalledWith({
-      query: 'abc'
+      query: 'abc',
+      scopeFilter: {}
     });
     expect(patientConsentReadRepository.enrichSamplesWithConsent).toHaveBeenCalledWith(
       candidates
@@ -51,7 +52,8 @@ describe('SearchAllocatableSamplesUseCase', () => {
     await useCase.execute(undefined);
 
     expect(storageRepository.searchAllocatableSampleCandidates).toHaveBeenCalledWith({
-      query: ''
+      query: '',
+      scopeFilter: {}
     });
   });
 
@@ -64,7 +66,8 @@ describe('SearchAllocatableSamplesUseCase', () => {
     await useCase.execute({});
 
     expect(storageRepository.searchAllocatableSampleCandidates).toHaveBeenCalledWith({
-      query: ''
+      query: '',
+      scopeFilter: {}
     });
   });
 });

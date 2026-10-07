@@ -63,7 +63,7 @@ describe('scripts/seedDiseaseValidationRules', () => {
     expect(operations).toHaveLength(3);
 
     const gaucher = operations.find(
-      (op) => op.updateOne.filter.orpha_code === '79258',
+      (op) => op.updateOne.filter.orpha_code === '355',
     );
     expect(gaucher.updateOne.update.$set).toMatchObject({
       name: 'Doenca de Gaucher',
@@ -95,6 +95,29 @@ describe('scripts/seedDiseaseValidationRules', () => {
       { name: 'disease_active_idx' },
     );
     expect(logSpy).toHaveBeenCalledWith('DiseaseDictionary seeded: 3 operations');
+  });
+
+  // #1204: each explicit rule sits under the ORPHA code of the disease it
+  // names, per Orphanet (api.orphacode.org, terms of 2026-07-02). 79258 is
+  // glycogen storage disease Ia and 58 is Alexander disease; keyed there,
+  // the rules blocked those diseases' samples on unrelated biomarkers.
+  it('keys each explicit rule to the ORPHA code of the disease it names (#1204)', async () => {
+    const { db, bulkWrite } = mockDb({ orphanetRows: [] });
+    const connectDB = vi.fn().mockResolvedValue(db);
+    const closeConnection = vi.fn().mockResolvedValue(undefined);
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    loadScript({ connectDB, closeConnection });
+
+    await vi.waitFor(() => expect(closeConnection).toHaveBeenCalledTimes(1));
+
+    const nameByCode = Object.fromEntries(bulkWrite.mock.calls[0][0]
+      .map((op) => [op.updateOne.filter.orpha_code, op.updateOne.update.$set.name]));
+    expect(nameByCode).toEqual({
+      324: 'Doenca lisossomica',
+      355: 'Doenca de Gaucher',
+      98896: 'Distrofia Muscular de Duchenne',
+    });
   });
 
   it('skips an orphanet row whose code normalizes to empty', async () => {
@@ -232,8 +255,8 @@ describe('scripts/seedDiseaseValidationRules', () => {
       miabis: { requireTreatmentStatus: true },
       biomarkers: { required: [], recommended: [] },
       pharmacology: {
-        required: ['treatment_status'],
-        recommended: ['medication_name', 'last_dose_date'],
+        required: ['treatmentStatus'],
+        recommended: ['medicationName', 'lastDoseDate'],
         treatmentStatuses: ['NAIVE', 'TREATED', 'WASHOUT'],
       },
     });
@@ -285,5 +308,42 @@ describe('scripts/seedDiseaseValidationRules', () => {
     } finally {
       process.exitCode = originalExitCode;
     }
+  });
+
+  // The seeded validation_requirements are read by SampleGraphValidator, which
+  // looks each pharmacology.required entry up as a literal key on
+  // sample.pharmacologyData, and samples store camelCase (treatmentStatus).
+  // A seeded disease must accept the same complete sample the validator's own
+  // defaults accept.
+  it('seeds pharmacology requirements the validator can satisfy from a stored sample', async () => {
+    const SampleGraphValidator = require('../../src/services/SampleGraphValidator');
+    const { db, bulkWrite } = mockDb({
+      orphanetRows: [{ code: '999', name: 'Default-rule disease' }],
+    });
+    const connectDB = vi.fn().mockResolvedValue(db);
+    const closeConnection = vi.fn().mockResolvedValue(undefined);
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    loadScript({ connectDB, closeConnection });
+    await vi.waitFor(() => expect(closeConnection).toHaveBeenCalledTimes(1));
+
+    const seeded = (orpha) => bulkWrite.mock.calls[0][0]
+      .find((op) => op.updateOne.filter.orpha_code === orpha)
+      .updateOne.update.$set.validation_requirements;
+    const sample = (orphaCode, biomarkerValues = {}) => ({
+      clinicalData: { orphaCode, cid: 'E75.2', biomarkerValues },
+      pharmacologyData: {
+        treatmentStatus: 'NAIVE',
+        medicationName: 'none',
+        lastDoseDate: '2026-01-01',
+      },
+    });
+    const validator = new SampleGraphValidator({});
+
+    // Control: the validator's own defaults accept this sample.
+    expect(validator._validateClinical(sample('999')).valid).toBe(true);
+
+    expect(validator._validateClinical(sample('999'), seeded('999'))).toMatchObject({ valid: true });
+    expect(validator._validateClinical(sample('98896', { CK_TOTAL: 1200 }), seeded('98896'))).toMatchObject({ valid: true });
   });
 });

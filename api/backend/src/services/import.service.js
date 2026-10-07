@@ -10,16 +10,22 @@ const TemperatureModel = require('../models/Temperature');
 const fhirValidator = require('./fhir-validator.service');
 const notificationService = require('./notification.service');
 const { getCollection } = require('../utils/collectionResolver');
-const { omitLegacyIdentityFields } = require('../utils/legacyPatientIdentityFields');
+const {
+  omitLegacyIdentityFields,
+  PARTICIPANT_IDENTITY_ONLY_FIELDS,
+  omitParticipantIdentityOnlyFields
+} = require('../utils/legacyPatientIdentityFields');
 const ParticipantIdentityModel = require('../models/ParticipantIdentity');
 const participantIdentityService = require('./participantIdentity.service');
 const SampleGraphValidator = require('./SampleGraphValidator');
 const qualityDomain = require('./quality-domain.service');
 const qualityCompatibility = require('./quality-compatibility.service');
 const rcsAssessmentService = require('./rcs-assessment.service');
+const { recordSpecimenProjection } = require('./graphProjection.service');
 const specimenPreanalyticsService = require('./specimen-preanalytics.service');
 const { generateUniqueSpecimenId } = require('../utils/sampleIDGenerator');
 const { generateUniqueParticipantId } = require('../utils/patientAnonymization');
+const { hashConsentToken } = require('../utils/consentTokenHash');
 
 /**
  * Service de Importação de Dados
@@ -135,6 +141,7 @@ class ImportService {
       let headerRow = null;
 
       const stream = fs.createReadStream(file.path)
+        .on('error', reject)
         .pipe(csv())
         .on('headers', (headers) => {
           headerRow = headers;
@@ -318,17 +325,20 @@ class ImportService {
         if (patientData.identityDocument) {
           const identityCollection = getCollection(db, 'participantIdentities');
           // RF005/RNF007 (#574): identityDocumentHash lets this dedup match
-          // without querying the plaintext field once it's eventually
-          // dropped; the plaintext branch stays as a fallback for records
-          // written before the hash sibling existed.
+          // without querying the plaintext field.
           // #1099: match under EVERY registered key, not just the active
           // one -- a hash written before a rotation is otherwise
           // unmatchable, and a missed dedup here creates a DUPLICATE
           // participant rather than raising an error.
+          // #1104: identityDocument is ciphertext-only, so a plaintext arm
+          // beside the hash would match nothing and make this $or
+          // unindexable. The plaintext is queried only on a keyless stack
+          // (#1083), the one case that still writes it -- canonicalized,
+          // because every writer stores the digits-only form (#1109).
           const identityDocumentHashes = participantIdentityService.computeBlindIndexCandidates('identityDocument', patientData.identityDocument);
           const orConditions = identityDocumentHashes.length
-            ? [{ identityDocumentHash: { $in: identityDocumentHashes } }, { identityDocument: patientData.identityDocument }]
-            : [{ identityDocument: patientData.identityDocument }];
+            ? [{ identityDocumentHash: { $in: identityDocumentHashes } }]
+            : [{ identityDocument: participantIdentityService.normalizeIdentityDocument(patientData.identityDocument) }];
           const existingIdentity = await identityCollection.findOne({ $or: orConditions });
           if (existingIdentity) {
             existing = await patientsCollection.findOne({ participantId: existingIdentity.participantId });
@@ -348,7 +358,7 @@ class ImportService {
           // Novo cadastro
           const consentMetadata = notificationService.buildConsentMetadata();
           patientData.status = 'PENDING_CONSENT';
-          patientData.consentToken = consentMetadata.token;
+          patientData.consentTokenHash = hashConsentToken(consentMetadata.token);
           patientData.consentTokenCreatedAt = consentMetadata.createdAt;
           patientData.consentTokenExpiresAt = consentMetadata.expiresAt;
           const patient = PatientModel.create(omitLegacyIdentityFields(patientData));
@@ -362,7 +372,10 @@ class ImportService {
           const identityDoc = participantIdentityService.encryptIdentityFields(
             ParticipantIdentityModel.create({ ...patientData, participantId: patient.participantId })
           );
-          await identityCollection.insertOne(identityDoc);
+          // #1166 slice 3: a refused identity insert must not leave the Patient behind.
+          await participantIdentityService.insertIdentityOrRollbackPatient(
+            identityCollection, identityDoc, patientsCollection, insertResult.insertedId
+          );
 
           if (patient.participantId) {
             try {
@@ -390,7 +403,12 @@ class ImportService {
           // never land on Patient — `merged` (used below, un-stripped, for
           // the ParticipantIdentity sync) may still carry them from
           // `existing` (pre-#575 data) even when `patientData` doesn't.
-          await patientsCollection.updateOne({ _id: existing._id }, { $set: omitLegacyIdentityFields(merged) });
+          // #1166 slice 4 / #1168: likewise the contact and the
+          // representative, which go to the identity sync below and nowhere else.
+          await patientsCollection.updateOne(
+            { _id: existing._id },
+            { $set: omitParticipantIdentityOnlyFields(omitLegacyIdentityFields(merged)) }
+          );
 
           // RF005/RNF007 (#561/#563): keep ParticipantIdentity in sync on
           // update, same as patient.service.js#updatePatient — an import
@@ -399,9 +417,17 @@ class ImportService {
           if (merged.participantId && (
             Object.prototype.hasOwnProperty.call(merged, 'patientName') ||
             Object.prototype.hasOwnProperty.call(merged, 'birthDate') ||
-            Object.prototype.hasOwnProperty.call(merged, 'identityDocument')
+            Object.prototype.hasOwnProperty.call(merged, 'identityDocument') ||
+            PARTICIPANT_IDENTITY_ONLY_FIELDS.some((field) => merged[field])
           )) {
             const identityUpdate = { updatedAt: merged.updatedAt };
+            for (const field of PARTICIPANT_IDENTITY_ONLY_FIELDS) {
+              if (merged[field]) {
+                identityUpdate[field] = field === 'email' || field === 'representativeEmail'
+                  ? String(merged[field]).trim().toLowerCase()
+                  : merged[field];
+              }
+            }
             if (Object.prototype.hasOwnProperty.call(merged, 'patientName')) identityUpdate.patientName = merged.patientName;
             if (Object.prototype.hasOwnProperty.call(merged, 'birthDate')) identityUpdate.birthDate = merged.birthDate ? new Date(merged.birthDate) : null;
             if (Object.prototype.hasOwnProperty.call(merged, 'identityDocument')) identityUpdate.identityDocument = merged.identityDocument;
@@ -460,6 +486,7 @@ class ImportService {
         const rows = [];
         await new Promise((resolve, reject) => {
           fs.createReadStream(file.path)
+            .on('error', reject)
             .pipe(csv())
             .on('data', (row) => rows.push(row))
             .on('end', resolve)
@@ -543,6 +570,11 @@ class ImportService {
 
             const sample = SampleModel.create(sampleData);
             const insertResult = await samplesCollection.insertOne(sample);
+            await recordSpecimenProjection(db, {
+              specimenId: String(insertResult.insertedId),
+              participantId: sample.participantId,
+              sourceService: 'import.service'
+            });
             if (sample.rcsEvaluation) {
               try {
                 const assessment = await rcsAssessmentService.recordAssessment(db, sample.specimenId, sample.rcsEvaluation);
@@ -608,6 +640,7 @@ class ImportService {
           : await new Promise((resolve, reject) => {
             const dataRows = [];
             fs.createReadStream(file.path)
+              .on('error', reject)
               .pipe(csv())
               .on('data', (row) => dataRows.push(row))
               .on('end', () => resolve(dataRows))
@@ -645,6 +678,11 @@ class ImportService {
 
             const sample = SampleModel.create(sampleData);
             const insertResult = await samplesCollection.insertOne(sample);
+            await recordSpecimenProjection(db, {
+              specimenId: String(insertResult.insertedId),
+              participantId: sample.participantId,
+              sourceService: 'import.service'
+            });
             if (sample.rcsEvaluation) {
               try {
                 const assessment = await rcsAssessmentService.recordAssessment(db, sample.specimenId, sample.rcsEvaluation);
@@ -724,6 +762,7 @@ class ImportService {
       const rows = [];
       await new Promise((resolve, reject) => {
         fs.createReadStream(file.path)
+          .on('error', reject)
           .pipe(csv())
           .on('data', (row) => rows.push(row))
           .on('end', resolve)

@@ -242,14 +242,16 @@ const RETIRED_KEY_EXEMPT = new Set([
   'interface/routes/result.routes.js:177',
   // :440 -> :451 when #1082's destination scope check added 11 lines to
   // POST /upload, above POST /'s own legacy-resolution tier.
-  'interface/routes/result.routes.js:451',
+  'interface/routes/result.routes.js:452',
   // :522 -> :543 when #875's allowlist rework added ~21 lines above the
   // link-sample legacy-resolution tier (the entry itself is #628's
   // deliberate _id -> specimenId -> legacy sampleID fallback; #804 owns
   // sampleID's eventual retirement).
   // :543 -> :599 (#875 era) -> :652 when #1082 added the source scope
   // checks to PUT /:id and link-sample above this site.
-  'interface/routes/result.routes.js:652',
+  // :451/:652 -> :452/:654 when #1299 added `details` to the 422 bodies
+  // above each site.
+  'interface/routes/result.routes.js:654',
   'services/result-specimenid-backfill.service.js:56',
   // #857: _id -> specimenId -> legacy sampleID/sampleId/barcode.
   // :619/:696/:789 -> :683/:760/:853, a uniform +64 shift, when #789 added
@@ -258,9 +260,19 @@ const RETIRED_KEY_EXEMPT = new Set([
   // are unchanged -- same reason the result.routes.js entry above moved
   // under #875. Line-keyed exemptions are load-bearing bookkeeping: this
   // guard went red on the shift alone, which is the intended behaviour.
-  'interface/routes/sample.routes.js:683',
-  'interface/routes/sample.routes.js:760',
-  'interface/routes/sample.routes.js:853',
+  // :683/:760/:853 -> :691/:768/:861, a uniform +8, when #1185 added
+  // requireOrganizationScope and the collectionSite stamp to POST /.
+  // :691/:768/:861 -> :695/:772/:865, a uniform +4, when #1216 added
+  // specimenId to POST /'s response and audit payload.
+  // :695/:772/:865 -> :697/:774/:867, a uniform +2, when #1266 added the
+  // export-gate require at the top of the file.
+  // :697/:774/:867 -> :700/:777/:870, a uniform +3, when #1299 added
+  // `details` to the 422 bodies above all three sites.
+  // :777/:870 -> :779/:873, +2 then +3, when #1334 commented the SVG and
+  // ZPL label routes' specimenId read; :700 sits above both.
+  'interface/routes/sample.routes.js:700',
+  'interface/routes/sample.routes.js:779',
+  'interface/routes/sample.routes.js:873',
   'services/analysisValidation.service.js:29'
 ]);
 

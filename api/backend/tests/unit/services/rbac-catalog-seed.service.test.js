@@ -7,7 +7,7 @@ const { seedRolesAndPermissions, PERMISSION_CATALOG } = require('../../../src/se
 /**
  * Real query-matching fake (findOne exact-match, insertOne), not a canned
  * stub — proves the seed's upsert-by-business-key idempotency actually
- * depends on querying by roleCode/permissionCode, per build-loop's
+ * depends on querying by roleCode/permissionCode, per this repo's
  * native-only "real backend" proof bar.
  */
 function createFakeCollection() {
@@ -117,15 +117,66 @@ describe('rbac-catalog-seed.service', () => {
     const permissionIdByCode = Object.fromEntries(first.permissions.map((p) => [p.permissionCode, p.permissionId]));
     const coordinatorDoc = db.collections.roles.docs.find((r) => r.roleCode === 'coordinator');
     const staleRoleId = coordinatorDoc.roleId;
-    coordinatorDoc.permissionIds = coordinatorDoc.permissionIds.filter((id) => id !== permissionIdByCode.manageAccessRequests);
-    expect(coordinatorDoc.permissionIds).not.toContain(permissionIdByCode.manageAccessRequests);
+    // #662: was manageAccessRequests, which the Coordenador no longer holds.
+    coordinatorDoc.permissionIds = coordinatorDoc.permissionIds.filter((id) => id !== permissionIdByCode.manageReportTemplates);
+    expect(coordinatorDoc.permissionIds).not.toContain(permissionIdByCode.manageReportTemplates);
 
     const second = await seedRolesAndPermissions(db);
 
     const coordinator = second.roles.find((r) => r.roleCode === 'coordinator');
-    expect(coordinator.permissionIds).toContain(permissionIdByCode.manageAccessRequests);
+    expect(coordinator.permissionIds).toContain(permissionIdByCode.manageReportTemplates);
     expect(coordinator.roleId).toBe(staleRoleId);
     expect(db.collections.roles.docs).toHaveLength(5);
+  });
+
+  // #662 (Denise, 2026-09-25): manageAccessRequests is Administrador-only
+  // until a real multi-approver committee workflow exists.
+  it('#662: seeds manageAccessRequests on the Administrador only, not the Coordenador', async () => {
+    const db = createFakeDb();
+    const { roles, permissions } = await seedRolesAndPermissions(db);
+    const manageAccessRequestsId = permissions.find((p) => p.permissionCode === 'manageAccessRequests').permissionId;
+
+    const holders = roles.filter((r) => r.permissionIds.includes(manageAccessRequestsId)).map((r) => r.roleCode);
+    expect(holders).toEqual(['administrator']);
+  });
+
+  // #1008 (Denise, 2026-09-25): RF003 makes role assignment the
+  // Administrador's. The Coordenador keeps createUser but not assignRole.
+  it('#1008: seeds assignRole on the Administrador only, while the Coordenador keeps createUser', async () => {
+    const db = createFakeDb();
+    const { roles, permissions } = await seedRolesAndPermissions(db);
+    const idOf = (code) => permissions.find((p) => p.permissionCode === code).permissionId;
+
+    expect(roles.filter((r) => r.permissionIds.includes(idOf('assignRole'))).map((r) => r.roleCode)).toEqual(['administrator']);
+    expect(roles.find((r) => r.roleCode === 'coordinator').permissionIds).toContain(idOf('createUser'));
+  });
+
+  // upsertRole merges, so deleting the code from the seed alone would leave
+  // every database seeded before #662 enforcing the old grant, since
+  // userHasPermission reads the stored role document.
+  it('#662: pulls the retired Coordenador grant off an already-seeded role, keeping its roleId and every other grant', async () => {
+    const db = createFakeDb();
+    const first = await seedRolesAndPermissions(db);
+    const permissionIdByCode = Object.fromEntries(first.permissions.map((p) => [p.permissionCode, p.permissionId]));
+
+    // A database seeded before #662: the Coordenador still holds the grant,
+    // plus one an operator added by hand.
+    const coordinatorDoc = db.collections.roles.docs.find((r) => r.roleCode === 'coordinator');
+    const roleId = coordinatorDoc.roleId;
+    coordinatorDoc.permissionIds = [...coordinatorDoc.permissionIds, permissionIdByCode.manageAccessRequests, permissionIdByCode.manageBackup];
+
+    const second = await seedRolesAndPermissions(db);
+
+    const coordinator = second.roles.find((r) => r.roleCode === 'coordinator');
+    expect(coordinator.permissionIds).not.toContain(permissionIdByCode.manageAccessRequests);
+    expect(coordinator.permissionIds).toContain(permissionIdByCode.manageBackup);
+    expect(coordinator.permissionIds).toContain(permissionIdByCode.createUser);
+    expect(coordinator.roleId).toBe(roleId);
+    const stored = db.collections.roles.docs.find((r) => r.roleCode === 'coordinator');
+    expect(stored.permissionIds).not.toContain(permissionIdByCode.manageAccessRequests);
+
+    const administrator = second.roles.find((r) => r.roleCode === 'administrator');
+    expect(administrator.permissionIds).toContain(permissionIdByCode.manageAccessRequests);
   });
   // #1075: `permissions` was the last collection still seeded through the
   // skip-on-existing `upsertByKey` -- the same defect #646 Wave 3 fixed for
@@ -246,6 +297,9 @@ describe('rbac-catalog-seed.service', () => {
       ['viewTemperature', ['CREATE', 'READ', 'UPDATE', 'DELETE']],
       ['uploadFiles', ['CREATE', 'READ', 'UPDATE']],
       ['createUser', ['CREATE', 'READ', 'UPDATE', 'DELETE']],
+      // #1008: CREATE is POST /users/register, UPDATE the in-handler check on
+      // PUT /users/:id.
+      ['assignRole', ['CREATE', 'UPDATE']],
       ['editSample', ['UPDATE']],
       ['deleteSample', ['DELETE']],
       ['createPatient', ['CREATE', 'READ', 'UPDATE', 'DELETE']],
@@ -270,6 +324,18 @@ describe('rbac-catalog-seed.service', () => {
       // routes at it. Pinned now, in the table that claims to be the audit.
       ['manageStorageAllocation', ['CREATE', 'READ', 'UPDATE', 'DELETE']],
       ['manageStorageTopology', ['CREATE', 'READ', 'UPDATE', 'DELETE']],
+      // #929: the read-only pair added by #1087 and #1146 after this table
+      // was last extended. Neither was backfilled here, which is the same
+      // drift the comment above describes -- a code can be introduced, or
+      // later widened, with nothing in the audit table objecting.
+      ['viewEquipment', ['READ']],
+      ['viewStorageTopology', ['READ']],
+      // #929: the Consent-domain code that replaced the borrowed
+      // 'createPatient' on POST /generate-link. CREATE only: the route is a
+      // POST and METHOD_TO_ACTION derives CREATE, so a wider set would buy
+      // nothing and would let the code later gate a read or a delete the way
+      // 'viewTemperature' did before #1073.
+      ['requestConsent', ['CREATE']],
     ])('%s allows exactly %j', (permissionCode, expectedActions) => {
       expect(PERMISSION_CATALOG[permissionCode].allowedActions).toEqual(expectedActions);
     });

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
@@ -7,6 +7,7 @@ const controller = require('../../src/controllers/paciente.controller');
 const patientService = require('../../src/services/patient.service');
 const biomarkerObservationService = require('../../src/services/biomarker-observation.service');
 const auditLogger = require('../../src/utils/auditLogger');
+const securityService = require('../../src/services/security.service');
 const sampleComplianceSync = require('../../src/services/sampleComplianceSync.service');
 const { createDbMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
@@ -256,7 +257,7 @@ describe('paciente.controller', () => {
         find: vi.fn().mockReturnValue({
           limit: vi.fn().mockReturnThis(),
           skip: vi.fn().mockReturnThis(),
-          toArray: vi.fn().mockResolvedValue([{ patientID: '1', status: 'ACTIVE' }])
+          toArray: vi.fn().mockResolvedValue([{ participantId: '12345678', status: 'ACTIVE' }])
         }),
         countDocuments: vi.fn().mockResolvedValue(1)
       };
@@ -272,7 +273,10 @@ describe('paciente.controller', () => {
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({
           success: true,
-          data: expect.objectContaining({ total: 1 })
+          data: expect.objectContaining({
+            total: 1,
+            patients: [{ participantId: '12345678', status: 'ACTIVE', consentNotifiedAt: null, consentTokenExpiresAt: null }]
+          })
         })
       );
     });
@@ -304,7 +308,7 @@ describe('paciente.controller', () => {
     });
 
     it('returns full patient data for cadastro role (has createPatient permission)', async () => {
-      vi.spyOn(patientService, 'listPatients').mockResolvedValue({ patients: [{ patientID: '1' }], total: 1 });
+      vi.spyOn(patientService, 'listPatients').mockResolvedValue({ patients: [{ participantId: '12345678' }], total: 1 });
       vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
       vi.spyOn(auditLogger, 'log').mockResolvedValue();
       const db = createDbMock({ ...buildRbacCollections([{ userAccountId: 'cadastro-user', accessType: 4 }]) });
@@ -420,7 +424,7 @@ describe('paciente.controller', () => {
     });
 
     it('returns full patient data for cadastro role', async () => {
-      vi.spyOn(patientService, 'getPatient').mockResolvedValue({ patientID: '12345678', name: 'Foo' });
+      vi.spyOn(patientService, 'getPatient').mockResolvedValue({ participantId: '12345678', name: 'Foo' });
       vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
       vi.spyOn(auditLogger, 'log').mockResolvedValue();
       const db = createDbMock({ ...buildRbacCollections([{ userAccountId: 'cadastro-user', accessType: 4 }]) });
@@ -640,6 +644,42 @@ describe('paciente.controller', () => {
   });
 
   describe('deletar', () => {
+    // #1262: the delete reads lgpd.allowDataDeletion, and this file's db is a
+    // bare object that cannot answer it, so each case says it is allowed
+    // unless it tests the gate.
+    beforeEach(() => {
+      vi.spyOn(securityService, 'isDataDeletionAllowed').mockResolvedValue(true);
+    });
+
+    it('#1262: returns 403 and deletes nothing while lgpd.allowDataDeletion is false', async () => {
+      securityService.isDataDeletionAllowed.mockResolvedValue(false);
+      vi.spyOn(patientService, 'getPatient').mockResolvedValue({ participantId: '12345678' });
+      const deleteSpy = vi.spyOn(patientService, 'deletePatient').mockResolvedValue(true);
+      const req = createReq({ params: { id: '12345678' } });
+      const res = createRes();
+
+      await controller.deletar(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'Eliminação desabilitada' }));
+      expect(deleteSpy).not.toHaveBeenCalled();
+    });
+
+    it('#1262: the organization scope answers before the setting does', async () => {
+      securityService.isDataDeletionAllowed.mockResolvedValue(false);
+      vi.spyOn(patientService, 'getPatient').mockResolvedValue({ participantId: '12345678', clinicalUnitId: 'org-9' });
+      const req = createReq({
+        params: { id: '12345678' },
+        organizationScope: { scope: 'organization', organizationIds: ['org-1'] }
+      });
+      const res = createRes();
+
+      await controller.deletar(req, res);
+
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: 'Este paciente pertence a outra organização' }));
+      expect(securityService.isDataDeletionAllowed).not.toHaveBeenCalled();
+    });
+
     it('returns 503 when db is missing', async () => {
       const req = createReq({ app: { locals: {} }, params: { id: '1' } });
       const res = createRes();
@@ -819,6 +859,42 @@ describe('paciente.controller', () => {
 
       expect(res.status).toHaveBeenCalledWith(500);
     });
+
+    // #1185: buscar/atualizar/deletar all 403 a patient outside the caller's
+    // organization scope (#340/#626); findForEdit returned it for editing.
+    it('returns 403 when the patient belongs to a different organization', async () => {
+      const patientsCollection = { findOne: vi.fn().mockResolvedValue({ participantId: '12345678', clinicalUnitId: 'org-9' }) };
+      const db = { collection: vi.fn().mockReturnValue(patientsCollection) };
+      vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+      vi.spyOn(auditLogger, 'log').mockResolvedValue();
+      const req = createReq({
+        app: { locals: { db } },
+        body: { participantId: '12345678' },
+        organizationScope: { scope: 'organization', organizationIds: ['org-1'] }
+      });
+      const res = createRes();
+
+      await controller.findForEdit(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+    });
+
+    it('CONTROL: returns a patient in the caller organization', async () => {
+      const patientsCollection = { findOne: vi.fn().mockResolvedValue({ participantId: '12345678', clinicalUnitId: 'org-1' }) };
+      const db = { collection: vi.fn().mockReturnValue(patientsCollection) };
+      vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+      vi.spyOn(auditLogger, 'log').mockResolvedValue();
+      const req = createReq({
+        app: { locals: { db } },
+        body: { participantId: '12345678' },
+        organizationScope: { scope: 'organization', organizationIds: ['org-1'] }
+      });
+      const res = createRes();
+
+      await controller.findForEdit(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+    });
   });
 
   describe('search', () => {
@@ -901,7 +977,7 @@ describe('paciente.controller', () => {
 
     it('strips extra fields for operational role', async () => {
       vi.spyOn(biomarkerObservationService, 'listPatientObservations').mockResolvedValue({
-        observations: [{ _id: '1', patientID: '12345678', biomarkerType: 'X', collectedAt: 'd', status: 's', unit: 'u', extra: 'secret' }],
+        observations: [{ _id: '1', participantId: '12345678', biomarkerType: 'X', collectedAt: 'd', status: 's', unit: 'u', extra: 'secret' }],
         total: 1,
         limit: 50,
         skip: 0
@@ -923,11 +999,12 @@ describe('paciente.controller', () => {
       expect(res.status).toHaveBeenCalledWith(200);
       const jsonArg = res.json.mock.calls[0][0];
       expect(jsonArg.data.observations[0].extra).toBeUndefined();
+      expect(jsonArg.data.observations[0].participantId).toBe('12345678');
     });
 
     it('returns full observations for cadastro role', async () => {
       vi.spyOn(biomarkerObservationService, 'listPatientObservations').mockResolvedValue({
-        observations: [{ _id: '1', patientID: '12345678', extra: 'secret' }],
+        observations: [{ _id: '1', participantId: '12345678', extra: 'secret' }],
         total: 1,
         limit: 50,
         skip: 0

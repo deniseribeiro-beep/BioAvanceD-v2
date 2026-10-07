@@ -4,6 +4,7 @@ const { ObjectId } = require('mongodb');
 const { authenticate } = require('../../infrastructure/middleware/auth');
 const { requirePermission } = require('../../infrastructure/middleware/rbac');
 const logger = require('../../utils/logger');
+const { ensureFacilityIndexes } = require('../../utils/facilityIndexes');
 
 /**
  * Facility CRUD — dict-02 StorageAssignment.facilityId (ELM-0168, 1..1 Core).
@@ -12,6 +13,12 @@ const logger = require('../../utils/logger');
  * admin-config CRUD route in this repo (equipment.routes.js,
  * location.routes.js) — MongoStorageRepository already reads Facility/Room
  * via raw collections rather than the mongoose models added in #418.
+ *
+ * Documented dictionary deviation (#1147): dict-02 makes facilityId 1..1
+ * Core, but RF017's storage topology starts at the Freezer and nothing reads
+ * this field, so an assignment with a null facilityId/roomId is accepted for
+ * the prototype. The surface is API-only by decision; a facility/room UI is
+ * post-prototype work, and only if RF017 is widened.
  */
 
 function validateFacilityInput(data) {
@@ -22,10 +29,18 @@ function validateFacilityInput(data) {
   return { isValid: errors.length === 0, errors };
 }
 
-router.get('/', authenticate, async (req, res) => {
+router.get('/', authenticate, requirePermission('viewStorageTopology'), async (req, res) => {
   try {
     const db = req.app.locals.db;
-    const facilities = await db.collection('facilities')
+    // #941: ensured on the READ path, not the write path. This index exists
+    // for the sort below -- measured as the winning plan, removing an
+    // in-memory SORT -- so it has to be built wherever that query runs. A
+    // process that only serves this endpoint never reaches the POST handler.
+    // Latched per collection name, so this is one no-op call after the first.
+    const facilitiesCollection = db.collection('facilities');
+    ensureFacilityIndexes(facilitiesCollection);
+
+    const facilities = await facilitiesCollection
       .find({ deletedAt: null })
       .sort({ name: 1 })
       .toArray();
@@ -41,7 +56,7 @@ router.get('/', authenticate, async (req, res) => {
   }
 });
 
-router.get('/:id', authenticate, async (req, res) => {
+router.get('/:id', authenticate, requirePermission('viewStorageTopology'), async (req, res) => {
   try {
     const db = req.app.locals.db;
 

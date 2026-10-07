@@ -4,6 +4,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const logger = require('../utils/logger');
 const { ObjectId } = require('mongodb');
+const { findSampleByAnyId } = require('../utils/sampleLookup');
 const SampleFileModel = require('../models/SampleFile');
 const { getUserAnonId } = require('../utils/userAnonymization');
 const { isRecordInOrganizationScope } = require('../services/rbac-assignment.service');
@@ -129,14 +130,9 @@ class SampleFileController {
 
       // Valida se a amostra existe
       const samplesCollection = db.collection('samples');
-      let sample;
-      try {
-        // Tenta buscar por ObjectId primeiro
-        sample = await samplesCollection.findOne({ _id: new ObjectId(specimenId) });
-      } catch (idError) {
-        // Se não for ObjectId válido, tenta buscar por specimenId numérico
-        sample = await samplesCollection.findOne({ specimenId: Number(specimenId) });
-      }
+      // #1216: an _id or the canonical specimenId. The old fallback matched
+      // specimenId as a Number, and the field is a string, so it never hit.
+      const sample = await findSampleByAnyId(samplesCollection, specimenId);
 
       if (!sample) {
         // Remove arquivo se amostra não existe
@@ -361,12 +357,9 @@ class SampleFileController {
 
       // Valida se a amostra existe
       const samplesCollection = db.collection('samples');
-      let sample;
-      try {
-        sample = await samplesCollection.findOne({ _id: new ObjectId(specimenId) });
-      } catch (idError) {
-        sample = await samplesCollection.findOne({ specimenId: Number(specimenId) });
-      }
+      // #1216: an _id or the canonical specimenId. The old fallback matched
+      // specimenId as a Number, and the field is a string, so it never hit.
+      const sample = await findSampleByAnyId(samplesCollection, specimenId);
 
       if (!sample) {
         return res.status(404).json({
@@ -482,9 +475,18 @@ class SampleFileController {
       }
 
       // Verifica se o arquivo pertence à amostra correta
-      const specimenIdString = typeof specimenId === 'string' && ObjectId.isValid(specimenId) 
-        ? new ObjectId(specimenId).toString()
-        : String(specimenId);
+      // #1216: the URL may name the specimen by its specimenId, while a file
+      // is keyed by the sample's _id string, so resolve the sample first and
+      // compare against that. The same document serves the scope check below.
+      let resolvedSample = null;
+      try {
+        resolvedSample = await findSampleByAnyId(db.collection('samples'), specimenId);
+      } catch (_) {}
+      const specimenIdString = resolvedSample
+        ? resolvedSample._id.toString()
+        : typeof specimenId === 'string' && ObjectId.isValid(specimenId)
+          ? new ObjectId(specimenId).toString()
+          : String(specimenId);
       
       if (fileRecord.specimenId !== specimenIdString) {
         return res.status(403).json({
@@ -499,11 +501,7 @@ class SampleFileController {
       // the sample no longer exists) is treated as "can't determine
       // scope" and doesn't block the download on its own.
       if (req.organizationScope) {
-        const samplesCollection = db.collection('samples');
-        let sampleForScope = null;
-        try {
-          sampleForScope = await samplesCollection.findOne({ _id: new ObjectId(specimenIdString) });
-        } catch (_) {}
+        const sampleForScope = resolvedSample;
         if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
           return res.status(403).json({
             success: false,
@@ -613,9 +611,18 @@ class SampleFileController {
       }
 
       // Verifica se o arquivo pertence à amostra correta
-      const specimenIdString = typeof specimenId === 'string' && ObjectId.isValid(specimenId) 
-        ? new ObjectId(specimenId).toString()
-        : String(specimenId);
+      // #1216: the URL may name the specimen by its specimenId, while a file
+      // is keyed by the sample's _id string, so resolve the sample first and
+      // compare against that. The same document serves the scope check below.
+      let resolvedSample = null;
+      try {
+        resolvedSample = await findSampleByAnyId(db.collection('samples'), specimenId);
+      } catch (_) {}
+      const specimenIdString = resolvedSample
+        ? resolvedSample._id.toString()
+        : typeof specimenId === 'string' && ObjectId.isValid(specimenId)
+          ? new ObjectId(specimenId).toString()
+          : String(specimenId);
       
       if (fileRecord.specimenId !== specimenIdString) {
         return res.status(403).json({
@@ -629,11 +636,7 @@ class SampleFileController {
       // downloadFile's identical check for why the lookup is scoped to
       // just this check and tolerant of a failed/missing lookup.
       if (req.organizationScope) {
-        const samplesCollection = db.collection('samples');
-        let sampleForScope = null;
-        try {
-          sampleForScope = await samplesCollection.findOne({ _id: new ObjectId(specimenIdString) });
-        } catch (_) {}
+        const sampleForScope = resolvedSample;
         if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
           return res.status(403).json({
             success: false,
@@ -753,9 +756,18 @@ class SampleFileController {
       }
 
       // Verifica se o arquivo pertence à amostra correta
-      const specimenIdString = typeof specimenId === 'string' && ObjectId.isValid(specimenId)
-        ? new ObjectId(specimenId).toString()
-        : String(specimenId);
+      // #1216: the URL may name the specimen by its specimenId, while a file
+      // is keyed by the sample's _id string, so resolve the sample first and
+      // compare against that. The same document serves the scope check below.
+      let resolvedSample = null;
+      try {
+        resolvedSample = await findSampleByAnyId(db.collection('samples'), specimenId);
+      } catch (_) {}
+      const specimenIdString = resolvedSample
+        ? resolvedSample._id.toString()
+        : typeof specimenId === 'string' && ObjectId.isValid(specimenId)
+          ? new ObjectId(specimenId).toString()
+          : String(specimenId);
 
       if (fileRecord.specimenId !== specimenIdString) {
         cleanupUploadedFile();
@@ -768,11 +780,7 @@ class SampleFileController {
       // #625: mirrors sample.routes.js's own out-of-scope 403 pattern —
       // checked before the mutation, same as deleteFile.
       if (req.organizationScope) {
-        const samplesCollection = db.collection('samples');
-        let sampleForScope = null;
-        try {
-          sampleForScope = await samplesCollection.findOne({ _id: new ObjectId(specimenIdString) });
-        } catch (_) {}
+        const sampleForScope = resolvedSample;
         if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
           cleanupUploadedFile();
           return res.status(403).json({
@@ -881,7 +889,7 @@ class SampleFileController {
           resourceType: 'SampleFile',
           resourceId: fileRecord._id.toString(),
           status: 'success',
-          severity: 'medium',
+          severity: 'warning',
           message: `Substituição de arquivo de análise: ${fileRecord.fileName} -> ${file.originalname}`,
           payload: {
             previousFileName: fileRecord.fileName,
@@ -963,18 +971,19 @@ class SampleFileController {
         });
       }
 
+      // Busca amostra. #1216: resolved before the link check, because the URL
+      // may carry the specimenId while the file is keyed by the sample's _id.
+      const samplesCollection = db.collection('samples');
+      const sample = await findSampleByAnyId(samplesCollection, specimenId);
+
       // Valida vinculação à amostra
-      const specimenIdString = String(specimenId);
+      const specimenIdString = sample ? sample._id.toString() : String(specimenId);
       if (String(fileRecord.specimenId) !== specimenIdString) {
         return res.status(400).json({
           success: false,
           error: req.t ? req.t('sampleFiles.sampleMismatch') : 'Arquivo não está vinculado a esta amostra'
         });
       }
-
-      // Busca amostra
-      const samplesCollection = db.collection('samples');
-      const sample = await samplesCollection.findOne({ _id: new ObjectId(specimenId) });
 
       if (!sample) {
         return res.status(404).json({
@@ -1009,7 +1018,7 @@ class SampleFileController {
           resourceType: 'SampleFile',
           resourceId: fileID,
           status: 'success',
-          severity: 'medium',
+          severity: 'info',
           message: `Exportação HL7 v2.x do arquivo: ${fileRecord.fileName}`,
           payload: {
             fileName: fileRecord.fileName,
@@ -1064,18 +1073,19 @@ class SampleFileController {
         });
       }
 
+      // Busca amostra. #1216: resolved before the link check, because the URL
+      // may carry the specimenId while the file is keyed by the sample's _id.
+      const samplesCollection = db.collection('samples');
+      const sample = await findSampleByAnyId(samplesCollection, specimenId);
+
       // Valida vinculação à amostra
-      const specimenIdString = String(specimenId);
+      const specimenIdString = sample ? sample._id.toString() : String(specimenId);
       if (String(fileRecord.specimenId) !== specimenIdString) {
         return res.status(400).json({
           success: false,
           error: req.t ? req.t('sampleFiles.sampleMismatch') : 'Arquivo não está vinculado a esta amostra'
         });
       }
-
-      // Busca amostra
-      const samplesCollection = db.collection('samples');
-      const sample = await samplesCollection.findOne({ _id: new ObjectId(specimenId) });
 
       if (!sample) {
         return res.status(404).json({
@@ -1109,7 +1119,7 @@ class SampleFileController {
           resourceType: 'SampleFile',
           resourceId: fileID,
           status: 'success',
-          severity: 'medium',
+          severity: 'info',
           message: `Exportação FHIR do arquivo: ${fileRecord.fileName}`,
           payload: {
             fileName: fileRecord.fileName,
@@ -1164,18 +1174,19 @@ class SampleFileController {
         });
       }
 
+      // Busca amostra. #1216: resolved before the link check, because the URL
+      // may carry the specimenId while the file is keyed by the sample's _id.
+      const samplesCollection = db.collection('samples');
+      const sample = await findSampleByAnyId(samplesCollection, specimenId);
+
       // Valida vinculação à amostra
-      const specimenIdString = String(specimenId);
+      const specimenIdString = sample ? sample._id.toString() : String(specimenId);
       if (String(fileRecord.specimenId) !== specimenIdString) {
         return res.status(400).json({
           success: false,
           error: req.t ? req.t('sampleFiles.sampleMismatch') : 'Arquivo não está vinculado a esta amostra'
         });
       }
-
-      // Busca amostra
-      const samplesCollection = db.collection('samples');
-      const sample = await samplesCollection.findOne({ _id: new ObjectId(specimenId) });
 
       if (!sample) {
         return res.status(404).json({
@@ -1209,7 +1220,7 @@ class SampleFileController {
           resourceType: 'SampleFile',
           resourceId: fileID,
           status: 'success',
-          severity: 'medium',
+          severity: 'info',
           message: `Exportação CDA do arquivo: ${fileRecord.fileName}`,
           payload: {
             fileName: fileRecord.fileName,

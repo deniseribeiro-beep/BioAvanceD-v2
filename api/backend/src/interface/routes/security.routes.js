@@ -70,9 +70,73 @@ router.put('/config', async (req, res) => {
     });
   } catch (error) {
     logger.error('Erro ao atualizar configurações de segurança:', error.message);
-    return res.status(400).json({
+    // A ConfigurationReleaseError carries its status (409: another change
+    // was activated first); anything else is a refused configuration.
+    return res.status(error.statusCode || 400).json({
       success: false,
       error: (req.t && req.t('security.updateConfigError')) || 'Erro ao atualizar configurações de segurança',
+      message: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/security/config/releases
+ * RF014 AC4: the ConfigurationRelease history of this environment's
+ * security configuration, newest first.
+ */
+router.get('/config/releases', async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({
+        success: false,
+        error: (req.t && req.t('errors.databaseUnavailable')) || 'Banco de dados não disponível'
+      });
+    }
+    const requested = Number.parseInt(req.query.limit, 10);
+    const limit = Number.isInteger(requested) && requested > 0 ? Math.min(requested, 200) : 50;
+    const releases = await securityService.listReleases(db, { limit });
+    return res.status(200).json({ success: true, data: releases });
+  } catch (error) {
+    logger.error('Erro ao listar releases de configuração:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: 'Erro ao listar releases de configuração',
+      message: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/security/config/rollback
+ * RF014 AC4: governed rollback to an earlier release, recorded as a new
+ * release. Body: { configurationReleaseId }.
+ */
+router.post('/config/rollback', async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({
+        success: false,
+        error: (req.t && req.t('errors.databaseUnavailable')) || 'Banco de dados não disponível'
+      });
+    }
+    const { configurationReleaseId } = req.body || {};
+    if (!configurationReleaseId || typeof configurationReleaseId !== 'string') {
+      return res.status(400).json({ success: false, error: 'configurationReleaseId é obrigatório' });
+    }
+    const updatedConfig = await securityService.rollbackConfig(db, configurationReleaseId, req);
+    return res.status(200).json({
+      success: true,
+      message: 'Configuração revertida para a release solicitada',
+      data: updatedConfig
+    });
+  } catch (error) {
+    logger.error('Erro ao reverter configuração de segurança:', error.message);
+    return res.status(error.statusCode || 400).json({
+      success: false,
+      error: 'Erro ao reverter configuração de segurança',
       message: error.message
     });
   }
@@ -99,7 +163,8 @@ router.get('/logs/export', async (req, res) => {
       startDate: req.query.startDate,
       endDate: req.query.endDate,
       action: req.query.action,
-      entity: req.query.entity
+      entity: req.query.entity,
+      source: req.query.source // #1271: 'archive' exports logs_archive
     };
 
     const exportData = await securityService.exportLogs(db, filters, format);
@@ -127,6 +192,10 @@ router.get('/logs/export', async (req, res) => {
       return res.status(200).json(exportData);
     }
   } catch (error) {
+    // #1271: an unknown ?source= (log.service's logSourceCollection).
+    if (error.statusCode === 422) {
+      return res.status(422).json({ success: false, error: 'Dados inválidos', message: error.message, details: error.details || [error.message] });
+    }
     logger.error('Erro ao exportar logs:', error.message);
     return res.status(500).json({
       success: false,
@@ -188,40 +257,13 @@ router.get('/consent-queue', async (_req, res) => {
   }
 });
 
-/**
- * PUT /api/security/permissions
- * Atualiza permissões por perfil
- */
-router.put('/permissions', async (req, res) => {
-  try {
-    const db = req.app.locals.db;
-    if (!db) {
-      return res.status(503).json({
-        success: false,
-        error: (req.t && req.t('errors.databaseUnavailable')) || 'Banco de dados não disponível'
-      });
-    }
-
-    // Busca permissões atuais para comparar mudanças
-    const currentPermissions = await securityService.getPermissions(db);
-    
-    // Valida e atualiza permissões
-    const updatedPermissions = await securityService.updatePermissions(db, req.body, currentPermissions, req);
-
-    return res.status(200).json({
-      success: true,
-      message: (req.t && req.t('security.updatePermissionsSuccess')) || 'Permissões atualizadas com sucesso',
-      data: updatedPermissions
-    });
-  } catch (error) {
-    logger.error('Erro ao atualizar permissões:', error.message);
-    return res.status(400).json({
-      success: false,
-      error: (req.t && req.t('security.updatePermissionsError')) || 'Erro ao atualizar permissões',
-      message: error.message
-    });
-  }
-});
+// #1149: there is deliberately no PUT /permissions. It wrote a
+// `security_permissions` store that no authorization path reads, answered
+// 'Permissões atualizadas com sucesso', and wrote a critical-severity audit
+// row for a change that never took effect. Pointing it at the real roles
+// would not help either: the RBAC seed re-unions each role's permissionIds
+// on every boot, so a revoke would silently revert at the next restart
+// (#1123). GET /permissions stays, read-only.
 
 module.exports = router;
 

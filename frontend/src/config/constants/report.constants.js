@@ -146,6 +146,42 @@ export function getReportTypeDefinition(typeOrKey) {
   return REPORT_TYPE_DEFINITIONS.find((item) => item.key === normalized || item.type === normalized) || null;
 }
 
-export function getAllowedReportDefinitions(hasAccess) {
-  return REPORT_TYPE_DEFINITIONS.filter((reportType) => hasAccess(reportType.type) || hasAccess(reportType.key));
+
+// #735 (RF008 AC#6): a template created on ReportTemplatesPage becomes a
+// menu entry too. Only active, operator-created templates are added: the
+// system rows are already the definitions above.
+// A code is compared in the backend's snake_case form (toTemplateCode in
+// reports.routes.js), so `samples_by_patient` names the samplesByPatient key.
+function toTemplateCode(value) {
+  return String(value || '').replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase();
+}
+
+/**
+ * @typedef {{ key: string, type: string, fallbackType: string, icon: string, description: string,
+ *   fallbackDescription: string, allowedRoles?: string[], allowedAccessTypes?: number[],
+ *   handlerKey?: string, isCustomTemplate?: boolean }} ReportMenuEntry
+ * @param {ReportMenuEntry[]} definitions
+ * @param {Array<{ code?: string, name?: string, description?: string | null, handlerKey?: string,
+ *   isSystemDefined?: boolean, templateStatus?: string }> | null | undefined} templates
+ * @returns {ReportMenuEntry[]}
+ */
+export function mergeCustomTemplates(definitions, templates) {
+  if (!Array.isArray(templates)) {
+    return definitions;
+  }
+  const takenCodes = new Set(definitions.map((definition) => toTemplateCode(definition.key)));
+  const custom = templates
+    .filter((template) => template && !template.isSystemDefined && template.templateStatus === 'active')
+    .filter((template) => template.code && !takenCodes.has(toTemplateCode(template.code)))
+    .map((template) => ({
+      key: template.code,
+      type: template.code,
+      fallbackType: template.name || template.code,
+      icon: '📄',
+      description: '',
+      fallbackDescription: template.description || 'Modelo de relatório personalizado.',
+      handlerKey: template.handlerKey,
+      isCustomTemplate: true,
+    }));
+  return custom.length > 0 ? [...definitions, ...custom] : definitions;
 }

@@ -149,11 +149,82 @@ describe('neo4jCanonicalProjection.service', () => {
       const event = { eventType: 'CONSENT_REVOKED', aggregateId: 'agg-2', payload: {} };
       await service.applyConsentProjection(session, event);
       const params = session.run.mock.calls[0][1];
-      expect(params.specimenId).toBe('agg-2');
+      // #1225: the aggregateId is the consent's id, never a specimen's.
+      expect(params.specimenId).toBe('');
       expect(params.consentId).toBe('agg-2');
       expect(params.consentStatus).toBe('ACTIVE');
       expect(params.sourceService).toBe('unknown');
       expect(params.schemaVersion).toBe(1);
+    });
+  });
+
+  describe('#1225 consent governance', () => {
+    it('a consent event without specimenId keys no Sample by the consent id', async () => {
+      const service = new Neo4jCanonicalProjectionService();
+      const session = makeSession();
+      await service.applyConsentProjection(session, {
+        eventType: 'CONSENT_UPSERTED',
+        aggregateType: 'EthicalConsent',
+        aggregateId: 'consent-9',
+        payload: { participantId: 'P-9', specimenId: null, ethicalConsentId: 'consent-9', status: 'ACTIVE' },
+      });
+      const params = session.run.mock.calls[0][1];
+      expect(params.specimenId).toBe('');
+      expect(params.consentId).toBe('consent-9');
+    });
+
+    it('a consent event governs the samples its donor already DONATED', async () => {
+      const service = new Neo4jCanonicalProjectionService();
+      const session = makeSession();
+      await service.applyConsentProjection(session, {
+        eventType: 'CONSENT_UPSERTED',
+        aggregateId: 'consent-9',
+        payload: { participantId: 'P-9', ethicalConsentId: 'consent-9' },
+      });
+      const cypher = session.run.mock.calls[0][0];
+      expect(cypher).toMatch(/OPTIONAL MATCH \(donor\)-\[:DONATED\]->\(donated:Sample\)/);
+      expect(cypher).toMatch(/MERGE \(owned\)-\[r4:GOVERNED_BY\]->\(consent\)/);
+    });
+
+    it('routes SPECIMEN_UPSERTED to the specimen projection, linking the donor and its consents', async () => {
+      const service = new Neo4jCanonicalProjectionService();
+      const session = makeSession();
+      const result = await service.applyEvent(session, {
+        eventType: 'SPECIMEN_UPSERTED',
+        aggregateType: 'Sample',
+        aggregateId: 'mongo-1',
+        eventId: 'evt-s1',
+        sourceService: 'sample.service',
+        payload: { specimenId: 'mongo-1', participantId: 'P-9' },
+      });
+      expect(result).toEqual({
+        projected: true,
+        eventType: 'SPECIMEN_UPSERTED',
+        specimenId: 'mongo-1',
+        donorId: service.pseudonymizeDonorId('P-9'),
+      });
+      expect(session.run).toHaveBeenCalledTimes(1);
+      const [cypher, params] = session.run.mock.calls[0];
+      expect(params.specimenId).toBe('mongo-1');
+      expect(params.donorId).toBe(service.pseudonymizeDonorId('P-9'));
+      expect(cypher).toMatch(/MERGE \(donor\)-\[r1:DONATED\]->\(sample\)/);
+      expect(cypher).toMatch(/OPTIONAL MATCH \(donor\)-\[:CONSENTED_UNDER\]->\(consent:EthicalConsent\)/);
+      expect(cypher).toMatch(/MERGE \(sample\)-\[r2:GOVERNED_BY\]->\(governing\)/);
+    });
+
+    it('a SPECIMEN_UPSERTED with no participant merges the Sample alone and mints no Donor', async () => {
+      const service = new Neo4jCanonicalProjectionService();
+      const session = makeSession();
+      const result = await service.applyEvent(session, {
+        eventType: 'SPECIMEN_UPSERTED',
+        aggregateId: 'mongo-2',
+        payload: { specimenId: 'mongo-2', participantId: null },
+      });
+      expect(result.donorId).toBeNull();
+      const [cypher, params] = session.run.mock.calls[0];
+      expect(params.specimenId).toBe('mongo-2');
+      expect(cypher).not.toMatch(/Donor/);
+      expect(cypher).not.toMatch(/GOVERNED_BY/);
     });
   });
 

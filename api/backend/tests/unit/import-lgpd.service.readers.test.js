@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { createRequire } from 'module';
 import { Transform } from 'stream';
 import os from 'os';
@@ -43,6 +43,19 @@ afterEach(() => {
 describe('ImportLGPDService.readCSV', () => {
   it('rejects when the file does not exist', async () => {
     await expect(importLgpdService.readCSV('/definitely/does/not/exist.csv')).rejects.toThrow('Arquivo não encontrado');
+  });
+
+  // #1175: .pipe() does not forward the SOURCE stream's 'error', so a read
+  // failure after the existence check and separator sniff (the file removed
+  // in between) was an uncaught exception instead of a rejection.
+  it('rejects when the read stream fails after the existence check (#1175)', async () => {
+    const missingPath = path.join(os.tmpdir(), `import-lgpd-readers-missing-${Date.now()}.csv`);
+    const existsSpy = vi.spyOn(fs, 'existsSync').mockReturnValueOnce(true);
+    const readSpy = vi.spyOn(fs, 'readFileSync').mockReturnValueOnce(Buffer.from('a,b\n1,2\n'));
+
+    await expect(importLgpdService.readCSV(missingPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    existsSpy.mockRestore();
+    readSpy.mockRestore();
   });
 
   it('parses a comma-delimited CSV into row objects', async () => {

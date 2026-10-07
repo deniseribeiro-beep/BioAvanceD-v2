@@ -302,10 +302,35 @@ describe('import-lgpd.controller', () => {
 
       expect(cleanupSpy).toHaveBeenCalledWith(file.path);
       expect(res.status).toHaveBeenCalledWith(400);
+      // #840: the full body -- error, reason token AND message -- not just
+      // typeof message, which is what let the four endpoints' bodies drift
+      // apart unnoticed in the first place.
       expect(res.json).toHaveBeenCalledWith({
         success: false,
         error: 'groupFields inválido',
+        reason: 'malformed',
         message: 'groupFields deve ser um JSON válido'
+      });
+    });
+
+    it('returns 400 with the "value" reason when groupFields has an operator-shaped key (#840)', async () => {
+      const db = createDb();
+      const file = { path: '/tmp/a.csv', originalname: 'a.csv' };
+      const req = { app: { locals: { db } }, file, body: { groupFields: '{"$ne": null}' } };
+      const res = createRes();
+
+      vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
+      const cleanupSpy = vi.spyOn(importLGPDService, 'cleanupFile').mockImplementation(() => {});
+
+      await controller.importPatients(req, res);
+
+      expect(cleanupSpy).toHaveBeenCalledWith(file.path);
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'groupFields inválido',
+        reason: 'value',
+        message: 'groupFields aceita apenas chaves simples com valores texto, número ou booleano'
       });
     });
 
@@ -541,10 +566,33 @@ describe('import-lgpd.controller', () => {
 
       expect(cleanupSpy).toHaveBeenCalledWith(file.path);
       expect(res.status).toHaveBeenCalledWith(400);
+      // #840: full body, not just typeof message.
       expect(res.json).toHaveBeenCalledWith({
         success: false,
         error: 'groupFields inválido',
+        reason: 'malformed',
         message: 'groupFields deve ser um JSON válido'
+      });
+    });
+
+    it('returns 400 with the "value" reason when groupFields has a dotted key (#840)', async () => {
+      const db = createDb();
+      const file = { path: '/tmp/s.csv', originalname: 's.csv' };
+      const req = { app: { locals: { db } }, file, body: { groupFields: '{"a.b": 1}' } };
+      const res = createRes();
+
+      vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
+      const cleanupSpy = vi.spyOn(importLGPDService, 'cleanupFile').mockImplementation(() => {});
+
+      await controller.importSamples(req, res);
+
+      expect(cleanupSpy).toHaveBeenCalledWith(file.path);
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'groupFields inválido',
+        reason: 'value',
+        message: 'groupFields aceita apenas chaves simples com valores texto, número ou booleano'
       });
     });
 

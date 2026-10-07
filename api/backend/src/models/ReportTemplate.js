@@ -24,6 +24,7 @@ const HANDLER_KEYS = [
   'tissueOriginHistory',
   'extracellularNetwork',
   'accessLogs',
+  'auditEvents',
 ];
 
 const TEMPLATE_STATUSES = ['active', 'retired'];

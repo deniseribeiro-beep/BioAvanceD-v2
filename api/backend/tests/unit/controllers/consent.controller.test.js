@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 // NOTE on mocking strategy: this repo's Vitest setup does not let vi.mock()
-// intercept CommonJS require() (see .claude/skills/testing-conventions/SKILL.md).
+// intercept CommonJS require().
 // consent.controller.js does plain, non-destructured
 // `const consentService = require('../services/consent.service')` and
 // `const patientService = require('../services/patient.service')` at the top,
@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const consentController = require('../../../src/controllers/consent.controller');
 const consentService = require('../../../src/services/consent.service');
 const patientService = require('../../../src/services/patient.service');
+const { hashConsentToken } = require('../../../src/utils/consentTokenHash');
 const participantIdentityService = require('../../../src/services/participantIdentity.service');
 const auditLogger = require('../../../src/utils/auditLogger');
 
@@ -36,6 +37,22 @@ function createReq(overrides = {}) {
 }
 
 const NO_DB_REQ = () => createReq({ app: { locals: {} } });
+
+// #1127: the controller now splits its catch on WHO is at fault, and the
+// service marks the refusals it raises against the caller's own request so the
+// controller can tell. A bare Error is an infrastructure failure under that
+// contract, so a test that wants the 400 arm must reject with a MARKED error.
+//
+// This builds one by calling the real service with no arguments, rather than
+// re-declaring the marker literal here: a fixture that hand-stamps the code
+// would keep passing if the service stopped stamping it, which is exactly the
+// drift that would put a token refusal back on the 503 arm unnoticed. If the
+// argument guard ever stops being the first thing validateConsentToken does,
+// this returns an unmarked error and the tests below go red rather than
+// quietly asserting nothing.
+async function realConsentTokenRefusal() {
+  return patientService.validateConsentToken(null, '', '').catch((error) => error);
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -111,6 +128,45 @@ describe('ConsentController.getPendingPatientsForPolicy', () => {
 
     expect(res.status).toHaveBeenCalledWith(200);
     expect(res.json).toHaveBeenCalledWith({ success: true, data: [{ participantId: 'p1', patientName: 'Paciente Cifrado' }] });
+  });
+
+  // #1166 slice 2: email is identity data too. The Patient row carries none
+  // here, as it will after slice 4, so the value must come from the
+  // decrypted identity record.
+  it('#1166: resolves email from a ciphertext-only ParticipantIdentity record', async () => {
+    const encrypted = participantIdentityService.encryptIdentityFields({
+      participantId: 'p1',
+      patientName: 'Paciente Cifrado',
+      email: 'cifrado@example.com'
+    });
+    const ciphertextOnlyIdentity = { ...encrypted, patientName: null, email: null };
+
+    const patientsToArray = vi.fn().mockResolvedValue([{ participantId: 'p1' }]);
+    const patientsProject = vi.fn().mockReturnValue({ toArray: patientsToArray });
+    const patientsFind = vi.fn().mockReturnValue({ project: patientsProject });
+
+    // Honours the projection it is handed, so a projection that leaves out
+    // the ciphertext sibling fails here the way it would against Mongo.
+    const identitiesProject = vi.fn((projection) => ({
+      toArray: vi.fn().mockResolvedValue([
+        Object.fromEntries(Object.entries(ciphertextOnlyIdentity).filter(([key]) => projection[key]))
+      ])
+    }));
+    const identitiesFind = vi.fn().mockReturnValue({ project: identitiesProject });
+
+    const collection = vi.fn((name) =>
+      name === 'participantIdentities' ? { find: identitiesFind } : { find: patientsFind }
+    );
+    const req = createReq({ params: { id: 'policy1' }, app: { locals: { db: { collection } } } });
+    const res = createRes();
+
+    await consentController.getPendingPatientsForPolicy(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith({
+      success: true,
+      data: [{ participantId: 'p1', patientName: 'Paciente Cifrado', email: 'cifrado@example.com' }]
+    });
   });
 
   it('skips the ParticipantIdentity lookup when no pending patients are found', async () => {
@@ -910,6 +966,32 @@ describe('ConsentController.revokeConsent', () => {
 });
 
 describe('ConsentController.getPatientConsent', () => {
+  // #1188: a Consent has no organization field, so the check runs on its
+  // patient -- the #626 shape every other patient read uses.
+  it('returns 403 and reads no consent when the patient belongs to another organization', async () => {
+    vi.spyOn(patientService, 'getPatient').mockResolvedValue({ participantId: '12345678', clinicalUnitId: 'org-9' });
+    const consentSpy = vi.spyOn(consentService, 'getPatientConsent').mockResolvedValue({ _id: '1' });
+    const req = createReq({ params: { participantId: '12345678' }, organizationScope: { scope: 'organization', organizationIds: ['org-1'] } });
+    const res = createRes();
+
+    await consentController.getPatientConsent(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(consentSpy).not.toHaveBeenCalled();
+  });
+
+  it('CONTROL: reads the consent of a patient in the caller organization, by that patient id', async () => {
+    vi.spyOn(patientService, 'getPatient').mockResolvedValue({ participantId: '12345678', clinicalUnitId: 'org-1' });
+    const consentSpy = vi.spyOn(consentService, 'getPatientConsent').mockResolvedValue({ _id: '1' });
+    const req = createReq({ params: { participantId: '12345678' }, organizationScope: { scope: 'organization', organizationIds: ['org-1'] } });
+    const res = createRes();
+
+    await consentController.getPatientConsent(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(consentSpy).toHaveBeenCalledWith(expect.anything(), '12345678');
+  });
+
   it('returns 503 when db is unavailable', async () => {
     const req = NO_DB_REQ();
     const res = createRes();
@@ -918,8 +1000,10 @@ describe('ConsentController.getPatientConsent', () => {
   });
 
   it('returns 404 when consent is not found', async () => {
+    // #1188: params.participantId -- patientId was the route's stale name.
+    vi.spyOn(patientService, 'getPatient').mockResolvedValue({ participantId: 'p1' });
     vi.spyOn(consentService, 'getPatientConsent').mockResolvedValue(null);
-    const req = createReq({ params: { patientId: 'p1' } });
+    const req = createReq({ params: { participantId: 'p1' }, organizationScope: { scope: 'global', organizationIds: [] } });
     const res = createRes();
 
     await consentController.getPatientConsent(req, res);
@@ -928,8 +1012,9 @@ describe('ConsentController.getPatientConsent', () => {
   });
 
   it('returns 200 with the consent', async () => {
+    vi.spyOn(patientService, 'getPatient').mockResolvedValue({ participantId: 'p1' });
     vi.spyOn(consentService, 'getPatientConsent').mockResolvedValue({ _id: '1' });
-    const req = createReq({ params: { patientId: 'p1' } });
+    const req = createReq({ params: { participantId: 'p1' }, organizationScope: { scope: 'global', organizationIds: [] } });
     const res = createRes();
 
     await consentController.getPatientConsent(req, res);
@@ -1066,8 +1151,12 @@ describe('ConsentController.validateConsentToken', () => {
   // 'expired'` -- i.e. it pinned the raw service message being echoed to an
   // unauthenticated caller, which is the enumeration oracle itself. The
   // response must now carry no service detail at all.
-  it('returns 400 with an opaque error when the service throws', async () => {
-    vi.spyOn(patientService, 'validateConsentToken').mockRejectedValue(new Error('expired'));
+  it('returns 400 with an opaque error when the service REFUSES the token', async () => {
+    // #1127: was a bare Error. That now means an outage, not a bad token.
+    const refusal = await realConsentTokenRefusal();
+    expect(patientService.isConsentTokenRejection(refusal)).toBe(true);
+
+    vi.spyOn(patientService, 'validateConsentToken').mockRejectedValue(refusal);
     const req = createReq({ body: { patientId: 'p1', token: 'bad' } });
     const res = createRes();
 
@@ -1078,6 +1167,24 @@ describe('ConsentController.validateConsentToken', () => {
       success: false,
       error: 'Link inválido ou expirado',
     });
+  });
+
+  // #1127: the other half of that split. An unmarked error is our failure, not
+  // the participant's -- their link is fine, so answering 400 sends them to
+  // request a new invitation that cannot help. Same decision the template arm
+  // below already makes, now applied to the token check itself.
+  it('returns 503, not 400, when the token check fails for an infrastructure reason', async () => {
+    vi.spyOn(patientService, 'validateConsentToken')
+      .mockRejectedValue(new Error('connection <monitor> closed'));
+    const req = createReq({ body: { patientId: 'p1', token: 'tok' } });
+    const res = createRes();
+
+    await consentController.validateConsentToken(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(503);
+    const body = JSON.stringify(res.json.mock.calls[0][0]);
+    expect(body).not.toContain('Link inválido ou expirado');
+    expect(body).not.toContain('connection <monitor> closed');
   });
 
   // A template-lookup failure must not be reported as an invalid token: the
@@ -1097,6 +1204,26 @@ describe('ConsentController.validateConsentToken', () => {
       expect.objectContaining({ success: false, error: 'Termo de consentimento indisponível' })
     );
   });
+
+  // #1138: the assertion above is objectContaining, so it passed either way.
+  // This route is unauthenticated, and the body used to carry
+  // templateError.message verbatim -- the last raw internal string reaching an
+  // unauthenticated caller anywhere in this controller.
+  it('does not echo the template error message to the unauthenticated caller', async () => {
+    vi.spyOn(patientService, 'validateConsentToken')
+      .mockResolvedValue({ valid: true, participantId: 'p1' });
+    vi.spyOn(consentService, 'getActiveTemplate')
+      .mockRejectedValue(new Error('connection <monitor> to 10.0.0.5:27017 closed'));
+    const req = createReq({ body: { patientId: 'p1', token: 'tok' } });
+    const res = createRes();
+
+    await consentController.validateConsentToken(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(503);
+    const body = res.json.mock.calls[0][0];
+    expect(JSON.stringify(body)).not.toContain('connection <monitor> to 10.0.0.5:27017 closed');
+    expect(body).not.toHaveProperty('message');
+  });
 });
 
 describe('ConsentController.acceptConsentToken', () => {
@@ -1109,12 +1236,21 @@ describe('ConsentController.acceptConsentToken', () => {
 
   it('returns 200 with confirmation on success', async () => {
     const acceptSpy = vi.spyOn(patientService, 'acceptConsentToken').mockResolvedValue({ accepted: true });
-    const req = createReq({ body: { patientId: 'p1', token: 'tok' } });
+    const req = createReq({
+      body: { patientId: 'p1', token: 'tok', consentTemplateId: 'tpl-1', responses: { storage: true } },
+      headers: { 'user-agent': 'Mozilla/5.0' },
+    });
     const res = createRes();
 
     await consentController.acceptConsentToken(req, res);
 
-    expect(acceptSpy).toHaveBeenCalledWith(req.app.locals.db, 'p1', 'tok');
+    // #821: the manifestation and its origin reach the service.
+    expect(acceptSpy).toHaveBeenCalledWith(req.app.locals.db, 'p1', 'tok', {
+      consentTemplateId: 'tpl-1',
+      responses: { storage: true },
+      ipAddress: '127.0.0.1',
+      userAgent: 'Mozilla/5.0',
+    });
     expect(res.status).toHaveBeenCalledWith(200);
     expect(res.json).toHaveBeenCalledWith({
       success: true,
@@ -1127,8 +1263,12 @@ describe('ConsentController.acceptConsentToken', () => {
   // service message echoed back, and this route is unauthenticated too. It also
   // now answers with the SAME body as validate, so the two routes cannot be
   // played off each other.
-  it('returns 400 with an opaque error when the service throws', async () => {
-    vi.spyOn(patientService, 'acceptConsentToken').mockRejectedValue(new Error('invalid token'));
+  it('returns 400 with an opaque error when the service REFUSES the token', async () => {
+    // #1127: was a bare Error. That now means an outage, not a bad token.
+    const refusal = await realConsentTokenRefusal();
+    expect(patientService.isConsentTokenRejection(refusal)).toBe(true);
+
+    vi.spyOn(patientService, 'acceptConsentToken').mockRejectedValue(refusal);
     const req = createReq({ body: { patientId: 'p1', token: 'bad' } });
     const res = createRes();
 
@@ -1141,6 +1281,47 @@ describe('ConsentController.acceptConsentToken', () => {
     });
   });
 
+  // #1127: worse here than on validate. acceptConsentToken checks the token
+  // and THEN writes, so an unmarked error can mean the participant consented
+  // and the write recording it failed. A 400 tells them their link was invalid
+  // -- i.e. that they failed to consent, when the system failed to record it.
+  it('returns 503, not 400, when the acceptance write fails', async () => {
+    vi.spyOn(patientService, 'acceptConsentToken')
+      .mockRejectedValue(new Error('connection <monitor> closed'));
+    const req = createReq({ body: { patientId: 'p1', token: 'tok' } });
+    const res = createRes();
+
+    await consentController.acceptConsentToken(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(503);
+    const body = JSON.stringify(res.json.mock.calls[0][0]);
+    expect(body).not.toContain('Link inválido ou expirado');
+    expect(body).not.toContain('connection <monitor> closed');
+  });
+
+  // #821: a good link carrying answers that cannot be recorded as sent is
+  // neither a bad link (400) nor an outage (503).
+  it('returns 422 with a fixed body when the service refuses the MANIFESTATION', async () => {
+    const refusal = await patientService
+      .acceptConsentToken({ collection: () => ({ findOne: async () => ({ participantId: 'p1', status: 'PENDING_CONSENT', consentTokenHash: hashConsentToken('tok') }) }) }, 'p1', 'tok', {})
+      .catch(e => e);
+    expect(patientService.isConsentManifestationRejection(refusal)).toBe(true);
+
+    vi.spyOn(patientService, 'acceptConsentToken').mockRejectedValue(refusal);
+    const req = createReq({ body: { patientId: 'p1', token: 'tok' } });
+    const res = createRes();
+
+    await consentController.acceptConsentToken(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(422);
+    expect(res.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'Respostas do termo inválidas ou termo atualizado',
+      // #1299: the same fixed string as a list; nothing from the service leaks.
+      details: ['Respostas do termo inválidas ou termo atualizado'],
+    });
+  });
+
   it('falls back to query values when body is empty', async () => {
     const acceptSpy = vi.spyOn(patientService, 'acceptConsentToken').mockResolvedValue({ accepted: true });
     const req = createReq({ body: {}, query: { patientID: 'p2', token: 'tok2' } });
@@ -1148,6 +1329,6 @@ describe('ConsentController.acceptConsentToken', () => {
 
     await consentController.acceptConsentToken(req, res);
 
-    expect(acceptSpy).toHaveBeenCalledWith(req.app.locals.db, 'p2', 'tok2');
+    expect(acceptSpy).toHaveBeenCalledWith(req.app.locals.db, 'p2', 'tok2', expect.any(Object));
   });
 });

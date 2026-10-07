@@ -29,6 +29,7 @@ vi.mock('../../src/services/SampleGraphValidator', () => ({
 vi.mock('../../src/services/MerkleService', () => ({ generateSampleHash: vi.fn(() => 'hash-1') }));
 
 const service = require('../../src/services/import-lgpd.service');
+const { revealStagedRecord } = require('../../src/utils/stagedRowCrypto');
 const patientIdentityService = require('../../src/services/PatientIdentityService');
 const qualityDomain = require('../../src/services/quality-domain.service');
 const DrugService = require('../../src/services/DrugService');
@@ -485,7 +486,7 @@ describe('ImportLGPDService.importSamples', () => {
   // #499: import-lgpd's own RCS-computing CSV parse logic never called
   // rcsAssessmentService.recordAssessment — the canonical, referenced
   // RcsAssessment snapshot import.service.js's CSV/XLSX branch already
-  // writes. Real-enough proof per the build-loop overlay's backend-internal
+  // writes. Real-enough proof per this repo's backend-internal
   // proof bar: an in-memory collection mock, asserting the actual
   // specimenId/certificationResult shape passed through, not a stub.
   it('records a referenced RcsAssessment snapshot alongside the embedded copy (#499)', async () => {
@@ -968,7 +969,7 @@ describe('ImportLGPDService.importSamples', () => {
       const staged = importStagingRecordsCollection.insertMany.mock.calls[0][0];
       expect(staged).toHaveLength(1);
       expect(staged[0]).toMatchObject({
-        batchId: 'batch-1',
+        batchId: importBatchesCollection.insertOne.mock.calls[0][0]._id,
         rowNumber: 3,
         status: 'ERROR',
       });
@@ -984,7 +985,7 @@ describe('ImportLGPDService.importSamples', () => {
 
       // "sem correção silenciosa" cuts both ways: the rows have to be kept,
       // and the caller has to be told where they went.
-      expect(result.stagingBatchId).toBe('batch-1');
+      expect(result.stagingBatchId).toBe(importBatchesCollection.insertOne.mock.calls[0][0]._id);
     });
 
     it('preserves the rejected row data, not just the error message', async () => {
@@ -994,7 +995,8 @@ describe('ImportLGPDService.importSamples', () => {
 
       await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
 
-      const staged = importStagingRecordsCollection.insertMany.mock.calls[0][0];
+      // #807: sealed at rest, so read it back the way the batch reader does.
+      const staged = importStagingRecordsCollection.insertMany.mock.calls[0][0].map(revealStagedRecord);
       // The whole point of quarantine over a log line: the row can be
       // corrected and re-submitted, which needs the original values.
       expect(staged[0].row).toBeDefined();

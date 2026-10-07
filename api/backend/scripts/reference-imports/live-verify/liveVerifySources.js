@@ -4,7 +4,7 @@
 // reference-import-boundary.arch.test.js. HPO (#556, the pilot), MONDO,
 // ORPHA, ICD-10/ICD-11, OMIM, HGNC, LOINC, UCUM, DCB, ATC, DUO, UBERON,
 // NCBITAX, CL, and EDAM (#557) — all 16 Fase 2 sources are now populated,
-// closing out RF028's live-verify build-loop (per docs-7-31-2026/3-
+// closing out RF028's live-verify loop (per docs-7-31-2026/3-
 // Plano_Integrado_Foundation_Data_Pipeline.md §7.4 "Ordem recomendada da
 // Fase 2").
 //
@@ -242,7 +242,7 @@ module.exports = {
   },
   // #557: confirmed live on 2026-08-13, closing out §7.4 step 6's "LOINC e
   // UCUM" pair. Checked robots.txt first this time (per LOINC's own
-  // lesson, filed as dyeallpies-skills-pack#269) — ucum.org's is a plain
+  // lesson) — ucum.org's is a plain
   // `Disallow: /wp/wp-admin/` only, no AI-crawler-specific block, and
   // Node's own fetch() 200s the spec page directly with no Cloudflare
   // challenge (unlike loinc.org, despite sharing the same steward —

@@ -6,6 +6,7 @@ const { getCollection } = require('../../../utils/collectionResolver');
 const { isKnownStandaloneDeployment } = require('../../../utils/mongoTransaction');
 const StorageAssignmentModel = require('../../../models/StorageAssignment');
 const positionGrid = require('../../../utils/storagePositionGrid');
+const { escapeRegex } = require('../../../utils/escapeRegex');
 
 /**
  * Repositório Mongo para operações de armazenamento físico de amostras.
@@ -1025,7 +1026,7 @@ class MongoStorageRepository {
   }
 
   /**
-   * @param {{ query: string }} input
+   * @param {{ query: string, scopeFilter?: object }} input - scopeFilter: #1211's organization terms
    */
   async searchAllocatableSampleCandidates(input) {
     const searchTerm = String(input.query || '').trim();
@@ -1033,7 +1034,7 @@ class MongoStorageRepository {
 
     const samplesCollection = await getCollection(this.db, 'samples');
 
-    const searchRegex = new RegExp(searchTerm, 'i');
+    const searchRegex = new RegExp(escapeRegex(searchTerm), 'i');
     return samplesCollection.find({
       $and: [
         {
@@ -1049,7 +1050,8 @@ class MongoStorageRepository {
             { 'storageLocation.boxId': { $exists: false } },
             { 'storageLocation.boxId': null }
           ]
-        }
+        },
+        ...(input.scopeFilter && Object.keys(input.scopeFilter).length > 0 ? [input.scopeFilter] : [])
       ]
     }).limit(20).toArray();
   }

@@ -291,3 +291,56 @@ export async function waitForTerminologyRelation(
       `(last seen: ${lastSeen ?? 'no relation found'})`
   );
 }
+
+async function readGovernedByConsentIds(sampleId: string): Promise<string[]> {
+  const session = getDriver().session({ database });
+  try {
+    const result = await session.run(
+      'MATCH (:Sample {id: $sampleId})-[:GOVERNED_BY]->(c:EthicalConsent) RETURN c.id AS consentId',
+      { sampleId }
+    );
+    return result.records.map((record) => String(record.get('consentId')));
+  } finally {
+    await session.close();
+  }
+}
+
+/**
+ * #1225 fixture: polls Neo4j until `(:Sample {id: sampleId})-[:GOVERNED_BY]->
+ * (:EthicalConsent {id: consentId})` exists, or throws once `timeoutMs`
+ * elapses. `sampleId` is the key LineageRepository's consent gate MERGEs the
+ * sample under (the Mongo _id). Both events are projected asynchronously by
+ * the outbox worker, and either may land first.
+ */
+export async function waitForSampleGovernedBy(
+  sampleId: string,
+  consentId: string,
+  { timeoutMs = 15_000, intervalMs = 500 }: { timeoutMs?: number; intervalMs?: number } = {}
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let lastSeen: string[] = [];
+
+  while (Date.now() < deadline) {
+    lastSeen = await readGovernedByConsentIds(sampleId);
+    if (lastSeen.includes(consentId)) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+
+  throw new Error(
+    `waitForSampleGovernedBy: timed out after ${timeoutMs}ms waiting for Sample ${sampleId} ` +
+      `-[GOVERNED_BY]-> EthicalConsent ${consentId} (last seen: ${lastSeen.length ? lastSeen.join(', ') : 'no GOVERNED_BY edge'})`
+  );
+}
+
+/** Counts `:Sample` nodes with the given id — #1225's phantom-node check (a consent id must never key a Sample). */
+export async function countSampleNodes(sampleId: string): Promise<number> {
+  const session = getDriver().session({ database });
+  try {
+    const result = await session.run('MATCH (s:Sample {id: $sampleId}) RETURN count(s) AS n', { sampleId });
+    return Number(result.records[0].get('n'));
+  } finally {
+    await session.close();
+  }
+}

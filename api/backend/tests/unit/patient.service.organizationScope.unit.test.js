@@ -10,8 +10,7 @@ const { createDbMock, createCollectionMock } = require('../factories/db.factory'
 // clinicalUnitId is one of their scoped organizations. Mirrors
 // sample.service.test.js's listSamples organizationScope coverage — asserts
 // the query object built and passed to find(), this repo's "real backend"
-// proof bar for a backend-internal query-logic slice (build-loop's
-// local-env overlay).
+// proof bar for a backend-internal query-logic slice.
 describe('patient.service listPatients - organization scope (#340)', () => {
   it('restricts the query to clinicalUnitId $in organizationIds for an organization scope', async () => {
     const patientsCollection = createCollectionMock();

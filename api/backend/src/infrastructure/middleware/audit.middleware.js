@@ -75,7 +75,15 @@ const auditRequest = async (req, res, next) => {
           
           // Determina módulo
           const module = determineModule(requestPath);
-          
+
+          // #1120: a controller that knows WHY it refused a request names it
+          // in res.locals.auditReason, and it rides on this row rather than a
+          // second one. Without it, a machine-ingest 400 for an empty
+          // sensorId and one for a non-finite temperature were byte-identical
+          // rows. payload is in buildHashPayload, so the reason is chained.
+          // Added only when set, so every other row's payload keeps its shape.
+          const auditReason = res.locals && res.locals.auditReason;
+
           await auditLogger.log({
             action: action,
             resourceType: entity,
@@ -89,7 +97,8 @@ const auditRequest = async (req, res, next) => {
               path: requestPath,
               statusCode: statusCode,
               duration: duration,
-              query: Object.keys(req.query).length > 0 ? 'present' : null
+              query: Object.keys(req.query).length > 0 ? 'present' : null,
+              ...(auditReason ? { reason: auditReason } : {})
             }
           });
         }

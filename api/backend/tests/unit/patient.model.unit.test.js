@@ -189,7 +189,7 @@ describe('PatientModel.validate', () => {
       representativeIdentityDocument: '98765432100',
       representativePhone: '11987654321',
       status: 'ACTIVE',
-      consentToken: 'tok',
+      consentTokenHash: 'a'.repeat(64),
       consentTokenCreatedAt: new Date(),
       consentTokenExpiresAt: new Date(),
       consentNotifiedAt: new Date(),
@@ -240,14 +240,32 @@ describe('PatientModel.create', () => {
       .toThrow('Payload contém campos não canônicos');
   });
 
-  it('normalizes email to lowercase/trimmed', () => {
+  // #1166 slice 4: the participant's contact is identity data (dict-02
+  // P1X-0352/P1X-0353). It is still accepted and validated as input, because
+  // every writer routes it on to ParticipantIdentity, but it never lands on
+  // the Patient document.
+  it('#1166: does not emit email or phone -- the contact lives on ParticipantIdentity', () => {
     const result = PatientModel.create(baseData);
-    expect(result.email).toBe('maria@example.com');
+    expect(result).not.toHaveProperty('email');
+    expect(result).not.toHaveProperty('phone');
   });
 
-  it('normalizes phone digits', () => {
-    const result = PatientModel.create(baseData);
-    expect(result.phone).toBe('11987654321');
+  it('#1166: still rejects an invalid email it no longer persists', () => {
+    expect(() => PatientModel.create({ ...baseData, email: 'not-an-email' })).toThrow('email inválido');
+  });
+
+  // #1168: the legal representative's fields are identity data too (dict-02
+  // P1X-0357..0360, ParticipantIdentity only).
+  it('#1168: does not emit the four representative fields', () => {
+    const result = PatientModel.create({ ...baseData, isDeceased: true, ...{ representativeName: 'Rep Legal', representativeEmail: 'rep@example.com', representativeIdentityDocument: '98765432100', representativePhone: '11955554444' } });
+    for (const field of ['representativeName', 'representativeEmail', 'representativeIdentityDocument', 'representativePhone']) {
+      expect(result).not.toHaveProperty(field);
+    }
+    expect(result.isDeceased).toBe(true);
+  });
+
+  it('#1168: still rejects an invalid representativeEmail it no longer persists', () => {
+    expect(() => PatientModel.create({ ...baseData, representativeEmail: 'bad-email' })).toThrow('representativeEmail inválido');
   });
 
   it('defaults status to PENDING_CONSENT', () => {
@@ -263,11 +281,6 @@ describe('PatientModel.create', () => {
   it('sets isDeceased boolean from truthy/falsy input', () => {
     expect(PatientModel.create({ ...baseData, isDeceased: true }).isDeceased).toBe(true);
     expect(PatientModel.create(baseData).isDeceased).toBe(false);
-  });
-
-  it('normalizes representativePhone', () => {
-    const result = PatientModel.create({ ...baseData, representativePhone: '(21) 91234-5678' });
-    expect(result.representativePhone).toBe('21912345678');
   });
 
   it('sets consentToken date fields when provided', () => {
@@ -290,10 +303,7 @@ describe('PatientModel.create', () => {
     expect(result.clinicalUnitId).toBeNull();
     expect(result.clinicalUnit).toBeNull();
     expect(result.unitAcronym).toBeNull();
-    expect(result.representativeName).toBeNull();
-    expect(result.representativeEmail).toBeNull();
-    expect(result.representativeIdentityDocument).toBeNull();
-    expect(result.consentToken).toBeNull();
+    expect(result.consentTokenHash).toBeNull();
     expect(result.consentTokenCreatedAt).toBeNull();
     expect(result.consentTokenExpiresAt).toBeNull();
     expect(result.consentNotifiedAt).toBeNull();
@@ -373,7 +383,9 @@ describe('PatientModel.fillAcronym', () => {
     const withSecrets = {
       participantId: '77222497',
       status: 'PENDING_CONSENT',
+      // #1049: a legacy row's plaintext token, next to the hash new rows carry.
       consentToken: 'a'.repeat(64),
+      consentTokenHash: 'b'.repeat(64),
       consentTokenCreatedAt: new Date('2026-09-02T00:00:00Z'),
       consentTokenExpiresAt: new Date('2026-09-09T00:00:00Z'),
       consentNotifiedAt: new Date('2026-09-02T00:01:00Z'),
@@ -384,6 +396,11 @@ describe('PatientModel.fillAcronym', () => {
       expect(out.consentToken).toBeUndefined();
       expect(out.consentTokenCreatedAt).toBeUndefined();
       expect('consentToken' in out).toBe(false);
+    });
+
+    it('removes the stored hash too (#1049)', () => {
+      const out = PatientModel.stripConsentSecrets(withSecrets);
+      expect('consentTokenHash' in out).toBe(false);
     });
 
     it('KEEPS consentTokenExpiresAt and consentNotifiedAt -- the directory renders both', () => {

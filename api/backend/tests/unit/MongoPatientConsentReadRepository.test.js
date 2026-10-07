@@ -38,6 +38,7 @@ function createDb({ patients = {}, consents = {} } = {}) {
 function makeSample(overrides = {}) {
   return {
     _id: 's1',
+    specimenId: 'BR-0001',
     barcode: 'BC1',
     participantId: 'P1',
     sampleType: 'blood',
@@ -88,6 +89,7 @@ describe('MongoPatientConsentReadRepository', () => {
       consentValid: true,
       consentMessage: 'Consentimento ativo',
       canAllocate: true,
+      specimenId: 'BR-0001',
       barcode: 'BC1',
       participantId: 'P1'
     });

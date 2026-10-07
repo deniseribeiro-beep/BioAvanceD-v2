@@ -3,7 +3,9 @@ import {
   buildConsentUpdatePayload,
   buildRevokeAllAnswers,
   mapEConsentError,
+  mapEConsentRequestError,
   mapEConsentSubmitError,
+  mapEConsentSubmitRequestError,
   normalizeEConsentResponses,
   normalizeEConsentSnapshot,
   normalizeEConsentTemplate,
@@ -160,5 +162,49 @@ describe('error mapping', () => {
   it('falls back to a retry message when there is no status at all', () => {
     expect(mapEConsentError(undefined)).toMatch(/Tente novamente/);
     expect(mapEConsentSubmitError(undefined)).toBe('Erro ao atualizar consentimento.');
+  });
+});
+
+// #1158: EConsentPage and EConsentImportPage passed `err.response?.status` to
+// the mappers above, and in a real outage there is no response: api.ts aborts at
+// its own 10s timeout while the backend answers 503 only after 30s. So the
+// mapper got `undefined`, and on SUBMIT the participant saw a bare "Erro ao
+// atualizar consentimento." -- no retry advice, and no word on whether their
+// link still works. Same defect #1152 fixed on ConsentTokenPage.
+describe('request error mapping', () => {
+  const timeout = { code: 'ECONNABORTED', request: {}, message: 'timeout of 10000ms exceeded' };
+
+  // THE BUG, submit side. Retrying is safe on both routes: /update's JWT is not
+  // single-use, and acceptImportConsentToken returns early on an already-signed
+  // record. The copy must not claim the consent was NOT recorded, because a slow
+  // success can land after the client gave up.
+  it('tells the participant their link still works when a submit times out', () => {
+    const message = mapEConsentSubmitRequestError(timeout);
+    expect(message).toMatch(/link continua válido/i);
+    expect(message).toMatch(/tente novamente/i);
+    expect(message).not.toMatch(/inválido ou expirado/i);
+  });
+
+  it('tells the participant their link still works when loading times out', () => {
+    expect(mapEConsentRequestError(timeout)).toMatch(/link continua válido/i);
+    expect(mapEConsentRequestError(timeout)).not.toMatch(/inválido ou expirado/i);
+  });
+
+  // CONTROL: a real response still decides, unchanged.
+  it('still reports a real 401 as an invalid link on load and submit', () => {
+    expect(mapEConsentRequestError({ response: { status: 401 } })).toMatch(/Link inválido ou expirado/);
+    expect(mapEConsentSubmitRequestError({ response: { status: 401 } })).toMatch(/Link inválido ou expirado/);
+  });
+
+  it('still maps a real 422 on submit to the team-notified copy', () => {
+    expect(mapEConsentSubmitRequestError({ response: { status: 422 } })).toMatch(/equipe do biobanco foi notificada/);
+  });
+
+  // CONTROL: a throw that never reached the network is a fault in the page, not
+  // an outage, so it keeps the existing fallback rather than promising anything.
+  it('does not promise a working link for an error that never reached the network', () => {
+    const bug = new Error('Cannot read properties of undefined');
+    expect(mapEConsentRequestError(bug)).not.toMatch(/link continua válido/i);
+    expect(mapEConsentSubmitRequestError(bug)).toBe('Erro ao atualizar consentimento.');
   });
 });

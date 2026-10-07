@@ -3,6 +3,7 @@ const consentService = require('../../src/services/consent.service');
 const notificationService = require('../../src/services/notification.service');
 const notificationDispatchService = require('../../src/services/notificationDispatch.service');
 const logger = require('../../src/utils/logger');
+const consentEvidence = require('../../src/services/consentEvidence.service');
 const { ObjectId } = require('mongodb');
 
 // Fake, chainable Mongo cursor helper: supports .sort().skip().limit().toArray()
@@ -546,6 +547,31 @@ describe('ConsentService.updateTemplate', () => {
     await expect(consentService.updateTemplate(db, 'not-an-object-id', { title: 'x' })).rejects.toThrow('inválido');
   });
 
+  // #824 (found proving it on the real stack): the builder's CAAE field is
+  // optional, createTemplate stores an absent one as '' (ConsentTemplateModel
+  // .create), and this re-validated that stored '' against `caae: minLength 1`
+  // -- so a term created without a CAAE could never be revised in the builder.
+  it('revises a term that was created without a CAAE', async () => {
+    const existingId = new ObjectId();
+    const existing = {
+      _id: existingId,
+      title: 'No CAAE',
+      content: 'c',
+      htmlContent: 'c',
+      version: 'v1',
+      caae: '',
+      active: true,
+      permissions: [{ key: 'analytics', label: 'Analytics', required: false }],
+    };
+    const templates = makeCollection({ findOne: vi.fn(async () => existing) });
+    const db = makeDb({ consent_templates: templates });
+
+    const result = await consentService.updateTemplate(db, existingId.toString(), { title: 'No CAAE', content: 'c2' });
+
+    expect(result.version).toBe('v2');
+    expect(templates.insertOne).toHaveBeenCalled();
+  });
+
   it('reuses the existing permissions when the payload omits them', async () => {
     const existingId = new ObjectId();
     const existing = {
@@ -887,10 +913,10 @@ describe('ConsentService.createPolicy', () => {
       return { db, patients, templates };
     }
 
-    /** participantIds the sweep persisted a consentToken for. */
+    /** participantIds the sweep persisted a consentTokenHash for (#1049). */
     function tokenedParticipants(patients, pending) {
       return patients.updateOne.mock.calls
-        .filter(([, update]) => update?.$set?.consentToken !== undefined)
+        .filter(([, update]) => update?.$set?.consentTokenHash !== undefined)
         .map(([filter]) => pending.find((p) => String(p._id) === String(filter._id))?.participantId);
     }
 
@@ -922,6 +948,62 @@ describe('ConsentService.createPolicy', () => {
       expect(
         notificationService.enqueueConsentNotification.mock.calls.map(([patient]) => patient.participantId)
       ).toEqual(['10203041', '10203042', '10203043']);
+    });
+
+    // #824: the TCLE builder -- the only UI that publishes a term -- revises
+    // through updateTemplate, which created the new version and invited
+    // nobody: the sweep lived only in createPolicy, whose frontend client is
+    // commented out. dict-07 row 39 makes the two one entity
+    // (ConsentTemplate), so both paths now share ONE sweep.
+    it('a builder revision (updateTemplate) invites the cohort pending on the term it revises (#824)', async () => {
+      const pending = THREE_PENDING();
+      const { db, templates } = setup(pending);
+      vi.spyOn(notificationService, 'enqueueConsentNotification').mockResolvedValue(undefined);
+
+      const result = await consentService.updateTemplate(db, PREVIOUS_POLICY_ID.toString(), {
+        title: 'Policy v2',
+        content: '<p>revised</p>',
+        permissions: [{ key: 'analytics', label: 'Analytics', required: false }],
+      });
+
+      expect(
+        notificationService.enqueueConsentNotification.mock.calls.map(([patient]) => patient.participantId)
+      ).toEqual(['10203041', '10203042', '10203043']);
+      expect(result.consentNotifications).toEqual({ total: 3, notified: 3, failed: 0 });
+      // The canonical lineage fields createPolicy writes and the sweep reads
+      // (RF010 AC#1), not only the builder's own previousTemplateId.
+      expect(templates.insertOne).toHaveBeenCalledWith(expect.objectContaining({
+        previousPolicyId: PREVIOUS_POLICY_ID.toString(),
+        versionGroupId: 'group-810',
+        revisionType: 'update',
+      }));
+    });
+
+    it('a builder create (createTemplate) starts a lineage and reports an empty sweep (#824)', async () => {
+      const pending = THREE_PENDING();
+      const { db, templates } = setup(pending);
+      db.collection('consent_templates').find = vi.fn((filter = {}) =>
+        filter.versionGroupId !== undefined ? makeCursor([]) : makeCursor([{ version: 'v1' }])
+      );
+      vi.spyOn(notificationService, 'enqueueConsentNotification').mockResolvedValue(undefined);
+
+      const result = await consentService.createTemplate(db, {
+        title: 'Brand new term',
+        content: '<p>new</p>',
+        validFrom: '2026-01-01T00:00:00.000Z',
+        validTo: '2026-12-31T23:59:59.000Z',
+        permissions: [{ key: 'analytics', label: 'Analytics', required: false }],
+      });
+
+      expect(notificationService.enqueueConsentNotification).not.toHaveBeenCalled();
+      expect(result.consentNotifications).toEqual({ total: 0, notified: 0, failed: 0 });
+      expect(templates.insertOne).toHaveBeenCalledWith(expect.objectContaining({
+        previousPolicyId: null,
+        revisionType: 'create',
+        // The validity period the builder sends is kept, not dropped.
+        validFrom: new Date('2026-01-01T00:00:00.000Z'),
+        validTo: new Date('2026-12-31T23:59:59.000Z'),
+      }));
     });
 
     it('sweeps the whole version lineage, so someone pending on an older version is still invited', async () => {
@@ -1053,6 +1135,36 @@ describe('ConsentService.createPolicy', () => {
       const result = await consentService.updatePolicy(db, PREVIOUS_POLICY_ID.toString(), POLICY_PAYLOAD);
 
       expect(result.consentNotifications).toEqual({ total: 3, notified: 2, failed: 1 });
+    });
+
+    // #1166 slice 2: the sweep hands the send path the contact from the
+    // decrypted identity record. These pending rows carry no email, as every
+    // Patient will after slice 4.
+    it('#1166: notifies with the email and phone from the decrypted identity record', async () => {
+      const participantIdentityService = require('../../src/services/participantIdentity.service');
+      const pending = THREE_PENDING();
+      const { db } = setup(pending);
+      const identities = await db.collection('participantIdentities');
+      identities.findOne = vi.fn(async ({ participantId }) => ({
+        ...participantIdentityService.encryptIdentityFields({
+          participantId,
+          email: `${participantId}@example.com`,
+          phone: '11987654321',
+        }),
+        email: null,
+        phone: null,
+      }));
+      vi.spyOn(notificationService, 'enqueueConsentNotification').mockResolvedValue(undefined);
+
+      await consentService.updatePolicy(db, PREVIOUS_POLICY_ID.toString(), POLICY_PAYLOAD);
+
+      expect(
+        notificationService.enqueueConsentNotification.mock.calls.map(([patient]) => [patient.email, patient.phone])
+      ).toEqual([
+        ['10203041@example.com', '11987654321'],
+        ['10203042@example.com', '11987654321'],
+        ['10203043@example.com', '11987654321'],
+      ]);
     });
 
     it('reports a clean sweep when every patient succeeds', async () => {
@@ -1435,6 +1547,17 @@ describe('ConsentService.createPatientConsent', () => {
   // POST /api/e-consent/consents carries one).
   const validSignature = { signatureImageBase64: Buffer.from('sig').toString('base64'), signatureName: 'Jane Doe' };
 
+  // #827: every recorded consent now writes an encrypted evidence document.
+  // Kept off the disk here; consentEvidence.service.unit.test.js owns it.
+  beforeEach(() => {
+    vi.spyOn(consentEvidence, 'storeConsentEvidence').mockReturnValue({
+      evidenceDocumentUri: 'objstore://consents/stub/evidence.json',
+      evidenceHash: `sha256:${'0'.repeat(64)}`,
+      evidenceMimeType: 'application/json',
+      evidenceEncryption: null,
+    });
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -1492,6 +1615,50 @@ describe('ConsentService.createPatientConsent', () => {
     // Origin evidence is still captured (RF010 AC#4's "origem").
     expect(result.ipAddress).toBe('203.0.113.7');
     expect(result.userAgent).toBe('Mozilla/5.0');
+  });
+
+  // #827: RF010 AC#3 ("Vincular as respostas à versão exata do termo") and
+  // AC#4's evidence -- dict-02 consentVersion (ELM-0091) and the evidence
+  // trio (ELM-0105/0106, P1X-0373), all 1..1 Core. The recorder stored the
+  // template id alone, so once the template group was revised the consent
+  // could not be resolved back to the text the participant saw.
+  it('records the exact term version and the stored evidence on every consent (#827)', async () => {
+    const storeSpy = vi.spyOn(consentEvidence, 'storeConsentEvidence').mockReturnValue({
+      evidenceDocumentUri: 'objstore://consents/x/evidence.json',
+      evidenceHash: `sha256:${'a'.repeat(64)}`,
+      evidenceMimeType: 'application/json',
+      evidenceEncryption: { algorithm: 'aes-256-gcm', keyId: 'k1', iv: 'iv', tag: 'tag' },
+    });
+    const patients = makeCollection({ findOne: vi.fn(async () => ({ participantId: '12345678' })) });
+    const versioned = { ...activeTemplate, version: '4', htmlContent: '<p>v4</p>' };
+    const templates = makeCollection({ findOne: vi.fn(async () => versioned) });
+    const consents = makeCollection({ insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })) });
+    const db = makeDb({ patients, consent_templates: templates, patientConsents: consents });
+
+    const result = await consentService.createPatientConsent(db, {
+      participantId: '12345678',
+      consentTemplateId: templateId.toString(),
+      responses: { analytics: true },
+      ipAddress: '203.0.113.7',
+    });
+
+    expect(result.consentVersion).toBe('4');
+    expect(result.evidenceDocumentUri).toBe('objstore://consents/x/evidence.json');
+    expect(result.evidenceHash).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(result.evidenceMimeType).toBe('application/json');
+    // The evidence is written for THIS consent's id, against the template
+    // actually loaded, with the answers actually recorded.
+    expect(storeSpy).toHaveBeenCalledWith(expect.objectContaining({
+      consentId: result.consentId,
+      participantId: '12345678',
+      template: versioned,
+      responses: { analytics: true },
+      ipAddress: '203.0.113.7',
+    }));
+    expect(consents.insertOne).toHaveBeenCalledWith(expect.objectContaining({
+      consentVersion: '4',
+      evidenceHash: `sha256:${'a'.repeat(64)}`,
+    }));
   });
 
   it('drops a caller-supplied empty signatureImageBase64 instead of 422ing on it', async () => {

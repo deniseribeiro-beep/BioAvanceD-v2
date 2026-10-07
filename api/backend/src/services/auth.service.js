@@ -5,14 +5,16 @@ const speakeasy = require('speakeasy');
 const QRCode = require('qrcode');
 const env = require('../config/env');
 const UserModel = require('../models/User');
+const RecoveryCodeSetModel = require('../models/RecoveryCodeSet');
 const LogModel = require('../models/Log');
 const logger = require('../utils/logger');
 const sessionService = require('./session.service');
 const { hashToken } = require('../utils/tokenHash');
 const { encryptValue, decryptValue, assertFieldEncryptionConfigured } = require('../utils/fieldEncryption');
 const passwordService = require('./password.service');
-const { grantRoleForAccessType, assertGrantPreconditions, isAdministrator, resolveRoleDisplayName, resolveUserHierarchyLevel, ROLE_CODE_BY_ACCESS_TYPE } = require('./rbac-assignment.service');
+const { grantRoleForAccessType, assertGrantPreconditions, isAdministrator, isAuditReader, resolveRoleDisplayName, resolveUserHierarchyLevel, ROLE_CODE_BY_ACCESS_TYPE } = require('./rbac-assignment.service');
 const notificationDispatchService = require('./notificationDispatch.service');
+const ipAttemptService = require('./ipAttempt.service');
 
 /**
  * #1072: the ONE place that turns a stored MFA envelope back into a TOTP seed.
@@ -43,6 +45,59 @@ const notificationDispatchService = require('./notificationDispatch.service');
  */
 function readMfaSecret(user) {
   return decryptValue(user && user.mfaSecretCiphertext);
+}
+
+// #1331: the MFA step of sign-in also takes a recovery code. The login form
+// sends it in the same field as a TOTP code, and its shape tells them apart:
+// a recovery code is eight characters of generateRecoveryCode's alphabet
+// (user-security.service.js), a TOTP code six digits. Spaces, hyphens and
+// case are forgiven, since the code is typed from a printed sheet.
+const RECOVERY_CODE_PATTERN = /^[A-HJ-NP-Z2-9]{8}$/;
+
+function asRecoveryCode(code) {
+  if (typeof code !== 'string') return null;
+  const normalized = code.replace(/[\s-]/g, '').toUpperCase();
+  return RECOVERY_CODE_PATTERN.test(normalized) ? normalized : null;
+}
+
+// Finds the user's set and the unspent hash this code matches, or null.
+// Matching does not spend it: processLogin spends the code only once the
+// sign-in will complete, so a code that also carries a required password
+// change (#1252) is spent by the submission that makes the change.
+async function matchRecoveryCode(db, user, code) {
+  const set = await db.collection('recovery_codes').findOne(RecoveryCodeSetModel.ownerFilter(user._id));
+  for (const hash of RecoveryCodeSetModel.unspentHashesOf(set)) {
+    if (await bcrypt.compare(code, hash)) return { set, hash };
+  }
+  return null;
+}
+
+// Spends a matched code in one conditional update and audits it. When
+// another sign-in spent it between the match and here, the update modifies
+// nothing, and this attempt is refused and counted like a wrong code.
+async function redeemRecoveryCode(db, usersCollection, user, match, req) {
+  const { filter, update } = RecoveryCodeSetModel.spendOf(match.set, match.hash, crypto.randomUUID());
+  const result = await db.collection('recovery_codes').updateOne(filter, update);
+  if (result.modifiedCount !== 1) {
+    await usersCollection.updateOne({ _id: user._id }, { $inc: { mfaFailedAttempts: 1 } });
+    throw new Error('Código MFA inválido');
+  }
+  const auditLogger = require('../utils/auditLogger');
+  auditLogger.init(db);
+  await auditLogger.log({
+    action: 'MFA',
+    resourceType: 'User',
+    resourceId: user._id.toString(),
+    status: 'success',
+    severity: 'warning',
+    message: 'Código de recuperação MFA utilizado no login',
+    payload: {
+      operation: 'recovery_code_redeemed',
+      remainingCount: RecoveryCodeSetModel.unspentHashesOf(match.set).length - 1
+    },
+    req,
+    module: 'Autenticação'
+  });
 }
 
 // #952 / RF001 AC#2: "Bloquear temporariamente a conta apos o limite configurado
@@ -169,6 +224,68 @@ function clearedLockoutFields() {
   return { failedLoginAttempts: 0, accountLockedUntil: null };
 }
 
+/**
+ * #1258 item 5: the account-status gate, lifted from processLogin so the two
+ * unauthenticated first-login endpoints apply the same one. They had none:
+ * an inactive, suspended or blocked account that had not enrolled MFA got a
+ * full session from enable-first-login, and neither authenticate nor
+ * issueSessionTokens reads the status. #1247's requireMFAForAll sends every
+ * returning unenrolled account down that path, which is how the review
+ * found it.
+ *
+ * Called after the password check at every site, as processLogin always
+ * did: whoever does not know the password must not learn the status.
+ */
+function assertAccountActive(user) {
+  const normalizedStatus = UserModel.normalizeStatus(user.status);
+  if (normalizedStatus !== 'active') {
+    const statusMessages = {
+      'inactive': 'Usuário inativo',
+      'suspended': 'Usuário suspenso',
+      'blocked': 'Usuário bloqueado'
+    };
+    throw new Error(statusMessages[normalizedStatus] || 'Usuário não pode fazer login');
+  }
+}
+
+/**
+ * #914 / RF001 ("aplicar autenticação multifator conforme a política de
+ * segurança"), RF014 AC#3. authentication.requireMFA (dict-02 P1X-0278,
+ * "Exige MFA segundo a política global") was one of the SecurityConfiguration
+ * keys nothing read: the mandatory first-login enrolment below ran for every
+ * non-admin whatever the Administrador had configured.
+ *
+ * Reads the collection directly, not through securityService.getConfig, which
+ * INSERTS a default document when none exists -- the same reason
+ * session.service.js gives for its own policy read.
+ *
+ * Fails CLOSED, to the canonical default `true`: an unreadable policy keeps MFA
+ * mandatory, which is also exactly the behaviour before this read existed.
+ * Only an explicit boolean `false` relaxes it.
+ *
+ * #1247: enhancedSecurity.requireMFAForAll (dict-02 P1X-0311) is read only
+ * while enhancedSecurity.enabled (P1X-0310, default false) is true. #1011's
+ * decision keeps Administrador MFA optional and says to revisit it "via
+ * config (not a silent code flip)": the mode is that config. Under it, every
+ * user without MFA configured is sent to enrolment at login, Administrador
+ * included and not only on a first login, so an account that predates the
+ * mode is enrolled too. Fails to `false`: an unreadable mode is the default
+ * (off), and requireMFA's own fail-closed read still applies.
+ */
+async function resolveMfaEnrolmentPolicy(db) {
+  try {
+    const config = await db.collection('security_config').findOne({ _id: 'main' });
+    const enhanced = (config && config.enhancedSecurity) || {};
+    return {
+      requireMFA: !(config && config.authentication && config.authentication.requireMFA === false),
+      requireMFAForAll: enhanced.enabled === true && enhanced.requireMFAForAll !== false,
+    };
+  } catch (error) {
+    logger.warn('#914: política de MFA ilegível, mantendo MFA obrigatório:', error.message);
+    return { requireMFA: true, requireMFAForAll: false };
+  }
+}
+
 const ACCESS_TOKEN_TTL = '15m';
 const REFRESH_TOKEN_TTL = '7d';
 
@@ -262,12 +379,33 @@ class AuthService {
   }
   /**
    * Registra um novo usuário
+   *
+   * #1057: `grantedBy` is REQUIRED, and it is who the hierarchy floor below
+   * is measured against. Pass the calling user's userID from an HTTP route,
+   * or the literal 'system' from a trusted internal caller with no human
+   * actor. It used to default to 'system', and a default parameter also
+   * fires on `undefined`: a route passing `req.user?.userID` without a user
+   * would then have skipped the floor silently. A missing value now throws
+   * before any read or write.
    */
-  async registerUser(db, userData, grantedBy = 'system') {
+  async registerUser(db, userData, grantedBy) {
     try {
-      const validation = UserModel.validate(userData);
+      if (!grantedBy) {
+        throw new Error("registerUser requires grantedBy: the caller's userID, or 'system' for a trusted internal caller");
+      }
+
+      // #1249: registration checks strength against the stored passwordRules
+      // policy, as every other password write has since #1246.
+      const passwordPolicy = await passwordService.resolvePasswordPolicy(db);
+      const validation = UserModel.validate(userData, { passwordPolicy });
       if (!validation.isValid) {
-        throw new Error(validation.errors.join(', '));
+        // RNF018 (#1300): a validation failure answers 422; the caller's catch
+        // keeps every other error on its own status.
+        const validationError = new Error(validation.errors.join(', '));
+        validationError.statusCode = 422;
+
+        validationError.details = validation.errors;
+        throw validationError;
       }
 
       const usersCollection = db.collection('users');
@@ -312,6 +450,27 @@ class AuthService {
         throw new Error(`accessType inválido: ${resolvedAccessType}`);
       }
 
+      // #998's hierarchy floor, moved here from user.routes.js (#1057,
+      // Denise 2026-09-25): a caller may not create a user at a level above
+      // their own. It lived in one of two routes reaching this method, and
+      // the sibling POST /api/auth/register inherited nothing, which is how
+      // #1037 happened. Enforcing it in the service means no route can drift
+      // from it again.
+      //
+      // Measured against the RESOLVED level, default included, so a request
+      // with no accessType/roleName is held to the same floor as one naming
+      // a level. A caller with no active role resolves to null, which is
+      // refused. 'system' is the one exemption: a trusted internal caller
+      // with no hierarchy of its own to compare against.
+      if (grantedBy !== 'system') {
+        const callerLevel = await resolveUserHierarchyLevel(db, grantedBy);
+        if (Number(resolvedAccessType) > Number(callerLevel || 0)) {
+          const error = new Error('Não é possível criar um usuário com nível de acesso superior ao seu.');
+          error.statusCode = 403;
+          throw error;
+        }
+      }
+
       // Para Administrador, MFA é opcional e pode ser setado manualmente
       // Se não foi fornecido explicitamente, desabilita por padrão
       if (resolvedAccessType === 4 || userData.roleName === 'Administrador') {
@@ -326,11 +485,9 @@ class AuthService {
       // #1028: widens #435's pre-write guard to the OTHER two throw sites
       // reachable from grantRoleForAccessType below. #435 closed the
       // accessType trigger; an unseeded RBAC catalogue and an unknown
-      // organizationId were still reachable AFTER the insert, and the
-      // organizationId one is reachable by an UNAUTHENTICATED caller --
-      // auth.routes.js registers POST /register with no `authenticate`, and
-      // #1037's rejectCallerSuppliedPrivilege inspects only accessType and
-      // roleName, so a bogus organizationId passes straight through.
+      // organizationId were still reachable AFTER the insert. (When #1028
+      // landed, the organizationId one was reachable anonymously through
+      // POST /api/auth/register. #1037 gated that route and #1057 deleted it.)
       //
       // Fail-fast, not atomic: only compose.test.yml runs a replica set, so a
       // transaction here would break user creation on dev and prod while the
@@ -401,6 +558,22 @@ class AuthService {
         throw new Error(translate('auth.emailAndPasswordRequired', lang));
       }
 
+      // #1255: the source-address gate, before the lookup so it covers an
+      // unknown identifier too, and before any compare for #952's reason.
+      // The generic message, like the account lockout's: a distinct "address
+      // blocked" answer would say the block exists, and every caller from the
+      // address gets the same one, so it names no account.
+      //
+      // #1268: and fast, with no equalizing compare, for the account lockout's
+      // reason (#952, and #1036's note above burnPasswordComparison): a dummy
+      // round here would hand back the work the block exists to refuse. The
+      // speed says only "this address is blocked", the same for every name it
+      // tries, so it tells the caller nothing about any account.
+      // auth.ipBlock.parity.1268.test.js pins the parity on all three endpoints.
+      if (await ipAttemptService.isSourceBlocked(db, req)) {
+        throw new Error('Credenciais inválidas');
+      }
+
       // Remove espaços do termo de busca
       const searchTerm = email.trim();
       // #1052: the raw caller-supplied identifier is NOT echoed here. The
@@ -444,6 +617,10 @@ class AuthService {
         // anonymous caller could force, which sat INSIDE the window #1036's
         // equalizer below exists to keep constant.
         logger.warn('Tentativa de login falhou: identificador não encontrado');
+        // #1255: an unknown name counts against the source. It is what a
+        // credential-stuffing list is full of, and #1256's detector counts
+        // the distinct names one source tries.
+        await ipAttemptService.recordFailedSourceAttempt(db, req, `name:${searchTerm}`);
         // #1036: the same residual on the highest-traffic endpoint. A user
         // that exists reaches processLogin's real compare; one that does not
         // returned from here without one.
@@ -535,20 +712,15 @@ class AuthService {
         // #986: extracted to recordFailedPasswordAttempt() so the two
         // first-login endpoints count identically. Behaviour here is unchanged.
         await recordFailedPasswordAttempt(db, usersCollection, user);
+        // #1255: and against the source address.
+        await ipAttemptService.recordFailedSourceAttempt(db, req, `id:${user._id}`);
 
         throw new Error('Credenciais inválidas');
       }
 
       // Verifica status do usuário - impede login se não estiver ativo
-      const normalizedStatus = UserModel.normalizeStatus(user.status);
-      if (normalizedStatus !== 'active') {
-        const statusMessages = {
-          'inactive': 'Usuário inativo',
-          'suspended': 'Usuário suspenso',
-          'blocked': 'Usuário bloqueado'
-        };
-        throw new Error(statusMessages[normalizedStatus] || 'Usuário não pode fazer login');
-      }
+      // #1258: shared with the first-login endpoints (assertAccountActive).
+      assertAccountActive(user);
 
       // #683 (RF003): bloqueio de MFA por força bruta. O contador acima grava
       // mfaLocked após 5 códigos errados, mas nada lia a flag: a tentativa
@@ -583,7 +755,12 @@ class AuthService {
 
       // MFA obrigatório apenas para não-admin no primeiro login
       // Admin com MFA habilitado também precisa configurar no primeiro login se não estiver configurado
-      if (!isAdmin && isFirstLogin && mfaNotConfigured) {
+      // #914: and only while the policy requires it (authentication.requireMFA).
+      // #1247: the enhanced mode's requireMFAForAll widens it to every user.
+      const mfaPolicy = mfaNotConfigured ? await resolveMfaEnrolmentPolicy(db) : null;
+      const enrolmentDue = mfaNotConfigured
+        && (mfaPolicy.requireMFAForAll || (!isAdmin && isFirstLogin && mfaPolicy.requireMFA));
+      if (enrolmentDue) {
         // Primeiro login - MFA obrigatório
         // Gera token temporário apenas para setup MFA
         // #433: accessType resolved from the live RBAC assignment, not the
@@ -617,7 +794,13 @@ class AuthService {
             accessType: await resolveUserHierarchyLevel(db, user._id.toString()),
             // #427: resolved from the RBAC assignment — roleName is no
             // longer persisted on the User document for new/edited users.
-            roleName: await resolveRoleDisplayName(db, user._id.toString())
+            roleName: await resolveRoleDisplayName(db, user._id.toString()),
+
+            // #1239: the audit-trail gate's own rule (admin or the additive
+
+            // auditor role), so the frontend guards the Logs screen with it.
+
+            isAuditReader: await isAuditReader(db, user._id.toString())
           }
         };
       }
@@ -625,6 +808,8 @@ class AuthService {
       // Verifica MFA se estiver habilitado
       // Para admin, MFA é opcional; se estiver habilitado, verifica
       // Para não-admin, MFA é obrigatório se habilitado
+      // #1331: a matched recovery code, spent below once the sign-in completes.
+      let recoveryMatch = null;
       if (user.mfaEnabled) {
         if (!mfaCode) {
           return {
@@ -633,12 +818,21 @@ class AuthService {
           };
         }
 
-        const verified = speakeasy.totp.verify({
-          secret: readMfaSecret(user),
-          encoding: 'base32',
-          token: mfaCode,
-          window: 2
-        });
+        // #1331: a recovery code stands in for the TOTP code. A spent or
+        // unknown one fails exactly like a wrong TOTP code, counter included.
+        const recoveryCode = asRecoveryCode(mfaCode);
+        let verified;
+        if (recoveryCode) {
+          recoveryMatch = await matchRecoveryCode(db, user, recoveryCode);
+          verified = recoveryMatch !== null;
+        } else {
+          verified = speakeasy.totp.verify({
+            secret: readMfaSecret(user),
+            encoding: 'base32',
+            token: mfaCode,
+            window: 2
+          });
+        }
 
         if (!verified) {
           // Incrementa tentativas falhas
@@ -647,6 +841,8 @@ class AuthService {
             { _id: user._id },
             { $set: { mfaFailedAttempts: failedAttempts } }
           );
+          // #1255: a wrong code counts against the source as well.
+          await ipAttemptService.recordFailedSourceAttempt(db, req, `id:${user._id}`);
 
           if (failedAttempts >= 5) {
             await usersCollection.updateOne(
@@ -692,20 +888,50 @@ class AuthService {
       // set. Mirrors changePassword's validate/hash/history update
       // (auth.controller.js) inlined here, since this path has no prior
       // authenticated session to call that endpoint with.
-      if (user.forceReset) {
+      //
+      // #1251: an expired password (passwordRules.expirationDays) takes the
+      // same branch. After MFA, like forceReset, so an expiry never hands a
+      // password change to someone holding only the password.
+      //
+      // #1285: so does a single-factor sign-in whose password is under the
+      // single-factor floor, typically one set under the MFA floor before an
+      // MFA reset. Only this path holds the plaintext.
+      const passwordPolicy = await passwordService.resolvePasswordPolicy(db);
+      const passwordExpired = passwordService.isPasswordExpired(user, passwordPolicy);
+      const belowFloor = passwordService.belowSingleFactorFloor(password, passwordPolicy, user);
+      const passwordChangeDue = user.forceReset || passwordExpired || belowFloor;
+
+      // #1331: a recovery code is spent only by the submission that completes
+      // the sign-in. With a password change due, that is the one carrying a
+      // new password that passes the policy checks, since the form sends the
+      // same code back with it (#1252).
+      if (recoveryMatch && !passwordChangeDue) {
+        await redeemRecoveryCode(db, usersCollection, user, recoveryMatch, req);
+      }
+
+      if (passwordChangeDue) {
         if (!newPassword) {
+          const reason = user.forceReset ? null : (passwordExpired ? 'expired' : 'below_policy');
           return {
             requiresPasswordChange: true,
-            message: 'Alteração de senha obrigatória antes de continuar'
+            ...(reason ? { reason } : {}),
+            message: reason === 'expired'
+              ? 'Senha expirada: defina uma nova senha para continuar'
+              : reason === 'below_policy'
+                ? 'Senha abaixo do tamanho mínimo atual: defina uma nova senha para continuar'
+                : 'Alteração de senha obrigatória antes de continuar'
           };
         }
 
-        passwordService.validateStrength(newPassword);
-        await passwordService.validateReuse(newPassword, user);
+        passwordService.validateStrength(newPassword, passwordPolicy, user);
+        await passwordService.validateReuse(newPassword, user, passwordPolicy);
+
+        if (recoveryMatch) {
+          await redeemRecoveryCode(db, usersCollection, user, recoveryMatch, req);
+        }
 
         const newHash = await bcrypt.hash(newPassword, 10);
-        const history = Array.isArray(user.passwordHistory) ? user.passwordHistory : [];
-        const updatedHistory = [user.password, ...history].slice(0, 3);
+        const updatedHistory = passwordService.nextPasswordHistory(user, passwordPolicy);
 
         await usersCollection.updateOne(
           { _id: user._id },
@@ -713,7 +939,7 @@ class AuthService {
             $set: {
               password: newHash,
               passwordHistory: updatedHistory,
-              lastPasswordChange: new Date(),
+              passwordChangedAt: new Date(),
               forceReset: false,
               updatedAt: new Date()
             }
@@ -763,6 +989,12 @@ class AuthService {
           // #427: resolved from the RBAC assignment — roleName is no
           // longer persisted on the User document for new/edited users.
           roleName: await resolveRoleDisplayName(db, user._id.toString()),
+
+          // #1239: the audit-trail gate's own rule (admin or the additive
+
+          // auditor role), so the frontend guards the Logs screen with it.
+
+          isAuditReader: await isAuditReader(db, user._id.toString()),
           mfaEnabled: user.mfaEnabled
         }
       };
@@ -775,7 +1007,7 @@ class AuthService {
   /**
    * Configura MFA para primeiro login (sem autenticação)
    */
-  async setupMFAFirstLogin(db, credentials) {
+  async setupMFAFirstLogin(db, credentials, req) {
     try {
       const { username, password } = credentials;
 
@@ -792,6 +1024,11 @@ class AuthService {
       }
       const usernameTerm = username.trim();
 
+      // #1255: the source-address gate, as in login().
+      if (await ipAttemptService.isSourceBlocked(db, req)) {
+        throw new Error('Credenciais inválidas');
+      }
+
       const usersCollection = db.collection('users');
       const user = await usersCollection.findOne({
         $or: [
@@ -801,6 +1038,8 @@ class AuthService {
       });
 
       if (!user) {
+        // #1255: an unknown name counts against the source, as in login().
+        await ipAttemptService.recordFailedSourceAttempt(db, req, `name:${usernameTerm}`);
         // #1036: equalize with the enrolled/not-enrolled branches below.
         await burnPasswordComparison(password);
         throw new Error('Credenciais inválidas');
@@ -859,8 +1098,12 @@ class AuthService {
         // attacker who knows a username could guess passwords here forever
         // without ever incrementing failedLoginAttempts.
         await recordFailedPasswordAttempt(db, usersCollection, user);
+        await ipAttemptService.recordFailedSourceAttempt(db, req, `id:${user._id}`);
         throw new Error('Credenciais inválidas');
       }
+
+      // #1258 item 5: an account that may not log in may not enrol either.
+      assertAccountActive(user);
 
       // #1072: a `mfaNotConfigured` binding sat here, computed and never
       // read -- dead, and a live trap for anyone editing this function
@@ -941,6 +1184,11 @@ class AuthService {
       }
       const usernameTerm = username.trim();
 
+      // #1255: the source-address gate, as in login().
+      if (await ipAttemptService.isSourceBlocked(db, req)) {
+        throw new Error('Credenciais inválidas');
+      }
+
       if (!mfaCode) {
         throw new Error('Código MFA é obrigatório');
       }
@@ -956,6 +1204,8 @@ class AuthService {
       });
 
       if (!user) {
+        // #1255: an unknown name counts against the source, as in login().
+        await ipAttemptService.recordFailedSourceAttempt(db, req, `name:${usernameTerm}`);
         // #1036: equalize with the enrolled/not-enrolled branches below.
         await burnPasswordComparison(password);
         throw new Error('Credenciais inválidas');
@@ -1000,8 +1250,13 @@ class AuthService {
       const passwordMatch = await bcrypt.compare(password, user.password);
       if (!passwordMatch) {
         await recordFailedPasswordAttempt(db, usersCollection, user);
+        await ipAttemptService.recordFailedSourceAttempt(db, req, `id:${user._id}`);
         throw new Error('Credenciais inválidas');
       }
+
+      // #1258 item 5: this path issues a full session, so it applies the
+      // status gate processLogin applies.
+      assertAccountActive(user);
 
       // #1072: ciphertext presence gates reachability; the decrypt happens
       // only inside the verify call below.
@@ -1017,6 +1272,8 @@ class AuthService {
       });
 
       if (!verified) {
+        // #1255: a wrong enrolment code counts against the source.
+        await ipAttemptService.recordFailedSourceAttempt(db, req, `id:${user._id}`);
         throw new Error('Código MFA inválido');
       }
 
@@ -1038,8 +1295,6 @@ class AuthService {
         }
       );
 
-      const tokenBundle = await this.issueSessionTokens(db, user, req);
-
       // Registra log (anonimizado via auditLogger)
       const auditLogger = require('../utils/auditLogger');
       auditLogger.init(db);
@@ -1052,6 +1307,38 @@ class AuthService {
         req: req,
         module: 'Autenticação'
       });
+
+      // #1250 (RF014 AC#4): processLogin sends a first-login non-admin here
+      // BEFORE it reaches its forceReset branch, so this path used to issue a
+      // full session on a password an administrator had just set or forced.
+      // The enrolment stands -- it is the user's own second factor -- but no
+      // token is issued: the next login, now with MFA, reaches processLogin's
+      // forceReset branch and its password change.
+      //
+      // #1253 item 3: an administrator who knows the password they set can
+      // enrol their own authenticator here first, and the real user then
+      // meets an MFA they did not enrol. That grants nothing the role lacks:
+      // with or without this enrolment, an administrator who sets a password
+      // can log in with it and complete the forced change, which is
+      // set-password's own exposure, and the same administrator can reset-mfa
+      // for the user. Set-password, reset-mfa and this enrolment (the row
+      // above) are all audited.
+      //
+      // #1258 item 5: an expired password (#1251) withholds the session the
+      // same way. Under requireMFAForAll every returning unenrolled account
+      // comes through here, and its password may have expired long ago.
+      const passwordExpired = passwordService.isPasswordExpired(user, await passwordService.resolvePasswordPolicy(db));
+      if (user.forceReset || passwordExpired) {
+        return {
+          requiresPasswordChange: true,
+          ...(passwordExpired && !user.forceReset ? { reason: 'expired' } : {}),
+          message: passwordExpired && !user.forceReset
+            ? 'Senha expirada: defina uma nova senha para continuar'
+            : 'Alteração de senha obrigatória antes de continuar'
+        };
+      }
+
+      const tokenBundle = await this.issueSessionTokens(db, user, req);
 
       return {
         success: true,
@@ -1070,6 +1357,12 @@ class AuthService {
           // #427: resolved from the RBAC assignment — roleName is no
           // longer persisted on the User document for new/edited users.
           roleName: await resolveRoleDisplayName(db, user._id.toString()),
+
+          // #1239: the audit-trail gate's own rule (admin or the additive
+
+          // auditor role), so the frontend guards the Logs screen with it.
+
+          isAuditReader: await isAuditReader(db, user._id.toString()),
           mfaEnabled: true
         }
       };
@@ -1146,6 +1439,17 @@ class AuthService {
         throw new Error('Código MFA inválido');
       }
 
+      // #1270: processLogin hands a first-login account its setup tempToken
+      // before its forceReset/expiry branch, and the middleware admits that
+      // token here, so this is a second door onto completing a first login.
+      // It applies enable-first-login's gates: the status before any write
+      // (#1258), and forceReset or an expired password (#1250, #1251) below,
+      // where the enrolment stands but no session is issued.
+      const isFirstLogin = user.lastLogin === null;
+      if (isFirstLogin) {
+        assertAccountActive(user);
+      }
+
       // Ativa MFA e atualiza último login (primeiro acesso completo)
       const updateData = {
         mfaEnabled: true,
@@ -1164,7 +1468,18 @@ class AuthService {
       );
 
         // Se for primeiro login, gera tokens de sessão completos
-      if (user.lastLogin === null) {
+      if (isFirstLogin) {
+        const passwordExpired = passwordService.isPasswordExpired(user, await passwordService.resolvePasswordPolicy(db));
+        if (user.forceReset || passwordExpired) {
+          return {
+            requiresPasswordChange: true,
+            ...(passwordExpired && !user.forceReset ? { reason: 'expired' } : {}),
+            message: passwordExpired && !user.forceReset
+              ? 'Senha expirada: defina uma nova senha para continuar'
+              : 'Alteração de senha obrigatória antes de continuar'
+          };
+        }
+
         const tokenBundle = await this.issueSessionTokens(db, user, null);
 
         return { 
@@ -1184,6 +1499,12 @@ class AuthService {
             // #427: resolved from the RBAC assignment — roleName is no
             // longer persisted on the User document for new/edited users.
             roleName: await resolveRoleDisplayName(db, user._id.toString()),
+
+            // #1239: the audit-trail gate's own rule (admin or the additive
+
+            // auditor role), so the frontend guards the Logs screen with it.
+
+            isAuditReader: await isAuditReader(db, user._id.toString()),
             mfaEnabled: true
           }
         };
@@ -1284,9 +1605,24 @@ class AuthService {
         module: 'Autenticação'
       });
 
-      // Em produção, aqui você enviaria um email com o link
-      // Por enquanto, retornamos o token para desenvolvimento
       const resetLink = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/reset-password?token=${resetToken}`;
+
+      // #1203: the link goes out by email in every environment. Until now it
+      // left only in the development response below, so in production this
+      // route promised a link it never sent.
+      //
+      // NOT awaited, deliberately: the unknown-user and inactive-user
+      // branches above return without sending, so an awaited SMTP round-trip
+      // would make "this address exists" visible through latency -- the
+      // channel #1036 closed on the login path. And a delivery failure is
+      // logged, never thrown, so the response cannot differ by outcome
+      // either. sendEmail records its own compliance row for each attempt.
+      const notificationService = require('./NotificationService');
+      Promise.resolve()
+        .then(() => notificationService.sendPasswordReset(user.email, resetLink, { expiresInMinutes: 60 }))
+        .catch((mailError) => {
+          logger.error('#1203: falha ao enviar email de recuperação de senha:', mailError && mailError.message);
+        });
 
       logger.info('Token de recuperação gerado para:', email);
 
@@ -1319,9 +1655,11 @@ class AuthService {
         throw new Error('Nova senha é obrigatória');
       }
 
-      // Valida complexidade da senha
-      const PasswordValidator = require('../utils/passwordValidator');
-      PasswordValidator.validateOrThrow(newPassword);
+      // #1246: the policy's strength rules, the same check every other
+      // password write uses (this path had its own 12-character validator).
+      // #1257: checked below, once the token names the account, because its
+      // MFA enrolment decides its length floor.
+      const passwordPolicy = await passwordService.resolvePasswordPolicy(db);
 
       // Verifica e decodifica token
       let decoded;
@@ -1377,15 +1715,39 @@ class AuthService {
         throw new Error('Token de recuperação expirado. Solicite um novo link.');
       }
 
+      // #1244: the sixth password writer, and the one that neither checked
+      // reuse nor kept history -- a forgotten-password link could set the
+      // current password again, or any earlier one. After the token checks,
+      // so an invalid link never learns whether a password was reused.
+      passwordService.validateStrength(newPassword, passwordPolicy, user);
+      await passwordService.validateReuse(newPassword, user, passwordPolicy);
+
       // Hash da nova senha
       const hashedPassword = await bcrypt.hash(newPassword, 10);
 
       // Atualiza senha e remove token de recuperação
+      //
+      // #1002: the reset also ENDS a password lockout. This route never
+      // consulted isAccountLocked, which is right -- OWASP's Authentication
+      // Cheat Sheet ("Account Lockout") recommends letting the forgotten-
+      // password flow work while an account is locked, so a lockout cannot be
+      // turned into a denial of service against its owner. But it did not
+      // clear the lock either, so a user who proved control of their mailbox
+      // and set a new password was still refused at login until
+      // accountLockedUntil passed. The counter guarded the OLD password, which
+      // no longer exists after this write, so there is nothing left for it to
+      // protect.
       await usersCollection.updateOne(
         { _id: user._id },
         {
           $set: {
             password: hashedPassword,
+            passwordHistory: passwordService.nextPasswordHistory(user, passwordPolicy),
+            passwordChangedAt: new Date(),
+            // #1250: the owner just replaced the password through their own
+            // mailbox, which is what a forced reset asks for.
+            forceReset: false,
+            ...clearedLockoutFields(),
             updatedAt: new Date()
           },
           $unset: {

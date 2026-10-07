@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 const request = require('supertest');
 const jwt = require('jsonwebtoken');
+const { ObjectId } = require('mongodb');
 
 process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
@@ -194,5 +195,168 @@ describe('POST /api/datasets', () => {
     expect(res.body.success).toBe(true);
     expect(res.body.data.datasetId).toBeTruthy();
     expect(res.body.data.distributionFiles).toEqual([]);
+  });
+});
+
+// #1182: the assay FILES were org-scoped on the parent's laboratoryId in
+// #644, but the Assay record itself rode createMasterDataRouter with no
+// organization scope at all -- a Coordenador scoped to one organization
+// could list, read, edit or delete another organization's assay, and move
+// their own out of reach by rewriting laboratoryId. accessType 3, since an
+// Administrador (4) is global and bypasses org scope by design.
+describe('#1182: /api/assays is scoped on laboratoryId', () => {
+  const rbacCollectionsScoped = buildRbacCollections([{ userAccountId: 'qa-3', accessType: 3, organizationId: 'org-mine' }]);
+  const MINE = { assayId: 'assay-mine', laboratoryId: 'org-mine', studyId: 'study-1' };
+  const OTHER = { assayId: 'assay-other', laboratoryId: 'org-other', studyId: 'study-1' };
+  const token = () => `Bearer ${makeToken('qa-3', 3)}`;
+
+  it('filters the list to the caller organizations', async () => {
+    const find = vi.fn().mockReturnValue({ sort: vi.fn().mockReturnThis(), toArray: vi.fn().mockResolvedValue([MINE]) });
+    app.locals.db = createDbMock({ assays: createCollectionMock({ find }), ...rbacCollectionsScoped });
+
+    const res = await request(app).get('/api/assays').set('Authorization', token());
+
+    expect(res.status).toBe(200);
+    expect(find).toHaveBeenCalledWith({ laboratoryId: { $in: ['org-mine'] } });
+  });
+
+  it('refuses to read another organization assay', async () => {
+    app.locals.db = createDbMock({ assays: createCollectionMock({ findOne: vi.fn().mockResolvedValue(OTHER) }), ...rbacCollectionsScoped });
+
+    const res = await request(app).get('/api/assays/assay-other').set('Authorization', token());
+
+    expect(res.status).toBe(403);
+  });
+
+  it('refuses to edit another organization assay', async () => {
+    const findOneAndUpdate = vi.fn().mockResolvedValue(OTHER);
+    app.locals.db = createDbMock({
+      assays: createCollectionMock({ findOne: vi.fn().mockResolvedValue(OTHER), findOneAndUpdate }),
+      ...rbacCollectionsScoped,
+    });
+
+    const res = await request(app).put('/api/assays/assay-other').set('Authorization', token()).send({ intendedUse: 'x' });
+
+    expect(res.status).toBe(403);
+    expect(findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a PUT that moves an in-scope assay to another laboratory', async () => {
+    const findOneAndUpdate = vi.fn().mockResolvedValue(MINE);
+    app.locals.db = createDbMock({
+      assays: createCollectionMock({ findOne: vi.fn().mockResolvedValue(MINE), findOneAndUpdate }),
+      ...rbacCollectionsScoped,
+    });
+
+    const res = await request(app).put('/api/assays/assay-mine').set('Authorization', token()).send({ laboratoryId: 'org-other' });
+
+    expect(res.status).toBe(403);
+    expect(findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('refuses to delete another organization assay', async () => {
+    const deleteOne = vi.fn().mockResolvedValue({ deletedCount: 1 });
+    app.locals.db = createDbMock({
+      assays: createCollectionMock({ findOne: vi.fn().mockResolvedValue(OTHER), deleteOne }),
+      ...rbacCollectionsScoped,
+    });
+
+    const res = await request(app).delete('/api/assays/assay-other').set('Authorization', token());
+
+    expect(res.status).toBe(403);
+    expect(deleteOne).not.toHaveBeenCalled();
+  });
+
+  it('stamps the caller organization on a create, ignoring the body laboratoryId', async () => {
+    const insertOne = vi.fn().mockResolvedValue({ insertedId: '507f1f77bcf86cd799439011' });
+    app.locals.db = createDbMock({
+      assays: createCollectionMock({ insertOne }),
+      samples: createCollectionMock({ findOne: vi.fn().mockResolvedValue({ _id: 'specimen-1' }) }),
+      protocols: createCollectionMock({ findOne: vi.fn().mockResolvedValue({ protocolId: 'protocol-1' }) }),
+      users: createCollectionMock({ findOne: vi.fn().mockResolvedValue({ _id: 'user-1' }) }),
+      organizations: createCollectionMock({ findOne: vi.fn().mockResolvedValue({ organizationId: 'org-any' }) }),
+      ...rbacCollectionsScoped,
+    });
+
+    const res = await request(app)
+      .post('/api/assays')
+      .set('Authorization', token())
+      .send({ ...VALID_ASSAY_PAYLOAD, laboratoryId: 'org-other' });
+
+    expect(res.status).toBe(201);
+    expect(insertOne).toHaveBeenCalledWith(expect.objectContaining({ laboratoryId: 'org-mine' }));
+  });
+
+  it('CONTROL: reads an assay in the caller organization', async () => {
+    app.locals.db = createDbMock({ assays: createCollectionMock({ findOne: vi.fn().mockResolvedValue(MINE) }), ...rbacCollectionsScoped });
+
+    const res = await request(app).get('/api/assays/assay-mine').set('Authorization', token());
+
+    expect(res.status).toBe(200);
+  });
+
+  it('CONTROL: edits an in-scope assay without naming laboratoryId', async () => {
+    const findOneAndUpdate = vi.fn().mockResolvedValue({ ...MINE, intendedUse: 'x' });
+    app.locals.db = createDbMock({
+      assays: createCollectionMock({ findOne: vi.fn().mockResolvedValue(MINE), findOneAndUpdate }),
+      ...rbacCollectionsScoped,
+    });
+
+    const res = await request(app).put('/api/assays/assay-mine').set('Authorization', token()).send({ intendedUse: 'x' });
+
+    expect(res.status).toBe(200);
+    expect(findOneAndUpdate).toHaveBeenCalled();
+  });
+
+  // #1221: PUT ran no reference check, so an edit could point an assay at
+  // a specimen that does not exist, or put a raw _id back where create
+  // stores the canonical specimenId (#1219).
+  it('#1221: refuses a PUT whose specimenIds name no sample, and writes nothing', async () => {
+    const findOneAndUpdate = vi.fn().mockResolvedValue(MINE);
+    app.locals.db = createDbMock({
+      assays: createCollectionMock({ findOne: vi.fn().mockResolvedValue(MINE), findOneAndUpdate }),
+      samples: createCollectionMock({ findOne: vi.fn().mockResolvedValue(null) }),
+      ...rbacCollectionsScoped,
+    });
+
+    const res = await request(app).put('/api/assays/assay-mine').set('Authorization', token())
+      .send({ specimenIds: ['does-not-exist'] });
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/specimenIds: does-not-exist/);
+    expect(findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('#1221: a PUT naming a specimen by its _id stores the canonical specimenId', async () => {
+    const sample = { _id: new ObjectId(), specimenId: '3116768' };
+    const findOneAndUpdate = vi.fn().mockResolvedValue(MINE);
+    app.locals.db = createDbMock({
+      assays: createCollectionMock({ findOne: vi.fn().mockResolvedValue(MINE), findOneAndUpdate }),
+      samples: createCollectionMock({
+        findOne: vi.fn(async (filter = {}) => (
+          (filter._id && String(filter._id) === String(sample._id)) || filter.specimenId === sample.specimenId ? sample : null
+        )),
+      }),
+      ...rbacCollectionsScoped,
+    });
+
+    const res = await request(app).put('/api/assays/assay-mine').set('Authorization', token())
+      .send({ specimenIds: [String(sample._id)] });
+
+    expect(res.status).toBe(200);
+    expect(findOneAndUpdate.mock.calls[0][1].$set.specimenIds).toEqual(['3116768']);
+  });
+
+  it('CONTROL: deletes an in-scope assay', async () => {
+    const deleteOne = vi.fn().mockResolvedValue({ deletedCount: 1 });
+    app.locals.db = createDbMock({
+      assays: createCollectionMock({ findOne: vi.fn().mockResolvedValue(MINE), deleteOne }),
+      ...rbacCollectionsScoped,
+    });
+
+    const res = await request(app).delete('/api/assays/assay-mine').set('Authorization', token());
+
+    expect(res.status).toBe(200);
+    expect(deleteOne).toHaveBeenCalled();
   });
 });

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
-const { GraphProjectionService, stableHash } = require('../../src/services/graphProjection.service');
+const { GraphProjectionService, recordSpecimenProjection, stableHash } = require('../../src/services/graphProjection.service');
 
 function createFakeOutbox() {
   return { appendEvent: vi.fn().mockResolvedValue({ ok: true }) };
@@ -117,6 +117,34 @@ describe('graphProjection.service', () => {
       call = outbox.appendEvent.mock.calls[2][1];
       expect(call.aggregateId).toBe('');
       expect(call.payload.ethicalConsentId).toBeNull();
+    });
+  });
+
+  describe('appendSpecimenEvent (#1225)', () => {
+    it('emits SPECIMEN_UPSERTED carrying the specimen key and its donor', async () => {
+      const outbox = createFakeOutbox();
+      const service = new GraphProjectionService({ outbox });
+
+      await service.appendSpecimenEvent({}, { specimenId: 'mongo-1', participantId: 'P-1', sourceService: 'sample.service' });
+
+      const call = outbox.appendEvent.mock.calls[0][1];
+      expect(call.eventType).toBe('SPECIMEN_UPSERTED');
+      expect(call.aggregateType).toBe('Sample');
+      expect(call.aggregateId).toBe('mongo-1');
+      expect(call.payload).toEqual({ specimenId: 'mongo-1', participantId: 'P-1' });
+      expect(call.sourceService).toBe('sample.service');
+    });
+
+    it('recordSpecimenProjection logs and returns null when the append fails, rather than failing the committed insert', async () => {
+      const service = { appendSpecimenEvent: vi.fn().mockRejectedValue(new Error('outbox down')) };
+      await expect(recordSpecimenProjection({}, { specimenId: 'mongo-1', participantId: 'P-1' }, service)).resolves.toBeNull();
+      expect(service.appendSpecimenEvent).toHaveBeenCalledWith({}, { specimenId: 'mongo-1', participantId: 'P-1', sourceService: undefined });
+    });
+
+    it('recordSpecimenProjection appends nothing without a specimen id', async () => {
+      const service = { appendSpecimenEvent: vi.fn() };
+      await expect(recordSpecimenProjection({}, { specimenId: '', participantId: 'P-1' }, service)).resolves.toBeNull();
+      expect(service.appendSpecimenEvent).not.toHaveBeenCalled();
     });
   });
 

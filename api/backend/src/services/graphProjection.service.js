@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const { Neo4jOutboxService } = require('./neo4jOutbox.service');
+const logger = require('../utils/logger');
 
 function stableHash(payload) {
   const safePayload = payload || {};
@@ -23,6 +24,25 @@ class GraphProjectionService {
         ethicalConsentId: payload.ethicalConsentId || payload.consentId || null,
         status: payload.status || 'ACTIVE',
         signedAt: payload.signedAt || new Date(),
+      },
+      sourceService: payload.sourceService || 'graph-projection-service',
+      traceId: payload.traceId || null,
+      schemaVersion: 1,
+    });
+  }
+
+  // #1225: the sample's own projection event. It carries the donor, so the
+  // projector can write Donor-[:DONATED]->Sample and govern the sample by the
+  // donor's consents. specimenId is the Mongo _id, the key the lineage gate
+  // reads.
+  async appendSpecimenEvent(db, payload) {
+    return this.outbox.appendEvent(db, {
+      eventType: 'SPECIMEN_UPSERTED',
+      aggregateType: 'Sample',
+      aggregateId: String(payload.specimenId || ''),
+      payload: {
+        specimenId: payload.specimenId ? String(payload.specimenId) : null,
+        participantId: payload.participantId ? String(payload.participantId) : null,
       },
       sourceService: payload.sourceService || 'graph-projection-service',
       traceId: payload.traceId || null,
@@ -125,7 +145,22 @@ class GraphProjectionService {
   }
 }
 
+// #1225: called right after a sample's Mongo insert. Logged, not thrown: the
+// sample is already committed, so failing the request would report a failure
+// for a write that happened. scripts/neo4j-canonical-rebuild.js re-emits the
+// event for every sample, which is the recovery path.
+async function recordSpecimenProjection(db, { specimenId, participantId, sourceService }, service = new GraphProjectionService()) {
+  if (!db || !specimenId) return null;
+  try {
+    return await service.appendSpecimenEvent(db, { specimenId, participantId, sourceService });
+  } catch (error) {
+    logger.error(`[NEO4J_OUTBOX] SPECIMEN_UPSERTED nao registrado para ${specimenId}: ${error.message || error}`);
+    return null;
+  }
+}
+
 module.exports = {
   GraphProjectionService,
+  recordSpecimenProjection,
   stableHash,
 };

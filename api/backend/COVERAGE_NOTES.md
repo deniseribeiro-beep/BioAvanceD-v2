@@ -1,6 +1,6 @@
 # Backend coverage tracker
 
-Purpose: let `test-loop` pick the next slice by reading this file instead
+Purpose: let a coverage session pick the next slice from this file instead
 of running `npx vitest run --coverage` (~2-3 min, 258 files) at the start
 of every session. This file is a snapshot, not a live number — it goes
 stale as slices land and as source files change. Keep it honest:
@@ -20,8 +20,7 @@ stale as slices land and as source files change. Keep it honest:
   tail -60 /tmp/covrun.log` for the coverage table, then
   `grep -E "Test Files|^ Tests " /tmp/covrun.log` for the pass/fail
   summary — a bare `--coverage` run with no dir targets is blocked by
-  `.claude/hooks/full-suite-guard.cjs`
-  (per-iteration full-suite guard); explicit dir targets are the hook's
+  the per-iteration full-suite guard; explicit dir targets are the hook's
   own documented exception and produce an equivalent full-suite result.
   Then re-derive buckets from `coverage/coverage-summary.json`
   (`lines.pct` per file). `coverage/` is gitignored — this file is the
@@ -36,7 +35,7 @@ stale as slices land and as source files change. Keep it honest:
   bucket-list line; when it's a partial, replace the old note with a
   single line stating the new isolated number and where the commit is,
   not a paragraph. `COVERAGE_HISTORY.md` was deleted 2026-07-22 for the
-  same reason (`dyeallpies-skills-pack#95`); this file drifted back into
+  same reason; this file drifted back into
   the same pattern once (895 lines by 2026-07-24) and was re-compacted —
   if it's creeping up again, compact it, don't add a second history file.
 
@@ -50,7 +49,7 @@ passed, 0 failures** — the previously-tracked 1 pre-existing failure in
 Statements **94.24%** (17467/18534), Branches **88.74%** (14584/16434),
 Functions **92.74%** (2084/2247), Lines **94.53%** (16768/17737).
 **Three of four dimensions (statements/functions/lines) remain past the
-90% milestone** (`bioavanced-v2-conventions`); branches is still the
+90% milestone** (the project's conventions); branches is still the
 sole laggard, up slightly from 88.2% at the prior (2026-07-24) reconcile.
 
 ## Branch-focused priority list toward the 90% branches milestone
@@ -93,8 +92,7 @@ that file's own test(s) alone with `--coverage.include="<path>"` first**
 if it has both a unit and an integration test file — don't trust the
 merged number for those. Also check whether a service is exercised
 across *more than two* test files (a 3-way+ split, not just
-unit/integration) before trusting an isolated single-file run — see
-`dyeallpies-skills-pack#112`.
+unit/integration) before trusting an isolated single-file run.
 
 Recurring dead-code pattern to check before treating a branch gap as a
 real test gap: a route's own `if (!db)` 503 guard is often pre-empted by
@@ -257,7 +255,7 @@ full reconcile regenerates this if needed). Ask for a fresh
 
 ## Maintaining this file
 
-If `test-loop` finds this file stale (a listed file turns out
+If a coverage session finds this file stale (a listed file turns out
 already well-tested, or vice versa), fix the entry in the same commit —
 don't just work around it. If the reconcile cadence above stops making
 sense (too frequent/rare), update it and say why in the session's

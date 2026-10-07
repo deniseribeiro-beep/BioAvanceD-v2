@@ -67,25 +67,57 @@ async function applyColdChainQuarantine(db, incident) {
   }
 }
 
+const ACTIVE_INCIDENT_STATUSES = ['open', 'acknowledged', 'escalated'];
+const DEFAULT_CRITICAL_DURATION_HOURS = 2;
+
+// #1207: how long an excursion must last before its samples are quarantined,
+// in minutes. The same rule TelemetryMonitor.resolveCriticalDurationMinutesBySensor
+// applies to the Neo4j COMPROMISED mark: the policy's minimumDuration when it
+// is a positive number, else TELEMETRY_CRITICAL_DURATION_HOURS.
+function resolveExcursionThresholdMinutes(temperaturePolicy) {
+  const minimumDuration = temperaturePolicy?.minimumDuration;
+  if (typeof minimumDuration === 'number' && minimumDuration > 0) return minimumDuration;
+  const hours = Number(process.env.TELEMETRY_CRITICAL_DURATION_HOURS ?? DEFAULT_CRITICAL_DURATION_HOURS);
+  return (Number.isFinite(hours) && hours > 0 ? hours : DEFAULT_CRITICAL_DURATION_HOURS) * 60;
+}
+
+// #1207: the alarm (incident, excursion row, emails) stays immediate, but the
+// quarantine changes specimen disposition, so it waits until the excursion has
+// lasted the policy's time limit -- ISBER Best Practices 5th ed. §H3.1 has the
+// operator set "the critical limits (temperatures and time)", and v2.0.0
+// ELM-0368 starts an excursion at the first out-of-limit reading "conforme a
+// regra". The clock is the incident's excursionStartedAt, not openedAt: an
+// incident only closes when someone resolves it, so a door opening that
+// recovered in minutes would otherwise still quarantine once the unresolved
+// incident aged past the limit.
 async function upsertTemperatureIncidentAndQuarantine(policyData, normalizedSensorId, normalizedTemperature, normalizedTimestamp) {
   const db = policyData?.db || await connectMongoDB();
   const TemperatureIncidentCollection = db.collection('temperatureIncidents');
   const sensorName = policyData?.sensorMetadata?.sensorName || normalizedSensorId;
   const existingIncident = await TemperatureIncidentCollection.findOne({
     sensorKey: normalizedSensorId,
-    status: { $in: ['open', 'acknowledged', 'escalated'] }
+    status: { $in: ACTIVE_INCIDENT_STATUSES }
   });
 
   if (existingIncident) {
+    // No clock means the temperature came back in range since the incident
+    // opened (or the incident predates #1207): this reading starts a new run.
+    const excursionStartedAt = existingIncident.excursionStartedAt
+      ? new Date(existingIncident.excursionStartedAt)
+      : normalizedTimestamp;
     const incidentUpdate = {
       currentTemperature: normalizedTemperature,
       maxTemperature: Math.max(existingIncident.maxTemperature, normalizedTemperature),
       minTemperature: Math.min(existingIncident.minTemperature, normalizedTemperature),
       samplesOutOfRange: existingIncident.samplesOutOfRange + 1,
+      excursionStartedAt,
       updatedAt: new Date()
     };
     await TemperatureIncidentCollection.updateOne({ _id: existingIncident._id }, { $set: incidentUpdate });
-    await applyColdChainQuarantine(db, { ...existingIncident, ...incidentUpdate, status: existingIncident.status || 'open' });
+    const thresholdMs = resolveExcursionThresholdMinutes(policyData?.temperaturePolicy) * 60 * 1000;
+    if (normalizedTimestamp.getTime() - excursionStartedAt.getTime() >= thresholdMs) {
+      await applyColdChainQuarantine(db, { ...existingIncident, ...incidentUpdate, status: existingIncident.status || 'open' });
+    }
     return;
   }
 
@@ -93,6 +125,7 @@ async function upsertTemperatureIncidentAndQuarantine(policyData, normalizedSens
     sensorKey: normalizedSensorId,
     sensorName,
     openedAt: normalizedTimestamp,
+    excursionStartedAt: normalizedTimestamp,
     currentTemperature: normalizedTemperature,
     maxTemperature: normalizedTemperature,
     minTemperature: normalizedTemperature,
@@ -100,7 +133,6 @@ async function upsertTemperatureIncidentAndQuarantine(policyData, normalizedSens
   });
   const result = await TemperatureIncidentCollection.insertOne(newIncident);
   const persistedIncident = { ...newIncident, _id: result.insertedId };
-  await applyColdChainQuarantine(db, persistedIncident);
 
   // #426: resolve via UserRoleAssignment -> Role, não accessType direto.
   const { findUserAccountIdsByRoleCodes } = require('../services/rbac-assignment.service');
@@ -128,6 +160,20 @@ async function upsertTemperatureIncidentAndQuarantine(policyData, normalizedSens
       logger.error('[IOT_INCIDENT] Erro ao enviar alerta de incidente:', err.message);
     });
   }
+}
+
+// #1207: an in-range reading ends the current out-of-range run, so the next
+// out-of-range reading starts the quarantine clock afresh.
+async function stopExcursionClock(policyData, normalizedSensorId) {
+  const db = policyData?.db || await connectMongoDB();
+  await db.collection('temperatureIncidents').updateOne(
+    {
+      sensorKey: normalizedSensorId,
+      status: { $in: ACTIVE_INCIDENT_STATUSES },
+      excursionStartedAt: { $ne: null }
+    },
+    { $set: { excursionStartedAt: null, updatedAt: new Date() } }
+  );
 }
 
 async function upsertEnvironmentalExcursion(policyData, temperaturePolicy, normalizedSensorId, normalizedTemperature, normalizedTimestamp, quarantine) {
@@ -191,6 +237,12 @@ async function ingestTelemetry(req, res) {
     const normalizedTimestamp = timestamp ? new Date(timestamp) : new Date();
 
     if (!normalizedSensorId || !Number.isFinite(normalizedTemperature)) {
+      // #1120 (Axis E E3): the audit row names which condition refused the
+      // reading -- a misconfigured gateway and a failing sensor mean
+      // different things operationally. Tokens follow the MQTT sibling's
+      // snake_case reasons. sensorId is checked first, so a body failing
+      // both records missing_sensor_id.
+      res.locals.auditReason = !normalizedSensorId ? 'missing_sensor_id' : 'invalid_temperature';
       return res.status(400).json({ success: false, error: 'sensorId e temperature são obrigatórios' });
     }
 
@@ -209,7 +261,14 @@ async function ingestTelemetry(req, res) {
     if (temperaturePolicy) {
       const minTemp = Number(temperaturePolicy.minTemp);
       const maxTemp = Number(temperaturePolicy.maxTemp);
-      const outOfRange = Number.isFinite(minTemp) && Number.isFinite(maxTemp) && (normalizedTemperature < minTemp || normalizedTemperature > maxTemp);
+      const boundsUsable = Number.isFinite(minTemp) && Number.isFinite(maxTemp);
+      const outOfRange = boundsUsable && (normalizedTemperature < minTemp || normalizedTemperature > maxTemp);
+
+      if (boundsUsable && !outOfRange) {
+        void Promise.resolve()
+          .then(() => stopExcursionClock(policyData, normalizedSensorId))
+          .catch((error) => logger.error('[IOT_INCIDENT] Falha ao encerrar a contagem da excursão:', error.message || error));
+      }
 
       if (outOfRange) {
         const recipientEmail = policyData?.sensorMetadata?.alertEmail || policyData?.sensorMetadata?.notificationEmail || process.env.ALERT_EMAIL_TO || process.env.ADMIN_EMAIL || '';
@@ -265,10 +324,9 @@ async function ingestTelemetry(req, res) {
     // the reading's only persistence here is the fire-and-forget InfluxDB
     // write above, so there is no document id to name.
     //
-    // Only the ACCEPTED ingest is audited, matching the #1080 sibling. The
-    // MQTT transport additionally audits its rejections; both HTTP machine
-    // routes diverge from it there, which is #1095 rather than something
-    // widened into this fix.
+    // Only the ACCEPTED ingest is audited here, matching the #1080 sibling.
+    // A rejection's row is the global audit.middleware.js one, which since
+    // #1120 carries the res.locals.auditReason set at the 400 above.
     try {
       const auditDb = policyData?.db || await connectMongoDB();
       const auditLogger = require('../utils/auditLogger');
@@ -287,8 +345,11 @@ async function ingestTelemetry(req, res) {
       // AUDIT_TRAIL_WRITE_FAILURE alert when the audit row cannot be written,
       // so a failed ingest audit is no longer silent. This catch guards the
       // connection lookup above it, so an unavailable audit trail cannot turn
-      // an accepted ingest into a 500 -- that fail-open trade is deliberate and
-      // is direction 2 of #1096, which was not taken.
+      // an accepted ingest into a 500. That fail-open posture is DECIDED:
+      // Denise's Axis E decision on #1106 (Session E1, 2026-09-25) is that
+      // cold-chain availability wins over refusing an unauditable reading.
+      // The alert's validation/infrastructure split (7d9fa26b) is the rest
+      // of that decision. Do not fail closed here without reopening it.
       logger.error('[ISO20387][IOT] Falha ao registrar trilha de auditoria da telemetria:', error.message || error);
     }
 

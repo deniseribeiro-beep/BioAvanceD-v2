@@ -6,7 +6,7 @@
  * ReferenceImportIssue (RF028), mas com seu próprio vocabulário: este
  * registro não pertence a uma ReferenceImportRun/ReferenceDatasetRelease,
  * pertence a uma ingestão de entidade operacional/científica (Fase 3)
- * qualquer — ver `bioavanced-v2-conventions`' local-env sobre a decisão de
+ * qualquer — ver as convenções do projeto sobre a decisão de
  * não reaproveitar ReferenceImportIssue nem StagingImport (FHIR) diretamente.
  */
 const crypto = require('crypto');

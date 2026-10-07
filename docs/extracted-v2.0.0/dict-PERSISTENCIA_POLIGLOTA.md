@@ -1,0 +1,10 @@
+# BioAvanceD_Dicionario_Dados_Consolidado_v2.0.0.xlsx :: PERSISTENCIA_POLIGLOTA
+
+| Data class | Authoritative store | Allowed use | Projection/secondary | Prohibited | Reconciliation source | Checklist |
+|---|---|---|---|---|---|---|
+| Operational canonical records and metadata | MongoDB | Canonical source of truth; transactions; outbox | Neo4j derived relationships via outbox | Operational dual-write; FHIR parallel persistence | MongoDB aggregate and outbox | DB-001; EVT-001 |
+| Graph lineage and relationships | MongoDB source events; Neo4j derived projection | Temporal property-graph traversal over topology, custody, lineage, assignment, excursion and summaries | Rebuilt from controlled outbox using aggregate versions and checkpoint | Direct operational writes; raw telemetry; civil identity/PII | MongoDB/outbox replay | EVT-001–003; graph corrections 5–7 |
+| Telemetry and time series | InfluxDB | Complete environmental/equipment measurements with idempotency, observed/received/persisted times and location correlation | Reproducible summaries in MongoDB; relationships only via outbox | Raw readings in MongoDB/Neo4j/FHIR; PII | TelemetryIngestionEvent, hashes, datastream and event correlation | DB-001; telemetry corrections 1–4 and 7 |
+| Files, documents, evidence and binary artifacts | Object Storage (binary); MongoDB (metadata) | Immutable/versioned objects with checksum | Relationship metadata via outbox | Binary payloads in MongoDB; silent overwrite | DataFile/DataFileVersion checksums | FILE-001–002 |
+| Cache, locks and transient coordination | None; Redis is transient | Cache, locks, rate/session support where approved | Recreated from authoritative sources | Canonical or evidentiary records | MongoDB/InfluxDB/Object Storage | DB-001 |
+| Interoperability payloads | No independent store; FHIR R4 is boundary only | Versioned transform and exchange | Canonical model remains authoritative | FHIR operational database; serializer side effects | Canonical record plus mapping release | INT-001–004 |

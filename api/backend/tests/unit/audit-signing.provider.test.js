@@ -9,17 +9,23 @@ const auditSigningProvider = require('../../src/services/audit-signing.provider'
 
 describe('audit-signing.provider', () => {
   let tmpKeyFile;
+  let tmpRegistryFile;
 
   beforeEach(() => {
     env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE = '';
     env.AUDIT_MERKLE_SIGN_KEY_ID = '';
     env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON = '';
+    env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_FILE = '';
   });
 
   afterEach(() => {
     if (tmpKeyFile) {
       fs.rmSync(tmpKeyFile, { force: true });
       tmpKeyFile = undefined;
+    }
+    if (tmpRegistryFile) {
+      fs.rmSync(tmpRegistryFile, { force: true });
+      tmpRegistryFile = undefined;
     }
   });
 
@@ -34,6 +40,12 @@ describe('audit-signing.provider', () => {
     tmpKeyFile = path.join(os.tmpdir(), `audit-signing-provider-test-${Date.now()}-${Math.random()}.pem`);
     fs.writeFileSync(tmpKeyFile, pem, 'utf8');
     return tmpKeyFile;
+  }
+
+  function writeTempRegistryFile(registry) {
+    tmpRegistryFile = path.join(os.tmpdir(), `audit-signing-registry-test-${Date.now()}-${Math.random()}.json`);
+    fs.writeFileSync(tmpRegistryFile, JSON.stringify(registry), 'utf8');
+    return tmpRegistryFile;
   }
 
   describe('loadPrivateKey', () => {
@@ -103,6 +115,29 @@ describe('audit-signing.provider', () => {
       env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON = '{not valid json';
       expect(() => auditSigningProvider.getPublicKeyRegistry()).toThrow();
     });
+
+    // #1157: the registry has to carry the SPKI half of a key that does not
+    // exist until the keygen one-shot runs, and compose resolves its
+    // environment at parse time -- so no static env entry can ever hold it. A
+    // file written beside the private key is the only source that can.
+    it('le o registro de um arquivo quando AUDIT_MERKLE_SIGN_PUBLIC_KEYS_FILE esta configurado', () => {
+      env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_FILE = writeTempRegistryFile({ 'key-1': 'pem-1' });
+      expect(auditSigningProvider.getPublicKeyRegistry()).toEqual({ 'key-1': 'pem-1' });
+    });
+
+    it('prefere o arquivo ao JSON quando ambos estao configurados', () => {
+      env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON = JSON.stringify({ 'key-1': 'pem-do-env' });
+      env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_FILE = writeTempRegistryFile({ 'key-1': 'pem-do-arquivo' });
+      expect(auditSigningProvider.getPublicKeyRegistry()).toEqual({ 'key-1': 'pem-do-arquivo' });
+    });
+
+    // Control: the pre-#1157 env-only path stays authoritative when the file
+    // is absent, so a dev stack whose generator writes the JSON is untouched.
+    it('volta para o JSON quando o arquivo configurado nao existe', () => {
+      env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON = JSON.stringify({ 'key-1': 'pem-do-env' });
+      env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_FILE = path.join(os.tmpdir(), 'audit-registry-inexistente-1157.json');
+      expect(auditSigningProvider.getPublicKeyRegistry()).toEqual({ 'key-1': 'pem-do-env' });
+    });
   });
 
   describe('getPublicKeyPem', () => {
@@ -171,6 +206,21 @@ describe('audit-signing.provider', () => {
       env.AUDIT_MERKLE_SIGN_KEY_ID = 'key-1';
       await expect(auditSigningProvider.sign(Buffer.from('x'))).rejects.toThrow(
         'AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE não configurado'
+      );
+    });
+
+    // #1157: the symptom on the live stack -- the first sealed tree head
+    // carried publicKeyFingerprint null because the registry was env-only.
+    it('preenche publicKeyFingerprint a partir do registro em arquivo', async () => {
+      const { privatePem, publicPem } = makeKeyPair();
+      env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE = writeTempKeyFile(privatePem);
+      env.AUDIT_MERKLE_SIGN_KEY_ID = 'key-1';
+      env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_FILE = writeTempRegistryFile({ 'key-1': publicPem });
+
+      const result = await auditSigningProvider.sign(Buffer.from('hello world'));
+
+      expect(result.publicKeyFingerprint).toBe(
+        crypto.createHash('sha256').update(publicPem.trim()).digest('hex')
       );
     });
   });

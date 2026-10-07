@@ -42,7 +42,7 @@ const extractResponseData = <T>(response: unknown): T | null => {
 export interface SecurityConfig {
   authentication: {
     requireMFA: boolean;
-    mfaMethod: 'totp' | 'sms' | 'email';
+    mfaMethod: 'totp';
     allowPasswordReset: boolean;
     maxLoginAttempts: number;
     lockoutDurationMinutes: number;
@@ -50,6 +50,8 @@ export interface SecurityConfig {
   };
   passwordRules: {
     minLength: number;
+    // #1257: absent from a document stored before it existed.
+    minLengthWithMFA?: number;
     requireUppercase: boolean;
     requireLowercase: boolean;
     requireNumbers: boolean;
@@ -75,14 +77,16 @@ export interface SecurityConfig {
     level: 'info' | 'warning' | 'error' | 'critical';
     logLoginAttempts: boolean;
     logAllActions: boolean;
-    retentionDays: number;
+    // #1248: derived from the active RetentionPolicy; null when none applies.
+    retentionDays: number | null;
   };
   privacy: {
     anonymizeLogs: boolean;
-    dataRetentionDays: number;
+    // #1261: fixed at null; no job applies a period to data other than logs.
+    dataRetentionDays: number | null;
     autoPurge: boolean;
-    purgeAfterDays: number;
-    anonymizeAfterDays: number;
+    purgeAfterDays: number | null;
+    anonymizeAfterDays: number | null;
   };
   enhancedSecurity: {
     enabled: boolean;
@@ -97,8 +101,19 @@ export interface SecurityConfig {
     allowDataDeletion: boolean;
     anonymizeOnExport: boolean;
     requireConsent: boolean;
-    consentExpirationDays: number;
+    // #1262: fixed at null; a PatientConsent carries no expiry.
+    consentExpirationDays: number | null;
   };
+  // #1248: the keys the active RetentionPolicy decides, read-only here.
+  governedBy?: Record<string, {
+    entity: string;
+    policyId: string | null;
+    version: string | null;
+    postRetentionAction?: string;
+    unavailable?: boolean;
+    // #1260, #1261: set for a key whose behaviour is fixed, naming why.
+    fixed?: 'audit-required' | 'always-anonymized' | 'not-applied' | 'consent-required' | 'consent-no-expiry' | 'export-pseudonymised';
+  }>;
   // #953: flat, per dict-02 P1X-0321/0322/0323.
   configVersion?: number;
   lastUpdatedAt?: Date | string;
@@ -118,11 +133,11 @@ export function useSecurity() {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   // #901: one sequence per state pair -- loadConfig/updateConfig write
-  // `config`, loadPermissions/updatePermissions write `permissions`. Each
+  // `config`, loadPermissions writes `permissions` (read-only since #1149). Each
   // pair's own catch also guards its `error` write with its own sequence,
   // since `error` is shared: a stale config error shouldn't clobber a
   // fresher permissions error (or vice versa) that landed in between.
-  // `saving` is shared by both update* calls but is a plain in-flight flag,
+  // `saving` is updateConfig's plain in-flight flag,
   // not stale data, so its finally-clear stays unconditional.
   const configSeq = useRequestSequence();
   const permissionsSeq = useRequestSequence();
@@ -173,23 +188,6 @@ export function useSecurity() {
     }
   };
 
-  const updatePermissions = async (updates: ProfilePermissions) => {
-    const seq = permissionsSeq.next();
-    try {
-      setSaving(true);
-      setError(null);
-      const response = await securityService.updatePermissions(updates);
-      if (permissionsSeq.isCurrent(seq)) setPermissions(extractResponseData<ProfilePermissions>(response));
-      return response.data;
-    } catch (err: unknown) {
-      const errorMessage = extractErrorMessage(err, 'Erro ao salvar permissões');
-      if (permissionsSeq.isCurrent(seq)) setError(errorMessage);
-      throw new Error(errorMessage);
-    } finally {
-      setSaving(false);
-    }
-  };
-
   const exportLogs = async (filters?: Record<string, unknown>, format: 'csv' | 'json' = 'csv') => {
     try {
       setError(null);
@@ -217,7 +215,6 @@ export function useSecurity() {
     loadConfig,
     loadPermissions,
     updateConfig,
-    updatePermissions,
     exportLogs
   };
 }

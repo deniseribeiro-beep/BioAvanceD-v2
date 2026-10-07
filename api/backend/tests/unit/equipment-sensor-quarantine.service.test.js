@@ -44,7 +44,7 @@ describe('equipment-sensor-quarantine.service', () => {
   describe('isQuarantineTriggerStatus', () => {
     it('recognizes known trigger statuses case-insensitively and trimmed', () => {
       expect(service.isQuarantineTriggerStatus('OFFLINE')).toBe(true);
-      expect(service.isQuarantineTriggerStatus('  Manutenção ')).toBe(true);
+      expect(service.isQuarantineTriggerStatus('repair')).toBe(true);
       expect(service.isQuarantineTriggerStatus('awaiting repair')).toBe(true);
     });
 
@@ -52,6 +52,21 @@ describe('equipment-sensor-quarantine.service', () => {
       expect(service.isQuarantineTriggerStatus('operational')).toBe(false);
       expect(service.isQuarantineTriggerStatus(undefined)).toBe(false);
       expect(service.isQuarantineTriggerStatus(null)).toBe(false);
+    });
+
+    // #883: routine maintenance/inactive states are not quarantine triggers
+    // -- only failure states (offline/repair) are.
+    it('does not treat routine Maintenance/Inactive states as triggers', () => {
+      expect(service.isQuarantineTriggerStatus('Maintenance')).toBe(false);
+      expect(service.isQuarantineTriggerStatus('maintenance')).toBe(false);
+      expect(service.isQuarantineTriggerStatus('Inactive')).toBe(false);
+      expect(service.isQuarantineTriggerStatus('inativo')).toBe(false);
+      expect(service.isQuarantineTriggerStatus('  Manutenção ')).toBe(false);
+    });
+
+    it('still treats failure states as triggers', () => {
+      expect(service.isQuarantineTriggerStatus('offline')).toBe(true);
+      expect(service.isQuarantineTriggerStatus('repair')).toBe(true);
     });
   });
 
@@ -106,7 +121,7 @@ describe('equipment-sensor-quarantine.service', () => {
       const samplesCursor = { toArray: vi.fn(async () => [sample]) };
       const samplesCollection = {
         find: vi.fn(() => samplesCursor),
-        updateOne: vi.fn(async () => ({ matchedCount: 1 }))
+        updateOne: vi.fn(async () => ({ matchedCount: 1, modifiedCount: 1 }))
       };
       const movementsCollection = { insertOne: vi.fn(async () => ({ insertedId: 'M1' })) };
       const quarantineActionsCollection = { insertOne: vi.fn(async () => ({ insertedId: 'QA1' })) };
@@ -187,6 +202,78 @@ describe('equipment-sensor-quarantine.service', () => {
       );
     });
 
+    // #883: `quarantined` reflects whether the update actually changed the
+    // document, not just that a matching sample was found.
+    it('records nothing for a sample whose update reports modifiedCount 0', async () => {
+      const freezerId = 'FRZ-2';
+      const shelfId = 'SHF-2';
+      const rackId = 'RCK-2';
+      const boxId = 'BOX-2';
+
+      const storageContainersCollection = {
+        find: vi.fn((filter) => {
+          if (filter.containerType === 'FREEZER') {
+            return { toArray: vi.fn(async () => [{ _id: freezerId, containerID: 43 }]) };
+          }
+          if (filter.containerType === 'SHELF') {
+            return { toArray: vi.fn(async () => (filter.parent_id === freezerId ? [{ _id: shelfId }] : [])) };
+          }
+          if (filter.containerType === 'RACK') {
+            return { toArray: vi.fn(async () => (filter.parent_id.$in.includes(shelfId) ? [{ _id: rackId }] : [])) };
+          }
+          if (filter.containerType === 'DRAWER') {
+            return { toArray: vi.fn(async () => []) };
+          }
+          return { toArray: vi.fn(async () => []) };
+        })
+      };
+      const storageBoxesCollection = {
+        find: vi.fn((filter) => ({
+          toArray: vi.fn(async () => (filter.parent_id.$in.includes(rackId) ? [{ _id: boxId }] : []))
+        }))
+      };
+
+      const sample = {
+        _id: 'S2',
+        barcode: 'BC-2',
+        currentQuantity: 5,
+        unit: 'mL',
+        storageLocation: { boxId, position: 'A1' }
+      };
+      const samplesCursor = { toArray: vi.fn(async () => [sample]) };
+      const samplesCollection = {
+        find: vi.fn(() => samplesCursor),
+        updateOne: vi.fn(async () => ({ matchedCount: 1, modifiedCount: 0 }))
+      };
+      const movementsCollection = { insertOne: vi.fn(async () => ({ insertedId: 'M3' })) };
+      const quarantineActionsCollection = { insertOne: vi.fn(async () => ({ insertedId: 'QA3' })) };
+
+      collectionResolverModule.getCollection.mockImplementation(async (_db, key) => {
+        if (key === 'samples') return samplesCollection;
+        if (key === 'sampleMovements') return movementsCollection;
+        if (key === 'quarantineActions') return quarantineActionsCollection;
+        throw new Error(`unexpected key ${key}`);
+      });
+
+      const db = {
+        collection: vi.fn((name) => {
+          if (name === 'storageContainers') return storageContainersCollection;
+          if (name === 'storageBoxes') return storageBoxesCollection;
+          throw new Error(`unexpected collection ${name}`);
+        })
+      };
+
+      const result = await service.quarantineByEquipmentStatus(db, { equipmentID: 43 }, 'offline');
+
+      expect(result.matched).toBe(1);
+      expect(result.quarantined).toBe(0);
+      // #883: a no-op update (a concurrent writer already quarantined it)
+      // records no second QuarantineAction and no second ledger movement.
+      expect(result.movements).toBe(0);
+      expect(quarantineActionsCollection.insertOne).not.toHaveBeenCalled();
+      expect(movementsCollection.insertOne).not.toHaveBeenCalled();
+    });
+
     it('resolves equipment identifiers from the bare `id` field when `_id`/`equipmentID` are absent', async () => {
       const storageContainersCollection = { find: vi.fn(() => ({ toArray: vi.fn(async () => []) })) };
       const db = { collection: vi.fn(() => storageContainersCollection) };
@@ -215,7 +302,7 @@ describe('equipment-sensor-quarantine.service', () => {
     it('returns zero-matched result when equipment has no resolvable identifiers', async () => {
       const db = { collection: vi.fn() };
 
-      const result = await service.quarantineByEquipmentStatus(db, {}, 'inactive');
+      const result = await service.quarantineByEquipmentStatus(db, {}, 'offline');
 
       expect(result).toEqual({
         triggered: true,
@@ -268,7 +355,7 @@ describe('equipment-sensor-quarantine.service', () => {
       const samplesCursor = { toArray: vi.fn(async () => [sample]) };
       const samplesCollection = {
         find: vi.fn(() => samplesCursor),
-        updateOne: vi.fn(async () => ({ matchedCount: 1 }))
+        updateOne: vi.fn(async () => ({ matchedCount: 1, modifiedCount: 1 }))
       };
       const movementsCollection = { insertOne: vi.fn(async () => ({ insertedId: 'M2' })) };
       const quarantineActionsCollection = { insertOne: vi.fn(async () => ({ insertedId: 'QA2' })) };

@@ -49,6 +49,9 @@ class participantIdentityService {
     const identityDocument = normalizeString(payload.identityDocument);
     const email = normalizeString(payload.email);
     const phone = normalizeString(payload.phone);
+    // #1166: lowercased like every other identity-side email writer
+    // (ParticipantIdentityModel.fieldsOf), so the ciphertext holds one spelling.
+    const normalizedEmail = email ? email.toLowerCase() : email;
     const sex = normalizeString(payload.sex);
     const cpf = normalizeString(payload.cpf);
     // #703: a caller-supplied participantId that isn't a real 8-digit id
@@ -62,8 +65,8 @@ class participantIdentityService {
     }
 
     // RF005/RNF007 (#561): resolve the name+birthDate match via
-    // ParticipantIdentity, not Patient's own (soon to be removed)
-    // patientNameNormalized/birthDateKey fields.
+    // ParticipantIdentity, not Patient's own patientNameNormalized/
+    // birthDateKey fields, which no longer land on Patient (#575).
     let matchedParticipantId = validParticipantId;
     const matchedBySuppliedId = Boolean(validParticipantId);
     if (!matchedParticipantId) {
@@ -83,8 +86,8 @@ class participantIdentityService {
         : [{ birthDate: { $gte: startOfDay, $lt: endOfDay } }];
       const candidates = await identities.find({ $or: dateOrConditions }).toArray();
       const matchedIdentity = candidates.find((rawCandidate) => {
-        // patientName is civil identity -- decrypt before comparing so this
-        // keeps matching once the plaintext field is eventually dropped.
+        // patientName is civil identity and ciphertext-only (#1104), so
+        // decrypt before comparing.
         const candidate = identityCryptoService.decryptIdentity(rawCandidate);
         return normalizeName(candidate.patientName) === normalizedName;
       });
@@ -121,10 +124,14 @@ class participantIdentityService {
       // Omit a field that resolves to nothing rather than writing null over
       // a stored value: a caller that supplies nothing must change nothing.
       const identityValues = {};
+      // #1166 slice 4: plus the contact, which is identity data and lives
+      // only on this record now.
       const resolvedIdentity = {
         patientName: patientName || existingIdentity.patientName,
         birthDate: birthDate || existingIdentity.birthDate,
         identityDocument: identityDocument || existingIdentity.identityDocument,
+        email: normalizedEmail || existingIdentity.email,
+        phone: phone || existingIdentity.phone,
       };
       for (const [identityField, resolvedValue] of Object.entries(resolvedIdentity)) {
         if (resolvedValue !== null && resolvedValue !== undefined && resolvedValue !== '') {
@@ -136,8 +143,6 @@ class participantIdentityService {
       // produces (#566/#574), not plaintext-only.
       const encryptedIdentityValues = identityCryptoService.encryptIdentityFields(identityValues);
       const update = {
-        email: email || existing.email || null,
-        phone: phone || existing.phone || null,
         sex: sex || existing.sex || null,
         cpf: cpf || existing.cpf || null,
         updatedAt: new Date()
@@ -148,8 +153,6 @@ class participantIdentityService {
         {
           $set: {
             ...encryptedIdentityValues,
-            email: update.email,
-            phone: update.phone,
             updatedAt: update.updatedAt,
           },
         },
@@ -164,12 +167,13 @@ class participantIdentityService {
       birthDate: birthDate || null,
       identityDocument: identityDocument || null,
     };
+    // #1166 slice 4: the contact goes to the identity record only.
+    if (normalizedEmail) identityValues.email = normalizedEmail;
+    if (phone) identityValues.phone = phone;
     // #640: same rationale as the update branch above.
     const encryptedIdentityValues = identityCryptoService.encryptIdentityFields(identityValues);
     const toInsert = {
       participantId: generatedParticipantId,
-      email: email || null,
-      phone: phone || null,
       sex: sex || null,
       cpf: cpf || null,
       createdAt: new Date(),
@@ -182,8 +186,6 @@ class participantIdentityService {
         $set: {
           participantId: generatedParticipantId,
           ...encryptedIdentityValues,
-          email: toInsert.email,
-          phone: toInsert.phone,
           updatedAt: toInsert.updatedAt,
         },
       },

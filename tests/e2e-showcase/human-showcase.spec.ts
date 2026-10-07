@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { MongoClient, Db, ObjectId } from 'mongodb';
-import { randomBytes } from 'crypto';
+import { randomBytes, createHash } from 'crypto';
 import { realLogin } from '../e2e/helpers/realAuth';
 import { createRealParticipant, seedStorageBoxLocation, cleanupStorageBoxLocation, closeSeedDb, type SeededStorageBox } from '../e2e/helpers/seedParticipant';
 
@@ -10,7 +10,7 @@ import { createRealParticipant, seedStorageBoxLocation, cleanupStorageBoxLocatio
 // testDir *is* tests/e2e, discovered by CI's bare `playwright test`) never
 // picks this file up. Run with:
 //   npx playwright test --config=playwright.showcase.config.ts
-// against a live compose stack — see docker-workflow's local-env overlay for
+// against a live compose stack — see the project's Docker conventions for
 // the startup recipe. Produces a .webm under test-results/; convert to mp4
 // with ffmpeg.
 //
@@ -40,7 +40,7 @@ async function beat(page: Page, ms: number) {
 test.describe('Human-paced e2e showcase reel — Wave 2 (#331)', () => {
   test('login, RF020 organizations/collections CRUD via the real UI, samples list', async ({ page, request }) => {
     const testUser = process.env.TEST_USER || 'admin';
-    const testPass = process.env.TEST_PASS || 'Admin@123';
+    const testPass = process.env.TEST_PASS || 'Admin@123-e2e-stack';
 
     const officialName = `Showcase Org ${Date.now()}`;
     const collectionId = `showcase-collection-${Date.now()}`;
@@ -149,8 +149,8 @@ test.describe('Human-paced e2e showcase reel — Wave 2 (#331)', () => {
 // them rather than demo an unproven flow live. RF017's storage-topology
 // sub-flow (InlineStorageMovementPanel) is also skipped: its freezer
 // dropdown has no data-testid coverage and is blocked by the known
-// seedStorageBoxLocation() fixture gap (#598, see this skill's local-env
-// overlay) -- the equipment sub-domain alone is what's demoed for RF017.
+// seedStorageBoxLocation() fixture gap (#598) -- the equipment sub-domain
+// alone is what's demoed for RF017.
 test.describe('Human-paced e2e showcase reel — Wave 3 (#646)', () => {
   test.afterAll(async () => {
     await closeSeedDb();
@@ -158,7 +158,7 @@ test.describe('Human-paced e2e showcase reel — Wave 3 (#646)', () => {
 
   test('login, RF014 security policy update via the real UI, RF017 equipment management, RF016 real sample labeling', async ({ page, request }) => {
     const testUser = process.env.TEST_USER || 'admin';
-    const testPass = process.env.TEST_PASS || 'Admin@123';
+    const testPass = process.env.TEST_PASS || 'Admin@123-e2e-stack';
 
     const equipmentDescription = `Showcase Freezer ${Date.now()}`;
     let originalSecurityConfig: Record<string, any> | null = null;
@@ -249,7 +249,7 @@ test.describe('Human-paced e2e showcase reel — Wave 3 (#646)', () => {
         },
       });
       expect([201, 202]).toContain(sampleCreate.status());
-      const sampleID = (await sampleCreate.json()).data.sampleID;
+      const sampleID = (await sampleCreate.json()).data.specimenId;
 
       await page.goto(`/samples/${sampleID}/label`);
       await expect(page.getByTestId('sample-label-page')).toBeVisible();
@@ -316,7 +316,7 @@ test.describe('Human-paced e2e showcase reel — Wave 4 (#743)', () => {
 
   test('login, RF008 report templates + CSV export via the real UI, RF013 backup run and policy edit', async ({ page, request }) => {
     const testUser = process.env.TEST_USER || 'admin';
-    const testPass = process.env.TEST_PASS || 'Admin@123';
+    const testPass = process.env.TEST_PASS || 'Admin@123-e2e-stack';
 
     let seededStorageBox: SeededStorageBox | null = null;
     let originalRetentionDays: number | null = null;
@@ -524,12 +524,15 @@ test.describe('Human-paced e2e showcase reel — Wave 5', () => {
       updatedAt: new Date(),
     });
 
-    const participantId = `W5${String(Date.now()).slice(-9)}`;
+    // #821: acceptance now records a Consent via createPatientConsent, whose
+    // validateParticipantId requires the canonical 8-digit shape.
+    const participantId = String(80_000_000 + (Date.now() % 10_000_000));
     const consentToken = randomBytes(32).toString('hex');
     await db.collection('patients').insertOne({
       participantId,
       status: 'PENDING_CONSENT',
-      consentToken,
+      // #1049: only the token's SHA-256 is stored; the link carries the token.
+      consentTokenHash: createHash('sha256').update(consentToken).digest('hex'),
       consentTokenCreatedAt: new Date(),
       consentTokenExpiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
       createdAt: new Date(),
@@ -575,7 +578,10 @@ test.describe('Human-paced e2e showcase reel — Wave 5', () => {
       );
       await beat(page, LARGE);
 
-      // 4. Consent given.
+      // 4. Consent given, purpose by purpose (#821): the required one is
+      //    accepted, the optional recontact stays declined.
+      await page.getByTestId('consent-token-permission-showcase-w5-research').check();
+      await beat(page, LARGE);
       await page.getByTestId('consent-token-accept').click();
       await expect(page.getByTestId('consent-token-success')).toBeVisible();
       await beat(page, LARGE);
@@ -585,16 +591,17 @@ test.describe('Human-paced e2e showcase reel — Wave 5', () => {
       const stored = await db.collection('patients').findOne({ participantId });
       expect(stored?.status).toBe('ACTIVE');
       expect(stored?.consentAcceptedAt).toBeTruthy();
-      expect(stored?.consentToken).toBeNull();
+      expect(stored?.consentTokenHash).toBeNull();
     } finally {
       await db.collection('patients').deleteMany({ participantId }).catch(() => {});
+      await db.collection('patientConsents').deleteMany({ participantId }).catch(() => {});
       await db.collection('consent_templates').deleteMany({ title: TERM_TITLE }).catch(() => {});
     }
   });
 
   test('RNF011 AC#4 an operator imports a spreadsheet and the rejected row is quarantined, not dropped', async ({ page, request }) => {
     const testUser = process.env.TEST_USER || 'admin';
-    const testPass = process.env.TEST_PASS || 'Admin@123';
+    const testPass = process.env.TEST_PASS || 'Admin@123-e2e-stack';
 
     const createdParticipantIds: string[] = [];
     let batchId: string | null = null;

@@ -20,6 +20,13 @@ function makeDb(collections = {}) {
   };
 }
 
+// #1118: checkPolicyAndAlert now checks for an already-active threshold
+// alert before inserting. Default the fixture to "none active", which is
+// what every pre-#1118 test in this file assumed implicitly.
+function alertFindOne(existing = null) {
+  return vi.fn().mockResolvedValue(existing);
+}
+
 function makeFindChain(docs) {
   const toArray = vi.fn().mockResolvedValue(docs);
   const skip = vi.fn().mockReturnValue({ toArray });
@@ -173,9 +180,9 @@ describe('temperatureService.createTemperatureReading', () => {
 
 describe('temperatureService.checkPolicyAndAlert', () => {
   it('does not query for or apply a policy when no policyId/policyID is present (#73)', async () => {
-    const findOne = vi.fn().mockResolvedValue({ minThreshold: 0, maxThreshold: 10 });
+    const findOne = vi.fn().mockResolvedValue({ minTemp: 0, maxTemp: 10 });
     const insertOne = vi.fn();
-    const db = makeDb({ policies: { findOne }, alerts: { insertOne } });
+    const db = makeDb({ temperaturePolicies: { findOne }, alerts: { insertOne, findOne: alertFindOne() } });
 
     await expect(
       temperatureService.checkPolicyAndAlert(db, { temperatureValue: 999 })
@@ -188,7 +195,7 @@ describe('temperatureService.checkPolicyAndAlert', () => {
   it('resolves without inserting an alert when no policy is found', async () => {
     const findOne = vi.fn().mockResolvedValue(null);
     const insertOne = vi.fn();
-    const db = makeDb({ policies: { findOne }, alerts: { insertOne } });
+    const db = makeDb({ temperaturePolicies: { findOne }, alerts: { insertOne, findOne: alertFindOne() } });
 
     await expect(
       temperatureService.checkPolicyAndAlert(db, { policyId: 'p1', temperatureValue: 5 })
@@ -198,14 +205,14 @@ describe('temperatureService.checkPolicyAndAlert', () => {
   });
 
   it('does not create an alert when the reading is within thresholds', async () => {
-    const policy = { minThreshold: 0, maxThreshold: 10 };
+    const policy = { minTemp: 0, maxTemp: 10 };
     const findOne = vi.fn().mockResolvedValue(policy);
     const insertOne = vi.fn();
     // #1079: the in-range branch now resolves active threshold alerts, so
     // this fixture needs updateMany or the call lands in the catch and the
     // assertion below passes for the wrong reason.
     const updateMany = vi.fn().mockResolvedValue({ modifiedCount: 0 });
-    const db = makeDb({ policies: { findOne }, alerts: { insertOne, updateMany } });
+    const db = makeDb({ temperaturePolicies: { findOne }, alerts: { insertOne, updateMany, findOne: alertFindOne() } });
 
     await temperatureService.checkPolicyAndAlert(db, {
       policyId: 'p1',
@@ -215,11 +222,64 @@ describe('temperatureService.checkPolicyAndAlert', () => {
     expect(insertOne).not.toHaveBeenCalled();
   });
 
+  // #1198: a policy's limits are Celsius, and a manually recorded reading may
+  // carry degF or K (TemperatureModel accepts all three). The comparison used
+  // the reading's bare number, so 41 degF -- 5 degC, inside 2..8 -- alerted.
+  describe('#1198: the reading is compared in Celsius', () => {
+    function inRangeDb() {
+      const findOne = vi.fn().mockResolvedValue({ minTemp: 2, maxTemp: 8 });
+      const insertOne = vi.fn().mockResolvedValue({ insertedId: 'alert1' });
+      const updateMany = vi.fn().mockResolvedValue({ modifiedCount: 0 });
+      const db = makeDb({ temperaturePolicies: { findOne }, alerts: { insertOne, updateMany, findOne: alertFindOne() } });
+      return { db, insertOne };
+    }
+
+    it('a °F reading inside the policy range raises no alert', async () => {
+      const { db, insertOne } = inRangeDb();
+
+      await temperatureService.checkPolicyAndAlert(db, {
+        policyId: 'p1',
+        temperatureValue: 41,
+        temperatureUnit: '°F'
+      });
+
+      expect(insertOne).not.toHaveBeenCalled();
+    });
+
+    it('a K reading inside the policy range raises no alert', async () => {
+      const { db, insertOne } = inRangeDb();
+
+      await temperatureService.checkPolicyAndAlert(db, {
+        policyId: 'p1',
+        temperatureValue: 278.15,
+        temperatureUnit: 'K'
+      });
+
+      expect(insertOne).not.toHaveBeenCalled();
+    });
+
+    it('CONTROL: a °F reading outside the range still alerts, recording the value as read', async () => {
+      const { db, insertOne } = inRangeDb();
+      vi.spyOn(notificationServiceV2, 'sendCriticalTempAlert').mockResolvedValue(undefined);
+      vi.spyOn(notificationDispatchService, 'dispatchNotification').mockResolvedValue(null);
+
+      await temperatureService.checkPolicyAndAlert(db, {
+        policyId: 'p1',
+        sensorId: 'sensor-a',
+        temperatureValue: 50,
+        temperatureUnit: '°F'
+      });
+
+      expect(insertOne).toHaveBeenCalledTimes(1);
+      expect(insertOne.mock.calls[0][0].temperatureValue).toBe(50);
+    });
+  });
+
   it('inserts an alert and notifies when the reading is outside policy thresholds', async () => {
-    const policy = { minThreshold: 0, maxThreshold: 10 };
+    const policy = { minTemp: 0, maxTemp: 10 };
     const findOne = vi.fn().mockResolvedValue(policy);
     const insertOne = vi.fn().mockResolvedValue({ insertedId: 'alert1' });
-    const db = makeDb({ policies: { findOne }, alerts: { insertOne } });
+    const db = makeDb({ temperaturePolicies: { findOne }, alerts: { insertOne, findOne: alertFindOne() } });
     const notifySpy = vi.spyOn(notificationServiceV2, 'sendCriticalTempAlert').mockResolvedValue(undefined);
     const dispatchSpy = vi.spyOn(notificationDispatchService, 'dispatchNotification').mockResolvedValue(null);
 
@@ -252,10 +312,10 @@ describe('temperatureService.checkPolicyAndAlert', () => {
   });
 
   it('does not let a rejected notification dispatch break the alert flow (fire-and-forget)', async () => {
-    const policy = { minThreshold: 0, maxThreshold: 10 };
+    const policy = { minTemp: 0, maxTemp: 10 };
     const findOne = vi.fn().mockResolvedValue(policy);
     const insertOne = vi.fn().mockResolvedValue({ insertedId: 'alert1' });
-    const db = makeDb({ policies: { findOne }, alerts: { insertOne } });
+    const db = makeDb({ temperaturePolicies: { findOne }, alerts: { insertOne, findOne: alertFindOne() } });
     vi.spyOn(notificationServiceV2, 'sendCriticalTempAlert').mockResolvedValue(undefined);
     vi.spyOn(notificationDispatchService, 'dispatchNotification').mockRejectedValue(new Error('no active rule collection'));
 
@@ -272,11 +332,11 @@ describe('temperatureService.checkPolicyAndAlert', () => {
   // this writer's untyped document could be matched by neither -- threshold
   // breaches were never deduplicated and never resolved.
   it('#1079: tags the alert with a threshold_breach type so the scheduler lifecycle helpers can match it', async () => {
-    const policy = { minThreshold: 0, maxThreshold: 10 };
+    const policy = { minTemp: 0, maxTemp: 10 };
     const findOne = vi.fn().mockResolvedValue(policy);
     const insertOne = vi.fn().mockResolvedValue({ insertedId: 'alert1' });
     const updateMany = vi.fn().mockResolvedValue({ modifiedCount: 0 });
-    const db = makeDb({ policies: { findOne }, alerts: { insertOne, updateMany } });
+    const db = makeDb({ temperaturePolicies: { findOne }, alerts: { insertOne, updateMany, findOne: alertFindOne() } });
     vi.spyOn(notificationServiceV2, 'sendCriticalTempAlert').mockResolvedValue(undefined);
     vi.spyOn(notificationDispatchService, 'dispatchNotification').mockResolvedValue(null);
 
@@ -291,11 +351,11 @@ describe('temperatureService.checkPolicyAndAlert', () => {
   });
 
   it('#1079: resolves active threshold alerts for the sensor once a reading is back within range', async () => {
-    const policy = { minThreshold: 0, maxThreshold: 10 };
+    const policy = { minTemp: 0, maxTemp: 10 };
     const findOne = vi.fn().mockResolvedValue(policy);
     const insertOne = vi.fn();
     const updateMany = vi.fn().mockResolvedValue({ modifiedCount: 2 });
-    const db = makeDb({ policies: { findOne }, alerts: { insertOne, updateMany } });
+    const db = makeDb({ temperaturePolicies: { findOne }, alerts: { insertOne, updateMany, findOne: alertFindOne() } });
 
     await temperatureService.checkPolicyAndAlert(db, {
       policyId: 'p1',
@@ -313,11 +373,11 @@ describe('temperatureService.checkPolicyAndAlert', () => {
   // Control: the resolve must not fire while the reading is still bad, or a
   // sensor sitting out of range would clear its own alert on every reading.
   it('#1079: does not resolve anything while the reading is still out of range', async () => {
-    const policy = { minThreshold: 0, maxThreshold: 10 };
+    const policy = { minTemp: 0, maxTemp: 10 };
     const findOne = vi.fn().mockResolvedValue(policy);
     const insertOne = vi.fn().mockResolvedValue({ insertedId: 'alert1' });
     const updateMany = vi.fn().mockResolvedValue({ modifiedCount: 0 });
-    const db = makeDb({ policies: { findOne }, alerts: { insertOne, updateMany } });
+    const db = makeDb({ temperaturePolicies: { findOne }, alerts: { insertOne, updateMany, findOne: alertFindOne() } });
     vi.spyOn(notificationServiceV2, 'sendCriticalTempAlert').mockResolvedValue(undefined);
     vi.spyOn(notificationDispatchService, 'dispatchNotification').mockResolvedValue(null);
 
@@ -329,9 +389,150 @@ describe('temperatureService.checkPolicyAndAlert', () => {
 
     expect(updateMany).not.toHaveBeenCalled();
   });
+
+  // #1118: split from #1079. That commit gave the threshold alert a `type`
+  // so the scheduler lifecycle helpers COULD match it, and wired the resolve
+  // half -- but left the insert unconditional, so an episode still wrote one
+  // document per reading. A freezer out of range for a day at a one-minute
+  // poll is 1,440 rows, and since #1079 bounded getActiveAlerts at
+  // `limit || 1000` a single sustained excursion can fill the whole default
+  // page with one sensor and push every other sensor off it.
+  //
+  // Shape 1 of the three the issue lists: dedup the ROW, keep both
+  // notifications firing per reading. Shape 2 (dedup the notifications too)
+  // was not taken -- for a cold chain, silencing an operator who missed the
+  // first alert while the excursion continues is a safety call and Denise's,
+  // and RF009 AC#6 says to raise an alert without saying how often.
+  //
+  // The dedup filter deliberately matches ensureActiveAlert's own
+  // ({ sensorId, type, status: "active" }) rather than inventing a second
+  // predicate -- same reason #1079 gave for mirroring the resolve.
+  describe('#1118: one alert row per episode, not per reading', () => {
+    const policy = { minTemp: 0, maxTemp: 10 };
+    const BREACH = { policyId: 'p1', sensorId: 'sensor-a', temperatureValue: 99 };
+
+    function quietNotifications() {
+      vi.spyOn(notificationServiceV2, 'sendCriticalTempAlert').mockResolvedValue(undefined);
+      vi.spyOn(notificationDispatchService, 'dispatchNotification').mockResolvedValue(null);
+    }
+
+    it('does not insert a second alert while one is already active', async () => {
+      const findOne = vi.fn().mockResolvedValue(policy);
+      const insertOne = vi.fn().mockResolvedValue({ insertedId: 'alert1' });
+      const updateMany = vi.fn().mockResolvedValue({ modifiedCount: 0 });
+      const alertFind = alertFindOne({ _id: 'existing-alert', status: 'active' });
+      const db = makeDb({
+        temperaturePolicies: { findOne },
+        alerts: { insertOne, updateMany, findOne: alertFind },
+      });
+      quietNotifications();
+
+      await temperatureService.checkPolicyAndAlert(db, BREACH);
+
+      expect(insertOne).not.toHaveBeenCalled();
+    });
+
+    it('looks for the active alert with the same filter ensureActiveAlert uses', async () => {
+      const findOne = vi.fn().mockResolvedValue(policy);
+      const insertOne = vi.fn().mockResolvedValue({ insertedId: 'alert1' });
+      const updateMany = vi.fn().mockResolvedValue({ modifiedCount: 0 });
+      const alertFind = alertFindOne(null);
+      const db = makeDb({
+        temperaturePolicies: { findOne },
+        alerts: { insertOne, updateMany, findOne: alertFind },
+      });
+      quietNotifications();
+
+      await temperatureService.checkPolicyAndAlert(db, BREACH);
+
+      expect(alertFind).toHaveBeenCalledTimes(1);
+      expect(alertFind.mock.calls[0][0]).toEqual({
+        sensorId: 'sensor-a',
+        type: 'threshold_breach',
+        status: 'active',
+      });
+    });
+
+    // Shape 1 is defined by this: the ROW is deduped, the operator is not.
+    it('still fires both notifications on a reading whose insert was skipped', async () => {
+      const findOne = vi.fn().mockResolvedValue(policy);
+      const insertOne = vi.fn();
+      const updateMany = vi.fn().mockResolvedValue({ modifiedCount: 0 });
+      const db = makeDb({
+        temperaturePolicies: { findOne },
+        alerts: { insertOne, updateMany, findOne: alertFindOne({ _id: 'existing-alert' }) },
+      });
+      const critical = vi.spyOn(notificationServiceV2, 'sendCriticalTempAlert').mockResolvedValue(undefined);
+      const dispatch = vi.spyOn(notificationDispatchService, 'dispatchNotification').mockResolvedValue(null);
+
+      await temperatureService.checkPolicyAndAlert(db, BREACH);
+
+      expect(critical).toHaveBeenCalledTimes(1);
+      expect(dispatch).toHaveBeenCalledTimes(1);
+    });
+
+    // The issue named this as the thing blocking shape 1. Nothing in src/
+    // reads sourceEventId back, so reusing the existing id breaks no
+    // consumer -- but it must still point at a real alert, not undefined.
+    it('points sourceEventId at the EXISTING alert when the insert is skipped', async () => {
+      const findOne = vi.fn().mockResolvedValue(policy);
+      const insertOne = vi.fn();
+      const updateMany = vi.fn().mockResolvedValue({ modifiedCount: 0 });
+      const db = makeDb({
+        temperaturePolicies: { findOne },
+        alerts: { insertOne, updateMany, findOne: alertFindOne({ _id: 'existing-alert' }) },
+      });
+      vi.spyOn(notificationServiceV2, 'sendCriticalTempAlert').mockResolvedValue(undefined);
+      const dispatch = vi.spyOn(notificationDispatchService, 'dispatchNotification').mockResolvedValue(null);
+
+      await temperatureService.checkPolicyAndAlert(db, BREACH);
+
+      expect(dispatch.mock.calls[0][1].sourceEventId).toBe('existing-alert');
+    });
+
+    // CONTROL: green before and after. If this reds, the dedup closed the
+    // insert path outright rather than making it conditional (#695).
+    it('CONTROL: still inserts when no alert is active for the sensor', async () => {
+      const findOne = vi.fn().mockResolvedValue(policy);
+      const insertOne = vi.fn().mockResolvedValue({ insertedId: 'alert1' });
+      const updateMany = vi.fn().mockResolvedValue({ modifiedCount: 0 });
+      const db = makeDb({
+        temperaturePolicies: { findOne },
+        alerts: { insertOne, updateMany, findOne: alertFindOne(null) },
+      });
+      quietNotifications();
+
+      await temperatureService.checkPolicyAndAlert(db, BREACH);
+
+      expect(insertOne).toHaveBeenCalledTimes(1);
+      expect(insertOne.mock.calls[0][0].type).toBe('threshold_breach');
+    });
+
+    // CONTROL: the dedup must not suppress the RESOLVE, which is the other
+    // half of #1079 and runs on the in-range branch.
+    it('CONTROL: an in-range reading still resolves, untouched by the dedup', async () => {
+      const findOne = vi.fn().mockResolvedValue(policy);
+      const insertOne = vi.fn();
+      const updateMany = vi.fn().mockResolvedValue({ modifiedCount: 2 });
+      const db = makeDb({
+        temperaturePolicies: { findOne },
+        alerts: { insertOne, updateMany, findOne: alertFindOne({ _id: 'existing-alert' }) },
+      });
+
+      await temperatureService.checkPolicyAndAlert(db, {
+        policyId: 'p1',
+        sensorId: 'sensor-a',
+        temperatureValue: 5,
+      });
+
+      expect(updateMany).toHaveBeenCalledTimes(1);
+      expect(insertOne).not.toHaveBeenCalled();
+    });
+  });
+
   it('swallows internal errors (e.g. policiesCollection.findOne rejecting) and resolves', async () => {
     const findOne = vi.fn().mockRejectedValue(new Error('db unreachable'));
-    const db = makeDb({ policies: { findOne } });
+    const db = makeDb({ temperaturePolicies: { findOne } });
     const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
 
     await expect(

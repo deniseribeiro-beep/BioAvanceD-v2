@@ -15,6 +15,8 @@ const notificationService = require('./notification.service');
 const { generateUniqueParticipantId } = require('../utils/patientAnonymization');
 const { getCollection } = require('../utils/collectionResolver');
 const { omitLegacyIdentityFields } = require('../utils/legacyPatientIdentityFields');
+const { sealStagedRecord, revealStagedRecord } = require('../utils/stagedRowCrypto');
+const { encryptFileBuffer, isFileEncryptionAvailable } = require('../utils/fileCrypto');
 const {
   SPECIMEN_TYPES,
   SAMPLE_ORIGINS,
@@ -26,6 +28,7 @@ const participantIdentityService = require('./PatientIdentityService');
 const { generateSampleHash } = require('./MerkleService');
 const qualityDomain = require('./quality-domain.service');
 const rcsAssessmentService = require('./rcs-assessment.service');
+const { recordSpecimenProjection } = require('./graphProjection.service');
 const specimenPreanalyticsService = require('./specimen-preanalytics.service');
 const AllocateSampleUseCase = require('../core/use-cases/AllocateSampleUseCase');
 const MongoStorageRepository = require('../infrastructure/persistence/mongo/MongoStorageRepository');
@@ -33,6 +36,7 @@ const MongoAuditRepository = require('../infrastructure/persistence/mongo/MongoA
 const LineageRepository = require('../infrastructure/database/neo4j/LineageRepository');
 
 const { CRITICAL_SENSOR_STATUSES, isEquipmentBlocked } = require('../models/equipmentStatus');
+const { hashConsentToken } = require('../utils/consentTokenHash');
 
 /**
  * Os dois tipos de lote de quarentena que a importacao LGPD escreve em
@@ -280,6 +284,7 @@ class ImportLGPDService {
       };
       const sourceLines = [];
       fs.createReadStream(filePath)
+        .on('error', reject)
         .pipe(csv({
           separator,
           skipEmptyLines: true,
@@ -787,7 +792,7 @@ class ImportLGPDService {
 
           const consentMetadata = notificationService.buildConsentMetadata();
           patientData.status = 'PENDING_CONSENT';
-          patientData.consentToken = consentMetadata.token;
+          patientData.consentTokenHash = hashConsentToken(consentMetadata.token);
           patientData.consentTokenCreatedAt = consentMetadata.createdAt;
           patientData.consentTokenExpiresAt = consentMetadata.expiresAt;
 
@@ -848,7 +853,10 @@ class ImportLGPDService {
           const identityDoc = participantIdentityEncryptionService.encryptIdentityFields(
             ParticipantIdentityModel.create({ ...patientData, participantId: patient.participantId })
           );
-          await identityCollection.insertOne(identityDoc);
+          // #1166 slice 3: a refused identity insert must not leave the Patient behind.
+          await participantIdentityEncryptionService.insertIdentityOrRollbackPatient(
+            identityCollection, identityDoc, patientsCollection, insertResult.insertedId
+          );
 
           try {
             const consentLink = notificationService.buildConsentLink(patient, consentMetadata.token);
@@ -1142,7 +1150,8 @@ class ImportLGPDService {
       .sort({ rowNumber: 1 })
       .toArray();
 
-    return { batch, records };
+    // #807: rows are sealed at rest; the reader gets them back as staged.
+    return { batch, records: records.map(revealStagedRecord) };
   }
 
   /**
@@ -1253,10 +1262,16 @@ class ImportLGPDService {
         updatedAt: now,
       };
 
-      const batchResult = await db.collection('import_batches').insertOne(batchDoc);
-      const batchId = batchResult.insertedId;
+      // #1295: as linhas sao gravadas ANTES do lote, como no importador
+      // assincrono. Quem encontra o lote encontra tambem as suas linhas.
+      const { ObjectId } = require('mongodb');
+      const batchId = new ObjectId();
+      batchDoc._id = batchId;
 
-      const stagedRecords = rejected.map((rejection) => ({
+      // #807: `row` is the pre-anonymisation spreadsheet row, so it and
+      // `normalized` are sealed at rest (stagedRowCrypto) like every other
+      // copy of civil identity.
+      const stagedRecords = rejected.map((rejection) => sealStagedRecord({
         batchId,
         // #1023: rowNumber e' a linha FISICA do arquivo -- o que o operador
         // ve' ao abrir a planilha -- e nao mais o indice do array filtrado
@@ -1289,6 +1304,13 @@ class ImportLGPDService {
       }));
 
       await db.collection('import_staging_records').insertMany(stagedRecords);
+      try {
+        await db.collection('import_batches').insertOne(batchDoc);
+      } catch (batchError) {
+        // Sem o lote, as linhas gravadas nao tem quem as leia.
+        await db.collection('import_staging_records').deleteMany({ batchId }).catch(() => {});
+        throw batchError;
+      }
 
       logger.warn(
         `[IMPORT_LGPD] ${stagedRecords.length} linha(s) rejeitada(s) colocadas em quarentena (batch ${batchId})`
@@ -1704,6 +1726,11 @@ class ImportLGPDService {
           // Insere no banco (sem storageLocation — a amostra entra não alocada)
           const insertResult = await samplesCollection.insertOne(sample);
           results.importedSampleIds.push(insertResult.insertedId);
+          await recordSpecimenProjection(db, {
+            specimenId: String(insertResult.insertedId),
+            participantId: sample.participantId,
+            sourceService: 'import-lgpd.service'
+          });
 
           // #499: mirrors import.service.js's CSV/XLSX branch — records the
           // canonical, referenced RcsAssessment snapshot alongside the
@@ -2449,7 +2476,7 @@ class ImportLGPDService {
 
         const consentMetadata = notificationService.buildConsentMetadata();
         patientData.status = 'PENDING_CONSENT';
-        patientData.consentToken = consentMetadata.token;
+        patientData.consentTokenHash = hashConsentToken(consentMetadata.token);
         patientData.consentTokenCreatedAt = consentMetadata.createdAt;
         patientData.consentTokenExpiresAt = consentMetadata.expiresAt;
 
@@ -2464,7 +2491,10 @@ class ImportLGPDService {
         const identityDoc = participantIdentityEncryptionService.encryptIdentityFields(
           ParticipantIdentityModel.create({ ...patientData, participantId: patient.participantId })
         );
-        await identityCollection.insertOne(identityDoc);
+        // #1166 slice 3: a refused identity insert must not leave the Patient behind.
+        await participantIdentityEncryptionService.insertIdentityOrRollbackPatient(
+          identityCollection, identityDoc, patientsCollection, insertResult.insertedId
+        );
 
         try {
           const consentLink = notificationService.buildConsentLink(patient, consentMetadata.token);
@@ -2573,13 +2603,39 @@ class ImportLGPDService {
       fs.mkdirSync(quarantineDir, { recursive: true });
 
       const storedPath = path.join(quarantineDir, `${String(batchId)}${extension}`);
-      fs.renameSync(file.path, storedPath);
+
+      // #807 (RNF029 AC#5): the file holds the same civil identifiers as the
+      // quarantined rows, so it is stored as ciphertext, in the envelope
+      // shape sample files use (decryptFileBuffer reads it back). With no
+      // key and no ALLOW_UNENCRYPTED_FILE_STORAGE opt-out it is not retained
+      // at all: the staged rows still record the rejection.
+      let encryption = null;
+      if (isFileEncryptionAvailable()) {
+        encryption = encryptFileBuffer(fs.readFileSync(file.path));
+        fs.writeFileSync(storedPath, encryption.ciphertext);
+        fs.unlinkSync(file.path);
+      } else if (process.env.ALLOW_UNENCRYPTED_FILE_STORAGE === 'true') {
+        fs.renameSync(file.path, storedPath);
+      } else {
+        logger.warn(
+          `[SECURITY][AES256] ENCRYPTION_KEY ausente: arquivo de origem do lote ${batchId} nao retido, `
+            + 'para nao gravar identificadores civis em texto claro (#807).'
+        );
+        return null;
+      }
 
       const sourceFile = {
         storedPath,
         originalName,
         size,
         retainedAt: new Date(),
+        encrypted: Boolean(encryption),
+        ...(encryption && {
+          encryptionAlgorithm: encryption.algorithm,
+          encryptionKeyId: encryption.keyId,
+          encryptionIv: encryption.iv,
+          encryptionTag: encryption.tag,
+        }),
       };
 
       await db.collection('import_batches').updateOne(

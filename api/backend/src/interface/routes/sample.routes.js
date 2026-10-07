@@ -5,7 +5,9 @@ const { validateMiabisCompliance } = require('../../services/miabisValidator.ser
 const SampleGraphValidator = require('../../services/SampleGraphValidator');
 const { authenticate } = require('../../infrastructure/middleware/auth');
 const { requireOrganizationScope } = require('../../infrastructure/middleware/rbac');
-const { isRecordInOrganizationScope } = require('../../services/rbac-assignment.service');
+// #1266: lgpd.allowDataExport switches the HL7/FHIR/CDA file exports off.
+const { requireDataExportAllowed } = require('../../infrastructure/middleware/lgpdExportGate');
+const { isRecordInOrganizationScope, assertOrganizationFieldNotReparented, resolveOrganizationIdForCreate, applyOrganizationScopeFilter } = require('../../services/rbac-assignment.service');
 // const { authenticate } = require('../../infrastructure/middleware/auth');
 const sampleService = require('../../services/sample.service');
 
@@ -141,7 +143,8 @@ function validateCreateSamplePayload(req, res, next) {
     return res.status(422).json({
       success: false,
       error: 'NON_CANONICAL_FIELD',
-      fields: [...new Set(aliasFields)]
+      fields: [...new Set(aliasFields)],
+      details: [...new Set(aliasFields)].map((field) => `${field}: campo não canônico`)
     });
   }
 
@@ -329,6 +332,7 @@ async function recordLabelGeneration(db, { sample, formats, req }) {
 router.post('/',
   authenticate,
   requirePermission('createSample'),
+  requireOrganizationScope,
   validateCreateSamplePayload,
   async (req, res) => {
     try {
@@ -360,8 +364,15 @@ router.post('/',
         quarantineService: req.app.locals.neo4jQuarantineService || req.app.locals.topologicalQuarantine || null
       });
 
+      // #1185: #1071's create rule -- an organization-scoped caller registers
+      // into its own organization whatever collectionSite the body names. A
+      // global caller keeps the body's value.
+      const sampleData = req.organizationScope?.scope === 'global'
+        ? req.body
+        : { ...req.body, collectionSite: resolveOrganizationIdForCreate(req.organizationScope, req.body?.collectionSite) };
+
       const result = await registerSampleUseCase.execute({
-        sampleData: req.body,
+        sampleData,
         actor: {
           userId: req.user?.id || req.user?._id?.toString() || req.user?.userID || null,
           userName: req.user?.name || req.user?.username || null,
@@ -393,7 +404,7 @@ router.post('/',
           // so an audit row written wrong stays wrong.
           message: `Amostra criada - Participante ID: ${sample.participantId}`, // Apenas ID, sem dados sensíveis
           payload: {
-            sampleID: sample._id.toString(),
+            specimenId: sample.specimenId || null,
             participantId: sample.participantId, // Apenas ID anonimizado
             sampleType: sample.sampleType,
             barcode: sample.barcode,
@@ -411,7 +422,11 @@ router.post('/',
           ? (req.t('samples.createSuccess') || 'Amostra criada com sucesso') + ' (integração topológica em quarentena)'
           : req.t('samples.createSuccess') || 'Amostra criada com sucesso',
         data: {
-          sampleID: sample._id.toString(),
+          // #1216: the canonical business id every report, ledger row and
+          // export carries, and every id-taking sample, file and storage
+          // route resolves. The Mongo _id left the response under its
+          // prohibited legacy name, sampleID.
+          specimenId: sample.specimenId || null,
           // #795: canonical name on the way out, matching the way in --
           // validateCreateSamplePayload already 422s a request carrying
           // `patientID` (NON_CANONICAL_FIELD), and the field is on
@@ -453,7 +468,8 @@ router.post('/',
         return res.status(error.status || error.statusCode).json({
           success: false,
           error: req.t?.('samples.createError') || 'Erro ao criar amostra',
-          message: errorMessage
+          message: errorMessage,
+          details: error.details
         });
       }
 
@@ -516,7 +532,8 @@ router.get('/', authenticate, requireOrganizationScope, async (req, res) => {
       return res.status(422).json({
         success: false,
         error: 'NON_CANONICAL_FIELD',
-        fields: [...new Set(queryAliases)]
+        fields: [...new Set(queryAliases)],
+        details: [...new Set(queryAliases)].map((field) => `${field}: campo não canônico`)
       });
     }
 
@@ -708,7 +725,9 @@ router.get('/:id/label', authenticate, requireOrganizationScope, async (req, res
       });
     }
 
-    const sampleIdentifier = escapeXml(String(sample.sampleID || sample._id || req.params.id));
+    // The canonical specimenId, which SampleModel writes; sampleID is the
+    // retired name, kept as a fallback for rows written before the rename.
+    const sampleIdentifier = escapeXml(String(sample.specimenId || sample.sampleID || sample._id || req.params.id));
     const barcode = escapeXml(String(sample.barcode || sampleIdentifier));
     const title = escapeXml(String(sample.sampleType || 'AMOSTRA').slice(0, 32));
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="378" height="189" viewBox="0 0 378 189">
@@ -789,7 +808,8 @@ router.get('/:id/label/print-job', authenticate, requireOrganizationScope, async
       });
     }
 
-    const sampleIdentifier = String(sample.sampleID ?? sample._id);
+    // specimenId first, as the SVG label route above.
+    const sampleIdentifier = String(sample.specimenId ?? sample.sampleID ?? sample._id);
     const location = buildLocationLineFromSample(sample);
     const zpl = buildZplPrintJob({ sampleId: sampleIdentifier, barcode: sample.barcode, location });
 
@@ -923,8 +943,7 @@ router.get('/:id', authenticate, requireOrganizationScope, async (req, res) => {
       });
     }
 
-    const { ObjectId } = require('mongodb');
-    const sample = await sampleService.getSample(db, new ObjectId(req.params.id));
+    const sample = await sampleService.getSample(db, req.params.id);
 
     // #340: an existing sample outside the caller's organization scope
     // 403s rather than 404s, matching sample-file.controller.js's
@@ -1018,7 +1037,6 @@ router.post('/:id/withdraw',
         req.body?.requiredScope || req.body?.consentScope || null
       );
 
-      const { ObjectId } = require('mongodb');
       
       // Preparar informações de auditoria
       const auditInfo = {
@@ -1029,7 +1047,7 @@ router.post('/:id/withdraw',
         userAgent: req.headers['user-agent']
       };
       
-      const result = await sampleService.withdrawSample(db, new ObjectId(req.params.id), req.body, auditInfo);
+      const result = await sampleService.withdrawSample(db, req.params.id, req.body, auditInfo);
 
       // Registra log de alta severidade (RF006)
       if (req.user) {
@@ -1040,7 +1058,7 @@ router.post('/:id/withdraw',
           resourceType: 'Sample',
           resourceId: req.params.id,
           status: 'success',
-          severity: 'high',
+          severity: 'warning',
           message: `Amostra retirada - Tipo: ${req.body.withdrawalType}, Responsável: ${req.body.withdrawalResponsible}, Qtd: ${result.withdrawnQuantity}`,
           payload: {
             withdrawalType: req.body.withdrawalType,
@@ -1094,8 +1112,15 @@ router.put('/:id', authenticate, requirePermission('editSample'), requireOrganiz
       });
     }
 
-    const { ObjectId } = require('mongodb');
-    const result = await sampleService.updateSample(db, new ObjectId(req.params.id), req.body);
+    // #1053: the check above proves the sample is CURRENTLY the caller's.
+    // updateSample's allowlist contains collectionSite -- the field this
+    // module scopes on -- so without a destination check an in-scope caller
+    // could push their own sample into another organization.
+    if (sampleForScope) {
+      assertOrganizationFieldNotReparented(req.organizationScope, sampleForScope.collectionSite, req.body?.collectionSite, 'collectionSite');
+    }
+
+    const result = await sampleService.updateSample(db, req.params.id, req.body);
 
     if (!result) {
       return res.status(404).json({
@@ -1147,6 +1172,16 @@ router.put('/:id', authenticate, requirePermission('editSample'), requireOrganiz
     });
   } catch (error) {
     logger.error('Erro ao atualizar amostra:', error.message);
+    // #1053: a refused re-parent throws statusCode:403. Mapped explicitly
+    // rather than honouring any error.statusCode, which would change the
+    // status of updateSample's own validation errors.
+    if (error.statusCode === 403) {
+      return res.status(403).json({
+        success: false,
+        error: 'Acesso negado',
+        message: error.message
+      });
+    }
     return res.status(400).json({
       success: false,
       error: 'Erro ao atualizar amostra',
@@ -1177,8 +1212,7 @@ router.delete('/:id', authenticate, requirePermission('deleteSample'), requireOr
       });
     }
 
-    const { ObjectId } = require('mongodb');
-    const result = await sampleService.deleteSample(db, new ObjectId(req.params.id));
+    const result = await sampleService.deleteSample(db, req.params.id);
 
     if (!result) {
       return res.status(404).json({
@@ -1217,7 +1251,7 @@ router.delete('/:id', authenticate, requirePermission('deleteSample'), requireOr
 });
 
 // Buscar amostras por termo (barcode ou ID) - para autocomplete
-router.get('/search/by-term', authenticate, async (req, res) => {
+router.get('/search/by-term', authenticate, requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -1249,6 +1283,8 @@ router.get('/search/by-term', authenticate, async (req, res) => {
       ],
       withdrawnAt: null
     };
+    // #1187: scoped like GET / -- this search carried only `authenticate`.
+    applyOrganizationScopeFilter(query, req.organizationScope, 'collectionSite');
 
     const samples = await samplesCollection
       .find(query)
@@ -1278,7 +1314,7 @@ router.get('/search/by-term', authenticate, async (req, res) => {
 });
 
 // Buscar amostra por código de barras
-router.get('/by-barcode/:barcode', authenticate, async (req, res) => {
+router.get('/by-barcode/:barcode', authenticate, requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -1309,6 +1345,16 @@ router.get('/by-barcode/:barcode', authenticate, async (req, res) => {
       return res.status(404).json({
         success: false,
         error: `Amostra não encontrada com código de barras: ${barcode}`
+      });
+    }
+
+    // #1187: GET /:id's #340 check. This lookup returned the sample and its
+    // patient's name to any authenticated caller.
+    if (!isRecordInOrganizationScope(result.sample, req.organizationScope, 'collectionSite')) {
+      return res.status(403).json({
+        success: false,
+        error: 'Acesso negado',
+        message: 'Esta amostra pertence a outra organização'
       });
     }
 
@@ -1426,8 +1472,7 @@ router.get('/:id/results', authenticate, requireOrganizationScope, async (req, r
       });
     }
 
-    const { ObjectId } = require('mongodb');
-    const results = await sampleService.getSampleResults(db, new ObjectId(req.params.id));
+    const results = await sampleService.getSampleResults(db, req.params.id);
 
     // Registra log de consulta de arquivos de analise da amostra
     const auditLogger = require('../../utils/auditLogger');
@@ -1439,7 +1484,7 @@ router.get('/:id/results', authenticate, requireOrganizationScope, async (req, r
       status: 'success',
       severity: 'info',
       message: `Arquivos de analise da amostra consultados - ${results.length || 0} registros`,
-      payload: { sampleID: req.params.id, resultsCount: results.length || 0 },
+      payload: { specimenId: sampleForScope?.specimenId || req.params.id, resultsCount: results.length || 0 },
       req: req,
       module: 'Amostras'
     });
@@ -1480,7 +1525,6 @@ router.post('/:id/return', authenticate, requirePermission('withdrawSample', 'UP
       });
     }
 
-    const { ObjectId } = require('mongodb');
 
     // Preparar informações de auditoria
     const auditInfo = {
@@ -1491,7 +1535,7 @@ router.post('/:id/return', authenticate, requirePermission('withdrawSample', 'UP
       userAgent: req.headers['user-agent']
     };
     
-    const result = await sampleService.returnSample(db, new ObjectId(req.params.id), req.body, auditInfo);
+    const result = await sampleService.returnSample(db, req.params.id, req.body, auditInfo);
 
     // Registra log (anonimizado via auditLogger)
     if (req.user) {
@@ -1502,7 +1546,7 @@ router.post('/:id/return', authenticate, requirePermission('withdrawSample', 'UP
         resourceType: 'Sample',
         resourceId: req.params.id,
         status: 'success',
-        severity: 'high',
+        severity: 'warning',
         message: `Amostra devolvida - Qtd: ${result.returnedQuantity}, Condição: ${result.condition}`,
         payload: {
           returnedQuantity: result.returnedQuantity,
@@ -1743,6 +1787,7 @@ router.put('/:specimenId/files/:fileID/replace',
 router.get('/:specimenId/files/:fileID/export/hl7',
   authenticate,
   requireOrganizationScope,
+  requireDataExportAllowed,
   enforceCommercialConsent({ resolveSampleId: (req) => req.params.specimenId }),
   sampleFileController.exportHL7v2.bind(sampleFileController)
 );
@@ -1751,6 +1796,7 @@ router.get('/:specimenId/files/:fileID/export/hl7',
 router.get('/:specimenId/files/:fileID/export/fhir',
   authenticate,
   requireOrganizationScope,
+  requireDataExportAllowed,
   enforceCommercialConsent({ resolveSampleId: (req) => req.params.specimenId }),
   sampleFileController.exportFHIR.bind(sampleFileController)
 );
@@ -1759,6 +1805,7 @@ router.get('/:specimenId/files/:fileID/export/fhir',
 router.get('/:specimenId/files/:fileID/export/cda',
   authenticate,
   requireOrganizationScope,
+  requireDataExportAllowed,
   enforceCommercialConsent({ resolveSampleId: (req) => req.params.specimenId }),
   sampleFileController.exportCDA.bind(sampleFileController)
 );

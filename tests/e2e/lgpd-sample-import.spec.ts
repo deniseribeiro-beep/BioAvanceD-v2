@@ -215,19 +215,22 @@ test.describe('LGPD sample import against the real backend (#759)', () => {
     expect(quarantined[0]).toMatchObject({ status: 'ERROR', rowNumber: 3 });
     expect(JSON.stringify(quarantined[0].errors)).toMatch(/sampleType/i);
 
-    // Not just the error text -- the original values, which is what makes a
-    // quarantined row correctable and re-submittable rather than merely
-    // auditable.
-    expect(quarantined[0].row).toBeTruthy();
-    expect(String(quarantined[0].row.participantId)).toBe(String(bad.participantId));
-    expect(quarantined[0].row.sampleType).toBe('NOT_A_REAL_SAMPLE_TYPE');
+    // #807: the original values are kept, which is what makes a quarantined
+    // row correctable rather than merely auditable -- but sealed at rest,
+    // because a rejected LGPD row carries the same identifiers that are
+    // encrypted everywhere else. At rest: no plaintext, one envelope. The
+    // values themselves are asserted through the batch API in the #794 test
+    // below, which is the reader that decrypts them.
+    expect(quarantined[0].row ?? null).toBeNull();
+    expect(quarantined[0].sealedPayload).toMatchObject({ alg: 'aes-256-gcm' });
+    const atRest = JSON.stringify(quarantined[0]);
+    expect(atRest).not.toContain('NOT_A_REAL_SAMPLE_TYPE');
+    expect(atRest).not.toContain(String(bad.participantId));
 
     // And the row that imported cleanly is NOT quarantined -- quarantine is
-    // for invalid rows, not a copy of the whole file.
-    expect(
-      quarantined.some((r) => String(r.row?.participantId) === String(good.participantId)),
-      'a row that imported successfully must not be quarantined'
-    ).toBe(false);
+    // for invalid rows, not a copy of the whole file. One staged row, and it
+    // is the rejected one (rowNumber 3, the second data line).
+    expect(quarantined.map((r) => r.rowNumber), 'a row that imported successfully must not be quarantined').toEqual([3]);
   });
 
   test('RNF011 AC#4: a clean import leaves no quarantine batch behind', async ({ request }) => {
@@ -375,7 +378,7 @@ test.describe('LGPD sample import against the real backend (#759)', () => {
       expect(await read.json()).toMatchObject({ success: false });
     } finally {
       // This fixture is not created by any import, so nothing else will clean
-      // it up -- the named volumes persist across sessions (docker-workflow).
+      // it up -- the named volumes persist across sessions.
       await removeForeignImportBatch(fhirBatchId);
     }
   });

@@ -15,7 +15,7 @@ import { useTemperature } from '../hooks/useTemperature';
 import { useSensors } from '../hooks/useSensors';
 import { usePolicies } from '../hooks/usePolicies';
 import { useOrganizations } from '../hooks/useOrganizations';
-import { validateReading, validateTemperatureUnit, generateAlert, validateThresholds } from '../utils/validations';
+import { validateThresholds } from '../utils/validations';
 import { CryoBoxGrid } from '../components/CryoBoxGrid';
 import { storageApi } from '../services/storageApi';
 import { MAINTENANCE_STATUS_OPTIONS, getMaintenanceStatusLabel } from '../config/constants/sensor.constants';
@@ -947,6 +947,7 @@ function SensorsSection() {
                   </button>
                   <button
                     className="action-button"
+                    data-testid={`sensor-edit-${sensor.sensorId}`}
                     onClick={() => {
                       setEditingSensor(sensor);
                       setIsModalOpen(true);
@@ -1056,7 +1057,7 @@ function SensorForm({
       nextCalibration: null,
       calibrationCertificate: '',
       locationID: undefined,
-      policyID: undefined,
+      temperaturePolicy: undefined,
       macAddress: '',
       storageContainer: undefined,
       organizationId: null,
@@ -1180,21 +1181,32 @@ function SensorForm({
         </div>
         <div className="form-grid-full">
           <label className="input-label" htmlFor="sensorPolicySelect">Política de Temperatura</label>
+          {/* #1145: binds SensorMetadata.temperaturePolicy, the field the
+              telemetry path resolves thresholds from, by the policy's _id.
+              It used to send a numeric policyID onto Sensor.policyId, which
+              nothing read. The binding lives on SensorMetadata, which only
+              exists when a MAC address is given, so it needs one. On edit it
+              rebinds that row (#1179), pre-filled from the list. The freezer
+              select below lives on the same row and has the same rule. */}
           <select
             id="sensorPolicySelect"
+            data-testid="sensor-policy-select"
             className="input"
-            value={formData.policyID || ''}
+            value={formData.temperaturePolicy || ''}
+            disabled={!formData.macAddress}
             onChange={(e) =>
               setFormData({
                 ...formData,
-                policyID: e.target.value ? parseInt(e.target.value) : undefined,
+                temperaturePolicy: e.target.value || undefined,
               })
             }
           >
-            <option value="">Selecione uma política</option>
-            {policies.map((policy) => (
-              <option key={policy.policyID} value={policy.policyID}>
-                Política #{policy.policyID} - {policy.targetTemperature}{policy.temperatureUnit} (Limites: {policy.minThreshold} - {policy.maxThreshold})
+            <option value="">
+              {formData.macAddress ? 'Selecione uma política' : 'Informe o MAC Address para vincular uma política'}
+            </option>
+            {policies.filter((policy) => policy && policy._id).map((policy) => (
+              <option key={policy._id} value={policy._id}>
+                {policy.name || 'Política'} (Limites: {policy.minTemp} - {policy.maxTemp}{policy.temperatureUnit})
               </option>
             ))}
           </select>
@@ -1205,7 +1217,14 @@ function SensorForm({
           placeholder="AA:BB:CC:DD:EE:FF"
           value={formData.macAddress || ''}
           onChange={(e) =>
-            setFormData({ ...formData, macAddress: e.target.value })
+            // #1145: without a MAC there is no SensorMetadata to bind a policy
+            // to, so clearing it clears the choice rather than submitting one
+            // the backend would refuse.
+            setFormData({
+              ...formData,
+              macAddress: e.target.value,
+              ...(e.target.value ? {} : { temperaturePolicy: undefined, storageContainer: undefined }),
+            })
           }
         />
         <div className="form-grid-full">
@@ -1215,6 +1234,7 @@ function SensorForm({
             data-testid="sensor-storage-container-select"
             className="input"
             value={formData.storageContainer || ''}
+            disabled={!formData.macAddress}
             onChange={(e) =>
               setFormData({
                 ...formData,
@@ -1222,7 +1242,7 @@ function SensorForm({
               })
             }
           >
-            <option value="">Selecione um freezer</option>
+            <option value="">{formData.macAddress ? 'Selecione um freezer' : 'Informe o MAC Address para vincular um freezer'}</option>
             {freezers.map((freezer) => (
               <option key={freezer._id} value={freezer._id}>
                 {freezer.name}
@@ -1268,18 +1288,19 @@ function PoliciesSection() {
   const { policies, loading, error, getActiveLimit, createPolicy, updatePolicy, deletePolicy } = usePolicies();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingPolicy, setEditingPolicy] = useState<Policy | null>(null);
-  const [activeLimits, setActiveLimits] = useState<Record<number, number>>({});
+  // #1178: keyed by _id, the only id the policy API returns.
+  const [activeLimits, setActiveLimits] = useState<Record<string, number>>({});
 
   const policyRows = useMemo(() => (Array.isArray(policies) ? policies : []), [policies]);
 
   useEffect(() => {
-    const validPolicies = policyRows.filter((p) => p && p.policyID);
+    const validPolicies = policyRows.filter((p) => p && p._id);
     validPolicies.forEach(async (policy) => {
       try {
-        const limit = await getActiveLimit(policy.policyID, true);
-        setActiveLimits((prev) => ({ ...prev, [policy.policyID]: limit.limit }));
+        const limit = await getActiveLimit(String(policy._id), true);
+        setActiveLimits((prev) => ({ ...prev, [String(policy._id)]: limit.limit }));
       } catch (err) {
-        console.error(`Erro ao obter limite para política ${policy.policyID}:`, err);
+        console.error(`Erro ao obter limite para política ${policy._id}:`, err);
       }
     });
   }, [policyRows, getActiveLimit]);
@@ -1300,7 +1321,6 @@ function PoliciesSection() {
         <Table
           headers={[
             'Política',
-            'Temperatura Alvo',
             'Limite Mínimo',
             'Limite Máximo',
             'Histerese',
@@ -1309,7 +1329,7 @@ function PoliciesSection() {
             'Ações',
           ]}
         >
-          {policyRows.filter((policy) => policy && policy.policyID).length === 0 ? (
+          {policyRows.filter((policy) => policy && policy._id).length === 0 ? (
             <tr>
               <td colSpan={8} className="table-empty-state-cell">
                 <div className="table-empty-state">
@@ -1323,30 +1343,28 @@ function PoliciesSection() {
             </tr>
           ) : (
             policyRows
-              .filter((policy) => policy && policy.policyID)
+              .filter((policy) => policy && policy._id)
               .map((policy) => (
-              <tr key={`policy-${policy.policyID}`}>
-                <td>{policy.policyName}</td>
+              <tr key={`policy-${policy._id}`} data-testid={`policy-row-${policy._id}`}>
+                <td>{policy.name}</td>
                 <td>
-                  {policy.targetTemperature}°C
+                  {policy.minTemp}°C
                 </td>
                 <td>
-                  {policy.minThreshold}°C
-                </td>
-                <td>
-                  {policy.maxThreshold}°C
+                  {policy.maxTemp}°C
                   <br />
                   <small style={{ color: 'var(--text-light)' }}>
-                    Limite ativo: {activeLimits[policy.policyID]?.toFixed(1) || 'N/A'}°C
+                    Limite ativo: {activeLimits[String(policy._id)]?.toFixed(1) || 'N/A'}°C
                   </small>
                 </td>
                 <td>{policy.hysteresis}°C</td>
-                <td>{new Date(policy.validFrom).toLocaleDateString('pt-BR')}</td>
-                <td>{new Date(policy.validTo).toLocaleDateString('pt-BR')}</td>
+                <td>{new Date(policy.effectivePeriod?.start).toLocaleDateString('pt-BR')}</td>
+                <td>{policy.effectivePeriod?.end ? new Date(policy.effectivePeriod.end).toLocaleDateString('pt-BR') : '—'}</td>
                 <td>
                   <div className="table-actions">
                     <button
                       className="action-button"
+                      data-testid={`policy-edit-${policy._id}`}
                       onClick={() => {
                         setEditingPolicy(policy);
                         setIsModalOpen(true);
@@ -1357,10 +1375,11 @@ function PoliciesSection() {
                     </button>
                     <button
                       className="action-button danger"
+                      data-testid={`policy-delete-${policy._id}`}
                       onClick={async () => {
                         if (confirm('Tem certeza que deseja excluir esta política?')) {
                           try {
-                            await deletePolicy(policy.policyID);
+                            await deletePolicy(String(policy._id));
                           } catch (err: any) {
                             alert(err.message);
                           }
@@ -1398,7 +1417,7 @@ function PoliciesSection() {
 
             try {
               if (editingPolicy) {
-                await updatePolicy(editingPolicy.policyID, data);
+                await updatePolicy(String(editingPolicy._id), data);
               } else {
                 await createPolicy(data);
               }
@@ -1429,16 +1448,29 @@ function PolicyForm({
 }) {
   const [formData, setFormData] = useState<Partial<Policy>>(
     policy || {
-      minThreshold: -85,
-      maxThreshold: -75,
-      targetTemperature: -80,
+      // #1089: required by the API as of the temperaturePolicies cutover.
+      name: '',
+      minTemp: -85,
+      maxTemp: -75,
       hysteresis: 2,
-      alertDelayMin: 5,
+      // #1196: 30 min, past a -80 °C freezer's recovery to -75 °C after a
+      // routine door opening, so a retrieval does not compromise the samples.
+      minimumDuration: 30,
       temperatureUnit: '°C',
-      validFrom: new Date(),
-      validTo: new Date(),
+      effectivePeriod: { start: new Date(), end: new Date() },
     }
   );
+  // #1139: the API takes effectivePeriod whole, so each date input edits
+  // one bound and keeps the other.
+  const setPeriodBound = (bound: 'start' | 'end', value: string) =>
+    setFormData({
+      ...formData,
+      effectivePeriod: {
+        start: formData.effectivePeriod?.start ?? new Date(),
+        end: formData.effectivePeriod?.end ?? null,
+        [bound]: new Date(value),
+      },
+    });
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1448,29 +1480,31 @@ function PolicyForm({
   return (
     <form onSubmit={handleSubmit} className="form">
       <div className="form-grid">
+        {/* #1089: sources dict-02 P1X-0106 profileName, which the canonical
+            store requires. Also the first thing to populate the policy
+            table's existing name column, which was blank until now. */}
         <Input
-          label="Temperatura Alvo"
-          type="number"
-          step="0.1"
-          value={formData.targetTemperature || ''}
+          label="Nome da Política"
+          type="text"
+          value={formData.name || ''}
           onChange={(e) =>
             setFormData({
               ...formData,
-              targetTemperature: parseFloat(e.target.value),
+              name: e.target.value,
             })
           }
-          helperText="Temperatura ideal que deve ser mantida. Deve estar entre o limite mínimo e máximo."
+          helperText="Identifica a política na listagem e nos alertas. Ex.: Freezer -80."
           required
         />
         <Input
           label="Limite Mínimo"
           type="number"
           step="0.1"
-          value={formData.minThreshold || ''}
+          value={formData.minTemp || ''}
           onChange={(e) =>
             setFormData({
               ...formData,
-              minThreshold: parseFloat(e.target.value),
+              minTemp: parseFloat(e.target.value),
             })
           }
           helperText="Temperatura mínima permitida. Deve ser menor que a temperatura alvo."
@@ -1480,11 +1514,11 @@ function PolicyForm({
           label="Limite Máximo"
           type="number"
           step="0.1"
-          value={formData.maxThreshold || ''}
+          value={formData.maxTemp || ''}
           onChange={(e) =>
             setFormData({
               ...formData,
-              maxThreshold: parseFloat(e.target.value),
+              maxTemp: parseFloat(e.target.value),
             })
           }
           helperText="Temperatura máxima permitida. Deve ser maior que a temperatura alvo."
@@ -1501,49 +1535,35 @@ function PolicyForm({
           helperText="Margem de tolerância para evitar alertas frequentes. Valor recomendado: 1-5 unidades."
         />
         <Input
-          label="Atraso de Alerta (minutos)"
+          label="Duração Mínima da Excursão (minutos)"
           type="number"
-          value={formData.alertDelayMin || ''}
+          value={formData.minimumDuration || ''}
           onChange={(e) =>
             setFormData({
               ...formData,
-              alertDelayMin: parseInt(e.target.value),
+              minimumDuration: parseInt(e.target.value),
             })
           }
-          helperText="Tempo em minutos que a temperatura deve estar fora dos limites antes de gerar um alerta."
+          helperText="Tempo em minutos que a temperatura deve permanecer fora dos limites antes de as amostras serem marcadas como comprometidas."
         />
+        {/* #1198: fixed, not selectable. Alert enforcement compares readings
+            against these limits in Celsius, so a policy entered in another
+            unit was misapplied (°F) or rejected by the API (K). */}
         <div className="form-grid-full">
-          <label className="input-label" htmlFor="temperatureUnitSelect">Unidade de Temperatura *</label>
-          <select
-            id="temperatureUnitSelect"
-            className="input"
-            value={formData.temperatureUnit || '°C'}
-            onChange={(e) =>
-              setFormData({ ...formData, temperatureUnit: e.target.value })
-            }
-          >
-            <option value="°C">Celsius (°C)</option>
-            <option value="°F">Fahrenheit (°F)</option>
-            <option value="K">Kelvin (K)</option>
-          </select>
-          <p className="form-help-text" style={{ marginTop: '0.5rem', fontSize: '0.875rem', color: 'var(--text-light)' }}>
-            Selecione a unidade de medida para todas as temperaturas desta política.
+          <p className="input-label">Unidade de Temperatura</p>
+          <p className="form-help-text" data-testid="policy-temperature-unit" style={{ fontSize: '0.875rem', color: 'var(--text-light)' }}>
+            Celsius (°C). Todas as temperaturas desta política são em °C.
           </p>
         </div>
         <Input
           label="Válido De"
           type="date"
           value={
-            formData.validFrom
-              ? new Date(formData.validFrom).toISOString().split('T')[0]
+            formData.effectivePeriod?.start
+              ? new Date(formData.effectivePeriod.start).toISOString().split('T')[0]
               : ''
           }
-          onChange={(e) =>
-            setFormData({
-              ...formData,
-              validFrom: new Date(e.target.value),
-            })
-          }
+          onChange={(e) => setPeriodBound('start', e.target.value)}
           helperText="Data de início da vigência desta política. Deve ser anterior à data de término."
           required
         />
@@ -1551,16 +1571,11 @@ function PolicyForm({
           label="Válido Até"
           type="date"
           value={
-            formData.validTo
-              ? new Date(formData.validTo).toISOString().split('T')[0]
+            formData.effectivePeriod?.end
+              ? new Date(formData.effectivePeriod.end).toISOString().split('T')[0]
               : ''
           }
-          onChange={(e) =>
-            setFormData({
-              ...formData,
-              validTo: new Date(e.target.value),
-            })
-          }
+          onChange={(e) => setPeriodBound('end', e.target.value)}
           helperText="Data de término da vigência desta política. Deve ser posterior à data de início."
           required
         />

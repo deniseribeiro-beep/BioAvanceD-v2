@@ -1,17 +1,14 @@
 const TemperatureModel = require('../models/Temperature');
-const PolicyModel = require('../models/Policy');
 const logger = require('../utils/logger');
 const influxTelemetryWriteRepository = require('../infrastructure/persistence/influxdb/InfluxTelemetryWriteRepository');
 const notificationServiceV2 = require('./NotificationService');
 const notificationDispatchService = require('./notificationDispatch.service');
 const { applyOrganizationScopeFilter } = require('./rbac-assignment.service');
-
-// #1079: scheduler.service.js's resolveActiveAlert/ensureActiveAlert both
-// filter on { sensorId, type, status }, so every alert writer has to emit a
-// `type` for those two lifecycle helpers to reach it. The scheduler owns
-// 'missing_reading' and 'stale_reading'; this module owns the threshold
+// #1079/#1142: the alert-episode helpers filter on { sensorId, type, status },
+// so every alert writer has to emit a `type` for them to reach it. The
+// scheduler owns missing/stale readings; this module owns the threshold
 // breach.
-const THRESHOLD_BREACH_ALERT_TYPE = 'threshold_breach';
+const { ALERT_TYPES, resolveActiveAlert, ensureActiveAlert } = require('./alertLifecycle.service');
 
 function createTemperatureValidationError(message, statusCode = 422) {
   const error = new Error(message);
@@ -27,7 +24,10 @@ async function assertOrganizationIdResolves(db, organizationId) {
   }
   const organization = await db.collection('organizations').findOne({ organizationId: String(organizationId) });
   if (!organization) {
-    throw createTemperatureValidationError(`organizationId ${organizationId} não encontrado`, 404);
+    const error = createTemperatureValidationError(`organizationId ${organizationId} não encontrado`, 404);
+    // #1120: named for the machine-ingest rejection audit row.
+    error.auditReason = 'unknown_organization';
+    throw error;
   }
 }
 
@@ -40,7 +40,14 @@ class TemperatureService {
     try {
       const validation = TemperatureModel.validate(temperatureData);
       if (!validation.isValid) {
-        throw new Error(validation.errors.join(', '));
+        const error = new Error(validation.errors.join(', '));
+        // #1120: the MQTT sibling's token for the same condition.
+        error.auditReason = 'invalid_payload';
+        // RNF018 (#1300): a validation failure answers 422.
+        error.statusCode = 422;
+
+        error.details = validation.errors;
+        throw error;
       }
       await assertOrganizationIdResolves(db, temperatureData.organizationId);
 
@@ -75,7 +82,10 @@ class TemperatureService {
 
   async checkPolicyAndAlert(db, temperature) {
     try {
-      const policiesCollection = db.collection('policies');
+      // #1089: was db.collection('policies'), the store the six CRUD
+      // routes wrote and nothing on the telemetry side read. Both sides
+      // now resolve the same canonical collection.
+      const policiesCollection = db.collection('temperaturePolicies');
       const policyId = temperature.policyId || temperature.policyID;
 
       if (!policyId) {
@@ -90,11 +100,15 @@ class TemperatureService {
       }
 
       // Usa thresholds da policy se não estiverem no temperature
-      const minThreshold = temperature.minThreshold || policy.minThreshold;
-      const maxThreshold = temperature.maxThreshold || policy.maxThreshold;
+      // #1089: the reading still carries its own legacy-named overrides;
+      // the POLICY's bounds are canonical (dict-02 lowerLimit/upperLimit).
+      const minThreshold = temperature.minThreshold || policy.minTemp;
+      const maxThreshold = temperature.maxThreshold || policy.maxTemp;
 
+      // #1198: the limits are Celsius, so the reading is converted for the
+      // comparison only.
       const isValid = TemperatureModel.validateReading(
-        temperature.temperatureValue,
+        TemperatureModel.toCelsius(temperature.temperatureValue, temperature.temperatureUnit),
         minThreshold,
         maxThreshold
       );
@@ -102,7 +116,28 @@ class TemperatureService {
       if (!isValid) {
         // Gera alerta
         const alertsCollection = db.collection('alerts');
-        const alertInsert = await alertsCollection.insertOne({
+
+        // #1118: split from #1079. That commit gave this document a `type`
+        // so the scheduler's lifecycle helpers COULD match it, and wired the
+        // resolve half below -- but left this insert unconditional, so an
+        // out-of-range episode still wrote one row per reading. A freezer out
+        // of range for a day at a one-minute poll is 1,440 of them, and since
+        // #1079 bounded getActiveAlerts at `limit || 1000` one sustained
+        // excursion can fill the entire default page and push every other
+        // sensor's alert off it.
+        //
+        // ensureActiveAlert is the scheduler's own episode check, shared
+        // through alertLifecycle.service since #1142 rather than copied here.
+        //
+        // Shape 1 of the three the issue lists: the ROW is deduped, the
+        // operator is NOT. Both notifications still fire on every breaching
+        // reading -- silencing an operator who missed the first alert while a
+        // cold-chain excursion continues is a safety decision, and RF009 AC#6
+        // requires an alert without saying how often. #1079's own canonical
+        // sibling (iot.controller#upsertEnvironmentalExcursion) is
+        // episode-shaped, which is evidence for deduping the row and says
+        // nothing about notification cadence.
+        const alertPayload = {
           sensorId: temperature.sensorId || temperature.sensorID,
           // #1062: an alert carried no organizationId at all, so
           // GET /alerts could not be scoped by adding middleware -- the
@@ -117,7 +152,7 @@ class TemperatureService {
           // breach stayed `active` forever -- one permanent document per
           // out-of-range reading, with nothing in the repo setting
           // status: 'resolved' on it.
-          type: THRESHOLD_BREACH_ALERT_TYPE,
+          type: ALERT_TYPES.THRESHOLD_BREACH,
           policyId: policyId,
           temperatureValue: temperature.temperatureValue,
           threshold: {
@@ -128,7 +163,15 @@ class TemperatureService {
           severity: 'warning',
           status: 'active',
           createdAt: new Date()
-        });
+        };
+
+        // Reuse the open episode's id when we skip the insert. Nothing in
+        // src/ reads sourceEventId back -- it is written by seven call sites
+        // and stored at notificationDispatch.service.js:159, and queried by
+        // none -- so reusing it breaks no consumer, and RF015 AC#6 ("vincular
+        // a notificação ao evento que a originou") still holds because the
+        // episode's alert IS the originating event.
+        const { alertId: activeAlertId } = await ensureActiveAlert(alertsCollection, alertPayload);
 
         logger.warn('Alerta de temperatura gerado:', {
           sensorId: temperature.sensorId || temperature.sensorID,
@@ -150,7 +193,7 @@ class TemperatureService {
         void notificationDispatchService.dispatchNotification(db, {
           eventType: 'environmental_excursion',
           sourceEventType: 'TemperatureAlert',
-          sourceEventId: alertInsert.insertedId,
+          sourceEventId: activeAlertId,
           payload: {
             sensorId: temperature.sensorId || temperature.sensorID,
             temperatureValue: temperature.temperatureValue,
@@ -165,17 +208,11 @@ class TemperatureService {
         // resolves its own two types the moment the good condition holds
         // (checkStaleTemperatureReadings, the `else` beside its isStale
         // branch), with no debounce or hysteresis; this matches that
-        // semantics deliberately rather than inventing a second one.
-        // Kept inline rather than importing scheduler.service, which would
-        // pull node-cron and three unrelated services into every caller of
-        // this module for one updateMany.
+        // semantics deliberately rather than inventing a second one -- and
+        // since #1142 it is the same function.
         const sensorId = temperature.sensorId || temperature.sensorID;
         if (sensorId) {
-          const alertsCollection = db.collection('alerts');
-          await alertsCollection.updateMany(
-            { sensorId, type: THRESHOLD_BREACH_ALERT_TYPE, status: 'active' },
-            { $set: { status: 'resolved', resolvedAt: new Date() } }
-          );
+          await resolveActiveAlert(db.collection('alerts'), sensorId, ALERT_TYPES.THRESHOLD_BREACH);
         }
       }
     } catch (error) {

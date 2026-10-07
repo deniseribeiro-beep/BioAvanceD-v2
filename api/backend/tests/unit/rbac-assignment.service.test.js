@@ -708,4 +708,23 @@ describe('#1053: assertOrganizationFieldNotReparented', () => {
   it('names the field in the message, so it can be reused for collectionSite', () => {
     expect(() => assertOrganizationFieldNotReparented(scoped, 'a', 'b', 'collectionSite')).toThrow(/collectionSite/);
   });
+
+  // #1183: a missing scope means requireOrganizationScope is not on the
+  // route -- every real caller, global included, has a scope object. The
+  // create-side twin fails closed on that; this one used to return, a
+  // guaranteed no-op on a mis-wired route.
+  it('fails closed with 403 when no scope was resolved and the field is being written', () => {
+    expect(() => assertOrganizationFieldNotReparented(undefined, 'org-a', 'org-b')).toThrow(/Escopo organizacional/);
+    try {
+      assertOrganizationFieldNotReparented(null, 'org-a', 'org-a');
+    } catch (error) {
+      expect(error.statusCode).toBe(403);
+      return;
+    }
+    throw new Error('expected a throw for a missing scope even when the value is unchanged');
+  });
+
+  it('CONTROL: a missing scope is harmless when the field is not being written', () => {
+    expect(() => assertOrganizationFieldNotReparented(undefined, 'org-a', undefined)).not.toThrow();
+  });
 });

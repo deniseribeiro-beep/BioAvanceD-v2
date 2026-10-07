@@ -9,6 +9,8 @@
 // tested directly, per this repo's frontend testing convention. Same split as
 // consentTokenView.ts (#809), which covers the *other* token system.
 
+import { classifyRequestFailure } from './requestFailure';
+
 export type EConsentPermission = {
   key: string;
   label: string;
@@ -145,4 +147,30 @@ export function mapEConsentSubmitError(status?: number): string {
     return 'Não foi possível registrar seu consentimento. A equipe do biobanco foi notificada.';
   }
   return 'Erro ao atualizar consentimento.';
+}
+
+// #1158: the status-only mappers above get `undefined` in a real outage, because
+// api.ts aborts at its own 10s timeout before the backend's 503 arrives (30s+).
+// These take the whole error, so "no response at all" is distinguishable from
+// "a response we have no arm for" -- the same split #1152 made on ConsentTokenPage.
+export function mapEConsentRequestError(error?: unknown): string {
+  const failure = classifyRequestFailure(error);
+  if (failure.kind === 'response') return mapEConsentError(failure.status);
+  if (failure.kind === 'no-response') {
+    return 'Não foi possível falar com o serviço de consentimento. Seu link continua válido -- tente novamente em alguns minutos.';
+  }
+  return mapEConsentError(undefined);
+}
+
+export function mapEConsentSubmitRequestError(error?: unknown): string {
+  const failure = classifyRequestFailure(error);
+  if (failure.kind === 'response') return mapEConsentSubmitError(failure.status);
+  if (failure.kind === 'no-response') {
+    // Deliberately does not say the consent was NOT recorded: a slow success can
+    // land after the client gave up. Retrying is safe on both routes -- /update's
+    // JWT is not single-use, and acceptImportConsentToken returns early on an
+    // already-signed record.
+    return 'Não foi possível confirmar o registro do seu consentimento. Seu link continua válido -- tente novamente em alguns minutos.';
+  }
+  return mapEConsentSubmitError(undefined);
 }

@@ -13,6 +13,7 @@ const sessionService = require('../../src/services/session.service');
 const backupService = require('../../src/services/backup.service');
 const { createDbMock, createCollectionMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
+const { createFakeDb } = require('../unit/foundation/helpers/fake-db');
 const { PERMISSION_CATALOG } = require('../../src/services/rbac-catalog-seed.service');
 
 // #632: requireRole(4) grants access to *any* hierarchyLevel-4 role,
@@ -259,6 +260,35 @@ describe('GET /api/backup/list', () => {
     const entry = res.body.data.find((d) => d.fileName === 'backup-1');
     expect(entry.status).toBe('success');
     expect(entry.checksum).toBe('abc123');
+
+    fs.rmSync(baseDir, { recursive: true, force: true });
+  });
+
+  // #1332: a directory run twice has two history rows; the listing shows
+  // the newest run's state. The rows sit out of order in a store that sorts.
+  it('merges the newest history row when a directory has several', async () => {
+    const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'backup-list-newest-'));
+    const dirPath = path.join(baseDir, 'backup-1');
+    fs.mkdirSync(dirPath);
+    fs.writeFileSync(path.join(dirPath, 'a.bson'), 'x');
+    const store = createFakeDb().collection('backupHistory');
+    await store.insertOne({ path: dirPath, status: 'success', checksum: 'new', startedAt: new Date('2026-02-03') });
+    await store.insertOne({ path: dirPath, status: 'failed', checksum: 'old', startedAt: new Date('2026-02-01') });
+
+    vi.spyOn(backupService, 'getBackupBaseDir').mockReturnValue(baseDir);
+    app.locals.db = createDbMock({
+      ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]),
+      backupHistory: createCollectionMock({ find: vi.fn((filter) => store.find(filter)) }),
+    });
+
+    const res = await request(app)
+      .get('/api/backup/list')
+      .set('Authorization', `Bearer ${makeToken(4)}`);
+
+    expect(res.status).toBe(200);
+    const entry = res.body.data.find((d) => d.fileName === 'backup-1');
+    expect(entry.status).toBe('success');
+    expect(entry.checksum).toBe('new');
 
     fs.rmSync(baseDir, { recursive: true, force: true });
   });

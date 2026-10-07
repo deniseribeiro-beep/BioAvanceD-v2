@@ -14,6 +14,15 @@ const require = createRequire(import.meta.url);
 const { ObjectId } = require('mongodb');
 const fhirImportStagingService = require('../../src/services/fhir-import-staging.service');
 
+// #1171: plus `$in`, for the phoneHash lookup.
+function matches(doc, filter) {
+  return Object.entries(filter).every(([key, value]) => (
+    value && typeof value === 'object' && Array.isArray(value.$in)
+      ? value.$in.includes(doc[key])
+      : String(doc[key]) === String(value)
+  ));
+}
+
 function createCollection() {
   const docs = [];
   return {
@@ -24,12 +33,12 @@ function createCollection() {
       return { insertedId: inserted._id };
     }),
     find: vi.fn((filter = {}) => {
-      const matched = docs.filter((doc) => Object.entries(filter).every(([key, value]) => String(doc[key]) === String(value)));
+      const matched = docs.filter((doc) => matches(doc, filter));
       return { sort: vi.fn().mockReturnThis(), toArray: vi.fn(async () => matched) };
     }),
-    findOne: vi.fn(async (filter = {}) => docs.find((doc) => Object.entries(filter).every(([key, value]) => String(doc[key]) === String(value))) || null),
+    findOne: vi.fn(async (filter = {}) => docs.find((doc) => matches(doc, filter)) || null),
     updateOne: vi.fn(async (filter = {}, update = {}, options = {}) => {
-      let doc = docs.find((item) => Object.entries(filter).every(([key, value]) => String(item[key]) === String(value)));
+      let doc = docs.find((item) => matches(item, filter));
       if (!doc && options.upsert) {
         doc = { _id: `id-${docs.length + 1}`, ...filter };
         docs.push(doc);
@@ -101,15 +110,59 @@ describe('fhir-import-staging.service#commitBatch — ParticipantIdentity dual-w
 
     const identity = db.collections.participantIdentities.docs.find((doc) => doc.participantId === 'PART-563');
     expect(identity).toBeTruthy();
-    expect(identity.patientName).toBe('Maria Silva');
-    expect(identity.identityDocument).toBe('12345678900');
-    // RF005/RNF007, dict-07 row 1 (#1104): birthDate is ciphertext-only now.
-    // The plaintext is dropped once the ciphertext exists, so the value lives
-    // in birthDateEncrypted and stays matchable via birthDateHash.
-    // patientName and identityDocument above still dual-write.
+    // RF005/RNF007, dict-07 row 1 (#1104): all three civil-identity fields
+    // are ciphertext-only now. The plaintext is dropped once the ciphertext
+    // exists, so each value lives in its *Encrypted sibling and stays
+    // matchable via its blind index.
+    const identityCrypto = require('../../src/services/participantIdentity.service');
+    expect(identity.patientName).toBeNull();
+    expect(identity.identityDocument).toBeNull();
+    expect(identityCrypto.decryptIdentity(identity)).toMatchObject({
+      patientName: 'Maria Silva',
+      identityDocument: '12345678900',
+    });
     expect(identity.birthDate).toBeNull();
     expect(identity.birthDateEncrypted).toBeTruthy();
     expect(identity.birthDateHash).toBeTruthy();
+  });
+
+  // #1171: every later consent path (/generate-link, resend, the publication
+  // sweep, the queue worker) reads the contact from the identity record only
+  // (#1166), so a committed FHIR participant must have it recorded there.
+  it('#1171: records the FHIR contact on the identity record, encrypted', async () => {
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
+    db.collections.import_staging_records.docs[0].normalized.patientPhone = '(11) 97777-6666';
+
+    await fhirImportStagingService.commitBatch(db, batchId);
+
+    const identity = db.collections.participantIdentities.docs.find((doc) => doc.participantId === 'PART-563');
+    expect(identity.emailEncrypted).toBeTruthy();
+    expect(identity.phoneHash).toBe(participantIdentityService.computeBlindIndex('phone', '11977776666'));
+    const decrypted = participantIdentityService.decryptIdentity(identity);
+    expect(decrypted.email).toBe('maria@example.com');
+    expect(decrypted.phone).toBe('11977776666');
+  });
+
+  // #1171: the phoneHash index would refuse the upsert, and commitBatch has no
+  // per-record catch, so one duplicate phone would abort the rest of the
+  // batch. The record commits without the phone instead.
+  it('#1171: commits without the phone when another participant already holds it', async () => {
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
+    db.collections.import_staging_records.docs[0].normalized.patientPhone = '11977776666';
+    await db.collection('participantIdentities').insertOne({
+      participantId: 'OTHER-1',
+      phoneHash: participantIdentityService.computeBlindIndex('phone', '11977776666'),
+    });
+
+    const result = await fhirImportStagingService.commitBatch(db, batchId);
+
+    expect(result.committed).toBe(1);
+    const identity = participantIdentityService.decryptIdentity(
+      db.collections.participantIdentities.docs.find((doc) => doc.participantId === 'PART-563')
+    );
+    expect(identity.email).toBe('maria@example.com');
+    expect(identity.phone ?? null).toBeNull();
+    expect(identity.phoneHash ?? null).toBeNull();
   });
 
   it('#571: carries sex onto Patient when the FHIR resource provides Patient.gender', async () => {

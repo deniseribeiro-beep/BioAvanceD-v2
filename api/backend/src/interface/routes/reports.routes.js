@@ -2,13 +2,16 @@ const express = require('express');
 const { ObjectId } = require('mongodb');
 const router = express.Router();
 const { authenticate } = require('../../infrastructure/middleware/auth');
-const { requirePermission } = require('../../infrastructure/middleware/rbac');
+const { requirePermission, requireRole } = require('../../infrastructure/middleware/rbac');
+// #1266: lgpd.allowDataExport switches the two report exports off.
+const { requireDataExportAllowed } = require('../../infrastructure/middleware/lgpdExportGate');
 const ReportsModel = require('../../models/Reports');
 // #1045: stripConsentSecrets -- the patient reports return raw participant documents.
 const PatientModel = require('../../models/Patient');
 const { SampleModel } = require('../../models/Sample');
 const { SPECIMEN_TYPE_IDS, SAMPLE_ORIGIN_IDS } = require('../../config/constants/specimen.constants');
 const logger = require('../../utils/logger');
+const { anonymizeLogs, generateAnonId } = require('../../utils/userAnonymization');
 const specimenPreanalyticsService = require('../../services/specimen-preanalytics.service');
 const rcsAssessmentService = require('../../services/rcs-assessment.service');
 const { resolveUserOrganizationScope, isOrganizationScopeUsable, applyOrganizationScopeFilter, isRecordInOrganizationScope, isAuditReader } = require('../../services/rbac-assignment.service');
@@ -344,12 +347,10 @@ const SCOPED_HANDLER_KEYS = new Set([
 // /:type/export, /:type/export/pdf and POST /generate in one place -- all
 // four already translate a thrown `statusCode === 403` into a 403 response.
 //
-// This is the GATE only. It bounds WHO may call these types, not WHAT the
-// export contains. As of #1058/#1061/#1050 the CSV export IS bounded, by
-// EXPORT_CATALOG below -- but the preview, the PDF branch and the Report
-// document POST /generate persists are all still the raw handler output,
-// so this sentence still holds for three of the four surfaces.
-const AUDIT_READER_HANDLER_KEYS = new Set(['accessLogs']);
+// This is the GATE only. It bounds WHO may call these types. WHAT they
+// contain is bounded by EXPORT_CATALOG below, which buildPreviewData applies
+// to every handler's output (#1077), so all four surfaces share it.
+const AUDIT_READER_HANDLER_KEYS = new Set(['accessLogs', 'auditEvents']);
 
 function unknownTypeResult(rawType) {
   return {
@@ -409,7 +410,10 @@ async function buildPreviewData(db, rawType, filters = {}) {
     filters.organizationScope = organizationScope;
   }
 
-  return handler(db, filters, handlerOptions);
+  // #1077: the catalog bounds the result here, where all four surfaces --
+  // the preview, the CSV, the "PDF" branch and the Report POST /generate
+  // persists -- receive it, rather than at one surface at a time.
+  return boundPreviewData(await handler(db, filters, handlerOptions), handlerKey);
 }
 
 async function handleSamplesByPatient(db, filters) {
@@ -818,9 +822,48 @@ async function handleAccessLogs(db, filters) {
     query.$or = [{ dateTime: dateQuery }, { timestamp: dateQuery }];
   }
 
-  const logs = await collection.find(query).sort({ dateTime: -1, timestamp: -1 }).limit(200).toArray();
+  const rawLogs = await collection.find(query).sort({ dateTime: -1, timestamp: -1 }).limit(200).toArray();
   const total = await collection.countDocuments(query);
+  // #1076: the same read-time anonymization log.service#getLogs applies for
+  // /api/logs. auditLogger already writes a USR- pseudonym into userName, but
+  // this handler returned raw documents, so any row not written through it
+  // (or written before it anonymized) left with its stored name through the
+  // preview, the CSV, /export/pdf and the persisted Report alike.
+  const logs = await anonymizeLogs(rawLogs, db);
   return { total, logs, previewLimited: total > 200 };
+}
+
+// #733: RF008 names AuditEvent as the audit report's contract (requisitos
+// v4.0.0), so 'Auditoria' reads the hash-chained `audit_events` trail
+// (audit-v2.service.js) rather than sharing handleAccessLogs' `logs` query.
+// Stored `occurredAt` is an ISO string, so the range is compared as ISO
+// strings -- a Date bound never matches a string field.
+const PSEUDONYM_PATTERN = /^USR-(?:[0-9A-F]{8}|SYSTEM)$/;
+
+function toActorPseudonym(actor) {
+  if (!actor || actor === 'system') return 'USR-SYSTEM';
+  const value = String(actor);
+  // ingestLogRecord copies the log's userName, falling back to its userID.
+  // A row written before the userName was pseudonymized carries the raw
+  // value, and audit_events is append-only, so it is masked here on read.
+  return PSEUDONYM_PATTERN.test(value) ? value : generateAnonId(value);
+}
+
+async function handleAuditEvents(db, filters) {
+  const collection = db.collection('audit_events');
+  const query = {};
+
+  const dateQuery = buildDateQuery(filters);
+  if (dateQuery) {
+    query.occurredAt = {};
+    if (dateQuery.$gte) query.occurredAt.$gte = dateQuery.$gte.toISOString();
+    if (dateQuery.$lte) query.occurredAt.$lte = dateQuery.$lte.toISOString();
+  }
+
+  const rawEvents = await collection.find(query).sort({ occurredAt: -1, sequenceNumber: -1 }).limit(200).toArray();
+  const total = await collection.countDocuments(query);
+  const auditEvents = rawEvents.map((event) => ({ ...event, actorPseudonym: toActorPseudonym(event.actorPseudonym) }));
+  return { total, auditEvents, previewLimited: total > 200 };
 }
 
 // #726: one entry per ReportTemplate.HANDLER_KEYS value -- buildPreviewData
@@ -839,6 +882,7 @@ const REPORT_HANDLERS = {
   tissueOriginHistory: handleTissueOriginHistory,
   extracellularNetwork: handleExtracellularNetwork,
   accessLogs: handleAccessLogs,
+  auditEvents: handleAuditEvents,
 };
 
 // #732 (RF008 AC#1/AC#6): GET /:type/filters used to ignore its own
@@ -865,7 +909,9 @@ const SAMPLE_QUERY_FILTERS = [
   // #531: the public vocabulary normalizeReleaseStatus accepts, which it
   // then maps onto canonical specimenStatus values.
   { name: 'status', label: 'Estado', type: 'select', options: ['AVAILABLE', 'QUARANTINE', 'BLOCKED'] },
-  { name: 'storageBoxId', label: 'Caixa de armazenamento', type: 'text' },
+  // #1215: `storageBox`, so the page offers a freezer-then-box picker
+  // instead of a free-text field for a 24-hex id.
+  { name: 'storageBoxId', label: 'Caixa de armazenamento', type: 'storageBox' },
   { name: 'storagePosition', label: 'Posição na caixa', type: 'text' },
   { name: 'orphaCode', label: 'Código ORPHA', type: 'text' },
   { name: 'atcCode', label: 'Código ATC', type: 'text' },
@@ -905,6 +951,7 @@ const FILTER_CATALOG = {
   tissueOriginHistory: [],
   extracellularNetwork: [],
   accessLogs: DATE_RANGE_FILTERS,
+  auditEvents: DATE_RANGE_FILTERS,
 };
 
 // #1058/#1061/#1050 piece 2: `toCsvRows` used to pick its rows by sniffing a
@@ -967,11 +1014,11 @@ const SAMPLE_EXPORT_COLUMNS = [
 // leave through the other route -- it would only create an unrecorded
 // divergence between two exports of one collection.
 //
-// Note this means real userName and ipSource DO leave through both, which
-// dict-04's P-033 row names as an anti-pattern outright ("nomes reais em
-// exportações de log") and dict-02 P1X-0328 `actorAnonId` exists to
-// replace. That is a real finding against BOTH surfaces and is filed
-// separately rather than half-fixed here.
+// The `userName` column carries the USR- pseudonym, not a real name (dict-04
+// P-033 forbids "nomes reais em exportações de log"): auditLogger writes it
+// anonymized, and both surfaces anonymize again on read -- getLogs for
+// /api/logs, handleAccessLogs here (#1076). ipSource is exported as stored;
+// dict-02 only says it "pode" be masked.
 const AUDIT_LOG_EXPORT_COLUMNS = [
   'timestamp', 'userName', 'action', 'entity', 'result', 'severity',
   'module', 'ipSource', 'message',
@@ -985,9 +1032,13 @@ const EXPORT_CATALOG = {
   // recordNumberCiphertext), `email`/`phone`, the free-form clinical blobs
   // `anamneseGeral`/`dadosEspecificos`, and the consent token pair #1045
   // already strips upstream.
+  // `nested`: each patient row carries its own samples. The CSV has no
+  // column for them, but the preview and the stored Report do (#1077), so
+  // they are bounded by the Sample column list.
   samplesByPatient: {
     rowKey: 'patients',
-    columns: ['participantId', 'status', 'clinicalUnit', 'unitAcronym', 'clinicalUnitId', 'consentTemplateId', 'consentAcceptedAt', 'sampleCount', 'samplesLimited'],
+    columns: ['participantId', 'status', 'clinicalUnit', 'unitAcronym', 'clinicalUnitId', 'consentTemplateId', 'consentAcceptedAt', 'consentTokenExpiresAt', 'sampleCount', 'samplesLimited'],
+    nested: { samples: SAMPLE_EXPORT_COLUMNS },
   },
   patient: {
     rowKey: 'patients',
@@ -1036,7 +1087,55 @@ const EXPORT_CATALOG = {
     columns: ['movementId', 'specimenId', 'barcode', 'type', 'quantity', 'unit', 'destination', 'purpose', 'linkedProject', 'condition', 'previousQuantity', 'newQuantity', 'previousState', 'newState', 'createdAt'],
   },
   accessLogs: { rowKey: 'logs', columns: AUDIT_LOG_EXPORT_COLUMNS },
+  // #733: the same exclusions as the logs list above -- no entity ids, and
+  // none of the hash-chain internals (eventHash, previousEventHash,
+  // canonicalLeaf, inclusionProof), for the reason withdrawalHistory gives.
+  // `eventId` stays: it is what POST /api/audit/verify takes, so an auditor
+  // can check any exported row against the tree.
+  auditEvents: {
+    rowKey: 'auditEvents',
+    columns: ['eventId', 'sequenceNumber', 'occurredAt', 'recordedAt', 'actorPseudonym', 'action', 'entityType', 'result', 'source'],
+  },
 };
+
+function pickColumns(row, columns) {
+  const picked = {};
+  for (const column of columns) {
+    if (row && Object.prototype.hasOwnProperty.call(row, column)) {
+      picked[column] = row[column];
+    }
+  }
+  return picked;
+}
+
+// #1077: the same allow-list as the CSV, applied to the handler's whole
+// result. The row array keeps only its declared columns (and a declared
+// nested array only its own). Scalar and object keys -- total, statistics,
+// mode, previewLimited -- pass through. Any OTHER array is dropped, and a
+// handlerKey with no entry keeps no rows at all: deny by default, as below.
+function boundPreviewData(previewData, handlerKey) {
+  if (!previewData || typeof previewData !== 'object') {
+    return previewData;
+  }
+  const entry = EXPORT_CATALOG[handlerKey];
+  const bounded = {};
+  for (const [key, value] of Object.entries(previewData)) {
+    if (!Array.isArray(value)) {
+      bounded[key] = value;
+    } else if (entry && key === entry.rowKey) {
+      bounded[key] = value.map((row) => {
+        const picked = pickColumns(row, entry.columns);
+        for (const [nestedKey, nestedColumns] of Object.entries(entry.nested || {})) {
+          if (Array.isArray(row?.[nestedKey])) {
+            picked[nestedKey] = row[nestedKey].map((nestedRow) => pickColumns(nestedRow, nestedColumns));
+          }
+        }
+        return picked;
+      });
+    }
+  }
+  return bounded;
+}
 
 function toCsvRows(previewData, handlerKey) {
   const entry = EXPORT_CATALOG[handlerKey];
@@ -1171,25 +1270,46 @@ router.post('/generate', authenticate, requirePermission('viewReports'), async (
   }
 });
 
-router.delete('/:id', authenticate, requirePermission('viewReports'), async (req, res) => {
+// #1186: viewReports is UsuarioExterno's whole permission set, and RF008's
+// actor is the Coordenador; the external actor only consults data. Deleting
+// a saved report is Coordenador-and-up, as createMasterDataRouter's writes are.
+router.delete('/:id', authenticate, requirePermission('viewReports'), requireRole(3, 4), async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
       return res.status(503).json({ error: 'Banco de dados não disponível' });
     }
 
+    // #1185: GET /:id's scope resolution and record check, which this route
+    // lacked -- any viewReports holder could delete any organization's report.
+    const organizationScope = await resolveUserOrganizationScope(db, req.user?.userID || req.user?._id);
+    if (!isOrganizationScopeUsable(organizationScope)) {
+      return res.status(403).json({ error: 'Sem organização atribuída', message: 'Seu usuário não possui organização atribuída para acessar este recurso' });
+    }
+
     const reportsCollection = db.collection('reports');
     const { id } = req.params;
 
-    let deleteResult = null;
+    // Resolve the one report first, by the same reportID-then-_id order,
+    // and delete by its _id, so the record checked is the record removed.
+    let report = null;
     if (/^\d+$/.test(id)) {
-      deleteResult = await reportsCollection.deleteOne({ reportID: Number(id) });
+      report = await reportsCollection.findOne({ reportID: Number(id) });
     }
 
-    if ((!deleteResult || deleteResult.deletedCount === 0) && ObjectId.isValid(id)) {
-      deleteResult = await reportsCollection.deleteOne({ _id: new ObjectId(id) });
+    if (!report && ObjectId.isValid(id)) {
+      report = await reportsCollection.findOne({ _id: new ObjectId(id) });
     }
 
+    if (!report) {
+      return res.status(404).json({ error: 'Relatório não encontrado' });
+    }
+
+    if (!isRecordInOrganizationScope(report, organizationScope, 'organizationIds')) {
+      return res.status(403).json({ error: 'Acesso negado', message: 'Este relatório pertence a outra organização' });
+    }
+
+    const deleteResult = await reportsCollection.deleteOne({ _id: report._id });
     if (!deleteResult || deleteResult.deletedCount === 0) {
       return res.status(404).json({ error: 'Relatório não encontrado' });
     }
@@ -1221,7 +1341,15 @@ router.get('/:type/filters', authenticate, requirePermission('viewReports'), asy
     }
 
     const filters = FILTER_CATALOG[template.handlerKey] || [];
-    return res.status(200).json({ filters, reportType: template.code, handlerKey: template.handlerKey });
+    // #735: name/description label a custom template on the query page,
+    // which has no frontend definition for it.
+    return res.status(200).json({
+      filters,
+      reportType: template.code,
+      handlerKey: template.handlerKey,
+      name: template.name || template.code,
+      description: template.description || null,
+    });
   } catch (error) {
     return res.status(500).json({ error: 'Erro ao obter filtros', message: error.message });
   }
@@ -1250,7 +1378,7 @@ router.post('/:type/preview', authenticate, requirePermission('viewReports'), as
   }
 });
 
-router.get('/:type/export', authenticate, requirePermission('viewReports'), async (req, res) => {
+router.get('/:type/export', authenticate, requirePermission('viewReports'), requireDataExportAllowed, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -1281,7 +1409,7 @@ router.get('/:type/export', authenticate, requirePermission('viewReports'), asyn
   }
 });
 
-router.get('/:type/export/pdf', authenticate, requirePermission('viewReports'), async (req, res) => {
+router.get('/:type/export/pdf', authenticate, requirePermission('viewReports'), requireDataExportAllowed, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {

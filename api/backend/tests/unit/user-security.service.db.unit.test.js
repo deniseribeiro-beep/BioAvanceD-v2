@@ -54,7 +54,10 @@ describe('UserSecurityService DB-backed methods', () => {
   describe('getMFAStatus', () => {
     it('returns MFA status with recovery codes info', async () => {
       const users = buildCollection({
-        findOne: vi.fn().mockResolvedValue({ _id: USER_ID, mfaEnabled: true, mfaSetupDate: '2026-01-01' })
+        // The field the MFA enrolment writes (auth.service). This double once
+        // carried mfaSetupDate, which no writer emits, and kept the screen's
+        // always-null setup date green.
+        findOne: vi.fn().mockResolvedValue({ _id: USER_ID, mfaEnabled: true, mfaActivationDate: '2026-01-01' })
       });
       const recoveryCodes = buildCollection({
         findOne: vi.fn().mockResolvedValue({ remaining: 3 })
@@ -81,6 +84,30 @@ describe('UserSecurityService DB-backed methods', () => {
       expect(result.recoveryCodes.remaining).toBe(0);
     });
 
+    it('prefers the canonical mfaSetupAt over mfaActivationDate for the setup date', async () => {
+      const users = buildCollection({
+        findOne: vi.fn().mockResolvedValue({ _id: USER_ID, mfaEnabled: true, mfaSetupAt: '2026-02-02', mfaActivationDate: '2026-01-01' })
+      });
+      const recoveryCodes = buildCollection({ findOne: vi.fn().mockResolvedValue(null) });
+      const db = buildDb({ users, recovery_codes: recoveryCodes });
+
+      const result = await userSecurityService.getMFAStatus(db, USER_ID);
+
+      expect(result.primarySetupDate).toBe('2026-02-02');
+    });
+
+    it('reads the canonical remainingCount, finding the set under either owner name', async () => {
+      const users = buildCollection({ findOne: vi.fn().mockResolvedValue({ _id: USER_ID }) });
+      const recoveryCodes = buildCollection({ findOne: vi.fn().mockResolvedValue({ remainingCount: 7 }) });
+      const db = buildDb({ users, recovery_codes: recoveryCodes });
+
+      const result = await userSecurityService.getMFAStatus(db, USER_ID);
+
+      expect(result.recoveryCodes.remaining).toBe(7);
+      const [filter] = recoveryCodes.findOne.mock.calls[0];
+      expect(filter.$or.map((clause) => Object.keys(clause)[0])).toEqual(['userAccountId', 'userID']);
+    });
+
     it('throws when user not found', async () => {
       const users = buildCollection({ findOne: vi.fn().mockResolvedValue(null) });
       const db = buildDb({ users });
@@ -99,7 +126,11 @@ describe('UserSecurityService DB-backed methods', () => {
           passwordChangedAt: new Date('2026-01-01T00:00:00.000Z')
         })
       });
-      const db = buildDb({ users });
+      // #1257: a new deployment's default is 0 (no expiry), so this stores 90.
+      const security_config = buildCollection({
+        findOne: vi.fn().mockResolvedValue({ _id: 'main', passwordRules: { expirationDays: 90 } })
+      });
+      const db = buildDb({ users, security_config });
 
       const result = await userSecurityService.getPasswordStatus(db, USER_ID);
 
@@ -130,6 +161,17 @@ describe('UserSecurityService DB-backed methods', () => {
       await expect(userSecurityService.getPasswordStatus(db, USER_ID)).rejects.toThrow('Usuário não encontrado');
     });
 
+    it('#1257: a new deployment (no stored policy) reports no expiry', async () => {
+      const users = buildCollection({
+        findOne: vi.fn().mockResolvedValue({ _id: USER_ID, password: 'short', passwordChangedAt: new Date('2020-01-01T00:00:00.000Z') })
+      });
+      const security_config = buildCollection({ findOne: vi.fn().mockResolvedValue(null) });
+
+      const result = await userSecurityService.getPasswordStatus(buildDb({ users, security_config }), USER_ID);
+
+      expect(result.expiresAt).toBeNull();
+    });
+
     it('parses passwordChangedAt when stored as a non-Date value', async () => {
       const users = buildCollection({
         findOne: vi.fn().mockResolvedValue({
@@ -138,7 +180,11 @@ describe('UserSecurityService DB-backed methods', () => {
           passwordChangedAt: '2026-01-01T00:00:00.000Z'
         })
       });
-      const db = buildDb({ users });
+      // #1257: a new deployment's default is 0 (no expiry), so this stores 90.
+      const security_config = buildCollection({
+        findOne: vi.fn().mockResolvedValue({ _id: 'main', passwordRules: { expirationDays: 90 } })
+      });
+      const db = buildDb({ users, security_config });
 
       const result = await userSecurityService.getPasswordStatus(db, USER_ID);
 
@@ -243,6 +289,82 @@ describe('UserSecurityService DB-backed methods', () => {
       ).rejects.toThrow('Você não pode reutilizar uma senha recente');
     });
 
+    // #1244: this site compared every stored history hash but never the
+    // current password, and kept 5 where the other writers kept 3.
+    it('#1244: rejects setting the current password again', async () => {
+      const currentHash = await bcrypt.hash('NewPassw0rd!123', 4);
+      const users = buildCollection({
+        findOne: vi.fn().mockResolvedValue({ _id: USER_ID, password: currentHash, passwordHistory: [] })
+      });
+      const db = buildDb({ users });
+
+      await expect(
+        userSecurityService.updatePassword(db, USER_ID, 'NewPassw0rd!123', 'NewPassw0rd!123')
+      ).rejects.toThrow('Você não pode reutilizar uma senha recente');
+      expect(users.updateOne).not.toHaveBeenCalled();
+    });
+
+    it('#1244: checks and stores history to passwordRules.maxReuseHistory', async () => {
+      const currentHash = await bcrypt.hash('correct-pass', 4);
+      const olderHash = await bcrypt.hash('NewPassw0rd!123', 4);
+      const users = buildCollection({
+        findOne: vi.fn().mockResolvedValue({ _id: USER_ID, password: currentHash, passwordHistory: ['h1', olderHash] })
+      });
+      const security_config = buildCollection({
+        findOne: vi.fn().mockResolvedValue({ _id: 'main', passwordRules: { preventReuse: true, maxReuseHistory: 1 } })
+      });
+      const db = buildDb({ users, security_config });
+
+      // olderHash is history entry 2, past depth 1, so it is not checked.
+      await userSecurityService.updatePassword(db, USER_ID, 'correct-pass', 'NewPassw0rd!123');
+
+      const [, update] = users.updateOne.mock.calls[0];
+      expect(update.$set.passwordHistory).toEqual([currentHash]);
+    });
+
+    // #1246: this route had its own 12-character validator with no digit
+    // rule; it now checks the passwordRules policy like every other write.
+    it('#1246: checks strength against passwordRules, not a fixed 12', async () => {
+      const currentHash = await bcrypt.hash('correct-pass', 4);
+      const user = { _id: USER_ID, password: currentHash, passwordHistory: [] };
+      const strict = buildCollection({
+        findOne: vi.fn().mockResolvedValue({ _id: 'main', passwordRules: { minLength: 14 } })
+      });
+      const users = buildCollection({ findOne: vi.fn().mockResolvedValue(user) });
+      await expect(
+        userSecurityService.updatePassword(buildDb({ users, security_config: strict }), USER_ID, 'correct-pass', 'Abcdef1!xyz12')
+      ).rejects.toThrow('pelo menos 14 caracteres');
+
+      // A stored policy of 8: 8 characters with a digit pass, which the old
+      // validator refused for being under 12.
+      const eight = buildCollection({
+        findOne: vi.fn().mockResolvedValue({ _id: 'main', passwordRules: { minLength: 8 } })
+      });
+      const users2 = buildCollection({ findOne: vi.fn().mockResolvedValue(user) });
+      await userSecurityService.updatePassword(buildDb({ users: users2, security_config: eight }), USER_ID, 'correct-pass', 'Abcde1!x');
+      expect(users2.updateOne).toHaveBeenCalledTimes(1);
+    });
+
+    // #1257: a new deployment's floor depends on the account: 15 without MFA,
+    // 8 for an account enrolled in MFA (NIST SP 800-63B-4 §3.1.1.2).
+    it('#1257: with no stored policy, 15 characters without MFA and 8 with it', async () => {
+      const currentHash = await bcrypt.hash('correct-pass', 4);
+      const none = () => buildCollection({ findOne: vi.fn().mockResolvedValue(null) });
+      const single = buildCollection({ findOne: vi.fn().mockResolvedValue({ _id: USER_ID, password: currentHash, passwordHistory: [] }) });
+      await expect(
+        userSecurityService.updatePassword(buildDb({ users: single, security_config: none() }), USER_ID, 'correct-pass', 'eightchr')
+      ).rejects.toThrow('pelo menos 15 caracteres');
+      expect(single.updateOne).not.toHaveBeenCalled();
+
+      const enrolled = buildCollection({
+        findOne: vi.fn().mockResolvedValue({
+          _id: USER_ID, password: currentHash, passwordHistory: [], mfaEnabled: true, mfaSecretCiphertext: 'ciphertext'
+        })
+      });
+      await userSecurityService.updatePassword(buildDb({ users: enrolled, security_config: none() }), USER_ID, 'correct-pass', 'eightchr');
+      expect(enrolled.updateOne).toHaveBeenCalledTimes(1);
+    });
+
     it('updates the password and rotates history on success', async () => {
       const currentHash = await bcrypt.hash('correct-pass', 10);
       const users = buildCollection({
@@ -256,6 +378,8 @@ describe('UserSecurityService DB-backed methods', () => {
       const [, update] = users.updateOne.mock.calls[0];
       expect(update.$set.passwordHistory).toEqual([currentHash]);
       expect(await bcrypt.compare('NewPassw0rd!123', update.$set.password)).toBe(true);
+      // #1250: the owner's own change satisfies a forced reset.
+      expect(update.$set.forceReset).toBe(false);
       // #995: this route is the fifth site verifying a user-supplied password.
       // It wrote neither lockout field, so it could only ever count up. A
       // successful change clears the counter AND the lock, the same pairing
@@ -352,10 +476,35 @@ describe('UserSecurityService DB-backed methods', () => {
       expect(codes).toHaveLength(10);
       expect(new Set(codes).size).toBe(10);
       expect(recoveryCodes.updateOne).toHaveBeenCalledTimes(1);
-      const [, update, options] = recoveryCodes.updateOne.mock.calls[0];
-      expect(update.$set.remaining).toBe(10);
-      expect(update.$set.codes).toHaveLength(10);
+      const [filter, update, options] = recoveryCodes.updateOne.mock.calls[0];
+      expect(update.$set.remainingCount).toBe(10);
+      expect(update.$set.codeHashes).toHaveLength(10);
+      expect(update.$set.usedCodeHashes).toEqual([]);
+      expect(String(update.$set.userAccountId)).toBe(USER_ID);
+      expect(update.$set.recoveryCodeSetId).toMatch(/^[0-9a-f-]{36}$/);
+      expect(update.$set.generatedAt).toBeInstanceOf(Date);
+      expect(update.$set.regeneratedAt).toBeNull();
       expect(options).toEqual({ upsert: true });
+      // The filter finds a set under either owner name, and the update drops
+      // the pre-dictionary names a set written before them still carries.
+      expect(filter.$or.map((clause) => Object.keys(clause)[0])).toEqual(['userAccountId', 'userID']);
+      expect(Object.keys(update.$unset).sort()).toEqual(
+        ['codes', 'createdAt', 'remaining', 'updatedAt', 'usedCodes', 'userID']
+      );
+    });
+
+    it('marks a set that replaced an earlier one as regenerated, with a new id', async () => {
+      const recoveryCodes = buildCollection({
+        findOne: vi.fn().mockResolvedValue({ recoveryCodeSetId: 'old-set', remainingCount: 2 })
+      });
+      const db = buildDb({ recovery_codes: recoveryCodes });
+
+      await userSecurityService.generateRecoveryCodes(db, USER_ID);
+
+      const [, update] = recoveryCodes.updateOne.mock.calls[0];
+      expect(update.$set.regeneratedAt).toBeInstanceOf(Date);
+      expect(update.$set.regeneratedAt).toEqual(update.$set.generatedAt);
+      expect(update.$set.recoveryCodeSetId).not.toBe('old-set');
     });
   });
 
@@ -489,7 +638,10 @@ describe('UserSecurityService DB-backed methods', () => {
   });
 
   describe('requestPasswordReset', () => {
+    const notificationService = require('../../src/services/NotificationService');
+
     it('generates and persists a reset token with the requested expiration', async () => {
+      vi.spyOn(notificationService, 'sendPasswordReset').mockResolvedValue({ success: true });
       const users = buildCollection({
         findOne: vi.fn().mockResolvedValue({ _id: USER_ID, email: 'user@example.com' })
       });
@@ -501,6 +653,34 @@ describe('UserSecurityService DB-backed methods', () => {
       expect(typeof result.resetToken).toBe('string');
       expect(result.expiresAt).toBeInstanceOf(Date);
       expect(users.updateOne).toHaveBeenCalledTimes(1);
+    });
+
+    // #1203: the route reported "Link ... enviado" while nothing was sent.
+    it('#1203: emails the link for the stored token, with the requested lifetime', async () => {
+      const sendSpy = vi.spyOn(notificationService, 'sendPasswordReset').mockResolvedValue({ success: true });
+      const users = buildCollection({
+        findOne: vi.fn().mockResolvedValue({ _id: USER_ID, email: 'user@example.com' })
+      });
+      const db = buildDb({ users });
+
+      const result = await userSecurityService.requestPasswordReset(db, USER_ID, 2);
+
+      expect(sendSpy).toHaveBeenCalledTimes(1);
+      const [to, link, opts] = sendSpy.mock.calls[0];
+      expect(to).toBe('user@example.com');
+      expect(opts).toEqual({ expiresInMinutes: 120 });
+      expect(new URL(link).pathname).toBe('/reset-password');
+      expect(new URL(link).searchParams.get('token')).toBe(result.resetToken);
+    });
+
+    it('#1203: a failed send rejects, so the route cannot report success', async () => {
+      vi.spyOn(notificationService, 'sendPasswordReset').mockRejectedValue(new Error('smtp down'));
+      const users = buildCollection({
+        findOne: vi.fn().mockResolvedValue({ _id: USER_ID, email: 'user@example.com' })
+      });
+      const db = buildDb({ users });
+
+      await expect(userSecurityService.requestPasswordReset(db, USER_ID, 1)).rejects.toThrow('smtp down');
     });
 
     it('throws when user not found', async () => {

@@ -45,13 +45,16 @@ async function seedCanonicalOutbox(db, outbox) {
   for (const sample of samples) {
     const donorKey = String(sample.participantId || sample.participantId || '').trim();
     const donorIdentity = donorKeyByPatient.get(donorKey) || donorKey;
+    // #1225: a sample's event is SPECIMEN_UPSERTED. It used to be a
+    // CONSENT_UPSERTED keyed by the sample id, which minted an ACTIVE
+    // EthicalConsent per sample and governed the sample by it.
     await outbox.appendEvent(db, {
-      eventType: 'CONSENT_UPSERTED',
+      eventType: 'SPECIMEN_UPSERTED',
       aggregateType: 'Sample',
       aggregateId: String(sample._id),
       payload: {
         specimenId: String(sample._id),
-        donorKey: donorIdentity || donorKey,
+        participantId: donorIdentity || donorKey || null,
       },
       sourceService: 'neo4j-canonical-rebuild'
     });

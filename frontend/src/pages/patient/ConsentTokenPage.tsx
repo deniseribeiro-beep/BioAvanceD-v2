@@ -3,7 +3,9 @@ import { useParams, useSearchParams } from 'react-router-dom';
 import { consentTokenService } from '../../services/api';
 import {
   ConsentTokenTemplate,
-  mapConsentTokenError,
+  initialConsentResponses,
+  mapConsentTokenRequestError,
+  missingRequiredPermissions,
   normalizeConsentTemplate,
   resolveConsentTokenParams,
 } from '../../views/consentTokenView';
@@ -23,12 +25,11 @@ import {
 // The two systems are deliberately left separate -- whether they should
 // converge is Denise's call, recorded on #809.
 //
-// Acceptance here is whole-term, because that is what acceptConsentToken
-// implements: it flips the patient to ACTIVE and invalidates the token. It
-// records no Consent document and takes no per-permission responses; closing
-// that gap (RF010 AC#2-5) changes the endpoint's request shape and is tracked
-// as #821. Until then this page shows the term's purposes rather than
-// offering checkboxes it could not submit.
+// #821: acceptance is a granular manifestation (RF010). The participant
+// answers each purpose; required ones must be accepted before the button
+// enables. The accept call carries the term id shown here and those answers,
+// and the backend records them as a Consent (consentId, exact term version,
+// evidence, outbox event) before activating the participant.
 export default function ConsentTokenPage() {
   const { id } = useParams();
   const [searchParams] = useSearchParams();
@@ -37,6 +38,7 @@ export default function ConsentTokenPage() {
   const params = useMemo(() => resolveConsentTokenParams(id, tokenParam), [id, tokenParam]);
 
   const [template, setTemplate] = useState<ConsentTokenTemplate | null>(null);
+  const [responses, setResponses] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -56,10 +58,12 @@ export default function ConsentTokenPage() {
       try {
         const resp = await consentTokenService.validate(participantId, token);
         if (cancelled) return;
-        setTemplate(normalizeConsentTemplate(resp.data?.data?.template));
+        const normalized = normalizeConsentTemplate(resp.data?.data?.template);
+        setTemplate(normalized);
+        setResponses(normalized ? initialConsentResponses(normalized.permissions) : {});
       } catch (err: any) {
         if (cancelled) return;
-        setError(mapConsentTokenError(err?.response?.status));
+        setError(mapConsentTokenRequestError(err));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -72,14 +76,17 @@ export default function ConsentTokenPage() {
   }, [params]);
 
   async function acceptConsent() {
-    if (!params.ok) return;
+    if (!params.ok || !template) return;
     setSubmitting(true);
     setError('');
     try {
-      await consentTokenService.accept(params.participantId, params.token);
+      await consentTokenService.accept(params.participantId, params.token, {
+        consentTemplateId: template.id,
+        responses,
+      });
       setAccepted(true);
     } catch (err: any) {
-      setError(mapConsentTokenError(err?.response?.status));
+      setError(mapConsentTokenRequestError(err));
     } finally {
       setSubmitting(false);
     }
@@ -119,6 +126,8 @@ export default function ConsentTokenPage() {
     );
   }
 
+  const missingRequired = missingRequiredPermissions(template.permissions, responses);
+
   return (
     <div style={{ maxWidth: 640, margin: 'auto', padding: 24 }}>
       <h2>Consentimento Eletrônico</h2>
@@ -143,22 +152,38 @@ export default function ConsentTokenPage() {
       {template.permissions.length > 0 && (
         <div style={{ marginBottom: 16 }}>
           <h4>Finalidades cobertas por este termo</h4>
-          <ul data-testid="consent-token-permissions">
+          <ul data-testid="consent-token-permissions" style={{ listStyle: 'none', paddingLeft: 0 }}>
             {template.permissions.map(permission => (
               <li key={permission.key}>
-                {permission.label}
-                {permission.required ? ' (obrigatória)' : ' (opcional)'}
+                <label>
+                  <input
+                    type="checkbox"
+                    data-testid={`consent-token-permission-${permission.key}`}
+                    checked={responses[permission.key] === true}
+                    onChange={event =>
+                      setResponses(prev => ({ ...prev, [permission.key]: event.target.checked }))
+                    }
+                  />{' '}
+                  {permission.label}
+                  {permission.required ? ' (obrigatória)' : ' (opcional)'}
+                </label>
               </li>
             ))}
           </ul>
         </div>
       )}
 
+      {missingRequired.length > 0 && (
+        <p data-testid="consent-token-required-hint" style={{ color: '#555', fontSize: 14 }}>
+          Para aceitar o termo, marque as finalidades obrigatórias: {missingRequired.join(', ')}.
+        </p>
+      )}
+
       <button
         type="button"
         data-testid="consent-token-accept"
         onClick={acceptConsent}
-        disabled={submitting}
+        disabled={submitting || missingRequired.length > 0}
       >
         {submitting ? 'Enviando...' : 'Aceitar o termo'}
       </button>

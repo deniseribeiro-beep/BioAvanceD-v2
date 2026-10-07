@@ -195,6 +195,46 @@ describe('terminologySync.service', () => {
   });
 
   describe('#941 ensureTerminologyIndexes', () => {
+    // #941's measured DELETEs. Terminology.js declared `index: true` on both,
+    // inert under autoIndex:false. explain() on mongo:7: { ativo: 1 } is
+    // picked for dictionary.js's `ativo: { $ne: false }` and walks ~98% of
+    // the collection through the index -- slower than the COLLSCAN it
+    // replaces. { codigo: 1 } wins only the sync upsert, and only because
+    // the compound unique index is ineligible for that filter; that is
+    // fixed at the compound, not by adding a second index.
+    it.each([[{ ativo: 1 }], [{ codigo: 1 }]])('does NOT build %o', async (keys) => {
+      const createIndex = vi.fn(async () => {});
+
+      await svc.ensureTerminologyIndexes({ createIndex }, `941-not-built-${Object.keys(keys)[0]}`);
+
+      expect(createIndex).toHaveBeenCalled();
+      const built = createIndex.mock.calls.map(([k]) => JSON.stringify(k));
+      expect(built).not.toContain(JSON.stringify(keys));
+    });
+
+    // #1164: v2's `$type: 'string'` filter made the index a constraint only --
+    // the planner cannot use it for the upsert's plain `{ sistema, codigo }`
+    // equality, so every synced record paid a COLLSCAN. v3 is built first,
+    // then v2 dropped, so uniqueness never has a gap.
+    it('drops the superseded terminologies_sistema_codigo_unique_v2 only AFTER building v3', async () => {
+      const createIndex = vi.fn(async () => {});
+      const dropIndex = vi.fn(async () => {});
+
+      await svc.ensureTerminologyIndexes({ createIndex, dropIndex }, '1164-drop-v2');
+
+      expect(dropIndex).toHaveBeenCalledWith('terminologies_sistema_codigo_unique_v2');
+      expect(createIndex.mock.invocationCallOrder[0]).toBeLessThan(dropIndex.mock.invocationCallOrder[0]);
+    });
+
+    it('keeps terminologies_sistema_codigo_unique_v2 when building v3 fails', async () => {
+      const createIndex = vi.fn(async () => { throw new Error('boom'); });
+      const dropIndex = vi.fn(async () => {});
+
+      await svc.ensureTerminologyIndexes({ createIndex, dropIndex }, '1164-keep-v2');
+
+      expect(dropIndex).not.toHaveBeenCalled();
+    });
+
     it('creates a unique index on { sistema: 1, codigo: 1 }, pinned by value', async () => {
       const createIndex = vi.fn(async () => {});
       const collection = { createIndex };
@@ -205,16 +245,18 @@ describe('terminologySync.service', () => {
       const [keys, options] = createIndex.mock.calls[0];
       expect(keys).toEqual({ sistema: 1, codigo: 1 });
       expect(options).toEqual({
-        name: 'terminologies_sistema_codigo_unique_v2',
+        name: 'terminologies_sistema_codigo_unique_v3',
         unique: true,
-        partialFilterExpression: { sistema: { $type: 'string' }, codigo: { $type: 'string' } },
+        partialFilterExpression: { sistema: { $gt: '' }, codigo: { $gt: '' } },
       });
     });
 
     // The index shipped by a936d385 was plain-unique with no partial filter,
     // and `terminologies` has a THIRD writer nobody counted: the essential
-    // seed. `scripts/seed-essential-reference-data.js`'s `sprec-minimal` entry
-    // writes SPREC axis rows carrying `code`, never `codigo`. Under a plain
+    // reference load. Its `sprec-minimal` entry (the loader in
+    // `src/foundation/essential-references.js`, run by
+    // `scripts/load-essential-references.js`) writes SPREC axis rows carrying
+    // `code`, never `codigo`. Under a plain
     // unique index Mongo treats the missing field as null, so all four rows
     // share the key { 'SPREC', null } and collide with each other.
     //
@@ -223,17 +265,8 @@ describe('terminologySync.service', () => {
     // about, and then LATCHES anyway -- so the index never exists and never
     // retries. Index-then-seed fails the seed run instead.
     it('does not collide with the SPREC rows the essential seed writes to the same collection', async () => {
-      const sprecSeed = require('../../src/reference-data/sprec.min.json');
-
-      // Exactly the mapping scripts/seed-essential-reference-data.js applies.
-      const seededDocs = sprecSeed.axes.map((axis) => ({
-        sistema: sprecSeed.sistema,
-        fonte: sprecSeed.fonte,
-        axis: axis.axis,
-        code: axis.code,
-        label: axis.label,
-        descricao: axis.descricao,
-      }));
+      // The loader's own output, so a change to its mapping reaches this test.
+      const seededDocs = require('../../src/foundation/essential-references').loadByKey('sprec-minimal').docsByCollection.terminologies;
 
       // The premise: more than one row, none of them carrying `codigo`.
       expect(seededDocs.length).toBeGreaterThan(1);
@@ -247,9 +280,11 @@ describe('terminologySync.service', () => {
       // one, `unique: true` indexes them as four identical { SPREC, null }.
       expect(options.partialFilterExpression).toBeDefined();
 
+      // #1164: the filter is `{ $gt: '' }` per field -- Mongo's comparisons are
+      // type-bracketed, so it admits exactly the non-empty strings.
       const matchesFilter = (doc) =>
         Object.entries(options.partialFilterExpression).every(
-          ([field, cond]) => typeof doc[field] === (cond.$type === 'string' ? 'string' : typeof doc[field])
+          ([field, cond]) => (cond.$gt === '' ? typeof doc[field] === 'string' && doc[field] > '' : false)
         );
 
       expect(seededDocs.filter(matchesFilter)).toEqual([]);
@@ -266,7 +301,7 @@ describe('terminologySync.service', () => {
 
       const realRow = { sistema: 'ORPHA', codigo: 'ORPHA:558', descricao: 'Marfan' };
       const matchesFilter = Object.entries(options.partialFilterExpression).every(
-        ([field, cond]) => cond.$type !== 'string' || typeof realRow[field] === 'string'
+        ([field, cond]) => cond.$gt === '' && typeof realRow[field] === 'string' && realRow[field] > ''
       );
 
       expect(matchesFilter).toBe(true);
@@ -299,14 +334,14 @@ describe('terminologySync.service', () => {
       const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
       const collection = {
         createIndex: vi.fn(async () => {
-          throw new Error('E11000 duplicate key error collection: bio.terminologies index: terminologies_sistema_codigo_unique_v2');
+          throw new Error('E11000 duplicate key error collection: bio.terminologies');
         }),
       };
 
       await expect(svc.ensureTerminologyIndexes(collection, '941-fails')).resolves.toBeUndefined();
 
       expect(warn).toHaveBeenCalledTimes(1);
-      expect(warn.mock.calls[0][0]).toContain('terminologies_sistema_codigo_unique_v2');
+      expect(warn.mock.calls[0][0]).toContain('terminologies_sistema_codigo_unique_v3');
       expect(warn.mock.calls[0][0]).toContain('E11000');
     });
 
@@ -414,9 +449,9 @@ describe('terminologySync.service', () => {
       const [keys, options] = createIndex.mock.calls[0];
       expect(keys).toEqual({ sistema: 1, codigo: 1 });
       expect(options).toEqual({
-        name: 'terminologies_sistema_codigo_unique_v2',
+        name: 'terminologies_sistema_codigo_unique_v3',
         unique: true,
-        partialFilterExpression: { sistema: { $type: 'string' }, codigo: { $type: 'string' } },
+        partialFilterExpression: { sistema: { $gt: '' }, codigo: { $gt: '' } },
       });
       expect(createIndex.mock.invocationCallOrder[0]).toBeLessThan(updateOne.mock.invocationCallOrder[0]);
     });

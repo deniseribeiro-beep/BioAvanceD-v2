@@ -17,6 +17,19 @@ class SensorModel {
       errors.push('maintenanceStatus inválido');
     }
 
+    // #1145: the temperature policy is bound on the sensor's SensorMetadata,
+    // and createSensor only creates that row when a macAddress is given. A
+    // policy without one used to be dropped silently, leaving a sensor that
+    // looked governed and was not, so it is refused here instead.
+    if (data.temperaturePolicy && !data.macAddress) {
+      errors.push('temperaturePolicy exige macAddress: a política é vinculada ao SensorMetadata do sensor');
+    }
+    // #1179: the freezer binding lives on the same row and was dropped the
+    // same silent way.
+    if (data.storageContainer && !data.macAddress) {
+      errors.push('storageContainer exige macAddress: o freezer é vinculado ao SensorMetadata do sensor');
+    }
+
     return {
       isValid: errors.length === 0,
       errors

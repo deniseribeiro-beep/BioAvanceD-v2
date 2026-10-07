@@ -4,6 +4,7 @@ import express from 'express';
 import request from 'supertest';
 
 const require = createRequire(import.meta.url);
+const { createFakeDb } = require('./foundation/helpers/fake-db');
 
 const notificationServicePath = require.resolve('../../src/services/notification.service');
 const patientIdentityServicePath = require.resolve('../../src/services/PatientIdentityService');
@@ -158,7 +159,7 @@ describe('intakeWizard routes', () => {
 
       const db = {
         collection: (name) => {
-          if (name === 'sensors') return { find: () => makeCursor([{ locationId: 'EQ-1', status: 'ok' }]) };
+          if (name === 'sensors') return { find: () => makeCursor([{ sensorId: 'SEN-1', sensorType: 'temperature', locationId: 'EQ-1', maintenanceStatus: 'operational' }]) };
           if (name === 'equipment') return { findOne: vi.fn().mockResolvedValue({ equipmentID: 'EQ-1', status: 'active' }) };
           if (name === 'storageBoxes') {
             return {
@@ -224,6 +225,73 @@ describe('intakeWizard routes', () => {
       );
     });
 
+    // #1332: the consent decision names one consent; with several, it must
+    // be the newest. The consents sit out of order in a store that sorts.
+    async function postIntakeWithConsents(consentRows) {
+      const consents = createFakeDb().collection('consents');
+      consentRows.forEach((row) => consents.docs.push(row));
+      const samplesCollection = {
+        insertOne: vi.fn().mockResolvedValue({ insertedId: 'sample-1' }),
+        findOne: vi.fn().mockResolvedValue({ _id: 'sample-1', participantId: '12345678' }),
+        updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
+      };
+      const getCollectionImpl = vi.fn(async (_db, key) => {
+        if (key === 'samples') return samplesCollection;
+        if (key === 'patients') return { updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) };
+        if (key === 'consents') return consents;
+        throw new Error(`unexpected key ${key}`);
+      });
+      const db = {
+        collection: (name) => {
+          if (name === 'sensors') return { find: () => makeCursor([{ sensorId: 'SEN-1', sensorType: 'temperature', locationId: 'EQ-1', maintenanceStatus: 'operational' }]) };
+          if (name === 'equipment') return { findOne: vi.fn().mockResolvedValue({ equipmentID: 'EQ-1', status: 'active' }) };
+          if (name === 'storageBoxes') {
+            return { find: () => makeCursor([{ _id: 'box-1', name: 'Box A', status: 'ACTIVE', dimension: { rows: 1, cols: 1 }, currentOccupancy: 0, occupancyGrid: {}, parent_id: 'rack-1' }]) };
+          }
+          if (name === 'storageContainers') {
+            return {
+              findOne: vi.fn(async ({ _id }) => {
+                if (_id === 'rack-1') return { _id: 'rack-1', containerType: 'RACK', parent_id: 'shelf-1' };
+                if (_id === 'shelf-1') return { _id: 'shelf-1', containerType: 'SHELF', parent_id: 'freezer-1' };
+                if (_id === 'freezer-1') return { _id: 'freezer-1', containerType: 'FREEZER', containerID: 'EQ-1' };
+                return null;
+              }),
+            };
+          }
+          throw new Error(`unexpected collection ${name}`);
+        },
+      };
+      const { router } = loadRoute({ getCollectionImpl });
+      vi.spyOn(require(sampleServicePath), 'createSample').mockResolvedValue({ _id: 'sample-1', participantId: '12345678' });
+      vi.spyOn(require(storageServicePath).prototype, 'autoAssignSampleToBox').mockResolvedValue({
+        success: true,
+        sampleLocation: { boxId: 'box-1', position: 'A1' },
+      });
+      return request(buildApp(router, db)).post('/api/intake-wizard').send(VALID_PAYLOAD);
+    }
+
+    it('names the newest active consent of the participant (#1332)', async () => {
+      const res = await postIntakeWithConsents([
+        { _id: 'c-mid', participantId: '12345678', status: 'ACTIVE', signedAt: new Date('2026-01-02') },
+        { _id: 'c-new', participantId: '12345678', status: 'ACTIVE', signedAt: new Date('2026-01-03') },
+        { _id: 'c-old', participantId: '12345678', status: 'ACTIVE', signedAt: new Date('2026-01-01') },
+      ]);
+
+      expect(res.status).toBe(200);
+      expect(res.body.consent).toEqual(expect.objectContaining({ active: true, consentId: 'c-new' }));
+    });
+
+    it('names the newest revoked consent when none is active (#1332)', async () => {
+      const res = await postIntakeWithConsents([
+        { _id: 'r-mid', participantId: '12345678', status: 'REVOKED', revokedAt: new Date('2026-01-02') },
+        { _id: 'r-new', participantId: '12345678', status: 'REVOKED', revokedAt: new Date('2026-01-03') },
+        { _id: 'r-old', participantId: '12345678', status: 'REVOKED', revokedAt: new Date('2026-01-01') },
+      ]);
+
+      expect(res.status).toBe(200);
+      expect(res.body.consent).toEqual(expect.objectContaining({ active: false, status: 'REVOKED', consentId: 'r-new' }));
+    });
+
     // #511: sample.service.js#createSample (#510) additively exposes the
     // canonical StorageAssignment on its return value alongside the legacy
     // storageLocation field. intakeWizard's own response builder (lines
@@ -246,7 +314,7 @@ describe('intakeWizard routes', () => {
 
       const db = {
         collection: (name) => {
-          if (name === 'sensors') return { find: () => makeCursor([{ locationId: 'EQ-1', status: 'ok' }]) };
+          if (name === 'sensors') return { find: () => makeCursor([{ sensorId: 'SEN-1', sensorType: 'temperature', locationId: 'EQ-1', maintenanceStatus: 'operational' }]) };
           if (name === 'equipment') return { findOne: vi.fn().mockResolvedValue({ equipmentID: 'EQ-1', status: 'active' }) };
           if (name === 'storageBoxes') {
             return {
@@ -457,7 +525,7 @@ function defaultStorageContainersFindOne({ _id }) {
 
       const db = {
         collection: (name) => {
-          if (name === 'sensors') return { find: sensorsFind || (() => makeCursor([{ locationId: 'EQ-1', status: 'ok' }])) };
+          if (name === 'sensors') return { find: sensorsFind || (() => makeCursor([{ sensorId: 'SEN-1', sensorType: 'temperature', locationId: 'EQ-1', maintenanceStatus: 'operational' }])) };
           if (name === 'equipment') return { findOne: equipmentFindOne || vi.fn().mockResolvedValue({ equipmentID: 'EQ-1', status: 'active' }) };
           if (name === 'storageBoxes') {
             return {

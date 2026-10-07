@@ -43,6 +43,9 @@ class LineageRepository {
           SET sample.updatedAt = datetime(),
               sample.barcode = coalesce($barcode, sample.barcode)
 
+          // #1224: a read clause after SET needs WITH; without it this whole
+          // query was a syntax error and every lineage check threw.
+          WITH sample
           OPTIONAL MATCH (sample)-[:GOVERNED_BY]->(consent:EthicalConsent)
 
           RETURN sample.id AS specimenId,

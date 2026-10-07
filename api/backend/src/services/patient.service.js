@@ -7,10 +7,52 @@ const { generateUniqueParticipantId, sanitizePatientForLogs } = require('../util
 const { encryptValue, decryptValue, assertFieldEncryptionConfigured } = require('../utils/fieldEncryption');
 const notificationService = require('./notification.service');
 const { getCollection } = require('../utils/collectionResolver');
-const { omitLegacyIdentityFields } = require('../utils/legacyPatientIdentityFields');
+const {
+  omitLegacyIdentityFields,
+  PARTICIPANT_REPRESENTATIVE_FIELDS,
+  PARTICIPANT_IDENTITY_ONLY_FIELDS,
+  omitParticipantIdentityOnlyFields
+} = require('../utils/legacyPatientIdentityFields');
 const { applyOrganizationScopeFilter } = require('./rbac-assignment.service');
+const { hashConsentToken, consentTokenMatches } = require('../utils/consentTokenHash');
 
 const indexedPatientCollections = new Set();
+
+// #1127: the code stamped on the refusals validateConsentToken raises when the
+// PARTICIPANT's request is at fault -- unknown id, not awaiting consent, wrong
+// token, expired token, missing arguments. Those stay one opaque 400 at the
+// controller, per #823's disclosure boundary. Anything else thrown out of that
+// method is OUR fault -- a driver error on the findOne, a failed acceptance
+// write -- and answering it with 'Link inválido ou expirado' sends the
+// participant to ask the biobank team for a new invitation, which cannot help
+// them because nothing was wrong with the old link.
+//
+// The marker is what lets the controller separate the two WITHOUT reopening
+// the enumeration oracle: the 400 body stays byte-identical to what #823
+// established, and only UNMARKED errors become 503. It is deliberately a stamp
+// on the refusals rather than a try/catch around the I/O, so an I/O call site
+// added to this flow later answers 503 by default instead of having to
+// remember to.
+const CONSENT_TOKEN_REJECTION_CODE = 'CONSENT_TOKEN_REJECTED';
+
+function consentTokenRejection(message) {
+  const error = new Error(message);
+  error.code = CONSENT_TOKEN_REJECTION_CODE;
+  return error;
+}
+
+// #821: the token was good but the manifestation it carries cannot be
+// recorded as sent -- no answers, answers that do not fit the term, or a term
+// that was republished after the page loaded. Distinct from a token rejection
+// so the participant is told to reload rather than that their link is bad,
+// and distinct from an unmarked outage for the same reason #1127 gave.
+const CONSENT_MANIFESTATION_REJECTION_CODE = 'CONSENT_MANIFESTATION_REJECTED';
+
+function consentManifestationRejection(message) {
+  const error = new Error(message);
+  error.code = CONSENT_MANIFESTATION_REJECTION_CODE;
+  return error;
+}
 
 /**
  * Service de Pacientes
@@ -113,17 +155,10 @@ class PatientService {
   async ensurePatientIndexes(collection, collectionName) {
     if (!collection || !collectionName || indexedPatientCollections.has(collectionName)) return;
 
+    // #1166 slice 4: no phone index any more. `patients` no longer carries the
+    // contact, and phone uniqueness is participant_identities_phone_hash_unique_v1
+    // (participantIdentityIndexes.js), checked ahead of the write in updatePatient.
     const indexDefinitions = [
-      [
-        { phone: 1 },
-        {
-          name: 'patients_phone_unique_sanitized_v1',
-          unique: true,
-          partialFilterExpression: {
-            phone: { $type: 'string', $ne: '' }
-          }
-        }
-      ],
       [{ recordNumber: 1 }, { name: 'patients_record_number_idx_v1' }]
     ];
 
@@ -138,7 +173,17 @@ class PatientService {
     // RF005/RNF007 (#575): patientName/identityDocument no longer live on
     // Patient — drop the indexes built on them from already-deployed
     // collections (no-op via IndexNotFound if never created).
-    const legacyIndexNames = ['patients_name_document_text_v1', 'patients_name_idx_v1'];
+    // #1165: plus the phone index's superseded v1 name, which could not be
+    // built on mongo:7 -- dropped anyway so no collection carries both.
+    // #1166 slice 4: and v2, whose column is gone. Run the ParticipantIdentity
+    // backfill (src/scripts/backfillParticipantIdentities.js) on a database
+    // with pre-slice-1 identity rows, so their phones get a phoneHash.
+    const legacyIndexNames = [
+      'patients_name_document_text_v1',
+      'patients_name_idx_v1',
+      'patients_phone_unique_sanitized_v1',
+      'patients_phone_unique_sanitized_v2'
+    ];
     for (const indexName of legacyIndexNames) {
       try {
         await collection.dropIndex(indexName);
@@ -163,15 +208,44 @@ class PatientService {
     return patientsCollection;
   }
 
-  handlePhoneUniqueConstraint(error) {
+  // #1166 slice 3: the refusal can also come from the identity side's
+  // participant_identities_phone_hash_unique_v1, whose keyValue is the blind
+  // index -- meaningless to the caller -- so the message carries the phone
+  // the caller sent whenever one is known.
+  handlePhoneUniqueConstraint(error, submittedPhone) {
     const keyPattern = error?.keyPattern || {};
     const keyValue = error?.keyValue || {};
-    const isPhoneDuplicate = Boolean(keyPattern.phone || Object.prototype.hasOwnProperty.call(keyValue, 'phone'));
+    const isPhoneDuplicate = Boolean(
+      keyPattern.phone || keyPattern.phoneHash
+      || Object.prototype.hasOwnProperty.call(keyValue, 'phone')
+      || Object.prototype.hasOwnProperty.call(keyValue, 'phoneHash')
+    );
     if (!isPhoneDuplicate) return;
 
-    const duplicateError = new Error(`Telefone ${String(keyValue.phone || '').trim()} já cadastrado no sistema.`);
+    const phone = String(submittedPhone || keyValue.phone || '').trim();
+    const duplicateError = new Error(`Telefone ${phone} já cadastrado no sistema.`);
     duplicateError.statusCode = 409;
     throw duplicateError;
+  }
+
+  // #1166 slice 4: phone uniqueness is only enforced on the identity side now,
+  // and updatePatient writes `patients` before its identity sync. Refusing
+  // the duplicate there would leave the Patient row already updated, so the
+  // check runs first. The index still catches a race, in the catch below.
+  async assertPhoneAvailable(db, patientsCollection, query, phone) {
+    const candidates = participantIdentityService.computeBlindIndexCandidates('phone', phone);
+    if (candidates.length === 0) return;
+
+    const identityCollection = await this.getIdentityCollection(db);
+    const holders = await identityCollection.find({ phoneHash: { $in: candidates } }).toArray();
+    if (holders.length === 0) return;
+
+    const target = await patientsCollection.findOne(query);
+    if (holders.some((holder) => holder.participantId !== target?.participantId)) {
+      const duplicateError = new Error(`Telefone ${phone} já cadastrado no sistema.`);
+      duplicateError.statusCode = 409;
+      throw duplicateError;
+    }
   }
 
   normalizeClinicalUnit(value) {
@@ -349,9 +423,14 @@ class PatientService {
       // was invisible -- under the cutover the identityDocument uniqueness
       // check would have gone dead, allowing a second participant for the same
       // document. #1099: match under every registered key.
+      // #1104: identityDocument is ciphertext-only, so the plaintext arm can
+      // never match a row written since, and keeping it would make this $or
+      // unindexable (the plaintext column is deliberately unindexed, #1102).
+      // The keyless branch still queries the plaintext, which is the only
+      // thing a stack with no ENCRYPTION_KEY writes (#1083).
       const identityDocumentHashes = participantIdentityService.computeBlindIndexCandidates('identityDocument', normalizedidentityDocument);
       const documentOrConditions = identityDocumentHashes.length
-        ? [{ identityDocumentHash: { $in: identityDocumentHashes } }, { identityDocument: normalizedidentityDocument }]
+        ? [{ identityDocumentHash: { $in: identityDocumentHashes } }]
         : [{ identityDocument: normalizedidentityDocument }];
       const existingIdentity = await identityCollection.findOne({ $or: documentOrConditions });
       if (existingIdentity) {
@@ -512,6 +591,11 @@ class PatientService {
       }
 
       this.applyDeceasedRepresentativeRules(patientData);
+      // #1083, kept by #1168: the representative's document used to be
+      // encrypted on the Patient row, where a keyless stack REFUSES the write.
+      // It moved to ParticipantIdentity, whose encryption degrades to
+      // plaintext by design, so the refusal is asserted here instead.
+      assertFieldEncryptionConfigured(patientData.representativeIdentityDocument);
 
       if (!patientData.consentTemplateId || typeof patientData.consentTemplateId !== 'string') {
         throw new Error('Template de consentimento (consentTemplateId) é obrigatório');
@@ -564,7 +648,13 @@ class PatientService {
 
       const validation = PatientModel.validate(omitLegacyIdentityFields(patientData));
       if (!validation.isValid) {
-        throw new Error(validation.errors.join(', '));
+        // RNF018 (#1300): a validation failure answers 422; the caller's catch
+        // keeps every other error on its own status.
+        const validationError = new Error(validation.errors.join(', '));
+        validationError.statusCode = 422;
+
+        validationError.details = validation.errors;
+        throw validationError;
       }
 
       patientData.identityDocument = this.normalizeidentityDocument(patientData.identityDocument);
@@ -610,7 +700,7 @@ class PatientService {
 
       const consentMetadata = notificationService.buildConsentMetadata();
       patientData.status = 'PENDING_CONSENT';
-      patientData.consentToken = consentMetadata.token;
+      patientData.consentTokenHash = hashConsentToken(consentMetadata.token);
       patientData.consentTokenCreatedAt = consentMetadata.createdAt;
       patientData.consentTokenExpiresAt = consentMetadata.expiresAt;
 
@@ -628,7 +718,9 @@ class PatientService {
       const identityDoc = participantIdentityService.encryptIdentityFields(
         ParticipantIdentityModel.create({ ...patientData, participantId })
       );
-      await identityCollection.insertOne(identityDoc);
+      await participantIdentityService.insertIdentityOrRollbackPatient(
+        identityCollection, identityDoc, patientsCollection, result.insertedId
+      );
 
       if (options.skipConsentNotification !== true) {
         try {
@@ -655,7 +747,7 @@ class PatientService {
       };
     } catch (error) {
       if (error?.code === 11000) {
-        this.handlePhoneUniqueConstraint(error);
+        this.handlePhoneUniqueConstraint(error, patientData?.phone);
       }
       logger.error('Erro ao criar paciente:', error.message);
       throw error;
@@ -694,8 +786,21 @@ class PatientService {
       // ParticipantIdentity, not read/filtered directly off Patient.
       if (filters.patientName) {
         const identityCollection = await this.getIdentityCollection(db);
+        // #1104: patientName is ciphertext-only, so this is an EXACT match on
+        // the normalized full name (accents, case and spacing ignored) through
+        // patientNameHash. It used to be a case-insensitive substring $regex,
+        // which a blind index cannot serve; no screen sent this filter.
+        // #1099: match under every registered key. The keyless branch queries
+        // the plaintext, the only thing a stack with no ENCRYPTION_KEY writes
+        // (#1083), with the same exact-match semantics: anchored and escaped,
+        // so the caller's term is never read as a pattern.
+        const patientNameHashes = participantIdentityService.computeBlindIndexCandidates('patientName', filters.patientName);
+        const escapedName = String(filters.patientName).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const nameCondition = patientNameHashes.length
+          ? { patientNameHash: { $in: patientNameHashes } }
+          : { patientName: { $regex: `^${escapedName}$`, $options: 'i' } };
         const matchingIdentities = await identityCollection
-          .find({ patientName: { $regex: filters.patientName, $options: 'i' } })
+          .find(nameCondition)
           .toArray();
         query.participantId = { $in: matchingIdentities.map((identity) => identity.participantId) };
       }
@@ -858,7 +963,27 @@ class PatientService {
   }
 
   async updatePatient(db, participantId, updateData, options = {}) {
+    let submittedPhone = null;
     try {
+      // #1277: every declared field the patch carries must hold its type,
+      // checked on the raw input before anything below coerces it. Before
+      // this, only the fields named below were checked, and a wrong type in
+      // any other (sex, status, studyId, anamneseGeral, a consent date) went
+      // straight into the $set.
+      const typeErrors = PatientModel.validateUpdateTypes(updateData);
+      if (typeErrors.length > 0) {
+        const error = new Error(typeErrors.join(', '));
+        error.statusCode = 422;
+        error.code = 'INVALID_FIELD_TYPE';
+        error.fields = typeErrors;
+        throw error;
+      }
+      // A date given as a string is stored as a Date, as create() stores it.
+      // birthDate is converted where it is routed to ParticipantIdentity.
+      for (const field of ['consentTokenCreatedAt', 'consentTokenExpiresAt', 'consentNotifiedAt', 'consentAcceptedAt', 'createdAt']) {
+        if (typeof updateData[field] === 'string') updateData[field] = new Date(updateData[field]);
+      }
+
       const patientsCollection = await this.getPatientsCollection(db);
 
       if (updateData.unitAcronym !== undefined) {
@@ -874,13 +999,52 @@ class PatientService {
         }
       }
 
+      // #1083, kept by #1168: see createPatient -- refused on the raw input,
+      // exactly where the Patient-side encryption loop used to refuse it.
+      if (updateData.representativeIdentityDocument !== undefined) {
+        assertFieldEncryptionConfigured(updateData.representativeIdentityDocument);
+      }
+
       if (updateData.phone !== undefined) {
         const normalizedPhone = this.normalizePhone(updateData.phone);
         if (updateData.phone !== null && updateData.phone !== '' && (!normalizedPhone || normalizedPhone.length < 10 || normalizedPhone.length > 15)) {
           throw new Error('Telefone (phone) inválido. Informe de 10 a 15 dígitos');
         }
         updateData.phone = normalizedPhone;
+        submittedPhone = normalizedPhone;
       }
+
+      // #1168: the stored representative lives on ParticipantIdentity only, so
+      // the merge reads it from there, decrypted. isDeceased stays a Patient
+      // field. This runs BEFORE the encryption loop below: that loop used to
+      // null the plaintext representativeIdentityDocument first, so the rules
+      // saw it as missing and refused every such edit on a keyed stack.
+      if (updateData.isDeceased !== undefined ||
+        PARTICIPANT_REPRESENTATIVE_FIELDS.some((field) => updateData[field] !== undefined)) {
+        const existingPatient = await this.getPatient(db, participantId);
+        const storedIdentity = existingPatient?.participantId
+          ? participantIdentityService.decryptIdentity(
+            await (await this.getIdentityCollection(db)).findOne({ participantId: existingPatient.participantId })
+          ) || {}
+          : {};
+        const mergedPayload = { isDeceased: existingPatient?.isDeceased };
+        for (const field of PARTICIPANT_REPRESENTATIVE_FIELDS) mergedPayload[field] = storedIdentity[field];
+        Object.assign(mergedPayload, updateData);
+        this.applyDeceasedRepresentativeRules(mergedPayload);
+        updateData.isDeceased = mergedPayload.isDeceased;
+        for (const field of PARTICIPANT_REPRESENTATIVE_FIELDS) updateData[field] = mergedPayload[field];
+      }
+
+      // #1166/#1168: the contact and the representative are mirrored too, and
+      // stripped BEFORE the patients-side encryption loop below, which would
+      // otherwise null representativeIdentityDocument's plaintext first -- ParticipantIdentity is their only home.
+      const identityOnlyFieldsFromUpdate = {};
+      for (const field of PARTICIPANT_IDENTITY_ONLY_FIELDS) {
+        if (Object.prototype.hasOwnProperty.call(updateData, field)) {
+          identityOnlyFieldsFromUpdate[field] = updateData[field];
+        }
+      }
+      updateData = omitParticipantIdentityOnlyFields(updateData);
 
       const encryptedFieldMap = this.getEncryptedFieldMap();
       for (const [plainField, encryptedField] of Object.entries(encryptedFieldMap)) {
@@ -905,27 +1069,6 @@ class PatientService {
         }
       }
 
-      if (updateData.isDeceased !== undefined ||
-        updateData.representativeName !== undefined ||
-        updateData.representativeEmail !== undefined ||
-        updateData.representativeIdentityDocument !== undefined ||
-        updateData.representativePhone !== undefined) {
-        const existingPatient = await this.getPatient(db, participantId);
-        const mergedPayload = {
-          isDeceased: existingPatient?.isDeceased,
-          representativeName: existingPatient?.representativeName,
-          representativeEmail: existingPatient?.representativeEmail,
-          representativeIdentityDocument: existingPatient?.representativeIdentityDocument,
-          representativePhone: existingPatient?.representativePhone,
-          ...updateData
-        };
-        this.applyDeceasedRepresentativeRules(mergedPayload);
-        updateData.isDeceased = mergedPayload.isDeceased;
-        updateData.representativeName = mergedPayload.representativeName;
-        updateData.representativeEmail = mergedPayload.representativeEmail;
-        updateData.representativeIdentityDocument = mergedPayload.representativeIdentityDocument;
-        updateData.representativePhone = mergedPayload.representativePhone;
-      }
       
       // Validação antes de atualizar
       if (updateData.participantId) {
@@ -977,6 +1120,10 @@ class PatientService {
         query = { participantId };
       }
 
+      if (identityOnlyFieldsFromUpdate.phone) {
+        await this.assertPhoneAvailable(db, patientsCollection, query, identityOnlyFieldsFromUpdate.phone);
+      }
+
       const result = await patientsCollection.updateOne(
         query,
         { $set: updateData }
@@ -1000,9 +1147,10 @@ class PatientService {
       if (updatedPatient?.participantId && (
         Object.prototype.hasOwnProperty.call(identityFieldsFromUpdate, 'patientName') ||
         Object.prototype.hasOwnProperty.call(identityFieldsFromUpdate, 'birthDate') ||
-        Object.prototype.hasOwnProperty.call(identityFieldsFromUpdate, 'identityDocument')
+        Object.prototype.hasOwnProperty.call(identityFieldsFromUpdate, 'identityDocument') ||
+        Object.keys(identityOnlyFieldsFromUpdate).length > 0
       )) {
-        const identityUpdate = { updatedAt: updateData.updatedAt };
+        const identityUpdate = { ...identityOnlyFieldsFromUpdate, updatedAt: updateData.updatedAt };
         if (Object.prototype.hasOwnProperty.call(identityFieldsFromUpdate, 'patientName')) {
           identityUpdate.patientName = identityFieldsFromUpdate.patientName;
         }
@@ -1013,10 +1161,32 @@ class PatientService {
           identityUpdate.identityDocument = identityFieldsFromUpdate.identityDocument;
         }
 
+        // RF005/RNF007 (#1104, #1109): this sync is a participantIdentities
+        // writer like any other, so it goes through encryptIdentityFields --
+        // otherwise an edit writes raw plaintext onto a ciphertext-only field,
+        // stores an uncanonicalized identityDocument, and leaves the blind
+        // index on the OLD value for every matching site to find. A field
+        // cleared here must clear its ciphertext and hash as well, or
+        // decryptIdentity recovers the old value from the ciphertext.
+        const encryptedFieldMap = participantIdentityService.getEncryptedFieldMap();
+        const hashFieldMap = participantIdentityService.getHashFieldMap();
+        const clearedSiblings = {};
+        for (const [plainField, encryptedField] of Object.entries(encryptedFieldMap)) {
+          if (Object.prototype.hasOwnProperty.call(identityUpdate, plainField)
+            && (identityUpdate[plainField] === null || identityUpdate[plainField] === '')) {
+            clearedSiblings[encryptedField] = null;
+            if (hashFieldMap[plainField]) clearedSiblings[hashFieldMap[plainField]] = null;
+          }
+        }
+        const encryptedIdentityUpdate = {
+          ...participantIdentityService.encryptIdentityFields(identityUpdate),
+          ...clearedSiblings,
+        };
+
         const identityCollection = await this.getIdentityCollection(db);
         await identityCollection.updateOne(
           { participantId: updatedPatient.participantId },
-          { $set: identityUpdate },
+          { $set: encryptedIdentityUpdate },
           { upsert: true }
         );
       }
@@ -1024,43 +1194,102 @@ class PatientService {
       return { success: true };
     } catch (error) {
       if (error?.code === 11000) {
-        this.handlePhoneUniqueConstraint(error);
+        this.handlePhoneUniqueConstraint(error, submittedPhone);
       }
       logger.error('Erro ao atualizar paciente:', error.message);
       throw error;
     }
   }
 
+  /**
+   * #1127: true only for the refusals this service raises against the caller's
+   * own request. The controller answers those 400 and everything else 503.
+   */
+  isConsentTokenRejection(error) {
+    return error?.code === CONSENT_TOKEN_REJECTION_CODE;
+  }
+
+  /** #821: true for a manifestation refused as sent; the controller answers 422. */
+  isConsentManifestationRejection(error) {
+    return error?.code === CONSENT_MANIFESTATION_REJECTION_CODE;
+  }
+
   async validateConsentToken(db, participantId, token) {
     if (!participantId || !token) {
-      throw new Error('participantId e token são obrigatórios');
+      throw consentTokenRejection('participantId e token são obrigatórios');
     }
 
+    // #1127: NOT wrapped. A driver error here is not a bad token, and it
+    // reaches the controller unmarked so it is answered as the outage it is.
     const patientsCollection = await this.getPatientsCollection(db);
     const query = { participantId };
     const patient = await patientsCollection.findOne(query);
 
     if (!patient) {
-      throw new Error('Paciente não encontrado');
+      throw consentTokenRejection('Paciente não encontrado');
     }
 
     if (patient.status !== 'PENDING_CONSENT') {
-      throw new Error('Paciente não está pendente de consentimento');
+      throw consentTokenRejection('Paciente não está pendente de consentimento');
     }
 
-    if (!patient.consentToken || patient.consentToken !== token) {
-      throw new Error('Token inválido');
+    // #1049: only the hash is stored, compared in constant time. A legacy
+    // row still holding a plaintext `consentToken` and no hash is rejected
+    // here; src/scripts/migrateConsentTokenHash.js converts those in place.
+    if (!consentTokenMatches(patient.consentTokenHash, token)) {
+      throw consentTokenRejection('Token inválido');
     }
 
     if (patient.consentTokenExpiresAt && new Date(patient.consentTokenExpiresAt) < new Date()) {
-      throw new Error('Token expirado');
+      throw consentTokenRejection('Token expirado');
     }
 
     return { valid: true, participantId: patient.participantId };
   }
 
-  async acceptConsentToken(db, participantId, token) {
+  /**
+   * #821: RF010 AC#2-5,7 -- a bulk-invited participant's acceptance is a
+   * manifestation, so it is recorded as a Consent by the canonical recorder
+   * (consentId, exact term version, evidence, outbox event), with the
+   * participant's per-permission answers, against the term the page showed.
+   * It used to flip Patient.status and record nothing.
+   *
+   * The record is written BEFORE the status flip, so a failed write leaves
+   * the token live and the participant can retry.
+   */
+  async acceptConsentToken(db, participantId, token, manifestation = {}) {
     await this.validateConsentToken(db, participantId, token);
+
+    // Lazy: consent.service's module graph is not needed by any other path
+    // here, and the recorder is the only thing taken from it.
+    const consentService = require('./consent.service');
+
+    const { consentTemplateId, responses, ipAddress, userAgent } = manifestation || {};
+    if (!consentTemplateId || !responses || typeof responses !== 'object' || Array.isArray(responses)) {
+      throw consentManifestationRejection('consentTemplateId e responses são obrigatórios');
+    }
+
+    // The page renders getActiveTemplate (consent.controller validate), so an
+    // answer set is only meaningful against that same term. A republish in
+    // between would otherwise record answers to a text never shown.
+    const activeTemplate = await consentService.getActiveTemplate(db);
+    if (!activeTemplate || String(activeTemplate._id) !== String(consentTemplateId)) {
+      throw consentManifestationRejection('O termo de consentimento foi atualizado');
+    }
+
+    try {
+      consentService.validateResponsesAgainstTemplate(activeTemplate, responses);
+    } catch (validationError) {
+      throw consentManifestationRejection(validationError.message);
+    }
+
+    const consent = await consentService.createPatientConsent(db, {
+      participantId,
+      consentTemplateId: String(consentTemplateId),
+      responses,
+      ipAddress,
+      userAgent
+    });
 
     const patientsCollection = await this.getPatientsCollection(db);
     await patientsCollection.updateOne(
@@ -1069,14 +1298,19 @@ class PatientService {
         $set: {
           status: 'ACTIVE',
           consentAcceptedAt: new Date(),
-          consentToken: null,
+          consentTokenHash: null,
           consentTokenExpiresAt: null,
           updatedAt: new Date()
         }
       }
     );
 
-    return { success: true, participantId };
+    return {
+      success: true,
+      participantId,
+      consentId: consent.consentId,
+      consentVersion: consent.consentVersion
+    };
   }
 
   async resendConsentNotification(db, participantId) {
@@ -1095,20 +1329,12 @@ class PatientService {
       throw new Error('Paciente não está pendente de consentimento');
     }
 
-    const now = new Date();
-    const expiresAt = patient.consentTokenExpiresAt ? new Date(patient.consentTokenExpiresAt) : null;
-    const hasValidToken = Boolean(patient.consentToken && expiresAt && expiresAt > now);
-
-    let token = patient.consentToken;
-    let tokenCreatedAt = patient.consentTokenCreatedAt ? new Date(patient.consentTokenCreatedAt) : null;
-    let tokenExpiresAt = expiresAt;
-
-    if (!hasValidToken) {
-      const consentMetadata = notificationService.buildConsentMetadata();
-      token = consentMetadata.token;
-      tokenCreatedAt = consentMetadata.createdAt;
-      tokenExpiresAt = consentMetadata.expiresAt;
-    }
+    // #1049: a resend always mints a fresh token. It used to re-send the
+    // stored token while it was unexpired, which needed the plaintext at rest;
+    // only its hash is stored now, so it cannot be recovered. The link a
+    // participant already holds stops working once this one is persisted.
+    const consentMetadata = notificationService.buildConsentMetadata();
+    const token = consentMetadata.token;
 
     // RF005/RNF007 (#561/#564): patientName resolved via ParticipantIdentity
     // instead of read directly off the Patient document.
@@ -1118,32 +1344,42 @@ class PatientService {
     // ciphertext-only row sends the consent invitation with no name. This read
     // had no decryptIdentity anywhere in its path.
     const identity = rawIdentity ? participantIdentityService.decryptIdentity(rawIdentity) : null;
-    const patientWithIdentity = identity ? { ...patient, patientName: identity.patientName } : patient;
+    // #1166 slice 2: and the contact the invitation goes to, from the same
+    // decrypted record rather than the Patient's own copy.
+    const patientWithIdentity = identity
+      ? { ...participantIdentityService.withIdentityContact(patient, identity), patientName: identity.patientName }
+      : patient;
 
     const consentLink = notificationService.buildConsentLink(patientWithIdentity, token);
+
+    // Persisted BEFORE delivery, the #810 ordering the publication sweep
+    // uses: an emailed link is only usable if the database already holds its
+    // hash, so a failure here means "not sent" rather than "sent, unusable".
+    // A legacy plaintext `consentToken` is removed in the same write.
+    await patientsCollection.updateOne(
+      { _id: patient._id },
+      {
+        $set: {
+          consentTokenHash: hashConsentToken(token),
+          consentTokenCreatedAt: consentMetadata.createdAt,
+          consentTokenExpiresAt: consentMetadata.expiresAt,
+          updatedAt: new Date()
+        },
+        $unset: { consentToken: '' }
+      }
+    );
+
     await notificationService.enqueueConsentNotification(patientWithIdentity, consentLink);
-
-    const updatePayload = {
-      consentNotifiedAt: new Date(),
-      updatedAt: new Date()
-    };
-
-    if (!hasValidToken) {
-      updatePayload.consentToken = token;
-      updatePayload.consentTokenCreatedAt = tokenCreatedAt;
-      updatePayload.consentTokenExpiresAt = tokenExpiresAt;
-    }
 
     await patientsCollection.updateOne(
       { _id: patient._id },
-      { $set: updatePayload }
+      { $set: { consentNotifiedAt: new Date(), updatedAt: new Date() } }
     );
 
     return {
       success: true,
       participantId,
-      reusedToken: hasValidToken,
-      consentTokenExpiresAt: tokenExpiresAt
+      consentTokenExpiresAt: consentMetadata.expiresAt
     };
   }
 

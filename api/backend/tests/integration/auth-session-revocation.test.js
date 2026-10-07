@@ -69,7 +69,8 @@ describe('Session Revocation (DELETE /api/auth/sessions/:sessionId)', () => {
       'qa-admin-revoke-1',
       'session-revoke-test-1',
       'user_request',
-      'qa-admin-revoke-1'
+      'qa-admin-revoke-1',
+      { req: expect.anything() }
     );
   });
 

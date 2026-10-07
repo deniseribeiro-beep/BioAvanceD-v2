@@ -63,6 +63,8 @@ const TOKEN_OPTIONAL_ROUTES = [
   '/auth/password-reset/reset',
   '/auth/two-factor/qr-first-login',
   '/auth/two-factor/enable-first-login',
+  // #1246: the password rules, read by the reset page before any session.
+  '/auth/password-policy',
   // #809: participant-facing consent-token endpoints. Whoever follows a bulk
   // consent invitation has no account and no session -- the 64-char token in
   // the emailed link is the credential. Without these entries the request
@@ -530,14 +532,16 @@ export const sensorService = {
 // ========== POLICY SERVICES ==========
 export const policyService = {
   getAll: () => api.get<ApiEnvelope<Policy[]>>('/policies'),
-  getById: (id: number) => api.get<Policy>(`/policies/${id}`),
-  getActiveLimit: (id: number, isMax: boolean = true) =>
+  // #1178: `id` is the policy's _id. The API never returns a `policyID`, and
+  // PUT/DELETE look up by _id only.
+  getById: (id: string) => api.get<Policy>(`/policies/${id}`),
+  getActiveLimit: (id: string, isMax: boolean = true) =>
     api.get<{ limit: number; type: string; unit: string }>(`/policies/${id}/active-limit`, {
       params: { type: isMax ? 'max' : 'min' }
     }), // Implementa Policy.getActiveLimit()
-  create: (data: Partial<Policy>) => api.post<ApiEnvelope<Policy>>('/policies', data), // policy.routes.js:163-167
-  update: (id: number, data: Partial<Policy>) => api.put<ApiEnvelope<never>>(`/policies/${id}`, data), // policy.routes.js:220-223, no data key
-  delete: (id: number) => api.delete(`/policies/${id}`),
+  create: (data: Partial<Policy>) => api.post<ApiEnvelope<Policy>>('/policies', data), // policy.routes.js:224 (#1089 moved it)
+  update: (id: string, data: Partial<Policy>) => api.put<ApiEnvelope<never>>(`/policies/${id}`, data), // policy.routes.js:220-223, no data key
+  delete: (id: string) => api.delete(`/policies/${id}`),
 };
 
 // ========== USER SERVICES ==========
@@ -560,11 +564,20 @@ export const userService = {
   resetMFA: (id: number | string) => api.post(`/users/${id}/reset-mfa`),
   disableMFA: (id: number | string) => api.post(`/users/${id}/disable-mfa`),
   forcePasswordReset: (id: number | string) => api.post(`/users/${id}/force-password-reset`),
+  // #1013: an administrator sets another user's password (off PUT /:id).
+  setPassword: (id: number | string, password: string) =>
+    api.post<ApiEnvelope<{ forceReset: boolean }>>(`/users/${id}/set-password`, { password }),
+  // #1020 / RF003 AC#5: revoke every active session; 'risk' records a
+  // suspected compromise, 'admin_action' a routine administrative revoke.
+  revokeSessions: (id: number | string, reason: 'admin_action' | 'risk') =>
+    api.post<{ success: boolean; data: { revoked: number; reason: string } }>(`/users/${id}/revoke-sessions`, { reason }),
 };
 
 // ========== ORGANIZATION SERVICES ==========
 export const organizationService = {
-  getAll: () => api.get<ApiEnvelope<Organization[]>>('/organizations'),
+  // #1280: the route returns one sorted page (limit at most 500); useOrganizations pages through it.
+  getAll: (params?: { limit?: number; skip?: number }) =>
+    api.get<ApiEnvelope<Organization[]>>('/organizations', { params }),
   create: (data: Partial<Organization>) => api.post<Organization>('/organizations', data),
   update: (id: string, data: Partial<Organization>) => api.put<Organization>(`/organizations/${id}`, data),
   delete: (id: string) => api.delete(`/organizations/${id}`),
@@ -608,7 +621,8 @@ export const reportsService = {
   getById: (id: number) => api.get<Reports>(`/reports/${id}`),
   generate: (reportType: string) => api.post<Reports>('/reports/generate', { reportType }), // Implementa User.generateReports()
   delete: (id: number) => api.delete(`/reports/${id}`),
-  getFilters: (type: string) => api.get<{ filters: any[] }>(`/reports/${encodeURIComponent(type)}/filters`),
+  getFilters: (type: string) =>
+    api.get<{ filters: any[]; reportType?: string; handlerKey?: string; name?: string; description?: string | null }>(`/reports/${encodeURIComponent(type)}/filters`),
   previewReport: (type: string, data: { filters: any }) => 
     api.post<any>(`/reports/${encodeURIComponent(type)}/preview`, data),
   exportReport: (type: string, format: 'csv' | 'pdf', filters?: any) => {
@@ -691,7 +705,46 @@ export const logService = {
   queryLogs: (filters: any) => api.post<{ success: boolean; data: { logs: Log[]; total: number; page: number; totalPages: number } }>('/logs/query', filters),
   exportCSV: (filters?: any) => api.get('/logs/export/csv', { params: filters, responseType: 'blob' }),
   exportExcel: (filters?: any) => api.get('/logs/export/xlsx', { params: filters, responseType: 'blob' }),
+  // #1005: every user's sessions, revoked ones included, pseudonymised.
+  getSessions: (filters?: SessionAuditFilters) =>
+    api.get<{ success: boolean; data: SessionAuditPage }>('/logs/sessions', { params: filters }),
 };
+
+export type SessionRevocationReason = 'user_request' | 'admin_action' | 'password_change' | 'risk' | 'expiration';
+
+export interface SessionAuditFilters {
+  revocationReason?: SessionRevocationReason | '';
+  isRevoked?: 'true' | 'false' | '';
+  from?: string;
+  to?: string;
+  page?: number;
+  limit?: number;
+}
+
+export interface SessionAuditRow {
+  id: string | null;
+  user: string;
+  ipAddress: string | null;
+  browser: string | null;
+  os: string | null;
+  deviceType: string | null;
+  createdAt: string | null;
+  lastActivity: string | null;
+  expiresAt: string | null;
+  isActive: boolean;
+  isRevoked: boolean;
+  revokedAt: string | null;
+  revokedBy: string | null;
+  revocationReason: SessionRevocationReason | null;
+}
+
+export interface SessionAuditPage {
+  sessions: SessionAuditRow[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
 
 // ========== AUDIT SERVICES ==========
 export const auditService = {
@@ -741,6 +794,8 @@ export const authService = {
     api.post('/auth/two-factor/qr-first-login', { username, password }),
   enableTwoFactorFirstLogin: (code: string, username: string, password: string) => 
     api.post('/auth/two-factor/enable-first-login', { code, username, password }),
+  // #1246: passwordRules strength keys in force (no session needed)
+  getPasswordPolicy: () => api.get('/auth/password-policy'),
   // Recuperação de senha
   requestPasswordReset: (email: string) => 
     api.post('/auth/password-reset/request', { email }),
@@ -841,10 +896,20 @@ export const consentTokenService = {
       '/e-consent/consent-tokens/validate',
       { patientId: participantId, token }
     ),
-  accept: (participantId: string, token: string) =>
-    api.post<{ success: boolean; message: string; data: { success: boolean; participantId: string } }>(
+  // #821: the accept carries the manifestation -- the term shown and one
+  // answer per purpose -- which the backend records as a Consent.
+  accept: (
+    participantId: string,
+    token: string,
+    manifestation: { consentTemplateId: string; responses: Record<string, boolean> }
+  ) =>
+    api.post<{
+      success: boolean;
+      message: string;
+      data: { success: boolean; participantId: string; consentId: string; consentVersion: string | null };
+    }>(
       '/e-consent/consent-tokens/accept',
-      { patientId: participantId, token }
+      { patientId: participantId, token, ...manifestation }
     ),
 };
 
@@ -907,21 +972,6 @@ export const importLGPDService = {
       responseType: 'blob',
     });
   },
-  smartImportPatients: (formData: FormData) => {
-    return api.post('/import-lgpd/pacientes/smart-import', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data',
-      },
-    });
-  },
-  getSmartImportReports: (params?: { page?: number; limit?: number }) => {
-    return api.get('/import-lgpd/pacientes/smart-import/reports', {
-      params,
-    });
-  },
-  getSmartImportPatientsMetadata: () => {
-    return api.get('/import-lgpd/pacientes/smart-import/metadata');
-  },
   // #794 (RNF011 AC#4): the quarantine surface. #787 made rejected rows
   // survive and slice 1 made a batch readable by id; these are what let an
   // operator actually reach one.
@@ -937,8 +987,8 @@ export const importLGPDService = {
 export const securityService = {
   getConfig: () => api.get('/security/config'),
   updateConfig: (data: any) => api.put('/security/config', data),
+  // #1149: read-only. The PUT it paired with wrote a store nothing enforced.
   getPermissions: () => api.get('/security/permissions'),
-  updatePermissions: (data: any) => api.put('/security/permissions', data),
   getSessions: () => api.get('/auth/sessions'),
   getConsentQueueStatus: () => api.get('/security/consent-queue'),
   exportLogs: (filters?: any, format: 'csv' | 'json' = 'csv') => {

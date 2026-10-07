@@ -489,6 +489,33 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
 
       expect([200, 409]).toContain(response.status);
     });
+
+    // #1281: with these writable, the caller could set a token hash of its
+    // own and accept a consent through the unauthenticated accept route.
+    it('#1281: refuses the consent lifecycle fields with a 422 naming them, and writes nothing', async () => {
+      const patient = { participantId: '12345678', clinicalUnitId: 'test-org-default' };
+      const patientsCollection = {
+        findOne: vi.fn().mockResolvedValue(patient),
+        updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
+      };
+
+      app.locals.db = dbWithRbac({ patients: patientsCollection });
+
+      const response = await request(app)
+        .put('/api/patients/12345678')
+        .set('Authorization', `Bearer ${createCoordinatorToken()}`)
+        .send({
+          status: 'PENDING_CONSENT',
+          consentTokenHash: 'a'.repeat(64),
+          consentTokenExpiresAt: '2099-01-01T00:00:00.000Z',
+          recordNumber: 'R-1',
+        });
+
+      expect(response.status).toBe(422);
+      expect(response.body.code).toBe('SERVER_MANAGED_FIELD');
+      expect(response.body.fields).toEqual(['status', 'consentTokenHash', 'consentTokenExpiresAt']);
+      expect(patientsCollection.updateOne).not.toHaveBeenCalled();
+    });
   });
 
   /**

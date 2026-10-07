@@ -8,11 +8,31 @@ import { useLanguage } from '../contexts/LanguageContext';
 import { useToast } from '../components/UI/ToastContainer';
 import './SecurityPage.css';
 
+// #1248: the retention keys are decided by the active RetentionPolicy, so
+// they render read-only with a line naming it.
+type GovernedSource = NonNullable<SecurityConfig['governedBy']>[string];
+// #1260, #1261: a key whose behaviour is fixed names why.
+const FIXED_HELP_KEYS: Record<string, string> = {
+  'audit-required': 'security.logging.fixedAuditRequired',
+  'always-anonymized': 'security.logging.fixedAlwaysAnonymized',
+  'not-applied': 'security.logging.fixedNotApplied',
+  'consent-required': 'security.logging.fixedConsentRequired',
+  'consent-no-expiry': 'security.logging.fixedConsentNoExpiry',
+  'export-pseudonymised': 'security.logging.fixedExportPseudonymised',
+};
+function retentionGovernedHelp(t: (key: string, fallback?: string) => string, source?: GovernedSource): string {
+  if (!source) return '';
+  if (source.fixed) return FIXED_HELP_KEYS[source.fixed] ? t(FIXED_HELP_KEYS[source.fixed]) : '';
+  if (source.unavailable) return t('security.logging.governedUnavailable');
+  if (!source.policyId) return t('security.logging.governedNoPolicy');
+  return t('security.logging.governedByPolicy').replace('{{version}}', source.version ?? '');
+}
+
 export default function SecurityPage() {
   const { user, isLoading: authLoading, hasRole } = useAuth();
   const { t } = useLanguage();
   const { showToast } = useToast();
-  const { config, permissions, loading, error, saving, updateConfig, updatePermissions, exportLogs } = useSecurity();
+  const { config, permissions, loading, error, saving, updateConfig, exportLogs } = useSecurity();
   const [localConfig, setLocalConfig] = useState<SecurityConfig | null>(null);
   const [localPermissions, setLocalPermissions] = useState<ProfilePermissions | null>(null);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'success' | 'error'>('idle');
@@ -97,17 +117,6 @@ export default function SecurityPage() {
     setLocalConfig(newConfig);
   };
 
-  const handlePermissionChange = (profile: string, permission: string, value: boolean) => {
-    if (!localPermissions) return;
-
-    const newPermissions = { ...localPermissions };
-    if (!newPermissions[profile]) {
-      newPermissions[profile] = {};
-    }
-    newPermissions[profile][permission] = value;
-    setLocalPermissions(newPermissions);
-  };
-
   const handleSaveConfig = async () => {
     if (!localConfig) return;
 
@@ -119,21 +128,6 @@ export default function SecurityPage() {
     } catch (err: unknown) {
       setSaveStatus('error');
       showToast(getErrorMessage(err, t('security.saveError')), 'error');
-      setTimeout(() => setSaveStatus('idle'), 3000);
-    }
-  };
-
-  const handleSavePermissions = async () => {
-    if (!localPermissions) return;
-
-    try {
-      await updatePermissions(localPermissions);
-      setSaveStatus('success');
-      showToast(t('security.permissions.saveSuccess'), 'success');
-      setTimeout(() => setSaveStatus('idle'), 3000);
-    } catch (err: unknown) {
-      setSaveStatus('error');
-      showToast(getErrorMessage(err, t('security.permissions.saveError')), 'error');
       setTimeout(() => setSaveStatus('idle'), 3000);
     }
   };
@@ -311,9 +305,8 @@ export default function SecurityPage() {
                     value={localConfig.authentication.mfaMethod}
                     onChange={(e) => handleConfigChange('authentication.mfaMethod', e.target.value)}
                   >
+                    {/* #1249: TOTP is the only method implemented. */}
                     <option value="totp">{t('security.mfa.methodTotp')}</option>
-                    <option value="sms">{t('security.mfa.methodSms')}</option>
-                    <option value="email">{t('security.mfa.methodEmail')}</option>
                   </select>
                 </div>
                 <label className="config-switch">
@@ -353,26 +346,6 @@ export default function SecurityPage() {
                   />
                   <span className="config-help">{t('security.authentication.lockoutDurationHelp')}</span>
                 </div>
-                <label className="config-switch">
-                  <input title="security-input"
-                    type="checkbox"
-                    checked={localConfig.loginAttempts.trackIP}
-                    onChange={(e) => handleConfigChange('loginAttempts.trackIP', e.target.checked)}
-                  />
-                  <span>{t('security.login.trackIP')}</span>
-                </label>
-                {localConfig.loginAttempts.trackIP && (
-                  <div className="config-field">
-                    <label>{t('security.login.blockIPAfterAttempts')}</label>
-                    <input title="security-input"
-                      type="number"
-                      min="5"
-                      max="100"
-                      value={localConfig.loginAttempts.blockIPAfterAttempts}
-                      onChange={(e) => handleConfigChange('loginAttempts.blockIPAfterAttempts', parseInt(e.target.value))}
-                    />
-                  </div>
-                )}
               </div>
               <div className="config-actions">
                 <Button data-testid="security-save-config-button" onClick={handleSaveConfig} disabled={saving}>
@@ -392,10 +365,22 @@ export default function SecurityPage() {
                   <label>{t('security.password.minLength')}</label>
                   <input title="security-input"
                     type="number"
-                    min="6"
+                    min="8"
                     max="128"
                     value={localConfig.passwordRules.minLength}
                     onChange={(e) => handleConfigChange('passwordRules.minLength', parseInt(e.target.value))}
+                  />
+                </div>
+                {/* #1257: the floor for an account enrolled in MFA; a stored
+                    document from before the key existed reads it as minLength. */}
+                <div className="config-field">
+                  <label>{t('security.password.minLengthWithMFA')}</label>
+                  <input title="security-input"
+                    type="number"
+                    min="8"
+                    max={localConfig.passwordRules.minLength}
+                    value={localConfig.passwordRules.minLengthWithMFA ?? localConfig.passwordRules.minLength}
+                    onChange={(e) => handleConfigChange('passwordRules.minLengthWithMFA', parseInt(e.target.value))}
                   />
                 </div>
                 <label className="config-switch">
@@ -536,14 +521,16 @@ export default function SecurityPage() {
             <Card className="security-section">
               <h2>{t('security.login.title')}</h2>
               <div className="config-group">
+                {/* #1249: the attempt limit and lockout are the authentication
+                    keys the lockout reads; loginAttempts' copies follow them. */}
                 <div className="config-field">
                   <label>{t('security.login.maxAttempts')}</label>
                   <input title="security-input"
                     type="number"
                     min="1"
                     max="10"
-                    value={localConfig.loginAttempts.maxAttempts}
-                    onChange={(e) => handleConfigChange('loginAttempts.maxAttempts', parseInt(e.target.value))}
+                    value={localConfig.authentication.maxLoginAttempts}
+                    onChange={(e) => handleConfigChange('authentication.maxLoginAttempts', parseInt(e.target.value))}
                   />
                 </div>
                 <div className="config-field">
@@ -552,8 +539,8 @@ export default function SecurityPage() {
                     type="number"
                     min="1"
                     max="1440"
-                    value={localConfig.loginAttempts.lockoutDurationMinutes}
-                    onChange={(e) => handleConfigChange('loginAttempts.lockoutDurationMinutes', parseInt(e.target.value))}
+                    value={localConfig.authentication.lockoutDurationMinutes}
+                    onChange={(e) => handleConfigChange('authentication.lockoutDurationMinutes', parseInt(e.target.value))}
                   />
                 </div>
                 <label className="config-switch">
@@ -569,11 +556,15 @@ export default function SecurityPage() {
                     <label>{t('security.login.blockIPAfterAttempts')}</label>
                     <input title="security-input"
                       type="number"
-                      min="5"
+                      min="0"
                       max="100"
                       value={localConfig.loginAttempts.blockIPAfterAttempts}
                       onChange={(e) => handleConfigChange('loginAttempts.blockIPAfterAttempts', parseInt(e.target.value))}
                     />
+                    {/* #1264 item 2: the count is per network address, not per person. */}
+                    <span className="config-help" data-testid="security-ip-block-help">
+                      {t('security.login.blockIPAfterAttemptsHelp')}
+                    </span>
                   </div>
                 )}
               </div>
@@ -602,11 +593,13 @@ export default function SecurityPage() {
                     <option value="error">{t('logs.severity.error')}</option>
                     <option value="critical">{t('logs.severity.critical')}</option>
                   </select>
+                  <span className="config-help">{t('security.logging.minLevelHelp')}</span>
                 </div>
                 <label className="config-switch">
                   <input title="security-input"
                     type="checkbox"
                     checked={localConfig.logging.logLoginAttempts}
+                    disabled={Boolean(localConfig.governedBy?.['logging.logLoginAttempts'])}
                     onChange={(e) => handleConfigChange('logging.logLoginAttempts', e.target.checked)}
                   />
                   <span>{t('security.logging.logLoginAttempts')}</span>
@@ -615,19 +608,27 @@ export default function SecurityPage() {
                   <input title="security-input"
                     type="checkbox"
                     checked={localConfig.logging.logAllActions}
+                    disabled={Boolean(localConfig.governedBy?.['logging.logAllActions'])}
                     onChange={(e) => handleConfigChange('logging.logAllActions', e.target.checked)}
                   />
                   <span>{t('security.logging.logAllActions')}</span>
                 </label>
+                <span className="config-help" data-testid="security-logging-fixed-help">
+                  {retentionGovernedHelp(t, localConfig.governedBy?.['logging.logAllActions'])}
+                </span>
                 <div className="config-field">
                   <label>{t('security.logging.retentionDays')}</label>
                   <input title="security-input"
                     type="number"
                     min="30"
                     max="3650"
-                    value={localConfig.logging.retentionDays}
+                    value={localConfig.logging.retentionDays ?? ''}
+                    disabled={Boolean(localConfig.governedBy?.['logging.retentionDays'])}
                     onChange={(e) => handleConfigChange('logging.retentionDays', parseInt(e.target.value))}
                   />
+                  <span className="config-help" data-testid="security-retention-governed-help">
+                    {retentionGovernedHelp(t, localConfig.governedBy?.['logging.retentionDays'])}
+                  </span>
                 </div>
               </div>
               
@@ -699,6 +700,9 @@ export default function SecurityPage() {
           {activeSection === 'permissions' && (
             <Card className="security-section">
               <h2>{t('security.permissions.title')}</h2>
+              {/* #1149: read-only. The save this tab had wrote a store no
+                  authorization path reads, so it is gone rather than kept. */}
+              <p data-testid="security-permissions-readonly-note">{t('security.permissions.readOnlyNote')}</p>
               <div className="permissions-grid">
                 {Object.keys(localPermissions).map((profile) => (
                   <div key={profile} className="permission-profile">
@@ -709,19 +713,14 @@ export default function SecurityPage() {
                           data-testid={`security-permission-toggle-${profile}-${permission}`}
                           type="checkbox"
                           checked={localPermissions[profile][permission] || false}
-                          onChange={(e) => handlePermissionChange(profile, permission, e.target.checked)}
+                          disabled
+                          readOnly
                         />
                         <span>{permission}</span>
                       </label>
                     ))}
                   </div>
                 ))}
-              </div>
-              <div className="config-actions">
-                <Button data-testid="security-save-permissions-button" onClick={handleSavePermissions} disabled={saving}>
-                  <Save size={18} />
-                  {saving ? t('users.saving') : t('security.permissions.savePermissions')}
-                </Button>
               </div>
             </Card>
           )}
@@ -735,28 +734,40 @@ export default function SecurityPage() {
                   <input title="security-input"
                     type="checkbox"
                     checked={localConfig.privacy.anonymizeLogs}
+                    disabled={Boolean(localConfig.governedBy?.['privacy.anonymizeLogs'])}
                     onChange={(e) => handleConfigChange('privacy.anonymizeLogs', e.target.checked)}
                   />
                   <span>{t('security.privacy.anonymizeLogs')}</span>
                 </label>
+                <span className="config-help">
+                  {retentionGovernedHelp(t, localConfig.governedBy?.['privacy.anonymizeLogs'])}
+                </span>
                 <div className="config-field">
                   <label>{t('security.privacy.dataRetentionDays')}</label>
                   <input title="security-input"
                     type="number"
                     min="30"
                     max="3650"
-                    value={localConfig.privacy.dataRetentionDays}
+                    value={localConfig.privacy.dataRetentionDays ?? ''}
+                    disabled={Boolean(localConfig.governedBy?.['privacy.dataRetentionDays'])}
                     onChange={(e) => handleConfigChange('privacy.dataRetentionDays', parseInt(e.target.value))}
                   />
+                  <span className="config-help" data-testid="security-privacy-fixed-help">
+                    {retentionGovernedHelp(t, localConfig.governedBy?.['privacy.dataRetentionDays'])}
+                  </span>
                 </div>
                 <label className="config-switch">
                   <input title="security-input"
                     type="checkbox"
                     checked={localConfig.privacy.autoPurge}
+                    disabled={Boolean(localConfig.governedBy?.['privacy.autoPurge'])}
                     onChange={(e) => handleConfigChange('privacy.autoPurge', e.target.checked)}
                   />
                   <span>{t('security.privacy.autoPurge')}</span>
                 </label>
+                <span className="config-help">
+                  {retentionGovernedHelp(t, localConfig.governedBy?.['privacy.autoPurge'])}
+                </span>
                 {localConfig.privacy.autoPurge && (
                   <>
                     <div className="config-field">
@@ -765,7 +776,8 @@ export default function SecurityPage() {
                         type="number"
                         min="90"
                         max="3650"
-                        value={localConfig.privacy.purgeAfterDays}
+                        value={localConfig.privacy.purgeAfterDays ?? ''}
+                        disabled={Boolean(localConfig.governedBy?.['privacy.purgeAfterDays'])}
                         onChange={(e) => handleConfigChange('privacy.purgeAfterDays', parseInt(e.target.value))}
                       />
                     </div>
@@ -775,7 +787,8 @@ export default function SecurityPage() {
                         type="number"
                         min="30"
                         max="365"
-                        value={localConfig.privacy.anonymizeAfterDays}
+                        value={localConfig.privacy.anonymizeAfterDays ?? ''}
+                        disabled={Boolean(localConfig.governedBy?.['privacy.anonymizeAfterDays'])}
                         onChange={(e) => handleConfigChange('privacy.anonymizeAfterDays', parseInt(e.target.value))}
                       />
                     </div>
@@ -836,6 +849,7 @@ export default function SecurityPage() {
                       <input title="security-input"
                         type="checkbox"
                         checked={localConfig.enhancedSecurity.logAllActions}
+                        disabled={Boolean(localConfig.governedBy?.['enhancedSecurity.logAllActions'])}
                         onChange={(e) => handleConfigChange('enhancedSecurity.logAllActions', e.target.checked)}
                       />
                       <span>{t('security.enhanced.logAllActions')}</span>
@@ -848,6 +862,7 @@ export default function SecurityPage() {
                       />
                       <span>{t('security.enhanced.blockUnusualActivity')}</span>
                     </label>
+                    <span className="config-help">{t('security.enhanced.blockUnusualActivityHelp')}</span>
                   </>
                 )}
               </div>
@@ -885,18 +900,26 @@ export default function SecurityPage() {
                   <input title="security-input"
                     type="checkbox"
                     checked={localConfig.lgpd.anonymizeOnExport}
+                    disabled={Boolean(localConfig.governedBy?.['lgpd.anonymizeOnExport'])}
                     onChange={(e) => handleConfigChange('lgpd.anonymizeOnExport', e.target.checked)}
                   />
                   <span>{t('security.lgpd.anonymizeOnExport')}</span>
                 </label>
+                <span className="config-help" data-testid="security-export-fixed-help">
+                  {retentionGovernedHelp(t, localConfig.governedBy?.['lgpd.anonymizeOnExport'])}
+                </span>
                 <label className="config-switch">
                   <input title="security-input"
                     type="checkbox"
                     checked={localConfig.lgpd.requireConsent}
+                    disabled={Boolean(localConfig.governedBy?.['lgpd.requireConsent'])}
                     onChange={(e) => handleConfigChange('lgpd.requireConsent', e.target.checked)}
                   />
                   <span>{t('security.lgpd.requireConsent')}</span>
                 </label>
+                <span className="config-help">
+                  {retentionGovernedHelp(t, localConfig.governedBy?.['lgpd.requireConsent'])}
+                </span>
                 {localConfig.lgpd.requireConsent && (
                   <div className="config-field">
                     <label>{t('security.lgpd.consentExpirationDays')}</label>
@@ -904,9 +927,13 @@ export default function SecurityPage() {
                       type="number"
                       min="30"
                       max="3650"
-                      value={localConfig.lgpd.consentExpirationDays}
+                      value={localConfig.lgpd.consentExpirationDays ?? ''}
+                      disabled={Boolean(localConfig.governedBy?.['lgpd.consentExpirationDays'])}
                       onChange={(e) => handleConfigChange('lgpd.consentExpirationDays', parseInt(e.target.value))}
                     />
+                    <span className="config-help" data-testid="security-lgpd-fixed-help">
+                      {retentionGovernedHelp(t, localConfig.governedBy?.['lgpd.consentExpirationDays'])}
+                    </span>
                   </div>
                 )}
               </div>

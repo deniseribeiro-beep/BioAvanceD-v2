@@ -38,17 +38,17 @@ const LEGACY_ROLES_SEED = {
     {
       accessType: 2,
       roleName: 'Tecnico',
-      permissions: ['createSample', 'withdrawSample', 'viewTemperature', 'manageTemperature', 'manageSensor', 'recordTemperature', 'uploadFiles', 'viewReports', 'manageStorageAllocation'],
+      permissions: ['createSample', 'withdrawSample', 'viewTemperature', 'manageTemperature', 'manageTemperaturePolicy', 'manageSensor', 'recordTemperature', 'uploadFiles', 'viewReports', 'viewEquipment', 'viewStorageTopology', 'manageStorageAllocation'],
     },
     {
       accessType: 3,
       roleName: 'Coordenador',
-      permissions: ['createUser', 'createSample', 'editSample', 'createPatient', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageSensor', 'recordTemperature', 'viewReports', 'createResult', 'editResult', 'deleteResult', 'manageAccessRequests', 'manageReportTemplates', 'manageStorageAllocation', 'manageStorageTopology'],
+      permissions: ['createUser', 'createSample', 'editSample', 'createPatient', 'requestConsent', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageTemperaturePolicy', 'manageSensor', 'recordTemperature', 'viewReports', 'createResult', 'editResult', 'deleteResult', 'manageReportTemplates', 'viewEquipment', 'viewStorageTopology', 'manageStorageAllocation', 'manageStorageTopology'],
     },
     {
       accessType: 4,
       roleName: 'Administrador',
-      permissions: ['createUser', 'createSample', 'editSample', 'deleteSample', 'createPatient', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageSensor', 'recordTemperature', 'viewReports', 'manageBackup', 'manageSystem', 'resetMFA', 'forcePasswordReset', 'disableMFA', 'manageOrganizations', 'createResult', 'editResult', 'deleteResult', 'reidentifyParticipant', 'manageAccessRequests', 'manageReportTemplates', 'manageStorageAllocation', 'manageStorageTopology'],
+      permissions: ['createUser', 'assignRole', 'createSample', 'editSample', 'deleteSample', 'createPatient', 'requestConsent', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageTemperaturePolicy', 'manageSensor', 'recordTemperature', 'viewReports', 'manageBackup', 'manageSystem', 'resetMFA', 'forcePasswordReset', 'disableMFA', 'revokeSessions', 'setUserPassword', 'manageOrganizations', 'createResult', 'editResult', 'deleteResult', 'reidentifyParticipant', 'manageAccessRequests', 'manageReportTemplates', 'viewEquipment', 'viewStorageTopology', 'manageStorageAllocation', 'manageStorageTopology'],
     },
   ],
 };
@@ -96,9 +96,43 @@ const PERMISSION_CATALOG = {
   viewTemperature: { resourceType: 'Temperature', allowedActions: ['CREATE', 'READ', 'UPDATE', 'DELETE'], displayName: 'Visualizar temperatura' },
   uploadFiles: { resourceType: 'SampleFile', allowedActions: ['CREATE', 'READ', 'UPDATE'], displayName: 'Enviar arquivos' },
   createUser: { resourceType: 'User', allowedActions: ['CREATE', 'READ', 'UPDATE', 'DELETE'], displayName: 'Criar usuário' },
+  // #1008 (Denise, 2026-09-25): RF003 names the Administrador as the actor
+  // for role assignment (AC#3, "atribuir papel com vigência e escopo"), so
+  // granting, changing or re-dating a role is its own permission, seeded on
+  // the Administrador only. createUser keeps the account itself: the
+  // Coordenador still lists, edits and deletes users, but no longer assigns
+  // roles. CREATE is POST /api/users/register, where every new account is
+  // granted a role. UPDATE is PUT /api/users/:id, checked in the handler
+  // only when a role actually changes.
+  assignRole: { resourceType: 'UserRoleAssignment', allowedActions: ['CREATE', 'UPDATE'], displayName: 'Atribuir papel' },
   editSample: { resourceType: 'Sample', allowedActions: ['UPDATE'], displayName: 'Editar amostra' },
   deleteSample: { resourceType: 'Sample', allowedActions: ['DELETE'], displayName: 'Excluir amostra' },
   createPatient: { resourceType: 'Patient', allowedActions: ['CREATE', 'READ', 'UPDATE', 'DELETE'], displayName: 'Criar paciente' },
+  // #929, closing the last of #888's four createPatient borrowers. The other
+  // three were storage routes and took manageStorageTopology; eConsent.js's
+  // POST /generate-link is a Consent action and had no code to move to, so
+  // #888 left it borrowing a Patient-domain authorization for the act of
+  // inviting a participant to consent. The audit trail recorded every consent
+  // invitation as an exercise of "Criar paciente".
+  //
+  // Same TIER, different code -- Dennis, 2026-09-22, answering the question
+  // #888 left open and #929 carried as its check 2 ('whether any borrower
+  // should be a different tier rather than a differently-named code at the
+  // same tier'). So this is seeded to Coordenador + Administrador, exactly
+  // where createPatient already resolved, and the swap is a no-op for every
+  // real caller. Tecnico and UsuarioExterno could not reach the route before
+  // and still cannot.
+  //
+  // resourceType 'Consent' is dict-02's own entity (ELM-0088..0113), following
+  // the same rule viewEquipment and viewStorageTopology follow: resourceType is
+  // a 1..1 Core field of Permission (P1X-0221), so it is load-bearing and not a
+  // label (#1123).
+  //
+  // CREATE only, deliberately. The route is a POST and METHOD_TO_ACTION
+  // (rbac.js:82) derives CREATE, so a wider set buys nothing today and would
+  // let the code later gate a read or a delete the way viewTemperature was
+  // reused before #1073. Widening it is a catalogue edit, which is the point.
+  requestConsent: { resourceType: 'Consent', allowedActions: ['CREATE'], displayName: 'Solicitar consentimento' },
   // #888: the catalog had no storage-scoped code at all, so storage.routes.js
   // could only be gated by role, and its one requirePermission site borrowed
   // 'createPatient' -- a Patient-domain authorization recorded for a freezer
@@ -120,6 +154,56 @@ const PERMISSION_CATALOG = {
   // READ/UPDATE-only set would 403 every create and every delete on those
   // three routers -- six of the nine sites -- while looking like a rename.
   manageStorageTopology: { resourceType: 'StorageContainer', allowedActions: ['CREATE', 'READ', 'UPDATE', 'DELETE'], displayName: 'Gerenciar topologia de armazenamento' },
+  // #1146: facility.routes.js and room.routes.js gated their writes on
+  // manageStorageTopology above but left all four of their GETs on
+  // `authenticate` alone, so any authenticated principal could enumerate the
+  // facility and room topology -- UsuarioExterno included, whose only seeded
+  // grant is viewReports. #1087 had already closed the same hole in the third
+  // file of the family, equipment.routes.js.
+  //
+  // NOT a reuse of viewEquipment, and the reason is the catalog's own data
+  // rather than taste: viewEquipment carries resourceType 'Device', which a
+  // facility or a room is not, and dict-02 makes resourceType a 1..1 Core
+  // field of Permission (P1X-0221) -- load-bearing, not a label (#1123). This
+  // takes manageStorageTopology's resourceType so the pair matches.
+  //
+  // READ-only on purpose, for #1087's reason: the #631 derived-action check
+  // passes for GET, and the code can never later be reused to gate a write
+  // the way viewTemperature was before #1073.
+  //
+  // Granted to Tecnico + Coordenador + Administrador, viewEquipment's exact
+  // population. Unlike #1074's and #1087's splits this is NOT seeded to a
+  // pre-existing population -- that population is everyone authenticated, so
+  // any gate narrows. It matches what the UI already admits
+  // (rolePermissions.ts:133 gates /facility-management to STAFF), so the one
+  // principal that loses access had no UI path to these routes.
+  viewStorageTopology: { resourceType: 'StorageContainer', allowedActions: ['READ'], displayName: 'Visualizar topologia de armazenamento' },
+  // #1087: the three equipment GETs carried no permission at all, so every
+  // authenticated principal could list the inventory -- UsuarioExterno
+  // included, whose only seeded grant is viewReports. The sibling route
+  // family already gated its reads (sensor.routes.js, on viewTemperature),
+  // so this was a divergence between files written alongside each other.
+  //
+  // NOT manageStorageTopology, and the reason is a requirement rather than a
+  // preference: Tecnico does not hold that code, while RF025's primary actor
+  // IS Tecnico and its AC#3 is "Registrar equipamentos utilizados". Reusing
+  // the write code would have 403'd the role the requirement is written for
+  // -- the same allowedActions/population trap #929 records, reached from the
+  // population side instead of the actions side.
+  //
+  // READ-only on purpose: the #631 derived-action check passes for GET, and
+  // the code can never later be reused to gate a write the way
+  // viewTemperature was before #1073.
+  //
+  // resourceType 'Device' follows manageSensor's precedent of taking the
+  // dictionary's own entity; #666 records dict-02's Device as the counterpart
+  // of this repo's Equipment model.
+  //
+  // Granted to the three roles the frontend already admits: rolePermissions.ts
+  // gates /equipment to STAFF (Administrador, Coordenador, Tecnico). This
+  // narrows the BACKEND to what the UI already assumed, and the one principal
+  // that loses access -- UsuarioExterno -- had no UI path to it.
+  viewEquipment: { resourceType: 'Device', allowedActions: ['READ'], displayName: 'Visualizar equipamentos' },
   uploadSampleFiles: { resourceType: 'SampleFile', allowedActions: ['CREATE'], displayName: 'Enviar arquivos da amostra' },
   deleteSampleFiles: { resourceType: 'SampleFile', allowedActions: ['DELETE'], displayName: 'Excluir arquivos da amostra' },
   // #632: broadened from ['UPDATE'] to cover backup.routes.js's real
@@ -137,6 +221,14 @@ const PERMISSION_CATALOG = {
   // isAdministrator check only, so it appeared in no permission audit.
   // Same shape as resetMFA -- acts on another user's second factor.
   disableMFA: { resourceType: 'User', allowedActions: ['UPDATE'], displayName: 'Desativar MFA' },
+  // #1020: RF003 AC#5 ("Revogar sessões") as an administrator's own act on
+  // another user's sessions, not only a side effect of a password set or MFA
+  // reset. Same shape as resetMFA.
+  revokeSessions: { resourceType: 'User', allowedActions: ['UPDATE'], displayName: 'Revogar sessões' },
+  // #1013: an administrator setting another user's password. It rode on
+  // PUT /api/users/:id under createUser, with no reuse check, no history and
+  // a generic audit row. Same shape as resetMFA.
+  setUserPassword: { resourceType: 'User', allowedActions: ['UPDATE'], displayName: 'Definir senha de usuário' },
   manageTemperature: { resourceType: 'Temperature', allowedActions: ['UPDATE'], displayName: 'Gerenciar incidentes de temperatura' },
   // #1073: every sensor and temperature WRITE route was gated on
   // 'viewTemperature' -- a read permission whose allowedActions had been
@@ -159,6 +251,27 @@ const PERMISSION_CATALOG = {
   // allowedActions is derived from METHOD_TO_ACTION (rbac.js), not taste.
   manageSensor: { resourceType: 'Device', allowedActions: ['CREATE', 'READ', 'UPDATE', 'DELETE'], displayName: 'Gerenciar sensores' },
   recordTemperature: { resourceType: 'Temperature', allowedActions: ['CREATE'], displayName: 'Registrar leitura de temperatura' },
+  // #1074, the write half, and the same defect as #1073 one resource over:
+  // the three policy WRITES were gated on a READ code. Because that code's
+  // allowedActions had already been widened to full CRUD, the #631 derived-
+  // action check passed and nothing was broken -- what was broken is that
+  // "may look at a threshold" and "may rewrite the threshold that decides
+  // whether an excursion is detected at all" were one capability, and no
+  // catalogue edit could separate them.
+  //
+  // manageTemperature is not the answer here either, for the reason recorded
+  // above: ['UPDATE'] only, so it would 403 POST and DELETE.
+  //
+  // resourceType follows the precedent set for manageSensor -- the
+  // dictionary's own entity, not a coinage. dict-02 P1X-0105..0112 is
+  // ThresholdProfile, and contracts/canonical/v1 maps the temperaturePolicies
+  // collection (#1089's surviving store) onto exactly that entity.
+  //
+  // GRANTS ARE DELIBERATELY UNCHANGED: seeded to the same three roles that
+  // already held viewTemperature, so nobody gains or loses access today.
+  // Whether a Tecnico should govern thresholds is #1074's open question and
+  // Denise's to answer; this makes answering it a catalogue edit.
+  manageTemperaturePolicy: { resourceType: 'ThresholdProfile', allowedActions: ['CREATE', 'READ', 'UPDATE', 'DELETE'], displayName: 'Gerenciar políticas de temperatura' },
   manageOrganizations: { resourceType: 'Organization', allowedActions: ['CREATE', 'UPDATE', 'DELETE'], displayName: 'Gerenciar organizações' },
   viewAuditLogs: { resourceType: 'AuditLog', allowedActions: ['READ'], displayName: 'Visualizar trilhas de auditoria' },
   createResult: { resourceType: 'Result', allowedActions: ['CREATE'], displayName: 'Criar arquivo de análise' },
@@ -171,10 +284,32 @@ const PERMISSION_CATALOG = {
   // RF024 (#646 Wave 3): create/evaluate/decide/distribute/revoke all live
   // behind this one code — see accessRequest.js's own comment for why no
   // dedicated researcher/committee role exists to split it across.
+  // Administrador-only (#662, Denise 2026-09-25): the committee decision is
+  // at least as sensitive as reidentifyParticipant above, so it takes the
+  // same posture until a real multi-approver committee workflow exists.
+  // RETIRED_SEED_GRANTS below pulls the old Coordenador grant off
+  // already-seeded databases.
   manageAccessRequests: { resourceType: 'AccessRequest', allowedActions: ['CREATE', 'READ', 'UPDATE'], displayName: 'Gerenciar solicitações de acesso' },
   // RF008 AC#6 (#726): Coordenador/Administrador-only -- lets a report
   // template be created/edited without a code change to reports.routes.js.
   manageReportTemplates: { resourceType: 'ReportTemplate', allowedActions: ['CREATE', 'READ', 'UPDATE', 'DELETE'], displayName: 'Gerenciar modelos de relatório' },
+};
+
+/**
+ * #662: grants the seed once gave and has deliberately withdrawn, by
+ * roleCode. upsertRole merges a role's seeded permissions INTO what it
+ * already holds, so deleting a code from LEGACY_ROLES_SEED alone never
+ * reaches a database seeded before the deletion: the old grant would stay
+ * enforced there forever, because userHasPermission reads the stored role
+ * document. Listing it here makes every seed run pull it.
+ *
+ * The cost is deliberate: an operator who re-grants one of these by hand
+ * loses it on the next boot. A withdrawn grant is a policy decision, and a
+ * restart must not quietly undo it. Everything else an operator added to a
+ * role is still left alone.
+ */
+const RETIRED_SEED_GRANTS = {
+  coordinator: ['manageAccessRequests'],
 };
 
 function allSeedRoles() {
@@ -305,7 +440,7 @@ async function upsertPermission(collection, doc) {
  * stays untouched, preserving the idempotency contract
  * rbac-catalog-seed.service.test.js already asserts on it.
  */
-async function upsertRole(collection, doc) {
+async function upsertRole(collection, doc, retiredPermissionIds = []) {
   const filter = { roleCode: doc.roleCode };
   const existing = await collection.findOne(filter);
   if (!existing) {
@@ -313,9 +448,15 @@ async function upsertRole(collection, doc) {
     return doc;
   }
 
-  const mergedPermissionIds = Array.from(new Set([...(existing.permissionIds || []), ...doc.permissionIds]));
-  const gainedNewPermissions = mergedPermissionIds.length !== (existing.permissionIds || []).length;
-  if (!gainedNewPermissions) return existing;
+  // #662: a retired grant is removed AFTER the merge, so it cannot come back
+  // through either side of the union.
+  const retired = new Set(retiredPermissionIds);
+  const existingIds = existing.permissionIds || [];
+  const mergedPermissionIds = Array.from(new Set([...existingIds, ...doc.permissionIds]))
+    .filter((id) => !retired.has(id));
+  const unchanged = mergedPermissionIds.length === existingIds.length
+    && mergedPermissionIds.every((id) => existingIds.includes(id));
+  if (unchanged) return existing;
 
   await collection.updateOne(filter, { $set: { permissionIds: mergedPermissionIds, updatedAt: new Date() } });
   return { ...existing, permissionIds: mergedPermissionIds };
@@ -335,7 +476,12 @@ async function seedRolesAndPermissions(db) {
   const roleDocs = buildRoleDocs(permissionIdByCode);
   const storedRoles = [];
   for (const doc of roleDocs) {
-    storedRoles.push(await upsertRole(rolesCollection, doc));
+    // A retired code the catalogue no longer seeds anywhere has no stored
+    // permission row, so it maps to no id and has nothing to pull.
+    const retiredPermissionIds = (RETIRED_SEED_GRANTS[doc.roleCode] || [])
+      .map((code) => permissionIdByCode[code])
+      .filter(Boolean);
+    storedRoles.push(await upsertRole(rolesCollection, doc, retiredPermissionIds));
   }
 
   return { roles: storedRoles, permissions: storedPermissions };
@@ -347,4 +493,5 @@ module.exports = {
   PERMISSION_CATALOG,
   LEGACY_ROLES_SEED,
   ADDITIONAL_ROLES_SEED,
+  RETIRED_SEED_GRANTS,
 };

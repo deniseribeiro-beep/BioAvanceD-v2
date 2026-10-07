@@ -40,12 +40,13 @@ describe('canRoleAccessRoute — the restrictive blocks still hold', () => {
     }
   });
 
-  it('keeps /logs to Administrador and Coordenador', () => {
+  // #1239: /logs follows the backend's audit-reader rule, which is not a base
+  // role, so the role map defers to ProtectedRoute's requireAuditReader.
+  it('defers /logs to the audit-reader guard rather than a base role', () => {
     for (const route of ['/logs', '/logs/123']) {
-      expect(canRoleAccessRoute('Administrador', route)).toBe(true);
-      expect(canRoleAccessRoute('Coordenador', route)).toBe(true);
-      expect(canRoleAccessRoute('Técnico', route)).toBe(false);
-      expect(canRoleAccessRoute('Usuário Externo', route)).toBe(false);
+      for (const role of ['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo'] as const) {
+        expect(canRoleAccessRoute(role, route)).toBe(true);
+      }
     }
   });
 

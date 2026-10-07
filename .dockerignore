@@ -6,3 +6,9 @@ playwright-report
 test-results
 coverage
 api/backend/coverage
+# #961: the backend's runtime data roots, the same three api/backend/.dockerignore
+# excludes (#947). Any build with the repo root as context would otherwise upload
+# a developer's local uploads, sample files and backups to the daemon.
+api/backend/uploads
+api/backend/storage
+api/backend/backups

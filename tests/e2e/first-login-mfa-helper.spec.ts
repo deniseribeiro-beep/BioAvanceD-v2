@@ -15,7 +15,7 @@ test.describe('First-login MFA e2e helper (#293) — real backend', () => {
     const admin = await realLogin(request);
 
     const username = `tecnico.totp.${Date.now()}`;
-    const password = 'Tecnico@123';
+    const password = 'Tecnico@123-forte';
     const registerResponse = await request.post(`${apiBaseURL}/api/users/register`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: {

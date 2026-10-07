@@ -56,6 +56,53 @@ describe('GET /api/organizations', () => {
     expect(res.body.success).toBe(true);
     expect(Array.isArray(res.body.data)).toBe(true);
   });
+
+  // #1280: without an offset no client could read past the 500th row.
+  describe('paging (#1280)', () => {
+    function givenCursor() {
+      const cursor = {
+        toArray: vi.fn().mockResolvedValue([]),
+        sort: vi.fn().mockReturnThis(),
+        skip: vi.fn().mockReturnThis(),
+        limit: vi.fn().mockReturnThis(),
+      };
+      app.locals.db = createDbMock({
+        organizations: createCollectionMock({ find: vi.fn().mockReturnValue(cursor) }),
+        ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]),
+      });
+      return cursor;
+    }
+
+    it('applies skip and limit over a name order with _id as the tie-break', async () => {
+      const cursor = givenCursor();
+
+      const res = await request(app)
+        .get('/api/organizations?limit=500&skip=500')
+        .set('Authorization', `Bearer ${makeToken()}`);
+
+      expect(res.status).toBe(200);
+      expect(cursor.sort).toHaveBeenCalledWith({ officialName: 1, _id: 1 });
+      expect(cursor.skip).toHaveBeenCalledWith(500);
+      expect(cursor.limit).toHaveBeenCalledWith(500);
+    });
+
+    it.each([
+      ['', 0, 100],
+      ['?skip=-5&limit=9999', 0, 500],
+      ['?skip=abc&limit=0', 0, 100],
+      ['?skip=2.7', 2, 100],
+    ])('normalizes %s to skip %i, limit %i', async (query, skip, limit) => {
+      const cursor = givenCursor();
+
+      const res = await request(app)
+        .get(`/api/organizations${query}`)
+        .set('Authorization', `Bearer ${makeToken()}`);
+
+      expect(res.status).toBe(200);
+      expect(cursor.skip).toHaveBeenCalledWith(skip);
+      expect(cursor.limit).toHaveBeenCalledWith(limit);
+    });
+  });
 });
 
 describe('GET /api/organizations/:id', () => {
@@ -274,7 +321,10 @@ describe('DELETE /api/organizations/:id', () => {
   });
 
   it('deletes an organization for an Administrador', async () => {
-    const coll = createCollectionMock({ deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }) });
+    const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue({ _id: 'mongo-org-1', organizationId: 'org-1' }),
+      deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }),
+    });
     app.locals.db = createDbMock({
       organizations: coll,
       ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]),
@@ -286,5 +336,62 @@ describe('DELETE /api/organizations/:id', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
+    expect(coll.deleteOne).toHaveBeenCalledWith({ _id: 'mongo-org-1' });
+  });
+
+  // #1284: the delete used to orphan every record naming the organization.
+  it('refuses with 409 and names the collections while records reference the organization', async () => {
+    const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue({ _id: 'mongo-org-1', organizationId: 'org-uuid-1' }),
+      deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }),
+    });
+    const equipment = createCollectionMock({ countDocuments: vi.fn().mockResolvedValue(1) });
+    const users = createCollectionMock({ countDocuments: vi.fn().mockResolvedValue(1) });
+    const samples = createCollectionMock({ countDocuments: vi.fn().mockResolvedValue(0) });
+    app.locals.db = createDbMock({
+      organizations: coll,
+      equipment,
+      users,
+      samples,
+      ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]),
+    });
+
+    const res = await request(app)
+      .delete('/api/organizations/mongo-org-1')
+      .set('Authorization', `Bearer ${makeToken(4)}`);
+
+    expect(res.status).toBe(409);
+    expect(res.body.references).toEqual(['equipment', 'users']);
+    expect(coll.deleteOne).not.toHaveBeenCalled();
+    // References carry Organization.organizationId, never the Mongo _id.
+    expect(equipment.countDocuments).toHaveBeenCalledWith({ organizationId: 'org-uuid-1' }, { limit: 1 });
+    expect(users.countDocuments).toHaveBeenCalledWith(
+      { $or: [{ organizationId: 'org-uuid-1' }, { organizationIds: 'org-uuid-1' }] },
+      { limit: 1 }
+    );
+    expect(samples.countDocuments).toHaveBeenCalledWith({ collectionSite: 'org-uuid-1' }, { limit: 1 });
+  });
+
+  // A deleted sensor's alerts keep its organizationId: they alone must refuse.
+  it('refuses with 409 while only alerts reference the organization', async () => {
+    const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue({ _id: 'mongo-org-1', organizationId: 'org-uuid-1' }),
+      deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }),
+    });
+    const alerts = createCollectionMock({ countDocuments: vi.fn().mockResolvedValue(1) });
+    app.locals.db = createDbMock({
+      organizations: coll,
+      alerts,
+      ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]),
+    });
+
+    const res = await request(app)
+      .delete('/api/organizations/mongo-org-1')
+      .set('Authorization', `Bearer ${makeToken(4)}`);
+
+    expect(res.status).toBe(409);
+    expect(res.body.references).toEqual(['alerts']);
+    expect(coll.deleteOne).not.toHaveBeenCalled();
+    expect(alerts.countDocuments).toHaveBeenCalledWith({ organizationId: 'org-uuid-1' }, { limit: 1 });
   });
 });

@@ -56,10 +56,11 @@ class SensorController {
           message: error.message
         });
       }
-      return res.status(400).json({
+      return res.status(error.statusCode === 422 ? 422 : 400).json({
         success: false,
         error: 'Erro ao criar sensor',
-        message: error.message
+        message: error.message,
+        details: error.details
       });
     }
   }

@@ -5,6 +5,12 @@
 
 require('dotenv').config();
 const logger = require('../utils/logger');
+// #1154: o gate de assinatura abaixo pergunta ao PROVIDER em vez de ler
+// process.env. Desde #1157 o registro de chaves públicas pode vir de arquivo,
+// então um boot check que lesse variáveis diretamente validaria uma
+// configuração diferente da que a aplicação de fato usa -- que é exatamente o
+// tipo de divergência silenciosa que este arquivo existe para eliminar.
+const auditSigningProvider = require('../services/audit-signing.provider');
 
 /**
  * Valida variáveis Redis obrigatórias
@@ -137,6 +143,93 @@ function validateKeyRotationEnv() {
   }
 
   return warnings;
+}
+
+/**
+ * #1154: sanidade da configuração de assinatura de auditoria no boot.
+ *
+ * SEMPRE aviso, nunca fatal, inclusive em produção -- a mesma severidade
+ * deliberada de validateKeyRotationEnv acima, e por um motivo estrutural, não
+ * por comodidade: #989 estabelece que o job noturno NÃO pode passar a
+ * rejeitar, e #979 é a decisão em aberto do eixo fatal-vs-degradar. A direção
+ * 1 de #1154 é precisamente a que não depende dessa decisão. Se #979 concluir
+ * "fatal em produção", é esta função que ganha a escalada, no formato que
+ * validateEncryptionEnv já usa.
+ *
+ * NÃO é uma quarta convenção de boot check (#979 adverte contra isso): é o
+ * mesmo par validar/avisar que #1085 introduziu, chamado do mesmo lugar.
+ *
+ * O silêncio é o defeito real. audit-v2.service chama loadPrivateKey/getKeyId
+ * dentro de try/FINALLY -- não try/catch -- então o throw sobe até o catch de
+ * runOnce, que loga e engole; e o gatilho é um setTimeout para 02:30 UTC.
+ * Sem este aviso o primeiro e único sinal chega até 24h depois do boot, no log
+ * de um worker cujo healthcheck depende só do Redis e segue reportando
+ * healthy indefinidamente.
+ *
+ * A verificação é um ida-e-volta completo (assina e confere), porque a falha
+ * que mais parece saudável é a pior: uma chave privada legível cujo id não
+ * tem par no registro assina normalmente e faz processTimestampBacklog
+ * carimbar FAILED/signature_unknown_key_id em toda raiz.
+ */
+const AUDIT_SIGNING_BOOT_PROBE = Buffer.from('bioavanced-audit-signing-boot-probe');
+
+async function validateAuditSigningEnv() {
+  const warnings = [];
+
+  let keyId = '';
+  try {
+    keyId = auditSigningProvider.getKeyId();
+  } catch (error) {
+    warnings.push(
+      '[AUDIT] AUDIT_MERKLE_SIGN_KEY_ID não está configurado: nenhuma raiz de '
+        + 'auditoria pode ser assinada e o selo diário falha em silêncio às 02:30 UTC (#1154)'
+    );
+  }
+
+  try {
+    await auditSigningProvider.loadPrivateKey();
+  } catch (error) {
+    warnings.push(
+      '[AUDIT] a chave privada de assinatura não pôde ser lida ('
+        + (error.code || error.message)
+        + '): nenhuma raiz de auditoria pode ser assinada e o selo diário falha em '
+        + 'silêncio às 02:30 UTC (#1154)'
+    );
+  }
+
+  if (warnings.length > 0) return warnings;
+
+  try {
+    const signed = await auditSigningProvider.sign(AUDIT_SIGNING_BOOT_PROBE);
+    const verification = auditSigningProvider.verify(AUDIT_SIGNING_BOOT_PROBE, signed.signature, keyId);
+    if (!verification.ok) {
+      warnings.push(
+        '[AUDIT] a chave de assinatura "' + keyId + '" assina mas não verifica ('
+          + verification.reason
+          + '): o stack sela raízes corretamente e declara os próprios artefatos '
+          + 'inválidos. Confira AUDIT_MERKLE_SIGN_PUBLIC_KEYS_FILE / _JSON contra a '
+          + 'chave ativa (#1154, #1157)'
+      );
+    }
+  } catch (error) {
+    warnings.push(
+      '[AUDIT] o teste de assinatura no boot falhou (' + error.message + '): '
+        + 'a configuração de assinatura de auditoria não está utilizável (#1154)'
+    );
+  }
+
+  return warnings;
+}
+
+/**
+ * #1154: ponto de entrada de boot, chamado por server.js e worker.js ao lado
+ * de validateEncryptionAndHalt. Deliberadamente "AndWarn" e não "AndHalt":
+ * não lança em nenhum ambiente. Devolve true quando nada foi encontrado.
+ */
+async function validateAuditSigningAndWarn() {
+  const warnings = await validateAuditSigningEnv();
+  warnings.forEach((warning) => logger.warn(warning));
+  return warnings.length === 0;
 }
 
 function validateEncryptionEnv() {
@@ -287,6 +380,8 @@ function validateEncryptionAndHalt() {
 
 module.exports = {
   validateRedisEnv,
+  validateAuditSigningEnv,
+  validateAuditSigningAndWarn,
   validateEncryptionEnv,
   validateKeyRotationEnv,
   validateEncryptionAndHalt,

@@ -1,0 +1,103 @@
+/**
+ * RF022 AC2, RNF031 C2 (Foundation plan F1.4): the Foundation job builds
+ * every model index before the APIs start, and reports a failed build,
+ * instead of leaving each one to the first request that touches its
+ * collection (#941 proved every declared index has such a lazy build).
+ *
+ * The helpers below swallow their own errors by design, since their request
+ * path must keep serving without a performance index. So each helper gets a
+ * collection whose `createIndex` is recorded: the job learns every key spec
+ * the helper asked for and whether the build succeeded, without changing
+ * the helpers. `verifyFoundationIndexes` then reads the indexes back.
+ */
+const { CANONICAL_COLLECTIONS } = require('../config/collections');
+const { ensureConfigurationReleaseIndexes } = require('../utils/configurationReleaseIndexes');
+const { ensureFacilityIndexes, ensureRoomIndexes } = require('../utils/facilityIndexes');
+const { ensureParticipantIdentityIndexes } = require('../utils/participantIdentityIndexes');
+const { ensureSampleIndexes } = require('../utils/sampleIndexes');
+const { ensureSessionIndexes } = require('../utils/sessionIndexes');
+const { ensureStagingImportIndexes } = require('../utils/stagingImportIndexes');
+const {
+  ensureStorageContainerIndexes,
+  ensureStorageBoxIndexes,
+  ensureSensorMetadataIndexes,
+} = require('../utils/storageIndexes');
+
+// Collection names as each helper's own callers resolve them.
+const INDEX_TARGETS = [
+  { collection: 'facilities', ensure: ensureFacilityIndexes },
+  { collection: 'rooms', ensure: ensureRoomIndexes },
+  { collection: CANONICAL_COLLECTIONS.participantIdentities, ensure: ensureParticipantIdentityIndexes },
+  { collection: CANONICAL_COLLECTIONS.samples, ensure: ensureSampleIndexes },
+  { collection: 'sessions', ensure: ensureSessionIndexes },
+  { collection: 'stagingImports', ensure: ensureStagingImportIndexes },
+  { collection: 'storageContainers', ensure: ensureStorageContainerIndexes },
+  { collection: 'storageBoxes', ensure: ensureStorageBoxIndexes },
+  { collection: 'sensorMetadata', ensure: ensureSensorMetadataIndexes },
+  { collection: CANONICAL_COLLECTIONS.configurationReleases, ensure: ensureConfigurationReleaseIndexes },
+];
+
+function recordingCollection(collection, builds, collectionName) {
+  return new Proxy(collection, {
+    get(target, prop) {
+      if (prop === 'createIndex') {
+        return (keys, options = {}) => {
+          const build = { collection: collectionName, keys, name: options.name || null, unique: options.unique === true, ok: null, error: null };
+          builds.push(build);
+          const pending = Promise.resolve().then(() => target.createIndex(keys, options));
+          build.settled = pending.then(() => { build.ok = true; }, (error) => {
+            build.ok = false;
+            build.error = String(error?.message || error).slice(0, 300);
+          });
+          return pending;
+        };
+      }
+      const value = target[prop];
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+
+/**
+ * Runs every index helper against `db` and returns one record per
+ * `createIndex` call: collection, keys, name, unique, ok, error.
+ */
+async function buildFoundationIndexes(db, targets = INDEX_TARGETS) {
+  const builds = [];
+  for (const target of targets) {
+    const collection = recordingCollection(db.collection(target.collection), builds, target.collection);
+    try {
+      await target.ensure(collection);
+    } catch {
+      // A helper that awaits its builds and throws (the configuration
+      // release constraint does) has its failure on the build record
+      // already; the job reports it rather than dying on it.
+    }
+  }
+  // A helper may fire a build without awaiting it; wait for every one.
+  await Promise.all(builds.map((build) => build.settled));
+  return builds.map(({ settled, ...build }) => build);
+}
+
+function sameKeys(a, b) {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/**
+ * Reads each collection's indexes back and returns the builds whose key
+ * spec is not present. An empty list is the postcondition.
+ */
+async function verifyFoundationIndexes(db, builds) {
+  const missing = [];
+  const byCollection = new Map();
+  for (const build of builds) {
+    if (!byCollection.has(build.collection)) {
+      byCollection.set(build.collection, await db.collection(build.collection).listIndexes().toArray());
+    }
+    const present = byCollection.get(build.collection);
+    if (!present.some((index) => sameKeys(index.key, build.keys))) missing.push(build);
+  }
+  return missing;
+}
+
+module.exports = { INDEX_TARGETS, buildFoundationIndexes, verifyFoundationIndexes, recordingCollection };

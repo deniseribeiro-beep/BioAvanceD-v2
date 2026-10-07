@@ -4,6 +4,8 @@ const router = express.Router();
 const redis = require('redis');
 const { getNeo4jDriver } = require('../database/neo4j');
 const DrugService = require('../services/DrugService');
+const { escapeRegex } = require('../utils/escapeRegex');
+const { checkActiveCode } = require('../ingestion/activeCodeValidator');
 
 let redisClient = null;
 let redisConnectPromise = null;
@@ -170,6 +172,65 @@ async function buildLocalSemanticSuggestions(db, orphaCode) {
   };
 }
 
+/**
+ * RF029 AC4 on the read side (#885): the write side (intakeWizard's
+ * recordClinicalEntities -> phenotype-observation.service) checks every
+ * phenotype's hpoCoding against an active ReferenceDatasetRelease and skips
+ * the observation when it fails, so a suggestion outside an active release
+ * is one the operator can pick and the server will not record. Each
+ * phenotype runs the same checkActiveCode the write side runs, on the same
+ * systemUri+code pair, and only active ones are offered. Every coding whose
+ * concept resolves active also carries that concept's `version`, the one the
+ * write side would stamp (#866).
+ *
+ * Only phenotypes are filtered, because only they are gated on write. The
+ * disease is the code the operator asked about, and the biomarker codes here
+ * are local names rather than LOINC codes, so both are annotated, never
+ * dropped. Excluded phenotypes are listed in `releaseGate.excluded` with the
+ * validator's status, so an empty list is distinguishable from "no
+ * phenotypes known".
+ *
+ * Runs per response, after the cache, so a release promoted or retired takes
+ * effect on the next request rather than after the cache TTL. Without a db
+ * the gate cannot run and the payload goes out as before, with no
+ * `releaseGate` field; app.js always sets app.locals.db.
+ */
+async function applyReleaseGate(db, payload) {
+  if (!db || typeof db.collection !== 'function' || !payload) return payload;
+
+  const check = async (coding) => {
+    if (!coding?.system || !coding?.code) return { coding, result: null };
+    const result = await checkActiveCode(db, { systemUri: coding.system, code: coding.code });
+    const version = result.active ? result.concept?.version : null;
+    return { coding: version ? { ...coding, version } : coding, result };
+  };
+
+  const phenotypeChecks = await Promise.all((payload.phenotypes || []).map(check));
+  const biomarkerChecks = await Promise.all((payload.biomarkers || []).map(check));
+  const diseaseCheck = payload.disease ? await check(payload.disease) : null;
+
+  return {
+    ...payload,
+    disease: diseaseCheck ? diseaseCheck.coding : payload.disease,
+    phenotypes: phenotypeChecks.filter(({ result }) => result?.active).map(({ coding }) => coding),
+    biomarkers: biomarkerChecks.map(({ coding }) => coding),
+    releaseGate: {
+      status: 'applied',
+      excluded: phenotypeChecks
+        .filter(({ result }) => !result?.active)
+        .map(({ coding, result }) => ({ ...coding, status: result?.status || 'unknown' })),
+    },
+  };
+}
+
+async function sendSuggestions(req, res, payload) {
+  try {
+    return res.json(await applyReleaseGate(req.app.locals.db, payload));
+  } catch (gateError) {
+    return res.status(500).json({ error: gateError.message });
+  }
+}
+
 function normalizeMedicationRecord(raw = {}) {
   const atcCode = String(raw.atc_code || raw.code || '').replace(/^ATC:/i, '').trim().toUpperCase();
   return {
@@ -282,7 +343,7 @@ router.get('/suggest', async (req, res) => {
   const cacheKey = `orpha:suggest:${orphaCode}`;
   try {
     const cached = await getCacheValue(cacheKey);
-    if (cached) return res.json(JSON.parse(cached));
+    if (cached) return sendSuggestions(req, res, JSON.parse(cached));
 
     const driver = getNeo4jDriver();
     const session = driver.session();
@@ -323,7 +384,7 @@ router.get('/suggest', async (req, res) => {
     };
 
     await setCacheValue(cacheKey, 3600, JSON.stringify(response));
-    res.json(response);
+    return sendSuggestions(req, res, response);
   } catch (err) {
     const db = req.app.locals.db;
     if (!db || typeof db.collection !== 'function') {
@@ -334,7 +395,7 @@ router.get('/suggest', async (req, res) => {
       const fallback = await buildLocalSemanticSuggestions(db, orphaCode);
       if (fallback) {
         await setCacheValue(cacheKey, 3600, JSON.stringify(fallback));
-        return res.json(fallback);
+        return sendSuggestions(req, res, fallback);
       }
 
       return res.status(404).json({ error: 'Not found' });
@@ -356,6 +417,9 @@ router.get('/disease-profile', async (req, res) => {
   try {
     const collection = db.collection('disease_dictionary');
     const disease = await collection.findOne({ orpha_code: orphaCode, active: { $ne: false } });
+    // No stack seeds disease_dictionary (a legacy store, seeded only by
+    // hand, #1200), so this 404 is the expected answer. The intake wizard
+    // treats it as "no disease profile".
     if (!disease) {
       return res.status(404).json({ error: 'Disease profile not found' });
     }
@@ -386,7 +450,7 @@ router.get('/medications/search', async (req, res) => {
 
     const filters = [{ active: { $ne: false } }];
     if (query) {
-      const regex = new RegExp(query, 'i');
+      const regex = new RegExp(escapeRegex(query), 'i');
       filters.push({
         $or: [
           { name: regex },

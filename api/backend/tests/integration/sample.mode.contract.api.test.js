@@ -74,6 +74,8 @@ describe('POST /api/samples - matriz STRICT/PERMISSIVE e contrato de resposta', 
     // of them was undefined in production. Same blindness class as #797.
     vi.spyOn(sampleService, 'createSample').mockResolvedValue({
       _id: '507f1f77bcf86cd799439012',
+      // #1216: the real createSample writes the generated specimenId.
+      specimenId: '3116769',
       participantId: '12345678',
       sampleType: 'Sangue',
       barcode: 'BR-TEST-0002',
@@ -107,12 +109,32 @@ describe('POST /api/samples - matriz STRICT/PERMISSIVE e contrato de resposta', 
     expect(typeof response.body.partialSuccess).toBe('boolean');
     expect(response.body.partialSuccess).toBe(false);
     expect(response.body.data).toBeDefined();
-    expect(typeof response.body.data.sampleID).toBe('string');
+    expect(response.body.data.specimenId).toBe('3116769');
+    expect(response.body.data).not.toHaveProperty('sampleID');
     expect(response.body.data.participantId).toBe('12345678');
     expect(['STRICT', 'PERMISSIVE']).toContain(response.body.data.operationMode);
     expect(response.body.data.operationMode).toBe('STRICT');
     expect(typeof response.body.data.topology.synced).toBe('boolean');
     expect(typeof response.body.data.topology.fallbackQueued).toBe('boolean');
+  });
+
+  // #1216: the response named only the Mongo _id (as sampleID). The
+  // specimen's canonical business id, specimenId, is what every report,
+  // ledger row and export carries, so a caller could not find its own new
+  // specimen anywhere downstream. It is now the only id the response names:
+  // every id-taking sample, file and storage route resolves it.
+  it('#1216: a 201 names the specimen by its canonical specimenId, never as sampleID', async () => {
+    vi.spyOn(LineageRepository.prototype, 'recordCustodyEvent').mockResolvedValue({ eventId: 'evt-contract-1216' });
+
+    const response = await request(app)
+      .post('/api/samples')
+      .set('Authorization', `Bearer ${createAuthToken()}`)
+      .send(buildPayload({ isRareDisease: true }));
+
+    expect(response.status).toBe(201);
+    expect(typeof response.body.data.specimenId).toBe('string');
+    expect(response.body.data.specimenId.length).toBeGreaterThan(0);
+    expect(response.body.data).not.toHaveProperty('sampleID');
   });
 
   it('deve operar em PERMISSIVE com fallback e sucesso parcial (202)', async () => {

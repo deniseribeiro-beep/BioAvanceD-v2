@@ -1,15 +1,17 @@
 import { test, expect } from '@playwright/test';
 import { mockLogin } from './helpers/mockAuth';
 
+// #1216: the real API names a specimen by its specimenId; the legacy
+// sampleID these fixtures carried is prohibited on the wire.
 const MOCK_SAMPLES = [
   {
     _id: 'sample-e2e-1',
-    sampleID: 'AMO-E2E-0001',
+    specimenId: 'AMO-E2E-0001',
     sampleType: 'Sangue',
   },
   {
     _id: 'sample-e2e-2',
-    sampleID: 'AMO-E2E-0002',
+    specimenId: 'AMO-E2E-0002',
     sampleType: 'Plasma',
   },
 ];

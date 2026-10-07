@@ -34,7 +34,7 @@ describe('import-lgpd.controller importSamples success flag (issue #24)', () => 
     vi.spyOn(importLGPDService, 'importSamples').mockResolvedValue({
       total: 2,
       success: 1,
-      errors: [{ row: 2, errors: ['dup barcode'], data: { patientID: '12345678' } }]
+      errors: [{ index: 1, row: 2, errors: ['dup barcode'], data: { participantId: '12345678' } }]
     });
     vi.spyOn(importLGPDService, 'cleanupFile').mockImplementation(() => {});
 
@@ -55,8 +55,8 @@ describe('import-lgpd.controller importSamples success flag (issue #24)', () => 
       total: 2,
       success: 0,
       errors: [
-        { row: 1, errors: ['dup barcode'], data: { patientID: '1' } },
-        { row: 2, errors: ['dup barcode'], data: { patientID: '2' } }
+        { index: 0, row: 1, errors: ['dup barcode'], data: { participantId: '11111111' } },
+        { index: 1, row: 2, errors: ['dup barcode'], data: { participantId: '22222222' } }
       ]
     });
     vi.spyOn(importLGPDService, 'cleanupFile').mockImplementation(() => {});

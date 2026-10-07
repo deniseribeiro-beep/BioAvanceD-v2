@@ -3,6 +3,9 @@ import {
   resolveConsentTokenParams,
   normalizeConsentTemplate,
   mapConsentTokenError,
+  mapConsentTokenRequestError,
+  initialConsentResponses,
+  missingRequiredPermissions,
 } from './consentTokenView';
 
 describe('resolveConsentTokenParams', () => {
@@ -108,21 +111,115 @@ describe('normalizeConsentTemplate', () => {
   });
 });
 
+// #821: the page now collects a granular manifestation (RF010) instead of a
+// whole-term accept, so the answer set and its required-purpose gate are
+// derived here.
+describe('initialConsentResponses', () => {
+  it('starts every purpose unanswered-as-declined, keyed by permission key', () => {
+    expect(initialConsentResponses([
+      { key: 'storage', label: 'Armazenamento', required: true },
+      { key: 'contact', label: 'Contato', required: false },
+    ])).toEqual({ storage: false, contact: false });
+  });
+
+  it('is empty for a term with no purposes', () => {
+    expect(initialConsentResponses([])).toEqual({});
+  });
+});
+
+describe('missingRequiredPermissions', () => {
+  const permissions = [
+    { key: 'storage', label: 'Armazenamento', required: true },
+    { key: 'contact', label: 'Contato', required: false },
+  ];
+
+  it('names each required purpose not yet accepted', () => {
+    expect(missingRequiredPermissions(permissions, { storage: false, contact: true })).toEqual(['Armazenamento']);
+  });
+
+  it('is empty once every required purpose is accepted, whatever the optional ones say', () => {
+    expect(missingRequiredPermissions(permissions, { storage: true, contact: false })).toEqual([]);
+  });
+});
+
 describe('mapConsentTokenError', () => {
+  // #821: 422 is a good link whose answers could not be recorded as sent --
+  // most often the term was republished after the page loaded. Reloading
+  // fixes it; a new invitation does not.
+  it('asks for a reload, not a new invitation, on a 422', () => {
+    expect(mapConsentTokenError(422)).toMatch(/recarregue/i);
+    expect(mapConsentTokenError(422)).toMatch(/link continua válido/i);
+    expect(mapConsentTokenError(422)).not.toMatch(/novo convite/i);
+  });
+
   it('reports an invalid or expired link for 400', () => {
     expect(mapConsentTokenError(400)).toMatch(/inválido|expirado/i);
   });
 
-  // A 503 means the token was fine and the term could not be loaded. Telling
-  // the participant their link is bad would send them to request a new one,
-  // which would not help.
+  // A 503 means the failure was ours, not the link's: the term could not be
+  // loaded, the token check could not run, or the acceptance could not be
+  // written (#1127). Telling the participant their link is bad would send them
+  // to request a new one, which would not help in any of the three.
   it('distinguishes a 503 from an invalid link', () => {
     expect(mapConsentTokenError(503)).not.toMatch(/inválido/i);
     expect(mapConsentTokenError(503)).toMatch(/indisponível|tente/i);
   });
 
+  // #1127: the 503 arm's whole job is to stop the participant discarding a
+  // working link, so it has to SAY the link still works. The pattern above
+  // cannot see that -- it matched the old term-specific wording too, which
+  // left the copy free to drift back to describing only the template lookup
+  // while three different failures now route here.
+  it('tells the participant their link is still valid on a 503', () => {
+    expect(mapConsentTokenError(503)).toMatch(/link continua válido/i);
+  });
+
+  // The 400 arm keeps the opposite instruction: there the link really is spent.
+  it('still sends the participant for a new invitation on a 400', () => {
+    expect(mapConsentTokenError(400)).toMatch(/novo convite/i);
+  });
+
   it('falls back to a generic message for an unknown status', () => {
     expect(mapConsentTokenError(undefined)).toBeTruthy();
     expect(mapConsentTokenError(500)).toBeTruthy();
+  });
+});
+
+// #1152: the status-only mapper above is reached with `err.response?.status`,
+// and in a REAL outage there is no response to take a status from. Measured on a
+// live stack: the backend answers 503 after 30s (mongo stopped) or 60s
+// (partitioned), while api.ts aborts the request at its own 10s timeout -- so
+// axios throws ECONNABORTED with no `response`, the mapper got `undefined`, and
+// the participant fell to the generic arm. The 503 copy #1127 shipped was
+// unreachable through the UI in exactly the outage it was written for.
+describe('mapConsentTokenRequestError', () => {
+  // THE BUG. A client-side abort during an outage must still make the one promise
+  // that matters -- the link is not spent -- because requesting a new invitation
+  // would not help here any more than it would on a 503.
+  it('tells the participant their link is still valid when the request times out', () => {
+    const timeout = { code: 'ECONNABORTED', request: {}, message: 'timeout of 10000ms exceeded' };
+    expect(mapConsentTokenRequestError(timeout)).toMatch(/link continua válido/i);
+    expect(mapConsentTokenRequestError(timeout)).not.toMatch(/inválido/i);
+    expect(mapConsentTokenRequestError(timeout)).not.toMatch(/novo convite/i);
+  });
+
+  // CONTROL: a real response still decides, unchanged. These two are the whole
+  // reason this is a new function rather than a change to the mapper above.
+  it('still sends the participant for a new invitation on a real 400', () => {
+    expect(mapConsentTokenRequestError({ response: { status: 400 } })).toMatch(/novo convite/i);
+  });
+
+  it('still reports a real 503 with the 503 copy', () => {
+    expect(mapConsentTokenRequestError({ response: { status: 503 } })).toMatch(/link continua válido/i);
+  });
+
+  // CONTROL, and the one that pins the DESIGN: a throw with neither a response
+  // nor a request is a bug in the page, not an outage. Mapping `undefined` to the
+  // 503 copy would have been the smaller diff and would have claimed the service
+  // was unavailable every time this page threw for any other reason.
+  it('does not claim an outage for an error that never reached the network', () => {
+    const bug = new Error('Cannot read properties of undefined');
+    expect(mapConsentTokenRequestError(bug)).not.toMatch(/link continua válido/i);
+    expect(mapConsentTokenRequestError(bug)).toBeTruthy();
   });
 });

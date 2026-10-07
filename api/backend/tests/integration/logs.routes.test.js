@@ -21,6 +21,7 @@ function dbWithRbac({ accessType, collections = {} } = {}) {
 const modulePaths = {
   auth: require.resolve('../../src/infrastructure/middleware/auth'),
   logService: require.resolve('../../src/services/log.service'),
+  sessionService: require.resolve('../../src/services/session.service'),
   controller: require.resolve('../../src/interface/routes/logs.routes'),
 };
 
@@ -36,6 +37,7 @@ function setCachedModule(modulePath, exportsObject) {
 describe('logs.routes.js', () => {
   let currentUser;
   let logServiceMock;
+  let sessionServiceMock;
 
   const authenticate = (req, _res, next) => {
     req.user = currentUser;
@@ -56,6 +58,10 @@ describe('logs.routes.js', () => {
 
     setCachedModule(modulePaths.auth, { authenticate });
     setCachedModule(modulePaths.logService, logServiceMock);
+    sessionServiceMock = {
+      listSessionsForAudit: vi.fn(async () => ({ sessions: [], total: 0 })),
+    };
+    setCachedModule(modulePaths.sessionService, sessionServiceMock);
     delete require.cache[modulePaths.controller];
   });
 
@@ -93,6 +99,39 @@ describe('logs.routes.js', () => {
     };
     return appWithDb(db);
   }
+
+  // #1271: the archived trail, behind the same admin-or-auditor rule.
+  describe('#1271: GET /api/logs/archive and ?source=', () => {
+    it('serves logs_archive through getLogs with source archive', async () => {
+      const response = await request(appWithDb(dbWithRbac({ accessType: 4 }))).get('/api/logs/archive?action=LOGIN');
+      expect(response.status).toBe(200);
+      expect(logServiceMock.getLogs).toHaveBeenCalledWith(expect.anything(), { action: 'LOGIN', source: 'archive' });
+    });
+
+    it('refuses a reader who is not admin or auditor', async () => {
+      currentUser = { userID: TOKEN_USER_ID, accessType: 1 };
+      const response = await request(appWithDb(dbWithRbac({ accessType: 1 }))).get('/api/logs/archive');
+      expect(response.status).toBe(403);
+      expect(logServiceMock.getLogs).not.toHaveBeenCalled();
+    });
+
+    it('answers 422 for an unknown source, on the list and on the export', async () => {
+      const invalid = Object.assign(new Error('source deve ser "live" ou "archive"'), { statusCode: 422 });
+      logServiceMock.getLogs.mockRejectedValue(invalid);
+      const app = appWithDb(dbWithRbac({ accessType: 4 }));
+      for (const path of ['/api/logs?source=archived', '/api/logs/export/csv?source=archived']) {
+        const response = await request(app).get(path);
+        expect(response.status).toBe(422);
+        expect(response.body.message).toBe('source deve ser "live" ou "archive"');
+      }
+    });
+
+    it('names an archive export after the archive', async () => {
+      const response = await request(appWithDb(dbWithRbac({ accessType: 4 }))).get('/api/logs/export/csv?source=archive');
+      expect(response.status).toBe(200);
+      expect(response.headers['content-disposition']).toMatch(/filename=logs_archive_/);
+    });
+  });
 
   describe('requireAuditReader', () => {
     it('permite acesso para usuário com role administrator ativa', async () => {
@@ -348,6 +387,67 @@ describe('logs.routes.js', () => {
       const response = await request(appWithThrowingCollection()).get('/api/logs/abc');
       expect(response.status).toBe(500);
       expect(response.body.error).toBe('Erro ao buscar log');
+    });
+  });
+
+  // #1005: the audit read path over sessions.
+  describe('GET /api/logs/sessions', () => {
+    it('admin: passes the query to listSessionsForAudit and returns its result', async () => {
+      const response = await request(appWithDb(dbWithRbac({ accessType: 4 })))
+        .get('/api/logs/sessions?revocationReason=admin_action&page=2');
+      expect(response.status).toBe(200);
+      expect(response.body.data).toEqual({ sessions: [], total: 0 });
+      expect(sessionServiceMock.listSessionsForAudit).toHaveBeenCalledTimes(1);
+      expect(sessionServiceMock.listSessionsForAudit.mock.calls[0][1]).toMatchObject({
+        revocationReason: 'admin_action',
+        page: '2',
+      });
+    });
+
+    it('is not swallowed by /:id: no log lookup runs', async () => {
+      const logsFindOne = vi.fn(async () => null);
+      const db = dbWithRbac({ accessType: 4, collections: { logs: { findOne: logsFindOne } } });
+      const response = await request(appWithDb(db)).get('/api/logs/sessions');
+      expect(response.status).toBe(200);
+      expect(logsFindOne).not.toHaveBeenCalled();
+    });
+
+    it('auditor assignment without administrator: 200', async () => {
+      currentUser = { userID: TOKEN_USER_ID, accessType: 1 };
+      const rbac = buildRbacCollections([{ userAccountId: TOKEN_USER_ID, roleCodes: ['auditor'] }]);
+      const db = { collection: (name) => rbac[name] || createCollectionMock() };
+      const response = await request(appWithDb(db)).get('/api/logs/sessions');
+      expect(response.status).toBe(200);
+    });
+
+    it('coordinator: 403, and the service is never reached', async () => {
+      currentUser = { userID: TOKEN_USER_ID, accessType: 3 };
+      const response = await request(appWithDb(dbWithRbac({ accessType: 3 }))).get('/api/logs/sessions');
+      expect(response.status).toBe(403);
+      expect(sessionServiceMock.listSessionsForAudit).not.toHaveBeenCalled();
+    });
+
+    it('maps a service validation error to 422', async () => {
+      sessionServiceMock.listSessionsForAudit.mockRejectedValueOnce(
+        Object.assign(new Error('revocationReason inválido'), { statusCode: 422 })
+      );
+      const response = await request(appWithDb(dbWithRbac({ accessType: 4 })))
+        .get('/api/logs/sessions?revocationReason=nope');
+      expect(response.status).toBe(422);
+      // #1299: every 422 carries the failures as a list too.
+      expect(response.body).toEqual({
+        success: false,
+        error: 'Dados inválidos',
+        message: 'revocationReason inválido',
+        details: ['revocationReason inválido'],
+      });
+    });
+
+    it('maps any other failure to 500', async () => {
+      sessionServiceMock.listSessionsForAudit.mockRejectedValueOnce(new Error('boom'));
+      const response = await request(appWithDb(dbWithRbac({ accessType: 4 }))).get('/api/logs/sessions');
+      expect(response.status).toBe(500);
+      expect(response.body.error).toBe('Erro ao buscar sessões');
     });
   });
 });

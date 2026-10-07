@@ -10,10 +10,13 @@ import {
   seedStudy,
   seedProtocol,
   seedCollectionEntity,
+  seedQuarantineAction,
+  cleanupQuarantineActions,
   closeSeedDb,
   type SeededStorageBox,
 } from './helpers/seedParticipant';
 import { watchAuditTrail, assertAuditEventRecorded } from './helpers/assertAuditEvent';
+import { deleteOrganizations } from './helpers/listOrganizations';
 
 // Real backend only — see backend-integration.spec.ts for the same skip
 // rationale. Run via `npm run test:e2e:docker` against the compose test
@@ -180,11 +183,11 @@ test.describe('Specimen registration (RF004) — real backend, happy path (#294)
     // conditional, not the specimen registration this criterion covers.
     const first = await create();
     expect([201, 202]).toContain(first.status());
-    const firstSampleID = (await first.json()).data.sampleID;
+    const firstSampleID = (await first.json()).data.specimenId;
 
     const second = await create();
     expect([201, 202]).toContain(second.status());
-    const secondSampleID = (await second.json()).data.sampleID;
+    const secondSampleID = (await second.json()).data.specimenId;
 
     const [firstGet, secondGet] = await Promise.all([
       request.get(`${apiBaseURL}/api/samples/${firstSampleID}`, {
@@ -231,7 +234,7 @@ test.describe('Specimen registration (RF004) — real backend, happy path (#294)
     });
 
     expect([201, 202]).toContain(create.status());
-    const sampleID = (await create.json()).data.sampleID;
+    const sampleID = (await create.json()).data.specimenId;
 
     const get = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -263,7 +266,7 @@ test.describe('Specimen registration (RF004) — real backend, happy path (#294)
       },
     });
     expect([201, 202]).toContain(create.status());
-    const sampleID = (await create.json()).data.sampleID;
+    const sampleID = (await create.json()).data.specimenId;
 
     const withdraw = await request.post(`${apiBaseURL}/api/samples/${sampleID}/withdraw`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -407,7 +410,7 @@ test.describe('Specimen registration (RF004 AC#3) — study/protocol/collection 
     });
 
     expect([201, 202]).toContain(create.status());
-    const sampleID = (await create.json()).data.sampleID;
+    const sampleID = (await create.json()).data.specimenId;
 
     const get = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -510,8 +513,8 @@ test.describe('Specimen registration (RF021 AC#5) — inactive/incompatible prot
 });
 
 test.describe('Chain of custody (RF006) — real backend', () => {
-  // No spec, mocked or real, covered this RF before (#288) — see
-  // E2E_TRACEABILITY_PLAN.md. Building this exposed that the "blocked
+  // No spec, mocked or real, covered this RF before (#288). Building
+  // this exposed that the "blocked
   // status" guard in sample.service.js's withdrawSample checked a field
   // (`currentStatus`) and vocabulary that don't exist on Sample.js's real
   // schema (`lifecycleStatus`, enum incl. UNAVAILABLE/DESTROYED/DISPOSED/
@@ -548,7 +551,7 @@ test.describe('Chain of custody (RF006) — real backend', () => {
       },
     });
     expect([201, 202]).toContain(create.status());
-    const sampleID = (await create.json()).data.sampleID;
+    const sampleID = (await create.json()).data.specimenId;
     return { sampleID };
   }
 
@@ -713,11 +716,13 @@ test.describe('Specimen quarantine (RF019) — real backend', () => {
   // quarantine route exists — release, like RF006's blocked-status
   // seeding, goes through the generic update route.
   const seededStorageBoxes: SeededStorageBox[] = [];
+  const seededQuarantineActionIds: string[] = [];
 
   test.afterAll(async () => {
     await Promise.all(
       seededStorageBoxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {}))
     );
+    await cleanupQuarantineActions(seededQuarantineActionIds).catch(() => {});
     await closeSeedDb();
   });
 
@@ -739,7 +744,7 @@ test.describe('Specimen quarantine (RF019) — real backend', () => {
       },
     });
     expect([201, 202]).toContain(create.status());
-    const sampleID = (await create.json()).data.sampleID;
+    const sampleID = (await create.json()).data.specimenId;
     return { sampleID };
   }
 
@@ -810,6 +815,31 @@ test.describe('Specimen quarantine (RF019) — real backend', () => {
     expect(releaseBody.specimenStatus).toBe('available');
 
     await assertAuditEventRecorded(request, apiBaseURL!, admin.token, watch);
+  });
+  // #1219: every QuarantineAction writer recorded the sample's Mongo _id, and
+  // this read queried the canonical specimenId, so it could not return a
+  // single real action. New actions carry the specimenId. The read matches
+  // both, because every row written before #1219 carries the _id.
+  test('#1219: GET /:id/quarantine-actions returns an action recorded under the sample _id and one under its specimenId', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const { sampleID: specimenId } = await seedQuarantinableSample(request, admin);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+
+    const sampleDoc = await request.get(`${apiBaseURL}/api/samples/${specimenId}`, { headers: auth });
+    expect(sampleDoc.status()).toBe(200);
+    const mongoId = String((await sampleDoc.json()).data._id);
+    expect(mongoId).not.toBe(specimenId);
+
+    const legacyId = await seedQuarantineAction([mongoId], 'E2E_1219_LEGACY');
+    const canonicalId = await seedQuarantineAction([specimenId], 'E2E_1219_CANONICAL');
+    seededQuarantineActionIds.push(legacyId, canonicalId);
+
+    const res = await request.get(`${apiBaseURL}/api/samples/${specimenId}/quarantine-actions`, { headers: auth });
+    expect(res.status()).toBe(200);
+    const ids = ((await res.json()).data as Array<{ quarantineActionId: string }>).map((a) => a.quarantineActionId);
+    expect(ids).toEqual(expect.arrayContaining([legacyId, canonicalId]));
   });
 });
 
@@ -896,7 +926,7 @@ test.describe('Sample labeling (RF016) — real backend', () => {
     await closeSeedDb();
   });
 
-  async function createRealSample(request: any, token: string): Promise<{ sampleID: string; barcode: string }> {
+  async function createRealSample(request: any, token: string): Promise<{ specimenId: string; barcode: string }> {
     const participant = await createRealParticipant(request, apiBaseURL!, token);
     const seededStorageBox = await seedStorageBoxLocation();
     seededStorageBoxes.push(seededStorageBox);
@@ -909,11 +939,11 @@ test.describe('Sample labeling (RF016) — real backend', () => {
     expect([201, 202]).toContain(create.status());
     const body = (await create.json()).data;
 
-    const get = await request.get(`${apiBaseURL}/api/samples/${body.sampleID}`, {
+    const get = await request.get(`${apiBaseURL}/api/samples/${body.specimenId}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     const sample = (await get.json()).data;
-    return { sampleID: body.sampleID, barcode: sample.barcode };
+    return { specimenId: body.specimenId, barcode: sample.barcode };
   }
 
   test('generates Code128, DataMatrix and QR symbology assets tied to the specimen\'s own unique barcode (criteria 1, 2)', async ({ request }) => {
@@ -972,7 +1002,7 @@ test.describe('Sample labeling (RF016) — real backend', () => {
 
     const res = await request.post(`${apiBaseURL}/api/samples/labels/batch`, {
       headers: { Authorization: `Bearer ${admin.token}` },
-      data: { specimenIds: [sampleA.sampleID, sampleB.sampleID, 'does-not-exist'] },
+      data: { specimenIds: [sampleA.specimenId, sampleB.specimenId, 'does-not-exist'] },
     });
     expect(res.ok(), await res.text()).toBeTruthy();
     const body = (await res.json()).data;
@@ -981,7 +1011,7 @@ test.describe('Sample labeling (RF016) — real backend', () => {
     expect(body.generated).toBe(2);
     expect(body.failed).toBe(1);
 
-    const resultA = body.results.find((r: any) => r.specimenId === sampleA.sampleID);
+    const resultA = body.results.find((r: any) => r.specimenId === sampleA.specimenId);
     expect(resultA).toMatchObject({ success: true, barcode: sampleA.barcode });
     expect(resultA.qr.payload).toBe(sampleA.barcode);
 
@@ -1025,7 +1055,7 @@ test.describe('Sample labeling (RF016) — through the real UI (#655)', () => {
       data: { participantId: participant.participantId, ...validSampleFields(), boxId, positionCode },
     });
     expect([201, 202]).toContain(create.status());
-    const sampleID = (await create.json()).data.sampleID;
+    const sampleID = (await create.json()).data.specimenId;
 
     await page.goto(`/samples/${sampleID}/label`);
 
@@ -1124,7 +1154,7 @@ test.describe('Storage location availability (RF017 AC#7) — real backend', () 
       },
     });
     expect([201, 202]).toContain(create.status());
-    const sampleId = (await create.json()).data.sampleID;
+    const sampleId = (await create.json()).data.specimenId;
 
     const destination = await seedStorageBoxLocation();
     seededStorageBoxes.push(destination);
@@ -1196,6 +1226,8 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
   // through seedStorageBoxLocation() -- cleaned up via the API (like
   // human-showcase.spec.ts's own equipment fixture), not cleanupStorageBoxLocation.
   const equipmentIdsToDelete: string[] = [];
+  // #1282: the laboratories these tests create, deleted last.
+  const organizationIdsToDelete: string[] = [];
 
   test.afterAll(async ({ request }) => {
     await Promise.all(
@@ -1213,6 +1245,7 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
         );
       }
     }
+    await deleteOrganizations(request, apiBaseURL!, organizationIdsToDelete);
     await closeSeedDb();
   });
 
@@ -1233,7 +1266,9 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
       data: { participantId: participant.participantId, ...validSampleFields(), boxId, positionCode },
     });
     expect(sampleRes.status(), await sampleRes.text()).toBe(201);
-    const specimenId = String((await sampleRes.json()).data.sampleID);
+    // #1216/#1219: an assay references the specimen by the canonical
+    // specimenId the create response names, and stores it as given.
+    const specimenId = String((await sampleRes.json()).data.specimenId);
 
     const reagentRes = await request.post(`${apiBaseURL}/api/reagent-lots`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -1268,6 +1303,7 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
     });
     expect(orgRes.status(), await orgRes.text()).toBe(201);
     const organizationId = (await orgRes.json()).data.organizationId;
+    organizationIdsToDelete.push(organizationId);
 
     const assayRes = await request.post(`${apiBaseURL}/api/assays`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -1309,7 +1345,9 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
       data: { participantId: participant.participantId, ...validSampleFields(), boxId, positionCode },
     });
     expect(sampleRes.status(), await sampleRes.text()).toBe(201);
-    const specimenId = String((await sampleRes.json()).data.sampleID);
+    // #1216/#1219: an assay references the specimen by the canonical
+    // specimenId the create response names, and stores it as given.
+    const specimenId = String((await sampleRes.json()).data.specimenId);
 
     const orgRes = await request.post(`${apiBaseURL}/api/organizations`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -1322,6 +1360,7 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
     });
     expect(orgRes.status(), await orgRes.text()).toBe(201);
     const organizationId = (await orgRes.json()).data.organizationId;
+    organizationIdsToDelete.push(organizationId);
 
     return { specimenId, operatorId: String(admin.user._id), organizationId };
   }
@@ -1379,6 +1418,47 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
     expect(assayRes.status()).toBe(404);
     const body = await assayRes.json();
     expect(body.message).toMatch(/specimenIds/);
+  });
+
+  // #1221: PUT ran none of #664's reference checks, so an assay created
+  // with verified links could be edited to name a specimen that does not
+  // exist.
+  test('#1221: rejects an assay update whose specimenIds do not resolve, and leaves the assay unchanged', async ({ request }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const studyId = `rf025-study-${suffix}`;
+    const protocolId = `rf025-protocol-${suffix}`;
+    await seedStudy(studyId);
+    await seedProtocol(protocolId);
+    const { specimenId, operatorId, organizationId } = await seedRealAssayLinkage(request, admin);
+
+    const created = await request.post(`${apiBaseURL}/api/assays`, {
+      headers: auth,
+      data: {
+        studyId,
+        specimenIds: [specimenId],
+        assayType: 'RNA sequencing',
+        protocolId,
+        operatorId,
+        laboratoryId: organizationId,
+        assayDateTime: new Date().toISOString(),
+        intendedUse: '#1221 e2e update integrity',
+      },
+    });
+    expect(created.status(), await created.text()).toBe(201);
+    const assayId = (await created.json()).data.assayId;
+
+    const update = await request.put(`${apiBaseURL}/api/assays/${assayId}`, {
+      headers: auth,
+      data: { specimenIds: ['specimen-does-not-exist'] },
+    });
+    expect(update.status()).toBe(404);
+    expect((await update.json()).message).toMatch(/specimenIds/);
+
+    const after = await request.get(`${apiBaseURL}/api/assays/${assayId}`, { headers: auth });
+    expect(after.status()).toBe(200);
+    expect((await after.json()).data.specimenIds).toEqual([specimenId]);
   });
 
   test('#664: rejects an assay create when laboratoryId does not resolve to a real Organization', async ({ request }) => {

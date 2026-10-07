@@ -617,7 +617,16 @@ function resolveOrganizationIdForCreate(organizationScope, requestedOrganization
  */
 function assertOrganizationFieldNotReparented(organizationScope, existingValue, requestedValue, fieldName = 'organizationId') {
   if (requestedValue === undefined) return;
-  if (!organizationScope || organizationScope.scope === 'global') return;
+  if (!organizationScope) {
+    // #1183: fail CLOSED, like resolveOrganizationIdForCreate above. Every
+    // real caller, global included, carries a scope object, so a missing one
+    // means requireOrganizationScope is not on the route -- and returning
+    // here made this check a silent no-op on exactly that mis-wiring.
+    const error = new Error('Escopo organizacional não resolvido para esta atualização');
+    error.statusCode = 403;
+    throw error;
+  }
+  if (organizationScope.scope === 'global') return;
 
   const current = existingValue === undefined || existingValue === null ? null : String(existingValue);
   const requested = requestedValue === null || requestedValue === '' ? null : String(requestedValue);

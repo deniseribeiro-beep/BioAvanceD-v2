@@ -168,6 +168,15 @@ describe('ImportService.validateCSVStructure', () => {
       fs.unlinkSync(filePath);
     }
   });
+
+  // #1175: .pipe() does not forward the SOURCE stream's 'error', so a missing
+  // file was an uncaught exception that crashed the process instead of this
+  // rejection.
+  it('rejects when the file does not exist (#1175)', async () => {
+    const missingPath = path.join(os.tmpdir(), `import-service-test-missing-${Date.now()}.csv`);
+    await expect(importService.validateCSVStructure({ path: missingPath }, 'patients'))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
 });
 
 describe('ImportService.validateFHIRFile', () => {

@@ -61,7 +61,7 @@ export default function SampleLabelPage() {
 
         if (active) {
           setLabel({
-            sampleId: String(sample.sampleID ?? sample._id ?? id),
+            sampleId: String(sample.specimenId ?? sample._id ?? id),
             barcode: assets.barcode,
             code128: assets.code128,
             dataMatrix: assets.dataMatrix,

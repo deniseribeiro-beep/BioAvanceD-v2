@@ -89,8 +89,12 @@ describe('patient.service.js identity resolution migrated to ParticipantIdentity
     const patients = makeInMemoryCollection([
       { participantId: '11111111', recordNumber: 'PRONT-1' },
     ]);
+    // #1104: built through the real write path -- identityDocument is
+    // ciphertext-only, so a hand-written plaintext-only row represents
+    // nothing a writer produces with a key configured.
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
     const participantIdentities = makeInMemoryCollection([
-      { participantId: '11111111', identityDocument: '11144477735' },
+      participantIdentityService.encryptIdentityFields({ participantId: '11111111', identityDocument: '11144477735' }),
     ]);
     const db = makeDb({ patients, participantIdentities });
 
@@ -278,20 +282,63 @@ describe('patient.service.js identity resolution migrated to ParticipantIdentity
     expect(duplicate).toBeNull();
   });
 
-  it('listPatients({ patientName }) resolves matching participantIds via ParticipantIdentity, not Patient.patientName', async () => {
-    const patients = makeInMemoryCollection([
+  // #1104: patientName is ciphertext-only, so the filter is an EXACT match on
+  // the normalized full name through patientNameHash. It used to be a
+  // case-insensitive substring $regex over the plaintext, which a blind
+  // index cannot serve.
+  function nameIdentities() {
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
+    return makeInMemoryCollection([
+      participantIdentityService.encryptIdentityFields({ participantId: '11111111', patientName: 'Ana Silva' }),
+      participantIdentityService.encryptIdentityFields({ participantId: '22222222', patientName: 'Bruno Costa' }),
+    ]);
+  }
+
+  function stalePatients() {
+    return makeInMemoryCollection([
       { participantId: '11111111', patientName: 'STALE' },
       { participantId: '22222222', patientName: 'STALE' },
     ]);
+  }
+
+  it('#1104: listPatients({ patientName }) matches a CIPHERTEXT-ONLY identity via patientNameHash, ignoring accents, case and spacing', async () => {
+    const participantIdentities = nameIdentities();
+    expect(participantIdentities._docs.every((doc) => doc.patientName === null)).toBe(true);
+    const db = makeDb({ patients: stalePatients(), participantIdentities });
+
+    const result = await patientService.listPatients(db, { patientName: '  ÁNA   silva ' });
+
+    expect(result.patients.map((p) => p.participantId)).toEqual(['11111111']);
+  });
+
+  // The semantics change, pinned: a partial name no longer matches.
+  it('#1104: listPatients({ patientName }) no longer matches a SUBSTRING of the name', async () => {
+    const db = makeDb({ patients: stalePatients(), participantIdentities: nameIdentities() });
+
+    const result = await patientService.listPatients(db, { patientName: 'ana' });
+
+    expect(result.patients).toEqual([]);
+  });
+
+  // #1083: with no key, only the plaintext is written, so the keyless branch
+  // queries it -- with the same exact-match semantics, and escaped, so a
+  // term like '.*' is a literal rather than a pattern matching everyone.
+  it('#1104/#1083: on a keyless stack, listPatients matches the plaintext name exactly and escapes the term', async () => {
+    const keyRegistry = require('../../src/config/keyRegistry');
+    vi.spyOn(keyRegistry, 'getFallbackKeys').mockReturnValue([]);
     const participantIdentities = makeInMemoryCollection([
       { participantId: '11111111', patientName: 'Ana Silva' },
       { participantId: '22222222', patientName: 'Bruno Costa' },
     ]);
-    const db = makeDb({ patients, participantIdentities });
+    const db = makeDb({ patients: stalePatients(), participantIdentities });
 
-    const result = await patientService.listPatients(db, { patientName: 'ana' });
+    const exact = await patientService.listPatients(db, { patientName: 'ana silva' });
+    const partial = await patientService.listPatients(db, { patientName: 'ana' });
+    const pattern = await patientService.listPatients(db, { patientName: '.*' });
 
-    expect(result.patients.map((p) => p.participantId)).toEqual(['11111111']);
+    expect(exact.patients.map((p) => p.participantId)).toEqual(['11111111']);
+    expect(partial.patients).toEqual([]);
+    expect(pattern.patients).toEqual([]);
   });
 
   it('searchPatients(term) resolves a birthDate-shaped term via ParticipantIdentity, not Patient.birthDate', async () => {
@@ -348,8 +395,12 @@ describe('patient.service.js identity resolution migrated to ParticipantIdentity
 
     await patientService.updatePatient(db, '11111111', { patientName: 'New Name' });
 
+    // #1104: ciphertext-only, with the hash re-derived for the new name.
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
     const identity = await participantIdentities.findOne({ participantId: '11111111' });
-    expect(identity.patientName).toBe('New Name');
+    expect(identity.patientName).toBeNull();
+    expect(identity.patientNameHash).toBe(participantIdentityService.computeBlindIndex('patientName', 'New Name'));
+    expect(participantIdentityService.decryptIdentity(identity).patientName).toBe('New Name');
   });
 
   it('updatePatient upserts into ParticipantIdentity when no prior identity record exists', async () => {
@@ -361,8 +412,168 @@ describe('patient.service.js identity resolution migrated to ParticipantIdentity
 
     await patientService.updatePatient(db, '22222222', { identityDocument: '11144477735' });
 
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
     const identity = await participantIdentities.findOne({ participantId: '22222222' });
     expect(identity).toBeTruthy();
-    expect(identity.identityDocument).toBe('11144477735');
+    // #1104: ciphertext-only.
+    expect(identity.identityDocument).toBeNull();
+    expect(participantIdentityService.decryptIdentity(identity).identityDocument).toBe('11144477735');
+  });
+
+  // updatePatient's identity sync is a participantIdentities WRITER, and it
+  // was the one writer that never went through encryptIdentityFields: an
+  // edit wrote raw plaintext beside the ciphertext and hash it left stale.
+  it('updatePatient re-derives birthDate ciphertext and blind index and keeps it ciphertext-only (#1104)', async () => {
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
+    const oldDate = new Date(1990, 0, 20);
+    const newDate = new Date(1985, 5, 1);
+    const patients = makeInMemoryCollection([{ participantId: '11111111' }]);
+    const participantIdentities = makeInMemoryCollection([
+      participantIdentityService.encryptIdentityFields({ participantId: '11111111', patientName: 'Maria', birthDate: oldDate }),
+    ]);
+    const db = makeDb({ patients, participantIdentities });
+
+    await patientService.updatePatient(db, '11111111', { birthDate: newDate });
+
+    const identity = await participantIdentities.findOne({ participantId: '11111111' });
+    expect(identity.birthDate).toBeNull();
+    expect(identity.birthDateHash).toBe(participantIdentityService.computeBlindIndex('birthDate', newDate));
+    expect(participantIdentityService.decryptIdentity(identity).birthDate.getTime()).toBe(newDate.getTime());
+  });
+
+  it('updatePatient stores identityDocument digits-only with a matching hash (#1109)', async () => {
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
+    const patients = makeInMemoryCollection([{ participantId: '22222222' }]);
+    const participantIdentities = makeInMemoryCollection([]);
+    const db = makeDb({ patients, participantIdentities });
+
+    await patientService.updatePatient(db, '22222222', { identityDocument: '111.444.777-35' });
+
+    const identity = await participantIdentities.findOne({ participantId: '22222222' });
+    // #1104: ciphertext-only, so the canonical form is read back decrypted.
+    expect(identity.identityDocument).toBeNull();
+    expect(participantIdentityService.decryptIdentity(identity).identityDocument).toBe('11144477735');
+    expect(identity.identityDocumentHash).toBe(participantIdentityService.computeBlindIndex('identityDocument', '11144477735'));
+  });
+
+  // #1166: an edited contact used to update patients and leave the identity
+  // copy stale -- the sync forwarded only the three civil-identity fields.
+  it('updatePatient syncs an edited phone and email into ParticipantIdentity, encrypted (#1166)', async () => {
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
+    const patients = makeInMemoryCollection([{ participantId: '44444444', phone: '11900000000', email: 'old@example.com' }]);
+    const participantIdentities = makeInMemoryCollection([
+      participantIdentityService.encryptIdentityFields({ participantId: '44444444', phone: '11900000000', email: 'old@example.com' }),
+    ]);
+    const db = makeDb({ patients, participantIdentities });
+
+    await patientService.updatePatient(db, '44444444', { phone: '(11) 98765-4321', email: 'New@Example.com' });
+
+    const identity = participantIdentityService.decryptIdentity(
+      { ...(await participantIdentities.findOne({ participantId: '44444444' })), phone: null, email: null }
+    );
+    expect(identity.phone).toBe('11987654321');
+    expect(identity.email).toBe('new@example.com');
+    expect(identity.phoneHash).toBe(participantIdentityService.computeBlindIndex('phone', '11987654321'));
+  });
+
+  // #1168: the deceased-representative merge reads the stored representative
+  // from the identity record -- the only place it lives -- and writes the
+  // edit back there, never to patients.
+  it('#1168: updatePatient merges a representative edit against the identity record', async () => {
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
+    const patients = makeInMemoryCollection([{ participantId: '46464646', isDeceased: true }]);
+    const participantIdentities = makeInMemoryCollection([
+      participantIdentityService.encryptIdentityFields({ participantId: '46464646', ...{ representativeName: 'Rep Legal', representativeEmail: 'rep@example.com', representativeIdentityDocument: '98765432100', representativePhone: '11955554444' } }),
+    ]);
+    const db = makeDb({ patients, participantIdentities });
+
+    await patientService.updatePatient(db, '46464646', { representativePhone: '(11) 93333-2222' });
+
+    const patientSet = patients.updateOne.mock.calls[0][1].$set;
+    for (const field of ['representativeName', 'representativeEmail', 'representativeIdentityDocument', 'representativePhone', 'representativeIdentityDocumentEncrypted']) {
+      expect(patientSet).not.toHaveProperty(field);
+    }
+    const identity = participantIdentityService.decryptIdentity(await participantIdentities.findOne({ participantId: '46464646' }));
+    expect(identity.representativePhone).toBe('11933332222');
+    expect(identity.representativeIdentityDocument).toBe('98765432100');
+  });
+
+  // #1168: the patients-side encryption loop used to run BEFORE the merge and
+  // null the plaintext it was about to validate, so this edit threw
+  // "... obrigatórios" whenever an ENCRYPTION_KEY was configured.
+  it('#1168: updatePatient accepts an edited representativeIdentityDocument', async () => {
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
+    const patients = makeInMemoryCollection([{ participantId: '47474747', isDeceased: true }]);
+    const participantIdentities = makeInMemoryCollection([
+      participantIdentityService.encryptIdentityFields({ participantId: '47474747', ...{ representativeName: 'Rep Legal', representativeEmail: 'rep@example.com', representativeIdentityDocument: '98765432100', representativePhone: '11955554444' } }),
+    ]);
+    const db = makeDb({ patients, participantIdentities });
+
+    await expect(
+      patientService.updatePatient(db, '47474747', { representativeIdentityDocument: '111.444.777-35' })
+    ).resolves.toEqual({ success: true });
+
+    const identity = participantIdentityService.decryptIdentity(await participantIdentities.findOne({ participantId: '47474747' }));
+    expect(identity.representativeIdentityDocument).toBe('11144477735');
+  });
+
+  it('#1168: marking a participant not deceased clears the representative on the identity record', async () => {
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
+    const patients = makeInMemoryCollection([{ participantId: '48484848', isDeceased: true }]);
+    const participantIdentities = makeInMemoryCollection([
+      participantIdentityService.encryptIdentityFields({ participantId: '48484848', ...{ representativeName: 'Rep Legal', representativeEmail: 'rep@example.com', representativeIdentityDocument: '98765432100', representativePhone: '11955554444' } }),
+    ]);
+    const db = makeDb({ patients, participantIdentities });
+
+    await patientService.updatePatient(db, '48484848', { isDeceased: false });
+
+    const identity = participantIdentityService.decryptIdentity(await participantIdentities.findOne({ participantId: '48484848' }));
+    expect(identity.representativeName ?? null).toBeNull();
+    expect(identity.representativeIdentityDocument ?? null).toBeNull();
+    expect(patients._docs[0].isDeceased).toBe(false);
+  });
+
+  it('#1168: a deceased participant with no stored representative is still refused (control)', async () => {
+    const patients = makeInMemoryCollection([{ participantId: '49494949', isDeceased: false }]);
+    const participantIdentities = makeInMemoryCollection([{ participantId: '49494949' }]);
+    const db = makeDb({ patients, participantIdentities });
+
+    await expect(
+      patientService.updatePatient(db, '49494949', { isDeceased: true, representativeName: 'Só o nome' })
+    ).rejects.toThrow('representante legal são obrigatórios');
+  });
+
+  // #1166 slice 4: the edit goes to the identity record only.
+  it('#1166: updatePatient does not write an edited contact to patients', async () => {
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
+    const patients = makeInMemoryCollection([{ participantId: '45454545' }]);
+    const participantIdentities = makeInMemoryCollection([
+      participantIdentityService.encryptIdentityFields({ participantId: '45454545', email: 'old@example.com' }),
+    ]);
+    const db = makeDb({ patients, participantIdentities });
+
+    await patientService.updatePatient(db, '45454545', { phone: '(11) 98765-4321', email: 'New@Example.com' });
+
+    const patientSet = patients.updateOne.mock.calls[0][1].$set;
+    expect(patientSet).not.toHaveProperty('email');
+    expect(patientSet).not.toHaveProperty('phone');
+    expect(patients._docs[0]).not.toHaveProperty('email');
+  });
+
+  it('updatePatient clearing a civil-identity field clears its ciphertext and hash too', async () => {
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
+    const patients = makeInMemoryCollection([{ participantId: '33333333' }]);
+    const participantIdentities = makeInMemoryCollection([
+      participantIdentityService.encryptIdentityFields({ participantId: '33333333', identityDocument: '11144477735' }),
+    ]);
+    const db = makeDb({ patients, participantIdentities });
+
+    await patientService.updatePatient(db, '33333333', { identityDocument: null });
+
+    const identity = participantIdentityService.decryptIdentity(
+      await participantIdentities.findOne({ participantId: '33333333' })
+    );
+    expect(identity.identityDocument ?? null).toBeNull();
+    expect(identity.identityDocumentHash ?? null).toBeNull();
   });
 });

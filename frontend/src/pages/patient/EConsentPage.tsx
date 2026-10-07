@@ -6,7 +6,8 @@ import {
   buildConsentUpdatePayload,
   buildRevokeAllAnswers,
   mapEConsentError,
-  mapEConsentSubmitError,
+  mapEConsentRequestError,
+  mapEConsentSubmitRequestError,
   normalizeEConsentSnapshot,
 } from '../../views/eConsentView';
 
@@ -59,7 +60,7 @@ export default function EConsentPage() {
         setConsents(snapshot.responses);
       } catch (err) {
         if (cancelled) return;
-        setError(mapEConsentError((err as { response?: { status?: number } })?.response?.status));
+        setError(mapEConsentRequestError(err));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -82,7 +83,7 @@ export default function EConsentPage() {
       setSuccess(true);
     } catch (err) {
       setError(
-        mapEConsentSubmitError((err as { response?: { status?: number } })?.response?.status)
+        mapEConsentSubmitRequestError(err)
       );
     }
   }

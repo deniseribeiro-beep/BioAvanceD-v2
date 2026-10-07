@@ -2,7 +2,6 @@ require('dotenv').config();
 
 module.exports = {
   NODE_ENV: process.env.NODE_ENV || 'development',
-  TEST_ENVIRONMENT: process.env.TEST_ENVIRONMENT === 'true' || process.env.TEST_ENVIRONMENT === '1',
   // #359 / RNF008.6: authLimiter's relaxed budget must be an explicit,
   // isolated opt-in, not inferred from NODE_ENV (a generic environment
   // indicator every non-production run shares, including one where
@@ -16,6 +15,11 @@ module.exports = {
   // consent surface), and a stack that needs headroom on one does not
   // thereby need it on the other.
   CONSENT_RATE_LIMIT_RELAXED: process.env.CONSENT_RATE_LIMIT_RELAXED === 'true' || process.env.CONSENT_RATE_LIMIT_RELAXED === '1',
+  // RF022 AC4/AC9, RNF014 C7: the API and workers refuse to start unless the
+  // newest ReadinessReport for their environment is `ready`. An explicit
+  // opt-in, set by the stacks that run the Foundation job first (test,
+  // production), so a native `npm start` with no Foundation run still works.
+  FOUNDATION_READINESS_REQUIRED: process.env.FOUNDATION_READINESS_REQUIRED === 'true' || process.env.FOUNDATION_READINESS_REQUIRED === '1',
   PORT: process.env.PORT || 3000,
 
   // Mongo
@@ -82,6 +86,12 @@ module.exports = {
   AUDIT_MERKLE_SIGN_KEY_ID: process.env.AUDIT_MERKLE_SIGN_KEY_ID,
   AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE: process.env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE,
   AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON: process.env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON,
+  // #1157: the registry holds the SPKI half of a key that does not exist until
+  // the stack's keygen one-shot runs, and compose resolves its environment at
+  // parse time -- so no static env entry can ever carry it. This names a file
+  // written beside the private key instead; the JSON var above stays the
+  // fallback, for the host-side generator that already writes it.
+  AUDIT_MERKLE_SIGN_PUBLIC_KEYS_FILE: process.env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_FILE,
   AUDIT_RFC3161_MODE: process.env.AUDIT_RFC3161_MODE,
   AUDIT_RFC3161_TSA_URL: process.env.AUDIT_RFC3161_TSA_URL,
   AUDIT_RFC3161_TSA_AUTH_TOKEN: process.env.AUDIT_RFC3161_TSA_AUTH_TOKEN,
@@ -143,7 +153,6 @@ module.exports = {
   TEMP_STALE_MINUTES: process.env.TEMP_STALE_MINUTES,
 
   // Notification
-  APP_DOMAIN: process.env.APP_DOMAIN,
   ALERT_EMAIL_TO: process.env.ALERT_EMAIL_TO,
   RESEND_API_KEY: process.env.RESEND_API_KEY,
   EMAIL_FROM: process.env.EMAIL_FROM,
@@ -168,6 +177,10 @@ module.exports = {
   COLL_MEDICATION_DICTIONARY: process.env.COLL_MEDICATION_DICTIONARY || 'medication_dictionary',
   COLL_REFERENCE_SEED_RUNS: process.env.COLL_REFERENCE_SEED_RUNS || 'referenceSeedRuns',
   COLL_FOUNDATION_DATA_RUNS: process.env.COLL_FOUNDATION_DATA_RUNS || 'foundationDataRuns',
+  COLL_READINESS_REPORTS: process.env.COLL_READINESS_REPORTS || 'readinessReports',
+  COLL_CONFIGURATION_PROFILES: process.env.COLL_CONFIGURATION_PROFILES || 'configurationProfiles',
+  COLL_CONFIGURATION_RELEASES: process.env.COLL_CONFIGURATION_RELEASES || 'configurationReleases',
+  COLL_CONFIGURATION_CHANGE_EVENTS: process.env.COLL_CONFIGURATION_CHANGE_EVENTS || 'configurationChangeEvents',
   COLL_PARTICIPANT_IDENTITIES: process.env.COLL_PARTICIPANT_IDENTITIES || 'participantIdentities',
   COLL_RCS_ASSESSMENTS: process.env.COLL_RCS_ASSESSMENTS || 'rcsAssessments',
   COLL_ENCOUNTERS: process.env.COLL_ENCOUNTERS || 'encounters',

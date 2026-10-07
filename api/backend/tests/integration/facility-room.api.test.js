@@ -57,6 +57,28 @@ describe('GET /api/facilities', () => {
     expect(res.status).toBe(200);
     expect(res.body.data).toHaveLength(1);
   });
+
+  // #1163 / #941: the list handler must ENSURE the index its sort depends
+  // on. facilities_name_idx_v1 is declared on Facility.js and, like every
+  // Schema.index() in this repo, never built -- the connection uses
+  // autoIndex:false. Without this the wiring line can be deleted and the
+  // suite stays green (#1126's shape), which is how the helper ends up
+  // written, tested and never called.
+  it('#1163: ensures facilities_name_idx_v1 on the read path', async () => {
+    const coll = createCollectionMock({
+      collectionName: 'facilities_wiring_probe',
+      find: vi.fn().mockReturnValue({ sort: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }) }),
+    });
+    app.locals.db = dbWithRbac({ facilities: coll }, 2);
+
+    await request(app).get('/api/facilities').set('Authorization', `Bearer ${makeToken(2)}`);
+
+    const call = coll.createIndex.mock.calls.find(
+      ([k]) => Object.keys(k).length === 1 && k.name === 1
+    );
+    expect(call).toBeDefined();
+    expect(call[1].name).toBe('facilities_name_idx_v1');
+  });
 });
 
 describe('GET /api/facilities/:id', () => {
@@ -199,6 +221,28 @@ describe('POST /api/rooms', () => {
 });
 
 describe('GET /api/rooms?facilityId=', () => {
+  // #1163 / #941: as above. The { facilityId, name } key ORDER is what lets
+  // one index serve the facilityId filter and the name sort in a single
+  // pass, so the order is asserted rather than just the membership.
+  it('#1163: ensures rooms_facility_name_idx_v1 on the read path', async () => {
+    const coll = createCollectionMock({
+      collectionName: 'rooms_wiring_probe',
+      find: vi.fn().mockReturnValue({ sort: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }) }),
+    });
+    app.locals.db = dbWithRbac({ rooms: coll }, 2);
+
+    await request(app)
+      .get(`/api/rooms?facilityId=${FACILITY_ID}`)
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+
+    const call = coll.createIndex.mock.calls.find(
+      ([k]) => k.facilityId === 1 && k.name === 1
+    );
+    expect(call).toBeDefined();
+    expect(call[1].name).toBe('rooms_facility_name_idx_v1');
+    expect(Object.keys(call[0])).toEqual(['facilityId', 'name']);
+  });
+
   it('filters rooms by facilityId', async () => {
     const find = vi.fn().mockReturnValue({ sort: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([FAKE_ROOM]) }) });
     const roomsColl = createCollectionMock({ find });
@@ -307,5 +351,130 @@ describe('PATCH /api/storage/freezer/:freezerId/room', () => {
       { _id: expect.any(ObjectId) },
       { $set: expect.objectContaining({ roomId: null }) }
     );
+  });
+});
+
+// #1146: all four facility/room GETs were `authenticate` and nothing else,
+// so every authenticated principal could enumerate the facility and room
+// topology -- UsuarioExterno included, whose only seeded grant is
+// viewReports. Their own write siblings in the same two files were already
+// gated, and the equipment sibling's reads were gated by #1087, so this was
+// the unswept read half of a family whose other halves were both done.
+//
+// The code is a NEW read-only one rather than a reuse of viewEquipment, and
+// the reason is the catalog's data rather than taste: viewEquipment carries
+// resourceType 'Device', which a facility or a room is not, and dict-02
+// makes resourceType a 1..1 Core field of Permission (P1X-0221), so it is
+// load-bearing rather than a label (#1123). viewStorageTopology mirrors
+// manageStorageTopology -- same resourceType 'StorageContainer', the read
+// half of the pair whose write half already gates these same two files.
+//
+// It is READ-only on purpose, for #1087's reason: the #631 derived-action
+// check passes for GET, and the code can never later be reused to gate a
+// write the way viewTemperature was before #1073.
+//
+// The seeded population is Tecnico + Coordenador + Administrador, matching
+// viewEquipment's exactly. That is NOT the "seeded to the pre-existing
+// population" no-op #1074 and #1087 were: the pre-existing population here
+// is *everyone authenticated*, so any gate narrows. It is chosen to match
+// what the UI already admits -- rolePermissions.ts:133 gates
+// /facility-management to STAFF -- so the one principal that loses access,
+// UsuarioExterno, had no UI path to these routes.
+describe('#1146: the four facility/room READS are permission-gated', () => {
+  function facilitiesCollection() {
+    return createCollectionMock({
+      find: vi.fn().mockReturnValue({ sort: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([FAKE_FACILITY]) }) }),
+      findOne: vi.fn().mockResolvedValue(FAKE_FACILITY),
+    });
+  }
+
+  function roomsCollection() {
+    return createCollectionMock({
+      find: vi.fn().mockReturnValue({ sort: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([FAKE_ROOM]) }) }),
+      findOne: vi.fn().mockResolvedValue(FAKE_ROOM),
+    });
+  }
+
+  // The collections are populated deliberately: if the gate does NOT fire,
+  // every one of these routes answers 200 with data rather than erroring,
+  // so a pre-fix run fails on the status it was written to catch.
+  function externalDb() {
+    return dbWithRbac({ facilities: facilitiesCollection(), rooms: roomsCollection() }, 1);
+  }
+
+  it('GET /api/facilities refuses an UsuarioExterno caller, who holds only viewReports', async () => {
+    app.locals.db = externalDb();
+
+    const res = await request(app)
+      .get('/api/facilities')
+      .set('Authorization', `Bearer ${makeToken(1)}`);
+
+    expect(res.status).toBe(403);
+  });
+
+  it('GET /api/facilities/:id refuses the same caller', async () => {
+    app.locals.db = externalDb();
+
+    const res = await request(app)
+      .get(`/api/facilities/${FACILITY_ID.toString()}`)
+      .set('Authorization', `Bearer ${makeToken(1)}`);
+
+    expect(res.status).toBe(403);
+  });
+
+  it('GET /api/rooms refuses the same caller', async () => {
+    app.locals.db = externalDb();
+
+    const res = await request(app)
+      .get('/api/rooms')
+      .set('Authorization', `Bearer ${makeToken(1)}`);
+
+    expect(res.status).toBe(403);
+  });
+
+  it('GET /api/rooms/:id refuses the same caller', async () => {
+    app.locals.db = externalDb();
+
+    const res = await request(app)
+      .get(`/api/rooms/${ROOM_ID.toString()}`)
+      .set('Authorization', `Bearer ${makeToken(1)}`);
+
+    expect(res.status).toBe(403);
+  });
+
+  // CONTROL, and the one that decides the population: a Tecnico does NOT
+  // hold manageStorageTopology, so gating these reads on the write code
+  // would have refused the role the UI admits to /facility-management.
+  // Green before and after -- this is what a wrong population would break.
+  it('CONTROL: a Tecnico (accessType 2) still lists facilities', async () => {
+    app.locals.db = dbWithRbac({ facilities: facilitiesCollection() }, 2);
+
+    const res = await request(app)
+      .get('/api/facilities')
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+  });
+
+  it('CONTROL: a Tecnico (accessType 2) still lists rooms', async () => {
+    app.locals.db = dbWithRbac({ rooms: roomsCollection() }, 2);
+
+    const res = await request(app)
+      .get('/api/rooms')
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+  });
+
+  // CONTROL: the unauthenticated refusal must stay 401, not become 403 --
+  // a 403 here would mean the gate runs before authenticate.
+  it('CONTROL: no token is still 401, not 403', async () => {
+    app.locals.db = externalDb();
+
+    const res = await request(app).get('/api/facilities');
+
+    expect(res.status).toBe(401);
   });
 });

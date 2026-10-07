@@ -7,7 +7,7 @@ import { clearClientSession, onClientLogout } from '../utils/sessionCleanup';
 interface AuthContextType {
   user: User | null;
   token: string | null;
-  login: (username: string, password: string, twoFactorCode?: string, newPassword?: string) => Promise<{ requiresTwoFactor?: boolean; requiresTwoFactorSetup?: boolean; requiresPasswordChange?: boolean; user?: User } | void>;
+  login: (username: string, password: string, twoFactorCode?: string, newPassword?: string) => Promise<{ requiresTwoFactor?: boolean; requiresTwoFactorSetup?: boolean; requiresPasswordChange?: boolean; passwordChangeReason?: string; user?: User } | void>;
   logout: () => Promise<void>;
   isAuthenticated: boolean;
   isLoading: boolean;
@@ -254,7 +254,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  const login = useCallback(async (username: string, password: string, twoFactorCode?: string, newPassword?: string): Promise<{ requiresTwoFactor?: boolean; requiresTwoFactorSetup?: boolean; requiresPasswordChange?: boolean; user?: User } | void> => {
+  const login = useCallback(async (username: string, password: string, twoFactorCode?: string, newPassword?: string): Promise<{ requiresTwoFactor?: boolean; requiresTwoFactorSetup?: boolean; requiresPasswordChange?: boolean; passwordChangeReason?: string; user?: User } | void> => {
     try {
       const response = await authService.login(username, password, twoFactorCode, newPassword);
 
@@ -290,8 +290,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       // Se o admin forçou redefinição de senha e a nova senha ainda não foi
       // enviada, retorna informação para o componente solicitar a nova senha.
+      // #1291: the reason (expired, below_policy; none for an administrator's
+      // forceReset) lets the page say why, instead of always blaming the admin.
       if (requiresPasswordChange && !newPassword) {
-        return { requiresPasswordChange: true };
+        return {
+          requiresPasswordChange: true,
+          ...(responseData.reason ? { passwordChangeReason: String(responseData.reason) } : {}),
+        };
       }
 
       // Se tem token, significa que login foi bem-sucedido

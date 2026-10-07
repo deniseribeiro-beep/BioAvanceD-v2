@@ -1,3 +1,9 @@
+// disease_dictionary is a legacy store: neither the v2.0.0 data dictionary
+// nor the v4.0.0 requirements declare it, and v2.0.0 models
+// biomarker-condition knowledge as BiomarkerAssociation instead. This seed
+// is therefore manual only (npm run seed:disease-validation-rules), never
+// on the boot path (#1200). Running it switches on enforcement: a required
+// biomarker with no value makes SampleGraphValidator block the sample.
 const { connectDB, closeConnection } = require('../database/mongo');
 
 const DEFAULT_RULES = {
@@ -9,8 +15,8 @@ const DEFAULT_RULES = {
     recommended: [],
   },
   pharmacology: {
-    required: ['treatment_status'],
-    recommended: ['medication_name', 'last_dose_date'],
+    required: ['treatmentStatus'],
+    recommended: ['medicationName', 'lastDoseDate'],
     treatmentStatuses: ['NAIVE', 'TREATED', 'WASHOUT'],
   },
 };
@@ -28,7 +34,7 @@ const DISEASE_RULES = {
       },
     },
   },
-  '79258': {
+  '355': {
     name: 'Doenca de Gaucher',
     disease_category: 'Erros Inatos do Metabolismo',
     drug_classes: ['enzyme_replacement_therapy', 'substrate_reduction_therapy'],
@@ -40,7 +46,7 @@ const DISEASE_RULES = {
       },
     },
   },
-  '58': {
+  '98896': {
     name: 'Distrofia Muscular de Duchenne',
     disease_category: 'Doencas Neurologicas',
     drug_classes: ['corticosteroid', 'exon_skipping_therapy'],

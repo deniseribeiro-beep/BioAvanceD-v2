@@ -66,8 +66,26 @@ vi.mock('../../src/services/equipment-sensor-quarantine.service', () => ({
 }));
 
 
+// #1207: an active incident whose excursion has already outlasted the 2-hour
+// TELEMETRY_CRITICAL_DURATION_HOURS fallback, for tests about what happens
+// once the quarantine does fire.
+function sustainedIncident(overrides = {}) {
+  return {
+    _id: 'incident-1',
+    sensorKey: 'sensor-1',
+    maxTemperature: 10,
+    minTemperature: 9,
+    samplesOutOfRange: 2,
+    status: 'open',
+    excursionStartedAt: new Date(Date.now() - 3 * 60 * 60 * 1000),
+    ...overrides,
+  };
+}
+
 function createResponse() {
   return {
+    // Express always supplies res.locals; #1120's audit reason is written there.
+    locals: {},
     statusCode: 200,
     body: null,
     status(code) {
@@ -550,12 +568,15 @@ describe('iot.controller', () => {
   }, 15000);
 
   it('atualiza um incidente de temperatura existente em vez de criar um novo', async () => {
+    // #1207: an excursion already past the 2-hour fallback, so the
+    // quarantine this test expects is the sustained one.
     temperatureIncidentsCollection.findOne.mockResolvedValue({
       _id: 'incident-1',
       maxTemperature: 10,
       minTemperature: 9,
       samplesOutOfRange: 2,
       status: 'open',
+      excursionStartedAt: new Date(Date.now() - 3 * 60 * 60 * 1000),
     });
 
     const req = { body: { sensorId: 'sensor-1', temperature: 12.5 } };
@@ -657,6 +678,7 @@ describe('iot.controller', () => {
   it('loga aviso quando a quarentena de cadeia fria é acionada', async () => {
     const loggerModule = require('../../src/utils/logger');
     const warnSpy = vi.spyOn(loggerModule, 'warn').mockImplementation(() => undefined);
+    temperatureIncidentsCollection.findOne.mockResolvedValue(sustainedIncident());
     quarantineByColdChainIncidentMock.mockResolvedValue({
       triggered: true,
       incidentId: 'incident-1',
@@ -683,6 +705,7 @@ describe('iot.controller', () => {
   it('loga erro quando a aplicação da quarentena de cadeia fria falha', async () => {
     const loggerModule = require('../../src/utils/logger');
     const errorSpy = vi.spyOn(loggerModule, 'error').mockImplementation(() => undefined);
+    temperatureIncidentsCollection.findOne.mockResolvedValue(sustainedIncident());
     quarantineByColdChainIncidentMock.mockRejectedValue(new Error('quarantine boom'));
 
     const req = { body: { sensorId: 'sensor-1', temperature: 12.5 } };
@@ -698,6 +721,156 @@ describe('iot.controller', () => {
     });
     errorSpy.mockRestore();
   }, 15000);
+
+  // #1207: the first out-of-range reading used to quarantine every sample
+  // under the sensor at once. The policy's minimumDuration -- the time half
+  // of ISBER's "critical limits (temperatures and time)", and v2.0.0
+  // ELM-0368's "primeira medição fora do limite conforme a regra" -- was read
+  // only by TelemetryMonitor, for the Neo4j COMPROMISED mark. The alarm stays
+  // immediate; the quarantine now waits until the excursion has lasted
+  // minimumDuration, measured from the first reading of an unbroken
+  // out-of-range run.
+  describe('#1207: the cold-chain quarantine waits for the policy minimumDuration', () => {
+    const READING_AT = '2026-04-08T12:00:00.000Z';
+    const minutesBefore = (minutes) => new Date(Date.parse(READING_AT) - minutes * 60 * 1000);
+    // The quarantine runs fire-and-forget after the incident write, so a
+    // "was not called" assertion needs the chain to have had its turn.
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
+
+    function policyWith(minimumDuration) {
+      return {
+        sensorId: 'sensor-2',
+        alertEmail: 'alerts@example.test',
+        sensorName: 'sensor-2',
+        temperaturePolicy: { _id: 'policy-1', minTemp: 2, maxTemp: 8, minimumDuration },
+      };
+    }
+
+    async function ingest(temperature) {
+      const res = createResponse();
+      await ingestTelemetry({ body: { sensorId: 'sensor-2', temperature, timestamp: READING_AT } }, res);
+      expect(res.statusCode).toBe(200);
+    }
+
+    beforeEach(() => {
+      sensorMetadataLeanMock.mockResolvedValue(policyWith(30));
+    });
+
+    it('the first out-of-range reading opens the incident and starts the excursion clock, but quarantines nothing', async () => {
+      temperatureIncidentCreateMock.mockImplementation((payload) => ({ _id: 'incident-1', ...payload }));
+      usersCollection.find.mockReturnValue({
+        project: vi.fn().mockReturnValue({
+          toArray: vi.fn().mockResolvedValue([{ email: 'admin@example.test' }]),
+        }),
+      });
+
+      await ingest(12.5);
+
+      // The incident alert is sent after the point where the quarantine ran.
+      await vi.waitFor(() => {
+        expect(sendIncidentAlertEmailMock).toHaveBeenCalled();
+      });
+      expect(temperatureIncidentsCollection.insertOne).toHaveBeenCalledWith(
+        expect.objectContaining({ excursionStartedAt: new Date(READING_AT) })
+      );
+      expect(quarantineByColdChainIncidentMock).not.toHaveBeenCalled();
+      // The alarm itself is not delayed.
+      expect(sendCriticalAlertEmailMock).toHaveBeenCalledTimes(1);
+    }, 15000);
+
+    it('a reading inside minimumDuration of the excursion start does not quarantine, and keeps the clock', async () => {
+      temperatureIncidentsCollection.findOne.mockResolvedValue(
+        sustainedIncident({ sensorKey: 'sensor-2', excursionStartedAt: minutesBefore(29) })
+      );
+
+      await ingest(12.5);
+
+      await vi.waitFor(() => {
+        expect(temperatureIncidentsCollection.updateOne).toHaveBeenCalled();
+      });
+      await settle();
+      expect(temperatureIncidentsCollection.updateOne.mock.calls[0][1].$set.excursionStartedAt).toEqual(minutesBefore(29));
+      expect(quarantineByColdChainIncidentMock).not.toHaveBeenCalled();
+    }, 15000);
+
+    it('CONTROL: a reading minimumDuration after the excursion start quarantines', async () => {
+      temperatureIncidentsCollection.findOne.mockResolvedValue(
+        sustainedIncident({ sensorKey: 'sensor-2', excursionStartedAt: minutesBefore(30) })
+      );
+
+      await ingest(12.5);
+
+      await vi.waitFor(() => {
+        expect(quarantineByColdChainIncidentMock).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({ _id: 'incident-1', sensorKey: 'sensor-2' })
+        );
+      });
+    }, 15000);
+
+    it('without a usable minimumDuration the 2-hour fallback governs: 60 minutes in, nothing is quarantined', async () => {
+      sensorMetadataLeanMock.mockResolvedValue(policyWith(null));
+      temperatureIncidentsCollection.findOne.mockResolvedValue(
+        sustainedIncident({ sensorKey: 'sensor-2', excursionStartedAt: minutesBefore(60) })
+      );
+
+      await ingest(12.5);
+
+      await vi.waitFor(() => {
+        expect(temperatureIncidentsCollection.updateOne).toHaveBeenCalled();
+      });
+      await settle();
+      expect(quarantineByColdChainIncidentMock).not.toHaveBeenCalled();
+    }, 15000);
+
+    it('CONTROL: without a usable minimumDuration, 120 minutes in, the quarantine fires', async () => {
+      sensorMetadataLeanMock.mockResolvedValue(policyWith(null));
+      temperatureIncidentsCollection.findOne.mockResolvedValue(
+        sustainedIncident({ sensorKey: 'sensor-2', excursionStartedAt: minutesBefore(120) })
+      );
+
+      await ingest(12.5);
+
+      await vi.waitFor(() => {
+        expect(quarantineByColdChainIncidentMock).toHaveBeenCalled();
+      });
+    }, 15000);
+
+    it('an active incident with no excursion clock restarts it at this reading and does not quarantine', async () => {
+      // The temperature came back in range since the incident opened (which
+      // stopped the clock), or the incident predates #1207. Its openedAt is
+      // not when this excursion began.
+      temperatureIncidentsCollection.findOne.mockResolvedValue(
+        sustainedIncident({ sensorKey: 'sensor-2', openedAt: minutesBefore(180), excursionStartedAt: null })
+      );
+
+      await ingest(12.5);
+
+      await vi.waitFor(() => {
+        expect(temperatureIncidentsCollection.updateOne).toHaveBeenCalled();
+      });
+      await settle();
+      expect(temperatureIncidentsCollection.updateOne.mock.calls[0][1].$set.excursionStartedAt).toEqual(new Date(READING_AT));
+      expect(quarantineByColdChainIncidentMock).not.toHaveBeenCalled();
+    }, 15000);
+
+    it('an in-range reading stops the excursion clock on the sensor\'s active incident', async () => {
+      await ingest(5);
+
+      await vi.waitFor(() => {
+        expect(temperatureIncidentsCollection.updateOne).toHaveBeenCalledWith(
+          {
+            sensorKey: 'sensor-2',
+            status: { $in: ['open', 'acknowledged', 'escalated'] },
+            excursionStartedAt: { $ne: null },
+          },
+          { $set: expect.objectContaining({ excursionStartedAt: null }) }
+        );
+      });
+      expect(quarantineByColdChainIncidentMock).not.toHaveBeenCalled();
+      expect(sendCriticalAlertEmailMock).not.toHaveBeenCalled();
+    }, 15000);
+  });
 
   it('usa sensorId como sensorName de fallback quando metadata não possui sensorName', async () => {
     temperatureIncidentCreateMock.mockImplementation((payload) => payload);

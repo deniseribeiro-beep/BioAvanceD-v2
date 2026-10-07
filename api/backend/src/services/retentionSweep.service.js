@@ -26,11 +26,65 @@ const { iso8601DurationToMs } = require('../utils/iso8601Duration');
 const AUDIT_EVENTS_COLLECTION = 'audit_events';
 const AUDIT_EVENTS_ARCHIVE_COLLECTION = 'audit_events_archive';
 const LOGS_COLLECTION = 'logs';
+const LOGS_ARCHIVE_COLLECTION = 'logs_archive';
 
 class RetentionSweepService {
-  async sweepLogs(db, cutoff) {
-    const result = await db.collection(LOGS_COLLECTION).deleteMany({ createdAt: { $lt: cutoff } });
-    return { deleted: result.deletedCount || 0 };
+  // #1259: this deleted on every postRetentionAction, so an 'archive',
+  // 'review' or 'anonymize' policy destroyed log rows it was meant to keep.
+  // It now follows the action, as sweepAuditEvents does: 'destroy' deletes,
+  // 'archive' moves the row unchanged to logs_archive, and the two actions no
+  // code implements for logs remove nothing.
+  //
+  // #1271: logs_archive has a retention of its own (LGPD art. 16, see
+  // models/RetentionPolicy.js). Archived rows are past the live policy's
+  // period and only pseudonymised, so art. 16, I (a legal or regulatory
+  // obligation) is the one ground that can keep them, and it keeps them for
+  // that obligation's period. The policy cites it in archiveRetentionBasis and
+  // its period in archiveRetentionPeriod, counted from createdAt like
+  // retentionPeriod. Rows past it are deleted from the archive on every sweep.
+  // A policy citing none has no ground to archive on, so expired rows are
+  // deleted at the policy's own period instead, and so are rows an earlier
+  // policy archived, which are past that period too.
+  //
+  // #1286: RF012 AC#5 (requisitos v4.0.0) says the application must prevent
+  // the alteration and deletion of audit events. These deletes do not break
+  // it: they run only under an approved RetentionPolicy (RF026 AC#1, bound to
+  // a basis and a period), and LGPD art. 16 is binding law, which a project
+  // requirement cannot override. No route or handler deletes a log row.
+  //
+  // Reading the archive: GET /api/logs/archive and the export routes'
+  // source=archive, behind the same audit-reader rule as the live trail
+  // (log.service, logs.routes, security.routes).
+  async sweepLogs(db, policy, cutoff) {
+    const logs = db.collection(LOGS_COLLECTION);
+    if (policy.postRetentionAction === 'destroy') {
+      const result = await logs.deleteMany({ createdAt: { $lt: cutoff } });
+      return { deleted: result.deletedCount || 0 };
+    }
+    if (policy.postRetentionAction === 'archive') {
+      const archive = db.collection(LOGS_ARCHIVE_COLLECTION);
+      if (!policy.archiveRetentionPeriod || !policy.archiveRetentionBasis) {
+        logger.warn(
+          'Sweep de retenção: política "archive" sem archiveRetentionBasis/archiveRetentionPeriod -- sem obrigação '
+          + 'legal citada (LGPD art. 16, I), os logs expirados são excluídos em vez de arquivados.'
+        );
+        const deleted = await logs.deleteMany({ createdAt: { $lt: cutoff } });
+        const purged = await archive.deleteMany({ createdAt: { $lt: cutoff } });
+        return { archived: 0, deleted: deleted.deletedCount || 0, archivePurged: purged.deletedCount || 0, skipped: false, reason: 'no_archive_basis' };
+      }
+      const archiveCutoff = new Date(Date.now() - iso8601DurationToMs(policy.archiveRetentionPeriod));
+      const expired = await logs.find({ createdAt: { $lt: cutoff } }).toArray();
+      if (expired.length) {
+        await archive.insertMany(expired.map((doc) => ({ ...doc, archivedAt: new Date() })));
+        await logs.deleteMany({ _id: { $in: expired.map((doc) => doc._id) } });
+      }
+      const purged = await archive.deleteMany({ createdAt: { $lt: archiveCutoff } });
+      return { archived: expired.length, archivePurged: purged.deletedCount || 0, skipped: false };
+    }
+    logger.warn(
+      `Sweep de retenção: postRetentionAction "${policy.postRetentionAction}" não é implementado para Log -- nenhum log removido.`
+    );
+    return { deleted: 0, skipped: true, reason: `unsupported_post_retention_action:${policy.postRetentionAction}` };
   }
 
   async sweepAuditEvents(db, policy, cutoff) {
@@ -70,7 +124,7 @@ class RetentionSweepService {
     };
 
     if (policy.applicableEntityTypes.includes('Log')) {
-      result.logs = await this.sweepLogs(db, cutoff);
+      result.logs = await this.sweepLogs(db, policy, cutoff);
     }
     if (policy.applicableEntityTypes.includes('AuditEvent')) {
       result.auditEvents = await this.sweepAuditEvents(db, policy, cutoff);
@@ -105,3 +159,4 @@ module.exports = new RetentionSweepService();
 module.exports.AUDIT_EVENTS_COLLECTION = AUDIT_EVENTS_COLLECTION;
 module.exports.AUDIT_EVENTS_ARCHIVE_COLLECTION = AUDIT_EVENTS_ARCHIVE_COLLECTION;
 module.exports.LOGS_COLLECTION = LOGS_COLLECTION;
+module.exports.LOGS_ARCHIVE_COLLECTION = LOGS_ARCHIVE_COLLECTION;

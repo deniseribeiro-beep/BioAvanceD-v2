@@ -32,7 +32,7 @@ const ORPHA_SYSTEM_URI = 'http://www.orpha.net';
 const OMIM_SYSTEM_URI = 'https://www.omim.org';
 // "CID" in this wizard's own field names is the Brazilian Portuguese
 // abbreviation for ICD -- dict-01_FONTES.md's own SRC_ICD10/SRC_ICD11 rows
-// use the English abbreviation instead (see build-loop's overlay, #255).
+// use the English abbreviation instead (search the dictionary for ICD).
 // Mapped to ICD-10 here since this wizard's diagnosisCidCode field has
 // always meant CID-10 in this repo's existing terminology (no ICD-11
 // picker exists in this wizard).
@@ -795,7 +795,7 @@ async function handleIntakeWizard(req, res) {
     ];
 
     if (canonicalViolations.length > 0) {
-      return res.status(422).json({ error: 'NON_CANONICAL_FIELD', fields: canonicalViolations });
+      return res.status(422).json({ error: 'NON_CANONICAL_FIELD', fields: canonicalViolations, details: canonicalViolations.map((field) => `${field}: campo não canônico`) });
     }
 
     const validation = validate('canonical.v1.intake', data);
@@ -805,7 +805,7 @@ async function handleIntakeWizard(req, res) {
         const field = issue.instancePath?.replace(/^\//, '').replace(/\//g, '.') || issue.params?.missingProperty || null;
         if (field) fields.push(field);
       }
-      return res.status(422).json({ error: 'NON_CANONICAL_FIELD', fields: [...new Set(fields)] });
+      return res.status(422).json({ error: 'NON_CANONICAL_FIELD', fields: [...new Set(fields)], details: [...new Set(fields)].map((field) => `${field}: campo não canônico`) });
     }
 
     const db = req.app.locals.db;
@@ -973,6 +973,7 @@ async function handleIntakeWizard(req, res) {
     return res.status(error?.statusCode || error?.status || 500).json({
       success: false,
       error: error?.message || 'Erro desconhecido ao finalizar o Intake Wizard.',
+      details: error?.details,
     });
   }
 }
@@ -1031,8 +1032,8 @@ router.get('/patient-match', async (req, res) => {
         : [{ birthDate: { $gte: startOfDay, $lt: endOfDay } }];
       const candidates = await identityCollection.find({ $or: dateOrConditions }).toArray();
       identity = candidates.find((rawCandidate) => {
-        // patientName is civil identity -- decrypt before comparing so this
-        // keeps matching once the plaintext field is eventually dropped.
+        // patientName is civil identity and ciphertext-only (#1104), so
+        // decrypt before comparing.
         const candidate = participantIdentityService.decryptIdentity(rawCandidate);
         const candidateNormalized = normalizeString(candidate.patientName)
           .normalize('NFD')

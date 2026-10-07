@@ -228,7 +228,30 @@ describe('ImportLGPDService.importPatientsSmart', () => {
     expect(participantIdentitiesCollection.insertOne).toHaveBeenCalledTimes(1);
     const insertedIdentity = participantIdentitiesCollection.insertOne.mock.calls[0][0];
     expect(insertedIdentity.participantId).toBe(insertedPatient.participantId);
-    expect(insertedIdentity.patientName).toBe('MARIA SILVA');
+    // #1104: ciphertext-only -- no plaintext at rest, recovered by decryption.
+    const identityCrypto = require('../../src/services/participantIdentity.service');
+    expect(insertedIdentity.patientName).toBeNull();
+    expect(identityCrypto.decryptIdentity(insertedIdentity).patientName).toBe('MARIA SILVA');
+  });
+
+  // #1166 slice 3: same rollback as importPatients -- a refused identity
+  // insert must not leave the Patient row behind with no identity.
+  it('#1166: rolls back the Patient row when the identity insert fails', async () => {
+    participantIdentitiesCollection.insertOne.mockRejectedValue(
+      Object.assign(new Error('E11000 duplicate key'), { code: 11000, keyPattern: { phoneHash: 1 } })
+    );
+    patientsCollection.deleteOne = vi.fn().mockResolvedValue({ deletedCount: 1 });
+    vi.spyOn(service, 'readFile').mockResolvedValue([rowFromValid()]);
+
+    const result = await service.importPatientsSmart(
+      db,
+      { path: '/x.csv', originalname: 'x.csv' },
+      { mapping: MAPPING }
+    );
+
+    expect(result.success).toBe(0);
+    expect(result.errors).toHaveLength(1);
+    expect(patientsCollection.deleteOne).toHaveBeenCalledWith({ _id: 'patient-id-1' });
   });
 
   it('records a per-row error and does not insert when patientName is missing', async () => {
@@ -516,9 +539,11 @@ describe('ImportLGPDService.importPatientsSmart', () => {
       expect(importStagingRecordsCollection.insertMany).toHaveBeenCalledTimes(1);
       const staged = importStagingRecordsCollection.insertMany.mock.calls[0][0];
       expect(staged).toHaveLength(1);
-      expect(staged[0]).toMatchObject({ batchId: 'batch-1', rowNumber: 2, status: 'ERROR' });
+      // #1295: the rows carry the batch document's own id, generated before them.
+      const batchId = importBatchesCollection.insertOne.mock.calls[0][0]._id;
+      expect(staged[0]).toMatchObject({ batchId, rowNumber: 2, status: 'ERROR' });
 
-      expect(result.stagingBatchId).toBe('batch-1');
+      expect(result.stagingBatchId).toBe(batchId);
     });
 
     it('does not open a staging batch when every row imports cleanly', async () => {

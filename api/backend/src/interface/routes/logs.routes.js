@@ -3,6 +3,7 @@ const { ObjectId } = require('mongodb');
 const router = express.Router();
 const { authenticate } = require('../../infrastructure/middleware/auth');
 const logService = require('../../services/log.service');
+const sessionService = require('../../services/session.service');
 const logger = require('../../utils/logger');
 const { isAuditReader } = require('../../services/rbac-assignment.service');
 
@@ -34,6 +35,11 @@ async function requireAuditReader(req, res, next) {
   }
 }
 
+// #1271: an unknown ?source= (log.service's logSourceCollection).
+function sendInvalidSource(res, error) {
+  return res.status(422).json({ success: false, error: 'Dados inválidos', message: error.message, details: error.details || [error.message] });
+}
+
 function buildCsv(logs = []) {
   const headers = ['timestamp', 'userName', 'action', 'entity', 'result', 'severity', 'module', 'ipSource', 'message'];
   const escape = (value) => {
@@ -55,6 +61,7 @@ router.get('/', authenticate, requireAuditReader, async (req, res) => {
     const result = await logService.getLogs(db, req.query || {});
     return res.status(200).json({ success: true, data: result });
   } catch (error) {
+    if (error.statusCode === 422) return sendInvalidSource(res, error);
     logger.error('Erro ao buscar logs:', error.message || error);
     return res.status(500).json({ success: false, error: 'Erro ao buscar logs', message: error.message });
   }
@@ -70,6 +77,7 @@ router.get('/all', authenticate, requireAuditReader, async (req, res) => {
     const result = await logService.getLogs(db, { ...req.query, limit: req.query?.limit || 5000, page: 1 });
     return res.status(200).json({ success: true, data: result });
   } catch (error) {
+    if (error.statusCode === 422) return sendInvalidSource(res, error);
     logger.error('Erro ao buscar todos os logs:', error.message || error);
     return res.status(500).json({ success: false, error: 'Erro ao buscar logs', message: error.message });
   }
@@ -86,6 +94,7 @@ router.post('/query', authenticate, requireAuditReader, async (req, res) => {
     const result = await logService.getLogs(db, filters);
     return res.status(200).json({ success: true, data: result });
   } catch (error) {
+    if (error.statusCode === 422) return sendInvalidSource(res, error);
     logger.error('Erro ao consultar logs:', error.message || error);
     return res.status(500).json({ success: false, error: 'Erro ao consultar logs', message: error.message });
   }
@@ -123,9 +132,11 @@ router.get('/export/csv', authenticate, requireAuditReader, async (req, res) => 
     const csv = buildCsv(result.logs || []);
 
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-    res.setHeader('Content-Disposition', `attachment; filename=logs_${new Date().toISOString().split('T')[0]}.csv`);
+    const prefix = req.query?.source === 'archive' ? 'logs_archive' : 'logs';
+    res.setHeader('Content-Disposition', `attachment; filename=${prefix}_${new Date().toISOString().split('T')[0]}.csv`);
     return res.status(200).send(csv);
   } catch (error) {
+    if (error.statusCode === 422) return sendInvalidSource(res, error);
     logger.error('Erro ao exportar logs CSV:', error.message || error);
     return res.status(500).json({ success: false, error: 'Erro ao exportar logs CSV', message: error.message });
   }
@@ -142,11 +153,58 @@ router.get('/export/xlsx', authenticate, requireAuditReader, async (req, res) =>
     const csv = buildCsv(result.logs || []);
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename=logs_${new Date().toISOString().split('T')[0]}.xlsx`);
+    const prefix = req.query?.source === 'archive' ? 'logs_archive' : 'logs';
+    res.setHeader('Content-Disposition', `attachment; filename=${prefix}_${new Date().toISOString().split('T')[0]}.xlsx`);
     return res.status(200).send(Buffer.from(csv, 'utf8'));
   } catch (error) {
+    if (error.statusCode === 422) return sendInvalidSource(res, error);
     logger.error('Erro ao exportar logs XLSX:', error.message || error);
     return res.status(500).json({ success: false, error: 'Erro ao exportar logs XLSX', message: error.message });
+  }
+});
+
+// #1271: the archived trail. The retention sweep moves expired rows to
+// logs_archive under a policy that cites the legal or regulatory obligation
+// keeping them (LGPD art. 16, I), and an archive kept for an obligation has to
+// be producible when the obligation is invoked. So it is read here, behind the
+// same admin-or-auditor rule as the live trail, never left to database access.
+// The list and export routes above take ?source=archive for the same rows.
+// Registered before '/:id', which would otherwise take 'archive' as a log id.
+router.get('/archive', authenticate, requireAuditReader, async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
+    }
+
+    const result = await logService.getLogs(db, { ...(req.query || {}), source: 'archive' });
+    return res.status(200).json({ success: true, data: result });
+  } catch (error) {
+    logger.error('Erro ao buscar logs arquivados:', error.message || error);
+    return res.status(500).json({ success: false, error: 'Erro ao buscar logs arquivados', message: error.message });
+  }
+});
+
+// #1005: the audit read path over sessions, revoked ones included, for every
+// user (dict-02 P1X-0267, "Sessões > Motivo"). It sits behind the same
+// admin-or-auditor rule as the log trail rather than a named permission, since
+// #1056 made isAuditReader the shared rule for access-log data. Registered
+// before '/:id', which would otherwise take 'sessions' as a log id.
+router.get('/sessions', authenticate, requireAuditReader, async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
+    }
+
+    const result = await sessionService.listSessionsForAudit(db, req.query || {});
+    return res.status(200).json({ success: true, data: result });
+  } catch (error) {
+    if (error.statusCode === 422) {
+      return res.status(422).json({ success: false, error: 'Dados inválidos', message: error.message, details: error.details || [error.message] });
+    }
+    logger.error('Erro ao buscar sessões:', error.message || error);
+    return res.status(500).json({ success: false, error: 'Erro ao buscar sessões', message: error.message });
   }
 });
 

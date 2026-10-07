@@ -64,11 +64,27 @@ function makeSpecimenPreanalyticsCollection() {
   };
 }
 
-function makeDb(collection, rcsAssessmentsCollection = makeRcsAssessmentsCollection(), specimenPreanalyticsCollection = makeSpecimenPreanalyticsCollection()) {
+// #1225: each imported sample appends a SPECIMEN_UPSERTED outbox event. Its
+// own collection keeps that upsert out of the samples collection's updates.
+function makeOutboxCollection() {
+  const events = [];
   return {
+    events,
+    createIndex: async () => true,
+    updateOne: async (query, update) => {
+      events.push(update.$setOnInsert);
+      return { upsertedCount: 1 };
+    },
+  };
+}
+
+function makeDb(collection, rcsAssessmentsCollection = makeRcsAssessmentsCollection(), specimenPreanalyticsCollection = makeSpecimenPreanalyticsCollection(), outboxCollection = makeOutboxCollection()) {
+  return {
+    outboxCollection,
     collection: (name) => {
       if (name === 'rcsAssessments') return rcsAssessmentsCollection;
       if (name === 'specimenPreanalytics') return specimenPreanalyticsCollection;
+      if (name === 'graph_projection_outbox') return outboxCollection;
       return collection;
     },
   };
@@ -102,12 +118,20 @@ describe('ImportService.importSamples (JSON)', () => {
       sprec: { sampleType: 'BLD', primaryContainer: 'PED' },
     })));
     const collection = makeSamplesCollection();
+    const db = makeDb(collection);
 
-    const result = await importService.importSamples(makeDb(collection), { path: filePath, originalname: 'valid.json' });
+    const result = await importService.importSamples(db, { path: filePath, originalname: 'valid.json' });
 
     expect(result).toEqual({ success: 1, errors: [], total: 1 });
     expect(collection.inserted).toHaveLength(1);
     expect(collection.updates).toHaveLength(1);
+    // #1225: the imported sample reaches the graph under its Mongo _id with its donor.
+    expect(db.outboxCollection.events).toHaveLength(1);
+    expect(db.outboxCollection.events[0]).toMatchObject({
+      eventType: 'SPECIMEN_UPSERTED',
+      aggregateId: 'sample-1',
+      payload: { specimenId: 'sample-1', participantId: '12345678' },
+    });
     const sprecPinUpdate = collection.updates.find((call) => call.update?.$set?.sealedSpecimenPreanalyticsId);
     expect(sprecPinUpdate.update.$set.sealedSpecimenPreanalyticsId).toBe('preanalytics-1');
   });
@@ -314,6 +338,27 @@ describe('ImportService.importSamples (CSV)', () => {
     for (const u of collection.updates) {
       expect(u.update.$set || {}).not.toHaveProperty('releaseStatus');
     }
+  });
+
+  it('short-circuits with a structural error naming the read failure when the CSV does not exist (#1175)', async () => {
+    const missingPath = path.join(os.tmpdir(), `does-not-exist-samples-${Date.now()}.csv`);
+    const collection = makeSamplesCollection();
+
+    const result = await importService.importSamples(makeDb(collection), { path: missingPath, originalname: 'missing.csv' });
+
+    expect(result).toEqual({ success: 0, errors: [{ row: 0, error: expect.stringContaining('ENOENT') }], total: 0 });
+  });
+
+  // #1175: the row read is a second stream, after validateCSVStructure's own.
+  // Its source 'error' was never listened for, so a file removed between the
+  // two reads crashed the process instead of rejecting.
+  it('rejects when the row read fails after the structure check passed (#1175)', async () => {
+    const missingPath = path.join(os.tmpdir(), `does-not-exist-samples-${Date.now()}.csv`);
+    vi.spyOn(importService, 'validateCSVStructure').mockResolvedValueOnce({ valid: true });
+    const collection = makeSamplesCollection();
+
+    await expect(importService.importSamples(makeDb(collection), { path: missingPath, originalname: 'missing.csv' }))
+      .rejects.toMatchObject({ code: 'ENOENT' });
   });
 });
 

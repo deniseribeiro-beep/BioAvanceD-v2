@@ -5,10 +5,12 @@ import Button from '../components/UI/Button';
 import Input from '../components/UI/Input';
 import { apiClient } from '../api/client';
 import { reportsService } from '../services/api';
+import { storageApi } from '../services/storageApi';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { getReportTypeDefinition } from '../config/constants/report.constants';
 import { SPREC_FLUID_DICTIONARY, SPREC_SOLID_DICTIONARY } from '../constants/sprecDictionary';
+import { SPECIMEN_TYPES, SAMPLE_ORIGINS } from '../config/constants/specimen.constants';
 import { ArrowLeft, Download, Filter, Search, X } from 'lucide-react';
 import './ReportQueryPage.css';
 
@@ -20,7 +22,7 @@ type LookupOption = {
 
 type FilterValue = string | boolean | LookupOption | null;
 
-type FilterKind = 'autocomplete' | 'select' | 'date' | 'checkbox';
+type FilterKind = 'autocomplete' | 'select' | 'date' | 'checkbox' | 'text' | 'storageBox';
 
 type FilterFieldBase = {
   name: string;
@@ -48,7 +50,25 @@ type CheckboxField = FilterFieldBase & {
   kind: 'checkbox';
 };
 
-type ReportFilterField = AutocompleteField | SelectField | DateField | CheckboxField;
+type TextField = FilterFieldBase & {
+  kind: 'text';
+};
+
+// #1215: a freezer, then a box inside it; the value sent is the box id.
+type StorageBoxField = FilterFieldBase & {
+  kind: 'storageBox';
+};
+
+type ReportFilterField = AutocompleteField | SelectField | DateField | CheckboxField | TextField | StorageBoxField;
+
+// One entry of GET /reports/:type/filters (#732), the per-handler catalog of
+// the filters the backend actually reads for that report type.
+export type CatalogFilter = {
+  name: string;
+  label?: string;
+  type?: string;
+  options?: string[];
+};
 
 type ReportFilterSection = {
   id: string;
@@ -203,8 +223,197 @@ function formatFilename(reportLabel: string) {
     .toLowerCase();
 }
 
-function buildSections(reportKey: string, qualityFields: ReportFilterField[]): ReportFilterSection[] {
-  const sections: ReportFilterSection[] = [];
+// #748 (RF008 AC#1): periodo, colecao, tipo, origem and localizacao, in the
+// AC's own order. `estado` is the quality section's `status` select. The
+// backend reads all of them (#739), but which ones a report type honours is
+// the catalog's answer, not this page's: a dimension renders only when
+// GET /reports/:type/filters lists it for the selected type.
+const INVENTORY_FILTER_NAMES = [
+  'startDate',
+  'endDate',
+  'collectionId',
+  'sampleType',
+  'sampleOrigin',
+  'storageBoxId',
+  'storagePosition',
+] as const;
+
+const INVENTORY_OPTION_LABELS: Record<string, Record<string, string>> = {
+  sampleType: Object.fromEntries(SPECIMEN_TYPES.map((entry) => [entry.id, entry.label])),
+  sampleOrigin: Object.fromEntries(SAMPLE_ORIGINS.map((entry) => [entry.id, entry.label])),
+};
+
+type SprecDictionary = typeof SPREC_FLUID_DICTIONARY | typeof SPREC_SOLID_DICTIONARY;
+
+export function buildQualityFields(dictionary: SprecDictionary): ReportFilterField[] {
+  const axisFields: ReportFilterField[] = [
+    {
+      name: 'sprecSampleType',
+      label: `Axis 1 - ${dictionary.sampleType.label}`,
+      kind: 'select',
+      options: dictionary.sampleType.options,
+      helperText: 'Código SPREC do tipo da amostra.',
+    },
+    {
+      name: 'sprecPrimaryContainer',
+      label: `Axis 2 - ${dictionary.primaryContainer.label}`,
+      kind: 'select',
+      options: dictionary.primaryContainer.options,
+      helperText: 'Código SPREC do recipiente/tipo de coleta.',
+    },
+    {
+      name: 'sprecPreCentrifugation',
+      label: `Axis 3 - ${dictionary.preCentrifugation.label}`,
+      kind: 'select',
+      options: dictionary.preCentrifugation.options,
+    },
+    {
+      name: 'sprecCentrifugation',
+      label: `Axis 4 - ${dictionary.centrifugation.label}`,
+      kind: 'select',
+      options: dictionary.centrifugation.options,
+    },
+    {
+      name: 'sprecSecondCentrifugation',
+      label: `Axis 5 - ${dictionary.secondCentrifugation.label}`,
+      kind: 'select',
+      options: dictionary.secondCentrifugation.options,
+    },
+    {
+      name: 'sprecPostCentrifugationDelay',
+      label: `Axis 6 - ${dictionary.postCentrifugationDelay.label}`,
+      kind: 'select',
+      options: dictionary.postCentrifugationDelay.options,
+    },
+    {
+      name: 'sprecLongTermStorage',
+      label: `Axis 7 - ${dictionary.longTermStorage.label}`,
+      kind: 'select',
+      options: dictionary.longTermStorage.options,
+    },
+  ];
+
+  return [
+    {
+      name: 'sprecMatrixType',
+      label: 'Filtro SPREC - Matriz',
+      kind: 'select',
+      options: SPREC_MATRIX_OPTIONS,
+      helperText: 'Mesmo padrão da fase pré-analítica (Step 2).',
+    },
+    ...axisFields,
+    {
+      // #1214: the key buildSampleQuery reads. `final_grade` was never read,
+      // so this select filtered nothing.
+      name: 'qualityCategory',
+      label: 'Filtro RCS-GOV - Grade final',
+      kind: 'select',
+      options: RCS_GRADE_OPTIONS,
+      helperText: 'Grades RCS-GOV A-E.',
+    },
+    {
+      name: 'status',
+      label: 'Filtro de Status',
+      kind: 'select',
+      options: RELEASE_STATUS_OPTIONS,
+      helperText: 'Status do grafo e da amostra: ativa, quarentena ou esgotada.',
+    },
+  ];
+}
+
+// #1215: GET /storage/freezers and GET /storage/freezer/:id/tree, the
+// shapes StorageHierarchy and InlineStorageMovementPanel already read.
+type FreezerListEntry = { _id?: string; freezerName?: string; name?: string };
+type StorageTree = {
+  shelves?: Array<{ shelfName?: string; racks?: Array<{ rackName?: string; boxes?: Array<{ boxId?: string; boxName?: string }> }> }>;
+};
+
+export function buildFreezerOptions(freezers: FreezerListEntry[] | null | undefined): Array<{ label: string; value: string }> {
+  if (!Array.isArray(freezers)) {
+    return [];
+  }
+  return freezers
+    .filter((freezer) => freezer?._id)
+    .map((freezer) => ({ value: String(freezer._id), label: freezer.freezerName || freezer.name || String(freezer._id) }));
+}
+
+export function flattenTreeBoxes(tree: StorageTree | null | undefined): Array<{ label: string; value: string }> {
+  const options: Array<{ label: string; value: string }> = [];
+  (tree?.shelves || []).forEach((shelf, shelfIndex) => {
+    (shelf.racks || []).forEach((rack, rackIndex) => {
+      (rack.boxes || []).forEach((box) => {
+        if (!box?.boxId) {
+          return;
+        }
+        const path = [shelf.shelfName || `Prateleira ${shelfIndex + 1}`, rack.rackName || `Rack ${rackIndex + 1}`, box.boxName || String(box.boxId)];
+        options.push({ value: String(box.boxId), label: path.join(' / ') });
+      });
+    });
+  });
+  return options;
+}
+
+export function buildInventoryFields(catalog: CatalogFilter[], alreadyRendered: ReadonlySet<string>): ReportFilterField[] {
+  const byName = new Map(catalog.map((entry) => [entry.name, entry]));
+  const fields: ReportFilterField[] = [];
+
+  INVENTORY_FILTER_NAMES.forEach((name) => {
+    const entry = byName.get(name);
+    if (!entry || alreadyRendered.has(name)) {
+      return;
+    }
+
+    const label = entry.label || name;
+    if (entry.type === 'date') {
+      fields.push({ name, label, kind: 'date' });
+    } else if (entry.type === 'storageBox') {
+      fields.push({ name, label, kind: 'storageBox' });
+    } else if (entry.type === 'select' && Array.isArray(entry.options)) {
+      const optionLabels = INVENTORY_OPTION_LABELS[name] || {};
+      fields.push({
+        name,
+        label,
+        kind: 'select',
+        // The ID is what the backend matches on; an ID this page has no
+        // label for still renders rather than silently disappearing.
+        options: entry.options.map((value) => ({ value, label: optionLabels[value] || value })),
+      });
+    } else {
+      fields.push({ name, label, kind: 'text' });
+    }
+  });
+
+  return fields;
+}
+
+// #735: a custom template has no definition here, so its sections are
+// grouped as its handler's system type is. GET /:type/filters names the
+// handler.
+const HANDLER_SECTION_KEYS: Record<string, string> = {
+  samplesByPatient: 'samplesByPatient',
+  patient: 'patients',
+  sample: 'samples',
+  sampleAnalysis: 'sampleAnalysis',
+  temperature: 'temperature',
+  sensor: 'sensors',
+  equipment: 'equipment',
+  result: 'results',
+  withdrawalHistory: 'withdrawalHistory',
+  tissueOriginHistory: 'tissueOriginHistory',
+  extracellularNetwork: 'extracellularNetwork',
+  accessLogs: 'accessLogs',
+  auditEvents: 'audit',
+};
+
+export function resolveSectionKey(reportKey: string, isKnownType: boolean, handlerKey: string | null): string {
+  if (isKnownType || !handlerKey) {
+    return reportKey;
+  }
+  return HANDLER_SECTION_KEYS[handlerKey] || reportKey;
+}
+
+export function buildSections(reportKey: string, qualityFields: ReportFilterField[], catalog: CatalogFilter[] | null = null): ReportFilterSection[] {
+  let sections: ReportFilterSection[] = [];
 
   if (CLINICAL_KEYS.has(reportKey)) {
     sections.push(REPORT_SECTION_LIBRARY.clinical);
@@ -219,6 +428,28 @@ function buildSections(reportKey: string, qualityFields: ReportFilterField[]): R
 
   if (MONITORING_KEYS.has(reportKey)) {
     sections.push(REPORT_SECTION_LIBRARY.monitoring);
+  }
+
+  // #1214: the key sets above group fields; the catalog decides which exist.
+  // Once it has loaded, a field renders only if the type's handler reads it,
+  // and a section left empty is dropped. `null` (fetch pending or failed)
+  // keeps the key-set sections as they are.
+  if (catalog) {
+    const catalogNames = new Set(catalog.map((entry) => entry.name));
+    sections = sections
+      .map((section) => ({ ...section, fields: section.fields.filter((field) => catalogNames.has(field.name)) }))
+      .filter((section) => section.fields.length > 0);
+  }
+
+  const alreadyRendered = new Set(sections.flatMap((section) => section.fields.map((field) => field.name)));
+  const inventoryFields = buildInventoryFields(catalog || [], alreadyRendered);
+  if (inventoryFields.length > 0) {
+    sections.unshift({
+      id: 'inventory',
+      title: 'Inventário (período, coleção, tipo, origem, localização)',
+      description: 'Filtros de inventário do RF008, conforme o catálogo do tipo de relatório selecionado.',
+      fields: inventoryFields,
+    });
   }
 
   return sections;
@@ -406,6 +637,109 @@ function ReportDateField({
   );
 }
 
+function ReportTextField({
+  label,
+  helperText,
+  value,
+  onChange,
+}: {
+  label: string;
+  helperText?: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div className="report-field-stack">
+      <label className="report-field-label">{label}</label>
+      <Input type="text" value={value} aria-label={label} onChange={(event) => onChange(event.target.value)} />
+      {helperText && <p className="report-field-help">{helperText}</p>}
+    </div>
+  );
+}
+
+function ReportStorageBoxField({
+  label,
+  helperText,
+  value,
+  onChange,
+}: {
+  label: string;
+  helperText?: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const [freezerOptions, setFreezerOptions] = useState<Array<{ label: string; value: string }>>([]);
+  const [freezerId, setFreezerId] = useState('');
+  const [boxOptions, setBoxOptions] = useState<Array<{ label: string; value: string }>>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    storageApi.listFreezers().then((response) => {
+      if (!cancelled) {
+        setFreezerOptions(response?.success ? buildFreezerOptions(response.data) : []);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setBoxOptions([]);
+    if (!freezerId) {
+      return undefined;
+    }
+    storageApi.getFreezerTree(freezerId).then((response) => {
+      if (!cancelled) {
+        setBoxOptions(response?.success ? flattenTreeBoxes(response.data) : []);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [freezerId]);
+
+  const freezerLabel = `${label} — freezer`;
+
+  return (
+    <div className="report-field-stack">
+      <label className="report-field-label">{label}</label>
+      <select
+        className="report-select"
+        value={freezerId}
+        aria-label={freezerLabel}
+        onChange={(event) => {
+          setFreezerId(event.target.value);
+          onChange('');
+        }}
+      >
+        <option value="">Todos os freezers</option>
+        {freezerOptions.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+      <select
+        className="report-select"
+        value={value}
+        aria-label={label}
+        disabled={!freezerId}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        <option value="">Todas as caixas</option>
+        {boxOptions.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+      {helperText && <p className="report-field-help">{helperText}</p>}
+    </div>
+  );
+}
+
 function ReportCheckboxField({
   label,
   helperText,
@@ -472,6 +806,24 @@ function ReportField({
           onChange={(nextValue) => onChange(field.name, nextValue)}
         />
       );
+    case 'text':
+      return (
+        <ReportTextField
+          label={field.label}
+          helperText={field.helperText}
+          value={String(values[field.name] || '')}
+          onChange={(nextValue) => onChange(field.name, nextValue)}
+        />
+      );
+    case 'storageBox':
+      return (
+        <ReportStorageBoxField
+          label={field.label}
+          helperText={field.helperText}
+          value={String(values[field.name] || '')}
+          onChange={(nextValue) => onChange(field.name, nextValue)}
+        />
+      );
     case 'checkbox':
       return (
         <ReportCheckboxField
@@ -494,98 +846,68 @@ export default function ReportQueryPage() {
 
   const reportDefinition = getReportTypeDefinition(type);
   const reportKey = reportDefinition?.key || String(type || '');
-  const reportLabel = reportDefinition ? t(reportDefinition.type, reportDefinition.fallbackType) : 'Relatório';
+  // #735: a custom template has no definition; GET /:type/filters names it
+  // and its handler.
+  const [templateMeta, setTemplateMeta] = useState<{ handlerKey: string | null; name: string | null; description: string | null }>({
+    handlerKey: null,
+    name: null,
+    description: null,
+  });
+  const reportLabel = reportDefinition ? t(reportDefinition.type, reportDefinition.fallbackType) : templateMeta.name || 'Relatório';
   const reportDescription = reportDefinition
     ? t(reportDefinition.description, reportDefinition.fallbackDescription)
-    : 'Configure os filtros e exporte o relatório';
+    : templateMeta.description || 'Configure os filtros e exporte o relatório';
 
   const [values, setValues] = useState<Record<string, FilterValue>>({});
   const [error, setError] = useState('');
   const [exporting, setExporting] = useState(false);
+  const [filterCatalog, setFilterCatalog] = useState<CatalogFilter[] | null>(null);
 
   const sprecMatrixType = String(values.sprecMatrixType || 'fluid').trim().toLowerCase() === 'solid' ? 'solid' : 'fluid';
   const activeSprecDictionary = sprecMatrixType === 'solid' ? SPREC_SOLID_DICTIONARY : SPREC_FLUID_DICTIONARY;
 
-  const qualityFields = useMemo<ReportFilterField[]>(() => {
-    const axisFields: ReportFilterField[] = [
-      {
-        name: 'sprecSampleType',
-        label: `Axis 1 - ${activeSprecDictionary.sampleType.label}`,
-        kind: 'select',
-        options: activeSprecDictionary.sampleType.options,
-        helperText: 'Código SPREC do tipo da amostra.',
-      },
-      {
-        name: 'sprecPrimaryContainer',
-        label: `Axis 2 - ${activeSprecDictionary.primaryContainer.label}`,
-        kind: 'select',
-        options: activeSprecDictionary.primaryContainer.options,
-        helperText: 'Código SPREC do recipiente/tipo de coleta.',
-      },
-      {
-        name: 'sprecPreCentrifugation',
-        label: `Axis 3 - ${activeSprecDictionary.preCentrifugation.label}`,
-        kind: 'select',
-        options: activeSprecDictionary.preCentrifugation.options,
-      },
-      {
-        name: 'sprecCentrifugation',
-        label: `Axis 4 - ${activeSprecDictionary.centrifugation.label}`,
-        kind: 'select',
-        options: activeSprecDictionary.centrifugation.options,
-      },
-      {
-        name: 'sprecSecondCentrifugation',
-        label: `Axis 5 - ${activeSprecDictionary.secondCentrifugation.label}`,
-        kind: 'select',
-        options: activeSprecDictionary.secondCentrifugation.options,
-      },
-      {
-        name: 'sprecPostCentrifugationDelay',
-        label: `Axis 6 - ${activeSprecDictionary.postCentrifugationDelay.label}`,
-        kind: 'select',
-        options: activeSprecDictionary.postCentrifugationDelay.options,
-      },
-      {
-        name: 'sprecLongTermStorage',
-        label: `Axis 7 - ${activeSprecDictionary.longTermStorage.label}`,
-        kind: 'select',
-        options: activeSprecDictionary.longTermStorage.options,
-      },
-    ];
-
-    return [
-      {
-        name: 'sprecMatrixType',
-        label: 'Filtro SPREC - Matriz',
-        kind: 'select',
-        options: SPREC_MATRIX_OPTIONS,
-        helperText: 'Mesmo padrão da fase pré-analítica (Step 2).',
-      },
-      ...axisFields,
-      {
-        name: 'final_grade',
-        label: 'Filtro RCS-GOV - Grade final',
-        kind: 'select',
-        options: RCS_GRADE_OPTIONS,
-        helperText: 'Grades RCS-GOV A-E.',
-      },
-      {
-        name: 'status',
-        label: 'Filtro de Status',
-        kind: 'select',
-        options: RELEASE_STATUS_OPTIONS,
-        helperText: 'Status do grafo e da amostra: ativa, quarentena ou esgotada.',
-      },
-    ];
-  }, [activeSprecDictionary]);
+  const qualityFields = useMemo(() => buildQualityFields(activeSprecDictionary), [activeSprecDictionary]);
 
   useEffect(() => {
     setValues({});
     setError('');
   }, [reportKey]);
 
-  const sections = useMemo(() => buildSections(reportKey, qualityFields), [qualityFields, reportKey]);
+  // #748: the per-type catalog decides which inventory dimensions render. A
+  // failed fetch leaves the page as it was before #748, never blocks export.
+  useEffect(() => {
+    let cancelled = false;
+    setFilterCatalog(null);
+    setTemplateMeta({ handlerKey: null, name: null, description: null });
+    if (!reportKey) {
+      return undefined;
+    }
+    reportsService
+      .getFilters(reportKey)
+      .then((response) => {
+        if (!cancelled) {
+          setFilterCatalog(Array.isArray(response?.data?.filters) ? response.data.filters : null);
+          setTemplateMeta({
+            handlerKey: typeof response?.data?.handlerKey === 'string' ? response.data.handlerKey : null,
+            name: typeof response?.data?.name === 'string' ? response.data.name : null,
+            description: typeof response?.data?.description === 'string' ? response.data.description : null,
+          });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setFilterCatalog(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [reportKey]);
+
+  const sections = useMemo(
+    () => buildSections(resolveSectionKey(reportKey, Boolean(reportDefinition), templateMeta.handlerKey), qualityFields, filterCatalog),
+    [filterCatalog, qualityFields, reportKey, reportDefinition, templateMeta.handlerKey]
+  );
 
   const searchOrpha = useCallback(async (query: string): Promise<LookupOption[]> => {
     const trimmed = normalizeText(query);

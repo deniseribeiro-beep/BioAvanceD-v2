@@ -8,6 +8,9 @@ const { createCursorMock } = require('../factories/cursor.factory');
 const modulePaths = {
   auth: require.resolve('../../src/infrastructure/middleware/auth'),
   rbac: require.resolve('../../src/infrastructure/middleware/rbac'),
+  // #1266: the export gate reads security_config, which these db mocks
+  // cannot answer; it is stubbed open here and tested on its own.
+  exportGate: require.resolve('../../src/infrastructure/middleware/lgpdExportGate'),
   controller: require.resolve('../../src/interface/routes/reports.routes'),
 };
 
@@ -87,6 +90,14 @@ function buildCollectionDb(collections = {}) {
           capturedQueries[`${name}.findOne`] = query;
           return docs.find((doc) => Object.entries(query).every(([key, value]) => doc[key] === value)) || null;
         },
+        // #1185: DELETE /api/reports/:id -- same equality semantics as findOne.
+        async deleteOne(query = {}) {
+          capturedQueries[`${name}.deleteOne`] = query;
+          const index = docs.findIndex((doc) => Object.entries(query).every(([key, value]) => doc[key] === value));
+          if (index === -1) return { deletedCount: 0 };
+          docs.splice(index, 1);
+          return { deletedCount: 1 };
+        },
       };
     },
   };
@@ -109,8 +120,20 @@ describe('reports.routes.js gaps', () => {
     next();
   };
   const requirePermission = () => (_req, _res, next) => next();
+  // #1186: records each registration's requireRole(...) arguments and
+  // denies when a request carries x-deny-role, so a test can tell which
+  // routes the gate is on without re-implementing the hierarchy lookup.
+  let requireRoleCalls = [];
+  // #1266: open unless a request carries x-deny-export, so a test can tell
+  // which routes carry the export gate.
+  const exportGate = (req, res, next) => (req.headers['x-deny-export'] ? res.status(403).json({ gate: 'export' }) : next());
+  const requireRole = (...levels) => {
+    requireRoleCalls.push(levels);
+    return (req, res, next) => (req.headers['x-deny-role'] ? res.status(403).json({ gate: 'role' }) : next());
+  };
 
   beforeEach(() => {
+    requireRoleCalls = [];
     vi.clearAllMocks();
 
     for (const modulePath of Object.values(modulePaths)) {
@@ -118,7 +141,8 @@ describe('reports.routes.js gaps', () => {
     }
 
     setCachedModule(modulePaths.auth, { authenticate });
-    setCachedModule(modulePaths.rbac, { requirePermission });
+    setCachedModule(modulePaths.rbac, { requirePermission, requireRole });
+    setCachedModule(modulePaths.exportGate, { requireDataExportAllowed: exportGate });
     delete require.cache[modulePaths.controller];
   });
 
@@ -1012,12 +1036,13 @@ describe('reports.routes.js gaps', () => {
     expect(p1.sampleCount).toBe(1);
   });
 
-  it('logs/audit: aplica intervalo de datas na query', async () => {
+  // #733: `access_logs` reads `logs`; `audit` reads audit_events (reports.api.test.js).
+  it('logs/access_logs: aplica intervalo de datas na query', async () => {
     const { db, capturedQueries } = buildCollectionDb({ logs: [{ dateTime: new Date('2026-01-05') }] });
     const testApp = appWithDb(db);
 
     const response = await request(testApp)
-      .post('/api/reports/audit/preview')
+      .post('/api/reports/access_logs/preview')
       .send({ filters: { startDate: '2026-01-01', endDate: '2026-01-31' } });
 
     expect(response.status).toBe(200);
@@ -1377,6 +1402,90 @@ describe('reports.routes.js gaps', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.reportID).toBe(1);
+    });
+
+    // #1185: DELETE had neither the scope resolution nor the record check
+    // its GET sibling above runs, so any viewReports holder could delete
+    // any organization's report.
+    it('DELETE /api/reports/:id: 403 quando o relatório pertence a outra organização, e nada é removido', async () => {
+      const reports = [{ reportID: 1, reportType: 'audit', organizationIds: ['org-9'] }];
+      const { db, capturedQueries } = buildCollectionDb({ ...ORG_SCOPED_RBAC, reports });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).delete('/api/reports/1');
+
+      expect(response.status).toBe(403);
+      expect(capturedQueries['reports.deleteOne']).toBeUndefined();
+      expect(reports).toHaveLength(1);
+    });
+
+    it('DELETE /api/reports/:id: 403 quando o usuário não tem nenhuma organização atribuída', async () => {
+      const reports = [{ reportID: 1, reportType: 'audit', organizationIds: ['org-1'] }];
+      const { db } = buildCollectionDb({ ...NO_ASSIGNMENT_RBAC, reports });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).delete('/api/reports/1');
+
+      expect(response.status).toBe(403);
+      expect(reports).toHaveLength(1);
+    });
+
+    // #1186: viewReports is UsuarioExterno's whole permission set, and
+    // RF008's actor is the Coordenador -- the external actor only consults
+    // (diagrams-index). Deleting a saved report is Coordenador-and-up.
+    it('DELETE /api/reports/:id is gated on requireRole(3, 4), and nothing else in the file is', async () => {
+      const reports = [{ reportID: 1, reportType: 'audit', organizationIds: ['org-1'] }];
+      const { db } = buildCollectionDb({ ...ORG_SCOPED_RBAC, reports });
+      const testApp = appWithDb(db);
+
+      const denied = await request(testApp).delete('/api/reports/1').set('x-deny-role', '1');
+
+      expect(requireRoleCalls).toEqual([[3, 4]]);
+      expect(denied.status).toBe(403);
+      expect(denied.body.gate).toBe('role');
+      expect(reports).toHaveLength(1);
+    });
+
+    // #1266: lgpd.allowDataExport gates the two export routes, and only them.
+    it('#1266: GET /:type/export and /:type/export/pdf are behind the export gate', async () => {
+      const { db } = buildCollectionDb({ ...ORG_SCOPED_RBAC, reports: [] });
+      const testApp = appWithDb(db);
+
+      for (const path of ['/api/reports/patient/export', '/api/reports/patient/export/pdf']) {
+        const denied = await request(testApp).get(path).set('x-deny-export', '1');
+        expect(denied.status, path).toBe(403);
+        expect(denied.body.gate, path).toBe('export');
+      }
+    });
+
+    it('#1266 CONTROL: the report preview is not behind the export gate', async () => {
+      const { db } = buildCollectionDb({ ...ORG_SCOPED_RBAC, reports: [] });
+      const testApp = appWithDb(db);
+
+      const res = await request(testApp).post('/api/reports/patient/preview').send({}).set('x-deny-export', '1');
+
+      expect(res.body.gate).not.toBe('export');
+    });
+
+    it('CONTROL: GET /api/reports/:id is not behind the role gate', async () => {
+      const reports = [{ reportID: 1, reportType: 'audit', organizationIds: ['org-1'] }];
+      const { db } = buildCollectionDb({ ...ORG_SCOPED_RBAC, reports });
+      const testApp = appWithDb(db);
+
+      const res = await request(testApp).get('/api/reports/1').set('x-deny-role', '1');
+
+      expect(res.status).toBe(200);
+    });
+
+    it('CONTROL: DELETE /api/reports/:id remove um relatório no escopo do usuário', async () => {
+      const reports = [{ reportID: 1, reportType: 'audit', organizationIds: ['org-1'] }];
+      const { db } = buildCollectionDb({ ...ORG_SCOPED_RBAC, reports });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).delete('/api/reports/1');
+
+      expect(response.status).toBe(200);
+      expect(reports).toHaveLength(0);
     });
   });
 

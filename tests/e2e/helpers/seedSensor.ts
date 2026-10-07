@@ -58,7 +58,6 @@ export async function seedSensorWithPolicy(
 
   const policyResult = await db.collection('temperaturePolicies').insertOne({
     name: `RF009 e2e policy ${suffix}`,
-    targetTemp: (minTemp + maxTemp) / 2,
     minTemp,
     maxTemp,
     hysteresis: 0.5,
@@ -173,7 +172,6 @@ export async function seedSensorWithFreezerSample(
 
   const policyResult = await db.collection('temperaturePolicies').insertOne({
     name: `RF009 propagate e2e policy ${suffix}`,
-    targetTemp: (minTemp + maxTemp) / 2,
     minTemp,
     maxTemp,
     hysteresis: 0.5,
@@ -266,6 +264,12 @@ export async function seedSensorWithFreezerSample(
   };
 }
 
+/** Reads back the Mongo Sample document seedSensorWithFreezerSample created. */
+export async function findFreezerSample(sensor: SeededFreezerSample): Promise<any | null> {
+  const db = await getDb();
+  return db.collection('samples').findOne({ _id: new ObjectId(sensor.rootSampleId) });
+}
+
 /** Deletes everything seedSensorWithFreezerSample created (sensor, device, policy, storage hierarchy, sample, and any excursion/incident it triggered). */
 export async function removeSeededFreezerSample(sensor: SeededFreezerSample): Promise<void> {
   const db = await getDb();
@@ -276,11 +280,32 @@ export async function removeSeededFreezerSample(sensor: SeededFreezerSample): Pr
     db.collection('environmentalExcursions').deleteMany({ equipmentId: sensor.deviceId }),
     db.collection('temperatureIncidents').deleteMany({ sensorKey: sensor.sensorId }),
     db.collection('samples').deleteMany({ _id: new ObjectId(sensor.rootSampleId) }),
+    // Written when a cold-chain quarantine fires for this sample (#1207, #1208).
+    db.collection('sample_movements').deleteMany({ sampleID: sensor.rootSampleId }),
+    db.collection('quarantineActions').deleteMany({ specimenIds: sensor.rootSampleId }),
     db.collection('storageBoxes').deleteMany({ _id: new ObjectId(sensor.boxId) }),
     db.collection('storageContainers').deleteMany({
       _id: { $in: [new ObjectId(sensor.rackId), new ObjectId(sensor.shelfId), new ObjectId(sensor.freezerId)] },
     }),
   ]);
+}
+
+/** Deletes one temperaturePolicies document by _id (e.g. one created through the API). */
+export async function removeTemperaturePolicy(policyId: string): Promise<void> {
+  const db = await getDb();
+  await db.collection('temperaturePolicies').deleteOne({ _id: new ObjectId(policyId) });
+}
+
+/** Reads back a temperaturePolicies doc by _id (raw, no Mongoose) to assert the stored canonical shape. */
+export async function findTemperaturePolicy(policyId: string): Promise<any | null> {
+  const db = await getDb();
+  return db.collection('temperaturePolicies').findOne({ _id: new ObjectId(policyId) });
+}
+
+/** Same as findTemperaturePolicy, keyed by the unique name a UI-created policy was given. */
+export async function findTemperaturePolicyByName(name: string): Promise<any | null> {
+  const db = await getDb();
+  return db.collection('temperaturePolicies').findOne({ name });
 }
 
 /** Deletes a seeded freezer container and its linked sensorMetadata/sensors docs. */

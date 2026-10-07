@@ -5,6 +5,10 @@ const require = createRequire(import.meta.url);
 const jwt = require('jsonwebtoken');
 const { ObjectId } = require('mongodb');
 const fhirImportStagingService = require('../../src/services/fhir-import-staging.service');
+// #1191: staged records are sealed at rest; a test that reads or edits one
+// directly goes through the same reveal/seal the service uses.
+const { sealStagedRecord, revealStagedRecord } = require('../../src/utils/stagedRowCrypto');
+const FHIR_STAGING_SEALED_FIELDS = ['row', 'normalized', 'fhir', 'consentTracking'];
 const notificationService = require('../../src/services/NotificationService');
 const qualityDomain = require('../../src/services/quality-domain.service');
 const fhirImportStagingController = require('../../src/controllers/fhir-import-staging.controller');
@@ -207,6 +211,25 @@ describe('FHIR import staging', () => {
     expect(result.records[1].validationErrors.some((error) => error.field === 'patientName')).toBe(true);
   });
 
+  // #1191: normalized carries patientName/patientDocument/patientBirthDate/
+  // patientEmail and fhir carries the whole Patient resource, so the staged
+  // record is sealed at rest like the LGPD quarantine (#807). The service's
+  // own result is read back through the same reveal every reader uses.
+  it('#1191: stores no civil identity in plaintext, and hands it back revealed', async () => {
+    const result = await fhirImportStagingService.stageBundle(db, signedBundle, { fileName: 'bundle.json' });
+
+    const atRest = JSON.stringify(db.collections.import_staging_records.docs);
+    expect(atRest).not.toContain('Paciente Staging');
+    expect(atRest).not.toContain('13360378652');
+    expect(atRest).not.toContain('paciente@example.org');
+    expect(atRest).not.toContain('1990-01-01');
+    expect(db.collections.import_staging_records.docs[0].sealedPayload).toBeTruthy();
+
+    expect(result.records[0].normalized.patientName).toBe('Paciente Staging');
+    expect(result.records[0].normalized.patientEmail).toBe('paciente@example.org');
+    expect(result.records[0].fhir.patient.id).toBe('P-001');
+  });
+
   it('aceita Bundle mínimo com Patient + Specimen e cria batch/staging sem persistir definitivo', async () => {
     const minimalBundle = {
       resourceType: 'Bundle',
@@ -406,7 +429,7 @@ describe('FHIR import staging', () => {
     await fhirImportStagingService.stageBundle(db, signedBundle, { fileName: 'bundle.json' });
 
     expect(spy).toHaveBeenCalled();
-    expect(db.collections.import_staging_records.docs[0].normalized.rcsPreview.final_grade).toBe('A');
+    expect(revealStagedRecord(db.collections.import_staging_records.docs[0]).normalized.rcsPreview.final_grade).toBe('A');
   });
 
   it('controller retorna 400 controlado, nunca 500, para erro de validação', async () => {
@@ -602,9 +625,11 @@ describe('FHIR import staging', () => {
 
     const staged = await fhirImportStagingService.stageBundle(db, bundle, { fileName: 'bundle.json' });
     await fhirImportStagingService.sendConsents(db, staged.batch._id, { userID: 'admin' });
-    const record = db.collections.import_staging_records.docs[0];
+    const stored = db.collections.import_staging_records.docs[0];
+    const record = revealStagedRecord(stored);
     record.normalized.consentSigned = true;
     record.consentTracking.signedAt = new Date();
+    Object.assign(stored, sealStagedRecord(record, { fields: FHIR_STAGING_SEALED_FIELDS }));
 
     const committed = await fhirImportStagingService.commitBatch(db, staged.batch._id);
     expect(committed.committed).toBe(1);

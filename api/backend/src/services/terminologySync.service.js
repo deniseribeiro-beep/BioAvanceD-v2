@@ -1,6 +1,8 @@
 const crypto = require('crypto');
 const Terminology = require('../models/Terminology');
 const logger = require('../utils/logger');
+const { dropLegacyIndex } = require('../utils/legacyIndex');
+const { buildLookupIndex } = require('../utils/lookupIndex');
 
 const DEFAULT_TIMEOUT_MS = 15000;
 const ORPHADATA_BASE_URL = process.env.ORPHADATA_BASE_URL || '';
@@ -49,20 +51,57 @@ async function ensureTerminologyIndexes(collection, collectionName = 'terminolog
   if (!collection || typeof collection.createIndex !== 'function' || !collectionName) return;
   if (indexedTerminologyCollections.has(collectionName)) return;
 
+  // #1164: `$gt: ''`, not `$type: 'string'`. Both keep missing/null rows
+  // out (comparisons are type-bracketed, so `$gt: ''` means "a non-empty
+  // string"), but the planner cannot prove a plain equality implies a
+  // `$type` filter, so the `$type` version enforced uniqueness while never
+  // serving a single lookup. The new name is built FIRST, then the
+  // superseded one dropped, so the constraint never has a gap.
+  // Here that lookup is the sync upsert's own `{ sistema, codigo }` filter,
+  // run once per synced record.
   try {
     await collection.createIndex(
       { sistema: 1, codigo: 1 },
       {
-        name: 'terminologies_sistema_codigo_unique_v2',
+        name: 'terminologies_sistema_codigo_unique_v3',
         unique: true,
-        partialFilterExpression: { sistema: { $type: 'string' }, codigo: { $type: 'string' } },
+        partialFilterExpression: { sistema: { $gt: '' }, codigo: { $gt: '' } },
       }
     );
+    // Only once the replacement exists: a failed build keeps the old constraint.
+    await dropLegacyIndex(collection, 'terminologies_sistema_codigo_unique_v2', 'TERMINOLOGIES');
   } catch (error) {
-    logger.warn(`Não foi possível criar índice terminologies_sistema_codigo_unique_v2 em ${collectionName}: ${error.message}`);
+    logger.warn(`Não foi possível criar índice terminologies_sistema_codigo_unique_v3 em ${collectionName}: ${error.message}`);
   }
 
   indexedTerminologyCollections.add(collectionName);
+}
+
+// #1163: the plain, non-unique { sistema, codigo } LOOKUP behind
+// `GET /api/terminologies`, which runs find(filter).sort({ sistema: 1,
+// codigo: 1 }).limit(n) with at most a `sistema` equality. The unique index
+// above cannot serve it: its partial filter constrains `codigo` too, so a
+// query that does not mention `codigo` is ineligible. Measured on mongo:7
+// with 20k rows, the default listing went from a 20,000-document COLLSCAN
+// to 100 examined, because the index serves the sort and `limit` stops the
+// scan. It supersedes the model's inert field-level `sistema` index.
+//
+// Kept apart from `ensureTerminologyIndexes` because the two are wired at
+// different places for different reasons: the unique one where the
+// collection is written, this one where the list is read (utils/lookupIndex.js).
+const terminologyLookupIndexed = new Set();
+
+async function ensureTerminologyLookupIndexes(collection) {
+  if (!collection || typeof collection.createIndex !== 'function') return;
+
+  const name = collection.collectionName;
+  if (terminologyLookupIndexed.has(name)) return;
+  terminologyLookupIndexed.add(name);
+
+  await buildLookupIndex(
+    collection, { sistema: 1, codigo: 1 },
+    'terminologies_sistema_codigo_idx_v1', 'TERMINOLOGIES'
+  );
 }
 
 function isExternalTerminologySyncEnabled() {
@@ -434,4 +473,5 @@ module.exports = {
   normalizeRecord,
   isExternalTerminologySyncEnabled,
   ensureTerminologyIndexes,
+  ensureTerminologyLookupIndexes,
 };

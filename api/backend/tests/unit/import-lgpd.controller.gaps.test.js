@@ -239,9 +239,13 @@ describe('import-lgpd.controller gaps', () => {
 
       expect(cleanupSpy).toHaveBeenCalledWith(file.path);
       expect(res.status).toHaveBeenCalledWith(400);
-      expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({ success: false, error: 'groupFields inválido' })
-      );
+      // #840: full body -- error, reason token AND message.
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'groupFields inválido',
+        reason: 'malformed',
+        message: 'groupFields deve ser um JSON válido'
+      });
     });
 
     // #818's actual subject: the boundary must reject an operator-shaped
@@ -268,6 +272,15 @@ describe('import-lgpd.controller gaps', () => {
       expect(importSpy).not.toHaveBeenCalled();
       expect(cleanupSpy).toHaveBeenCalledWith(file.path);
       expect(res.status).toHaveBeenCalledWith(400);
+      // #840: the "value" reason token and its own Portuguese sentence, not
+      // the "malformed" body every rejection used to answer regardless of
+      // why parseGroupFields rejected the payload.
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'groupFields inválido',
+        reason: 'value',
+        message: 'groupFields aceita apenas chaves simples com valores texto, número ou booleano'
+      });
     });
 
     // #837: mapping's JSON.parse was the last unguarded parse in this

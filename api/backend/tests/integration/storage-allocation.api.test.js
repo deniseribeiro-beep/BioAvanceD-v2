@@ -68,11 +68,37 @@ function ledgerCollections() {
   };
 }
 
+// #1211: every storage mutation is bounded by the caller's organization. A
+// sample is scoped by collectionSite (the interim tenancy key, #1192); a box
+// by its root freezer's Equipment, as the topology creates are (#1210).
+// makeToken's non-admin callers resolve to 'test-org-default'
+// (rbac.factory.js), so HOME_ORG is their own organization.
+const HOME_ORG = 'test-org-default';
+const HOME_TREE = { freezerId: new ObjectId(), shelfId: new ObjectId(), rackId: new ObjectId() };
+
+function treeInOrg(organizationId, tree = HOME_TREE, equipmentID = 4201) {
+  const byId = new Map([
+    [String(tree.freezerId), { _id: tree.freezerId, containerType: 'FREEZER', containerID: equipmentID, parent_id: null, deletedAt: null }],
+    [String(tree.shelfId), { _id: tree.shelfId, containerType: 'SHELF', parent_id: tree.freezerId, deletedAt: null }],
+    [String(tree.rackId), { _id: tree.rackId, containerType: 'RACK', parent_id: tree.shelfId, deletedAt: null }],
+  ]);
+  return {
+    storageContainers: createCollectionMock({
+      findOne: vi.fn().mockImplementation(async (filter) => (
+        filter?._id instanceof ObjectId ? byId.get(String(filter._id)) || null : null
+      )),
+    }),
+    equipment: createCollectionMock({
+      findOne: vi.fn().mockResolvedValue({ _id: new ObjectId(), equipmentID, organizationId, deletedAt: null }),
+    }),
+  };
+}
+
 describe('POST /api/storage/allocate', () => {
   it('rejects accessType 1 with 403 -- the permission gate is server-side, not a frontend hide', async () => {
     const samples = createCollectionMock();
     const storageBoxes = createCollectionMock();
-    app.locals.db = dbWithRbac({ samples, storageBoxes, ...ledgerCollections() }, 1);
+    app.locals.db = dbWithRbac({ samples, storageBoxes, ...treeInOrg(HOME_ORG), ...ledgerCollections() }, 1);
 
     const res = await request(app)
       .post('/api/storage/allocate')
@@ -83,12 +109,12 @@ describe('POST /api/storage/allocate', () => {
   });
 
   it('accessType 2 allocates successfully and really enters a transaction -- session opened once, ended once', async () => {
-    const sample = { _id: SAMPLE_ID, barcode: 'BR-001', storageLocation: null };
-    const box = { _id: BOX_ID, name: 'Box A1-01', dimension: { rows: 9, cols: 9 }, occupancyGrid: {} };
+    const sample = { _id: SAMPLE_ID, barcode: 'BR-001', collectionSite: HOME_ORG, storageLocation: null };
+    const box = { _id: BOX_ID, name: 'Box A1-01', parent_id: HOME_TREE.rackId, dimension: { rows: 9, cols: 9 }, occupancyGrid: {} };
     const samples = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sample) });
     const storageBoxes = createCollectionMock({ findOne: vi.fn().mockResolvedValue(box) });
     const storageAssignments = createCollectionMock();
-    const db = dbWithRbac({ samples, storageBoxes, storageAssignments, ...ledgerCollections() }, 2);
+    const db = dbWithRbac({ samples, storageBoxes, ...treeInOrg(HOME_ORG), storageAssignments, ...ledgerCollections() }, 2);
     app.locals.db = db;
 
     const res = await request(app)
@@ -102,8 +128,8 @@ describe('POST /api/storage/allocate', () => {
   });
 
   it('carries the same transaction session on every write -- box update, sample update, assignment insert, movement insert', async () => {
-    const sample = { _id: SAMPLE_ID, barcode: 'BR-001', storageLocation: null };
-    const box = { _id: BOX_ID, name: 'Box A1-01', dimension: { rows: 9, cols: 9 }, occupancyGrid: {} };
+    const sample = { _id: SAMPLE_ID, barcode: 'BR-001', collectionSite: HOME_ORG, storageLocation: null };
+    const box = { _id: BOX_ID, name: 'Box A1-01', parent_id: HOME_TREE.rackId, dimension: { rows: 9, cols: 9 }, occupancyGrid: {} };
     const boxUpdateOne = vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
     const sampleUpdateOne = vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
     const assignmentInsertOne = vi.fn().mockResolvedValue({ insertedId: new ObjectId() });
@@ -111,7 +137,7 @@ describe('POST /api/storage/allocate', () => {
     const storageBoxes = createCollectionMock({ findOne: vi.fn().mockResolvedValue(box), updateOne: boxUpdateOne });
     const storageAssignments = createCollectionMock({ insertOne: assignmentInsertOne });
     const { sample_movements, counters } = ledgerCollections();
-    const db = dbWithRbac({ samples, storageBoxes, storageAssignments, sample_movements, counters }, 2);
+    const db = dbWithRbac({ samples, storageBoxes, ...treeInOrg(HOME_ORG), storageAssignments, sample_movements, counters }, 2);
     app.locals.db = db;
 
     const res = await request(app)
@@ -128,8 +154,8 @@ describe('POST /api/storage/allocate', () => {
   });
 
   it('a box-update matchedCount:0 surfaces as 409, not 500 -- the occupancy-collision guard actually fires', async () => {
-    const sample = { _id: SAMPLE_ID, barcode: 'BR-001', storageLocation: null };
-    const box = { _id: BOX_ID, name: 'Box A1-01', dimension: { rows: 9, cols: 9 }, occupancyGrid: { A1: SAMPLE_ID } };
+    const sample = { _id: SAMPLE_ID, barcode: 'BR-001', collectionSite: HOME_ORG, storageLocation: null };
+    const box = { _id: BOX_ID, name: 'Box A1-01', parent_id: HOME_TREE.rackId, dimension: { rows: 9, cols: 9 }, occupancyGrid: { A1: SAMPLE_ID } };
     const samples = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sample) });
     const storageBoxes = createCollectionMock({
       findOne: vi.fn().mockResolvedValue(box),
@@ -140,7 +166,7 @@ describe('POST /api/storage/allocate', () => {
       // the collision path.
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 0, modifiedCount: 0 }),
     });
-    app.locals.db = dbWithRbac({ samples, storageBoxes, ...ledgerCollections() }, 2);
+    app.locals.db = dbWithRbac({ samples, storageBoxes, ...treeInOrg(HOME_ORG), ...ledgerCollections() }, 2);
 
     const res = await request(app)
       .post('/api/storage/allocate')
@@ -189,15 +215,15 @@ describe('POST /api/storage/move', () => {
   });
 
   it('a valid move succeeds and the movement insert carries the transaction session', async () => {
-    const sample = { _id: SAMPLE_ID, barcode: 'BR-001', storageLocation: { boxId: BOX_ID, position: 'A1' } };
-    const targetBox = { _id: TARGET_BOX_ID, name: 'Box B', dimension: { rows: 9, cols: 9 }, occupancyGrid: {} };
+    const sample = { _id: SAMPLE_ID, barcode: 'BR-001', collectionSite: HOME_ORG, storageLocation: { boxId: BOX_ID, position: 'A1' } };
+    const targetBox = { _id: TARGET_BOX_ID, name: 'Box B', parent_id: HOME_TREE.rackId, dimension: { rows: 9, cols: 9 }, occupancyGrid: {} };
     const openAssignment = { specimenId: String(SAMPLE_ID), boxId: BOX_ID, positionCode: 'A1', removedAt: null };
 
     const samples = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sample) });
     const storageBoxes = createCollectionMock({ findOne: vi.fn().mockResolvedValue(targetBox) });
     const storageAssignments = createCollectionMock({ findOne: vi.fn().mockResolvedValue(openAssignment) });
     const { sample_movements, counters } = ledgerCollections();
-    const db = dbWithRbac({ samples, storageBoxes, storageAssignments, sample_movements, counters }, 2);
+    const db = dbWithRbac({ samples, storageBoxes, ...treeInOrg(HOME_ORG), storageAssignments, sample_movements, counters }, 2);
     app.locals.db = db;
 
     const res = await request(app)
@@ -222,7 +248,7 @@ describe('DELETE /api/storage/release/:sampleId', () => {
   });
 
   it('a sample with no open storage assignment is 400 and never opens a session', async () => {
-    const sample = { _id: SAMPLE_ID, barcode: 'BR-001', storageLocation: { boxId: BOX_ID, position: 'A1' } };
+    const sample = { _id: SAMPLE_ID, barcode: 'BR-001', collectionSite: HOME_ORG, storageLocation: { boxId: BOX_ID, position: 'A1' } };
     const samples = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sample) });
     // storageAssignments deliberately left at its default findOne (-> null):
     // no open StorageAssignment row for this specimen.
@@ -238,7 +264,7 @@ describe('DELETE /api/storage/release/:sampleId', () => {
   });
 
   it('a valid release succeeds and the assignment-closing update carries the transaction session', async () => {
-    const sample = { _id: SAMPLE_ID, barcode: 'BR-001', storageLocation: { boxId: BOX_ID, position: 'A1' } };
+    const sample = { _id: SAMPLE_ID, barcode: 'BR-001', collectionSite: HOME_ORG, storageLocation: { boxId: BOX_ID, position: 'A1' } };
     const openAssignment = { specimenId: String(SAMPLE_ID), boxId: BOX_ID, positionCode: 'A1', removedAt: null };
     const assignmentUpdateOne = vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
 
@@ -253,5 +279,230 @@ describe('DELETE /api/storage/release/:sampleId', () => {
 
     expect(res.status).toBe(200);
     expect(assignmentUpdateOne).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.objectContaining({ session: db.session }));
+  });
+});
+
+// #1211: before this, allocate/move/release checked the permission code and
+// nothing else, so a Tecnico of one organization could place, move or release
+// another organization's specimen given its id, or place their own specimen
+// into another organization's box. Refused before any transaction opens.
+describe('storage mutations are bounded by the caller organization (#1211)', () => {
+  const FOREIGN_TREE = { freezerId: new ObjectId(), shelfId: new ObjectId(), rackId: new ObjectId() };
+
+  function foreignSample(storageLocation = null) {
+    return { _id: SAMPLE_ID, barcode: 'BR-009', collectionSite: 'org-other', storageLocation };
+  }
+
+  function boxUnder(tree, _id = BOX_ID) {
+    return { _id, name: 'Box', parent_id: tree.rackId, dimension: { rows: 9, cols: 9 }, occupancyGrid: {} };
+  }
+
+  function openAssignmentFor(boxId) {
+    const openAssignment = { specimenId: String(SAMPLE_ID), boxId, positionCode: 'A1', removedAt: null };
+    return createCollectionMock({ findOne: vi.fn().mockResolvedValue(openAssignment) });
+  }
+
+  function homeSample(storageLocation = null) {
+    return { _id: SAMPLE_ID, barcode: 'BR-001', collectionSite: HOME_ORG, storageLocation };
+  }
+
+  it('POST /allocate refuses another organization\'s sample, without opening a session', async () => {
+    const samples = createCollectionMock({ findOne: vi.fn().mockResolvedValue(foreignSample()) });
+    const storageBoxes = createCollectionMock({ findOne: vi.fn().mockResolvedValue(boxUnder(HOME_TREE)) });
+    const db = dbWithRbac({ samples, storageBoxes, ...treeInOrg(HOME_ORG), ...ledgerCollections() }, 2);
+    app.locals.db = db;
+
+    const res = await request(app)
+      .post('/api/storage/allocate')
+      .set('Authorization', `Bearer ${makeToken(2)}`)
+      .send({ sampleId: SAMPLE_ID.toString(), boxId: BOX_ID.toString(), position: 'A1' });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe('SAMPLE_OUT_OF_SCOPE');
+    expect(db.client.startSession).not.toHaveBeenCalled();
+    expect(storageBoxes.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('POST /allocate refuses a box whose root freezer is on another organization\'s Equipment', async () => {
+    const samples = createCollectionMock({ findOne: vi.fn().mockResolvedValue(homeSample()) });
+    const storageBoxes = createCollectionMock({ findOne: vi.fn().mockResolvedValue(boxUnder(FOREIGN_TREE)) });
+    const db = dbWithRbac({ samples, storageBoxes, ...treeInOrg('org-other', FOREIGN_TREE), ...ledgerCollections() }, 2);
+    app.locals.db = db;
+
+    const res = await request(app)
+      .post('/api/storage/allocate')
+      .set('Authorization', `Bearer ${makeToken(2)}`)
+      .send({ sampleId: SAMPLE_ID.toString(), boxId: BOX_ID.toString(), position: 'A1' });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe('EQUIPMENT_OUT_OF_SCOPE');
+    expect(db.client.startSession).not.toHaveBeenCalled();
+  });
+
+  it('POST /allocate refuses a box with no reachable freezer -- an unresolvable tree fails closed', async () => {
+    const orphan = { ...boxUnder(HOME_TREE), parent_id: new ObjectId() };
+    const samples = createCollectionMock({ findOne: vi.fn().mockResolvedValue(homeSample()) });
+    const storageBoxes = createCollectionMock({ findOne: vi.fn().mockResolvedValue(orphan) });
+    const db = dbWithRbac({ samples, storageBoxes, ...treeInOrg(HOME_ORG), ...ledgerCollections() }, 2);
+    app.locals.db = db;
+
+    const res = await request(app)
+      .post('/api/storage/allocate')
+      .set('Authorization', `Bearer ${makeToken(2)}`)
+      .send({ sampleId: SAMPLE_ID.toString(), boxId: BOX_ID.toString(), position: 'A1' });
+
+    expect(res.status).toBe(403);
+    expect(db.client.startSession).not.toHaveBeenCalled();
+  });
+
+  it('POST /allocate/auto refuses another organization\'s sample', async () => {
+    const samples = createCollectionMock({ findOne: vi.fn().mockResolvedValue(foreignSample()) });
+    const storageBoxes = createCollectionMock({ findOne: vi.fn().mockResolvedValue(boxUnder(HOME_TREE)) });
+    app.locals.db = dbWithRbac({ samples, storageBoxes, ...treeInOrg(HOME_ORG), ...ledgerCollections() }, 2);
+
+    const res = await request(app)
+      .post('/api/storage/allocate/auto')
+      .set('Authorization', `Bearer ${makeToken(2)}`)
+      .send({ sampleId: SAMPLE_ID.toString(), boxId: BOX_ID.toString() });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe('SAMPLE_OUT_OF_SCOPE');
+    expect(storageBoxes.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('POST /move refuses another organization\'s sample', async () => {
+    const samples = createCollectionMock({ findOne: vi.fn().mockResolvedValue(foreignSample({ boxId: BOX_ID, position: 'A1' })) });
+    const storageBoxes = createCollectionMock({ findOne: vi.fn().mockResolvedValue(boxUnder(HOME_TREE, TARGET_BOX_ID)) });
+    const db = dbWithRbac({ samples, storageBoxes, storageAssignments: openAssignmentFor(BOX_ID), ...treeInOrg(HOME_ORG), ...ledgerCollections() }, 2);
+    app.locals.db = db;
+
+    const res = await request(app)
+      .post('/api/storage/move')
+      .set('Authorization', `Bearer ${makeToken(2)}`)
+      .send({ sampleId: SAMPLE_ID.toString(), targetBoxId: TARGET_BOX_ID.toString(), targetPosition: 'B2' });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe('SAMPLE_OUT_OF_SCOPE');
+    expect(db.client.startSession).not.toHaveBeenCalled();
+  });
+
+  it('POST /move refuses a target box in another organization\'s tree', async () => {
+    const samples = createCollectionMock({ findOne: vi.fn().mockResolvedValue(homeSample({ boxId: BOX_ID, position: 'A1' })) });
+    const storageBoxes = createCollectionMock({ findOne: vi.fn().mockResolvedValue(boxUnder(FOREIGN_TREE, TARGET_BOX_ID)) });
+    const db = dbWithRbac({ samples, storageBoxes, storageAssignments: openAssignmentFor(BOX_ID), ...treeInOrg('org-other', FOREIGN_TREE), ...ledgerCollections() }, 2);
+    app.locals.db = db;
+
+    const res = await request(app)
+      .post('/api/storage/move')
+      .set('Authorization', `Bearer ${makeToken(2)}`)
+      .send({ sampleId: SAMPLE_ID.toString(), targetBoxId: TARGET_BOX_ID.toString(), targetPosition: 'B2' });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe('EQUIPMENT_OUT_OF_SCOPE');
+    expect(db.client.startSession).not.toHaveBeenCalled();
+  });
+
+  it('DELETE /release/:sampleId refuses another organization\'s sample', async () => {
+    const openAssignment = { specimenId: String(SAMPLE_ID), boxId: BOX_ID, positionCode: 'A1', removedAt: null };
+    const samples = createCollectionMock({ findOne: vi.fn().mockResolvedValue(foreignSample({ boxId: BOX_ID, position: 'A1' })) });
+    const storageAssignments = createCollectionMock({ findOne: vi.fn().mockResolvedValue(openAssignment) });
+    app.locals.db = dbWithRbac({ samples, storageAssignments, ...ledgerCollections() }, 2);
+
+    const res = await request(app)
+      .delete(`/api/storage/release/${SAMPLE_ID}`)
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe('SAMPLE_OUT_OF_SCOPE');
+    expect(storageAssignments.updateOne).not.toHaveBeenCalled();
+  });
+
+  // #1216: the create response names a specimen by its specimenId, and the
+  // scope lookup is by _id and passes quietly on a miss. These findOne doubles
+  // honour the filter, so a specimenId the boundary did not resolve would
+  // miss, sail past the scope check, and never reach the 403.
+  const SPECIMEN_ID = '3116768';
+  function samplesBySpecimenId(sample) {
+    return createCollectionMock({
+      findOne: vi.fn(async (filter = {}) => {
+        if (filter.specimenId === SPECIMEN_ID) return sample;
+        if (filter._id && String(filter._id) === String(SAMPLE_ID)) return sample;
+        return null;
+      }),
+    });
+  }
+
+  it('#1216: POST /allocate by specimenId refuses another organization\'s sample', async () => {
+    const samples = samplesBySpecimenId({ ...foreignSample(), specimenId: SPECIMEN_ID });
+    const storageBoxes = createCollectionMock({ findOne: vi.fn().mockResolvedValue(boxUnder(HOME_TREE)) });
+    const db = dbWithRbac({ samples, storageBoxes, ...treeInOrg(HOME_ORG), ...ledgerCollections() }, 2);
+    app.locals.db = db;
+
+    const res = await request(app)
+      .post('/api/storage/allocate')
+      .set('Authorization', `Bearer ${makeToken(2)}`)
+      .send({ sampleId: SPECIMEN_ID, boxId: BOX_ID.toString(), position: 'A1' });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe('SAMPLE_OUT_OF_SCOPE');
+    expect(db.client.startSession).not.toHaveBeenCalled();
+  });
+
+  it('#1216: DELETE /release/:sampleId by specimenId refuses another organization\'s sample', async () => {
+    const openAssignment = { specimenId: String(SAMPLE_ID), boxId: BOX_ID, positionCode: 'A1', removedAt: null };
+    const samples = samplesBySpecimenId({ ...foreignSample({ boxId: BOX_ID, position: 'A1' }), specimenId: SPECIMEN_ID });
+    const storageAssignments = createCollectionMock({ findOne: vi.fn().mockResolvedValue(openAssignment) });
+    app.locals.db = dbWithRbac({ samples, storageAssignments, ...ledgerCollections() }, 2);
+
+    const res = await request(app)
+      .delete(`/api/storage/release/${SPECIMEN_ID}`)
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe('SAMPLE_OUT_OF_SCOPE');
+    expect(storageAssignments.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('PATCH /freezer/:freezerId/room refuses a freezer on another organization\'s Equipment', async () => {
+    const tree = treeInOrg('org-other', FOREIGN_TREE);
+    const rooms = createCollectionMock({ findOne: vi.fn().mockResolvedValue({ _id: new ObjectId(), deletedAt: null }) });
+    app.locals.db = dbWithRbac({ ...tree, rooms }, 3);
+
+    const res = await request(app)
+      .patch(`/api/storage/freezer/${FOREIGN_TREE.freezerId}/room`)
+      .set('Authorization', `Bearer ${makeToken(3)}`)
+      .send({ roomId: new ObjectId().toString() });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe('EQUIPMENT_OUT_OF_SCOPE');
+    expect(tree.storageContainers.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('PATCH /freezer/:freezerId/room still works on the caller\'s own freezer (control)', async () => {
+    const tree = treeInOrg(HOME_ORG);
+    const rooms = createCollectionMock({ findOne: vi.fn().mockResolvedValue({ _id: new ObjectId(), deletedAt: null }) });
+    app.locals.db = dbWithRbac({ ...tree, rooms }, 3);
+
+    const res = await request(app)
+      .patch(`/api/storage/freezer/${HOME_TREE.freezerId}/room`)
+      .set('Authorization', `Bearer ${makeToken(3)}`)
+      .send({ roomId: new ObjectId().toString() });
+
+    expect(res.status).toBe(200);
+    expect(tree.storageContainers.updateOne).toHaveBeenCalledTimes(1);
+  });
+
+  it('an Administrador (global scope) allocates another organization\'s sample into another organization\'s box (control)', async () => {
+    const samples = createCollectionMock({ findOne: vi.fn().mockResolvedValue(foreignSample()) });
+    const storageBoxes = createCollectionMock({ findOne: vi.fn().mockResolvedValue(boxUnder(FOREIGN_TREE)) });
+    const storageAssignments = createCollectionMock();
+    app.locals.db = dbWithRbac({ samples, storageBoxes, storageAssignments, ...treeInOrg('org-other', FOREIGN_TREE), ...ledgerCollections() }, 4);
+
+    const res = await request(app)
+      .post('/api/storage/allocate')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ sampleId: SAMPLE_ID.toString(), boxId: BOX_ID.toString(), position: 'A1' });
+
+    expect(res.status).toBe(201);
   });
 });

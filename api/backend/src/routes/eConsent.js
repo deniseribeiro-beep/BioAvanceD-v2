@@ -70,14 +70,24 @@ function resolveConsentSecretOr500(res) {
 }
 
 // Gera link seguro para o paciente
-router.post('/generate-link', authenticate, requirePermission('createPatient'), async (req, res) => {
+router.post('/generate-link', authenticate, requirePermission('requestConsent'), async (req, res) => {
   const { participantId, email } = req.body;
   if (!participantId || !email) return res.status(400).json({ error: 'participantId e email obrigatórios' });
 
   const db = req.app.locals.db;
   const patient = await db.collection('patients').findOne({ participantId });
   if (!patient) return res.status(404).json({ error: 'Paciente não encontrado' });
-  if (patient.email !== email) {
+
+  // #1166: the address on file is identity data (dict-02 P1X-0352), so the
+  // check reads the decrypted ParticipantIdentity record, its only home since
+  // slice 4. Compared case-insensitively because every writer canonicalizes
+  // the address to lowercase before encrypting it, so only the caller's
+  // spelling can differ in case.
+  const rawIdentity = await db.collection('participantIdentities').findOne({ participantId });
+  const identity = rawIdentity ? participantIdentityService.decryptIdentity(rawIdentity) : null;
+  const emailOnFile = participantIdentityService.withIdentityContact(patient, identity).email;
+  const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
+  if (!emailOnFile || normalizeEmail(emailOnFile) !== normalizeEmail(email)) {
     return res.status(403).json({ error: 'Email não corresponde ao paciente' });
   }
 
@@ -97,7 +107,7 @@ router.post('/generate-link', authenticate, requirePermission('createPatient'), 
     // was the more dangerous of the two: had the strict path not thrown, it
     // would have emailed a real participant a link to their own localhost.
     const link = `${notificationService.getFrontendUrl()}/patient/e-consent/${token}`;
-    await notificationService.sendConsentEmail({ participantId, email }, link);
+    await notificationService.sendConsentEmail({ participantId, email: emailOnFile }, link);
     return res.json({ success: true, link });
   } catch (error) {
     logger.error('Erro ao gerar link de consentimento:', error);
@@ -125,9 +135,9 @@ router.get('/validate/:token', async (req, res) => {
     if (!patient) return res.status(404).json({ error: 'Paciente não encontrado' });
 
     // RF005/RNF007 (#562/#574): patientName/birthDate/identityDocument are civil
-    // identity — resolved via ParticipantIdentity, not trusted from Patient's
-    // own (soon to be removed) copy of the fields. decryptIdentity falls back
-    // to the ciphertext sibling once the plaintext field is dropped (#566).
+    // identity — resolved via ParticipantIdentity, never from the Patient
+    // document (#575). All three are ciphertext-only there (#1104), so
+    // decryptIdentity is what recovers them.
     const rawIdentity = await db.collection('participantIdentities').findOne({ participantId: payload.participantId });
     const identity = rawIdentity ? participantIdentityService.decryptIdentity(rawIdentity) : null;
     const patientWithIdentity = identity
@@ -230,7 +240,7 @@ router.post('/update', async (req, res) => {
           );
           if (!wasQuarantined) {
             await quarantineActionService.recordAction(db, {
-              specimenIds: [String(sample._id)],
+              specimenIds: [quarantineActionService.canonicalSpecimenId(sample)],
               reasonCodes: ['CONSENT_REVOKED'],
             });
           }
@@ -260,7 +270,7 @@ router.post('/update', async (req, res) => {
             { $set: { specimenStatus, updatedAt: new Date() } }
           );
           if (wasQuarantined) {
-            await quarantineActionService.releaseActiveAction(db, String(sample._id), 'SYSTEM');
+            await quarantineActionService.releaseActiveAction(db, sample, 'SYSTEM');
           }
         }
       }
@@ -328,7 +338,7 @@ router.get('/consent-policies/active-with-caae', authenticate, consentController
 router.get('/consent-policies/history', authenticate, requireRole(3, 4), consentController.getPoliciesHistory.bind(consentController));
 router.get('/consent-policies', authenticate, requireRole(3, 4), consentController.getAllPolicies.bind(consentController));
 
-router.post('/consents', authenticate, consentController.createPatientConsent.bind(consentController));
+router.post('/consents', authenticate, requireRole(3, 4), consentController.createPatientConsent.bind(consentController));
 // #684: was authenticate-only, while every neighbouring consent-policy
 // route gates on requireRole(3, 4) -- so any authenticated user of any
 // role could revoke any patient's consent by guessing a Mongo _id.

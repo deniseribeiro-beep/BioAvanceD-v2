@@ -1179,10 +1179,12 @@ describe('workers/import-worker', () => {
       const job = { name: 'consent-notification', data: { userId: 'u1', patientId: 'p1' } };
       await notificationProcessor(job);
 
+      // #1166: with the worker's own connection, which the job needs to
+      // resolve the participant's name and contact.
       expect(fakeNotificationService.processConsentNotificationJob).toHaveBeenCalledWith({
         userId: 'u1',
         patientId: 'p1',
-      });
+      }, fakeDb);
     });
 
     it('returns null (without calling the notification service) for an unknown job name', async () => {

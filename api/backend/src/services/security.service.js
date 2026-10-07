@@ -1,6 +1,11 @@
+const crypto = require('crypto');
+const { isDeepStrictEqual } = require('util');
+const env = require('../config/env');
 const logger = require('../utils/logger');
 const auditLogger = require('../utils/auditLogger');
 const sessionService = require('./session.service');
+const configurationReleaseService = require('./configurationRelease.service');
+const logLevel = require('../utils/logLevel');
 
 /**
  * Service de Configurações de Segurança
@@ -10,7 +15,49 @@ const sessionService = require('./session.service');
 // detectChanges must not report them as user-visible policy changes -- they are
 // rewritten on every save by definition. Before the flattening these lived under
 // a `metadata` object and were skipped by the typeof-object branch instead.
-const SERVER_OWNED_KEYS = ['configVersion', 'lastUpdatedAt', 'lastUpdatedBy'];
+// #966, RF014 AC2: the identity, environment, release and validity fields are
+// server-owned too, written from the active ConfigurationRelease.
+const SERVER_OWNED_KEYS = [
+  'configVersion', 'lastUpdatedAt', 'lastUpdatedBy',
+  'securityConfigId', 'environment', 'effectivePeriod', 'configurationReleaseId',
+];
+
+// RF014 AC2/AC4: every saved change is a ConfigurationRelease of this
+// profile, one per environment (plano §4 F1.2, "Uma release ativa por
+// ambiente"). The environment is the one the Foundation job records,
+// env.NODE_ENV (FoundationDataRun P1X-0399: development|test|staging|production).
+const SECURITY_PROFILE_NAME = 'security-configuration';
+
+function settingsOf(config) {
+  const settings = {};
+  for (const group of CONFIG_GROUPS) {
+    if (config && config[group]) settings[group] = { ...config[group] };
+  }
+  return settings;
+}
+
+// The eight policy groups. updateConfig merges only these, one level deep
+// (#904), so any other top-level key a caller sends is never stored.
+const CONFIG_GROUPS = [
+  'authentication',
+  'passwordRules',
+  'session',
+  'loginAttempts',
+  'logging',
+  'privacy',
+  'enhancedSecurity',
+  'lgpd'
+];
+
+const TYPE_NAMES = { number: 'um número', boolean: 'verdadeiro ou falso', string: 'um texto' };
+
+function isPlainObject(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) && !(value instanceof Date);
+}
+
+function isNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value);
+}
 
 // #649 / RF014 AC#8: "Revogar sessoes quando a alteracao exigir." The
 // requirement is deliberately conditional -- "quando a alteracao exigir" -- and
@@ -20,11 +67,12 @@ const SERVER_OWNED_KEYS = ['configVersion', 'lastUpdatedAt', 'lastUpdatedBy'];
 //   revoke when a TIGHTENING invalidates a guarantee an already-issued session
 //   is currently relying on.
 //
-// That yields exactly one entry today, and the shortness is the finding, not an
-// oversight. session.timeoutMinutes is the only SecurityConfiguration key any
-// code path actually enforces (#914 wired it; the session snapshots it at
-// creation, so an existing session keeps the OLD, more generous limit until it
-// is revoked -- which is precisely the gap AC#8 names).
+// That yields two entries today, and the shortness is the finding, not an
+// oversight. session.timeoutMinutes and session.maxSessionDurationHours are the
+// only SecurityConfiguration keys any code path actually enforces (#914 wired
+// both; the session snapshots them at creation, so an existing session keeps
+// the OLD, more generous limit until it is revoked -- which is precisely the
+// gap AC#8 names).
 //
 // Deliberately NOT included, each for a stated reason:
 //  - authentication.requireMFA / enhancedSecurity.requireMFAForAll: still inert
@@ -41,7 +89,176 @@ const SERVER_OWNED_KEYS = ['configVersion', 'lastUpdatedAt', 'lastUpdatedBy'];
 // directions here -- it includes maxLoginAttempts and privacy.autoPurge and
 // omits maxSessionDurationHours. Coupling session lifecycle to audit-log
 // severity would mean a future logging tweak starts or stops logging people out.
-const SESSION_INVALIDATING_PATHS = ['session.timeoutMinutes'];
+const SESSION_INVALIDATING_PATHS = ['session.timeoutMinutes', 'session.maxSessionDurationHours'];
+
+// #1254: every security_config document stored before the key was wired holds
+// session.allowMultipleSessions false, the old code default, while the system
+// allowed several sessions per user. Read as stored, the switch would make every
+// such deployment single-session at its next boot, a flip no administrator
+// chose (#1011 kept administrator MFA optional for the same reason). So a stored
+// false that no audit row shows an administrator setting is rewritten to true,
+// once. The marker in systemBootstrap makes it once: after it, a false is an
+// administrator's choice, even after the retention sweep has moved or deleted
+// the row that recorded it.
+const ALLOW_MULTIPLE_SESSIONS_MARKER = 'allow_multiple_sessions_default_v1';
+const ALLOW_MULTIPLE_SESSIONS_PATH = 'session.allowMultipleSessions';
+// #1116 renamed the audit rows' resourceType; rows written before keep the old
+// spelling. logs_archive holds the rows the retention sweep moved (#1259).
+const SECURITY_CONFIG_AUDIT_FILTER = Object.freeze({
+  resourceType: { $in: ['SecurityConfiguration', 'SecurityConfig'] },
+  'payload.path': ALLOW_MULTIPLE_SESSIONS_PATH,
+});
+
+// #1248: three keys of the logging and privacy groups restate what the active
+// RetentionPolicy (retentionPolicy.service, #440) already decides, and
+// retentionSweep.service applies it nightly to `logs` and `audit_events`.
+// dict-02 keeps them as SecurityConfiguration fields (P1X-0304 says
+// logging.retentionDays "deve alinhar-se a RetentionPolicy"), so they stay in
+// the document, but they are derived from the policy rather than edited:
+//  - logging.retentionDays: the policy's retentionPeriod, in days.
+//  - privacy.autoPurge: whether the sweep removes anything from the live
+//    collections, which it does for 'destroy' and 'archive' (#1259).
+//  - privacy.purgeAfterDays: the same period, while the action is 'destroy'.
+// With no active policy covering Log or AuditEvent, nothing is purged:
+// autoPurge is false and the two periods are null. A second retention
+// authority is what #1248 rules out, so a write to these paths is dropped.
+const RETENTION_GOVERNED_PATHS = ['logging.retentionDays', 'privacy.autoPurge', 'privacy.purgeAfterDays'];
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+async function resolveRetentionGoverned(db) {
+  const retentionPolicyService = require('./retentionPolicy.service');
+  const { iso8601DurationToMs } = require('../utils/iso8601Duration');
+  const unset = { 'logging.retentionDays': null, 'privacy.autoPurge': false, 'privacy.purgeAfterDays': null };
+  try {
+    const policy = await retentionPolicyService.getActivePolicy(db);
+    const covered = policy && Array.isArray(policy.applicableEntityTypes)
+      && policy.applicableEntityTypes.some((type) => type === 'Log' || type === 'AuditEvent');
+    if (!covered) return { source: { entity: 'RetentionPolicy', policyId: null, version: null }, values: unset };
+    const days = Math.round(iso8601DurationToMs(policy.retentionPeriod) / DAY_MS);
+    return {
+      source: {
+        entity: 'RetentionPolicy',
+        policyId: String(policy._id),
+        version: policy.version || null,
+        postRetentionAction: policy.postRetentionAction,
+      },
+      values: {
+        'logging.retentionDays': days,
+        'privacy.autoPurge': ['destroy', 'archive'].includes(policy.postRetentionAction),
+        'privacy.purgeAfterDays': policy.postRetentionAction === 'destroy' ? days : null,
+      },
+    };
+  } catch (error) {
+    // The paths stay governed (read-only); only their values are unknown.
+    logger.warn(`#1248: política de retenção ilegível: ${error.message}`);
+    return { source: { entity: 'RetentionPolicy', policyId: null, version: null, unavailable: true }, values: null };
+  }
+}
+
+// #1260, #1261: keys whose behaviour is fixed, whatever the document says.
+// Nothing ever read them, so a value other than the one below changed
+// nothing. They stay in the document (dict-02 keeps them), show read-only,
+// and a write to them is dropped, exactly as for the retention keys.
+//  - 'audit-required': RNF009 AC 1 requires auditing authentication,
+//    configuration and every other critical event, so login attempts and
+//    auditable actions are always recorded. Turning that off is not an option
+//    the requirement leaves. enhancedSecurity.logAllActions (P1X-0314) is the
+//    same switch inside the reinforced mode.
+//  - 'always-anonymized': log reads always go through
+//    userAnonymization.anonymizeLogs (log.service, reports.routes). P1X-0305's
+//    "substitui identidade direta por anonId nos logs de consulta" is that
+//    behaviour, and LGPD art. 6 III (necessidade) argues against a view that
+//    drops it.
+//  - 'not-applied': no job applies a retention or anonymisation period to
+//    data other than logs; the RetentionPolicy sweep covers only Log and
+//    AuditEvent (#1248). The page says so rather than offer a period that
+//    nothing enforces.
+// #1262, the lgpd group:
+//  - 'consent-required': consent.enforcement and the lineage consent gate
+//    enforce consent unconditionally. Consent for sensitive health data is a
+//    legal basis (LGPD art. 11 I), not a preference, so requireConsent
+//    (P1X-0319) is true.
+//  - 'consent-no-expiry': a PatientConsent carries no expiry; its validity
+//    is the ConsentPolicy's validFrom/validTo window. P1X-0320 applies "when
+//    defined by the policy", and none defines a per-consent period.
+//  - 'export-pseudonymised' (#1266): every export of the system writes
+//    pseudonymised rows. The report exports keep only EXPORT_CATALOG's
+//    allow-listed columns (no name, contact or document), HL7/FHIR/CDA
+//    carry only the participantId, and every log export runs anonymizeLogs
+//    (#1267). RNF007 AC 5 requires exactly that, so anonymizeOnExport
+//    (P1X-0318) is true.
+// lgpd.allowDataDeletion and lgpd.allowDataExport are not here: the patient
+// delete and the personal-data exports read them.
+const FIXED_PATHS = {
+  'logging.logLoginAttempts': { value: true, reason: 'audit-required' },
+  'logging.logAllActions': { value: true, reason: 'audit-required' },
+  'enhancedSecurity.logAllActions': { value: true, reason: 'audit-required' },
+  'privacy.anonymizeLogs': { value: true, reason: 'always-anonymized' },
+  'privacy.dataRetentionDays': { value: null, reason: 'not-applied' },
+  'privacy.anonymizeAfterDays': { value: null, reason: 'not-applied' },
+  'lgpd.requireConsent': { value: true, reason: 'consent-required' },
+  'lgpd.consentExpirationDays': { value: null, reason: 'consent-no-expiry' },
+  'lgpd.anonymizeOnExport': { value: true, reason: 'export-pseudonymised' },
+};
+const GOVERNED_PATHS = [...RETENTION_GOVERNED_PATHS, ...Object.keys(FIXED_PATHS)];
+
+function applyFixedValues(config) {
+  for (const [path, { value }] of Object.entries(FIXED_PATHS)) {
+    const [group, key] = path.split('.');
+    if (config[group]) config[group][key] = value;
+  }
+}
+
+function applyRetentionGoverned(config, governed) {
+  const out = { ...config, governedBy: {} };
+  for (const path of RETENTION_GOVERNED_PATHS) {
+    const [group, key] = path.split('.');
+    out.governedBy[path] = governed.source;
+    if (governed.values) {
+      out[group] = { ...(out[group] || {}), [key]: governed.values[path] };
+    }
+  }
+  for (const [path, { value, reason }] of Object.entries(FIXED_PATHS)) {
+    const [group, key] = path.split('.');
+    out.governedBy[path] = { entity: 'Fixed', policyId: null, version: null, fixed: reason };
+    // A document missing the whole group is not given a one-key group.
+    if (out[group]) out[group] = { ...out[group], [key]: value };
+  }
+  return out;
+}
+
+function withoutRetentionGoverned(config) {
+  const out = { ...config };
+  for (const path of GOVERNED_PATHS) {
+    const [group, key] = path.split('.');
+    if (out[group] && Object.prototype.hasOwnProperty.call(out[group], key)) {
+      const { [key]: _dropped, ...rest } = out[group];
+      out[group] = rest;
+    }
+  }
+  delete out.governedBy;
+  return out;
+}
+
+// #1260: logging.level (P1X-0301) sets the backend logger's minimum level.
+// An absent or unknown value leaves the current level, which starts at 'info'.
+function applyLogLevel(config) {
+  const level = config && config.logging && config.logging.level;
+  if (level) logLevel.setMinLevel(level);
+}
+
+// #1262, #1266: an lgpd permission switch, read directly from the document.
+// Absent means the default, true; an unreadable document refuses.
+async function readLgpdSwitch(db, key) {
+  try {
+    const doc = await db.collection('security_config')
+      .findOne({ _id: 'main' }, { projection: { [`lgpd.${key}`]: 1 } });
+    return doc?.lgpd?.[key] !== false;
+  } catch (error) {
+    logger.warn(`#1266: configuração LGPD ilegível, lgpd.${key} tratado como desabilitado: ${error.message}`);
+    return false;
+  }
+}
 
 function requiresSessionRevocation(changes) {
   return changes.some((change) => {
@@ -72,13 +289,18 @@ class SecurityService {
       },
       
       // Regras de Senha
+      // #1257: NIST SP 800-63B-4 §3.1.1.2 (see password.service): 15 for an
+      // account that signs in without MFA, 8 for one enrolled in MFA, no
+      // composition rules and no periodic expiry. A new deployment's values;
+      // a stored document keeps its own.
       passwordRules: {
-        minLength: 8,
-        requireUppercase: true,
-        requireLowercase: true,
-        requireNumbers: true,
-        requireSpecialChars: true,
-        expirationDays: 90,
+        minLength: 15,
+        minLengthWithMFA: 8,
+        requireUppercase: false,
+        requireLowercase: false,
+        requireNumbers: false,
+        requireSpecialChars: false,
+        expirationDays: 0,
         preventReuse: true,
         maxReuseHistory: 5
       },
@@ -87,7 +309,10 @@ class SecurityService {
       session: {
         timeoutMinutes: 30, // timeout por inatividade
         maxSessionDurationHours: 12,
-        allowMultipleSessions: false,
+        // #1254: true, what the system has always done. dict-02 P1X-0294 states
+        // no default and its example is true; false is an administrator's
+        // choice (session.service ends the other sessions at sign-in).
+        allowMultipleSessions: true,
         autoRenewal: true, // renovação automática enquanto usuário estiver ativo
         logExpiration: true // registrar logs quando sessão for expirada
       },
@@ -141,8 +366,106 @@ class SecurityService {
       // appears nowhere in the dictionary, and renamed two of its three members.
       configVersion: 1,
       lastUpdatedAt: new Date(),
-      lastUpdatedBy: null
+      lastUpdatedBy: null,
+
+      // #966: P1X-0276 securityConfigId, a uuid assigned when the document
+      // is first stored (the Mongo _id stays 'main', which every reader
+      // keys on). P1X-0277 environment, the deployment it governs.
+      // P1X-0324 effectivePeriod, copied from the active release.
+      securityConfigId: null,
+      environment: env.NODE_ENV,
+      effectivePeriod: null,
+      // CFG-004: "Toda execução ou decisão registra configurationReleaseId".
+      configurationReleaseId: null
     };
+  }
+
+  /**
+   * #1260: applies the stored logging.level to this process's logger. server.js
+   * runs it at boot and on a poll, so a level saved through another replica
+   * reaches this one. Reads the document directly: getConfig would insert the
+   * default document as a side effect of a background read.
+   */
+  async syncLogLevel(db) {
+    try {
+      const doc = await db.collection('security_config')
+        .findOne({ _id: 'main' }, { projection: { 'logging.level': 1 } });
+      applyLogLevel(doc);
+    } catch (error) {
+      logger.warn(`#1260: nível de log não sincronizado: ${error.message}`);
+    }
+  }
+
+  /**
+   * #1262: lgpd.allowDataDeletion (P1X-0317, "permite execução de eliminação
+   * quando juridicamente aplicável") gates the patient delete. Read directly,
+   * for the reason syncLogLevel gives. An absent key is the default, true.
+   * An unreadable document refuses: a deletion cannot be undone, so the
+   * failure falls on the side that can be retried.
+   */
+  async isDataDeletionAllowed(db) {
+    return readLgpdSwitch(db, 'allowDataDeletion');
+  }
+
+  /**
+   * #1266: lgpd.allowDataExport (P1X-0316) gates the exports of personal
+   * data: the report exports and the sample-file HL7/FHIR/CDA exports. The
+   * audit-log exports are not personal-data exports and stay open to their
+   * readers. Same reading rules as isDataDeletionAllowed; a refused export
+   * can simply be retried.
+   */
+  async isDataExportAllowed(db) {
+    return readLgpdSwitch(db, 'allowDataExport');
+  }
+
+  /**
+   * #1254: the one-time rewrite of an unchosen allowMultipleSessions false
+   * (see ALLOW_MULTIPLE_SESSIONS_MARKER). Run at boot; idempotent.
+   */
+  async reconcileAllowMultipleSessions(db) {
+    const bootstrap = db.collection('systemBootstrap');
+    if (await bootstrap.findOne({ _id: ALLOW_MULTIPLE_SESSIONS_MARKER })) {
+      return { status: 'already_reconciled' };
+    }
+
+    const configCollection = db.collection('security_config');
+    const config = await configCollection.findOne({ _id: 'main' });
+    let outcome = 'no_document';
+    if (config) {
+      outcome = 'kept';
+      if (config.session && config.session.allowMultipleSessions === false) {
+        const chosen = await db.collection('logs').findOne(SECURITY_CONFIG_AUDIT_FILTER)
+          || await db.collection('logs_archive').findOne(SECURITY_CONFIG_AUDIT_FILTER);
+        if (chosen) {
+          outcome = 'kept_administrator_choice';
+        } else {
+          await configCollection.updateOne(
+            { _id: 'main', [ALLOW_MULTIPLE_SESSIONS_PATH]: false },
+            { $set: { [ALLOW_MULTIPLE_SESSIONS_PATH]: true, updatedAt: new Date() } }
+          );
+          outcome = 'rewritten';
+          auditLogger.init(db);
+          await auditLogger.log({
+            action: 'UPDATE',
+            resourceType: 'SecurityConfiguration',
+            resourceId: 'main',
+            status: 'success',
+            severity: this.getSeverityForChange(ALLOW_MULTIPLE_SESSIONS_PATH),
+            message: `Configuração de segurança alterada: ${ALLOW_MULTIPLE_SESSIONS_PATH} (padrão sem escolha de administrador corrigido)`,
+            payload: { path: ALLOW_MULTIPLE_SESSIONS_PATH, oldValue: false, newValue: true, reason: 'unchosen_default' },
+            req: null,
+            module: 'Segurança'
+          });
+        }
+      }
+    }
+
+    await bootstrap.updateOne(
+      { _id: ALLOW_MULTIPLE_SESSIONS_MARKER },
+      { $set: { status: outcome, completedAt: new Date() } },
+      { upsert: true }
+    );
+    return { status: outcome };
   }
 
   /**
@@ -155,19 +478,21 @@ class SecurityService {
 
       if (!config) {
         // Se não existe, cria com valores padrão
-        const defaultConfig = this.getDefaultConfig();
+        const defaultConfig = { ...this.getDefaultConfig(), securityConfigId: crypto.randomUUID() };
         await configCollection.insertOne({
           _id: 'main',
           ...defaultConfig,
           createdAt: new Date(),
           updatedAt: new Date()
         });
-        return defaultConfig;
+        return applyRetentionGoverned(defaultConfig, await resolveRetentionGoverned(db));
       }
 
       // Remove _id e campos internos antes de retornar
       const { _id, createdAt, ...configData } = config;
-      return configData;
+      applyLogLevel(configData);
+      // #1248: the retention keys come from the active RetentionPolicy.
+      return applyRetentionGoverned(configData, await resolveRetentionGoverned(db));
     } catch (error) {
       logger.error('Erro ao buscar configurações de segurança:', error.message);
       throw error;
@@ -177,31 +502,30 @@ class SecurityService {
   /**
    * Atualiza configurações de segurança
    */
-  async updateConfig(db, newConfig, currentConfig, req) {
+  async updateConfig(db, newConfig, currentConfig, req, options = {}) {
     try {
       const configCollection = db.collection('security_config');
       
+      // #1248: the retention keys are not this document's to set. Dropped
+      // before change detection, so no audit row claims a change that
+      // never applies; currentConfig loses governedBy for the same reason.
+      // Dropped rather than rejected (#1264 item 6): SecurityPage sends the
+      // whole config, governed and fixed keys included, on every save, so a
+      // 4xx on their presence would refuse every save. The response carries
+      // the real values and governedBy, so an API caller sees what applied.
+      newConfig = withoutRetentionGoverned(newConfig || {});
+      currentConfig = withoutRetentionGoverned(currentConfig || {});
+
       // Detecta mudanças para auditoria
       const changes = this.detectChanges(currentConfig, newConfig);
       
       // Valida configurações
-      this.validateConfig(newConfig);
-      
+      this.validateConfig(newConfig, currentConfig);
+
       // Mescla com configuração atual, grupo a grupo (um nível de profundidade),
       // para não apagar flags do grupo que o chamador não enviou (#904)
-      const knownGroups = [
-        'authentication',
-        'passwordRules',
-        'session',
-        'loginAttempts',
-        'logging',
-        'privacy',
-        'enhancedSecurity',
-        'lgpd'
-      ];
-
       const mergedConfig = {};
-      for (const group of knownGroups) {
+      for (const group of CONFIG_GROUPS) {
         if (currentConfig[group] || newConfig[group]) {
           mergedConfig[group] = {
             ...currentConfig[group],
@@ -210,15 +534,54 @@ class SecurityService {
         }
       }
 
+      // #1249: loginAttempts.maxAttempts and lockoutDurationMinutes duplicate
+      // the authentication pair the lockout reads (#952, resolveLockoutPolicy).
+      // The stored copy follows the enforced one on every save, so the two
+      // never disagree; the Security page edits only the authentication keys.
+      if (mergedConfig.authentication && mergedConfig.loginAttempts) {
+        const { maxLoginAttempts, lockoutDurationMinutes } = mergedConfig.authentication;
+        if (maxLoginAttempts !== undefined) mergedConfig.loginAttempts.maxAttempts = maxLoginAttempts;
+        if (lockoutDurationMinutes !== undefined) mergedConfig.loginAttempts.lockoutDurationMinutes = lockoutDurationMinutes;
+      }
+
       // #953: flat, per dict-02 P1X-0321/0322/0323. Note these are assigned
       // AFTER the knownGroups loop above, which copies only the eight group
       // objects -- so a caller-supplied configVersion/lastUpdatedAt/lastUpdatedBy
       // in newConfig is still ignored, exactly as the `...currentConfig.metadata`
       // spread used to guarantee. The protection survives the flattening, but for
       // a different reason, which is why it is stated here.
+      // #1248: the stored copy of the retention keys follows the policy on
+      // every save, the way #1249's loginAttempts pair follows the enforced
+      // one, so the document never disagrees with what the sweep does.
+      const governed = await resolveRetentionGoverned(db);
+      if (governed.values) {
+        for (const path of RETENTION_GOVERNED_PATHS) {
+          const [group, key] = path.split('.');
+          if (mergedConfig[group]) mergedConfig[group][key] = governed.values[path];
+        }
+      }
+      // #1260, #1261: the fixed keys are stored at their fixed value too.
+      applyFixedValues(mergedConfig);
+
       mergedConfig.configVersion = (currentConfig.configVersion || 1) + 1;
       mergedConfig.lastUpdatedAt = new Date();
       mergedConfig.lastUpdatedBy = req.user?.userID || 'SYSTEM';
+
+      // RF014 AC2/AC4: the change is a new ConfigurationRelease, activated
+      // before the document follows it, so a refused activation (409) leaves
+      // the configuration in force untouched. The document stays the read
+      // model every reader keys on ({ _id: 'main' }); the releases are the
+      // record of what was in force and when.
+      const release = await this.activateRelease(db, {
+        settings: settingsOf(mergedConfig),
+        actorId: mergedConfig.lastUpdatedBy,
+        changes,
+        rollbackTargetId: options.rollbackTargetId || null,
+      });
+      mergedConfig.securityConfigId = currentConfig.securityConfigId || crypto.randomUUID();
+      mergedConfig.environment = env.NODE_ENV;
+      mergedConfig.configurationReleaseId = release.configurationReleaseId;
+      mergedConfig.effectivePeriod = release.effectivePeriod;
 
       // Atualiza no banco
       await configCollection.updateOne(
@@ -254,7 +617,9 @@ class SecurityService {
           payload: {
             path: change.path,
             oldValue: change.oldValue,
-            newValue: change.newValue
+            newValue: change.newValue,
+            configurationReleaseId: release.configurationReleaseId,
+            ...(options.rollbackTargetId ? { rollbackTargetId: options.rollbackTargetId } : {})
           },
           req: req,
           module: 'Segurança'
@@ -269,7 +634,8 @@ class SecurityService {
           const revoked = await sessionService.revokeAllSessionsForPolicyChange(
             db,
             actingToken,
-            req && req.user && req.user.userID || 'SYSTEM'
+            req && req.user && req.user.userID || 'SYSTEM',
+            { req }
           );
           logger.info(`#649: política de sessão restringida, ${revoked} sessão(ões) revogada(s)`);
         } catch (revokeError) {
@@ -277,11 +643,80 @@ class SecurityService {
         }
       }
 
-      return mergedConfig;
+      // #1260: the logger follows the saved level at once in this process;
+      // syncLogLevel's poll carries it to the others.
+      applyLogLevel(mergedConfig);
+
+      return applyRetentionGoverned(mergedConfig, governed);
     } catch (error) {
       logger.error('Erro ao atualizar configurações de segurança:', error.message);
       throw error;
     }
+  }
+
+  /**
+   * RF014: this environment's security-configuration profile, created on
+   * first use. Its settings name each group's keys and types (the shape
+   * validateConfig enforces); allowedValues stays empty until the setting
+   * catalog (RF014 AC1) exists.
+   */
+  async securityProfile(db) {
+    return configurationReleaseService.ensureEnvironmentProfile(db, {
+      profileName: SECURITY_PROFILE_NAME,
+      environment: env.NODE_ENV,
+      describe: () => {
+        const defaults = settingsOf(this.getDefaultConfig());
+        const settings = {};
+        for (const [group, values] of Object.entries(defaults)) {
+          settings[group] = Object.fromEntries(Object.entries(values).map(([key, value]) => [key, value === null ? 'null' : typeof value]));
+        }
+        return { settings, allowedValues: {}, defaults, ownerId: 'SYSTEM' };
+      },
+    });
+  }
+
+  /**
+   * Activates a release of `settings`. Before the first release, the stored
+   * document is recorded as the baseline release, so the first change can
+   * be rolled back.
+   */
+  async activateRelease(db, { settings, actorId, changes = [], rollbackTargetId = null }) {
+    const profile = await this.securityProfile(db);
+    const stored = await db.collection('security_config').findOne({ _id: 'main' });
+    const paths = changes.map((change) => change.path);
+    const impactSummary = rollbackTargetId
+      ? `Rollback para a release ${rollbackTargetId}${paths.length ? `: ${paths.join(', ')}` : ''}.`
+      : (paths.length ? `Alterado: ${paths.join(', ')}.` : 'Nenhuma chave alterada.');
+    return configurationReleaseService.activate(db, {
+      profileId: profile.profileId,
+      settings,
+      actorId,
+      impactSummary,
+      rollbackTargetId,
+      baseline: stored ? {
+        settings: settingsOf(stored),
+        approvedBy: stored.lastUpdatedBy || 'SYSTEM',
+        since: stored.lastUpdatedAt instanceof Date ? stored.lastUpdatedAt : undefined,
+      } : null,
+    });
+  }
+
+  /** RF014 AC4: this environment's releases, newest first. */
+  async listReleases(db, { limit = 50 } = {}) {
+    const profile = await this.securityProfile(db);
+    return configurationReleaseService.listReleases(db, profile.profileId, { limit });
+  }
+
+  /**
+   * RF014 AC4: governed rollback. Restores an earlier release's settings as
+   * a new release (rollbackTargetId names the one restored), through the
+   * same validation, audit and session revocation as any other change.
+   */
+  async rollbackConfig(db, configurationReleaseId, req) {
+    const profile = await this.securityProfile(db);
+    const target = await configurationReleaseService.rollbackTarget(db, profile.profileId, configurationReleaseId);
+    const currentConfig = await this.getConfig(db);
+    return this.updateConfig(db, target.settings, currentConfig, req, { rollbackTargetId: target.configurationReleaseId });
   }
 
   /**
@@ -293,7 +728,10 @@ class SecurityService {
     const compareObjects = (oldObj, newObj, path = '') => {
       for (const key in newObj) {
         const currentPath = path ? `${path}.${key}` : key;
-        
+        // A server-owned object (effectivePeriod) is skipped whole: the page
+        // echoes it back as strings, and its parts are not policy.
+        if (!path && SERVER_OWNED_KEYS.includes(key)) continue;
+
         if (typeof newObj[key] === 'object' && newObj[key] !== null && !Array.isArray(newObj[key]) && !(newObj[key] instanceof Date)) {
           if (oldObj[key]) {
             compareObjects(oldObj[key], newObj[key], currentPath);
@@ -343,42 +781,115 @@ class SecurityService {
   /**
    * Valida configurações antes de salvar
    */
-  validateConfig(config) {
+  validateConfig(config, currentConfig = {}) {
     const errors = [];
+
+    // #909: a path-aware schema over getDefaultConfig()'s groups. Every key a
+    // group carries must be one the default declares, holding the default's
+    // type: a finite number, a boolean or a string. Before this, an unknown key
+    // or a wrong type was merged and stored (a null from an emptied numeric
+    // input included), and the readers fell back to their own defaults
+    // without saying so.
+    //
+    // An unchanged echo passes: SecurityPage sends the whole document back on
+    // every save, so a value identical to the stored one (a legacy key, or a
+    // null an older build stored) is not the caller's to fix in this request.
+    // updateConfig strips the governed and fixed keys before calling this.
+    const defaults = this.getDefaultConfig();
+    for (const group of CONFIG_GROUPS) {
+      if (!Object.prototype.hasOwnProperty.call(config, group) || config[group] === undefined) continue;
+      const values = config[group];
+      if (!isPlainObject(values)) {
+        errors.push(`${group} deve ser um objeto`);
+        continue;
+      }
+      const stored = isPlainObject(currentConfig && currentConfig[group]) ? currentConfig[group] : {};
+      for (const [key, value] of Object.entries(values)) {
+        if (value === undefined) continue;
+        if (Object.prototype.hasOwnProperty.call(stored, key) && isDeepStrictEqual(stored[key], value)) continue;
+        if (!Object.prototype.hasOwnProperty.call(defaults[group], key)) {
+          errors.push(`${group}.${key} não é uma configuração conhecida`);
+          continue;
+        }
+        const expected = typeof defaults[group][key];
+        const ok = expected === 'number' ? isNumber(value) : typeof value === expected;
+        if (!ok) errors.push(`${group}.${key} deve ser ${TYPE_NAMES[expected]}`);
+      }
+    }
+
+    // The ranges below check a number whenever one is present, 0 included;
+    // until #909 each was guarded by truthiness, so 0 skipped it.
 
     // Validações de autenticação
     if (config.authentication) {
-      if (config.authentication.maxLoginAttempts && (config.authentication.maxLoginAttempts < 1 || config.authentication.maxLoginAttempts > 10)) {
+      if (isNumber(config.authentication.maxLoginAttempts) && (config.authentication.maxLoginAttempts < 1 || config.authentication.maxLoginAttempts > 10)) {
         errors.push('maxLoginAttempts deve estar entre 1 e 10');
       }
-      if (config.authentication.mfaMethod && !['totp', 'sms', 'email'].includes(config.authentication.mfaMethod)) {
-        errors.push('mfaMethod deve ser: totp, sms ou email');
+      // #1249: TOTP is the only method implemented (dict-02 P1X-0279 says so),
+      // so the policy cannot name one that would never be offered.
+      if (typeof config.authentication.mfaMethod === 'string' && config.authentication.mfaMethod !== 'totp') {
+        errors.push('mfaMethod deve ser: totp (único método implementado)');
+      }
+    }
+
+    // #1255: ipAttempt.service reads this now. 0 tracks without blocking
+    // (dict-02 P1X-0300 is 0..1 Condicional); a fraction or a negative would
+    // be silently read as 0, so it is refused here instead.
+    if (config.loginAttempts) {
+      const blockAfter = config.loginAttempts.blockIPAfterAttempts;
+      if (blockAfter !== undefined && blockAfter !== null
+        && !(Number.isInteger(blockAfter) && blockAfter >= 0 && blockAfter <= 100)) {
+        errors.push('blockIPAfterAttempts deve ser um inteiro entre 0 e 100');
       }
     }
 
     // Validações de senha
     if (config.passwordRules) {
-      if (config.passwordRules.minLength && (config.passwordRules.minLength < 6 || config.passwordRules.minLength > 128)) {
-        errors.push('minLength deve estar entre 6 e 128');
+      // #1253: 8 is NIST SP 800-63B §5.1.1.2's floor (see password.service).
+      if (isNumber(config.passwordRules.minLength) && (config.passwordRules.minLength < 8 || config.passwordRules.minLength > 128)) {
+        errors.push('minLength deve estar entre 8 e 128');
       }
-      if (config.passwordRules.expirationDays && (config.passwordRules.expirationDays < 0 || config.passwordRules.expirationDays > 365)) {
+      // #1257: the same 8 floor, which SP 800-63B-4 sets for a password used
+      // with MFA. Above minLength is refused rather than silently capped
+      // (password.service caps it), so the page never shows a value not in
+      // force; an unchanged minLength is read from the stored document.
+      const mfaMin = config.passwordRules.minLengthWithMFA;
+      if (isNumber(mfaMin)) {
+        const singleFactorMin = isNumber(config.passwordRules.minLength)
+          ? config.passwordRules.minLength
+          : currentConfig?.passwordRules?.minLength;
+        if (mfaMin < 8 || mfaMin > 128) {
+          errors.push('minLengthWithMFA deve estar entre 8 e 128');
+        } else if (isNumber(singleFactorMin) && mfaMin > singleFactorMin) {
+          errors.push('minLengthWithMFA não pode exceder minLength');
+        }
+      }
+      if (isNumber(config.passwordRules.expirationDays) && (config.passwordRules.expirationDays < 0 || config.passwordRules.expirationDays > 365)) {
         errors.push('expirationDays deve estar entre 0 e 365');
+      }
+      // #1244: password.service now reads this depth, so an out-of-range
+      // value is refused here rather than silently replaced by the default
+      // there. 1..20 is SecurityPage's own input bound.
+      const reuseHistory = config.passwordRules.maxReuseHistory;
+      if (reuseHistory !== undefined && reuseHistory !== null
+        && !(Number.isInteger(reuseHistory) && reuseHistory >= 1 && reuseHistory <= 20)) {
+        errors.push('maxReuseHistory deve ser um inteiro entre 1 e 20');
       }
     }
 
     // Validações de sessão
     if (config.session) {
-      if (config.session.timeoutMinutes && (config.session.timeoutMinutes < 5 || config.session.timeoutMinutes > 480)) {
+      if (isNumber(config.session.timeoutMinutes) && (config.session.timeoutMinutes < 5 || config.session.timeoutMinutes > 480)) {
         errors.push('timeoutMinutes deve estar entre 5 e 480');
       }
-      if (config.session.maxSessionDurationHours && (config.session.maxSessionDurationHours < 1 || config.session.maxSessionDurationHours > 24)) {
+      if (isNumber(config.session.maxSessionDurationHours) && (config.session.maxSessionDurationHours < 1 || config.session.maxSessionDurationHours > 24)) {
         errors.push('maxSessionDurationHours deve estar entre 1 e 24 horas');
       }
     }
 
     // Validações de logs
     if (config.logging) {
-      if (config.logging.level && !['info', 'warning', 'error', 'critical'].includes(config.logging.level)) {
+      if (typeof config.logging.level === 'string' && !['info', 'warning', 'error', 'critical'].includes(config.logging.level)) {
         errors.push('level deve ser: info, warning, error ou critical');
       }
     }
@@ -393,7 +904,9 @@ class SecurityService {
    */
   async exportLogs(db, filters, format = 'csv') {
     try {
-      const logsCollection = db.collection('logs');
+      // #1271: source=archive exports logs_archive (log.service).
+      const { logSourceCollection } = require('./log.service');
+      const logsCollection = db.collection(logSourceCollection(filters.source));
       const query = {};
 
       // Aplica filtros
@@ -419,7 +932,12 @@ class SecurityService {
         }
       }
 
-      const logs = await logsCollection.find(query).sort({ timestamp: -1 }).limit(10000).toArray();
+      const rawLogs = await logsCollection.find(query).sort({ timestamp: -1 }).limit(10000).toArray();
+      // #1267: the same read-time anonymisation logService.getLogs applies
+      // (RNF007 AC 5). Without it the export carried raw staff ids, and any
+      // row a direct createLog writer stored unsanitised.
+      const { anonymizeLogs } = require('../utils/userAnonymization');
+      const logs = await anonymizeLogs(rawLogs, db);
 
       if (format === 'csv') {
         return this.formatLogsAsCSV(logs);
@@ -459,192 +977,58 @@ class SecurityService {
   /**
    * Retorna permissões por perfil
    */
-  async getPermissions(db) {
-    try {
-      // Permissões padrão baseadas em accessType
-      const defaultPermissions = {
-        '1': { // Usuário Externo
-          viewReports: true
-        },
-        '2': { // Técnico
-          createSample: true,
-          withdrawSample: true,
-          viewTemperature: true,
-          uploadFiles: true,
-          viewReports: true
-        },
-        '3': { // Coordenador
-          createUser: true,
-          createPatient: true,
-          createSample: true,
-          withdrawSample: true,
-          viewTemperature: true,
-          uploadFiles: true,
-          viewReports: true
-        },
-        '4': { // Administrador
-          createUser: true,
-          createPatient: true,
-          createSample: true,
-          withdrawSample: true,
-          viewTemperature: true,
-          uploadFiles: true,
-          viewReports: true,
-          manageSystem: true,
-          manageBackup: true,
-          manageSecurity: true,
-          resetMFA: true
-        }
-      };
-
-      // Busca permissões customizadas do banco
-      const permissionsCollection = db.collection('security_permissions');
-      const customPermissions = await permissionsCollection.findOne({ _id: 'main' });
-
-      if (customPermissions && customPermissions.permissions) {
-        // Mescla com padrões (mantém padrões se não existir customização)
-        const merged = { ...defaultPermissions };
-        for (const profile in customPermissions.permissions) {
-          merged[profile] = {
-            ...defaultPermissions[profile],
-            ...customPermissions.permissions[profile]
-          };
-        }
-        return merged;
+  async getPermissions(_db) {
+    // Permissões padrão baseadas em accessType
+    const defaultPermissions = {
+      '1': { // Usuário Externo
+        viewReports: true
+      },
+      '2': { // Técnico
+        createSample: true,
+        withdrawSample: true,
+        viewTemperature: true,
+        uploadFiles: true,
+        viewReports: true
+      },
+      '3': { // Coordenador
+        createUser: true,
+        createPatient: true,
+        createSample: true,
+        withdrawSample: true,
+        viewTemperature: true,
+        uploadFiles: true,
+        viewReports: true
+      },
+      '4': { // Administrador
+        createUser: true,
+        createPatient: true,
+        createSample: true,
+        withdrawSample: true,
+        viewTemperature: true,
+        uploadFiles: true,
+        viewReports: true,
+        manageSystem: true,
+        manageBackup: true,
+        manageSecurity: true,
+        resetMFA: true
       }
+    };
 
-      return defaultPermissions;
-    } catch (error) {
-      logger.error('Erro ao buscar permissões:', error.message);
-      throw error;
-    }
+    // #1149: this map is returned as-is. It used to be merged with a
+    // `security_permissions` overlay that PUT /api/security/permissions
+    // wrote. No enforcement path ever read that collection: requirePermission
+    // reads the in-process catalog and userHasPermission reads the seeded
+    // roles/permissions (see #1123). So an edit changed nothing, yet it was
+    // shown back as the profile's permissions and audited as a critical
+    // change. The write surface is gone, and this read no longer echoes
+    // rows it left behind. Those rows are kept, not deleted, as part of the
+    // record of what was once saved.
+    return defaultPermissions;
   }
 
-  /**
-   * Atualiza permissões por perfil
-   */
-  async updatePermissions(db, newPermissions, currentPermissions, req) {
-    try {
-      const permissionsCollection = db.collection('security_permissions');
-      
-      // Converte chaves numéricas para strings se necessário
-      const normalizedPermissions = {};
-      for (const profile in newPermissions) {
-        const profileKey = String(profile);
-        normalizedPermissions[profileKey] = newPermissions[profile];
-      }
-      
-      // Detecta mudanças
-      const changes = this.detectPermissionChanges(currentPermissions, normalizedPermissions);
-      
-      // Valida permissões
-      this.validatePermissions(normalizedPermissions);
-      
-      // Atualiza no banco
-      await permissionsCollection.updateOne(
-        { _id: 'main' },
-        {
-          $set: {
-            permissions: normalizedPermissions,
-            updatedAt: new Date(),
-            lastUpdatedBy: req.user?.userID || 'SYSTEM'
-          }
-        },
-        { upsert: true }
-      );
-
-      // Registra auditoria
-      auditLogger.init(db);
-      for (const change of changes) {
-        await auditLogger.log({
-          action: 'UPDATE',
-          resourceType: 'Permissions',
-          resourceId: change.profile,
-          status: 'success',
-          severity: 'critical',
-          message: `Permissões alteradas para perfil: ${change.profile}`,
-          payload: {
-            profile: change.profile,
-            permission: change.permission,
-            oldValue: change.oldValue,
-            newValue: change.newValue
-          },
-          req: req,
-          module: 'Segurança'
-        });
-      }
-
-      return normalizedPermissions;
-    } catch (error) {
-      logger.error('Erro ao atualizar permissões:', error.message);
-      throw error;
-    }
-  }
-
-  /**
-   * Detecta mudanças em permissões
-   */
-  detectPermissionChanges(oldPermissions, newPermissions) {
-    const changes = [];
-
-    for (const profile in newPermissions) {
-      if (!oldPermissions[profile]) {
-        // Novo perfil
-        for (const permission in newPermissions[profile]) {
-          changes.push({
-            profile,
-            permission,
-            oldValue: false,
-            newValue: newPermissions[profile][permission]
-          });
-        }
-      } else {
-        // Perfil existente - compara permissões
-        for (const permission in newPermissions[profile]) {
-          const oldValue = oldPermissions[profile][permission] || false;
-          const newValue = newPermissions[profile][permission];
-          if (oldValue !== newValue) {
-            changes.push({
-              profile,
-              permission,
-              oldValue,
-              newValue
-            });
-          }
-        }
-      }
-    }
-
-    return changes;
-  }
-
-  /**
-   * Valida permissões
-   */
-  validatePermissions(permissions) {
-    const validProfiles = ['1', '2', '3', '4'];
-    const validPermissionKeys = [
-      'createUser', 'createPatient', 'createSample', 'withdrawSample',
-      'viewTemperature', 'uploadFiles', 'viewReports',
-      'manageSystem', 'manageBackup', 'manageSecurity', 'resetMFA'
-    ];
-
-    for (const profile in permissions) {
-      if (!validProfiles.includes(profile)) {
-        throw new Error(`Perfil inválido: ${profile}`);
-      }
-
-      for (const permission in permissions[profile]) {
-        if (!validPermissionKeys.includes(permission)) {
-          throw new Error(`Permissão inválida: ${permission}`);
-        }
-        if (typeof permissions[profile][permission] !== 'boolean') {
-          throw new Error(`Valor de permissão deve ser booleano: ${permission}`);
-        }
-      }
-    }
-  }
 }
 
 module.exports = new SecurityService();
+module.exports.RETENTION_GOVERNED_PATHS = RETENTION_GOVERNED_PATHS;
+module.exports.FIXED_PATHS = FIXED_PATHS;
 

@@ -76,9 +76,14 @@ async function writeMfaResetAudit(db, req, targetUser, { operation, enrolmentPre
 }
 
 // RF003 - Cadastro de usuário
+//
+// #1008: every registration grants a role (registerUser falls back to
+// Técnico when none is named), so creating an account is also a role
+// assignment, and the route requires assignRole as well as createUser.
 router.post('/register',
   authenticate,
   requirePermission('createUser'),
+  requirePermission('assignRole'),
   async (req, res) => {
     try {
       const db = req.app.locals.db;
@@ -125,34 +130,9 @@ router.post('/register',
         }
       }
 
-      // #998 (RF003, RNF008 AC#1): a caller may not create a user at a level
-      // above their own. requirePermission('createUser') is the only gate on
-      // this route, and rbac-catalog-seed grants 'createUser' to the seeded
-      // Coordenador -- so without this, every Coordenador in a default
-      // deployment could POST a working Administrador account, with a password
-      // of their choosing, in one request. That needs no existing target and
-      // no role change, which makes it strictly cheaper to exploit than the
-      // PUT leg #998 was written around.
-      //
-      // A floor rather than an Administrador-only check, deliberately: it
-      // closes the escalation without deciding whether Coordenador should hold
-      // 'createUser' at all. RF003 names Administrador as the actor for role
-      // assignment, which points at a distinct assignRole permission -- that is
-      // #998 direction 2 and a larger change than a security fix should carry.
-      const requestedLevel = req.body.accessType
-        || (req.body.roleName ? authService.getAccessTypeForRole(req.body.roleName) : null);
-      if (requestedLevel) {
-        const { resolveUserHierarchyLevel } = require('../../services/rbac-assignment.service');
-        const callerLevel = await resolveUserHierarchyLevel(db, req.user?.userID);
-        if (Number(requestedLevel) > Number(callerLevel || 0)) {
-          return res.status(403).json({
-            success: false,
-            error: req.t('errors.forbidden'),
-            message: 'Não é possível criar um usuário com nível de acesso superior ao seu.'
-          });
-        }
-      }
-
+      // #998's hierarchy floor now lives in registerUser itself (#1057), so
+      // this route and any future caller of the service get the same check.
+      // It throws a statusCode-403 error, mapped in the catch below.
       const user = await authService.registerUser(db, req.body, req.user?.userID);
 
       // Registra log de criação de usuário
@@ -178,10 +158,18 @@ router.post('/register',
       });
     } catch (error) {
       logger.error('Erro ao registrar usuário:', error.message);
-      return res.status(400).json({
+      if (error.statusCode === 403) {
+        return res.status(403).json({
+          success: false,
+          error: req.t('errors.forbidden'),
+          message: error.message
+        });
+      }
+      return res.status(error.statusCode === 422 ? 422 : 400).json({
         success: false,
         error: req.t('users.registerError'),
-        message: error.message
+        message: error.message,
+        details: error.details
       });
     }
   }
@@ -203,7 +191,7 @@ router.get('/', authenticate, requirePermission('createUser'), async (req, res) 
     const usersCollection = db.collection('users');
     const users = await usersCollection.find({}).toArray();
     const UserModel = require('../../models/User');
-    const { resolveRoleDisplayName } = require('../../services/rbac-assignment.service');
+    const { resolveRoleDisplayName, getActiveRoleCodes } = require('../../services/rbac-assignment.service');
 
     // Remove senhas dos resultados e traduz status para português
     const sanitizedUsers = await Promise.all(users.map(async (user) => {
@@ -219,6 +207,9 @@ router.get('/', authenticate, requirePermission('createUser'), async (req, res) 
       if (!userWithoutPassword.roleName) {
         userWithoutPassword.roleName = await resolveRoleDisplayName(db, String(userWithoutPassword._id));
       }
+      // #1240: the additive `auditor` role, read back under the same name PUT
+      // takes it by. The user form seeds itself from this row.
+      userWithoutPassword.auditorRole = (await getActiveRoleCodes(db, String(userWithoutPassword._id))).includes('auditor');
       // Garante que o ID esteja disponível como _id e id
       if (userWithoutPassword._id && !userWithoutPassword.id) {
         userWithoutPassword.id = userWithoutPassword._id.toString();
@@ -255,6 +246,19 @@ router.get('/logs', authenticate, async (req, res) => {
       });
     }
 
+    // #1241: this serves the `logs` collection, the RNF009 audit trail, which
+    // /api/logs gates on isAuditReader (#1056). Once #926 made this route
+    // reachable it had authenticate alone, so every account could read the
+    // trail here. Same rule and same refusal as logs.routes.js.
+    const { isAuditReader } = require('../../services/rbac-assignment.service');
+    if (!(await isAuditReader(db, req.user?.userID))) {
+      return res.status(403).json({
+        success: false,
+        error: 'Acesso negado',
+        message: 'Apenas perfis Admin ou Auditor podem acessar trilhas de auditoria.'
+      });
+    }
+
     const logService = require('../../services/log.service');
     const result = await logService.getLogs(db, req.query);
 
@@ -272,7 +276,9 @@ router.get('/logs', authenticate, async (req, res) => {
   }
 });
 
-router.get('/:id', authenticate, async (req, res) => {
+// #1241: gated like GET / above. With authenticate alone any account could
+// read any other user's record (email, phone, organization, status, roles).
+router.get('/:id', authenticate, requirePermission('createUser'), async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -302,6 +308,10 @@ router.get('/:id', authenticate, async (req, res) => {
     if (userWithoutPassword.status) {
       userWithoutPassword.status = UserModel.translateStatus(userWithoutPassword.status);
     }
+
+    // #1240: same field as the list.
+    const { getActiveRoleCodes } = require('../../services/rbac-assignment.service');
+    userWithoutPassword.auditorRole = (await getActiveRoleCodes(db, user._id.toString())).includes('auditor');
 
     return res.status(200).json({
       success: true,
@@ -352,7 +362,21 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
     // grantAdditionalRole/revokeAdditionalRole, same pattern as accessType.
     const requestedAuditorRole = req.body.auditorRole;
     delete req.body.auditorRole;
-    
+
+    // #1013: an administrator sets a password through POST /:id/set-password.
+    // A non-empty one here is refused rather than dropped, so a stale client
+    // cannot believe it changed a password. A blank one is the form's
+    // "unchanged" and is dropped.
+    if (req.body.password) {
+      return res.status(422).json({
+        success: false,
+        error: req.t('errors.invalidInput'),
+        message: 'A senha não é alterada por esta rota; use POST /api/users/:id/set-password.',
+        details: ['A senha não é alterada por esta rota; use POST /api/users/:id/set-password.']
+      });
+    }
+    delete req.body.password;
+
     // Prepara dados para validação (mescla dados existentes com novos)
     // Remove campos que não devem ser validados na atualização
     const { password: __unusedPassword, ...targetUserWithoutPassword } = targetUser;
@@ -360,8 +384,9 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
       ...targetUserWithoutPassword,
       ...req.body,
       _id: targetUser._id, // Mantém _id para indicar que é atualização
-      // Se senha não foi fornecida, não inclui no validate (será removida depois)
-      password: req.body.password || undefined
+      // #1013: this route never sets a password (refused above), so the
+      // stored hash is kept out of validation.
+      password: undefined
     };
 
     // Valida dados antes de atualizar
@@ -370,7 +395,8 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
       return res.status(422).json({
         success: false,
         error: req.t('errors.invalidInput'),
-        message: validation.errors.join(', ')
+        message: validation.errors.join(', '),
+        details: validation.errors
       });
     }
 
@@ -411,18 +437,6 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
       }
     }
 
-    // Remove senha se não for fornecida
-    // #982: capturado ANTES do delete abaixo -- depois dele não há como
-    // distinguir "senha não enviada" de "senha enviada", e é essa distinção
-    // que decide a revogação de sessões após o updateOne.
-    const passwordWasSet = Boolean(req.body.password);
-    if (!req.body.password) {
-      delete req.body.password;
-    } else {
-      const bcrypt = require('bcryptjs');
-      req.body.password = await bcrypt.hash(req.body.password, 10);
-    }
-
     // Verifica se é admin (já buscamos targetUser acima)
     // #426: resolve via UserRoleAssignment -> Role, não accessType/roleName
     // direto no documento.
@@ -436,7 +450,13 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
     if (req.body.roleName && !requestedAccessType) {
       requestedAccessType = authService.getAccessTypeForRole(req.body.roleName);
     }
-    const isBecomingAdmin = requestedAccessType === 4 || req.body.roleName === 'Administrador';
+    // #1243: a promotion is a change of level (#1009's rule). NewUserPage
+    // echoes roleName on every save, so without `!isAdmin` a plain edit of an
+    // existing Administrador counted as one and the clear below destroyed
+    // their MFA enrolment -- #1021's defect through a second field.
+    // #1245: Number(), as the level floor and changeUserRole read it. A JSON
+    // string '4' promotes, and `=== 4` let that promotion skip the clear.
+    const isBecomingAdmin = !isAdmin && (Number(requestedAccessType) === 4 || req.body.roleName === 'Administrador');
 
     // #998 (RF003, RNF008 AC#1): a caller may not raise anyone -- including
     // themselves -- above their own level. requirePermission('createUser') was
@@ -467,6 +487,56 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
             success: false,
             error: req.t('errors.forbidden'),
             message: 'Não é possível atribuir um nível de acesso superior ao seu.'
+          });
+        }
+      }
+    }
+
+    // #1240: hoisted out of the #1008 block below, which computes it against
+    // the pre-edit state; the audit row further down records the auditor flag
+    // only when this is true.
+    let auditorChange = false;
+
+    // #1008 (RF003 AC#3, Denise 2026-09-25): assigning a role is the
+    // Administrador's, through the assignRole permission, not createUser.
+    // Three things in this body are role assignment: a level change, a
+    // change to the additive auditor role, and a change to the role's
+    // validity window (middleware/auth.js enforces roleValidUntil, so moving
+    // it can lock a user out or keep an expired role alive). Each counts only
+    // when it actually CHANGES. NewUserPage echoes the whole user back on
+    // every save, so a presence check would refuse a Coordenador's plain
+    // rename. The #998 floor above stays as defence in depth.
+    {
+      const {
+        resolveUserHierarchyLevel,
+        getActiveRoleCodes,
+        userHasPermission,
+      } = require('../../services/rbac-assignment.service');
+
+      let levelChange = false;
+      if (requestedAccessType) {
+        const currentLevel = targetLevel !== null
+          ? targetLevel
+          : await resolveUserHierarchyLevel(db, targetUser._id.toString());
+        levelChange = Number(requestedAccessType) !== Number(currentLevel);
+      }
+
+      if (requestedAuditorRole !== undefined) {
+        const currentRoleCodes = await getActiveRoleCodes(db, targetUser._id.toString());
+        auditorChange = Boolean(requestedAuditorRole) !== currentRoleCodes.includes('auditor');
+      }
+
+      const asTime = (value) => (value ? new Date(value).getTime() : null);
+      const validityChange = ['roleValidFrom', 'roleValidUntil'].some((field) =>
+        req.body[field] !== undefined && asTime(req.body[field]) !== asTime(targetUser[field]));
+
+      if (levelChange || auditorChange || validityChange) {
+        const mayAssignRole = await userHasPermission(db, req.user?.userID, 'assignRole');
+        if (!mayAssignRole) {
+          return res.status(403).json({
+            success: false,
+            error: req.t('errors.forbidden'),
+            message: 'Atribuir ou alterar papel é uma ação do Administrador.'
           });
         }
       }
@@ -546,7 +616,7 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
     // inject arbitrary keys (e.g. userID, or anything else) that reach the
     // driver untouched. Allowlist to UserModel.create()'s own fields, plus
     // the route-managed fields the preprocessing above legitimately writes
-    // (password/mfaEnabled/mfaSecretCiphertext/mfaActivationDate/roleValidFrom/
+    // (mfaEnabled/mfaSecretCiphertext/mfaActivationDate/roleValidFrom/
     // roleValidUntil/organizationId — already covered by create()'s field
     // set) and updatedAt (server-set above, never caller-supplied).
     // Excluded: _id/id (identity, already deleted above), userID (business
@@ -559,9 +629,12 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
     // route).
     const ALLOWED_USER_UPDATE_FIELDS = [
       'name', 'email', 'phone', 'organizationId', 'organizationIds', 'username',
-      'password', 'status',
+      // #1013: 'password' is gone -- POST /:id/set-password owns it.
+      'status',
       'mfaEnabled', 'mfaSecretCiphertext', 'mfaActivationDate',
-      'anonId',
+      // #1275 follow-up: 'anonId' is gone. Log reads now honour the stored
+      // pseudonym, so setting it would relabel this user's audit rows as
+      // another user's. Only generateAnonId writes it.
       // #952: 'failedLoginAttempts' was HERE and is deliberately gone. It is now
       // load-bearing (RF001 AC#2), so leaving it client-writable would let any
       // createUser holder clear a target's brute-force counter through a generic
@@ -598,21 +671,8 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
       });
     }
     
-    // #982 (RF003 AC#5, "Revogar sessões"): trocar a senha de um usuário por
-    // esta rota é uma escrita ADMINISTRATIVA -- #958 cobriu os quatro caminhos
-    // em que o próprio dono troca a senha, e este quinto ficou de fora. Sem
-    // isto, toda sessão que o alvo já tinha continua viva, autenticada por uma
-    // senha que não existe mais: middleware/auth.js só relê roleValidUntil, e
-    // rotateSessionTokens renova indefinidamente.
-    //
-    // targetUser._id.toString(), não req.params.id: buildUserFilterById aceita
-    // _id/id/userID em forma string E numérica, então o parâmetro da rota não é
-    // necessariamente igual ao userID gravado na sessão. Mesmo motivo do
-    // reset-mfa abaixo.
-    if (passwordWasSet) {
-      const sessionService = require('../../services/session.service');
-      await sessionService.invalidateUserSessions(db, targetUser._id.toString(), 'admin_action', req.user?.userID);
-    }
+    // #982's revocation moved to POST /:id/set-password with the password
+    // set itself (#1013).
 
     // #615: organizationId used for RBAC scoping below — already normalized
     // above (lines 280-287). Falls back to the user's current org when not
@@ -656,22 +716,31 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
       });
     }
     if (requestedAuditorRole !== undefined) {
-      const { grantAdditionalRole, revokeAdditionalRole } = require('../../services/rbac-assignment.service');
-      if (requestedAuditorRole) {
+      // #1240: read the held state HERE, after changeUserRole, which revokes
+      // every active assignment -- auditor included. A level change that
+      // echoes auditorRole=true must re-grant it, while the audit row reports
+      // the flag only when it differs from the pre-edit state (auditorChange),
+      // so a form echoing the unchanged flag is not logged as a permission
+      // change (the #1009 trap, for this field).
+      const { grantAdditionalRole, revokeAdditionalRole, getActiveRoleCodes } = require('../../services/rbac-assignment.service');
+      const heldNow = (await getActiveRoleCodes(db, targetUser._id.toString())).includes('auditor');
+      if (requestedAuditorRole && !heldNow) {
         await grantAdditionalRole(db, {
           userAccountId: targetUser._id.toString(),
           roleCode: 'auditor',
           grantedBy: req.user?.userID,
           organizationId: effectiveOrganizationId,
         });
-      } else {
+      } else if (!requestedAuditorRole && heldNow) {
         await revokeAdditionalRole(db, {
           userAccountId: targetUser._id.toString(),
           roleCode: 'auditor',
           revokedBy: req.user?.userID,
         });
       }
-      changes.auditorRole = Boolean(requestedAuditorRole);
+      if (auditorChange) {
+        changes.auditorRole = Boolean(requestedAuditorRole);
+      }
     }
     // #615: org-only edit (no accessType/auditorRole change this request)
     // still needs to resync the existing assignment's scopeId — otherwise a
@@ -703,7 +772,24 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
       // Atualização geral
       await auditLogger.logUpdate(req, 'User', req.params.id);
     }
-    
+
+    // #914, carrying #1011's decision (2026-09-25): the promotion clear above
+    // destroys an enrolled second factor, and until now the trail recorded it
+    // only as a generic User update. Same helper, and so the same 'MFA' action
+    // and row shape, as reset-mfa and disable-mfa -- `operation` is the
+    // discriminator. Written only when there WAS an enrolment to clear: a
+    // promotion of a user with no second factor changes nothing about MFA.
+    if (isBecomingAdmin && (targetUser.mfaEnabled || targetUser.mfaSecretCiphertext)) {
+      await writeMfaResetAudit(db, req, targetUser, {
+        operation: 'promotion_clear',
+        enrolmentPreserved: false,
+        secondFactorActive: false,
+        fieldsCleared: ['mfaEnabled', 'mfaSecretCiphertext', 'mfaActivationDate'],
+        sessionsRevoked: false,
+        message: 'MFA removido na promoção a Administrador (cadastro do segundo fator apagado)'
+      });
+    }
+
     // #1068: strips mfaSecretCiphertext and passwordResetTokenHash too -- see
     // UserModel.stripSecrets for the dictionary entries that require it.
     // (UserModel is already required earlier in this handler -- #566.)
@@ -711,8 +797,10 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
 
     // #427: roleName resolved from the active RBAC assignment for display —
     // no longer persisted on the User document.
-    const { resolveRoleDisplayName } = require('../../services/rbac-assignment.service');
+    const { resolveRoleDisplayName, getActiveRoleCodes: readRoleCodes } = require('../../services/rbac-assignment.service');
     userWithoutPassword.roleName = await resolveRoleDisplayName(db, targetUser._id.toString());
+    // #1240: same field as the list, so the form's next save echoes the truth.
+    userWithoutPassword.auditorRole = (await readRoleCodes(db, targetUser._id.toString())).includes('auditor');
 
     // Traduz status para português
     if (userWithoutPassword.status) {
@@ -751,6 +839,28 @@ router.delete('/:id', authenticate, requirePermission('createUser'), async (req,
 
     const usersCollection = db.collection('users');
     const userFilter = buildUserFilterById(req.params.id);
+
+    // #1008: the #998 floor covered granting a level above your own but not
+    // DELETING a user above your own, so a Coordenador could delete an
+    // Administrador. Same root cause as the role-assignment gate: createUser
+    // gates every verb on this resource. A missing target falls through to
+    // deleteOne, which answers the 404 below as before.
+    const targetUser = await usersCollection.findOne(userFilter);
+    if (targetUser) {
+      const { resolveUserHierarchyLevel } = require('../../services/rbac-assignment.service');
+      const [targetLevel, callerLevel] = await Promise.all([
+        resolveUserHierarchyLevel(db, targetUser._id.toString()),
+        resolveUserHierarchyLevel(db, req.user?.userID),
+      ]);
+      if (Number(targetLevel || 0) > Number(callerLevel || 0)) {
+        return res.status(403).json({
+          success: false,
+          error: req.t('errors.forbidden'),
+          message: 'Não é possível excluir um usuário com nível de acesso superior ao seu.'
+        });
+      }
+    }
+
     const result = await usersCollection.deleteOne(userFilter);
 
     if (result.deletedCount === 0) {
@@ -779,7 +889,9 @@ router.delete('/:id', authenticate, requirePermission('createUser'), async (req,
   }
 });
 
-router.get('/:id/validate-status', authenticate, async (req, res) => {
+// #1241: gated like GET /:id. With authenticate alone it told any account
+// whether an id existed and whether it was active.
+router.get('/:id/validate-status', authenticate, requirePermission('createUser'), async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -837,10 +949,11 @@ router.post('/register-patient', authenticate, requirePermission('createPatient'
     });
   } catch (error) {
     logger.error('Erro ao registrar paciente:', error.message);
-    return res.status(400).json({
+    return res.status(error.statusCode === 422 ? 422 : 400).json({
       success: false,
       error: req.t('users.registerPatientError'),
-      message: error.message
+      message: error.message,
+      details: error.details
     });
   }
 });
@@ -919,10 +1032,11 @@ router.post('/register-sample', authenticate, requirePermission('createSample'),
       });
     }
 
-    return res.status(400).json({
+    return res.status(error.statusCode === 422 ? 422 : 400).json({
       success: false,
       error: req.t('users.registerSampleError'),
-      message: error.message
+      message: error.message,
+      details: error.details
     });
   }
 });
@@ -1031,10 +1145,11 @@ router.post('/register-sensor', authenticate, requirePermission('manageSensor'),
     });
   } catch (error) {
     logger.error('Erro ao registrar sensor:', error.message);
-    return res.status(400).json({
+    return res.status(error.statusCode === 422 ? 422 : 400).json({
       success: false,
       error: req.t('users.registerSensorError'),
-      message: error.message
+      message: error.message,
+      details: error.details
     });
   }
 });
@@ -1155,7 +1270,7 @@ router.post('/:id/reset-mfa', authenticate, requirePermission('resetMFA', 'UPDAT
     // aceita _id/id/userID em forma string E numérica, então o parâmetro da
     // rota não é necessariamente igual ao userID gravado na sessão.
     const sessionService = require('../../services/session.service');
-    await sessionService.invalidateUserSessions(db, targetUser._id.toString(), 'admin_action', req.user?.userID);
+    await sessionService.invalidateUserSessions(db, targetUser._id.toString(), 'admin_action', req.user?.userID, { req });
 
     // #1031: par explícito da linha do desbloqueio acima. Sem as duas, a
     // trilha registra as duas operações de forma indistinguível.
@@ -1179,6 +1294,56 @@ router.post('/:id/reset-mfa', authenticate, requirePermission('resetMFA', 'UPDAT
       error: req.t('users.resetMFAError'),
       message: error.message
     });
+  }
+});
+
+// #1020 / RF003 AC#5 ("Revogar sessões"): an administrator revokes every
+// active session of an account. `reason` is 'admin_action' (default) or
+// 'risk', the P1X-0267 member that had no writer: the administrator records
+// that they judge the account at risk, which is what an auditor filtering the
+// session view by motivo needs to see. The other three members are not the
+// administrator's to claim (a user's own request, a password change, an
+// expiry), so they are refused here. No automatic 'risk' writer exists on
+// purpose: revoking on a login lockout would let anyone log the real owner
+// out by failing passwords against the account.
+//
+// #1241, kept deliberately: no hierarchy floor, so an administrator may
+// revoke another administrator's sessions, and their own. Revocation grants
+// nothing and the target signs in again. A compromised administrator account
+// is the case reason 'risk' exists for, and a floor would leave no other
+// administrator able to cut it off.
+router.post('/:id/revoke-sessions', authenticate, requirePermission('revokeSessions', 'UPDATE'), async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
+    }
+
+    const reason = req.body?.reason === undefined ? 'admin_action' : req.body.reason;
+    if (!['admin_action', 'risk'].includes(reason)) {
+      return res.status(422).json({
+        success: false,
+        error: 'Dados inválidos',
+        message: "reason deve ser 'admin_action' ou 'risk'",
+        details: ["reason deve ser 'admin_action' ou 'risk'"]
+      });
+    }
+
+    const userFilter = buildUserFilterById(req.params.id);
+    const targetUser = await db.collection('users').findOne(userFilter);
+    if (!targetUser) {
+      return res.status(404).json({ success: false, error: 'Usuário não encontrado' });
+    }
+
+    const sessionService = require('../../services/session.service');
+    const revoked = await sessionService.invalidateUserSessions(
+      db, targetUser._id.toString(), reason, req.user?.userID, { req }
+    );
+
+    return res.status(200).json({ success: true, data: { revoked, reason } });
+  } catch (error) {
+    logger.error('Erro ao revogar sessões do usuário:', error.message);
+    return res.status(500).json({ success: false, error: 'Erro ao revogar sessões' });
   }
 });
 
@@ -1251,6 +1416,89 @@ router.post('/:id/force-password-reset', authenticate, requirePermission('forceP
       error: req.t('users.forcePasswordResetError'),
       message: error.message
     });
+  }
+});
+
+// #1013: an administrator sets another user's password. This rode on PUT /:id
+// under createUser, which hashed and $set the field and nothing else: no
+// strength or reuse check, no passwordHistory, and a generic update row in the
+// trail. It now has its own permission and its own audit row, and it keeps
+// the bookkeeping the owner's own change keeps (auth.service's forceReset
+// branch). It also sets forceReset, because the administrator now knows the
+// password, so the owner must replace it at next login (RF014 AC#4's
+// mechanism). #982's revocation moved here from the PUT.
+//
+// #1245 item 1: an Administrador target is allowed, with no hierarchy floor,
+// deliberately. Denise's Axis E log (#686, CONFIRM) settles the sibling:
+// force-password-reset "may target Administrador", the asymmetry with the old
+// reset-mfa refusal being intentional. What this route adds is that the caller
+// knows the new password, and forceReset makes that knowledge unusable on its
+// own: processLogin's forceReset branch issues no token until a NEW password is
+// set, so the caller can only get in by replacing the password again. That
+// locks the real owner out, visibly, and leaves this route's warning row, the
+// admin_action revocation and a password_change revocation on the trail.
+router.post('/:id/set-password', authenticate, requirePermission('setUserPassword', 'UPDATE'), async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
+    }
+
+    const usersCollection = db.collection('users');
+    const userFilter = buildUserFilterById(req.params.id);
+    const targetUser = await usersCollection.findOne(userFilter);
+    if (!targetUser) {
+      return res.status(404).json({ success: false, error: 'Usuário não encontrado' });
+    }
+
+    const newPassword = req.body?.password;
+    const passwordService = require('../../services/password.service');
+    const passwordPolicy = await passwordService.resolvePasswordPolicy(db);
+    try {
+      passwordService.validateStrength(newPassword, passwordPolicy, targetUser);
+      await passwordService.validateReuse(newPassword, targetUser, passwordPolicy);
+    } catch (validationError) {
+      return res.status(422).json({ success: false, error: 'Dados inválidos', message: validationError.message, details: validationError.details || [validationError.message] });
+    }
+
+    const bcrypt = require('bcryptjs');
+    const now = new Date();
+    await usersCollection.updateOne(userFilter, {
+      $set: {
+        password: await bcrypt.hash(newPassword, 10),
+        // #1244: the same policy depth validateReuse checks.
+        passwordHistory: passwordService.nextPasswordHistory(targetUser, passwordPolicy),
+        passwordChangedAt: now,
+        forceReset: true,
+        updatedAt: now,
+      },
+    });
+
+    // targetUser._id.toString(), not req.params.id: sessions key their owner
+    // as the stored id string (see PUT /:id's #982 note).
+    const sessionService = require('../../services/session.service');
+    await sessionService.invalidateUserSessions(db, targetUser._id.toString(), 'admin_action', req.user?.userID, { req });
+
+    const auditLogger = require('../../utils/auditLogger');
+    auditLogger.init(db);
+    await auditLogger.log({
+      action: 'UPDATE',
+      resourceType: 'User',
+      resourceId: targetUser._id.toString(),
+      status: 'success',
+      severity: 'warning',
+      // audit-v2 keeps `message` and drops `payload` (#1005), so the
+      // operation is named here.
+      message: 'Senha definida por administrador; troca obrigatória no próximo login',
+      payload: { operation: 'setUserPassword', fieldsSet: ['password', 'passwordHistory', 'passwordChangedAt', 'forceReset'] },
+      req,
+      module: 'Usuários',
+    });
+
+    return res.status(200).json({ success: true, data: { forceReset: true } });
+  } catch (error) {
+    logger.error('Erro ao definir senha:', error.message);
+    return res.status(500).json({ success: false, error: 'Erro ao definir senha', message: error.message });
   }
 });
 

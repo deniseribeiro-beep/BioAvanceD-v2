@@ -52,7 +52,7 @@ async function createRealSample(request: any, token: string): Promise<string> {
     },
   });
   expect([201, 202]).toContain(create.status());
-  return (await create.json()).data.sampleID;
+  return (await create.json()).data.specimenId;
 }
 
 test.afterAll(async () => {
@@ -622,7 +622,7 @@ test.describe('Reports (RF008) — real backend', () => {
   async function createRealSampleWithParticipant(
     request: any,
     token: string
-  ): Promise<{ sampleID: string; participantId: string }> {
+  ): Promise<{ specimenId: string; participantId: string }> {
     const participant = await createRealParticipant(request, apiBaseURL!, token);
     const seededStorageBox = await seedStorageBoxLocation();
     seededStorageBoxes.push(seededStorageBox);
@@ -638,7 +638,7 @@ test.describe('Reports (RF008) — real backend', () => {
       },
     });
     expect([201, 202]).toContain(create.status());
-    return { sampleID: (await create.json()).data.sampleID, participantId: participant.participantId };
+    return { specimenId: (await create.json()).data.specimenId, participantId: participant.participantId };
   }
 
   async function previewReport(request: any, token: string, type: string, filters: Record<string, unknown>) {
@@ -749,7 +749,7 @@ test.describe('Reports (RF008) — real backend', () => {
     expect(unauthenticated.status()).toBe(401);
 
     const username = `tecnico.rf008.${Date.now()}`;
-    const password = 'Tecnico@123';
+    const password = 'Tecnico@123-forte';
     const registerResponse = await request.post(`${apiBaseURL}/api/users/register`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: {
@@ -943,5 +943,32 @@ test.describe('Reports (RF008) — real backend', () => {
     expect(downloadedPath).toBeTruthy();
     const csv = fs.readFileSync(downloadedPath!, 'utf8');
     expect(csv.split('\n')[0].split(',')).toContain('participantId');
+  });
+
+  // #733: `audit` and `access_logs` were two menu entries over one `logs`
+  // query. RF008 names AuditEvent, so `audit` now reads the hash-chained
+  // audit_events trail. The login itself is audited, so the trail is never
+  // empty here.
+  test('the audit report reads the AuditEvent trail, distinct from access_logs (#733)', async ({ request }) => {
+    const admin = await realLogin(request);
+
+    const audit = await previewReport(request, admin.token, 'audit', {});
+    expect(audit.ok(), await audit.text()).toBe(true);
+    const auditData = (await audit.json()).data;
+    expect(auditData.logs).toBeUndefined();
+    expect(Array.isArray(auditData.auditEvents)).toBe(true);
+    expect(auditData.auditEvents.length).toBeGreaterThan(0);
+    for (const row of auditData.auditEvents) {
+      expect(row.eventId).toBeTruthy();
+      expect(row.actorPseudonym).toMatch(/^USR-/);
+      expect(row.eventHash).toBeUndefined();
+      expect(row.entityId).toBeUndefined();
+    }
+
+    const accessLogs = await previewReport(request, admin.token, 'access_logs', {});
+    expect(accessLogs.ok(), await accessLogs.text()).toBe(true);
+    const accessLogsData = (await accessLogs.json()).data;
+    expect(accessLogsData.auditEvents).toBeUndefined();
+    expect(Array.isArray(accessLogsData.logs)).toBe(true);
   });
 });

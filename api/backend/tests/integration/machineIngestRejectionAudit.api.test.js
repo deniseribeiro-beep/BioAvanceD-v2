@@ -6,7 +6,7 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
 
 const app = require('../../app');
 const auditLogger = require('../../src/utils/auditLogger');
-const { createDbMock } = require('../factories/db.factory');
+const { createDbMock, createCollectionMock } = require('../factories/db.factory');
 
 // #1095 asked whether a rejected machine-ingest submission leaves any record on
 // the two HTTP transports, the way the MQTT sibling's three `reason` codes do.
@@ -78,6 +78,61 @@ describe('#1095/#1119: HTTP machine-ingest rejections are audited, with the righ
     // #1119: ENTITY_MAP['iot'], reachable only from the unstripped path.
     expect(row.payload.path).toBe('/api/iot/telemetry');
     expect(row.resourceType).toBe('TelemetryReading');
+
+    // #1120: the body fails BOTH checks; sensorId is checked first.
+    expect(row.payload.reason).toBe('missing_sensor_id');
+  });
+
+  // #1120 (Axis E E3): the discriminator. Same route, same status, same
+  // action as the case above -- only payload.reason tells them apart.
+  it('#1120: a non-finite temperature records invalid_temperature, not missing_sensor_id', async () => {
+    const res = await request(app)
+      .post('/api/iot/telemetry')
+      .set('x-telemetry-ingest-secret', INGEST_SECRET)
+      .send({ sensorId: 'sensor-1', temperature: 'abc' });
+
+    expect(res.status).toBe(400);
+    await flushAudit();
+    const row = soleRow();
+
+    expect(row.action).toBe('CREATE_FAILED');
+    expect(row.payload.statusCode).toBe(400);
+    expect(row.payload.reason).toBe('invalid_temperature');
+  });
+
+  it('#1120: the temperature sibling records unknown_sensor on its 404', async () => {
+    const res = await request(app)
+      .post('/api/temperature/system/reading')
+      .set('x-telemetry-ingest-secret', INGEST_SECRET)
+      .send({ sensorId: 'no-such-sensor', temperatureValue: 5 });
+
+    expect(res.status).toBe(404);
+    await flushAudit();
+    const row = soleRow();
+
+    expect(row.action).toBe('CREATE_FAILED');
+    expect(row.resourceType).toBe('Temperature');
+    expect(row.payload.reason).toBe('unknown_sensor');
+  });
+
+  it('#1120: the temperature sibling records invalid_payload on a model-validation 422', async () => {
+    app.locals.db = createDbMock({
+      sensors: createCollectionMock({
+        findOne: vi.fn().mockResolvedValue({ sensorId: 'sensor-1', organizationId: null }),
+      }),
+    });
+
+    const res = await request(app)
+      .post('/api/temperature/system/reading')
+      .set('x-telemetry-ingest-secret', INGEST_SECRET)
+      .send({ sensorId: 'sensor-1', temperatureValue: 'warm' });
+
+    expect(res.status).toBe(422);
+    await flushAudit();
+    const row = soleRow();
+
+    expect(row.action).toBe('CREATE_FAILED');
+    expect(row.payload.reason).toBe('invalid_payload');
   });
 
   // The gate refusal is the case #1095 called "arguably the most
@@ -97,6 +152,9 @@ describe('#1095/#1119: HTTP machine-ingest rejections are audited, with the righ
     expect(row.action).toBe('FORBIDDEN');
     expect(row.status).toBe('error');
     expect(row.payload.statusCode).toBe(403);
+    // #1120 CONTROL: nothing tagged a reason, so the payload carries no key
+    // for one -- untagged rows keep their pre-#1120 shape and hash input.
+    expect(row.payload).not.toHaveProperty('reason');
 
     expect(row.payload.path).toBe('/api/iot/telemetry');
     expect(row.resourceType).toBe('TelemetryReading');

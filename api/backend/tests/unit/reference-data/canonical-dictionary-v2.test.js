@@ -1,0 +1,72 @@
+import { describe, it, expect } from 'vitest';
+const fs = require('fs');
+const crypto = require('crypto');
+const { parseDictionaryV2, SOURCE_MD_V2 } = require('../../../scripts/generate-dictionary-catalog');
+const v2 = require('../../../src/reference-data/canonical-dictionary/v2');
+const v1 = require('../../../src/reference-data/canonical-dictionary');
+
+/**
+ * RF022 AC1 (Requisitos v4.0.0): "a release final v2.0.0 contém 1644
+ * elementos, incluindo os 929 históricos". These pin that count against the
+ * generated catalog, and the catalog against its source dictionary.
+ */
+describe('canonical-dictionary catalog v2.0.0 (docs/extracted-v2.0.0/dict-DICIONARIO.md)', () => {
+  it('loads the 1644 elements: 423 ELM + 506 P1X historical, 715 V2E', () => {
+    const catalog = v2.loadCanonicalDictionary();
+    expect(catalog).toHaveLength(1644);
+    expect(catalog.filter((el) => el.elementId.startsWith('ELM-'))).toHaveLength(423);
+    expect(catalog.filter((el) => el.elementId.startsWith('P1X-'))).toHaveLength(506);
+    expect(catalog.filter((el) => el.elementId.startsWith('V2E-'))).toHaveLength(715);
+  });
+
+  it('verifies completeness, with every v1.3.0 element id still present', () => {
+    const result = v2.checkCompleteness();
+    expect(result).toMatchObject({
+      dictionaryVersion: '2.0.0',
+      loadedTotal: 1644,
+      uniqueTotal: 1644,
+      historicalTotal: 929,
+      duplicateIds: [],
+      missingRequiredFieldIds: [],
+      unknownChangeStatusIds: [],
+      missingHistoricalIds: [],
+      verified: true,
+    });
+    for (const element of v1.loadCanonicalDictionary()) {
+      expect(v2.getElementById(element.elementId)).not.toBeNull();
+    }
+  });
+
+  it('reports a dropped historical id, a duplicate and an unknown changeStatus (control rows)', () => {
+    const catalog = v2.loadCanonicalDictionary();
+    const dropped = catalog.filter((el) => el.elementId !== 'ELM-0357');
+    const tampered = [...dropped, { ...catalog[0], changeStatus: 'rewritten' }];
+    const result = v2.checkCompleteness(tampered);
+    expect(result.missingHistoricalIds).toEqual(['ELM-0357']);
+    expect(result.duplicateIds).toEqual([catalog[0].elementId]);
+    expect(result.unknownChangeStatusIds).toEqual([catalog[0].elementId]);
+    expect(result.verified).toBe(false);
+  });
+
+  it('keeps the v2.0.0 columns: an element reads as the dictionary row it came from', () => {
+    expect(v2.getElementById('V2E-0563')).toMatchObject({
+      domain: 'Telemetria',
+      entity: 'TelemetryDatastream',
+      field: 'sensorId',
+      cardinality: '1..1',
+      requirement: 'Core',
+      authoritativePersistence: 'MongoDB',
+      uniquenessRule: 'Globally unique',
+      preparationPhase: 'Phase 1',
+      populationPhase: 'Phase 3',
+      changeStatus: 'added',
+      previousElementId: null,
+    });
+  });
+
+  it('matches a fresh parse of its source dictionary (source-vs-artifact drift)', () => {
+    const fresh = parseDictionaryV2(fs.readFileSync(SOURCE_MD_V2, 'utf8'));
+    const freshChecksum = crypto.createHash('sha256').update(JSON.stringify(fresh)).digest('hex');
+    expect(freshChecksum).toBe(v2.dictionaryChecksum());
+  });
+});

@@ -36,7 +36,10 @@ router.get('/', authenticate, async (req, res) => {
     await ensureIndexes(collection);
 
     const limit = Math.max(1, Math.min(Number(req.query.limit) || 100, 500));
-    const items = await collection.find({}).sort({ officialName: 1 }).limit(limit).toArray();
+    // #1280: an offset, so a client can read past the first page. _id breaks
+    // ties so consecutive pages neither repeat nor skip a row.
+    const skip = Math.max(0, Math.floor(Number(req.query.skip)) || 0);
+    const items = await collection.find({}).sort({ officialName: 1, _id: 1 }).skip(skip).limit(limit).toArray();
 
     return res.status(200).json({ success: true, data: items });
   } catch (error) {
@@ -79,7 +82,7 @@ router.post('/', authenticate, requirePermission('manageOrganizations'), async (
 
     const validation = OrganizationModel.validate(payload);
     if (!validation.isValid) {
-      return res.status(422).json({ success: false, error: 'Dados inválidos', message: validation.errors.join(', ') });
+      return res.status(422).json({ success: false, error: 'Dados inválidos', message: validation.errors.join(', '), details: validation.errors });
     }
 
     const db = req.app.locals.db;
@@ -126,6 +129,35 @@ function buildIdQuery(rawId) {
   };
 }
 
+// #1284: every record that names an organization by its organizationId
+// (a UUID string, never the Mongo _id), with the field it uses. Keys go
+// through getCollection where the collection is canonical, raw names
+// otherwise, as their own routes resolve them.
+const ORGANIZATION_REFERENCES = [
+  { label: 'equipment', name: 'equipment', filter: (id) => ({ organizationId: id }) },
+  { label: 'sensors', name: 'sensors', filter: (id) => ({ organizationId: id }) },
+  { label: 'temperatures', name: 'temperatures', filter: (id) => ({ organizationId: id }) },
+  // A sensor's delete is a hard delete that leaves its alerts, and the alert
+  // read is scoped by this organizationId, so alerts outlive their sensor.
+  { label: 'alerts', name: 'alerts', filter: (id) => ({ organizationId: id }) },
+  { label: 'samples', canonicalKey: 'samples', filter: (id) => ({ collectionSite: id }) },
+  { label: 'assays', name: 'assays', filter: (id) => ({ laboratoryId: id }) },
+  { label: 'users', name: 'users', filter: (id) => ({ $or: [{ organizationId: id }, { organizationIds: id }] }) },
+  { label: 'reports', name: 'reports', filter: (id) => ({ organizationIds: id }) },
+  { label: 'patients', canonicalKey: 'patients', filter: (id) => ({ clinicalUnitId: id }) },
+  { label: 'userRoleAssignments', canonicalKey: 'userRoleAssignments', filter: (id) => ({ scopeType: 'organization', scopeId: id }) }
+];
+
+async function findOrganizationReferences(db, organizationId) {
+  if (!organizationId) return [];
+  const id = String(organizationId);
+  const counts = await Promise.all(ORGANIZATION_REFERENCES.map(async (ref) => {
+    const collection = ref.canonicalKey ? await getCollection(db, ref.canonicalKey) : db.collection(ref.name);
+    return collection.countDocuments(ref.filter(id), { limit: 1 });
+  }));
+  return ORGANIZATION_REFERENCES.filter((_, i) => counts[i] > 0).map((ref) => ref.label);
+}
+
 router.put('/:id', authenticate, requirePermission('manageOrganizations'), async (req, res) => {
   try {
     const db = req.app.locals.db;
@@ -154,7 +186,7 @@ router.put('/:id', authenticate, requirePermission('manageOrganizations'), async
 
     const validation = OrganizationModel.validate(payload);
     if (!validation.isValid) {
-      return res.status(422).json({ success: false, error: 'Dados inválidos', message: validation.errors.join(', ') });
+      return res.status(422).json({ success: false, error: 'Dados inválidos', message: validation.errors.join(', '), details: validation.errors });
     }
 
     const update = {
@@ -194,7 +226,26 @@ router.delete('/:id', authenticate, requirePermission('manageOrganizations'), as
     const collection = await getCollection(db, 'organizations');
     const query = buildIdQuery(String(req.params.id));
 
-    const result = await collection.deleteOne(query);
+    const existing = await collection.findOne(query);
+    if (!existing) {
+      return res.status(404).json({ success: false, error: 'Organização não encontrada' });
+    }
+
+    // #1284: a delete used to leave every record naming the organization
+    // pointing at nothing, tenancy keys included. dict-02 gives Organization
+    // no status element, so there is no deactivation to fall back on: the
+    // delete is refused while anything still references it.
+    const references = await findOrganizationReferences(db, existing.organizationId);
+    if (references.length > 0) {
+      return res.status(409).json({
+        success: false,
+        error: 'Organização em uso',
+        message: `A organização é referenciada por: ${references.join(', ')}`,
+        references
+      });
+    }
+
+    const result = await collection.deleteOne({ _id: existing._id });
     if (!result || result.deletedCount === 0) {
       return res.status(404).json({ success: false, error: 'Organização não encontrada' });
     }

@@ -22,7 +22,7 @@ function matchesQuery(doc, query = {}) {
  * #421: real query-matching mocks (findOne/find honor the actual filter,
  * not canned data) for roles/permissions/userRoleAssignments — this repo's
  * "real backend" proof bar for a backend-internal slice (no live-Mongo
- * tier exists here; see build-loop's local-env overlay).
+ * tier exists here).
  */
 function buildRbacDb({ roles = [], permissionDocs = [], assignments = [] } = {}) {
   const rolesCollection = createCollectionMock({

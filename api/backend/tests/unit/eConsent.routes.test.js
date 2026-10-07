@@ -136,6 +136,39 @@ describe('eConsent.routes POST /generate-link', () => {
     sendConsentEmailSpy.mockRestore();
   });
 
+  // #1166 slice 2: the email check compares against the identity record,
+  // decrypted, because dict-02 places the contact there and nowhere else.
+  // The Patient row here carries no email, as it will after slice 4.
+  it('#1166: checks the email against the decrypted identity record, not the Patient document', async () => {
+    const router = loadAuthenticatedRouter();
+    const notificationService = require('../../src/services/notification.service');
+    const participantIdentityService = require('../../src/services/participantIdentity.service');
+    const sendConsentEmailSpy = vi
+      .spyOn(notificationService, 'sendConsentEmail')
+      .mockResolvedValue({ channel: 'email', success: true, provider: 'resend' });
+    const encrypted = participantIdentityService.encryptIdentityFields({
+      participantId: '12345678',
+      email: 'a@b.com',
+    });
+    const byCollection = {
+      patients: { findOne: vi.fn().mockResolvedValue({ participantId: '12345678' }) },
+      participantIdentities: { findOne: vi.fn().mockResolvedValue({ ...encrypted, email: null }) },
+    };
+    const db = { collection: vi.fn((name) => byCollection[name]) };
+    const app = buildApp(router, db);
+
+    const res = await request(app)
+      .post('/e-consent/generate-link')
+      .send({ participantId: '12345678', email: 'a@b.com' });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(byCollection.participantIdentities.findOne).toHaveBeenCalledWith({ participantId: '12345678' });
+    expect(sendConsentEmailSpy).toHaveBeenCalledWith(
+      { participantId: '12345678', email: 'a@b.com' },
+      res.body.link
+    );
+  });
+
   // #829: the handler had no try/catch, so a throw from sendConsentEmail was
   // an unhandled promise rejection and Node *exited the process*. Observed on
   // the test stack: backend-app-test went Up (healthy) -> Exited (1) on a
@@ -589,7 +622,8 @@ describe('eConsent.routes POST /update', () => {
       }
     );
     expect(db.samplesCollection.updateOne.mock.calls[0][1].$set.status).toBeUndefined();
-    expect(releaseSpy).toHaveBeenCalledWith(db, 'sample-1', 'SYSTEM');
+    // #1219: handed the sample, so the release matches its specimenId and its _id.
+    expect(releaseSpy).toHaveBeenCalledWith(db, expect.objectContaining({ _id: 'sample-1' }), 'SYSTEM');
     expect(io.to).toHaveBeenCalledWith('patient-12345678');
     expect(emit).toHaveBeenCalledWith('sample-released', { participantId: '12345678' });
   });
@@ -702,6 +736,90 @@ describe('eConsent.routes POST /consents/:id/revoke (#684)', () => {
   });
 });
 
+// #1150: POST /consents carried `authenticate` and nothing else, while the
+// revoke sibling four lines below it gates on requireRole(3, 4) -- so any
+// authenticated principal of any role, UsuarioExterno included, could record
+// a consent for any participant. createPatientConsent (consent.controller.js
+// :496-548) performs no role and no ownership check: it spreads req.body
+// wholesale and uses req.user only to write the audit row, which it labels
+// action: SIGN. So the trail recorded the fabricated consent as a signature.
+//
+// #684 settled the identical question for the revoke sibling and its
+// reasoning transfers verbatim, including why ownership is not the
+// alternative it looks like: req.user carries a userID into `users`, never a
+// participantId, so there is nothing on this route to compare against the
+// consent's owner. Creating is the stronger case than revoking -- revocation
+// destroys a permission the biobank holds, creation manufactures one, and
+// the Consent record is the legal artifact the whole eConsent flow exists to
+// produce.
+//
+// Gating at 3, not a new permission code: verified before choosing it that no
+// caller below accessType 3 exists. `git grep -n -I "createPatientConsent" --
+// frontend/src` returns only the api.ts definition and two comments -- the
+// client method has no caller at all -- and every e2e caller
+// (pipeline-continuity, study-protocol-collection-crud, interop-monitoring)
+// authenticates as admin via realLogin().
+describe('eConsent.routes POST /consents (#1150)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    clearRouteCache();
+  });
+
+  function loadRouterAsRole(hierarchyLevel) {
+    clearRouteCache();
+    const authModule = require(authPath);
+    authModule.authenticate = (req, res, next) => {
+      req.user = { userID: 'user-1', id: 'user-1' };
+      next();
+    };
+    const assignmentService = require('../../src/services/rbac-assignment.service');
+    vi.spyOn(assignmentService, 'resolveUserHierarchyLevel').mockResolvedValue(hierarchyLevel);
+    return require(routePath);
+  }
+
+  function stubCreate() {
+    return vi
+      .spyOn(consentService, 'createPatientConsent')
+      .mockResolvedValue({ _id: 'consent-1', participantId: 'p-1', consentTemplateId: 't-1', status: 'ACTIVE' });
+  }
+
+  it('refuses a Usuario Externo (level 1) instead of recording a consent', async () => {
+    const createSpy = stubCreate();
+
+    const app = buildApp(loadRouterAsRole(1), { collection: () => ({}) });
+
+    const res = await request(app).post('/e-consent/consents').send({ participantId: 'p-1' });
+
+    expect(res.status).toBe(403);
+    expect(createSpy).not.toHaveBeenCalled();
+  });
+
+  it('refuses a Tecnico (level 2) instead of recording a consent', async () => {
+    const createSpy = stubCreate();
+
+    const app = buildApp(loadRouterAsRole(2), { collection: () => ({}) });
+
+    const res = await request(app).post('/e-consent/consents').send({ participantId: 'p-1' });
+
+    expect(res.status).toBe(403);
+    expect(createSpy).not.toHaveBeenCalled();
+  });
+
+  // CONTROL: green before and after the gate lands. A Coordenador could
+  // record a consent before #1150 and must still be able to afterwards --
+  // this is the case that catches a gate set one tier too high.
+  it('lets a Coordenador (level 3) through to the handler', async () => {
+    const createSpy = stubCreate();
+
+    const app = buildApp(loadRouterAsRole(3), { collection: () => ({}) });
+
+    const res = await request(app).post('/e-consent/consents').send({ participantId: 'p-1' });
+
+    expect(res.status).not.toBe(403);
+    expect(createSpy).toHaveBeenCalled();
+  });
+});
+
 // Issue #921 slice 5: table-driven RBAC gate-argument pinning. Every test
 // above this point asserts gate PRESENCE (401/403 outcomes) but not the
 // arguments the route handed the gate factory, so a stub that discards its
@@ -712,12 +830,12 @@ describe('eConsent.routes POST /consents/:id/revoke (#684)', () => {
 // full and confirmed against source before use): a factory stub records its
 // own `...args` into a `recordedCalls` array the test then asserts against.
 //
-// #888: POST /generate-link's requirePermission('createPatient') is a
-// Patient-domain permission code gating a Consent-domain route (confirmed
-// against eConsent.js:19). This suite pins that argument exactly as the
-// route declares it today; whether 'createPatient' is the *right* code is
-// #888's question, not this one's -- pinning only makes a future change to
-// it visible in a test.
+// #929: POST /generate-link used to carry requirePermission('createPatient') --
+// a Patient-domain permission code gating a Consent-domain route (confirmed
+// against eConsent.js:73). It now carries 'requestConsent', the Consent-domain
+// code #888 said it needed and #929 added. Seeded to Coordenador +
+// Administrador, the same tier createPatient already resolved to, so the swap
+// is a no-op for every real caller -- which is exactly why it needs pinning.
 //
 // requireOrganizationScope: eConsent.js destructures only
 // `{ requireRole, requirePermission }` from rbac (eConsent.js:7) and never
@@ -790,12 +908,12 @@ describe('eConsent.routes RBAC gate argument pinning (issue #921)', () => {
     return require(routePath);
   }
 
-  // One entry per requireRole-gated registration -- 10 of the file's 11
+  // One entry per requireRole-gated registration -- 11 of the file's 12
   // gated sites (re-derived via `git grep -n -I -E
   // "requirePermission[(]|requireRole[(]|requireOrganizationScope" --
-  // api/backend/src/routes/eConsent.js`: 12 matching lines, one of which,
-  // eConsent.js:265, is a comment referencing requireRole(3, 4) in prose,
-  // not a call site -- 11 real sites). The 11th, the single
+  // api/backend/src/routes/eConsent.js`: 13 matching lines, one of which,
+  // eConsent.js:333, is a comment referencing requireRole(3, 4) in prose,
+  // not a call site -- 12 real sites). The 12th, the single
   // requirePermission call, is pinned separately below.
   const ROLE_CASES = [
     { label: 'GET /consent-policies/:id/pending-patients', method: 'get', path: '/consent-policies/cp1/pending-patients', expectedArgs: [3, 4] },
@@ -807,6 +925,10 @@ describe('eConsent.routes RBAC gate argument pinning (issue #921)', () => {
     { label: 'PUT /consent-policies/:id', method: 'put', path: '/consent-policies/cp1', expectedArgs: [3, 4] },
     { label: 'GET /consent-policies/history', method: 'get', path: '/consent-policies/history', expectedArgs: [3, 4] },
     { label: 'GET /consent-policies', method: 'get', path: '/consent-policies', expectedArgs: [3, 4] },
+    // #1150: POST /consents was authenticate-only while its revoke sibling
+    // one line below gated on requireRole(3, 4). Now gated the same way, and
+    // pinned here so the argument cannot drift back.
+    { label: 'POST /consents', method: 'post', path: '/consents', expectedArgs: [3, 4] },
     { label: 'POST /consents/:id/revoke', method: 'post', path: '/consents/consent-1/revoke', expectedArgs: [3, 4] },
   ];
 
@@ -827,7 +949,7 @@ describe('eConsent.routes RBAC gate argument pinning (issue #921)', () => {
     });
   }
 
-  it("pins requirePermission('createPatient') for POST /generate-link (#888: a Patient-domain code on a Consent-domain route)", async () => {
+  it("pins requirePermission('requestConsent') for POST /generate-link (#929: the Consent-domain code that replaced the borrowed createPatient)", async () => {
     const requirePermissionImpl = denyingRequirePermission();
     const router = loadRouterWithGate({ requirePermissionImpl });
     const app = buildApp(router);
@@ -838,6 +960,6 @@ describe('eConsent.routes RBAC gate argument pinning (issue #921)', () => {
 
     expect(res.status).toBe(403);
     expect(res.body.gate).toBe('permission');
-    expect(requirePermissionImpl.recordedCalls).toEqual([['createPatient']]);
+    expect(requirePermissionImpl.recordedCalls).toEqual([['requestConsent']]);
   });
 });

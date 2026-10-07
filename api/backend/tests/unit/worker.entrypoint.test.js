@@ -19,6 +19,13 @@ const redisConfigPath = require.resolve('../../src/config/redis');
 const loggerPath = require.resolve('../../src/utils/logger');
 const dailyMerkleJobPath = require.resolve('../../src/workers/jobs/daily-merkle.job');
 const dotenvPath = require.resolve('dotenv');
+const SRC_ROOT = require('path').resolve(__dirname, '../../src') + require('path').sep;
+// config/env.js is exempt from that eviction on purpose. It is a plain literal
+// module.exports object that tests deliberately WRITE to (env.FOO = ...) instead
+// of going through process.env, so a fresh copy per test would silently discard
+// every assignment the test just made -- the code under test would then read
+// defaults and the assertion would fail for a reason nothing in the test names.
+const envModulePath = require.resolve('../../src/config/env');
 
 let fakeInitWorker;
 let fakeTestRedisConnection;
@@ -41,9 +48,19 @@ async function loadWorker() {
 
 describe('#977 src/workers/worker.js — the worker treats every Redis failure as fatal', () => {
   beforeEach(() => {
+    // #1160: uncaughtException/unhandledRejection are in this set too, not just
+    // the signals. worker.js registers all four at load, afterEach dropped only
+    // the signals, and the #1040 handlers therefore accumulated one pair per
+    // loadWorker() across the file. Any late failure -- from a boot still in
+    // flight after its own test ended -- then reached a stale handler and called
+    // the REAL process.exit(1), which vitest reports as "Worker exited
+    // unexpectedly" with no pass or fail counts at all. The cause is invisible
+    // from the failure.
     signalListenersBefore = {
       SIGTERM: process.listeners('SIGTERM').slice(),
       SIGINT: process.listeners('SIGINT').slice(),
+      uncaughtException: process.listeners('uncaughtException').slice(),
+      unhandledRejection: process.listeners('unhandledRejection').slice(),
     };
 
     fakeInitWorker = vi.fn().mockResolvedValue({});
@@ -60,17 +77,29 @@ describe('#977 src/workers/worker.js — the worker treats every Redis failure a
   });
 
   afterEach(() => {
-    // worker.js registers SIGTERM/SIGINT handlers at load; drop the ones this
-    // test added so repeated loads do not leak listeners into sibling tests.
-    for (const signal of ['SIGTERM', 'SIGINT']) {
-      for (const listener of process.listeners(signal)) {
-        if (!signalListenersBefore[signal].includes(listener)) {
-          process.removeListener(signal, listener);
+    // worker.js registers SIGTERM/SIGINT and, since #1040, uncaughtException and
+    // unhandledRejection, all at load; drop the ones this test added so repeated
+    // loads do not leak listeners into sibling tests.
+    for (const event of ['SIGTERM', 'SIGINT', 'uncaughtException', 'unhandledRejection']) {
+      for (const listener of process.listeners(event)) {
+        if (!signalListenersBefore[event].includes(listener)) {
+          process.removeListener(event, listener);
         }
       }
     }
-    for (const path of [workerPath, importWorkerPath, queueConfigPath, redisConfigPath, loggerPath, dailyMerkleJobPath, dotenvPath]) {
-      delete require.cache[path];
+    // #1160: evict by PREFIX, not by hand-kept list. The list held only the
+    // modules worker.js requires DIRECTLY, so anything reached through one of
+    // them -- config/validateEnv is the live example -- was loaded once, bound
+    // whatever was in require.cache at that moment (the FIRST test's stubs) and
+    // kept it for the rest of the file. An assertion on a later stub then reads
+    // an object nothing writes to, and reports zero as though the code under
+    // test never ran. A prefix rule cannot fall behind the dependency graph the
+    // way a list does.
+    for (const path of Object.keys(require.cache)) {
+      if (path === envModulePath) continue;
+      if (path.startsWith(SRC_ROOT) || path === dotenvPath) {
+        delete require.cache[path];
+      }
     }
     vi.restoreAllMocks();
   });
@@ -157,6 +186,118 @@ describe('#977 src/workers/worker.js — the worker treats every Redis failure a
 
       expect(fakeInitWorker).toHaveBeenCalled();
       expect(exitSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  // #1154: the audit-signing boot check sits beside #1085's encryption gate in
+  // this same startup sequence, and is deliberately the OPPOSITE severity.
+  // That asymmetry is the whole point of direction 1 -- it is what keeps the
+  // change independent of #979's open fatal-vs-degrade decision -- and a
+  // comment cannot stop the next edit from quietly escalating it, which is the
+  // same reasoning #977 used to pin the fatal posture above.
+  describe('#1154 the audit-signing boot check warns and never exits', () => {
+    const crypto = require('crypto');
+    const fs = require('fs');
+    const os = require('os');
+    const path = require('path');
+    const env = require('../../src/config/env');
+
+    let nodeEnvBefore;
+    let auditBefore;
+    let tmpKeyFile;
+
+    // The boot check is fire-and-forget (see worker.js), so the startup
+    // sequence itself still settles inside loadWorker's two turns -- but the
+    // WARNING lands a few turns later, after the key file read. Drain a fixed
+    // bound, and let the control case assert nothing arrived within it.
+    const SETTLE_TURNS = 50;
+
+    async function bootAndSettleWarnings() {
+      await loadWorker();
+      for (let i = 0; i < SETTLE_TURNS; i += 1) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+    }
+
+    beforeEach(() => {
+      nodeEnvBefore = process.env.NODE_ENV;
+      auditBefore = {
+        key: env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE,
+        id: env.AUDIT_MERKLE_SIGN_KEY_ID,
+        json: env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON,
+        file: env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_FILE,
+      };
+      env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE = '';
+      env.AUDIT_MERKLE_SIGN_KEY_ID = '';
+      env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON = '';
+      env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_FILE = '';
+      // The encryption gate shares this sequence and exits(1) in production
+      // without a key, which would mask everything below.
+      process.env.ENCRYPTION_KEY = 'chave-de-teste';
+    });
+
+    afterEach(() => {
+      if (nodeEnvBefore === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = nodeEnvBefore;
+      env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE = auditBefore.key;
+      env.AUDIT_MERKLE_SIGN_KEY_ID = auditBefore.id;
+      env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON = auditBefore.json;
+      env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_FILE = auditBefore.file;
+      if (tmpKeyFile) {
+        fs.rmSync(tmpKeyFile, { force: true });
+        tmpKeyFile = undefined;
+      }
+    });
+
+    function auditWarnings() {
+      // The logger stub is rebuilt per test by the outer beforeEach, so read it
+      // back out of require.cache rather than holding a stale reference.
+      return require.cache[loggerPath].exports.warn.mock.calls
+        .map((args) => String(args[0]))
+        .filter((message) => message.includes('[AUDIT]'));
+    }
+
+    function configureSoundKey() {
+      const pair = crypto.generateKeyPairSync('ed25519');
+      tmpKeyFile = path.join(os.tmpdir(), 'worker-entrypoint-1154-' + Date.now() + '-' + Math.random() + '.pem');
+      fs.writeFileSync(tmpKeyFile, pair.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(), 'utf8');
+      env.AUDIT_MERKLE_SIGN_PRIVATE_KEY_FILE = tmpKeyFile;
+      env.AUDIT_MERKLE_SIGN_KEY_ID = 'key-worker-1';
+      env.AUDIT_MERKLE_SIGN_PUBLIC_KEYS_JSON = JSON.stringify({
+        'key-worker-1': pair.publicKey.export({ format: 'pem', type: 'spki' }).toString(),
+      });
+    }
+
+    it('starts the worker anyway when the audit signing config is broken in production', async () => {
+      process.env.NODE_ENV = 'production';
+
+      await bootAndSettleWarnings();
+
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(fakeInitWorker).toHaveBeenCalled();
+    });
+
+    it('logs the broken config as an [AUDIT] warning at boot, not at 02:30 UTC', async () => {
+      process.env.NODE_ENV = 'production';
+
+      await bootAndSettleWarnings();
+
+      const warnings = auditWarnings();
+      expect(warnings.length).toBeGreaterThan(0);
+      expect(warnings.join(' ')).toContain('AUDIT_MERKLE_SIGN_KEY_ID');
+    });
+
+    // Control: a sound config must produce NO audit warning, or the check is
+    // noise and an operator learns to ignore it.
+    it('control: says nothing when the signing config round-trips', async () => {
+      process.env.NODE_ENV = 'production';
+      configureSoundKey();
+
+      await bootAndSettleWarnings();
+
+      expect(auditWarnings()).toEqual([]);
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(fakeInitWorker).toHaveBeenCalled();
     });
   });
 });

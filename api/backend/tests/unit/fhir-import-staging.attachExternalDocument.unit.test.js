@@ -193,7 +193,8 @@ describe('fhir-import-staging.service#attachExternalDocument -- transactional re
     const stagingUpdateCall = db.collections.import_staging_records.updateOne.mock.calls.find((call) => call[2]);
     expect(stagingUpdateCall[2]).toEqual({ session: mockSession });
 
-    expect(releaseSpy).toHaveBeenCalledWith(db, expect.any(String), 'op-1', undefined, mockSession);
+    // #1219: handed the sample document, not its _id string.
+    expect(releaseSpy).toHaveBeenCalledWith(db, expect.objectContaining({ _id: expect.anything() }), 'op-1', undefined, mockSession);
   });
 
   it('aborts the transaction when samples.updateOne matches nothing, and never runs the staging write', async () => {

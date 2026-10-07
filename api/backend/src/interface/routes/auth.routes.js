@@ -3,7 +3,6 @@ const router = express.Router();
 const authController = require('../../controllers/auth.controller');
 const authService = require('../../services/auth.service');
 const { authenticate } = require('../../infrastructure/middleware/auth');
-const { requirePermission } = require('../../infrastructure/middleware/rbac');
 const logger = require('../../utils/logger');
 const auditLogger = require('../../utils/auditLogger');
 const jwt = require('jsonwebtoken');
@@ -64,80 +63,10 @@ router.post('/login', async (req, res, next) => {
   }
 });
 
-// RF003 - Cadastro de usuário (pode ser público ou protegido dependendo da regra)
-//
-// #1037: esta rota NÃO tem `authenticate` -- diferente de todas as suas
-// vizinhas -- e auth.controller.js entrega `req.body` inteiro a
-// registerUser, que respeita `userData.accessType || 2`. accessType 4 mapeia
-// para 'administrator' em ROLE_CODE_BY_ACCESS_TYPE, e resolveScopeForRole
-// atalha hierarchyLevel 4 para escopo GLOBAL sem validar organizationId --
-// ou seja, a concessão não pode falhar. O mesmo pedido ainda cai no ramo que
-// zera mfaEnabled/mfaSecretCiphertext por padrão. Resultado medido: um POST anônimo
-// devolvia 201 e gravava uma atribuição de administrador global, ativa, com
-// MFA desligado.
-//
-// A rota irmã POST /api/users/register carrega o piso de hierarquia do #998,
-// cujo próprio comentário descreve exatamente esta escalada um nível abaixo.
-// As duas chegam ao MESMO serviço; o piso vivia só numa delas. Este guard é
-// o piso equivalente para a rota pública, e é a única parte do #1037 que não
-// depende de uma decisão de produto: se esta rota deve existir, ser
-// autenticada ou ser removida continua em aberto lá.
-//
-// Falha FECHADA em vez de rebaixar em silêncio. Um rebaixamento silencioso
-// deixaria o chamador acreditando que escolheu o nível que pediu, e quem
-// legitimamente precisa escolher um nível tem a rota autenticada para isso.
-// Um pedido sem accessType/roleName segue inalterado e recebe o padrão 2.
-function rejectCallerSuppliedPrivilege(req, res, next) {
-  const body = req.body || {};
-  const supplied = ['accessType', 'roleName'].filter((k) => body[k] !== undefined && body[k] !== null);
-  if (supplied.length === 0) {
-    return next();
-  }
-
-  logger.warn(
-    `#1037: registro público recusado -- nível de acesso fornecido pelo chamador: ${supplied.join(", ")}`
-  );
-  return res.status(403).json({
-    success: false,
-    error: (req.t && req.t("errors.forbidden")) || "Acesso negado",
-    message: "Este endpoint não aceita accessType nem roleName. Use a rota autenticada de criação de usuários para definir o nível de acesso."
-  });
-}
-
-// #1037: this route was UNAUTHENTICATED. rejectCallerSuppliedPrivilege above
-// closed the escalation half -- an anonymous caller could no longer ASK for
-// accessType 4 -- but an anonymous caller could still create a default-level
-// account, with a caller-supplied organizationId, attributed to `system` and
-// with no audit row naming an actor, because there was no actor to name.
-//
-// The specification settles this; it is not a taste call:
-//   - RF003 ("Gestão de usuários") has `Ator primário: Administrador` and
-//     owns the whole account lifecycle. RF001 (authentication) creates
-//     SESSIONS, not accounts -- its acceptance criteria have no
-//     account-creation clause at all. This route lives on the RF001 surface
-//     while performing an RF003 action.
-//   - RF003 AC#6 requires auditing account creation.
-//   - RF012 AC#1 and RNF009 AC#2 (Crítica) both make the ACTOR a mandatory
-//     element of every audit event. An anonymous creation cannot supply one.
-//   - No requirement anywhere in docs-7-27-2026 or the 7-31 amendment asks
-//     for unauthenticated self-registration, and UserAccount carries no
-//     pending-approval state, no self-registered flag and no activation step
-//     that such a flow would need. UserRoleAssignment.grantedBy is 1..1 Core.
-//
-// Gated to match the authenticated twin (POST /api/users/register), which is
-// what the frontend actually calls. rejectCallerSuppliedPrivilege STAYS: the
-// twin is where a caller who legitimately needs to choose a level does so,
-// under #998's hierarchy floor. That makes this route a strictly weaker
-// duplicate of the twin, which is an argument for deleting it outright --
-// tracked separately rather than done here, because whether an out-of-repo
-// consumer posts to it cannot be answered from inside this repo.
-router.post(
-  '/register',
-  authenticate,
-  requirePermission('createUser'),
-  rejectCallerSuppliedPrivilege,
-  authController.register.bind(authController)
-);
+// #1057 (Denise, 2026-09-25): POST /register was deleted from this router.
+// Account creation is RF003's, and its one route is POST /api/users/register.
+// The duplicate here had no in-repo consumer, and a second door onto
+// registerUser is what let #1037's escalation past #998's floor.
 
 // Troca de senha autenticada
 router.post('/change-password', authenticate, authController.changePassword.bind(authController));
@@ -284,7 +213,8 @@ router.post('/logout', authenticate, async (req, res) => {
           db,
           sessionCheck.session.sessionID,
           'user_request',
-          sessionCheck.session.userID
+          sessionCheck.session.userID,
+          { req }
         );
       }
     }
@@ -347,10 +277,12 @@ router.get('/verify', authenticate, async (req, res) => {
     // #428: accessType/roleName no longer persisted on the User document
     // (#427) — resolve both display values from the active RBAC assignment,
     // same pattern as user.routes.js's resolveRoleDisplayName since #427.
-    const { resolveRoleDisplayName, resolveUserHierarchyLevel } = require('../../services/rbac-assignment.service');
-    const [roleName, accessType] = await Promise.all([
+    const { resolveRoleDisplayName, resolveUserHierarchyLevel, isAuditReader } = require('../../services/rbac-assignment.service');
+    const [roleName, accessType, auditReader] = await Promise.all([
       resolveRoleDisplayName(db, req.user.userID),
-      resolveUserHierarchyLevel(db, req.user.userID)
+      resolveUserHierarchyLevel(db, req.user.userID),
+      // #1239: the audit-trail gate's own rule, for the frontend's Logs guard.
+      isAuditReader(db, req.user.userID)
     ]);
 
     return res.status(200).json({
@@ -363,6 +295,7 @@ router.get('/verify', authenticate, async (req, res) => {
           username: user.username,
           accessType,
           roleName,
+          isAuditReader: auditReader,
           name: user.name,
           mfaEnabled: user.mfaEnabled || false
         },
@@ -409,7 +342,7 @@ router.delete('/sessions/all-others', authenticate, async (req, res) => {
 
     const token = req.headers.authorization?.substring(7);
     const sessionService = require('../../services/session.service');
-    await sessionService.revokeAllOtherSessions(db, req.user.userID, token);
+    await sessionService.revokeAllOtherSessions(db, req.user.userID, token, 'user_request', null, { req });
 
     return res.status(200).json({
       success: true,
@@ -439,7 +372,7 @@ router.delete('/sessions/:sessionId', authenticate, async (req, res) => {
       clearRefreshCookie(res);
     }
 
-    const revoked = await sessionService.revokeSessionById(db, req.user.userID, sessionId, 'user_request', req.user.userID);
+    const revoked = await sessionService.revokeSessionById(db, req.user.userID, sessionId, 'user_request', req.user.userID, { req });
 
     if (!revoked) {
       return res.status(404).json({
@@ -510,6 +443,18 @@ router.post('/refresh', async (req, res) => {
       });
     }
 
+    // #1249: session.autoRenewal off -- the session is not renewed, so it ends
+    // with its access token, recorded as an expiry.
+    if (!(await sessionService.resolveSessionPolicy(db)).autoRenewal) {
+      await sessionService.invalidateSession(db, session.sessionID, 'expiration', 'system');
+      clearRefreshCookie(res);
+      return res.status(401).json({
+        success: false,
+        code: 'SESSION_RENEWAL_DISABLED',
+        error: 'Renovação automática de sessão desativada pela política de segurança'
+      });
+    }
+
     const usersCollection = db.collection('users');
     const { ObjectId } = require('mongodb');
     const user = await usersCollection.findOne({ _id: new ObjectId(decoded.userID) });
@@ -536,7 +481,7 @@ router.post('/refresh', async (req, res) => {
       { expiresIn: '7d' }
     );
 
-    await sessionService.rotateSessionTokens(db, session.sessionID, accessToken, newRefreshToken);
+    await sessionService.rotateSessionTokens(db, session.sessionID, accessToken, newRefreshToken, session);
     setRefreshCookie(res, newRefreshToken);
 
     return res.status(200).json({
@@ -553,6 +498,25 @@ router.post('/refresh', async (req, res) => {
       message: error.message
     });
   }
+});
+
+// #1246: the password strength rules in force, so every form that sets a
+// password checks what the server will check. Unauthenticated on purpose: the
+// token-reset page and the first-login change have no session yet, and the
+// rules are what a user is told before choosing (the reuse keys stay out).
+router.get('/password-policy', async (req, res) => {
+  const db = req.app.locals.db;
+  if (!db) {
+    return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
+  }
+  const passwordService = require('../../services/password.service');
+  const policy = await passwordService.resolvePasswordPolicy(db);
+  // #1249: allowPasswordReset rides along so the login page can hide the
+  // forgot-password link while the flow is switched off.
+  return res.status(200).json({
+    success: true,
+    data: { ...passwordService.publicStrengthRules(policy), allowPasswordReset: policy.allowPasswordReset }
+  });
 });
 
 // Password reset

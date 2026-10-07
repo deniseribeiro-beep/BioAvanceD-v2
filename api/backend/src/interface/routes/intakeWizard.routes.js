@@ -146,15 +146,14 @@ async function enforcePersistedGovernanceStatus(req, body) {
     },
   });
 
-  const specimenId = existingSample?._id ? String(existingSample._id) : null;
-  if (specimenId) {
+  if (existingSample?._id) {
     if (specimenStatus === 'quarantined' && !wasQuarantined) {
       await quarantineActionService.recordAction(db, {
-        specimenIds: [specimenId],
+        specimenIds: [quarantineActionService.canonicalSpecimenId(existingSample)],
         reasonCodes: [governanceStatus.quarantineReason || 'INTAKE_GOVERNANCE'],
       });
     } else if (specimenStatus !== 'quarantined' && wasQuarantined) {
-      await quarantineActionService.releaseActiveAction(db, specimenId, req.user?.userID || 'SYSTEM');
+      await quarantineActionService.releaseActiveAction(db, existingSample, req.user?.userID || 'SYSTEM');
     }
   }
 
