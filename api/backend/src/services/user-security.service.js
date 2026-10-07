@@ -2,6 +2,7 @@ const bcrypt = require('bcryptjs');
 const speakeasy = require('speakeasy');
 const logger = require('../utils/logger');
 const { ObjectId } = require('mongodb');
+const { randomUUID } = require('crypto');
 const { hashToken } = require('../utils/tokenHash');
 const RecoveryCodeSetModel = require('../models/RecoveryCodeSet');
 
@@ -104,13 +105,15 @@ class UserSecurityService {
 
       // Busca recovery codes
       const recoveryCodesCollection = db.collection('recovery_codes');
-      const recoveryCodes = await recoveryCodesCollection.findOne({ userID: new ObjectId(userID) });
-      
+      const recoveryCodes = await recoveryCodesCollection.findOne(
+        RecoveryCodeSetModel.ownerFilter(new ObjectId(userID))
+      );
+
       return {
         primaryEnabled: user.mfaEnabled || false,
         primarySetupDate: user.mfaSetupDate || null,
         recoveryCodes: {
-          remaining: recoveryCodes?.remaining || 0,
+          remaining: RecoveryCodeSetModel.remainingOf(recoveryCodes),
           codes: null // Nunca retorna códigos em listagem
         }
       };
@@ -530,18 +533,24 @@ class UserSecurityService {
         codes.map(code => bcrypt.hash(code, 10))
       );
       
-      // Remove códigos antigos e salva novos. The owner goes in the filter,
-      // so the upsert writes it; $set carries the rest of the set's shape.
+      // Remove códigos antigos e salva novos: a new set replaces the user's
+      // previous one in place, under the canonical names, and drops the
+      // pre-dictionary ones a document written before them still carries.
+      const owner = new ObjectId(userID);
+      const filter = RecoveryCodeSetModel.ownerFilter(owner);
+      const previous = await recoveryCodesCollection.findOne(filter);
       const now = new Date();
-      const { userID: owner, ...set } = RecoveryCodeSetModel.fieldsOf({
-        userID: new ObjectId(userID),
-        codes: hashedCodes,
-        createdAt: now,
-        updatedAt: now
+      const set = RecoveryCodeSetModel.fieldsOf({
+        recoveryCodeSetId: randomUUID(),
+        userAccountId: owner,
+        codeHashes: hashedCodes,
+        generatedAt: now,
+        regeneratedAt: previous ? now : null
       });
+      const unset = Object.fromEntries(RecoveryCodeSetModel.LEGACY_FIELDS.map((field) => [field, '']));
       await recoveryCodesCollection.updateOne(
-        { userID: owner },
-        { $set: set },
+        filter,
+        { $set: set, $unset: unset },
         { upsert: true }
       );
       

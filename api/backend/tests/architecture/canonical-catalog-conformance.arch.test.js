@@ -237,26 +237,6 @@ const KNOWN_DRIFT = {
       { key: 'inactiveTimeout', note: 'TODO(#1330): pre-dictionary name of inactivityTimeoutMs (P1X-0262).' },
       { key: 'updatedAt', note: 'TODO(#1330): record timestamp with no Session row.' }
     ]
-  },
-  RecoveryCodeSet: {
-    absent: [
-      { elementId: 'P1X-0268', field: 'recoveryCodeSetId', note: 'TODO(#1330): 1..1 Core -- the set has no id beyond Mongo _id.' },
-      { elementId: 'P1X-0269', field: 'userAccountId', note: 'TODO(#1330): 1..1 Core -- stored as userID (extra below).' },
-      { elementId: 'P1X-0270', field: 'codeHashes', note: 'TODO(#1330): 1..* Core -- stored as codes (extra below).' },
-      { elementId: 'P1X-0271', field: 'remainingCount', note: 'TODO(#1330): 1..1 Core -- stored as remaining (extra below).' },
-      { elementId: 'P1X-0272', field: 'usedCodeHashes', note: 'TODO(#1330): 0..* Essencial -- stored as usedCodes (extra below).' },
-      { elementId: 'P1X-0273', field: 'generatedAt', note: 'TODO(#1330): 1..1 Core -- stored as createdAt (extra below).' },
-      { elementId: 'P1X-0274', field: 'regeneratedAt', note: 'TODO(#1330): 0..1 Opcional -- not written; a regeneration overwrites the set in place.' },
-      { elementId: 'P1X-0275', field: 'invalidatedAt', note: 'TODO(#1330): 0..1 Opcional -- not written.' }
-    ],
-    extra: [
-      { key: 'userID', note: 'TODO(#1330): pre-dictionary name of userAccountId (P1X-0269).' },
-      { key: 'codes', note: 'TODO(#1330): pre-dictionary name of codeHashes (P1X-0270).' },
-      { key: 'remaining', note: 'TODO(#1330): pre-dictionary name of remainingCount (P1X-0271).' },
-      { key: 'usedCodes', note: 'TODO(#1330): pre-dictionary name of usedCodeHashes (P1X-0272).' },
-      { key: 'createdAt', note: 'TODO(#1330): pre-dictionary name of generatedAt (P1X-0273).' },
-      { key: 'updatedAt', note: 'TODO(#1330): record timestamp with no RecoveryCodeSet row.' }
-    ]
   }
 };
 

@@ -81,6 +81,18 @@ describe('UserSecurityService DB-backed methods', () => {
       expect(result.recoveryCodes.remaining).toBe(0);
     });
 
+    it('reads the canonical remainingCount, finding the set under either owner name', async () => {
+      const users = buildCollection({ findOne: vi.fn().mockResolvedValue({ _id: USER_ID }) });
+      const recoveryCodes = buildCollection({ findOne: vi.fn().mockResolvedValue({ remainingCount: 7 }) });
+      const db = buildDb({ users, recovery_codes: recoveryCodes });
+
+      const result = await userSecurityService.getMFAStatus(db, USER_ID);
+
+      expect(result.recoveryCodes.remaining).toBe(7);
+      const [filter] = recoveryCodes.findOne.mock.calls[0];
+      expect(filter.$or.map((clause) => Object.keys(clause)[0])).toEqual(['userAccountId', 'userID']);
+    });
+
     it('throws when user not found', async () => {
       const users = buildCollection({ findOne: vi.fn().mockResolvedValue(null) });
       const db = buildDb({ users });
@@ -449,10 +461,35 @@ describe('UserSecurityService DB-backed methods', () => {
       expect(codes).toHaveLength(10);
       expect(new Set(codes).size).toBe(10);
       expect(recoveryCodes.updateOne).toHaveBeenCalledTimes(1);
-      const [, update, options] = recoveryCodes.updateOne.mock.calls[0];
-      expect(update.$set.remaining).toBe(10);
-      expect(update.$set.codes).toHaveLength(10);
+      const [filter, update, options] = recoveryCodes.updateOne.mock.calls[0];
+      expect(update.$set.remainingCount).toBe(10);
+      expect(update.$set.codeHashes).toHaveLength(10);
+      expect(update.$set.usedCodeHashes).toEqual([]);
+      expect(String(update.$set.userAccountId)).toBe(USER_ID);
+      expect(update.$set.recoveryCodeSetId).toMatch(/^[0-9a-f-]{36}$/);
+      expect(update.$set.generatedAt).toBeInstanceOf(Date);
+      expect(update.$set.regeneratedAt).toBeNull();
       expect(options).toEqual({ upsert: true });
+      // The filter finds a set under either owner name, and the update drops
+      // the pre-dictionary names a set written before them still carries.
+      expect(filter.$or.map((clause) => Object.keys(clause)[0])).toEqual(['userAccountId', 'userID']);
+      expect(Object.keys(update.$unset).sort()).toEqual(
+        ['codes', 'createdAt', 'remaining', 'updatedAt', 'usedCodes', 'userID']
+      );
+    });
+
+    it('marks a set that replaced an earlier one as regenerated, with a new id', async () => {
+      const recoveryCodes = buildCollection({
+        findOne: vi.fn().mockResolvedValue({ recoveryCodeSetId: 'old-set', remainingCount: 2 })
+      });
+      const db = buildDb({ recovery_codes: recoveryCodes });
+
+      await userSecurityService.generateRecoveryCodes(db, USER_ID);
+
+      const [, update] = recoveryCodes.updateOne.mock.calls[0];
+      expect(update.$set.regeneratedAt).toBeInstanceOf(Date);
+      expect(update.$set.regeneratedAt).toEqual(update.$set.generatedAt);
+      expect(update.$set.recoveryCodeSetId).not.toBe('old-set');
     });
   });
 
