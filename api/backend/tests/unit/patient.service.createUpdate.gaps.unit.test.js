@@ -321,7 +321,7 @@ describe('PatientService.updatePatient additional branches', () => {
     });
     const patientsCollection = makeFakeCollection({
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
-      findOne: vi.fn().mockResolvedValue({ patientID: '12345678' })
+      findOne: vi.fn().mockResolvedValue({ participantId: '12345678' })
     });
     const db = makeFakeDb({ patients: patientsCollection, organizations: organizationsCollection });
     const tsSpy = vi.spyOn(patientBiomarkerTimeseriesService, 'writePatientBiomarkers').mockResolvedValue(undefined);
@@ -368,7 +368,7 @@ describe('PatientService.updatePatient additional branches', () => {
   it('converts a height value under 3 (meters) to centimeters', async () => {
     const patientsCollection = makeFakeCollection({
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
-      findOne: vi.fn().mockResolvedValue({ patientID: '12345678' })
+      findOne: vi.fn().mockResolvedValue({ participantId: '12345678' })
     });
     const db = makeFakeDb({ patients: patientsCollection });
     const tsSpy = vi.spyOn(patientBiomarkerTimeseriesService, 'writePatientBiomarkers').mockResolvedValue(undefined);
@@ -385,7 +385,7 @@ describe('PatientService.updatePatient additional branches', () => {
   it('keeps a height value already in centimeters unconverted', async () => {
     const patientsCollection = makeFakeCollection({
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
-      findOne: vi.fn().mockResolvedValue({ patientID: '12345678' })
+      findOne: vi.fn().mockResolvedValue({ participantId: '12345678' })
     });
     const db = makeFakeDb({ patients: patientsCollection });
     const tsSpy = vi.spyOn(patientBiomarkerTimeseriesService, 'writePatientBiomarkers').mockResolvedValue(undefined);
@@ -398,11 +398,11 @@ describe('PatientService.updatePatient additional branches', () => {
     tsSpy.mockRestore();
   });
 
-  it('queries by ObjectId when patientID is not an 8-digit string', async () => {
+  it('queries by ObjectId when participantId is not an 8-digit string', async () => {
     const objectIdHex = '507f1f77bcf86cd799439011';
     const patientsCollection = makeFakeCollection({
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
-      findOne: vi.fn().mockResolvedValue({ patientID: '12345678' })
+      findOne: vi.fn().mockResolvedValue({ participantId: '12345678' })
     });
     const db = makeFakeDb({ patients: patientsCollection });
     const tsSpy = vi.spyOn(patientBiomarkerTimeseriesService, 'writePatientBiomarkers').mockResolvedValue(undefined);
