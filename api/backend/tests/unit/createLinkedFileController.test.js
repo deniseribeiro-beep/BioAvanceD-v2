@@ -14,6 +14,7 @@ const { ObjectId } = require('mongodb');
 // none of that lazy-require chain executes during these tests -- audit-log
 // internals aren't what's under test here.
 const auditLogger = require('../../src/utils/auditLogger');
+const { createMatchingCollection } = require('../factories/filter.factory');
 
 // #643 (RF007 AC#6): generic factory used by both assay-file.routes.js and
 // dataset-file.routes.js. Tested once here (parameterized with a fictional
@@ -178,6 +179,74 @@ describe('createLinkedFileController', () => {
       const [payload] = res.json.mock.calls[0];
       expect(payload.data[0]).not.toHaveProperty('storagePath');
       expect(payload.data[0].fileName).toBe('a.csv');
+    });
+  });
+
+  // #1336: every parent lookup above is an identity stub, so none of them
+  // could see which parent the `$or` query resolved. These seed two parents,
+  // the decoy first, and reach the target by each of its two identifiers.
+  describe('parent lookup resolves the requested parent, by either id', () => {
+    const decoyId = new ObjectId();
+    const targetId = new ObjectId();
+    const parents = () => [
+      { _id: decoyId, widgetId: 'w-decoy' },
+      { _id: targetId, widgetId: 'w-target' }
+    ];
+
+    it.each([
+      ['its business id', 'w-target'],
+      ['its ObjectId', targetId.toString()]
+    ])('uploadFile links the record to the parent addressed by %s', async (_label, rawId) => {
+      const controller = buildController();
+      const widgetFiles = createMatchingCollection([]);
+      const db = createDb({ widgets: createMatchingCollection(parents()), widgetFiles });
+      vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('hello'));
+      vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+
+      const req = {
+        app: { locals: { db } },
+        params: { widgetId: rawId },
+        user: { userID: 'u-1' },
+        file: { path: '/tmp/x.csv', originalname: 'x.csv', size: 5 }
+      };
+      const res = createRes();
+
+      await controller.uploadFile(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(201);
+      expect(widgetFiles.docs).toHaveLength(1);
+      expect(widgetFiles.docs[0].widgetId).toBe('w-target');
+    });
+
+    it('listFiles returns only the files of the parent addressed by ObjectId', async () => {
+      const controller = buildController();
+      const files = [
+        { _id: new ObjectId(), widgetId: 'w-decoy', fileName: 'decoy.csv' },
+        { _id: new ObjectId(), widgetId: 'w-target', fileName: 'target.csv' }
+      ];
+      const db = createDb({
+        widgets: createMatchingCollection(parents()),
+        widgetFiles: createMatchingCollection(files)
+      });
+      const req = { app: { locals: { db } }, params: { widgetId: targetId.toString() } };
+      const res = createRes();
+
+      await controller.listFiles(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      const [payload] = res.json.mock.calls[0];
+      expect(payload.data.map((f) => f.fileName)).toEqual(['target.csv']);
+    });
+
+    it('404s for an id that names neither parent', async () => {
+      const controller = buildController();
+      const db = createDb({ widgets: createMatchingCollection(parents()) });
+      const req = { app: { locals: { db } }, params: { widgetId: new ObjectId().toString() } };
+      const res = createRes();
+
+      await controller.listFiles(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(404);
     });
   });
 
