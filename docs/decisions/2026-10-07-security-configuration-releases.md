@@ -15,9 +15,9 @@ Requirement: RF014 AC2 ("Criar nova ConfigurationRelease para cada alteração; 
 
 - **`environment` (P1X-0277, #966) is `env.NODE_ENV`**, the same source and vocabulary (`development|test|staging|production`, P1X-0399) the Foundation job already records on FoundationDataRun and ReadinessReport. A second environment source would let the two disagree.
 - **`securityConfigId` (P1X-0276)** is a uuid assigned when the document is first stored. `_id` stays `'main'`.
-- **`ConfigurationRelease.status`**: the extraction lists only `draft` (V2E-0040). The set used is CanonicalModelRelease's `releaseStatus` (V2E-0003: `draft|candidate|approved|active|superseded|retired`), the one release lifecycle the same v2.0.0 governance block spells out in full. This is an inference.
-- **`ConfigurationChangeEvent.changeType`**: the extraction lists only `proposed` (V2E-0054). The set used is RF014 AC7's list of steps to record: `proposed|approved|activated|rolled_back|violation_attempted`.
-- **`ConfigurationProfile.scopeType`**: the extraction lists only `organization` (V2E-0013). The security profile is scoped to an `environment`, per the F1.2 gate above.
+- **`ConfigurationRelease.status`**: the dictionary lists only `draft` (V2E-0040). The set used is CanonicalModelRelease's `releaseStatus` (V2E-0003: `draft|candidate|approved|active|superseded|retired`), the one release lifecycle the same v2.0.0 governance block spells out in full. This is an inference.
+- **`ConfigurationChangeEvent.changeType`**: the dictionary lists only `proposed` (V2E-0054). The set used is RF014 AC7's list of steps to record: `proposed|approved|activated|rolled_back|violation_attempted`.
+- **`ConfigurationProfile.scopeType`**: the dictionary lists only `organization` (V2E-0013). The security profile is scoped to an `environment`, per the F1.2 gate above.
 
 ## Not decided here
 

@@ -59,8 +59,11 @@ function createFakeCollection(name, hooks = {}) {
     collectionName: name,
     docs,
     indexes,
+    // Reads return copies, as the driver does: a caller holding a read
+    // document must not see a later write through it.
     async findOne(filter = {}) {
-      return docs.find((doc) => matches(doc, filter)) || null;
+      const doc = docs.find((d) => matches(d, filter));
+      return doc ? structuredClone(doc) : null;
     },
     async updateOne(filter, update, options = {}) {
       const doc = docs.find((d) => matches(d, filter));
@@ -88,7 +91,7 @@ function createFakeCollection(name, hooks = {}) {
       return { deletedCount };
     },
     find(filter = {}) {
-      return cursor(docs.filter((doc) => matches(doc, filter)));
+      return cursor(docs.filter((doc) => matches(doc, filter)).map((doc) => structuredClone(doc)));
     },
     async createIndex(key, options = {}) {
       if (hooks.createIndex) await hooks.createIndex(key, options);

@@ -117,7 +117,7 @@ describe('configurationRelease.service.rollbackTarget', () => {
     await configurationReleaseService.activate(db, { profileId: 'prof-1', settings: { s: { a: 2 } }, actorId: 'a', impactSummary: 's', baseline: { settings: { s: { a: 1 } }, approvedBy: 'a' } });
     const [old, current] = releasesOf(db);
 
-    await expect(configurationReleaseService.rollbackTarget(db, 'prof-1', old.configurationReleaseId)).resolves.toBe(old);
+    await expect(configurationReleaseService.rollbackTarget(db, 'prof-1', old.configurationReleaseId)).resolves.toEqual(old);
     await expect(configurationReleaseService.rollbackTarget(db, 'prof-1', 'nope')).rejects.toMatchObject({ statusCode: 404 });
     await expect(configurationReleaseService.rollbackTarget(db, 'prof-2', old.configurationReleaseId)).rejects.toMatchObject({ statusCode: 404 });
     await expect(configurationReleaseService.rollbackTarget(db, 'prof-1', current.configurationReleaseId)).rejects.toMatchObject({ statusCode: 409 });
