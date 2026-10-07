@@ -57,5 +57,5 @@ integration branch runs no CI at all. That is intentional too.
 
 ## Related
 
-Milestones #1, #2, #3 · issues #284, #852 · `E2E_TRACEABILITY_PLAN.md` and
-`E2E_IMPLEMENTATION_PLAN.md` at the repo root.
+Issues #284, #599, #852 · CI is planned in milestone W11; the roadmap is
+#1326.

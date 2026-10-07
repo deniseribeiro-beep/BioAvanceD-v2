@@ -168,6 +168,5 @@ straight from the diagrams, that **every e2e test built from an RF
 should assert the audit-trail side effect, not just the primary
 outcome** — a spec that only checks "specimen was created" without
 also checking "an AuditEvent was appended" is only testing half of what
-the diagram says the use case does. See the milestone plan in
-`../../E2E_TRACEABILITY_PLAN.md` for how this translates into the
-traceability matrix's "audit assertion" column.
+the diagram says the use case does. Real-backend specs assert the audit
+trail with the shared `assertAuditEvent` helper.

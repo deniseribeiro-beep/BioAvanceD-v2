@@ -513,8 +513,8 @@ test.describe('Specimen registration (RF021 AC#5) — inactive/incompatible prot
 });
 
 test.describe('Chain of custody (RF006) — real backend', () => {
-  // No spec, mocked or real, covered this RF before (#288) — see
-  // E2E_TRACEABILITY_PLAN.md. Building this exposed that the "blocked
+  // No spec, mocked or real, covered this RF before (#288). Building
+  // this exposed that the "blocked
   // status" guard in sample.service.js's withdrawSample checked a field
   // (`currentStatus`) and vocabulary that don't exist on Sample.js's real
   // schema (`lifecycleStatus`, enum incl. UNAVAILABLE/DESTROYED/DISPOSED/

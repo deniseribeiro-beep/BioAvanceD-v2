@@ -11,7 +11,7 @@ const { testSupportRoutesEnabled, requireTestSupportSecret } = require('../../ut
 // the gateway against a real backend. This route calls the real
 // ingestRecord() (real Mongo reads/writes, no faked behavior) on demand,
 // purely so pipeline-continuity.spec.ts can exercise it as one of RF029's
-// milestone e2e specs (E2E_TRACEABILITY_PLAN.md maps RF029 to that file).
+// e2e specs. A production ingestion route is planned in milestone W10 (#1318).
 // Registration requires testSupportRoutesEnabled()'s two independent
 // signals (#675 hardening -- see utils/testSupportGate.js), on top of the
 // per-request requireTestSupportSecret check, so it's never a reachable
