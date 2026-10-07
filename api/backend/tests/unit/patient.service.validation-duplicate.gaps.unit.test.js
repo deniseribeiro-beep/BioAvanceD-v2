@@ -4,6 +4,8 @@ process.env.ENCRYPTION_KEY = 'dGVzdGtleXRlc3RrZXl0ZXN0a2V5dGVzdGtleXQ=';
 process.env.ENCRYPTION_KEY_ID = 'test-key-1';
 
 const patientService = require('../../src/services/patient.service');
+const participantIdentityService = require('../../src/services/participantIdentity.service');
+const { createMatchingCollection } = require('../factories/filter.factory');
 
 function makeFakeCollection(overrides = {}) {
   return {
@@ -279,6 +281,58 @@ describe('PatientService.checkIdentifierConflict', () => {
     });
 
     expect(result).toEqual({ field: 'recordNumber', value: 'REC-1', existing: expect.any(Object) });
+  });
+
+  // #1336: the three cases above answer from an identity stub, so they hold
+  // whatever key the lookup filters on. A wrong key here is a silent false
+  // negative: a second participant registered for the same person. These
+  // seed the collections and let the filter decide.
+  describe('against seeded collections', () => {
+    const seeded = (docs) => ({
+      ...createMatchingCollection(docs),
+      createIndex: vi.fn().mockResolvedValue(undefined),
+      dropIndex: vi.fn().mockResolvedValue(undefined)
+    });
+    const hashOf = (doc) =>
+      participantIdentityService.computeBlindIndexCandidates('identityDocument', doc)[0];
+
+    it('finds the identity holding the document by its blind index, not a plaintext copy', async () => {
+      const plaintextOnly = { participantId: 'P-plain', identityDocument: '52998224725' };
+      const other = { participantId: 'P-other', identityDocumentHash: hashOf('11144477735') };
+      const holder = { participantId: 'P-holder', identityDocumentHash: hashOf('52998224725') };
+      const db = makeFakeDb({ participantIdentities: seeded([plaintextOnly, other, holder]) });
+
+      const result = await patientService.checkIdentifierConflict(db, { identityDocument: '529.982.247-25' });
+
+      expect(result).toEqual({ field: 'identityDocument', value: '52998224725', existing: holder });
+    });
+
+    it('reports no conflict when only another document is registered', async () => {
+      const other = { participantId: 'P-other', identityDocumentHash: hashOf('11144477735') };
+      const db = makeFakeDb({
+        participantIdentities: seeded([other]),
+        patients: seeded([{ participantId: 'P-other', recordNumber: 'REC-0' }])
+      });
+
+      const result = await patientService.checkIdentifierConflict(db, {
+        identityDocument: '52998224725',
+        recordNumber: 'REC-1'
+      });
+
+      expect(result).toBeNull();
+    });
+
+    it('finds the patient holding the record number, trimmed', async () => {
+      const holder = { participantId: 'P-holder', recordNumber: 'REC-1' };
+      const db = makeFakeDb({
+        participantIdentities: seeded([]),
+        patients: seeded([{ participantId: 'P-other', recordNumber: 'REC-0' }, holder])
+      });
+
+      const result = await patientService.checkIdentifierConflict(db, { recordNumber: '  REC-1 ' });
+
+      expect(result).toEqual({ field: 'recordNumber', value: 'REC-1', existing: holder });
+    });
   });
 });
 

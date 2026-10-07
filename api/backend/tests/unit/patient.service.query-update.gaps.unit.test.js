@@ -6,6 +6,8 @@ process.env.ENCRYPTION_KEY_ID = 'test-key-1';
 const patientService = require('../../src/services/patient.service');
 const notificationService = require('../../src/services/notification.service');
 const { hashConsentToken } = require('../../src/utils/consentTokenHash');
+const { ObjectId } = require('mongodb');
+const { createMatchingCollection } = require('../factories/filter.factory');
 
 function makeFakeCollection(overrides = {}) {
   return {
@@ -30,6 +32,12 @@ function makeFakeDb(collectionsByName = {}) {
   };
 }
 
+// A patients collection that answers by filter (#1336), with the index calls
+// getPatientsCollection makes.
+function seededPatients(docs) {
+  return { ...createMatchingCollection(docs), createIndex: vi.fn().mockResolvedValue(undefined) };
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -47,17 +55,17 @@ describe('PatientService.getPatient', () => {
     expect(result.participantId).toBe('12345678');
   });
 
+  // #1336: this case once checked only that the filter HAD an `_id`, against
+  // a stub that answered the same patient for any filter. Two seeded patients
+  // make the `_id` value decide.
   it('queries by ObjectId when the identifier is not an 8-digit string', async () => {
-    const objectIdHex = '507f1f77bcf86cd799439011';
-    const patientsCollection = makeFakeCollection({
-      findOne: vi.fn().mockResolvedValue({ participantId: '12345678' })
-    });
+    const target = { _id: new ObjectId(), participantId: '22222222' };
+    const patientsCollection = seededPatients([{ _id: new ObjectId(), participantId: '11111111' }, target]);
     const db = makeFakeDb({ patients: patientsCollection });
 
-    await patientService.getPatient(db, objectIdHex);
+    const result = await patientService.getPatient(db, target._id.toString());
 
-    const callArg = patientsCollection.findOne.mock.calls[0][0];
-    expect(callArg).toHaveProperty('_id');
+    expect(result.participantId).toBe('22222222');
   });
 
   // #603: FHIR-imported participants get a non-numeric, non-24-hex
@@ -685,17 +693,18 @@ describe('PatientService.deletePatient', () => {
     expect(result).toBe(true);
   });
 
+  // #1336: as in getPatient's ObjectId case, the `_id` value decides which
+  // of two seeded patients is deleted.
   it('queries by ObjectId for a non-8-digit identifier', async () => {
-    const objectIdHex = '507f1f77bcf86cd799439011';
-    const patientsCollection = makeFakeCollection({
-      deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 })
-    });
+    const keep = { _id: new ObjectId(), participantId: '11111111' };
+    const target = { _id: new ObjectId(), participantId: '22222222' };
+    const patientsCollection = seededPatients([keep, target]);
     const db = makeFakeDb({ patients: patientsCollection });
 
-    await patientService.deletePatient(db, objectIdHex);
+    const result = await patientService.deletePatient(db, target._id.toString());
 
-    const callArg = patientsCollection.deleteOne.mock.calls[0][0];
-    expect(callArg).toHaveProperty('_id');
+    expect(result).toBe(true);
+    expect(patientsCollection.docs).toEqual([keep]);
   });
 
   // #604: same fix pattern as #603 (getPatient) — FHIR-imported participants

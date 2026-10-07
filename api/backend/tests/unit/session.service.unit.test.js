@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 const sessionService = require('../../src/services/session.service');
+const { createMatchingCollection } = require('../factories/filter.factory');
 
 function makeCollection(overrides = {}) {
   return {
@@ -14,6 +15,19 @@ function makeCollection(overrides = {}) {
 
 function makeDb(collection) {
   return { collection: vi.fn().mockReturnValue(collection) };
+}
+
+// An active, unexpired session document; overrides set its identity.
+function liveSession(overrides = {}) {
+  return {
+    isActive: true,
+    isRevoked: false,
+    expiresAt: new Date(Date.now() + 10000),
+    refreshExpiresAt: new Date(Date.now() + 10000),
+    lastActivity: new Date(),
+    inactiveTimeout: 30 * 60 * 1000,
+    ...overrides
+  };
 }
 
 describe('SessionService.getTokenHash', () => {
@@ -406,27 +420,40 @@ describe('SessionService.updateActivity', () => {
     expect(collection.updateOne).toHaveBeenCalled();
   });
 
+  // #1336: the two lookups below were once an identity stub answering null,
+  // then the session, by call order, so a lookup on the wrong key passed.
+  // Seeded collections answer by filter, and the decoy comes first because a
+  // filter on a key no session carries degenerates to `{ key: null }` and
+  // matches the first document.
   it('falls back to legacy plain-text token lookup when tokenHash misses', async () => {
-    const session = {
-      sessionID: 'sess-legacy',
-      isActive: true,
-      isRevoked: false,
-      expiresAt: new Date(Date.now() + 10000),
-      refreshExpiresAt: new Date(Date.now() + 10000),
-      lastActivity: new Date(),
-      inactiveTimeout: 30 * 60 * 1000
-    };
-    const collection = makeCollection({
-      findOne: vi.fn()
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce(session)
-    });
+    const decoy = liveSession({ sessionID: 'sess-decoy', tokenHash: sessionService.getTokenHash('decoy-token') });
+    const session = liveSession({ sessionID: 'sess-legacy', token: 'legacy-token' });
+    const collection = createMatchingCollection([decoy, session]);
     const db = makeDb(collection);
 
     const result = await sessionService.updateActivity(db, 'legacy-token');
 
     expect(result.sessionID).toBe('sess-legacy');
     expect(sessionService.sessions.get('sess-legacy')).toBe(session);
+    expect(collection.findOne.mock.calls.map(([filter]) => filter)).toEqual([
+      { tokenHash: sessionService.getTokenHash('legacy-token') },
+      { token: 'legacy-token' }
+    ]);
+  });
+
+  it('resolves a stored session by the hash of its token, never by the token itself', async () => {
+    const decoy = liveSession({ sessionID: 'sess-decoy', tokenHash: sessionService.getTokenHash('decoy-token') });
+    const session = liveSession({ sessionID: 'sess-db', tokenHash: sessionService.getTokenHash('db-token') });
+    const collection = createMatchingCollection([decoy, session]);
+
+    const result = await sessionService.updateActivity(makeDb(collection), 'db-token');
+
+    expect(result.sessionID).toBe('sess-db');
+    expect(collection.findOne).toHaveBeenCalledTimes(1);
+    expect(collection.updateOne).toHaveBeenCalledWith(
+      { sessionID: 'sess-db' },
+      expect.objectContaining({ $set: expect.objectContaining({ isActive: true }) })
+    );
   });
 
   it('invalidates and returns null when session found but expired', async () => {
@@ -559,6 +586,44 @@ describe('SessionService.verifySession', () => {
 
     const result = await sessionService.verifySession(db, 'active-token');
     expect(result).toEqual({ valid: true, session });
+  });
+
+  // #1336: verifySession's database path, the per-request lookup on a cache
+  // miss, had no test at all; every case above seeds the in-process cache.
+  it('resolves an uncached session from the database by its token hash', async () => {
+    const decoy = liveSession({ sessionID: 'sess-decoy', tokenHash: sessionService.getTokenHash('decoy-token') });
+    const session = liveSession({ sessionID: 'sess-db', tokenHash: sessionService.getTokenHash('db-token') });
+    const collection = createMatchingCollection([decoy, session]);
+
+    const result = await sessionService.verifySession(makeDb(collection), 'db-token');
+
+    expect(result).toEqual({ valid: true, session });
+    expect(collection.findOne).toHaveBeenCalledTimes(1);
+    expect(sessionService.sessions.get('sess-db')).toBe(session);
+  });
+
+  it('falls back to a legacy plain-text token for an uncached session', async () => {
+    const decoy = liveSession({ sessionID: 'sess-decoy', tokenHash: sessionService.getTokenHash('decoy-token') });
+    const session = liveSession({ sessionID: 'sess-legacy', token: 'legacy-token' });
+    const collection = createMatchingCollection([decoy, session]);
+
+    const result = await sessionService.verifySession(makeDb(collection), 'legacy-token');
+
+    expect(result).toEqual({ valid: true, session });
+    expect(collection.findOne.mock.calls.map(([filter]) => filter)).toEqual([
+      { tokenHash: sessionService.getTokenHash('legacy-token') },
+      { token: 'legacy-token' }
+    ]);
+  });
+
+  it('does not resolve a token that matches no stored session', async () => {
+    const decoy = liveSession({ sessionID: 'sess-decoy', tokenHash: sessionService.getTokenHash('decoy-token') });
+    const collection = createMatchingCollection([decoy]);
+
+    const result = await sessionService.verifySession(makeDb(collection), 'unknown-token');
+
+    expect(result).toEqual({ valid: false, reason: 'session_not_found' });
+    expect(sessionService.sessions.size).toBe(0);
   });
 
   it('returns invalid reason:error when lookup throws', async () => {
