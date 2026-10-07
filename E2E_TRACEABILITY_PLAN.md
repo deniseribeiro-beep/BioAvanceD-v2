@@ -1,5 +1,13 @@
 # E2E Traceability Plan — docs → Playwright milestone
 
+> **Superseded as the status of record, 2026-10-07.** This plan's
+> "Status today" column was written against Requisitos v3.0.x. The approved
+> v2.0.0 release carries Requisitos v4.0.0
+> (`docs/extracted-v2.0.0/requisitos.md`), which changed 22 of the 29 RFs.
+> A DONE below means the v3 criteria, not the v4 ones. The gaps against v4.0.0
+> are planned as phase milestones W4-W11, tracked in #1326; its Waves 1-4
+> are complete (#646, #723).
+
 **Written:** 2026-07-27, in response to the new doc drop in
 `docs/docs-7-27-2026/` (Requisitos v3.0.0, Plano Integrado do Foundation
 Data Pipeline v2.1.0, Dicionário Consolidado v1.3.0, `DENISE_VALIDATION_STATUS.md`,
