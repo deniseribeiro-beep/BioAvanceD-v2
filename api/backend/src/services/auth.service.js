@@ -5,6 +5,7 @@ const speakeasy = require('speakeasy');
 const QRCode = require('qrcode');
 const env = require('../config/env');
 const UserModel = require('../models/User');
+const RecoveryCodeSetModel = require('../models/RecoveryCodeSet');
 const LogModel = require('../models/Log');
 const logger = require('../utils/logger');
 const sessionService = require('./session.service');
@@ -44,6 +45,59 @@ const ipAttemptService = require('./ipAttempt.service');
  */
 function readMfaSecret(user) {
   return decryptValue(user && user.mfaSecretCiphertext);
+}
+
+// #1331: the MFA step of sign-in also takes a recovery code. The login form
+// sends it in the same field as a TOTP code, and its shape tells them apart:
+// a recovery code is eight characters of generateRecoveryCode's alphabet
+// (user-security.service.js), a TOTP code six digits. Spaces, hyphens and
+// case are forgiven, since the code is typed from a printed sheet.
+const RECOVERY_CODE_PATTERN = /^[A-HJ-NP-Z2-9]{8}$/;
+
+function asRecoveryCode(code) {
+  if (typeof code !== 'string') return null;
+  const normalized = code.replace(/[\s-]/g, '').toUpperCase();
+  return RECOVERY_CODE_PATTERN.test(normalized) ? normalized : null;
+}
+
+// Finds the user's set and the unspent hash this code matches, or null.
+// Matching does not spend it: processLogin spends the code only once the
+// sign-in will complete, so a code that also carries a required password
+// change (#1252) is spent by the submission that makes the change.
+async function matchRecoveryCode(db, user, code) {
+  const set = await db.collection('recovery_codes').findOne(RecoveryCodeSetModel.ownerFilter(user._id));
+  for (const hash of RecoveryCodeSetModel.unspentHashesOf(set)) {
+    if (await bcrypt.compare(code, hash)) return { set, hash };
+  }
+  return null;
+}
+
+// Spends a matched code in one conditional update and audits it. When
+// another sign-in spent it between the match and here, the update modifies
+// nothing, and this attempt is refused and counted like a wrong code.
+async function redeemRecoveryCode(db, usersCollection, user, match, req) {
+  const { filter, update } = RecoveryCodeSetModel.spendOf(match.set, match.hash, crypto.randomUUID());
+  const result = await db.collection('recovery_codes').updateOne(filter, update);
+  if (result.modifiedCount !== 1) {
+    await usersCollection.updateOne({ _id: user._id }, { $inc: { mfaFailedAttempts: 1 } });
+    throw new Error('Código MFA inválido');
+  }
+  const auditLogger = require('../utils/auditLogger');
+  auditLogger.init(db);
+  await auditLogger.log({
+    action: 'MFA',
+    resourceType: 'User',
+    resourceId: user._id.toString(),
+    status: 'success',
+    severity: 'warning',
+    message: 'Código de recuperação MFA utilizado no login',
+    payload: {
+      operation: 'recovery_code_redeemed',
+      remainingCount: RecoveryCodeSetModel.unspentHashesOf(match.set).length - 1
+    },
+    req,
+    module: 'Autenticação'
+  });
 }
 
 // #952 / RF001 AC#2: "Bloquear temporariamente a conta apos o limite configurado
@@ -754,6 +808,8 @@ class AuthService {
       // Verifica MFA se estiver habilitado
       // Para admin, MFA é opcional; se estiver habilitado, verifica
       // Para não-admin, MFA é obrigatório se habilitado
+      // #1331: a matched recovery code, spent below once the sign-in completes.
+      let recoveryMatch = null;
       if (user.mfaEnabled) {
         if (!mfaCode) {
           return {
@@ -762,12 +818,21 @@ class AuthService {
           };
         }
 
-        const verified = speakeasy.totp.verify({
-          secret: readMfaSecret(user),
-          encoding: 'base32',
-          token: mfaCode,
-          window: 2
-        });
+        // #1331: a recovery code stands in for the TOTP code. A spent or
+        // unknown one fails exactly like a wrong TOTP code, counter included.
+        const recoveryCode = asRecoveryCode(mfaCode);
+        let verified;
+        if (recoveryCode) {
+          recoveryMatch = await matchRecoveryCode(db, user, recoveryCode);
+          verified = recoveryMatch !== null;
+        } else {
+          verified = speakeasy.totp.verify({
+            secret: readMfaSecret(user),
+            encoding: 'base32',
+            token: mfaCode,
+            window: 2
+          });
+        }
 
         if (!verified) {
           // Incrementa tentativas falhas
@@ -834,7 +899,17 @@ class AuthService {
       const passwordPolicy = await passwordService.resolvePasswordPolicy(db);
       const passwordExpired = passwordService.isPasswordExpired(user, passwordPolicy);
       const belowFloor = passwordService.belowSingleFactorFloor(password, passwordPolicy, user);
-      if (user.forceReset || passwordExpired || belowFloor) {
+      const passwordChangeDue = user.forceReset || passwordExpired || belowFloor;
+
+      // #1331: a recovery code is spent only by the submission that completes
+      // the sign-in. With a password change due, that is the one carrying a
+      // new password that passes the policy checks, since the form sends the
+      // same code back with it (#1252).
+      if (recoveryMatch && !passwordChangeDue) {
+        await redeemRecoveryCode(db, usersCollection, user, recoveryMatch, req);
+      }
+
+      if (passwordChangeDue) {
         if (!newPassword) {
           const reason = user.forceReset ? null : (passwordExpired ? 'expired' : 'below_policy');
           return {
@@ -850,6 +925,10 @@ class AuthService {
 
         passwordService.validateStrength(newPassword, passwordPolicy, user);
         await passwordService.validateReuse(newPassword, user, passwordPolicy);
+
+        if (recoveryMatch) {
+          await redeemRecoveryCode(db, usersCollection, user, recoveryMatch, req);
+        }
 
         const newHash = await bcrypt.hash(newPassword, 10);
         const updatedHistory = passwordService.nextPasswordHistory(user, passwordPolicy);

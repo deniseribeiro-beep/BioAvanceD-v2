@@ -23,6 +23,9 @@ export default function LoginPage() {
   const [username, setUsername] = useState(loginState.username || '');
   const [password, setPassword] = useState('');
   const [twoFactorCode, setTwoFactorCode] = useState('');
+  // #1331: a saved recovery code, sent in the same field as a TOTP code; the
+  // backend tells the two apart by shape (8 characters against 6 digits).
+  const [useRecoveryCode, setUseRecoveryCode] = useState(false);
   const [requiresTwoFactor, setRequiresTwoFactor] = useState(false);
   const [attemptsRemaining, setAttemptsRemaining] = useState<number | undefined>();
   const [requiresPasswordChange, setRequiresPasswordChange] = useState(false);
@@ -213,27 +216,54 @@ export default function LoginPage() {
 
             {requiresTwoFactor && (
               <div className="two-factor-section" data-testid="two-factor-section">
-                <Input
-                  data-testid="login-mfa-code-input"
-                  label={t('auth.twoFactorCode')}
-                  type="text"
-                  value={twoFactorCode}
-                  onChange={(e) => setTwoFactorCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                  required
-                  placeholder={t('mfa.enterCode')}
-                  autoFocus
-                  inputMode="numeric"
-                  maxLength={LIMITS.MFA_CODE_LENGTH}
-                  pattern={VALIDATION_PATTERNS.numericCode6.source}
-                />
+                {useRecoveryCode ? (
+                  <Input
+                    key="recovery-code"
+                    data-testid="login-recovery-code-input"
+                    label={t('auth.recoveryCodeLabel')}
+                    type="text"
+                    value={twoFactorCode}
+                    onChange={(e) => setTwoFactorCode(e.target.value.toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 9))}
+                    required
+                    autoFocus
+                    autoComplete="one-time-code"
+                    maxLength={9}
+                  />
+                ) : (
+                  <Input
+                    key="totp-code"
+                    data-testid="login-mfa-code-input"
+                    label={t('auth.twoFactorCode')}
+                    type="text"
+                    value={twoFactorCode}
+                    onChange={(e) => setTwoFactorCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                    required
+                    placeholder={t('mfa.enterCode')}
+                    autoFocus
+                    inputMode="numeric"
+                    maxLength={LIMITS.MFA_CODE_LENGTH}
+                    pattern={VALIDATION_PATTERNS.numericCode6.source}
+                  />
+                )}
                 {attemptsRemaining !== undefined && attemptsRemaining > 0 && (
                   <p className="attempts-warning">
                     {t('auth.attemptsRemaining')}: {attemptsRemaining}
                   </p>
                 )}
                 <p className="two-factor-info">
-                  {t('auth.twoFactorInfo')}
+                  {useRecoveryCode ? t('auth.recoveryCodeInfo') : t('auth.twoFactorInfo')}
                 </p>
+                <button
+                  type="button"
+                  className="link-button"
+                  data-testid="login-toggle-recovery-code"
+                  onClick={() => {
+                    setUseRecoveryCode((current) => !current);
+                    setTwoFactorCode('');
+                  }}
+                >
+                  {useRecoveryCode ? t('auth.useAuthenticatorCode') : t('auth.useRecoveryCode')}
+                </button>
               </div>
             )}
 

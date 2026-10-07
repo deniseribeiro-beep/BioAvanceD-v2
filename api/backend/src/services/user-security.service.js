@@ -2,7 +2,7 @@ const bcrypt = require('bcryptjs');
 const speakeasy = require('speakeasy');
 const logger = require('../utils/logger');
 const { ObjectId } = require('mongodb');
-const { randomUUID } = require('crypto');
+const { randomUUID, randomInt } = require('crypto');
 const { hashToken } = require('../utils/tokenHash');
 const RecoveryCodeSetModel = require('../models/RecoveryCodeSet');
 
@@ -569,9 +569,12 @@ class UserSecurityService {
    */
   generateRecoveryCode() {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Remove I, O, 0, 1 para evitar confusão
+    // #1331: a code now signs in, so it is drawn from the CSPRNG, not
+    // Math.random. Sign-in recognises this alphabet and length
+    // (auth.service.js asRecoveryCode); change them together.
     let code = '';
     for (let i = 0; i < 8; i++) {
-      code += chars.charAt(Math.floor(Math.random() * chars.length));
+      code += chars.charAt(randomInt(chars.length));
     }
     return code;
   }

@@ -49,6 +49,10 @@
     "sendResetLink": "Enviar enlace de restablecimiento",
     "twoFactorCode": "Código de autenticación (2FA)",
     "twoFactorInfo": "Ingresa el código de 6 dígitos de Google Authenticator",
+    "recoveryCodeLabel": "Código de recuperación",
+    "recoveryCodeInfo": "Ingresa uno de los códigos de recuperación de 8 caracteres que guardaste. Cada código funciona una sola vez.",
+    "useRecoveryCode": "Usar un código de recuperación",
+    "useAuthenticatorCode": "Usar la aplicación autenticadora",
     "unknown": "Unknown",
     "username": "Usuario o email"
   },

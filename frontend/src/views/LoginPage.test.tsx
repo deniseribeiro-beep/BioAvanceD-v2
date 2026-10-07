@@ -144,3 +144,46 @@ describe('LoginPage forced-change reason (#1291)', () => {
     expect(text).toBe(key);
   });
 });
+
+// #1331: the MFA step offers a saved recovery code in place of the TOTP code.
+describe('LoginPage recovery code at the MFA step (#1331)', () => {
+  beforeEach(() => {
+    login.mockReset();
+    getPasswordPolicy.mockResolvedValue({ data: { data: { allowPasswordReset: true } } });
+  });
+
+  async function reachMfaStep() {
+    render(
+      <MemoryRouter>
+        <LoginPage />
+      </MemoryRouter>
+    );
+    login.mockResolvedValueOnce({ requiresTwoFactor: true });
+    fill('login-username-input', 'tecnico');
+    fill('login-password-input', 'Old@pass1234');
+    await submit();
+  }
+
+  it('sends the recovery code, upper-cased, in the code field', async () => {
+    await reachMfaStep();
+    fireEvent.click(screen.getByTestId('login-toggle-recovery-code'));
+    expect(screen.queryByTestId('login-mfa-code-input')).toBeNull();
+    fill('login-recovery-code-input', 'abcd-2345');
+    expect((screen.getByTestId('login-recovery-code-input') as HTMLInputElement).value).toBe('ABCD-2345');
+
+    login.mockResolvedValueOnce({ user: { roleName: 'Técnico', accessType: 2 } });
+    await submit();
+
+    expect(login).toHaveBeenLastCalledWith('tecnico', 'Old@pass1234', 'ABCD-2345', undefined);
+  });
+
+  it('switches back to the six-digit field with the field cleared', async () => {
+    await reachMfaStep();
+    fireEvent.click(screen.getByTestId('login-toggle-recovery-code'));
+    fill('login-recovery-code-input', 'ABCD2345');
+    fireEvent.click(screen.getByTestId('login-toggle-recovery-code'));
+
+    expect(screen.queryByTestId('login-recovery-code-input')).toBeNull();
+    expect((screen.getByTestId('login-mfa-code-input') as HTMLInputElement).value).toBe('');
+  });
+});
