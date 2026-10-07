@@ -14,6 +14,7 @@ const CANONICAL_COLLECTIONS = Object.freeze({
   medicationDictionary: env.COLL_MEDICATION_DICTIONARY || 'medication_dictionary',
   referenceSeedRuns: env.COLL_REFERENCE_SEED_RUNS || 'referenceSeedRuns',
   foundationDataRuns: env.COLL_FOUNDATION_DATA_RUNS || 'foundationDataRuns',
+  readinessReports: env.COLL_READINESS_REPORTS || 'readinessReports',
   participantIdentities: env.COLL_PARTICIPANT_IDENTITIES || 'participantIdentities',
   rcsAssessments: env.COLL_RCS_ASSESSMENTS || 'rcsAssessments',
   encounters: env.COLL_ENCOUNTERS || 'encounters',

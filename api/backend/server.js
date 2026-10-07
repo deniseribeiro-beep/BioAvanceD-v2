@@ -15,6 +15,7 @@ const { initScheduler } = require("./src/services/scheduler.service");
 const { initializeSecuritySystem } = require("./src/infrastructure/middleware/integrationSecurityMiddleware");
 const { seedReportTemplates } = require("./src/services/report-template-seed.service");
 const { seedRolesAndPermissions } = require("./src/services/rbac-catalog-seed.service");
+const { assertReadiness } = require("./src/foundation/readiness");
 const { validateEncryptionAndHalt, validateAuditSigningAndWarn } = require("./src/config/validateEnv");
 
 // #1040: Model.createIndexes() index-build errors (and unhandled rejections
@@ -111,6 +112,14 @@ async function startServer() {
     // Conecta banco
     const db = await connectDB();
     app.locals.db = db;
+
+    // RF022 AC4/AC9, RNF014 C7: where the stack runs the Foundation job
+    // first, the API starts only on its `ready` ReadinessReport. A refusal
+    // throws into the catch below, which exits 1.
+    if (env.FOUNDATION_READINESS_REQUIRED) {
+      const report = await assertReadiness(db, { environment: env.NODE_ENV });
+      logger.info(`[RF022] ReadinessReport ${report.readinessReportId} ready (${report.canonicalModelReleaseId})`);
+    }
 
     // #830/#826: modelos Mongoose ainda são consultados pela API (p.ex.
     // Sample.findById em miabisValidator, e os modelos de hierarquia de

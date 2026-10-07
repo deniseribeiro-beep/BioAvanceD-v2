@@ -2,8 +2,9 @@
 # Full e2e gate on a fresh test volume, with the in-container Playwright runner.
 # Run from the repo root: bash scripts/e2e-gate.sh <output dir>
 #
-# Steps: build compose.test.yml; bring up the 13 long-running services; run the
-# admin bootstrap and the reference-data bootstrap chain with --no-deps; check
+# Steps: build compose.test.yml; bring up the 13 long-running services, which
+# runs the Foundation job first as the API's dependency; run the admin bootstrap
+# and the reference-data bootstrap chain with --no-deps; check
 # every one-shot exited 0 and the projection worker is still up; run
 # playwright-runner with --no-deps and collect its logs.
 #
@@ -19,7 +20,9 @@ $DC up -d --wait mongodb-test neo4j-test redis-test mqtt-test influxdb-test smtp
   tsa-test witness-test backend-app-test trusted-hop-test worker-test \
   frontend-app-test neo4j-projection-worker-test > "$OUT/up.txt" 2>&1 || exit 4
 $DC up -d --wait --no-deps admin-bootstrap-test > "$OUT/boot.txt" 2>&1   # exits 1 on success; checked below
-CHAIN=$($DC config --services | grep -E '^(foundation-bootstrap-test|reference-data-bootstrap.*-test)$' | tr '\n' ' ')
+# foundation-bootstrap-test is not in this chain: backend-app-test depends on it
+# (RF022 AC4), so the up above already ran it before the API started.
+CHAIN=$($DC config --services | grep -E '^reference-data-bootstrap.*-test$' | tr '\n' ' ')
 $DC up -d --no-deps $CHAIN > "$OUT/chain.txt" 2>&1
 for i in $(seq 1 60); do
   [ "$(docker ps --format '{{.Names}}' | grep -c bootstrap)" -eq 0 ] && break

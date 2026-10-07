@@ -355,6 +355,75 @@ describe('#1098 server.js startServer() -- pinning the pre-I/O boot prologue', (
     });
   });
 
+  // RF022 AC4/AC9, RNF014 C7: with FOUNDATION_READINESS_REQUIRED the API
+  // starts only on a ready ReadinessReport. The real readiness module runs
+  // here against an in-memory db carrying (or not) the report.
+  describe('RF022 Foundation readiness gate', () => {
+    const { createFakeDb } = require('./foundation/helpers/fake-db');
+    const ReadinessReportModel = require('../../src/models/ReadinessReport');
+    const { CANONICAL_MODEL_RELEASE_ID } = require('../../src/foundation/readiness');
+    let requiredBefore;
+
+    beforeEach(() => {
+      requiredBefore = env.FOUNDATION_READINESS_REQUIRED;
+      env.FOUNDATION_READINESS_REQUIRED = true;
+    });
+    afterEach(() => {
+      env.FOUNDATION_READINESS_REQUIRED = requiredBefore;
+    });
+
+    async function dbWithReport(gateResults) {
+      const db = createFakeDb();
+      if (gateResults) {
+        await db.collection('readinessReports').insertOne(ReadinessReportModel.create({
+          foundationDataRunId: 'run-1',
+          canonicalModelReleaseId: CANONICAL_MODEL_RELEASE_ID,
+          environment: env.NODE_ENV,
+          gateResults,
+        }));
+      }
+      return db;
+    }
+
+    it('exits(1) before listen() when no ReadinessReport exists', async () => {
+      fakeConnectDB.mockResolvedValue(await dbWithReport(null));
+
+      await loadServerAndStart();
+
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(listenSpy).not.toHaveBeenCalled();
+      expect(fakeConnectMongoDB).not.toHaveBeenCalled();
+    });
+
+    it('exits(1) before listen() when the newest report is blocked', async () => {
+      fakeConnectDB.mockResolvedValue(await dbWithReport([{ gate: 'version', result: 'fail', p0: true }]));
+
+      await loadServerAndStart();
+
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(listenSpy).not.toHaveBeenCalled();
+    });
+
+    it('starts on a ready report', async () => {
+      fakeConnectDB.mockResolvedValue(await dbWithReport([{ gate: 'version', result: 'pass', p0: true }]));
+
+      await loadServerAndStart();
+
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(listenSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not read a report at all when the flag is off', async () => {
+      env.FOUNDATION_READINESS_REQUIRED = false;
+      fakeConnectDB.mockResolvedValue(await dbWithReport(null));
+
+      await loadServerAndStart();
+
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(listenSpy).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('happy path', () => {
     it('does not exit and calls listen() exactly once when every collaborator succeeds', async () => {
       await loadServerAndStart();

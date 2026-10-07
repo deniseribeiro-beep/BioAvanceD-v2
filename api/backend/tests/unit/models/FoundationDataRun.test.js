@@ -12,6 +12,12 @@ describe('FoundationDataRunModel', () => {
     configurationChecksum: 'sha256:config',
     dictionaryChecksum: 'sha256:dictionary',
     initiatedBy: 'system:foundation-data-pipeline',
+    // V2E-0459..0466, the v2.0.0 additions.
+    canonicalModelReleaseId: 'release-2.0.0',
+    contractChecksums: { dictionary: 'sha256:dictionary' },
+    migrationPlanId: 'migration-1.3.0-to-2.0.0',
+    dryRunResult: 'pass',
+    reportUri: 'urn:bioavanced:foundation-data-run:x#sha256=y',
   };
 
   describe('validate', () => {
@@ -55,6 +61,34 @@ describe('FoundationDataRunModel', () => {
     });
   });
 
+  describe('validate: the v2.0.0 run fields (RF022 AC5)', () => {
+    it('requires canonicalModelReleaseId, migrationPlanId and reportUri', () => {
+      const { canonicalModelReleaseId, migrationPlanId, reportUri, ...rest } = validData;
+      const { errors } = FoundationDataRunModel.validate(rest);
+      expect(errors).toEqual(expect.arrayContaining([
+        'canonicalModelReleaseId é obrigatório e deve ser string',
+        'migrationPlanId é obrigatório e deve ser string',
+        'reportUri é obrigatório e deve ser string',
+      ]));
+    });
+
+    it('requires contractChecksums as an object', () => {
+      expect(FoundationDataRunModel.validate({ ...validData, contractChecksums: 'sha' }).errors).toContain('contractChecksums deve ser um objeto');
+    });
+
+    it('rejects a result outside its set', () => {
+      expect(FoundationDataRunModel.validate({ ...validData, dryRunResult: 'maybe' }).isValid).toBe(false);
+      expect(FoundationDataRunModel.validate({ ...validData, applyResult: 'maybe' }).isValid).toBe(false);
+      expect(FoundationDataRunModel.validate({ ...validData, rollbackResult: 'not_run' }).isValid).toBe(false);
+      expect(FoundationDataRunModel.validate({ ...validData, rollbackResult: 'not_required' }).isValid).toBe(true);
+    });
+
+    it('requires verifyResult after a passing apply (V2E-0464)', () => {
+      expect(FoundationDataRunModel.validate({ ...validData, applyResult: 'pass' }).errors).toContain('verifyResult é obrigatório após apply');
+      expect(FoundationDataRunModel.validate({ ...validData, applyResult: 'pass', verifyResult: 'pass' }).isValid).toBe(true);
+    });
+  });
+
   describe('create', () => {
     it('fills defaults for a freshly planned run', () => {
       const doc = FoundationDataRunModel.create(validData);
@@ -66,6 +100,7 @@ describe('FoundationDataRunModel', () => {
       expect(doc.previousRunId).toBeNull();
       expect(doc.startedAt).toBeInstanceOf(Date);
       expect(doc.completedAt).toBeNull();
+      expect(doc).toMatchObject({ dryRunResult: 'pass', applyResult: null, verifyResult: null, rollbackResult: null, migrationPlanId: 'migration-1.3.0-to-2.0.0' });
     });
 
     it('carries through explicit status, steps and previousRunId', () => {

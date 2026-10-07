@@ -2,9 +2,9 @@ import { MongoClient, Db } from 'mongodb';
 
 /**
  * RF022 (#329) fixture: there's no API surface for the Foundation Data
- * Pipeline at all (api/backend/scripts/seed-essential-reference-data.js is a
- * manual CLI script, never invoked by the app or compose.test.yml) — so
- * proving the gap means reading the reference collections directly from the
+ * Pipeline at all (api/backend/scripts/seed-essential-reference-data.js runs
+ * as compose.test.yml's one-shot `foundation-bootstrap-test` job, before the
+ * API, and the app never calls it) — so its evidence is read from the
  * same Mongo the test stack itself uses, the same pattern seedParticipant.ts
  * and queryNeo4j.ts already use for this reason.
  */
@@ -125,4 +125,20 @@ export async function countActiveReferenceDatasetReleasesByDatasetCode(datasetCo
 export async function countTerminologyConceptsBySystemUri(systemUri: string): Promise<number> {
   const db = await getDb();
   return db.collection('terminologyConcepts').countDocuments({ systemUri });
+}
+
+/**
+ * RF022 AC9, RNF014 C7: the newest ReadinessReport the Foundation job wrote
+ * for an environment. The API starts only when it is `ready`.
+ */
+export async function latestReadinessReport(environment = 'test'): Promise<Record<string, any> | null> {
+  const db = await getDb();
+  return db.collection('readinessReports').find({ environment }).sort({ generatedAt: -1 }).limit(1).next();
+}
+
+/** RF022 AC2: the index names a collection carries, read from Mongo itself. */
+export async function indexNamesOf(collection: string): Promise<string[]> {
+  const db = await getDb();
+  const indexes = await db.collection(collection).listIndexes().toArray();
+  return indexes.map((index) => index.name as string);
 }

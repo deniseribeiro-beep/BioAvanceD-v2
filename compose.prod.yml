@@ -134,6 +134,30 @@ services:
       retries: 20
       start_period: 10s
 
+  foundation:
+    # RF022 AC4, RNF014 C6/C7: the Foundation Data Pipeline as a one-shot
+    # job, separate from the API's startup and run before it. It does
+    # dry-run, apply and verify, writes a ReadinessReport, and exits
+    # non-zero when that report is blocked; backend and both workers wait
+    # for it to complete successfully, and the backend re-checks the report
+    # itself (FOUNDATION_READINESS_REQUIRED). The same prod image as the
+    # backend; the direct node form for the same reason as worker's (#955).
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.prod
+    init: true
+    restart: "no"
+    command: ["node", "scripts/seed-essential-reference-data.js"]
+    env_file:
+      - .env.production
+    environment:
+      NODE_ENV: production
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    read_only: true
+    cap_drop: ["ALL"]
+
   backend:
     build:
       context: ./api/backend
@@ -147,7 +171,11 @@ services:
     environment:
       NODE_ENV: production
       CHOKIDAR_USEPOLLING: "false"
+      # RF022 AC9, RNF014 C7: refuse to start without a ready ReadinessReport.
+      FOUNDATION_READINESS_REQUIRED: "true"
     depends_on:
+      foundation:
+        condition: service_completed_successfully
       mongodb:
         condition: service_healthy
       redis:
@@ -210,6 +238,9 @@ services:
       retries: 4
       start_period: 60s
     depends_on:
+      # RNF014 C7: workers start only after a successful Foundation job.
+      foundation:
+        condition: service_completed_successfully
       mongodb:
         condition: service_healthy
       redis:
@@ -253,6 +284,9 @@ services:
       retries: 4
       start_period: 60s
     depends_on:
+      # RNF014 C7: workers start only after a successful Foundation job.
+      foundation:
+        condition: service_completed_successfully
       mongodb:
         condition: service_healthy
       redis:

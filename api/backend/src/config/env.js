@@ -15,6 +15,11 @@ module.exports = {
   // consent surface), and a stack that needs headroom on one does not
   // thereby need it on the other.
   CONSENT_RATE_LIMIT_RELAXED: process.env.CONSENT_RATE_LIMIT_RELAXED === 'true' || process.env.CONSENT_RATE_LIMIT_RELAXED === '1',
+  // RF022 AC4/AC9, RNF014 C7: the API and workers refuse to start unless the
+  // newest ReadinessReport for their environment is `ready`. An explicit
+  // opt-in, set by the stacks that run the Foundation job first (test,
+  // production), so a native `npm start` with no Foundation run still works.
+  FOUNDATION_READINESS_REQUIRED: process.env.FOUNDATION_READINESS_REQUIRED === 'true' || process.env.FOUNDATION_READINESS_REQUIRED === '1',
   PORT: process.env.PORT || 3000,
 
   // Mongo
@@ -172,6 +177,7 @@ module.exports = {
   COLL_MEDICATION_DICTIONARY: process.env.COLL_MEDICATION_DICTIONARY || 'medication_dictionary',
   COLL_REFERENCE_SEED_RUNS: process.env.COLL_REFERENCE_SEED_RUNS || 'referenceSeedRuns',
   COLL_FOUNDATION_DATA_RUNS: process.env.COLL_FOUNDATION_DATA_RUNS || 'foundationDataRuns',
+  COLL_READINESS_REPORTS: process.env.COLL_READINESS_REPORTS || 'readinessReports',
   COLL_PARTICIPANT_IDENTITIES: process.env.COLL_PARTICIPANT_IDENTITIES || 'participantIdentities',
   COLL_RCS_ASSESSMENTS: process.env.COLL_RCS_ASSESSMENTS || 'rcsAssessments',
   COLL_ENCOUNTERS: process.env.COLL_ENCOUNTERS || 'encounters',

@@ -25,6 +25,8 @@ import {
   countEssentialReferenceDocs,
   countFoundationDataRuns,
   latestFoundationDataRun,
+  latestReadinessReport,
+  indexNamesOf,
   countReferenceDatasetReleases,
   countTerminologyConcepts,
   countReferenceDatasetReleasesByDatasetCode,
@@ -268,6 +270,60 @@ test.describe('Foundation Data Pipeline bootstrap (RF022) — real backend', () 
       missingHistoricalIds: [],
       verified: true,
     });
+  });
+
+  // RF022 AC5, RNF031 C4: one apply run does dry-run, apply and verify, and
+  // records each result with the v2.0.0 run fields.
+  test('the bootstrap run recorded dry-run, apply and verify, each passing', async () => {
+    const run = await latestFoundationDataRun();
+    expect(run).toMatchObject({
+      executionMode: 'apply',
+      runStatus: 'completed',
+      dryRunResult: 'pass',
+      applyResult: 'pass',
+      verifyResult: 'pass',
+      rollbackResult: 'not_required',
+      canonicalModelReleaseId: 'release-2.0.0',
+      migrationPlanId: 'migration-1.3.0-to-2.0.0',
+    });
+    expect(run!.reportUri).toMatch(/^urn:bioavanced:foundation-data-run:[0-9a-f-]{36}#sha256=[0-9a-f]{64}$/);
+  });
+
+  // RF022 AC4/AC9, RNF014 C6/C7: the job ran before the API and wrote a
+  // ready ReadinessReport for that run. backend-app-test starts only on it
+  // (FOUNDATION_READINESS_REQUIRED), so this suite running at all is the API
+  // having passed that gate.
+  test('a ready ReadinessReport for the bootstrap run gates the API', async () => {
+    const run = await latestFoundationDataRun();
+    const report = await latestReadinessReport('test');
+    expect(report).toMatchObject({
+      status: 'ready',
+      blockers: [],
+      foundationDataRunId: run!.foundationDataRunId,
+      canonicalModelReleaseId: 'release-2.0.0',
+    });
+    const results = Object.fromEntries(report!.gateResults.map((gate: any) => [gate.gate, gate.result]));
+    expect(results).toMatchObject({
+      version: 'pass',
+      schemas: 'pass',
+      'reference-mechanisms': 'pass',
+      'storage-constraints': 'pass',
+      'zero-operational-data': 'pass',
+      configuration: 'not_evaluated',
+    });
+    expect(report!.p0Coverage).toBeGreaterThan(0);
+    expect(report!.p0Coverage).toBeLessThan(1);
+  });
+
+  // RF022 AC2: Foundation builds the model indexes before the API serves its
+  // first request, and they are on the real collections.
+  test('the bootstrap built the model indexes on the real collections', async () => {
+    const report = await latestReadinessReport('test');
+    const constraints = report!.gateResults.find((gate: any) => gate.gate === 'storage-constraints');
+    expect(constraints.evidence.built).toBeGreaterThan(0);
+    expect(constraints.evidence.failed).toEqual([]);
+    expect(await indexNamesOf('samples')).toContain('samples_barcode_unique_v2');
+    expect(await indexNamesOf('sessions')).toContain('sessions_tokenHash_v1');
   });
 });
 

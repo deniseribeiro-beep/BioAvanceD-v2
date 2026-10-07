@@ -360,6 +360,8 @@ services:
       # onto the shared anchor above (with the load-bearing /tsa suffix this
       # line was missing). So this was a near-miss name carrying the exact
       # unsuffixed value that #959 item 4 had just finished fixing. Removed.
+      # RF022 AC9, RNF014 C7: refuse to start without a ready ReadinessReport.
+      FOUNDATION_READINESS_REQUIRED: "true"
     command: ["npm", "start"]
     # #828: the API writes the uploaded staging file to /app/uploads and the
     # worker reads it back by absolute path (staging-import.service.js ->
@@ -385,6 +387,9 @@ services:
       mongodb-test:
         condition: service_healthy
       mongo-rs-init-test:
+        condition: service_completed_successfully
+      # RF022 AC4: the Foundation job before the API, never after it.
+      foundation-bootstrap-test:
         condition: service_completed_successfully
       neo4j-test:
         condition: service_healthy
@@ -452,13 +457,15 @@ services:
     networks: [bioavanced-test]
 
   foundation-bootstrap-test:
-    # RF022 (#371): one-shot, idempotent essential-reference-data seed —
-    # mirrors compose.dev.yml's `foundation-bootstrap`, wired into the test
-    # stack so pipeline-continuity.spec.ts's RF022/RF028 real-backend
-    # assertions have something to find (#600's trace: zero without this).
-    # Runs once backend-app-test is healthy, same trigger foundation-bootstrap
-    # uses in the dev stack; upsertDocs's $setOnInsert makes repeat runs
-    # no-ops.
+    # RF022 (#371): the Foundation Data Pipeline's one-shot job, mirroring
+    # compose.dev.yml's `foundation-bootstrap`. RF022 AC4 and RNF014 C6/C7:
+    # it runs after the datastores are healthy and BEFORE the API, separate
+    # from the API's own startup. It does dry-run, apply and verify, writes a
+    # ReadinessReport, and exits non-zero when that report is blocked, so
+    # backend-app-test's service_completed_successfully dependency below
+    # holds the API back; the API also re-checks the report itself
+    # (FOUNDATION_READINESS_REQUIRED). upsertDocs's $setOnInsert makes repeat
+    # runs no-ops. pipeline-continuity.spec.ts asserts what it records.
     build:
       context: ./api/backend
       dockerfile: Dockerfile.dev
@@ -466,8 +473,10 @@ services:
       <<: *test-env
     command: ["npm", "run", "seed:essential"]
     depends_on:
-      backend-app-test:
+      mongodb-test:
         condition: service_healthy
+      mongo-rs-init-test:
+        condition: service_completed_successfully
     networks: [bioavanced-test]
 
   reference-data-bootstrap-test:

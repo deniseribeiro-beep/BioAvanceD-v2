@@ -71,6 +71,9 @@ services:
     depends_on:
       mongodb:
         condition: service_healthy
+      # RF022 AC4: the Foundation job before the API.
+      foundation-bootstrap:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       neo4j:
@@ -113,10 +116,12 @@ services:
         condition: service_healthy
 
   foundation-bootstrap:
-    # RF022 (#366 slice 1): one-shot, idempotent essential-reference-data
-    # seed, coupled to build/startup instead of a script a human has to
-    # remember to run. Runs once per `up` after the backend is healthy;
-    # upsertDocs's $setOnInsert makes repeat runs no-ops.
+    # RF022 (#366 slice 1): the Foundation Data Pipeline's one-shot job,
+    # coupled to build/startup instead of a script a human has to remember
+    # to run. RF022 AC4: runs once per `up` after MongoDB is healthy and
+    # before the backend (see its depends_on); it writes a ReadinessReport
+    # and exits non-zero when that report is blocked. upsertDocs's
+    # $setOnInsert makes repeat runs no-ops.
     build:
       context: ./api/backend
       dockerfile: Dockerfile.dev
@@ -127,7 +132,7 @@ services:
     env_file:
       - .env.docker
     depends_on:
-      backend:
+      mongodb:
         condition: service_healthy
 
   reference-data-bootstrap:
