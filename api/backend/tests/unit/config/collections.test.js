@@ -11,7 +11,8 @@ const ENV_KEYS = [
   'COLL_CLINICAL_UNITS',
   'COLL_DISEASE_DICTIONARY',
   'COLL_MEDICATION_DICTIONARY',
-  'COLL_REFERENCE_SEED_RUNS'
+  'COLL_REFERENCE_SEED_RUNS',
+  'COLL_READINESS_REPORTS'
 ];
 
 const DEFAULTS = {
@@ -28,6 +29,7 @@ const DEFAULTS = {
   medicationDictionary: 'medication_dictionary',
   referenceSeedRuns: 'referenceSeedRuns',
   foundationDataRuns: 'foundationDataRuns',
+  readinessReports: 'readinessReports',
   participantIdentities: 'participantIdentities',
   rcsAssessments: 'rcsAssessments',
   encounters: 'encounters',
@@ -131,6 +133,7 @@ describe('config/collections', () => {
       medicationDictionary: 'custom_coll_medication_dictionary',
       referenceSeedRuns: 'custom_coll_reference_seed_runs',
       foundationDataRuns: 'foundationDataRuns',
+      readinessReports: 'custom_coll_readiness_reports',
       participantIdentities: 'participantIdentities',
       rcsAssessments: 'rcsAssessments',
       // COLL_ENCOUNTERS/COLL_CONDITIONS/COLL_PHENOTYPE_OBSERVATIONS/
