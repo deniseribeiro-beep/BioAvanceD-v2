@@ -40,9 +40,9 @@ describe('PatientService.getEncryptedFieldMap', () => {
 
 describe('PatientService.encryptSensitivePatientFields', () => {
   it('returns unchanged object when no sensitive fields present', () => {
-    const patient = { patientID: '12345678', name: 'João' };
+    const patient = { participantId: '12345678', name: 'João' };
     const result = patientService.encryptSensitivePatientFields(patient);
-    expect(result.patientID).toBe('12345678');
+    expect(result.participantId).toBe('12345678');
     expect(result.name).toBe('João');
   });
 
@@ -73,7 +73,7 @@ describe('PatientService.decryptSensitivePatientFields', () => {
   });
 
   it('roundtrip: encrypt then decrypt restores original value', () => {
-    const patient = { patientID: '12345678', alphaGal: 4.7 };
+    const patient = { participantId: '12345678', alphaGal: 4.7 };
     const encrypted = patientService.encryptSensitivePatientFields(patient);
     const decrypted = patientService.decryptSensitivePatientFields(encrypted);
     expect(decrypted.alphaGal).toBe(4.7);
@@ -164,7 +164,7 @@ describe('PatientService.createPatient', () => {
     };
   }
 
-  it('creates a patient with a generated 8-digit patientID and PENDING_CONSENT status', async () => {
+  it('creates a patient with a generated 8-digit participantId and PENDING_CONSENT status', async () => {
     const patientsCollection = makeFakeCollection();
     const identitiesCollection = makeFakeCollection();
     const consentTemplatesCollection = makeFakeCollection({
@@ -378,7 +378,7 @@ describe('PatientService.searchPatients', () => {
   });
 
   it('searches by recordNumber/clinicalUnit/etc for a normal term', async () => {
-    const findMock = vi.fn().mockReturnValue({ limit: vi.fn().mockReturnThis(), toArray: vi.fn().mockResolvedValue([{ patientID: '12345678' }]) });
+    const findMock = vi.fn().mockReturnValue({ limit: vi.fn().mockReturnThis(), toArray: vi.fn().mockResolvedValue([{ participantId: '12345678' }]) });
     const patientsCollection = makeFakeCollection({ find: findMock, countDocuments: vi.fn().mockResolvedValue(1) });
     const db = makeFakeDb({ patients: patientsCollection });
 
@@ -398,7 +398,7 @@ describe('PatientService.updatePatient', () => {
   it('encrypts sensitive fields in updateData before writing and returns success', async () => {
     const patientsCollection = makeFakeCollection({
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
-      findOne: vi.fn().mockResolvedValue({ patientID: '12345678', phone: '11999999999' })
+      findOne: vi.fn().mockResolvedValue({ participantId: '12345678', phone: '11999999999' })
     });
     const db = makeFakeDb({ patients: patientsCollection });
     const tsSpy = vi.spyOn(patientBiomarkerTimeseriesService, 'writePatientBiomarkers').mockResolvedValue(undefined);
@@ -450,7 +450,7 @@ describe('PatientService.deletePatient', () => {
 });
 
 describe('PatientService.validateConsentToken', () => {
-  it('throws when patientID or token is missing', async () => {
+  it('throws when participantId or token is missing', async () => {
     const db = makeFakeDb({});
     await expect(patientService.validateConsentToken(db, null, 'tok')).rejects.toThrow('obrigatórios');
     await expect(patientService.validateConsentToken(db, '12345678', null)).rejects.toThrow('obrigatórios');
@@ -465,7 +465,7 @@ describe('PatientService.validateConsentToken', () => {
 
   it('throws when the patient is not pending consent', async () => {
     const patientsCollection = makeFakeCollection({
-      findOne: vi.fn().mockResolvedValue({ patientID: '12345678', status: 'ACTIVE' })
+      findOne: vi.fn().mockResolvedValue({ participantId: '12345678', status: 'ACTIVE' })
     });
     const db = makeFakeDb({ patients: patientsCollection });
 
@@ -474,7 +474,7 @@ describe('PatientService.validateConsentToken', () => {
 
   it('throws when the token does not match', async () => {
     const patientsCollection = makeFakeCollection({
-      findOne: vi.fn().mockResolvedValue({ patientID: '12345678', status: 'PENDING_CONSENT', consentTokenHash: hashConsentToken('real-token') })
+      findOne: vi.fn().mockResolvedValue({ participantId: '12345678', status: 'PENDING_CONSENT', consentTokenHash: hashConsentToken('real-token') })
     });
     const db = makeFakeDb({ patients: patientsCollection });
 
@@ -484,7 +484,7 @@ describe('PatientService.validateConsentToken', () => {
   it('throws when the token has expired', async () => {
     const patientsCollection = makeFakeCollection({
       findOne: vi.fn().mockResolvedValue({
-        patientID: '12345678',
+        participantId: '12345678',
         status: 'PENDING_CONSENT',
         consentTokenHash: hashConsentToken('tok'),
         consentTokenExpiresAt: new Date(Date.now() - 1000).toISOString(),
@@ -660,7 +660,7 @@ describe('PatientService.resendConsentNotification', () => {
     enqueueSpy.mockRestore();
   });
 
-  it('throws when patientID is missing', async () => {
+  it('throws when participantId is missing', async () => {
     const db = makeFakeDb({});
     await expect(patientService.resendConsentNotification(db, null)).rejects.toThrow('obrigatório');
   });
@@ -674,7 +674,7 @@ describe('PatientService.resendConsentNotification', () => {
 
   it('throws when the patient is not pending consent', async () => {
     const patientsCollection = makeFakeCollection({
-      findOne: vi.fn().mockResolvedValue({ patientID: '12345678', status: 'ACTIVE' })
+      findOne: vi.fn().mockResolvedValue({ participantId: '12345678', status: 'ACTIVE' })
     });
     const db = makeFakeDb({ patients: patientsCollection });
 
@@ -683,7 +683,7 @@ describe('PatientService.resendConsentNotification', () => {
 
   it('generates a new token when no valid token exists', async () => {
     const patientsCollection = makeFakeCollection({
-      findOne: vi.fn().mockResolvedValue({ _id: 'p1', patientID: '12345678', status: 'PENDING_CONSENT' }),
+      findOne: vi.fn().mockResolvedValue({ _id: 'p1', participantId: '12345678', status: 'PENDING_CONSENT' }),
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 })
     });
     const db = makeFakeDb({ patients: patientsCollection });
@@ -726,7 +726,7 @@ describe('PatientService.resendConsentNotification', () => {
     const patientsCollection = makeFakeCollection({
       findOne: vi.fn().mockResolvedValue({
         _id: 'p1',
-        patientID: '12345678',
+        participantId: '12345678',
         status: 'PENDING_CONSENT',
         consentTokenHash: hashConsentToken('still-valid'),
         consentTokenExpiresAt: new Date(Date.now() + 100000).toISOString(),
@@ -738,7 +738,7 @@ describe('PatientService.resendConsentNotification', () => {
     await patientService.resendConsentNotification(db, '12345678');
 
     expect(buildMetaSpy).toHaveBeenCalled();
-    expect(buildLinkSpy).toHaveBeenCalledWith(expect.objectContaining({ patientID: '12345678' }), 'new-token');
+    expect(buildLinkSpy).toHaveBeenCalledWith(expect.objectContaining({ participantId: '12345678' }), 'new-token');
     const updatePayload = patientsCollection.updateOne.mock.calls[0][1].$set;
     expect(updatePayload.consentTokenHash).toBe(hashConsentToken('new-token'));
   });
