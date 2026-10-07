@@ -31,9 +31,8 @@ export async function closeFoundationDb(): Promise<void> {
 
 /**
  * essential/manifest.js's three entries target these collections
- * (sampleTypes/terminologies via miabis-minimal/sprec-minimal). A one-shot
- * bootstrap coupled to the build would populate them before anything else
- * runs; today nothing does.
+ * (sampleTypes/terminologies via miabis-minimal/sprec-minimal). The Phase 2
+ * job populates them after Foundation and before the API (RF022 AC7).
  */
 export async function countEssentialReferenceDocs(): Promise<number> {
   const db = await getDb();
@@ -42,6 +41,19 @@ export async function countEssentialReferenceDocs(): Promise<number> {
     db.collection('terminologies').countDocuments(),
   ]);
   return sampleTypes + terminologies;
+}
+
+/**
+ * RF022 AC7: the Phase 2 job (load-essential-references.js, the stack's
+ * `essential-reference-bootstrap-test`) loads the essential set and records
+ * one ReferenceImportRun per manifest entry. Newest first.
+ */
+export async function essentialReferenceImportRuns(): Promise<Record<string, any>[]> {
+  const db = await getDb();
+  return db.collection('referenceImportRuns')
+    .find({ initiatedBy: 'system:essential-reference-load' })
+    .sort({ startedAt: -1 })
+    .toArray();
 }
 
 /**

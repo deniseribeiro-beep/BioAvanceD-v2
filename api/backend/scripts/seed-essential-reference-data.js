@@ -5,9 +5,7 @@ const os = require('os');
 const { version: pipelineVersion } = require('../package.json');
 const { connectNewDB, closeConnection } = require('../src/database/mongo');
 const { getManifest } = require('../src/reference-data/essential');
-const miabisSeed = require('../src/reference-data/miabis.min.json');
-const sprecSeed = require('../src/reference-data/sprec.min.json');
-const rcsReferenceData = require('../src/services/rcs-reference-data');
+const { selectEntries, planSteps, referenceCollections } = require('../src/foundation/essential-references');
 const FoundationDataRunModel = require('../src/models/FoundationDataRun');
 const ReadinessReportModel = require('../src/models/ReadinessReport');
 const canonicalDictionary = require('../src/reference-data/canonical-dictionary/v2');
@@ -27,17 +25,24 @@ const { CANONICAL_MODEL_RELEASE_ID, MIGRATION_PLAN_ID, DEFERRED_P0_GATES } = req
 //   --dry-run   dry_run: plans and validates, mutates nothing
 //   --verify    validate: re-verifies the newest apply, new ReadinessReport
 //   --rollback  rollback: removes what the newest un-rolled-back apply
-//               inserted, and blocks readiness until the next apply
+//               checkpointed, and blocks readiness until the next apply.
+//               An apply since RF022 AC7 inserts no reference docs, so
+//               only an older apply's checkpoints still name any
 //   --list      prints the manifest, touches no database
 //
 // Apply also seeds the configuration catalogs (RBAC, system report
 // templates), which the API seeded at its own boot until RF022 AC4 moved
 // them here; the API still does when no Foundation job runs first.
 //
-// The essential manifest is the 3-entry set (#366); the full canonical
-// dictionary is loaded to pin dictionaryVersion/checksum/completeness
-// (RF022 AC1: v2.0.0, 1644 elements with the 929 historical ones). Mongo
-// schemas for the non-technical domain elements are out of scope here.
+// The essential manifest is the 3-entry set (#366). Foundation prepares its
+// loaders and populates none of it (RF022 AC7, plano §4 F1.7): the dry-run
+// loads every entry, and a P0 gate fails the run if any reference
+// collection gained a doc during apply. The Phase 2 job,
+// scripts/load-essential-references.js, loads it after this job's report
+// is ready. The full canonical dictionary is loaded to pin
+// dictionaryVersion/checksum/completeness (RF022 AC1: v2.0.0, 1644 elements
+// with the 929 historical ones). Mongo schemas for the non-technical domain
+// elements are out of scope here.
 
 // The configuration catalogs Foundation prepares (RF022 AC2, plano F1.2).
 // Lazily required: they pull the models and the collection resolver, which
@@ -84,92 +89,6 @@ function checksumFor(value) {
   return crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
 
-function ensureArray(value) {
-  return Array.isArray(value) ? value : [];
-}
-
-function loadByKey(key) {
-  if (key === 'miabis-minimal') {
-    return {
-      docsByCollection: {
-        sampleTypes: ensureArray(miabisSeed.sampleTypes),
-        sampleOrigins: ensureArray(miabisSeed.sampleOrigins),
-        extractionProtocols: ensureArray(miabisSeed.extractionProtocols),
-        qualityDescriptions: ensureArray(miabisSeed.qualityDescriptions),
-      },
-    };
-  }
-
-  if (key === 'sprec-minimal') {
-    return {
-      docsByCollection: {
-        terminologies: ensureArray(sprecSeed.axes).map((axis) => ({
-          sistema: sprecSeed.sistema,
-          fonte: sprecSeed.fonte,
-          axis: axis.axis,
-          code: axis.code,
-          label: axis.label,
-          descricao: axis.descricao,
-        })),
-      },
-    };
-  }
-
-  if (key === 'rcs-gov-1.0') {
-    return {
-      docsByCollection: {},
-      payload: {
-        catalogs: rcsReferenceData.catalogs,
-        severityMappings: rcsReferenceData.severityMappings,
-        weights: rcsReferenceData.weights,
-        thresholds: rcsReferenceData.thresholds,
-        governanceRules: rcsReferenceData.governanceRules,
-      },
-    };
-  }
-
-  throw new Error(`Loader not implemented for seed key: ${key}`);
-}
-
-function filterFor(doc, uniqueKeys) {
-  return uniqueKeys.length
-    ? Object.fromEntries(uniqueKeys.map((key) => [key, doc[key]]))
-    : { _id: doc._id };
-}
-
-// Returns the _ids this call inserted, the step's checkpoint for rollback
-// (RF022 AC10): a doc that already existed is never claimed by this run.
-async function upsertDocs(db, collectionName, docs, uniqueKeys = []) {
-  const collection = db.collection(collectionName);
-  const insertedIds = [];
-  for (const doc of docs) {
-    const result = await collection.updateOne(filterFor(doc, uniqueKeys), { $setOnInsert: { ...doc } }, { upsert: true });
-    if (result && result.upsertedId !== undefined && result.upsertedId !== null) insertedIds.push(result.upsertedId);
-  }
-  return insertedIds;
-}
-
-function selectEntries(args) {
-  const manifest = getManifest();
-  const selected = args.only ? manifest.filter((entry) => entry.key === args.only) : manifest;
-  if (args.only && selected.length === 0) {
-    throw new Error(`Unknown seed key: ${args.only}`);
-  }
-  return selected;
-}
-
-// F1.1 dry-run: every loader loads and every planned doc carries its unique
-// keys. Nothing is written.
-function planSteps(selected) {
-  return selected.map((entry) => {
-    const docsByCollection = loadByKey(entry.key).docsByCollection || {};
-    const plannedCounts = Object.fromEntries(Object.entries(docsByCollection).map(([collection, docs]) => [collection, docs.length]));
-    const keyless = Object.values(docsByCollection).flat()
-      .filter((doc) => (entry.uniqueKeys || []).some((key) => doc[key] === undefined || doc[key] === null)).length;
-    return { entry, docsByCollection, plannedCounts, keyless };
-  });
-}
-
 async function countOperational(db) {
   const counts = {};
   for (const name of OPERATIONAL_COLLECTIONS) {
@@ -178,23 +97,27 @@ async function countOperational(db) {
   return counts;
 }
 
-// F1.10 verify: every planned reference doc is present, every index the
-// job built is readable, and no operational record appeared.
-async function verifyPlan(db, plan) {
-  const missingDocs = [];
-  for (const { entry, docsByCollection } of plan) {
-    for (const [collectionName, docs] of Object.entries(docsByCollection)) {
-      for (const doc of docs) {
-        const found = await db.collection(collectionName).countDocuments(filterFor(doc, entry.uniqueKeys || []));
-        if (found === 0) missingDocs.push({ step: entry.key, collection: collectionName, filter: filterFor(doc, entry.uniqueKeys || []) });
-      }
-    }
+// The essential set's reference collections, counted before and after
+// apply: Foundation prepares their loaders and must not populate them
+// (RF022 AC7).
+async function countReferences(db, plan) {
+  const counts = {};
+  for (const name of referenceCollections(plan)) {
+    counts[name] = await db.collection(name).countDocuments({});
   }
-  return missingDocs;
+  return counts;
 }
 
 function gate(name, passed, p0, evidence) {
   return { gate: name, result: passed ? 'pass' : 'fail', p0, evidence };
+}
+
+// F1.7: every reference loader loads and every doc it plans carries its
+// unique keys, so the Phase 2 job can upsert it.
+function mechanismsGate(plan) {
+  return gate('reference-mechanisms', plan.every((step) => step.keyless === 0), true, {
+    loaders: plan.map(({ entry, plannedCounts, keyless }) => ({ key: entry.key, plannedCounts, keyless })),
+  });
 }
 
 function contractChecksums(selected) {
@@ -306,21 +229,15 @@ async function runApply({ db, args, environment, deploymentId, selected, configu
     return { run, report };
   }
 
-  // F1.3/F1.4/F1.7: apply.
+  // F1.3/F1.4/F1.7: apply. F1.7 prepares the reference loaders and writes
+  // nothing through them (RF022 AC7): each entry's step records what the
+  // Phase 2 job will load.
   const operationalBefore = await countOperational(db);
-  const steps = [];
+  const referencesBefore = await countReferences(db, plan);
+  const steps = plan.map(({ entry, plannedCounts, keyless }) => ({ step: entry.key, system: entry.system, version: entry.version, status: 'prepared', plannedCounts, keyless }));
   let builds = [];
   let currentStep = null;
   try {
-    for (const { entry, docsByCollection, plannedCounts } of plan) {
-      currentStep = entry.key;
-      console.log(JSON.stringify({ key: entry.key, mode: 'apply', plannedCounts }, null, 2));
-      const insertedIds = {};
-      for (const [collectionName, docs] of Object.entries(docsByCollection)) {
-        insertedIds[collectionName] = await upsertDocs(db, collectionName, docs, entry.uniqueKeys || []);
-      }
-      steps.push({ step: entry.key, system: entry.system, version: entry.version, status: 'completed', plannedCounts, checkpoint: { insertedIds } });
-    }
     // F1.2 configuration catalogs, which the API seeded at its own boot
     // before RF022 AC4 separated the two. Both upserts are idempotent and
     // reconcile catalog-owned fields, so a re-run is safe; a failure here is
@@ -349,14 +266,16 @@ async function runApply({ db, args, environment, deploymentId, selected, configu
   }
 
   // F1.10: verify.
-  const missingDocs = await verifyPlan(db, plan);
   const missingIndexes = await verifyFoundationIndexes(db, builds);
   const operationalAfter = await countOperational(db);
   const createdOperational = Object.keys(operationalAfter).filter((name) => operationalAfter[name] > operationalBefore[name]);
+  const referencesAfter = await countReferences(db, plan);
+  const populatedReferences = Object.keys(referencesAfter).filter((name) => referencesAfter[name] > referencesBefore[name]);
   const verifyGates = [
-    gate('reference-mechanisms', missingDocs.length === 0, true, { missing: missingDocs.slice(0, 20) }),
+    mechanismsGate(plan),
     ...indexGates(builds, missingIndexes),
     gate('zero-operational-data', createdOperational.length === 0, true, { before: operationalBefore, after: operationalAfter }),
+    gate('zero-reference-data', populatedReferences.length === 0, true, { before: referencesBefore, after: referencesAfter }),
   ];
   const gateResults = [...versionGates, ...verifyGates];
   const verifyPassed = verifyGates.every((g) => g.result !== 'fail');
@@ -407,12 +326,11 @@ async function runVerify({ db, args, environment, deploymentId, selected }) {
   const lastApply = await newestRun(runs, { environment, executionMode: 'apply', runStatus: 'completed' });
   const { dictionaryCompleteness, gates: versionGates } = versionGate(lastApply);
   const plan = planSteps(selected);
-  const missingDocs = await verifyPlan(db, plan);
   const builds = await buildFoundationIndexes(db);
   const missingIndexes = await verifyFoundationIndexes(db, builds);
   const gateResults = [
     ...versionGates,
-    gate('reference-mechanisms', missingDocs.length === 0, true, { missing: missingDocs.slice(0, 20) }),
+    mechanismsGate(plan),
     ...indexGates(builds, missingIndexes),
   ];
   const passed = gateResults.every((g) => g.result !== 'fail');
@@ -491,7 +409,7 @@ async function runSeed({ db, args, environment, deploymentId, configurationSeeds
     }
     return null;
   }
-  const selected = selectEntries(args);
+  const selected = selectEntries(args.only);
   const context = { db, args, environment, deploymentId, selected, configurationSeeds };
   const mode = args.mode || 'apply';
   if (mode === 'dry_run') return runDryRun(context);

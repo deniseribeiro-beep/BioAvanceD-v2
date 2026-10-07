@@ -74,6 +74,9 @@ services:
       # RF022 AC4: the Foundation job before the API.
       foundation-bootstrap:
         condition: service_completed_successfully
+      # RF022 AC7: the essential reference set, loaded in Phase 2.
+      essential-reference-bootstrap:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       neo4j:
@@ -120,8 +123,8 @@ services:
     # coupled to build/startup instead of a script a human has to remember
     # to run. RF022 AC4: runs once per `up` after MongoDB is healthy and
     # before the backend (see its depends_on); it writes a ReadinessReport
-    # and exits non-zero when that report is blocked. upsertDocs's
-    # $setOnInsert makes repeat runs no-ops.
+    # and exits non-zero when that report is blocked. It populates no
+    # reference data (RF022 AC7).
     build:
       context: ./api/backend
       dockerfile: Dockerfile.dev
@@ -134,6 +137,24 @@ services:
     depends_on:
       mongodb:
         condition: service_healthy
+
+  essential-reference-bootstrap:
+    # RF022 AC7, plano §5: Phase 2 for the essential reference set (MIABIS
+    # and SPREC minimal, RCS-GOV 1.0), which Foundation prepares and does
+    # not load. It runs on a ready ReadinessReport and before the backend;
+    # $setOnInsert makes repeat runs insert nothing.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    command: npm run reference:load:essential
+    volumes:
+      - ./api/backend:/app
+      - backend_node_modules:/app/node_modules
+    env_file:
+      - .env.docker
+    depends_on:
+      foundation-bootstrap:
+        condition: service_completed_successfully
 
   reference-data-bootstrap:
     # RF028 (#367 slice 1): one-shot, idempotent HPO reference-data import —

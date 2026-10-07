@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 const { runSeed, parseArgs, exitCodeFor, indexGates, OPERATIONAL_COLLECTIONS } = require('../../../scripts/seed-essential-reference-data');
+const { runLoad } = require('../../../scripts/load-essential-references');
 const canonicalDictionary = require('../../../src/reference-data/canonical-dictionary/v2');
 const FoundationDataRunModel = require('../../../src/models/FoundationDataRun');
 const ReadinessReportModel = require('../../../src/models/ReadinessReport');
@@ -11,7 +12,8 @@ const { createFakeDb } = require('../foundation/helpers/fake-db');
  * RF022 (Requisitos v4.0.0) through the Foundation job's own entry point:
  * AC1 the v2.0.0 dictionary (1644 elements, 929 historical), AC2 the index
  * builds, AC5 dry-run/apply/verify/rollback recorded as FoundationDataRuns,
- * AC8 no operational data, AC9 the ReadinessReport that blocks promotion.
+ * AC7 reference loaders prepared and no reference data populated, AC8 no
+ * operational data, AC9 the ReadinessReport that blocks promotion.
  *
  * The fake db (../foundation/helpers/fake-db.js) runs the pipeline's own
  * filters, sorts, upserts, counts and deletes, not canned answers, so a
@@ -68,16 +70,30 @@ describe('Foundation job: apply', () => {
     expect(FoundationDataRunModel.validate(run)).toEqual({ isValid: true, errors: [] });
   });
 
-  it('checkpoints the ids each step inserted, and claims none on a re-run', async () => {
+  it('prepares each reference loader and populates no reference collection (AC7)', async () => {
     const db = createFakeDb();
     await apply(db);
     await apply(db);
 
     const [first, second] = runsOf(db);
-    const firstInserted = first.steps.find((step) => step.step === 'miabis-minimal').checkpoint.insertedIds;
-    expect(firstInserted.sampleTypes).toHaveLength(db.collection('sampleTypes').docs.length);
-    expect(second.steps.find((step) => step.step === 'miabis-minimal').checkpoint.insertedIds.sampleTypes).toEqual([]);
+    const miabis = first.steps.find((step) => step.step === 'miabis-minimal');
+    expect(miabis).toMatchObject({ status: 'prepared', keyless: 0 });
+    expect(miabis.plannedCounts.sampleTypes).toBe(require('../../../src/reference-data/miabis.min.json').sampleTypes.length);
+    expect(miabis.checkpoint).toBeUndefined();
+    for (const name of ['sampleTypes', 'sampleOrigins', 'extractionProtocols', 'qualityDescriptions', 'terminologies']) {
+      expect(db.collection(name).docs).toHaveLength(0);
+    }
     expect(second.previousRunId).toBe(first.foundationDataRunId);
+  });
+
+  it('blocks readiness when apply populates a reference collection (AC7)', async () => {
+    const db = createFakeDb();
+    const configurationSeeds = [{ step: 'leaky-seed', seed: async (fakeDb) => fakeDb.collection('sampleTypes').insertOne({ _id: 'leaked-reference' }), count: () => ({}) }];
+    const { report } = await runSeed({ db, args: parseArgs([]), ...quiet, configurationSeeds });
+
+    expect(report.status).toBe('blocked');
+    expect(report.blockers).toContain('gate:zero-reference-data');
+    expect(gateOf(report, 'zero-reference-data').evidence).toMatchObject({ before: { sampleTypes: 0 }, after: { sampleTypes: 1 } });
   });
 
   it('writes a ready ReadinessReport naming each gate it evaluated and each it does not yet (AC9)', async () => {
@@ -86,14 +102,14 @@ describe('Foundation job: apply', () => {
 
     expect(reportsOf(db)).toEqual([report]);
     expect(report).toMatchObject({ status: 'ready', blockers: [], foundationDataRunId: run.foundationDataRunId, canonicalModelReleaseId: CANONICAL_MODEL_RELEASE_ID, environment: 'test' });
-    for (const name of ['version', 'schemas', 'reference-mechanisms', 'storage-constraints', 'zero-operational-data']) {
+    for (const name of ['version', 'schemas', 'reference-mechanisms', 'storage-constraints', 'zero-operational-data', 'zero-reference-data']) {
       expect(gateOf(report, name)).toMatchObject({ result: 'pass', p0: true });
     }
     for (const { gate } of DEFERRED_P0_GATES) {
       expect(gateOf(report, gate)).toMatchObject({ result: 'not_evaluated', p0: true });
     }
-    // Five evaluated P0 gates pass; the deferred ones keep coverage below 1.
-    expect(report.p0Coverage).toBeCloseTo(5 / (5 + DEFERRED_P0_GATES.length));
+    // Six evaluated P0 gates pass; the deferred ones keep coverage below 1.
+    expect(report.p0Coverage).toBeCloseTo(6 / (6 + DEFERRED_P0_GATES.length));
     expect(ReadinessReportModel.validate(report)).toEqual({ isValid: true, errors: [] });
     expect(exitCodeFor({ run, report })).toBe(0);
   });
@@ -151,14 +167,9 @@ describe('Foundation job: apply', () => {
   });
 
   it('blocks readiness when apply creates an operational record (AC8)', async () => {
-    const db = createFakeDb({
-      sampleTypes: (fakeDb) => ({
-        afterUpsert: async () => {
-          await fakeDb.collection(CANONICAL_COLLECTIONS.samples).insertOne({ _id: 'leaked-specimen' });
-        },
-      }),
-    });
-    const { report } = await apply(db);
+    const db = createFakeDb();
+    const configurationSeeds = [{ step: 'leaky-seed', seed: async (fakeDb) => fakeDb.collection(CANONICAL_COLLECTIONS.samples).insertOne({ _id: 'leaked-specimen' }), count: () => ({}) }];
+    const { report } = await runSeed({ db, args: parseArgs([]), ...quiet, configurationSeeds });
 
     expect(OPERATIONAL_COLLECTIONS).toContain(CANONICAL_COLLECTIONS.samples);
     expect(report.status).toBe('blocked');
@@ -198,7 +209,7 @@ describe('Foundation job: the other modes', () => {
 
     expect(result.run.executionMode).toBe('validate');
     expect(result.report.status).toBe('blocked');
-    expect(result.report.blockers).toEqual(expect.arrayContaining(['no_completed_apply', 'gate:reference-mechanisms']));
+    expect(result.report.blockers).toEqual(['no_completed_apply']);
   });
 
   it('--verify after an apply writes a new ready report', async () => {
@@ -211,22 +222,36 @@ describe('Foundation job: the other modes', () => {
     expect(reportsOf(db)).toHaveLength(2);
   });
 
-  it('--rollback removes only what the newest apply inserted, appends a run, and blocks readiness (AC10)', async () => {
+  it('--rollback of an apply leaves the references Phase 2 loaded, appends a run, and blocks readiness (AC7, AC10)', async () => {
     const db = createFakeDb();
-    // A doc that existed before Foundation ran: no apply claims it.
-    const firstSampleType = require('../../../src/reference-data/miabis.min.json').sampleTypes[0];
-    await db.collection('sampleTypes').insertOne({ _id: 'pre-existing', ...firstSampleType });
     const { run: applyRun } = await apply(db);
+    await runLoad({ db, args: { dryRun: false, only: null }, environment: 'test' });
+    const loaded = db.collection('sampleTypes').docs.length;
     const result = await runSeed({ db, args: parseArgs(['--rollback']), ...quiet });
 
-    expect(db.collection('sampleTypes').docs.map((doc) => doc._id)).toEqual(['pre-existing']);
-    expect(db.collection('terminologies').docs).toHaveLength(0);
+    expect(loaded).toBeGreaterThan(0);
+    expect(db.collection('sampleTypes').docs).toHaveLength(loaded);
     expect(result.run).toMatchObject({ executionMode: 'rollback', rollbackResult: 'pass', runStatus: 'rolled_back' });
     expect(result.run.validationSummary.rollbackTargetRunId).toBe(applyRun.foundationDataRunId);
     expect(result.report).toMatchObject({ status: 'blocked', blockers: [`rolled_back:${applyRun.foundationDataRunId}`] });
     // The apply run itself is untouched: evidence is append-only.
     expect(runsOf(db).find((run) => run.foundationDataRunId === applyRun.foundationDataRunId)).toEqual(applyRun);
     expect(exitCodeFor(result)).toBe(0);
+  });
+
+  it('--rollback still removes exactly the ids an older apply checkpointed', async () => {
+    const db = createFakeDb();
+    // An apply from before RF022 AC7, when Foundation upserted references.
+    await db.collection(CANONICAL_COLLECTIONS.foundationDataRuns).insertOne({
+      foundationDataRunId: 'older-apply', environment: 'test', executionMode: 'apply', applyResult: 'pass', startedAt: new Date(0),
+      steps: [{ step: 'miabis-minimal', checkpoint: { insertedIds: { sampleTypes: ['claimed-1', 'claimed-2'] } } }],
+    });
+    for (const _id of ['pre-existing', 'claimed-1', 'claimed-2']) await db.collection('sampleTypes').insertOne({ _id });
+    const result = await runSeed({ db, args: parseArgs(['--rollback']), ...quiet });
+
+    expect(db.collection('sampleTypes').docs.map((doc) => doc._id)).toEqual(['pre-existing']);
+    expect(result.run.validationSummary.rollbackTargetRunId).toBe('older-apply');
+    expect(result.run.steps[0].removed).toEqual({ sampleTypes: 2 });
   });
 
   it('a second --rollback finds nothing left to undo', async () => {

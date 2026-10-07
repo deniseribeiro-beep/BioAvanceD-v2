@@ -253,8 +253,10 @@ describe('terminologySync.service', () => {
 
     // The index shipped by a936d385 was plain-unique with no partial filter,
     // and `terminologies` has a THIRD writer nobody counted: the essential
-    // seed. `scripts/seed-essential-reference-data.js`'s `sprec-minimal` entry
-    // writes SPREC axis rows carrying `code`, never `codigo`. Under a plain
+    // reference load. Its `sprec-minimal` entry (the loader in
+    // `src/foundation/essential-references.js`, run by
+    // `scripts/load-essential-references.js`) writes SPREC axis rows carrying
+    // `code`, never `codigo`. Under a plain
     // unique index Mongo treats the missing field as null, so all four rows
     // share the key { 'SPREC', null } and collide with each other.
     //
@@ -263,17 +265,8 @@ describe('terminologySync.service', () => {
     // about, and then LATCHES anyway -- so the index never exists and never
     // retries. Index-then-seed fails the seed run instead.
     it('does not collide with the SPREC rows the essential seed writes to the same collection', async () => {
-      const sprecSeed = require('../../src/reference-data/sprec.min.json');
-
-      // Exactly the mapping scripts/seed-essential-reference-data.js applies.
-      const seededDocs = sprecSeed.axes.map((axis) => ({
-        sistema: sprecSeed.sistema,
-        fonte: sprecSeed.fonte,
-        axis: axis.axis,
-        code: axis.code,
-        label: axis.label,
-        descricao: axis.descricao,
-      }));
+      // The loader's own output, so a change to its mapping reaches this test.
+      const seededDocs = require('../../src/foundation/essential-references').loadByKey('sprec-minimal').docsByCollection.terminologies;
 
       // The premise: more than one row, none of them carrying `codigo`.
       expect(seededDocs.length).toBeGreaterThan(1);

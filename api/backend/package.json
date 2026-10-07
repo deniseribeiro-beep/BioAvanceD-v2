@@ -44,6 +44,8 @@
     "seed:essential:list": "node scripts/seed-essential-reference-data.js --list",
     "seed:essential:dry-run": "node scripts/seed-essential-reference-data.js --dry-run",
     "seed:essential": "node scripts/seed-essential-reference-data.js",
+    "reference:load:essential": "node scripts/load-essential-references.js",
+    "reference:load:essential:dry-run": "node scripts/load-essential-references.js --dry-run",
     "seed:validate:essential": "node scripts/validate-essential-reference-data.js",
     "dictionary:generate": "node scripts/generate-dictionary-catalog.js",
     "dictionary:validate": "node scripts/validate-dictionary-catalog.js",

@@ -158,6 +158,27 @@ services:
     read_only: true
     cap_drop: ["ALL"]
 
+  essential-references:
+    # RF022 AC7, plano §5: Phase 2 for the essential reference set (MIABIS
+    # and SPREC minimal, RCS-GOV 1.0), which the Foundation job prepares
+    # and does not load. It runs on a ready ReadinessReport and exits 1
+    # without one; the backend waits for it.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.prod
+    init: true
+    restart: "no"
+    command: ["node", "scripts/load-essential-references.js"]
+    env_file:
+      - .env.production
+    environment:
+      NODE_ENV: production
+    depends_on:
+      foundation:
+        condition: service_completed_successfully
+    read_only: true
+    cap_drop: ["ALL"]
+
   backend:
     build:
       context: ./api/backend
@@ -175,6 +196,9 @@ services:
       FOUNDATION_READINESS_REQUIRED: "true"
     depends_on:
       foundation:
+        condition: service_completed_successfully
+      # RF022 AC7: the essential reference set, loaded in Phase 2.
+      essential-references:
         condition: service_completed_successfully
       mongodb:
         condition: service_healthy

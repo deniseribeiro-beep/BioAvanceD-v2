@@ -23,6 +23,7 @@ import {
 } from './helpers/queryNeo4j';
 import {
   countEssentialReferenceDocs,
+  essentialReferenceImportRuns,
   countFoundationDataRuns,
   latestFoundationDataRun,
   latestReadinessReport,
@@ -246,9 +247,25 @@ test.describe('Foundation Data Pipeline bootstrap (RF022) — real backend', () 
     await closeFoundationDb();
   });
 
-  test('reference data is populated automatically, without running the manual seed script', async () => {
-    const count = await countEssentialReferenceDocs();
-    expect(count).toBeGreaterThan(0);
+  // RF022 AC7: Foundation prepares the reference loaders and populates none
+  // of them; the Phase 2 job loads the essential set before the API, one
+  // ReferenceImportRun per entry, each naming the Foundation run that let it.
+  test('the essential reference set is loaded by the Phase 2 job, not by Foundation', async () => {
+    expect(await countEssentialReferenceDocs()).toBeGreaterThan(0);
+
+    const foundationRun = await latestFoundationDataRun();
+    const miabisStep = foundationRun!.steps.find((step: any) => step.step === 'miabis-minimal');
+    expect(miabisStep).toMatchObject({ status: 'prepared', keyless: 0 });
+    expect(miabisStep.checkpoint).toBeUndefined();
+
+    const runs = await essentialReferenceImportRuns();
+    for (const key of ['miabis-minimal', 'sprec-minimal', 'rcs-gov-1.0']) {
+      expect(runs.find((run) => run.datasetCode === key)).toMatchObject({
+        importMode: 'full',
+        runStatus: 'completed',
+        foundationDataRunId: foundationRun!.foundationDataRunId,
+      });
+    }
   });
 
   test('the bootstrap records an idempotent FoundationDataRun, not just ad-hoc upserts', async () => {
@@ -309,6 +326,7 @@ test.describe('Foundation Data Pipeline bootstrap (RF022) — real backend', () 
       'reference-mechanisms': 'pass',
       'storage-constraints': 'pass',
       'zero-operational-data': 'pass',
+      'zero-reference-data': 'pass',
       configuration: 'not_evaluated',
     });
     expect(report!.p0Coverage).toBeGreaterThan(0);

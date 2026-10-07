@@ -391,6 +391,9 @@ services:
       # RF022 AC4: the Foundation job before the API, never after it.
       foundation-bootstrap-test:
         condition: service_completed_successfully
+      # RF022 AC7: the essential reference set, loaded in Phase 2.
+      essential-reference-bootstrap-test:
+        condition: service_completed_successfully
       neo4j-test:
         condition: service_healthy
       redis-test:
@@ -464,8 +467,8 @@ services:
     # ReadinessReport, and exits non-zero when that report is blocked, so
     # backend-app-test's service_completed_successfully dependency below
     # holds the API back; the API also re-checks the report itself
-    # (FOUNDATION_READINESS_REQUIRED). upsertDocs's $setOnInsert makes repeat
-    # runs no-ops. pipeline-continuity.spec.ts asserts what it records.
+    # (FOUNDATION_READINESS_REQUIRED). It populates no reference data
+    # (RF022 AC7). pipeline-continuity.spec.ts asserts what it records.
     build:
       context: ./api/backend
       dockerfile: Dockerfile.dev
@@ -476,6 +479,24 @@ services:
       mongodb-test:
         condition: service_healthy
       mongo-rs-init-test:
+        condition: service_completed_successfully
+    networks: [bioavanced-test]
+
+  essential-reference-bootstrap-test:
+    # RF022 AC7, plano §5: Phase 2 for the essential reference set (MIABIS
+    # and SPREC minimal, RCS-GOV 1.0), which Foundation prepares and does
+    # not load. It runs on a ready ReadinessReport, exits 1 without one, and
+    # records a ReferenceImportRun per entry. backend-app-test waits for it,
+    # since sample registration reads these catalogs. $setOnInsert makes
+    # repeat runs insert nothing.
+    build:
+      context: ./api/backend
+      dockerfile: Dockerfile.dev
+    environment:
+      <<: *test-env
+    command: ["npm", "run", "reference:load:essential"]
+    depends_on:
+      foundation-bootstrap-test:
         condition: service_completed_successfully
     networks: [bioavanced-test]
 
