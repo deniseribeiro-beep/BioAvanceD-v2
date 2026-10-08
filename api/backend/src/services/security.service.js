@@ -159,8 +159,9 @@ async function resolveRetentionGoverned(db) {
 
 // #1260, #1261: keys whose behaviour is fixed, whatever the document says.
 // Nothing ever read them, so a value other than the one below changed
-// nothing. They stay in the document (dict-02 keeps them), show read-only,
-// and a write to them is dropped, exactly as for the retention keys.
+// nothing. They stay in the document (dict-02 keeps them) and show read-only.
+// A write echoing the fixed value is accepted; a write at another value is
+// refused (RF014 AC6, fixedKeyAttempts below).
 //  - 'audit-required': RNF009 AC 1 requires auditing authentication,
 //    configuration and every other critical event, so login attempts and
 //    auditable actions are always recorded. Turning that off is not an option

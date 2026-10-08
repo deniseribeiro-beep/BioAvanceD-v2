@@ -1553,9 +1553,12 @@ test.describe('Security policy management (RF014) — real backend', () => {
   });
 
   // #1260, #1261: the logging switches RNF009 makes mandatory and the privacy
-  // keys whose behaviour is fixed show that behaviour, ignore writes, and
-  // render read-only. logging.level is a real input and round-trips.
-  test('#1260 #1261: the fixed logging and privacy keys ignore writes and render read-only; logging.level saves', async ({
+  // keys whose behaviour is fixed show that behaviour and render read-only.
+  // logging.level is a real input and round-trips with the fixed values
+  // echoed back, as the page sends them. Since RF014 AC6 (CFG-008) a fixed
+  // key sent at another value is refused with 422 naming its invariant, where
+  // it used to be dropped silently, and the configuration in force stays.
+  test('#1260 #1261: the fixed logging and privacy keys refuse other values and render read-only; logging.level saves', async ({
     page,
     request,
   }) => {
@@ -1592,13 +1595,14 @@ test.describe('Security policy management (RF014) — real backend', () => {
     const originalLevel = before.logging.level;
     const newLevel = originalLevel === 'warning' ? 'error' : 'warning';
     try {
+      // The page's echo: the fixed keys at their fixed values, plus a real change.
       const put = await request.put(`${apiBaseURL}/api/security/config`, {
         headers: auth,
         data: {
-          logging: { level: newLevel, logLoginAttempts: false, logAllActions: false },
-          privacy: { anonymizeLogs: false, dataRetentionDays: 40, anonymizeAfterDays: 40 },
-          enhancedSecurity: { logAllActions: false },
-          lgpd: { requireConsent: false, consentExpirationDays: 40, anonymizeOnExport: false },
+          logging: { level: newLevel, logLoginAttempts: true, logAllActions: true },
+          privacy: { anonymizeLogs: true, dataRetentionDays: null, anonymizeAfterDays: null },
+          enhancedSecurity: { logAllActions: true },
+          lgpd: { requireConsent: true, consentExpirationDays: null, anonymizeOnExport: true },
         },
       });
       expect(put.ok(), await put.text()).toBeTruthy();
@@ -1606,6 +1610,28 @@ test.describe('Security policy management (RF014) — real backend', () => {
       expect(after.logging.level).toBe(newLevel);
       for (const [path, [, value]] of Object.entries(fixed)) {
         expect(valueAt(after, path), path).toBe(value);
+      }
+
+      // Every fixed key at another value, with another level change riding
+      // along: the whole request is refused, naming each invariant broken.
+      const refused = await request.put(`${apiBaseURL}/api/security/config`, {
+        headers: auth,
+        data: {
+          logging: { level: originalLevel, logLoginAttempts: false, logAllActions: false },
+          privacy: { anonymizeLogs: false, dataRetentionDays: 40, anonymizeAfterDays: 40 },
+          enhancedSecurity: { logAllActions: false },
+          lgpd: { requireConsent: false, consentExpirationDays: 40, anonymizeOnExport: false },
+        },
+      });
+      expect(refused.status(), await refused.text()).toBe(422);
+      expect((await refused.json()).violatedInvariants).toEqual([
+        'INV-AUDIT-001', 'INV-PRIVACY-001', 'INV-CONSENT-001', 'INV-IDENTITY-001',
+      ]);
+      const inForce = await read();
+      expect(inForce.configurationReleaseId).toBe(after.configurationReleaseId);
+      expect(inForce.logging.level).toBe(newLevel);
+      for (const [path, [, value]] of Object.entries(fixed)) {
+        expect(valueAt(inForce, path), path).toBe(value);
       }
 
       await seedRealAuth(page, admin);
