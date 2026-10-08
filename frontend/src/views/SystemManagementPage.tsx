@@ -859,14 +859,14 @@ function CollectionForm({
           <label className="input-label" htmlFor="collectionGovernanceRegimeSelect">
             {t('system.collections.governanceRegime', 'Regime de governança')}
           </label>
-          {/* RF004 AC2: biobank or biorepository, chosen at creation; RF020 AC4: a change is a governed event, not an edit. */}
+          {/* RF004 AC2: biobank or biorepository. RF020 AC4: once set, a change is a governed event, not an edit; a collection stored without one may receive it. */}
           <select
             id="collectionGovernanceRegimeSelect"
             data-testid="collection-governance-regime-select"
             className="input"
             value={formData.governanceRegime}
             onChange={(e) => setFormData({ ...formData, governanceRegime: e.target.value })}
-            disabled={!!collection}
+            disabled={!!collection?.governanceRegime}
             required
           >
             <option value="">{t('system.collections.governanceRegimePlaceholder', 'Selecione o regime')}</option>

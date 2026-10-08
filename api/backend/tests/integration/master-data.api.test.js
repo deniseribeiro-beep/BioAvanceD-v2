@@ -369,6 +369,22 @@ describe('PUT /api/collections/:id (governanceRegime is immutable)', () => {
     expect(coll.findOneAndUpdate).toHaveBeenCalled();
   });
 
+  it('lets a collection stored before the regime existed receive its first one', async () => {
+    const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue({ collectionId: 'col-legacy', collectionName: 'Antiga' }),
+      findOneAndUpdate: vi.fn().mockResolvedValue({ collectionId: 'col-legacy', governanceRegime: 'biorepository' }),
+    });
+    app.locals.db = createDbMock({ collections: coll, ...rbacCollectionsAdmin });
+
+    const res = await request(app)
+      .put('/api/collections/col-legacy')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ governanceRegime: 'biorepository' });
+
+    expect(res.status).toBe(200);
+    expect(coll.findOneAndUpdate).toHaveBeenCalled();
+  });
+
   it('answers 422 for a collection created with no regime', async () => {
     const coll = createCollectionMock({ insertOne: vi.fn() });
     app.locals.db = createDbMock({ collections: coll, ...rbacCollectionsAdmin });

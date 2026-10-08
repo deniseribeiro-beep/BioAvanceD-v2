@@ -15,9 +15,10 @@ const {
 // shared vocabularies with no organization field in dict-02, so scoping is
 // per mount rather than on by default. Assay passes 'laboratoryId' (dict-02
 // ELM-0293), the field #644 already scopes its files on.
-// `immutableFields`: set at create, never changed by PUT. An update naming
-// one with a different value answers 422 rather than rewriting it (RF020 AC4:
-// a collection's governanceRegime changes only through a governed event).
+// `immutableFields`: once set, never changed by PUT. An update naming one
+// with a different value answers 422 rather than rewriting it (RF020 AC4: a
+// collection's governanceRegime changes only through a governed event). A
+// record stored before the field existed may receive its first value.
 function createMasterDataRouter({ collectionName, idField, model, validateReferences, generateId = randomUUID, scopeField = null, immutableFields = [] }) {
   const router = express.Router();
 
@@ -204,7 +205,9 @@ function createMasterDataRouter({ collectionName, idField, model, validateRefere
         if (!existing) {
           return res.status(404).json({ success: false, error: 'Registro não encontrado' });
         }
-        const refused = changedImmutable.filter((key) => (existing[key] ?? null) !== (body[key] ?? null));
+        const refused = changedImmutable.filter(
+          (key) => existing[key] !== undefined && existing[key] !== null && existing[key] !== body[key]
+        );
         if (refused.length > 0) {
           return res.status(422).json({
             success: false,
