@@ -669,7 +669,17 @@ class ConsentService {
         granularPermissions: permissions
       });
 
+      // RF010 AC1: the same document control the builder's paths record.
+      const documentControlErrors = ConsentTemplateModel.documentControlErrors(normalizedPayload);
+      if (documentControlErrors.length > 0) {
+        const validationError = new Error(documentControlErrors.join(', '));
+        validationError.statusCode = 422;
+        validationError.details = documentControlErrors;
+        throw validationError;
+      }
+
       const document = {
+        ...ConsentTemplateModel.documentControlOf(normalizedPayload, policy.htmlContent),
         ...policy,
         previousPolicyId: previousPolicyId || null,
         versionGroupId,
@@ -955,6 +965,8 @@ class ConsentService {
         signedAt,
         consentTemplateId: consentTemplateId.toString(),
         consentVersion: template.version != null ? String(template.version) : null,
+        // RF010 AC1/ELM-0095: the modality of the term signed, as it offers it.
+        consentModel: template.consentModel || null,
         ...evidence,
         status: 'ACTIVE'
       });

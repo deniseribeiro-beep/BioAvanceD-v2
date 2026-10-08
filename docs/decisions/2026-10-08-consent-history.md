@@ -20,6 +20,11 @@ Requirements: RF010 AC4-AC6, Requisitos v4.0.0; dictionary v2.0.0 ConsentDecisio
 11. **Rules.** `consent_in_force` (the consent read is the newest `ACTIVE` one); `consent_study_scope`: a consent given for one study denies use for another; `consent_partial_revocation`: a consent with permissions revoked by scope gives `review_required`, because a purpose is not computable against the template's untyped permission keys until ConsentPermission is typed (AC3). Deny wins over review, review over permit.
 12. **Effect on the request.** `deny` makes the item incompatible, so the request cannot be approved (RF024 AC6). `review_required` leaves it compatible and carries its reasons in the item's `consentAuthorizationReasons`, for the committee whose decision resolves it. A participant with no consent in force is incompatible as before, and no decision is recorded, since the decision's `consentId` is 1..1.
 
+## The term's document control (RF010 AC1)
+
+13. **Every term records `language` (P1X-0093, BCP 47), `jurisdiction` (V2E-0430), `checksum` (V2E-0432) and `consentModel`,** on all three write paths (`createTemplate`, `updateTemplate`, `createPolicy`). The checksum is the SHA-256 of the exact text, computed by the server and never taken from the caller. Language and jurisdiction default to `pt-BR` and `BR`, this deployment's language and law.
+14. **`consentModel` is ENUM-0043..0046 (`specific`, `broad`, `tiered`, `dynamic`) and is optional on a term,** since the builder does not yet offer it. A Consent records its term's modality (ELM-0095), null when the term names none.
+
 ## Read
 
 `GET /api/e-consent/consents/:id/history` (roles 3 and 4, as revoke) returns the derived state with the events and revocations it derives from.

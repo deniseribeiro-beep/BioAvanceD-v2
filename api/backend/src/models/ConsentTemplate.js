@@ -1,9 +1,49 @@
 /**
  * Modelo de validação e estrutura para ConsentTemplate
  */
+const crypto = require('crypto');
+
+// ENUM-0043..0046: the four consent modalities (Consent.consentModel).
+const CONSENT_MODELS = ['specific', 'broad', 'tiered', 'dynamic'];
+// BCP 47 (P1X-0093), the shape only: a primary language subtag and optional subtags.
+const BCP47 = /^[a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,8})*$/;
+
+/**
+ * RF010 AC1 (dict v2.0.0 P1X-0093, V2E-0430, V2E-0432): the term's language,
+ * jurisdiction and the checksum of the exact text, plus the consent
+ * modality it offers, which each Consent signed on it records (ELM-0095).
+ * Language and jurisdiction default to this deployment's: Portuguese, under
+ * Brazilian law. The checksum is always computed from the text, never taken
+ * from the caller.
+ */
+function documentControlOf(data, text) {
+  return {
+    language: typeof data.language === 'string' && data.language.trim() ? data.language.trim() : 'pt-BR',
+    jurisdiction: typeof data.jurisdiction === 'string' && data.jurisdiction.trim() ? data.jurisdiction.trim() : 'BR',
+    consentModel: data.consentModel ?? null,
+    checksum: `sha256:${crypto.createHash('sha256').update(String(text || ''), 'utf8').digest('hex')}`,
+  };
+}
+
+function documentControlErrors(data) {
+  const errors = [];
+  if (data.language !== undefined && data.language !== null
+    && (typeof data.language !== 'string' || !BCP47.test(data.language.trim()))) {
+    errors.push('language deve ser uma etiqueta BCP 47 (ex.: pt-BR)');
+  }
+  if (data.jurisdiction !== undefined && data.jurisdiction !== null
+    && (typeof data.jurisdiction !== 'string' || data.jurisdiction.trim().length === 0)) {
+    errors.push('jurisdiction deve ser um texto válido');
+  }
+  if (data.consentModel !== undefined && data.consentModel !== null && !CONSENT_MODELS.includes(data.consentModel)) {
+    errors.push(`consentModel deve ser um de: ${CONSENT_MODELS.join(', ')}`);
+  }
+  return errors;
+}
+
 class ConsentTemplateModel {
   static validate(data) {
-    const errors = [];
+    const errors = [...documentControlErrors(data)];
 
     if (!data.title || typeof data.title !== 'string' || data.title.trim().length === 0) {
       errors.push('title é obrigatório e deve ser um texto válido');
@@ -55,7 +95,10 @@ class ConsentTemplateModel {
   }
 
   static create(data) {
+    const content = (data.content || data.htmlContent).trim();
+    const htmlContent = data.htmlContent ? data.htmlContent.trim() : (data.content || '').trim();
     return {
+      ...documentControlOf(data, htmlContent || content),
       title: data.title.trim(),
       content: (data.content || data.htmlContent).trim(),
       htmlContent: data.htmlContent ? data.htmlContent.trim() : (data.content || '').trim(),
@@ -80,3 +123,6 @@ class ConsentTemplateModel {
 }
 
 module.exports = ConsentTemplateModel;
+module.exports.CONSENT_MODELS = CONSENT_MODELS;
+module.exports.documentControlOf = documentControlOf;
+module.exports.documentControlErrors = documentControlErrors;

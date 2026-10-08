@@ -64,6 +64,7 @@ class PatientConsentModel {
       consentTemplateId: data.consentTemplateId,
       // #827: dict-02 ELM-0091 and the evidence trio ELM-0105/0106, P1X-0373
       consentVersion: data.consentVersion || null,
+      consentModel: data.consentModel || null,
       evidenceDocumentUri: data.evidenceDocumentUri || null,
       evidenceHash: data.evidenceHash || null,
       evidenceMimeType: data.evidenceMimeType || null,

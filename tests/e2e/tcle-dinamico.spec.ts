@@ -3,6 +3,7 @@ import { mockLogin } from './helpers/mockAuth';
 import { realLogin } from './helpers/realAuth';
 import { createRealParticipant, closeSeedDb } from './helpers/seedParticipant';
 import { MongoClient, ObjectId } from 'mongodb';
+import { createHash } from 'crypto';
 
 // Real backend only — see specimen-quality-inventory.spec.ts for the same
 // skip rationale. Run via `npm run test:e2e:docker` (or a locally running
@@ -143,6 +144,47 @@ test.describe('RF010 Consent versioned by consentId — real backend, red-first 
     });
 
     expect(response.status()).toBe(422);
+  });
+
+  // RF010 AC1: a term records its language, jurisdiction, consent modality
+  // and the checksum of its exact text, computed by the server. Posted
+  // inactive, so no other spec's active term changes.
+  test('AC1: a published term records language, jurisdiction, modality and its text checksum', async ({ request }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const htmlContent = `<p>Termo RF010 AC1 ${Date.now()}</p>`;
+
+    const created = await request.post(`${apiBaseURL}/api/e-consent/consent-templates`, {
+      headers: auth,
+      data: {
+        title: 'RF010 AC1 e2e term',
+        htmlContent,
+        active: false,
+        language: 'en-US',
+        consentModel: 'broad',
+        checksum: 'sha256:forged',
+        permissions: [{ key: 'storage', label: 'Armazenamento', required: false }],
+      },
+    });
+    expect(created.status()).toBe(201);
+    const term = (await created.json()).data;
+    // GET /consent-templates lists every term on the kept test volume, so
+    // this one does not outlive the test.
+    const client = new MongoClient(mongoUri);
+    await client.connect();
+    try {
+      await client.db(mongoDbName).collection('consent_templates').deleteOne({ _id: new ObjectId(term._id) });
+    } finally {
+      await client.close();
+    }
+    const expected = createHash('sha256').update(htmlContent, 'utf8').digest('hex');
+    expect(term).toMatchObject({ language: 'en-US', jurisdiction: 'BR', consentModel: 'broad', checksum: `sha256:${expected}` });
+
+    const refused = await request.post(`${apiBaseURL}/api/e-consent/consent-templates`, {
+      headers: auth,
+      data: { title: 'RF010 AC1 refused', htmlContent, active: false, consentModel: 'implied' },
+    });
+    expect(refused.status()).toBe(422);
   });
 
   // RF010 AC4-AC6: every manifestation is an appended ConsentDecisionEvent, a
