@@ -925,9 +925,14 @@ describe('Reports API integration', () => {
       });
     });
 
-    it('CONTROL: um usuário externo continua exportando um relatório NÃO-auditoria', async () => {
+    // RF002 AC4: an external user builds only a report type a grant names,
+    // so the controls below hold an active grant for `equipment`.
+    const EQUIPMENT_GRANT = [{ userId: 'user-1', resourceType: 'report', reportID: 9, reportType: 'equipment', grantStatus: 'active', expiresAt: null, revokedAt: null }];
+
+    it('CONTROL: um usuário externo com concessão continua exportando um relatório NÃO-auditoria', async () => {
       const { db } = buildCollectionDb({
         ...rbacFor('external_user', 1),
+        access: EQUIPMENT_GRANT,
         equipment: [{ id: '1', name: 'Freezer A' }],
       });
       const testApp = appWithDb(db);
@@ -936,6 +941,19 @@ describe('Reports API integration', () => {
 
       expect(response.status).toBe(200);
       expect(response.text).toContain('Freezer A');
+    });
+
+    it('RF002 AC4: sem concessão, um usuário externo recebe 403 no export NÃO-auditoria', async () => {
+      const { db } = buildCollectionDb({
+        ...rbacFor('external_user', 1),
+        equipment: [{ id: '1', name: 'Freezer A' }],
+      });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).get('/api/reports/equipment/export');
+
+      expect(response.status).toBe(403);
+      expect(response.text).not.toContain('Freezer A');
     });
 
     it('usuário externo recebe 403 em GET /access_logs/export e nenhuma linha da trilha', async () => {
@@ -984,7 +1002,7 @@ describe('Reports API integration', () => {
     });
 
     it('CONTROL: POST /generate de um relatório NÃO-auditoria continua sendo persistido', async () => {
-      const { db } = buildCollectionDb({ ...rbacFor('external_user', 1), equipment: [{ id: '1', name: 'Freezer A' }] });
+      const { db } = buildCollectionDb({ ...rbacFor('external_user', 1), access: EQUIPMENT_GRANT, equipment: [{ id: '1', name: 'Freezer A' }] });
       const testApp = appWithDb(withReportInsert(db));
 
       const response = await request(testApp).post('/api/reports/generate').send({ reportType: 'equipment' });

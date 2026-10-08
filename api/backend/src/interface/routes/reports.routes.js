@@ -15,6 +15,7 @@ const { anonymizeLogs, generateAnonId } = require('../../utils/userAnonymization
 const specimenPreanalyticsService = require('../../services/specimen-preanalytics.service');
 const rcsAssessmentService = require('../../services/rcs-assessment.service');
 const { resolveUserOrganizationScope, isOrganizationScopeUsable, applyOrganizationScopeFilter, isRecordInOrganizationScope, isAuditReader } = require('../../services/rbac-assignment.service');
+const { resolveReportGrantScope, allowsReport, allowsReportType, reportIdFilter } = require('../../services/report-grant.service');
 
 function normalizeReport(report) {
   return {
@@ -398,6 +399,13 @@ async function buildPreviewData(db, rawType, filters = {}) {
     const auditError = new Error('Apenas perfis Admin ou Auditor podem acessar trilhas de auditoria.');
     auditError.statusCode = 403;
     throw auditError;
+  }
+
+  // RF002 AC4: an external user builds only the report types a grant names.
+  if (!allowsReportType(await resolveReportGrantScope(db, filters.userAccountId), template.code)) {
+    const grantError = new Error('Relatório não autorizado para este usuário.');
+    grantError.statusCode = 403;
+    throw grantError;
   }
 
   if (SCOPED_HANDLER_KEYS.has(handlerKey)) {
@@ -1166,7 +1174,9 @@ router.get('/', authenticate, requirePermission('viewReports'), async (req, res)
     if (!isOrganizationScopeUsable(organizationScope)) {
       return res.status(403).json({ error: 'Sem organização atribuída', message: 'Seu usuário não possui organização atribuída para acessar este recurso' });
     }
-    const query = applyOrganizationScopeFilter({}, organizationScope, 'organizationIds');
+    // RF002 AC4: an external user lists only the reports a grant names.
+    const grantScope = await resolveReportGrantScope(db, req.user?.userID || req.user?._id);
+    const query = applyOrganizationScopeFilter(reportIdFilter(grantScope), organizationScope, 'organizationIds');
 
     const reports = await db.collection('reports').find(query).sort({ generatedAt: -1, createdAt: -1 }).toArray();
     return res.status(200).json(reports.map(normalizeReport));
@@ -1211,6 +1221,11 @@ router.get('/:id', authenticate, requirePermission('viewReports'), async (req, r
     // isn't 'global'.
     if (!isRecordInOrganizationScope(report, organizationScope, 'organizationIds')) {
       return res.status(403).json({ error: 'Acesso negado', message: 'Este relatório pertence a outra organização' });
+    }
+
+    // RF002 AC4: an external user reads only the reports a grant names.
+    if (!allowsReport(await resolveReportGrantScope(db, req.user?.userID || req.user?._id), report)) {
+      return res.status(403).json({ error: 'Acesso negado', message: 'Relatório não autorizado para este usuário.' });
     }
 
     return res.status(200).json(normalizeReport(report));
