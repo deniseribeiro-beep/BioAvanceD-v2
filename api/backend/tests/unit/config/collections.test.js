@@ -71,6 +71,8 @@ const DEFAULTS = {
   labelGenerations: 'labelGenerations',
   accessRequests: 'accessRequests',
   accessPolicies: 'accessPolicies',
+  collectionGovernanceApprovals: 'collectionGovernanceApprovals',
+  collectionGovernanceEvents: 'collectionGovernanceEvents',
   reagentLots: 'reagentLots',
   nonconformances: 'nonconformances',
   legalHolds: 'legalHolds',
@@ -190,6 +192,8 @@ describe('config/collections', () => {
       labelGenerations: 'labelGenerations',
       accessRequests: 'accessRequests',
       accessPolicies: 'accessPolicies',
+      collectionGovernanceApprovals: 'collectionGovernanceApprovals',
+      collectionGovernanceEvents: 'collectionGovernanceEvents',
       // COLL_REAGENT_LOTS/COLL_NONCONFORMANCES/COLL_LEGAL_HOLDS/
       // COLL_DISPOSITION_ACTIONS aren't in ENV_KEYS/read by env.js either,
       // same hardcoded-default reasoning as cids/etc. above.

@@ -213,6 +213,8 @@ module.exports = {
   COLL_LABEL_GENERATIONS: process.env.COLL_LABEL_GENERATIONS || 'labelGenerations',
   COLL_ACCESS_REQUESTS: process.env.COLL_ACCESS_REQUESTS || 'accessRequests',
   COLL_ACCESS_POLICIES: process.env.COLL_ACCESS_POLICIES || 'accessPolicies',
+  COLL_COLLECTION_GOVERNANCE_APPROVALS: process.env.COLL_COLLECTION_GOVERNANCE_APPROVALS || 'collectionGovernanceApprovals',
+  COLL_COLLECTION_GOVERNANCE_EVENTS: process.env.COLL_COLLECTION_GOVERNANCE_EVENTS || 'collectionGovernanceEvents',
   COLL_REAGENT_LOTS: process.env.COLL_REAGENT_LOTS || 'reagentLots',
   COLL_NONCONFORMANCES: process.env.COLL_NONCONFORMANCES || 'nonconformances',
   COLL_LEGAL_HOLDS: process.env.COLL_LEGAL_HOLDS || 'legalHolds',

@@ -50,6 +50,8 @@ const CANONICAL_COLLECTIONS = Object.freeze({
   labelGenerations: env.COLL_LABEL_GENERATIONS || 'labelGenerations',
   accessRequests: env.COLL_ACCESS_REQUESTS || 'accessRequests',
   accessPolicies: env.COLL_ACCESS_POLICIES || 'accessPolicies',
+  collectionGovernanceApprovals: env.COLL_COLLECTION_GOVERNANCE_APPROVALS || 'collectionGovernanceApprovals',
+  collectionGovernanceEvents: env.COLL_COLLECTION_GOVERNANCE_EVENTS || 'collectionGovernanceEvents',
   reagentLots: env.COLL_REAGENT_LOTS || 'reagentLots',
   nonconformances: env.COLL_NONCONFORMANCES || 'nonconformances',
   legalHolds: env.COLL_LEGAL_HOLDS || 'legalHolds',

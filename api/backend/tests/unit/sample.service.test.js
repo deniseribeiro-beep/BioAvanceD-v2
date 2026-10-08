@@ -419,6 +419,61 @@ describe('sample.service', () => {
       ).rejects.toMatchObject({ statusCode: 422 });
     });
 
+    // RF004 AC3/AC4/AC7: a collection admits a specimen only with the one
+    // context its regime names and an approval in force.
+    const GOVERNED = {
+      collectionId: 'COL-1',
+      governanceRegime: 'biorepository',
+      governanceContext: {
+        biorepositoryContextId: 'ctx-1', studyId: 'STU-1', protocolId: 'PRO-1', ethicsApprovalId: 'APR-1',
+        validityPeriod: { start: '2020-01-01', end: null },
+      },
+    };
+    const IN_FORCE = { approvalId: 'APR-1', collectionId: 'COL-1', status: 'active', effectivePeriod: { start: '2020-01-01', end: null } };
+
+    function governedDb(collectionDoc, approvals) {
+      const db = makeDb({ collections: makeCollection('collections'), collectionGovernanceApprovals: makeCollection('collectionGovernanceApprovals') });
+      mockOperationalStorage(db);
+      db.collections.collections.findOne.mockResolvedValue(collectionDoc);
+      db.collections.collectionGovernanceApprovals.find.mockReturnValue(makeCursor(approvals));
+      return db;
+    }
+
+    it('rejects with 422 a collection with a regime and no governance context', async () => {
+      const db = governedDb({ collectionId: 'COL-1', governanceRegime: 'biorepository' }, []);
+
+      await expect(
+        sampleService.createSample(db, validSampleData({ collectionId: 'COL-1' }))
+      ).rejects.toMatchObject({ statusCode: 422, message: expect.stringMatching(/sem contexto de governança/) });
+      expect(db.collections.samples.insertOne).not.toHaveBeenCalled();
+    });
+
+    it('rejects with 422 a governed collection whose approval is suspended', async () => {
+      const db = governedDb(GOVERNED, [{ ...IN_FORCE, status: 'suspended' }]);
+
+      await expect(
+        sampleService.createSample(db, validSampleData({ collectionId: 'COL-1' }))
+      ).rejects.toMatchObject({ statusCode: 422, message: expect.stringMatching(/sem aprovação de governança vigente/) });
+    });
+
+    it('accepts a specimen into a governed collection with its approval in force', async () => {
+      const db = governedDb(GOVERNED, [IN_FORCE]);
+
+      const result = await sampleService.createSample(db, validSampleData({ collectionId: 'COL-1' }));
+
+      expect(result.collectionId).toBe('COL-1');
+    });
+
+    it('rejects with 422 a biorepository specimen naming another study (RF004 AC4)', async () => {
+      const db = governedDb(GOVERNED, [IN_FORCE]);
+      db.collections.studies = makeCollection('studies');
+      db.collections.studies.findOne.mockResolvedValue({ studyId: 'STU-2', studyStatus: 'active' });
+
+      await expect(
+        sampleService.createSample(db, validSampleData({ collectionId: 'COL-1', studyId: 'STU-2' }))
+      ).rejects.toMatchObject({ statusCode: 422, message: expect.stringMatching(/studyId STU-2 difere/) });
+    });
+
     it('rolls back the inserted sample when the ledger append fails', async () => {
       const db = makeDb();
       mockOperationalStorage(db);

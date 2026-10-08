@@ -1,6 +1,6 @@
 const { SampleModel, BLOCKED_SPECIMEN_STATUSES } = require('../models/Sample');
 const SampleMovementModel = require('../models/SampleMovement');
-const { GOVERNANCE_REGIMES } = require('../models/Collection');
+const collectionGovernanceService = require('./collectionGovernance.service');
 const logger = require('../utils/logger');
 const { validateParticipantId } = require('../utils/patientAnonymization');
 const { generateUniqueBarcode } = require('../utils/barcodeGenerator');
@@ -211,10 +211,23 @@ class SampleService {
         if (!collectionDoc) {
           throw createSampleValidationError(`collectionId ${sampleData.collectionId} não encontrado`, 404);
         }
-        // RF004 AC2/AC7: human research material enters only a collection
-        // governed as a biobank or a biorepository.
-        if (!GOVERNANCE_REGIMES.includes(collectionDoc.governanceRegime)) {
-          throw createSampleValidationError(`Coleção ${sampleData.collectionId} sem regime de governança (biobank ou biorepository)`, 422);
+        // RF004 AC2/AC3/AC7, RF021 AC6: human research material enters only
+        // a collection governed as a biobank or a biorepository, with the
+        // one context its regime names and an approval in force.
+        const refusal = await collectionGovernanceService.registrationRefusal(db, collectionDoc);
+        if (refusal) {
+          throw createSampleValidationError(refusal, 422);
+        }
+        // RF004 AC4: a biorepository specimen belongs to the context's study
+        // and protocol; one naming another is refused.
+        const ctx = collectionDoc.governanceContext;
+        if (collectionDoc.governanceRegime === 'biorepository') {
+          for (const field of ['studyId', 'protocolId']) {
+            const given = sampleData[field];
+            if (given !== undefined && given !== null && given !== '' && String(given) !== ctx[field]) {
+              throw createSampleValidationError(`${field} ${given} difere do ${field} do biorrepositório da coleção (${ctx[field]})`, 422);
+            }
+          }
         }
       }
 

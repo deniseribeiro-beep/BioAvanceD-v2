@@ -405,6 +405,9 @@ app.use("/api/datasets", createMasterDataRouter({
   idField: "datasetId",
   model: require("./src/models/Dataset")
 }));
+// RF004 AC3-AC5, RF020 AC2-AC4: approvals, the governance context and the
+// events that set or convert it. Mounted before /api/collections.
+app.use("/api/collections/:collectionId/governance", require("./src/interface/routes/collection-governance.routes"));
 app.use("/api/collections", createMasterDataRouter({
   collectionName: "collections",
   idField: "collectionId",
