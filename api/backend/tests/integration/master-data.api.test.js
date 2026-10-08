@@ -331,6 +331,59 @@ describe('DELETE /api/measurement-units/:id', () => {
   });
 });
 
+// ── RF020 AC4: a collection's governanceRegime is set at creation and never
+// rewritten by an edit; a conversion is a governed event, not a PUT.
+describe('PUT /api/collections/:id (governanceRegime is immutable)', () => {
+  const EXISTING = { collectionId: 'col-1', collectionName: 'Coleção', governanceRegime: 'biobank' };
+
+  it('answers 422 and writes nothing when an edit changes the regime', async () => {
+    const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue(EXISTING),
+      findOneAndUpdate: vi.fn(),
+    });
+    app.locals.db = createDbMock({ collections: coll, ...rbacCollectionsAdmin });
+
+    const res = await request(app)
+      .put('/api/collections/col-1')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ collectionName: 'Renomeada', governanceRegime: 'biorepository' });
+
+    expect(res.status).toBe(422);
+    expect(res.body.message).toMatch(/governanceRegime não pode ser alterado/);
+    expect(coll.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('accepts an edit that repeats the same regime', async () => {
+    const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue(EXISTING),
+      findOneAndUpdate: vi.fn().mockResolvedValue({ ...EXISTING, collectionName: 'Renomeada' }),
+    });
+    app.locals.db = createDbMock({ collections: coll, ...rbacCollectionsAdmin });
+
+    const res = await request(app)
+      .put('/api/collections/col-1')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ collectionName: 'Renomeada', governanceRegime: 'biobank' });
+
+    expect(res.status).toBe(200);
+    expect(coll.findOneAndUpdate).toHaveBeenCalled();
+  });
+
+  it('answers 422 for a collection created with no regime', async () => {
+    const coll = createCollectionMock({ insertOne: vi.fn() });
+    app.locals.db = createDbMock({ collections: coll, ...rbacCollectionsAdmin });
+
+    const res = await request(app)
+      .post('/api/collections')
+      .set('Authorization', `Bearer ${makeToken(4)}`)
+      .send({ collectionId: 'col-2', collectionName: 'Sem regime' });
+
+    expect(res.status).toBe(422);
+    expect(res.body.details.join(' ')).toMatch(/governanceRegime/);
+    expect(coll.insertOne).not.toHaveBeenCalled();
+  });
+});
+
 // ── /api/sample-types ─────────────────────────────────────
 // Exercises the same factory code with a different collection mount
 describe('GET /api/sample-types', () => {

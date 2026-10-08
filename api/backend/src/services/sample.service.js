@@ -1,5 +1,6 @@
 const { SampleModel, BLOCKED_SPECIMEN_STATUSES } = require('../models/Sample');
 const SampleMovementModel = require('../models/SampleMovement');
+const { GOVERNANCE_REGIMES } = require('../models/Collection');
 const logger = require('../utils/logger');
 const { validateParticipantId } = require('../utils/patientAnonymization');
 const { generateUniqueBarcode } = require('../utils/barcodeGenerator');
@@ -209,6 +210,11 @@ class SampleService {
         const collectionDoc = await db.collection('collections').findOne({ collectionId: String(sampleData.collectionId) });
         if (!collectionDoc) {
           throw createSampleValidationError(`collectionId ${sampleData.collectionId} não encontrado`, 404);
+        }
+        // RF004 AC2/AC7: human research material enters only a collection
+        // governed as a biobank or a biorepository.
+        if (!GOVERNANCE_REGIMES.includes(collectionDoc.governanceRegime)) {
+          throw createSampleValidationError(`Coleção ${sampleData.collectionId} sem regime de governança (biobank ou biorepository)`, 422);
         }
       }
 

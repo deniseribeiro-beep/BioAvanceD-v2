@@ -177,6 +177,25 @@ describe('buildCollectionSubmissionPayload', () => {
     expect(payload.sampleCount).toBe(1200);
   });
 
+  // RF004 AC2, V2E-0427: the regime chosen in the form reaches the payload;
+  // none chosen sends null, which the backend refuses.
+  it('carries the chosen governanceRegime, and null when none was chosen', () => {
+    const state = buildCollectionFormState(null);
+    expect(state.governanceRegime).toBe('');
+    state.collectionId = 'col-2';
+    state.collectionName = 'Biobanco Regional';
+
+    expect(buildCollectionSubmissionPayload(state).governanceRegime).toBeNull();
+
+    state.governanceRegime = 'biobank';
+    expect(buildCollectionSubmissionPayload(state).governanceRegime).toBe('biobank');
+  });
+
+  it('keeps an existing collection\'s governanceRegime in the edit state', () => {
+    const state = buildCollectionFormState(makeCollection({ governanceRegime: 'biorepository' }));
+    expect(state.governanceRegime).toBe('biorepository');
+  });
+
   it('#607: normalizes empty exclusionCriteria to null', () => {
     const state = buildCollectionFormState(null);
     state.collectionId = 'col-2';

@@ -560,6 +560,8 @@ export interface Collection {
   collectionId: string;
   collectionName: string;
   collectionStatus?: string;
+  // V2E-0427, RF004 AC2: set at creation, never edited.
+  governanceRegime?: 'biobank' | 'biorepository' | null;
   sampleTypes?: Array<Record<string, unknown>>;
   datasetTypes?: Array<Record<string, unknown>>;
   diseaseScope?: Array<Record<string, unknown>>;

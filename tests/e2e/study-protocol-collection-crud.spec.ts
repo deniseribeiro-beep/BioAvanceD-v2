@@ -21,7 +21,8 @@ const entities = [
   { path: 'studies', singular: 'study', idField: 'studyId', nameField: 'studyTitle', extraFields: { ethicsApprovalId: ['CAAE-e2e-crud'] } },
   // effectivePeriod (#588, RF021 AC#3/ELM-0072) is required on Protocol.
   { path: 'protocols', singular: 'protocol', idField: 'protocolId', nameField: 'protocolName', extraFields: { effectivePeriod: { start: '2026-01-01' } } },
-  { path: 'collections', singular: 'collection', idField: 'collectionId', nameField: 'collectionName', extraFields: {} },
+  // governanceRegime (RF004 AC2, V2E-0427) is required on Collection.
+  { path: 'collections', singular: 'collection', idField: 'collectionId', nameField: 'collectionName', extraFields: { governanceRegime: 'biobank' } },
 ];
 
 for (const { path, singular, idField, nameField, extraFields } of entities) {

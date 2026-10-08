@@ -408,7 +408,9 @@ app.use("/api/datasets", createMasterDataRouter({
 app.use("/api/collections", createMasterDataRouter({
   collectionName: "collections",
   idField: "collectionId",
-  model: require("./src/models/Collection")
+  model: require("./src/models/Collection"),
+  // RF020 AC4: a regime conversion needs an event and an approval, not an edit.
+  immutableFields: ["governanceRegime"]
 }));
 app.use("/api/workflow-runs/:workflowRunId/files", require("./src/interface/routes/workflow-run-file-link.routes"));
 app.use("/api/workflow-runs", createMasterDataRouter({

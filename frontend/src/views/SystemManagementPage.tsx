@@ -607,6 +607,7 @@ export interface CollectionFormState {
   collectionId: string;
   collectionName: string;
   collectionStatus: string;
+  governanceRegime: string;
   exclusionCriteria: string;
   participantCount: string;
   sampleCount: string;
@@ -628,6 +629,7 @@ export function buildCollectionFormState(collection: Collection | null): Collect
     collectionId: collection?.collectionId || '',
     collectionName: collection?.collectionName || '',
     collectionStatus: collection?.collectionStatus || 'active',
+    governanceRegime: collection?.governanceRegime || '',
     exclusionCriteria: collection?.exclusionCriteria || '',
     participantCount: collection?.participantCount != null ? String(collection.participantCount) : '',
     sampleCount: collection?.sampleCount != null ? String(collection.sampleCount) : '',
@@ -661,6 +663,7 @@ export function buildCollectionSubmissionPayload(formData: CollectionFormState):
     collectionId: formData.collectionId.trim(),
     collectionName: formData.collectionName.trim(),
     collectionStatus: formData.collectionStatus || 'active',
+    governanceRegime: (formData.governanceRegime || null) as Collection['governanceRegime'],
     exclusionCriteria: formData.exclusionCriteria.trim() || null,
     participantCount: formData.participantCount.trim() === '' ? null : Number(formData.participantCount),
     sampleCount: formData.sampleCount.trim() === '' ? null : Number(formData.sampleCount),
@@ -850,6 +853,25 @@ function CollectionForm({
           >
             <option value="active">{t('system.collections.statusActive', 'Ativa')}</option>
             <option value="inactive">{t('system.collections.statusInactive', 'Inativa')}</option>
+          </select>
+        </div>
+        <div className="form-grid-full">
+          <label className="input-label" htmlFor="collectionGovernanceRegimeSelect">
+            {t('system.collections.governanceRegime', 'Regime de governança')}
+          </label>
+          {/* RF004 AC2: biobank or biorepository, chosen at creation; RF020 AC4: a change is a governed event, not an edit. */}
+          <select
+            id="collectionGovernanceRegimeSelect"
+            data-testid="collection-governance-regime-select"
+            className="input"
+            value={formData.governanceRegime}
+            onChange={(e) => setFormData({ ...formData, governanceRegime: e.target.value })}
+            disabled={!!collection}
+            required
+          >
+            <option value="">{t('system.collections.governanceRegimePlaceholder', 'Selecione o regime')}</option>
+            <option value="biobank">{t('system.collections.regimeBiobank', 'Biobanco')}</option>
+            <option value="biorepository">{t('system.collections.regimeBiorepository', 'Biorrepositório')}</option>
           </select>
         </div>
         <Input

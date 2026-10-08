@@ -15,7 +15,10 @@ const {
 // shared vocabularies with no organization field in dict-02, so scoping is
 // per mount rather than on by default. Assay passes 'laboratoryId' (dict-02
 // ELM-0293), the field #644 already scopes its files on.
-function createMasterDataRouter({ collectionName, idField, model, validateReferences, generateId = randomUUID, scopeField = null }) {
+// `immutableFields`: set at create, never changed by PUT. An update naming
+// one with a different value answers 422 rather than rewriting it (RF020 AC4:
+// a collection's governanceRegime changes only through a governed event).
+function createMasterDataRouter({ collectionName, idField, model, validateReferences, generateId = randomUUID, scopeField = null, immutableFields = [] }) {
   const router = express.Router();
 
   router.use(authenticate);
@@ -193,6 +196,22 @@ function createMasterDataRouter({ collectionName, idField, model, validateRefere
         if (!existing) return undefined;
         // #1182: the check above is the SOURCE; this is the destination.
         assertOrganizationFieldNotReparented(req.organizationScope, existing[scopeField], body[scopeField], scopeField);
+      }
+
+      const changedImmutable = immutableFields.filter((key) => Object.prototype.hasOwnProperty.call(body, key));
+      if (changedImmutable.length > 0) {
+        const existing = await db.collection(collectionName).findOne(query);
+        if (!existing) {
+          return res.status(404).json({ success: false, error: 'Registro não encontrado' });
+        }
+        const refused = changedImmutable.filter((key) => (existing[key] ?? null) !== (body[key] ?? null));
+        if (refused.length > 0) {
+          return res.status(422).json({
+            success: false,
+            error: 'Campo imutável',
+            message: `${refused.join(', ')} não pode ser alterado por edição`,
+          });
+        }
       }
 
       const update = { updatedAt: new Date() };

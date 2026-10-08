@@ -95,6 +95,7 @@ test.describe('Human-paced e2e showcase reel — Wave 2 (#331)', () => {
       await page.getByTestId('collection-name-input').fill(collectionName);
       await beat(page, SMALL);
       await page.getByTestId('collection-sample-types-input').fill('plasma; serum');
+      await page.getByTestId('collection-governance-regime-select').selectOption('biorepository');
       await beat(page, SMALL);
       await page.getByTestId('collection-form-submit').click();
       await expect(page.getByTestId('collection-form-submit')).not.toBeVisible();

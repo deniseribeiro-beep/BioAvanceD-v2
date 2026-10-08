@@ -420,8 +420,18 @@ export async function seedCollectionEntity(collectionId: string): Promise<void> 
     collectionId,
     collectionName: `RF004 e2e collection ${collectionId}`,
     collectionStatus: 'active',
+    governanceRegime: 'biorepository',
     createdAt: new Date(),
   });
+}
+
+/**
+ * A collection stored before RF004 AC2 required a regime: the same document
+ * with governanceRegime removed, as a legacy row would read.
+ */
+export async function clearCollectionRegime(collectionId: string): Promise<void> {
+  const db = await getDb();
+  await db.collection('collections').updateOne({ collectionId }, { $unset: { governanceRegime: '' } });
 }
 
 export async function seedActiveConsent(

@@ -107,6 +107,7 @@ test.describe('Collections CRUD through the real UI (#607, #608)', () => {
       await page.getByTestId('collection-id-input').fill(collectionId);
       await page.getByTestId('collection-name-input').fill(collectionName);
       await page.getByTestId('collection-sample-types-input').fill('plasma; serum');
+      await page.getByTestId('collection-governance-regime-select').selectOption('biorepository');
 
       await page.getByTestId('collection-form-submit').click();
       await expect(page.getByTestId('collection-form-submit')).not.toBeVisible();

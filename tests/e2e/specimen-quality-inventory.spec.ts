@@ -10,6 +10,7 @@ import {
   seedStudy,
   seedProtocol,
   seedCollectionEntity,
+  clearCollectionRegime,
   seedQuarantineAction,
   cleanupQuarantineActions,
   closeSeedDb,
@@ -420,6 +421,33 @@ test.describe('Specimen registration (RF004 AC#3) — study/protocol/collection 
     expect(persisted.studyId).toBe(studyId);
     expect(persisted.protocolId).toBe(protocolId);
     expect(persisted.collectionId).toBe(collectionId);
+  });
+
+  // RF004 AC2/AC7: a collection with no governance regime takes no specimen.
+  test('rejects a create into a collection that carries no governance regime', async ({ request }) => {
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const seededStorageBox = await seedStorageBoxLocation();
+    seededStorageBoxes.push(seededStorageBox);
+    const { boxId, positionCode } = seededStorageBox;
+
+    const collectionId = `collection-ungoverned-${Date.now()}`;
+    await seedCollectionEntity(collectionId);
+    await clearCollectionRegime(collectionId);
+
+    const create = await request.post(`${apiBaseURL}/api/samples`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        participantId: participant.participantId,
+        ...validSampleFields(),
+        boxId,
+        positionCode,
+        collectionId,
+      },
+    });
+
+    expect(create.status(), await create.text()).toBe(422);
+    expect(JSON.stringify(await create.json())).toMatch(/sem regime de governança/);
   });
 });
 

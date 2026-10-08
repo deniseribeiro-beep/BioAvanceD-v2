@@ -78,15 +78,23 @@ describe('CollectionModel.validate', () => {
       storageTemperatureCategories: [{ code: '-80C' }],
       participantCount: 250,
       sampleCount: 1200,
-      relatedPublications: [{ doi: '10.1000/xyz' }]
+      relatedPublications: [{ doi: '10.1000/xyz' }],
+      governanceRegime: 'biobank'
     });
     expect(result.isValid).toBe(true);
     expect(result.errors).toEqual([]);
   });
 
-  it('accepts a minimal payload (Fase 1 identity fields only)', () => {
-    const result = CollectionModel.validate({ collectionId: 'col-1', collectionName: 'Coleção mínima' });
+  it('accepts a minimal payload (identity fields and the governance regime)', () => {
+    const result = CollectionModel.validate({ collectionId: 'col-1', collectionName: 'Coleção mínima', governanceRegime: 'biorepository' });
     expect(result.isValid).toBe(true);
+  });
+
+  // RF004 AC2, V2E-0427: biobank or biorepository, nothing else, never absent.
+  it.each([undefined, null, '', 'hospital'])('rejects a governanceRegime of %s', (governanceRegime) => {
+    const result = CollectionModel.validate({ collectionId: 'col-1', collectionName: 'Coleção', governanceRegime });
+    expect(result.isValid).toBe(false);
+    expect(result.errors).toContain('governanceRegime é obrigatório e deve ser um de: biobank, biorepository');
   });
 });
 
@@ -97,6 +105,7 @@ describe('CollectionModel.create', () => {
     expect(doc.collectionId).toBe('col-1');
     expect(doc.collectionName).toBe('Coleção mínima');
     expect(doc.collectionStatus).toBe('active');
+    expect(doc.governanceRegime).toBeNull();
     expect(doc.exclusionCriteria).toBeNull();
     expect(doc.participantCount).toBeNull();
     expect(doc.sampleCount).toBeNull();
