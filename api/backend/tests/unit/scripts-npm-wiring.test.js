@@ -25,6 +25,7 @@ const WIRED = [
   ['migrate:user-anon-ids', 'migrateUserAnonIds.js'],
   ['migrate:user-organizations', 'migrateUserOrganizations.js'],
   ['migrate:consent-token-hash', 'migrateConsentTokenHash.js'],
+  ['encryption:rewrite', 'rewriteEncryptedFields.js'],
   ['seed:disease-validation-rules', 'seedDiseaseValidationRules.js'],
 
   // CLI wrappers over tested services.

@@ -40,6 +40,7 @@
     "mfa:migrate-stale-locks": "node src/scripts/migrateClearStaleMfaLocks.js",
     "migrate:security-config-keys": "node src/scripts/migrateSecurityConfigCanonicalKeys.js",
     "migrate:consent-token-hash": "node src/scripts/migrateConsentTokenHash.js",
+    "encryption:rewrite": "node src/scripts/rewriteEncryptedFields.js",
     "iot:simulate": "node scripts/iot-simulator.js",
     "seed:essential:list": "node scripts/seed-essential-reference-data.js --list",
     "seed:essential:dry-run": "node scripts/seed-essential-reference-data.js --dry-run",

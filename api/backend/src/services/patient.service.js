@@ -5,6 +5,7 @@ const OrganizationModel = require('../models/Organization');
 const logger = require('../utils/logger');
 const { generateUniqueParticipantId, sanitizePatientForLogs } = require('../utils/patientAnonymization');
 const { encryptValue, decryptValue, assertFieldEncryptionConfigured } = require('../utils/fieldEncryption');
+const { fieldMapFor } = require('../utils/encryptedFieldRegistry');
 const notificationService = require('./notification.service');
 const { getCollection } = require('../utils/collectionResolver');
 const {
@@ -59,10 +60,10 @@ function consentManifestationRejection(message) {
  * RF005 - Cadastro de Paciente com Anonimização LGPD
  */
 class PatientService {
+  // #1103: the map lives in utils/encryptedFieldRegistry.js, the one
+  // inventory of encrypted fields, which the key-rotation rewrite reads too.
   getEncryptedFieldMap() {
-    return {
-      representativeIdentityDocument: 'representativeIdentityDocumentEncrypted'
-    };
+    return fieldMapFor('services/patient.service.js');
   }
 
   encryptSensitivePatientFields(patient = {}) {

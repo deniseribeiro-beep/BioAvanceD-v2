@@ -1,5 +1,6 @@
 const { getCollection } = require('../utils/collectionResolver');
 const { encryptValue, decryptValue, hmacBlindIndex, hmacBlindIndexCandidates } = require('../utils/fieldEncryption');
+const { fieldMapFor } = require('../utils/encryptedFieldRegistry');
 const logger = require('../utils/logger');
 
 // RF005/RNF007 (#560): read access to ParticipantIdentity, the segregated
@@ -26,19 +27,13 @@ class ParticipantIdentityService {
   // #1166: plus the participant's contact, dict-02 P1X-0352/P1X-0353
   // (ParticipantIdentity.email/phone, "MongoDB protegido"). This is its only
   // home since slice 4, and it is ciphertext-only (getCiphertextOnlyFields).
+  //
+  // #1168: plus the legal representative, dict-02 P1X-0357..0360.
+  //
+  // #1103: the map lives in utils/encryptedFieldRegistry.js, the one
+  // inventory of encrypted fields, which the key-rotation rewrite reads too.
   getEncryptedFieldMap() {
-    return {
-      patientName: 'patientNameEncrypted',
-      birthDate: 'birthDateEncrypted',
-      identityDocument: 'identityDocumentEncrypted',
-      email: 'emailEncrypted',
-      phone: 'phoneEncrypted',
-      // #1168: the legal representative, dict-02 P1X-0357..0360.
-      representativeName: 'representativeNameEncrypted',
-      representativeEmail: 'representativeEmailEncrypted',
-      representativeIdentityDocument: 'representativeIdentityDocumentEncrypted',
-      representativePhone: 'representativePhoneEncrypted'
-    };
+    return fieldMapFor('services/participantIdentity.service.js');
   }
 
   encryptIdentityFields(fields = {}) {
