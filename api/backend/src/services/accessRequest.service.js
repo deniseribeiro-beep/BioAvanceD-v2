@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const { ObjectId } = require('mongodb');
 const AccessRequestModel = require('../models/AccessRequest');
 const { getCollection } = require('../utils/collectionResolver');
@@ -37,6 +38,40 @@ function evaluateAccessState(accessRequest, now = new Date()) {
   return { allowed: true, reason: status };
 }
 
+function unprocessable(message) {
+  const error = new Error(message);
+  error.statusCode = 422;
+  return error;
+}
+
+/**
+ * RF024 AC4: the version of the rule set a decision applies. No AccessPolicy
+ * entity exists yet (#663), so the policy in force is evaluateCompatibility's
+ * own rules: active consent per participant-linked item, an active DUO
+ * concept when a duoCode is given, and an active Study. Bump it whenever
+ * those rules change, so a stored decision names the rules it stood on.
+ */
+const ACCESS_COMPATIBILITY_POLICY_VERSION = 'rf024-compatibility/1.0.0';
+
+/**
+ * RF024 AC4, CFG-004 ("Toda execução ou decisão registra
+ * configurationReleaseId"): the ConfigurationRelease the stored configuration
+ * names at the moment of the decision, or null before any release exists.
+ */
+async function activeConfigurationReleaseId(db) {
+  const config = await db.collection('security_config').findOne({ _id: 'main' });
+  return config?.configurationReleaseId || null;
+}
+
+async function decisionContext(db) {
+  return {
+    decisionId: crypto.randomUUID(),
+    decidedAt: new Date(),
+    policyVersion: ACCESS_COMPATIBILITY_POLICY_VERSION,
+    configurationReleaseId: await activeConfigurationReleaseId(db),
+  };
+}
+
 class AccessRequestService {
   async createRequest(db, payload) {
     const validation = AccessRequestModel.validate(payload);
@@ -50,8 +85,23 @@ class AccessRequestService {
       throw validationError;
     }
 
+    // RF024 AC1: the organization and the protocol are references, so each
+    // must resolve; the protocol must be approved (RF021 AC5's gate, as for
+    // a Sample), and its version in force is recorded with the request.
+    const organizations = await getCollection(db, 'organizations');
+    if (!(await organizations.findOne({ organizationId: payload.organizationId }))) {
+      throw unprocessable(`organizationId ${payload.organizationId} não encontrado`);
+    }
+    const protocol = await db.collection('protocols').findOne({ protocolId: payload.protocolId });
+    if (!protocol) {
+      throw unprocessable(`protocolId ${payload.protocolId} não encontrado`);
+    }
+    if (protocol.approvalStatus !== 'approved') {
+      throw unprocessable(`Protocolo ${payload.protocolId} não está aprovado (status: ${protocol.approvalStatus})`);
+    }
+
     const collection = await getCollection(db, 'accessRequests');
-    const document = AccessRequestModel.create(payload);
+    const document = AccessRequestModel.create({ ...payload, protocolVersion: protocol.protocolVersion ?? null });
     await collection.insertOne(document);
     return document;
   }
@@ -182,10 +232,10 @@ class AccessRequestService {
     }
 
     const committeeDecision = {
+      ...(await decisionContext(db)),
       status: payload.status,
       justification: payload.justification.trim(),
       decidedBy: decidedBy || null,
-      decidedAt: new Date(),
     };
 
     const approvalPeriod = ['approved', 'conditioned'].includes(payload.status)
@@ -218,7 +268,15 @@ class AccessRequestService {
 
     await collection.updateOne(
       { accessRequestId },
-      { $set: { distributionStatus: 'released', distributedAt: new Date(), updatedAt: new Date() } }
+      {
+        $set: {
+          distributionStatus: 'released',
+          distributedAt: new Date(),
+          // RF024 AC7: the distribution names the decision that allowed it.
+          distributionDecisionId: accessRequest.committeeDecision.decisionId || null,
+          updatedAt: new Date(),
+        },
+      }
     );
 
     return collection.findOne({ accessRequestId });
@@ -241,12 +299,14 @@ class AccessRequestService {
       throw new Error('Somente uma solicitação aprovada ou condicionada pode ser revogada');
     }
 
+    // A revocation is a decision of its own: a new decisionId, and the
+    // policyVersion and configurationReleaseId in force now.
     const committeeDecision = {
       ...accessRequest.committeeDecision,
+      ...(await decisionContext(db)),
       status: 'revoked',
       justification: String(justification).trim(),
       decidedBy: decidedBy || accessRequest.committeeDecision.decidedBy,
-      decidedAt: new Date(),
     };
 
     await collection.updateOne(
@@ -279,3 +339,4 @@ const accessRequestService = new AccessRequestService();
 module.exports = accessRequestService;
 module.exports.evaluateAccessState = evaluateAccessState;
 module.exports.DUO_SYSTEM_URI = DUO_SYSTEM_URI;
+module.exports.ACCESS_COMPATIBILITY_POLICY_VERSION = ACCESS_COMPATIBILITY_POLICY_VERSION;

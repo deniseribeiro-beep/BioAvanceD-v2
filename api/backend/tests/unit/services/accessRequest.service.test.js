@@ -51,7 +51,16 @@ function createFakeCollection(seedDocs = []) {
   };
 }
 
-function createFakeDb({ samples = [], consents = [], terminologyConcepts = [], studies = [], sampleFiles = [] } = {}) {
+function createFakeDb({
+  samples = [],
+  consents = [],
+  terminologyConcepts = [],
+  studies = [],
+  sampleFiles = [],
+  organizations = [{ organizationId: 'org-1' }],
+  protocols = [{ protocolId: 'protocol-1', protocolVersion: '2.1', approvalStatus: 'approved' }],
+  securityConfig = [{ _id: 'main', configurationReleaseId: 'release-1' }],
+} = {}) {
   const collections = {
     accessRequests: createFakeCollection(),
     samples: createFakeCollection(samples),
@@ -59,6 +68,9 @@ function createFakeDb({ samples = [], consents = [], terminologyConcepts = [], s
     terminologyConcepts: createFakeCollection(terminologyConcepts),
     studies: createFakeCollection(studies),
     sample_files: createFakeCollection(sampleFiles),
+    organizations: createFakeCollection(organizations),
+    protocols: createFakeCollection(protocols),
+    security_config: createFakeCollection(securityConfig),
   };
   return {
     collection(name) {
@@ -71,7 +83,9 @@ function createFakeDb({ samples = [], consents = [], terminologyConcepts = [], s
 function baseRequestPayload(overrides = {}) {
   return {
     requesterId: 'researcher-1',
+    organizationId: 'org-1',
     studyId: 'study-1',
+    protocolId: 'protocol-1',
     requestedPurpose: 'Estudo de biomarcadores oncológicos',
     requestedItems: [{ itemType: 'specimen', itemId: 'SPEC-1' }],
     ...overrides,
@@ -86,8 +100,17 @@ describe('accessRequest.service', () => {
       const created = await accessRequestService.createRequest(db, baseRequestPayload());
 
       expect(created.accessRequestId).toBeTruthy();
-      expect(created.committeeDecision).toEqual({ status: 'pending', justification: null, decidedBy: null, decidedAt: null });
+      expect(created.committeeDecision).toEqual({
+        decisionId: null,
+        status: 'pending',
+        justification: null,
+        decidedBy: null,
+        decidedAt: null,
+        policyVersion: null,
+        configurationReleaseId: null,
+      });
       expect(created.distributionStatus).toBe('pending');
+      expect(created.distributionDecisionId).toBeNull();
       expect(created.overallCompatible).toBeNull();
     });
 
@@ -97,6 +120,39 @@ describe('accessRequest.service', () => {
       await expect(
         accessRequestService.createRequest(db, baseRequestPayload({ requestedItems: [] }))
       ).rejects.toThrow(/requestedItems/);
+    });
+
+    // RF024 AC1: requester, organization, study, protocol, purpose and items.
+    it('records the organization, the protocol and the protocol version in force', async () => {
+      const db = createFakeDb();
+
+      const created = await accessRequestService.createRequest(db, baseRequestPayload({ protocolVersion: 'from-body' }));
+
+      expect(created).toMatchObject({ organizationId: 'org-1', protocolId: 'protocol-1', protocolVersion: '2.1' });
+      expect((await accessRequestService.getById(db, created.accessRequestId)).protocolVersion).toBe('2.1');
+    });
+
+    it.each([
+      ['organizationId', { organizationId: undefined }, /organizationId é obrigatório/],
+      ['protocolId', { protocolId: undefined }, /protocolId é obrigatório/],
+      ['an unknown organization', { organizationId: 'org-x' }, /organizationId org-x não encontrado/],
+      ['an unknown protocol', { protocolId: 'protocol-x' }, /protocolId protocol-x não encontrado/],
+    ])('answers 422 for a request missing or naming %s', async (_label, overrides, message) => {
+      const db = createFakeDb();
+
+      const error = await accessRequestService.createRequest(db, baseRequestPayload(overrides)).catch((e) => e);
+
+      expect(error.message).toMatch(message);
+      expect(error.statusCode).toBe(422);
+    });
+
+    it('answers 422 for a protocol that is not approved', async () => {
+      const db = createFakeDb({ protocols: [{ protocolId: 'protocol-1', protocolVersion: '1', approvalStatus: 'draft' }] });
+
+      const error = await accessRequestService.createRequest(db, baseRequestPayload()).catch((e) => e);
+
+      expect(error.message).toMatch(/não está aprovado/);
+      expect(error.statusCode).toBe(422);
     });
   });
 
@@ -325,6 +381,35 @@ describe('accessRequest.service', () => {
       expect(decided.approvalPeriod.end.toISOString()).toContain('2026-12-31');
     });
 
+    // RF024 AC4: policyVersion, configurationReleaseId and the instant.
+    it('records the decision id, the policy version, the configuration release and the instant', async () => {
+      const { db, accessRequestId } = await seedEvaluated();
+
+      const decided = await accessRequestService.recordDecision(db, accessRequestId, { status: 'rejected', justification: 'não' });
+
+      expect(decided.committeeDecision).toMatchObject({
+        policyVersion: accessRequestService.ACCESS_COMPATIBILITY_POLICY_VERSION,
+        configurationReleaseId: 'release-1',
+      });
+      expect(decided.committeeDecision.decisionId).toMatch(/^[0-9a-f-]{36}$/);
+      expect(decided.committeeDecision.decidedAt).toBeInstanceOf(Date);
+    });
+
+    it('records a null configurationReleaseId before any configuration release exists', async () => {
+      const db = createFakeDb({
+        samples: [{ specimenId: 'SPEC-1', participantId: 'participant-1' }],
+        consents: [{ participantId: 'participant-1', status: 'ACTIVE' }],
+        studies: [{ studyId: 'study-1', studyStatus: 'active' }],
+        securityConfig: [],
+      });
+      const created = await accessRequestService.createRequest(db, baseRequestPayload());
+      await accessRequestService.evaluateCompatibility(db, created.accessRequestId);
+
+      const decided = await accessRequestService.recordDecision(db, created.accessRequestId, { status: 'approved', justification: 'ok' });
+
+      expect(decided.committeeDecision.configurationReleaseId).toBeNull();
+    });
+
     it('leaves approvalPeriod null for a rejection', async () => {
       const { db, accessRequestId } = await seedEvaluated();
 
@@ -395,6 +480,9 @@ describe('accessRequest.service', () => {
 
       expect(distributed.distributionStatus).toBe('released');
       expect(distributed.distributedAt).toBeTruthy();
+      // RF024 AC7: correlated to the approval that allowed it.
+      expect(distributed.distributionDecisionId).toBe(distributed.committeeDecision.decisionId);
+      expect(distributed.distributionDecisionId).toBeTruthy();
     });
 
     it('refuses to link distribution once the approval period has expired', async () => {
@@ -412,9 +500,14 @@ describe('accessRequest.service', () => {
 
     it('revokes a previously approved request and blocks further distribution', async () => {
       const { db, accessRequestId } = await seedApproved();
+      const approvalDecisionId = (await accessRequestService.getById(db, accessRequestId)).committeeDecision.decisionId;
 
       const revoked = await accessRequestService.revokeAccess(db, accessRequestId, 'Consentimento retirado pelo participante', 'coordinator-1');
       expect(revoked.committeeDecision.status).toBe('revoked');
+      // A revocation is its own decision (RF024 AC4).
+      expect(revoked.committeeDecision.decisionId).toBeTruthy();
+      expect(revoked.committeeDecision.decisionId).not.toBe(approvalDecisionId);
+      expect(revoked.committeeDecision.configurationReleaseId).toBe('release-1');
 
       await expect(accessRequestService.markDistributed(db, accessRequestId)).rejects.toThrow(/revoked/);
     });

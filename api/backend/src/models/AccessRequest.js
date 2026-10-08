@@ -22,6 +22,18 @@ class AccessRequestModel {
       errors.push('studyId é obrigatório e deve ser string');
     }
 
+    // RF024 AC1: "Registrar solicitante, organização, estudo, protocolo, ...".
+    // ELM-0389 folds the organization into requesterId's reference; the
+    // requester here is a free identifier, so the organization is its own
+    // field (the name UserAccount and Actor use, P1X-0187, P1X-0131).
+    if (!data.organizationId || typeof data.organizationId !== 'string') {
+      errors.push('organizationId é obrigatório e deve ser string');
+    }
+
+    if (!data.protocolId || typeof data.protocolId !== 'string') {
+      errors.push('protocolId é obrigatório e deve ser string');
+    }
+
     if (!data.requestedPurpose || typeof data.requestedPurpose !== 'string') {
       errors.push('requestedPurpose é obrigatório e deve ser string');
     }
@@ -54,7 +66,12 @@ class AccessRequestModel {
     return {
       accessRequestId: data.accessRequestId || crypto.randomUUID(),
       requesterId: data.requesterId,
+      organizationId: data.organizationId,
       studyId: data.studyId,
+      protocolId: data.protocolId,
+      // The Protocol's version in force at request time (ELM-0071), read by
+      // the service from the Protocol, never taken from the request body.
+      protocolVersion: data.protocolVersion ?? null,
       requestedPurpose: data.requestedPurpose,
       duoCode: data.duoCode ? String(data.duoCode).trim() : null,
       requestedItems: data.requestedItems.map((item) => ({
@@ -65,15 +82,22 @@ class AccessRequestModel {
       consentCompatibility: [],
       compatibilityEvaluatedAt: null,
       overallCompatible: null,
+      // RF024 AC4/AC7: each decision carries its own id, the policyVersion and
+      // configurationReleaseId in force (V2E-0145/0146's names) and decidedAt.
       committeeDecision: {
+        decisionId: null,
         status: 'pending',
         justification: null,
         decidedBy: null,
         decidedAt: null,
+        policyVersion: null,
+        configurationReleaseId: null,
       },
       approvalPeriod: null,
       distributionStatus: 'pending',
       distributedAt: null,
+      // RF024 AC7: the decision that authorized the distribution.
+      distributionDecisionId: null,
       createdAt: new Date(),
       updatedAt: new Date(),
     };

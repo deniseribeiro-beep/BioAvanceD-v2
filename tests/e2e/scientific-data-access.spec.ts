@@ -8,12 +8,14 @@ import {
   seedStorageBoxLocation,
   cleanupStorageBoxLocation,
   seedStudy,
+  seedProtocol,
   seedActiveConsent,
   seedDuoConcept,
   closeSeedDb,
   type SeededStorageBox,
 } from './helpers/seedParticipant';
 import { watchAuditTrail, assertAuditEventRecorded } from './helpers/assertAuditEvent';
+import { deleteOrganizations } from './helpers/listOrganizations';
 
 // Real backend only — see backend-integration.spec.ts for the same skip
 // rationale. Run via `npm run test:e2e:docker` against the compose test
@@ -278,11 +280,28 @@ test.describe('Scientific files (RF007) — real backend', () => {
 });
 
 test.describe('Access and distribution requests (RF024) — real backend', () => {
+  const organizationIds: string[] = [];
+
+  test.afterAll(async ({ request }) => {
+    await deleteOrganizations(request, apiBaseURL!, organizationIds);
+  });
+
+  // AC#1: a request names a real organization and an approved protocol.
   async function createRequestForSample(
     request: any,
     token: string,
     opts: { studyId: string; duoCode?: string }
   ): Promise<any> {
+    const org = await request.post(`${apiBaseURL}/api/organizations`, {
+      headers: { Authorization: `Bearer ${token}` },
+      data: { officialName: `RF024 ${Date.now()} ${Math.random().toString(36).slice(2, 6)}`, countryCode: 'BR' },
+    });
+    expect(org.ok(), await org.text()).toBeTruthy();
+    const organizationId = (await org.json()).data.organizationId as string;
+    organizationIds.push(organizationId);
+    const protocolId = `rf024-protocol-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    await seedProtocol(protocolId, { protocolVersion: '1.2' });
+
     const sampleID = await createRealSample(request, token);
     const sampleDoc = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -295,14 +314,18 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
       headers: { Authorization: `Bearer ${token}` },
       data: {
         requesterId: `researcher-${Date.now()}`,
+        organizationId,
         studyId: opts.studyId,
+        protocolId,
         requestedPurpose: 'RF024 e2e — pesquisa em biomarcadores oncológicos',
         duoCode: opts.duoCode,
         requestedItems: [{ itemType: 'specimen', itemId: specimenId }],
       },
     });
-    expect(create.status()).toBe(201);
-    return (await create.json()).data;
+    expect(create.status(), await create.text()).toBe(201);
+    const created = (await create.json()).data;
+    expect(created).toMatchObject({ organizationId, protocolId, protocolVersion: '1.2' });
+    return created;
   }
 
   // An approval needs a passing evaluation (AC#6): seed the ACTIVE consent
@@ -397,6 +420,11 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
     const decisionBody = (await decision.json()).data;
     expect(decisionBody.committeeDecision.status).toBe('approved');
     expect(decisionBody.committeeDecision.decidedBy).toBeTruthy();
+    // AC#4 - the policy version, the configuration release key and the instant.
+    expect(decisionBody.committeeDecision.policyVersion).toBeTruthy();
+    expect(decisionBody.committeeDecision).toHaveProperty('configurationReleaseId');
+    expect(decisionBody.committeeDecision.decidedAt).toBeTruthy();
+    expect(decisionBody.committeeDecision.decisionId).toBeTruthy();
 
     // AC#5 - now allowed.
     const allowedCheck = await request.get(
@@ -414,6 +442,8 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
     const distributeBody = (await distribute.json()).data;
     expect(distributeBody.distributionStatus).toBe('released');
     expect(distributeBody.distributedAt).toBeTruthy();
+    // AC#7 - the distribution names the decision that authorized it.
+    expect(distributeBody.distributionDecisionId).toBe(decisionBody.committeeDecision.decisionId);
   });
 
   test('blocks access for a rejected decision, and separately for a revoked one (AC#5)', async ({ request }) => {

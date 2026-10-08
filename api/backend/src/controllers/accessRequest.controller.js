@@ -139,7 +139,12 @@ class AccessRequestController {
           status: 'success',
           severity: 'critical',
           message: `Solicitação de acesso vinculada à disponibilização (${accessRequest.accessRequestId})`,
-          payload: { distributionStatus: accessRequest.distributionStatus, distributedAt: accessRequest.distributedAt },
+          // RF024 AC7: the audited operation names the decision behind it.
+          payload: {
+            distributionStatus: accessRequest.distributionStatus,
+            distributedAt: accessRequest.distributedAt,
+            distributionDecisionId: accessRequest.distributionDecisionId,
+          },
           req,
           module: 'Acesso e distribuição',
         });

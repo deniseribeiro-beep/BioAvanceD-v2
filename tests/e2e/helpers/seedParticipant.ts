@@ -361,11 +361,15 @@ export async function seedStudy(studyId: string, options: { studyStatus?: string
 // approvalStatus defaults to 'approved' (ProtocolModel.create's own
 // default) — pass an override to seed a protocol RF021 AC#5's enforcement
 // path (#591) must reject linkage against.
-export async function seedProtocol(protocolId: string, options: { approvalStatus?: string } = {}): Promise<void> {
+export async function seedProtocol(
+  protocolId: string,
+  options: { approvalStatus?: string; protocolVersion?: string } = {}
+): Promise<void> {
   const db = await getDb();
   await db.collection('protocols').insertOne({
     protocolId,
     protocolName: `RF004 e2e protocol ${protocolId}`,
+    protocolVersion: options.protocolVersion ?? null,
     approvalStatus: options.approvalStatus || 'approved',
     effectivePeriod: { start: new Date('2026-01-01'), end: null },
     createdAt: new Date(),

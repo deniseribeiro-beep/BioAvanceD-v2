@@ -4,7 +4,9 @@ const AccessRequestModel = require('../../../src/models/AccessRequest');
 describe('AccessRequestModel', () => {
   const validData = {
     requesterId: 'researcher-1',
+    organizationId: 'org-1',
     studyId: 'study-1',
+    protocolId: 'protocol-1',
     requestedPurpose: 'Estudo de biomarcadores oncológicos',
     requestedItems: [{ itemType: 'specimen', itemId: 'SPEC-1' }],
   };
@@ -31,6 +33,18 @@ describe('AccessRequestModel', () => {
 
       expect(result.isValid).toBe(false);
       expect(result.errors).toContain('studyId é obrigatório e deve ser string');
+    });
+
+    // RF024 AC1.
+    it.each([
+      ['organizationId', 'organizationId é obrigatório e deve ser string'],
+      ['protocolId', 'protocolId é obrigatório e deve ser string'],
+    ])('deve rejeitar quando %s está ausente', (field, message) => {
+      const { [field]: _omitted, ...rest } = validData;
+      const result = AccessRequestModel.validate(rest);
+
+      expect(result.isValid).toBe(false);
+      expect(result.errors).toContain(message);
     });
 
     it('deve rejeitar quando requestedPurpose está ausente', () => {
@@ -83,10 +97,20 @@ describe('AccessRequestModel', () => {
       expect(created.accessRequestId).toBeTruthy();
       expect(created.requestedItems).toEqual([{ itemType: 'specimen', itemId: 'SPEC-1', quantity: null }]);
       expect(created.consentCompatibility).toEqual([]);
-      expect(created.committeeDecision).toEqual({ status: 'pending', justification: null, decidedBy: null, decidedAt: null });
+      expect(created.committeeDecision).toEqual({
+        decisionId: null,
+        status: 'pending',
+        justification: null,
+        decidedBy: null,
+        decidedAt: null,
+        policyVersion: null,
+        configurationReleaseId: null,
+      });
       expect(created.approvalPeriod).toBeNull();
       expect(created.distributionStatus).toBe('pending');
+      expect(created.distributionDecisionId).toBeNull();
       expect(created.duoCode).toBeNull();
+      expect(created).toMatchObject({ organizationId: 'org-1', protocolId: 'protocol-1', protocolVersion: null });
     });
 
     it('preserva um duoCode informado, aparado de espaços', () => {
