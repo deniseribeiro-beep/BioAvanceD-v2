@@ -80,4 +80,22 @@ test.describe('RF012 audit event chain (real backend)', () => {
 
     expect((await verify()).chainValid).toBe(true);
   });
+
+  // #1308: RNF020 C6 and RF012 AC1 -- the request's id is echoed and becomes
+  // the correlationId of the audit event the request produced.
+  test('a login carries its X-Request-Id into its audit event', async ({ request }) => {
+    const requestId = `e2e-corr-${Date.now()}`;
+    const response = await request.post(`${apiBaseURL}/api/auth/login`, {
+      headers: { 'X-Request-Id': requestId },
+      data: { username: process.env.TEST_USER || 'admin', password: process.env.TEST_PASS || 'Admin@123-e2e-stack' },
+    });
+    expect(response.status()).toBe(200);
+    expect(response.headers()['x-request-id']).toBe(requestId);
+
+    // The audit write may finish after the response is sent.
+    await expect.poll(async () => {
+      const recent = await latestChainEvents(CHAIN, 50);
+      return recent.filter((event) => event.correlationId === requestId).length;
+    }, { message: 'the login wrote an audit event under its request id', timeout: 10_000 }).toBeGreaterThan(0);
+  });
 });

@@ -8,6 +8,7 @@ const witness = require('./audit-witness.service');
 const { generateAnonId } = require('../utils/userAnonymization');
 const { CANONICAL_MODEL_RELEASE_ID } = require('../foundation/readiness');
 const { INVARIANT_CATALOG_VERSION } = require('../governance/invariants');
+const { currentRequestId } = require('../utils/requestContext');
 
 // RF012 AC3 / RNF009 C4: one append-only chain for the application's audit
 // events. Every event names the previous one's hash, so deleting, inserting
@@ -231,7 +232,8 @@ class AuditV2Service {
         entityId: logRecord.resourceId || logRecord.entityID || null,
         result: logRecord.result || logRecord.status || 'success',
         source: logRecord.module || 'backend',
-        correlationId: logRecord.correlationId || logRecord.requestId || null,
+        // #1308: the serving request's id when the record carries none.
+        correlationId: logRecord.correlationId || logRecord.requestId || currentRequestId() || null,
         payload: {
           message: logRecord.message || null,
           severity: logRecord.severity || null,

@@ -90,6 +90,10 @@ const normalizedAllowed = new Set(allowedOrigins.map(normalizeOrigin));
 app.set("allowedOrigins", allowedOrigins);
 app.set("allowAllCors", allowAllCors);
 
+// #1308: first, so every later middleware's log line and audit event carries
+// the request's id (RNF020 C6, RF012 AC1's correlationId).
+app.use(require("./src/utils/requestContext").middleware);
+
 app.use(
   helmet({
     hsts: {

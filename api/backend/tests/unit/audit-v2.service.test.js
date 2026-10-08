@@ -243,6 +243,18 @@ describe('audit-v2.service', () => {
       expect(auditV2Service.verifyChain(await auditV2Service.loadChain(db))).toEqual({ valid: true, brokenAt: null, reason: null });
     });
 
+    // #1308: RF012 AC1's correlationId comes from the serving request.
+    it('takes the serving request\'s id as correlationId when the record carries none', async () => {
+      const requestContext = require('../../src/utils/requestContext');
+      const db = createFakeDb();
+      const result = await new Promise((resolve, reject) => {
+        requestContext.middleware({ headers: { 'x-request-id': 'req-corr-0001' } }, { setHeader() {} }, () => {
+          auditV2Service.ingestLogRecord({ action: 'READ' }, db).then(resolve, reject);
+        });
+      });
+      expect(result.correlationId).toBe('req-corr-0001');
+    });
+
     it('takes purpose and policyVersion from the record or its details when it carries them', async () => {
       const db = createFakeDb();
       const result = await auditV2Service.ingestLogRecord({ action: 'RETENTION_SWEEP', details: { purpose: 'retention', policyVersion: 3 } }, db);
