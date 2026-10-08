@@ -11,10 +11,11 @@
  *
  * Each candidate passes a ConfigurationValidationRun first
  * (configurationValidation.service.js); a refused one is kept as a draft.
- * Still open on the issue that tracks RF014: the setting catalog (AC1) and
- * approval as a step separate from saving (AC7). Until then the
- * administrator who saves a change is recorded as its approver.
+ * The administrator who activates a change is recorded as its approver
+ * (V2E-0037/0038, "obrigatório para ativação"): no source of the v2.0.0
+ * release asks for a second approver (docs/decisions/2026-10-07-security-setting-catalog-and-approval.md).
  */
+const { isDeepStrictEqual } = require('util');
 const { CANONICAL_COLLECTIONS } = require('../config/collections');
 const ConfigurationProfileModel = require('../models/ConfigurationProfile');
 const ConfigurationReleaseModel = require('../models/ConfigurationRelease');
@@ -41,16 +42,30 @@ function isDuplicateKey(error) {
   return error && (error.code === 11000 || /E11000/.test(String(error.message)));
 }
 
+// The profile fields `describe` supplies, which follow the setting catalog.
+const DESCRIBED_FIELDS = ['settings', 'allowedValues', 'defaults', 'dependencies', 'ownerId'];
+
 /**
  * The profile `profileName` scoped to `environment`, created on first use.
- * `describe` returns the fields a new profile is built from.
+ * `describe` returns the fields a new profile is built from. An existing
+ * profile whose described fields differ (the setting catalog changed, RF014
+ * AC1) takes the new ones; its profileId, which the releases name, stays.
  */
 async function ensureEnvironmentProfile(db, { profileName, environment, describe }) {
   const { profiles } = collections(db);
   const filter = { profileName, scopeType: 'environment', scopeId: environment };
+  const described = describe();
   const existing = await profiles.findOne(filter);
-  if (existing) return existing;
-  const profile = ConfigurationProfileModel.create({ profileName, scopeType: 'environment', scopeId: environment, ...describe() });
+  if (existing) {
+    const stale = DESCRIBED_FIELDS.filter((field) => !isDeepStrictEqual(existing[field], described[field]));
+    if (stale.length === 0) return existing;
+    const changes = Object.fromEntries(stale.map((field) => [field, described[field]]));
+    const { isValid, errors } = ConfigurationProfileModel.validate({ ...existing, ...changes });
+    if (!isValid) throw new Error(`ConfigurationProfile inválido: ${errors.join('; ')}`);
+    await profiles.updateOne(filter, { $set: { ...changes, updatedAt: new Date() } });
+    return profiles.findOne(filter);
+  }
+  const profile = ConfigurationProfileModel.create({ profileName, scopeType: 'environment', scopeId: environment, ...described });
   await profiles.updateOne(filter, { $setOnInsert: profile }, { upsert: true });
   return profiles.findOne(filter);
 }

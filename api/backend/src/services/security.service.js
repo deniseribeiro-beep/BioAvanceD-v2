@@ -7,6 +7,7 @@ const sessionService = require('./session.service');
 const configurationReleaseService = require('./configurationRelease.service');
 const configurationValidationService = require('./configurationValidation.service');
 const { invariantForPath } = require('../governance/invariants');
+const { CATALOG_VERSION, SECURITY_SETTING_CATALOG, entriesOfKind, profileFields } = require('../governance/securitySettingCatalog');
 const logLevel = require('../utils/logLevel');
 
 /**
@@ -124,7 +125,8 @@ const SECURITY_CONFIG_AUDIT_FILTER = Object.freeze({
 // With no active policy covering Log or AuditEvent, nothing is purged:
 // autoPurge is false and the two periods are null. A second retention
 // authority is what #1248 rules out, so a write to these paths is dropped.
-const RETENTION_GOVERNED_PATHS = ['logging.retentionDays', 'privacy.autoPurge', 'privacy.purgeAfterDays'];
+// RF014 AC1: the setting catalog lists them as governed by RetentionPolicy.
+const RETENTION_GOVERNED_PATHS = entriesOfKind('governed').map(({ path }) => path);
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 async function resolveRetentionGoverned(db) {
@@ -192,17 +194,10 @@ async function resolveRetentionGoverned(db) {
 //    (P1X-0318) is true.
 // lgpd.allowDataDeletion and lgpd.allowDataExport are not here: the patient
 // delete and the personal-data exports read them.
-const FIXED_PATHS = {
-  'logging.logLoginAttempts': { value: true, reason: 'audit-required' },
-  'logging.logAllActions': { value: true, reason: 'audit-required' },
-  'enhancedSecurity.logAllActions': { value: true, reason: 'audit-required' },
-  'privacy.anonymizeLogs': { value: true, reason: 'always-anonymized' },
-  'privacy.dataRetentionDays': { value: null, reason: 'not-applied' },
-  'privacy.anonymizeAfterDays': { value: null, reason: 'not-applied' },
-  'lgpd.requireConsent': { value: true, reason: 'consent-required' },
-  'lgpd.consentExpirationDays': { value: null, reason: 'consent-no-expiry' },
-  'lgpd.anonymizeOnExport': { value: true, reason: 'export-pseudonymised' },
-};
+// RF014 AC1: the values and reasons are the setting catalog's
+// (securitySettingCatalog.js), which holds every key's allowed values.
+const FIXED_PATHS = Object.fromEntries(entriesOfKind('fixed')
+  .map(({ path, allowedValues }) => [path, { value: allowedValues.value, reason: allowedValues.reason }]));
 const GOVERNED_PATHS = [...RETENTION_GOVERNED_PATHS, ...Object.keys(FIXED_PATHS)];
 
 // RF014 AC6, CFG-008: the fixed keys a request tries to set to anything but
@@ -705,22 +700,14 @@ class SecurityService {
 
   /**
    * RF014: this environment's security-configuration profile, created on
-   * first use. Its settings name each group's keys and types (the shape
-   * validateConfig enforces); allowedValues stays empty until the setting
-   * catalog (RF014 AC1) exists.
+   * first use. Its settings, defaults, allowedValues and dependencies are
+   * the setting catalog's (RF014 AC1), refreshed when the catalog changes.
    */
   async securityProfile(db) {
     return configurationReleaseService.ensureEnvironmentProfile(db, {
       profileName: SECURITY_PROFILE_NAME,
       environment: env.NODE_ENV,
-      describe: () => {
-        const defaults = settingsOf(this.getDefaultConfig());
-        const settings = {};
-        for (const [group, values] of Object.entries(defaults)) {
-          settings[group] = Object.fromEntries(Object.entries(values).map(([key, value]) => [key, value === null ? 'null' : typeof value]));
-        }
-        return { settings, allowedValues: {}, defaults, ownerId: 'SYSTEM' };
-      },
+      describe: () => ({ ...profileFields(), ownerId: 'SYSTEM' }),
     });
   }
 
@@ -783,6 +770,11 @@ class SecurityService {
   async listReleases(db, { limit = 50 } = {}) {
     const profile = await this.securityProfile(db);
     return configurationReleaseService.listReleases(db, profile.profileId, { limit });
+  }
+
+  /** RF014 AC1: the setting catalog, with its version. */
+  settingCatalog() {
+    return { catalogVersion: CATALOG_VERSION, settings: Object.values(SECURITY_SETTING_CATALOG) };
   }
 
   /**

@@ -197,6 +197,20 @@ describe('Security routes', () => {
     expect(list).toHaveBeenCalledWith(expect.anything(), { limit: 200 });
   });
 
+  it('GET /config/catalog devolve o catálogo de configurações, sem banco (RF014 AC1)', () => {
+    const handler = getHandler(securityRoutes, 'get', '/config/catalog');
+    const req = createRequest();
+    req.app.locals.db = null;
+    const res = createResponse();
+
+    handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.payload.data.catalogVersion).toBe('1.0.0');
+    expect(res.payload.data.settings.find(({ path }) => path === 'session.timeoutMinutes'))
+      .toEqual(expect.objectContaining({ type: 'number', scope: 'environment', allowedValues: { kind: 'range', min: 5, max: 480 }, default: 30 }));
+  });
+
   it('POST /config/rollback exige configurationReleaseId e devolve o status do serviço (RF014 AC4)', async () => {
     const handler = getHandler(securityRoutes, 'post', '/config/rollback');
     const rollback = vi.spyOn(securityService, 'rollbackConfig');

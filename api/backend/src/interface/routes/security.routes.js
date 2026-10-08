@@ -115,6 +115,16 @@ router.get('/config/releases', async (req, res) => {
 });
 
 /**
+ * GET /api/security/config/catalog
+ * RF014 AC1, CFG-002: the setting catalog, one entry per configuration key
+ * with its type, scope, allowed values, default, dependencies, owner and
+ * validity.
+ */
+router.get('/config/catalog', (req, res) => {
+  return res.status(200).json({ success: true, data: securityService.settingCatalog() });
+});
+
+/**
  * POST /api/security/config/rollback
  * RF014 AC4: governed rollback to an earlier release, recorded as a new
  * release. Body: { configurationReleaseId }.

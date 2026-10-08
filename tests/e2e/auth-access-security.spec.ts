@@ -1552,6 +1552,43 @@ test.describe('Security policy management (RF014) — real backend', () => {
     await expect(page.locator('.config-field').filter({ has: help }).locator('input')).toBeDisabled();
   });
 
+  // RF014 AC1, CFG-002: the setting catalog names, for every key the
+  // configuration holds, its type, scope, allowed values, default,
+  // dependencies, owner and validity; a value outside a range it declares
+  // is refused by the validation run.
+  test('RF014 AC1: the setting catalog covers every configuration key, and its ranges are enforced', async ({ request }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const res = await request.get(`${apiBaseURL}/api/security/config/catalog`, { headers: auth });
+    expect(res.ok(), await res.text()).toBeTruthy();
+    const { catalogVersion, settings } = (await res.json()).data;
+    expect(catalogVersion).toMatch(/^\d+\.\d+\.\d+$/);
+    const byPath = Object.fromEntries(settings.map((entry: { path: string }) => [entry.path, entry]));
+
+    const config = (await (await request.get(`${apiBaseURL}/api/security/config`, { headers: auth })).json()).data;
+    const groups = ['authentication', 'passwordRules', 'session', 'loginAttempts', 'logging', 'privacy', 'enhancedSecurity', 'lgpd'];
+    for (const group of groups) {
+      for (const key of Object.keys(config[group])) {
+        const entry = byPath[`${group}.${key}`];
+        expect(entry, `${group}.${key}`).toBeTruthy();
+        for (const attribute of ['type', 'scope', 'allowedValues', 'dependencies', 'owner', 'validity']) {
+          expect(entry[attribute], `${group}.${key}.${attribute}`).toBeDefined();
+        }
+      }
+    }
+    expect(byPath['logging.logAllActions'].allowedValues).toEqual(expect.objectContaining({ kind: 'fixed', value: true, invariantId: 'INV-AUDIT-001' }));
+    expect(byPath['passwordRules.minLengthWithMFA'].dependencies).toEqual([
+      { path: 'passwordRules.minLength', rule: 'at most passwordRules.minLength' },
+    ]);
+
+    const { max } = byPath['session.maxSessionDurationHours'].allowedValues;
+    const past = await request.put(`${apiBaseURL}/api/security/config`, {
+      headers: auth,
+      data: { session: { maxSessionDurationHours: max + 1 } },
+    });
+    expect(past.status(), await past.text()).toBe(400);
+  });
+
   // #1260, #1261: the logging switches RNF009 makes mandatory and the privacy
   // keys whose behaviour is fixed show that behaviour and render read-only.
   // logging.level is a real input and round-trips with the fixed values
