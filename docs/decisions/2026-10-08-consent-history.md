@@ -14,6 +14,12 @@ Requirements: RF010 AC4-AC6, Requisitos v4.0.0; dictionary v2.0.0 ConsentDecisio
 8. **A revocation's evidence** is its own encrypted JSON document beside the acceptance's (`objstore://consents/<consentId>/revocation-<id>.json`), binding scope, effect, disposition and signer; the revocation row keeps what decrypts it.
 9. **A consent written before this history** has no rows. It is read as accepted, and one already `REVOKED` stays revoked.
 
+## Authorization decisions (RF010 AC7)
+
+10. **A ConsentAuthorizationDecision (V2E-0140..0150) is recorded where a use is evaluated against a consent:** an access request's compatibility evaluation, once per requested item whose participant has a consent in force, in `consentAuthorizationDecisions`. It names the purpose, study, protocol, `policyVersion` (`rf010-consent-authorization/1.0.0`), the ConfigurationRelease in force (null before any exists, as the access request's own decisions) and the access request and item it answered.
+11. **Rules.** `consent_in_force` (the consent read is the newest `ACTIVE` one); `consent_study_scope`: a consent given for one study denies use for another; `consent_partial_revocation`: a consent with permissions revoked by scope gives `review_required`, because a purpose is not computable against the template's untyped permission keys until ConsentPermission is typed (AC3). Deny wins over review, review over permit.
+12. **Effect on the request.** `deny` makes the item incompatible, so the request cannot be approved (RF024 AC6). `review_required` leaves it compatible and carries its reasons in the item's `consentAuthorizationReasons`, for the committee whose decision resolves it. A participant with no consent in force is incompatible as before, and no decision is recorded, since the decision's `consentId` is 1..1.
+
 ## Read
 
 `GET /api/e-consent/consents/:id/history` (roles 3 and 4, as revoke) returns the derived state with the events and revocations it derives from.

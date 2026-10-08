@@ -399,6 +399,10 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
       consentValid: true,
       duoCompatible: true,
       studyActive: true,
+      // RF010 AC7: the consent in force answered for this use, recorded as
+      // its own ConsentAuthorizationDecision.
+      consentAuthorizationResult: 'permit',
+      consentAuthorizationDecisionId: expect.any(String),
     });
 
     // AC#3 - committee decision recorded with justification and validity.

@@ -75,6 +75,7 @@ const DEFAULTS = {
   collectionGovernanceEvents: 'collectionGovernanceEvents',
   consentDecisionEvents: 'consentDecisionEvents',
   consentRevocations: 'consentRevocations',
+  consentAuthorizationDecisions: 'consentAuthorizationDecisions',
   reagentLots: 'reagentLots',
   nonconformances: 'nonconformances',
   legalHolds: 'legalHolds',
@@ -198,6 +199,7 @@ describe('config/collections', () => {
       collectionGovernanceEvents: 'collectionGovernanceEvents',
       consentDecisionEvents: 'consentDecisionEvents',
       consentRevocations: 'consentRevocations',
+      consentAuthorizationDecisions: 'consentAuthorizationDecisions',
       // COLL_REAGENT_LOTS/COLL_NONCONFORMANCES/COLL_LEGAL_HOLDS/
       // COLL_DISPOSITION_ACTIONS aren't in ENV_KEYS/read by env.js either,
       // same hardcoded-default reasoning as cids/etc. above.

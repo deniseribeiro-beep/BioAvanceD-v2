@@ -54,6 +54,7 @@ const ENTITY_TARGETS = {
   CollectionGovernanceEvent: () => require('../../src/models/CollectionGovernanceEvent').fieldsOf(),
   ConsentDecisionEvent: () => require('../../src/models/ConsentDecisionEvent').fieldsOf(),
   ConsentRevocation: () => require('../../src/models/ConsentRevocation').fieldsOf(),
+  ConsentAuthorizationDecision: () => require('../../src/models/ConsentAuthorizationDecision').fieldsOf(),
   AllergyIntolerance: () => require('../../src/models/AllergyIntolerance').fieldsOf(),
   ClinicalObservation: () => require('../../src/models/ClinicalObservation').fieldsOf(),
   ConfigurationChangeEvent: () => require('../../src/models/ConfigurationChangeEvent').fieldsOf(),

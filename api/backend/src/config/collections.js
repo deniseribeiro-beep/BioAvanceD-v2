@@ -54,6 +54,7 @@ const CANONICAL_COLLECTIONS = Object.freeze({
   collectionGovernanceEvents: env.COLL_COLLECTION_GOVERNANCE_EVENTS || 'collectionGovernanceEvents',
   consentDecisionEvents: env.COLL_CONSENT_DECISION_EVENTS || 'consentDecisionEvents',
   consentRevocations: env.COLL_CONSENT_REVOCATIONS || 'consentRevocations',
+  consentAuthorizationDecisions: env.COLL_CONSENT_AUTHORIZATION_DECISIONS || 'consentAuthorizationDecisions',
   reagentLots: env.COLL_REAGENT_LOTS || 'reagentLots',
   nonconformances: env.COLL_NONCONFORMANCES || 'nonconformances',
   legalHolds: env.COLL_LEGAL_HOLDS || 'legalHolds',

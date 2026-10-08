@@ -73,8 +73,10 @@ function createFakeDb({
     protocols: createFakeCollection(protocols),
     security_config: createFakeCollection(securityConfig),
     accessPolicies: createFakeCollection(accessPolicies),
+    consentAuthorizationDecisions: createFakeCollection(),
   };
   return {
+    collections,
     collection(name) {
       if (!collections[name]) throw new Error(`unexpected collection: ${name}`);
       return collections[name];
@@ -187,11 +189,79 @@ describe('accessRequest.service', () => {
           itemType: 'specimen',
           participantId: 'participant-1',
           consentValid: true,
+          consentAuthorizationDecisionId: expect.any(String),
+          consentAuthorizationResult: 'permit',
+          consentAuthorizationReasons: ['consentimento vigente, sem restrição aplicável ao uso'],
           duoCompatible: true,
           studyActive: true,
           compatible: true,
         },
       ]);
+    });
+
+    // RF010 AC7: the consent in force answers for the requested use, and
+    // the answer is recorded as its own ConsentAuthorizationDecision.
+    it('records a permit ConsentAuthorizationDecision for the consent in force', async () => {
+      const { db, created } = await seedAndCreate({}, {
+        consents: [{ consentId: 'consent-1', participantId: 'participant-1', status: 'ACTIVE', currentStateDerived: 'active' }],
+      });
+
+      const evaluated = await accessRequestService.evaluateCompatibility(db, created.accessRequestId);
+
+      const [decision] = db.collections.consentAuthorizationDecisions.docs;
+      expect(decision).toMatchObject({
+        consentId: 'consent-1',
+        participantId: 'participant-1',
+        purpose: 'Estudo de biomarcadores oncológicos',
+        studyId: 'study-1',
+        protocolId: 'protocol-1',
+        accessRequestId: created.accessRequestId,
+        itemId: 'SPEC-1',
+        policyVersion: 'rf010-consent-authorization/1.0.0',
+        configurationReleaseId: 'release-1',
+        result: 'permit',
+        appliedRules: ['consent_in_force', 'consent_study_scope', 'consent_partial_revocation'],
+      });
+      expect(decision.decisionAt).toBeInstanceOf(Date);
+      expect(evaluated.consentCompatibility[0].consentAuthorizationDecisionId).toBe(decision.consentAuthorizationDecisionId);
+    });
+
+    it('denies, and makes the item incompatible, when the consent was given for another study', async () => {
+      const { db, created } = await seedAndCreate({}, {
+        consents: [{ consentId: 'consent-1', participantId: 'participant-1', status: 'ACTIVE', studyId: 'study-9' }],
+      });
+
+      const evaluated = await accessRequestService.evaluateCompatibility(db, created.accessRequestId);
+
+      expect(evaluated.overallCompatible).toBe(false);
+      expect(evaluated.consentCompatibility[0]).toMatchObject({
+        consentValid: false,
+        consentAuthorizationResult: 'deny',
+        consentAuthorizationReasons: [expect.stringContaining('study-9')],
+      });
+    });
+
+    it('asks for review, and leaves the item to the committee, when permissions were revoked by scope', async () => {
+      const { db, created } = await seedAndCreate({}, {
+        consents: [{ consentId: 'consent-1', participantId: 'participant-1', status: 'ACTIVE', currentStateDerived: 'partially_revoked', withdrawalScope: ['contact'] }],
+      });
+
+      const evaluated = await accessRequestService.evaluateCompatibility(db, created.accessRequestId);
+
+      expect(evaluated.consentCompatibility[0]).toMatchObject({
+        consentValid: true,
+        compatible: true,
+        consentAuthorizationResult: 'review_required',
+        consentAuthorizationReasons: [expect.stringContaining('contact')],
+      });
+    });
+
+    it('records no decision when the participant has no consent in force', async () => {
+      const { db, created } = await seedAndCreate({}, { consents: [] });
+
+      await accessRequestService.evaluateCompatibility(db, created.accessRequestId);
+
+      expect(db.collections.consentAuthorizationDecisions.docs).toHaveLength(0);
     });
 
     it('marks incompatible when the participant has no ACTIVE consent', async () => {

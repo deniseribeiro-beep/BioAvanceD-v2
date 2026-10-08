@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const { ObjectId } = require('mongodb');
 const AccessRequestModel = require('../models/AccessRequest');
 const { evaluatePolicies } = require('../models/AccessPolicy');
+const ConsentAuthorizationDecisionModel = require('../models/ConsentAuthorizationDecision');
 const { getCollection } = require('../utils/collectionResolver');
 
 // sources/duo.js's own fixed systemUri for every DUO-imported TerminologyConcept.
@@ -166,33 +167,59 @@ class AccessRequestService {
       duoCompatible = !!concept && concept.conceptStatus === 'active';
     }
 
-    const resolveConsent = async (resolvedParticipantId) => {
+    // RF010 AC7: each item's consent in force answers permit, deny or
+    // review_required for this request's use, recorded as a
+    // ConsentAuthorizationDecision. A deny makes the item incompatible; a
+    // review_required leaves it to the committee, with its reasons.
+    const decisions = await getCollection(db, 'consentAuthorizationDecisions');
+    const configurationReleaseId = await activeConfigurationReleaseId(db);
+    const resolveConsent = async (resolvedParticipantId, itemId) => {
       if (!resolvedParticipantId) {
         // Item references a specimen/file that doesn't resolve to a real
         // participant — don't default to "consent ok", that would silently
         // approve compatibility for a nonexistent item.
-        return false;
+        return { consentValid: false, decision: null };
       }
-      const consent = await consents.findOne({ participantId: resolvedParticipantId, status: 'ACTIVE' });
-      return !!consent;
+      const consent = await consents.findOne(
+        { participantId: resolvedParticipantId, status: 'ACTIVE' },
+        { sort: { signedAt: -1, createdAt: -1 } }
+      );
+      if (!consent) {
+        return { consentValid: false, decision: null };
+      }
+      const evaluation = ConsentAuthorizationDecisionModel.evaluateConsentAuthorization(consent, accessRequest);
+      const decision = ConsentAuthorizationDecisionModel.create({
+        ...evaluation,
+        consentId: consent.consentId || String(consent._id),
+        participantId: resolvedParticipantId,
+        purpose: accessRequest.requestedPurpose,
+        studyId: accessRequest.studyId,
+        protocolId: accessRequest.protocolId,
+        accessRequestId: accessRequest.accessRequestId,
+        itemId,
+        configurationReleaseId,
+      });
+      await decisions.insertOne(decision);
+      return { consentValid: decision.result !== 'deny', decision };
     };
 
     const consentCompatibility = [];
     for (const item of accessRequest.requestedItems) {
       let participantId = null;
       let consentValid = null;
+      let decision = null;
 
       if (item.itemType === 'specimen') {
         const sample = await samples.findOne({ specimenId: item.itemId });
         participantId = sample?.participantId || null;
-        consentValid = await resolveConsent(participantId);
+        ({ consentValid, decision } = await resolveConsent(participantId, item.itemId));
       } else if (item.itemType === 'file') {
         const file = ObjectId.isValid(item.itemId)
           ? await sampleFiles.findOne({ _id: new ObjectId(item.itemId) })
           : null;
         const sample = file?.specimenId ? await samples.findOne({ specimenId: file.specimenId }) : null;
         participantId = sample?.participantId || null;
-        consentValid = await resolveConsent(participantId);
+        ({ consentValid, decision } = await resolveConsent(participantId, item.itemId));
       }
       // 'dataset' items: intentionally left untouched — participantId/
       // consentValid stay null (non-blocking), per #661's de-identified-
@@ -205,6 +232,9 @@ class AccessRequestService {
         itemType: item.itemType,
         participantId,
         consentValid,
+        consentAuthorizationDecisionId: decision?.consentAuthorizationDecisionId || null,
+        consentAuthorizationResult: decision?.result || null,
+        consentAuthorizationReasons: decision?.reasons || [],
         duoCompatible,
         studyActive,
         compatible,
