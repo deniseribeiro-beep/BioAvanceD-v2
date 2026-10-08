@@ -1688,7 +1688,6 @@
     },
     "passwordChange": "Alterar Senha",
     "permissions": {
-      "profile": "Perfil {id}",
       "readOnlyNote": "Somente leitura. Estas permissões são definidas pelo catálogo de papéis do sistema e não podem ser alteradas nesta tela.",
       "title": "Permissões por Perfil"
     },

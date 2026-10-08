@@ -287,29 +287,12 @@ const PERMISSION_CATALOG = {
   // Administrador-only (#662, Denise 2026-09-25): the committee decision is
   // at least as sensitive as reidentifyParticipant above, so it takes the
   // same posture until a real multi-approver committee workflow exists.
-  // RETIRED_SEED_GRANTS below pulls the old Coordenador grant off
-  // already-seeded databases.
+  // upsertRole sets each role to the seed's list, so the old Coordenador
+  // grant comes off already-seeded databases at their next boot (#1341).
   manageAccessRequests: { resourceType: 'AccessRequest', allowedActions: ['CREATE', 'READ', 'UPDATE'], displayName: 'Gerenciar solicitações de acesso' },
   // RF008 AC#6 (#726): Coordenador/Administrador-only -- lets a report
   // template be created/edited without a code change to reports.routes.js.
   manageReportTemplates: { resourceType: 'ReportTemplate', allowedActions: ['CREATE', 'READ', 'UPDATE', 'DELETE'], displayName: 'Gerenciar modelos de relatório' },
-};
-
-/**
- * #662: grants the seed once gave and has deliberately withdrawn, by
- * roleCode. upsertRole merges a role's seeded permissions INTO what it
- * already holds, so deleting a code from LEGACY_ROLES_SEED alone never
- * reaches a database seeded before the deletion: the old grant would stay
- * enforced there forever, because userHasPermission reads the stored role
- * document. Listing it here makes every seed run pull it.
- *
- * The cost is deliberate: an operator who re-grants one of these by hand
- * loses it on the next boot. A withdrawn grant is a policy decision, and a
- * restart must not quietly undo it. Everything else an operator added to a
- * role is still left alone.
- */
-const RETIRED_SEED_GRANTS = {
-  coordinator: ['manageAccessRequests'],
 };
 
 function allSeedRoles() {
@@ -395,13 +378,11 @@ function buildRoleDocs(permissionIdByCode) {
  * a reorder there is a genuine change and one reconciling write is the
  * correct response -- it settles on the next boot rather than churning.
  *
- * NOTE the enforcing path does NOT read this row: requirePermission takes
- * `allowedActions` from the in-process PERMISSION_CATALOG constant
- * (infrastructure/middleware/rbac.js, #631), and the only database reader
- * of this collection is rbac-assignment.service.js's userHasPermission,
- * which uses `permissionId` alone. So a stale row does not currently cause
- * a wrong 403 -- it makes the persisted catalog disagree with the enforced
- * one, with nothing reconciling them. #1123 carries that larger question.
+ * Readers: requirePermission takes `allowedActions` from the in-process
+ * PERMISSION_CATALOG constant (infrastructure/middleware/rbac.js, #631);
+ * userHasPermission (rbac-assignment.service.js) uses `permissionId`; and
+ * GET /api/security/permissions shows `displayName` (#1341). The catalog is
+ * the one source, and this row is its reconciled copy.
  */
 async function upsertPermission(collection, doc) {
   const filter = { permissionCode: doc.permissionCode };
@@ -430,17 +411,21 @@ async function upsertPermission(collection, doc) {
 /**
  * RF024 (#646 Wave 3): a plain skip-on-existing upsert on `roles` left an
  * already-seeded role's permissionIds frozen forever at whatever they were
- * the first time this ran — `existing` was returned as-is, so a later
- * PERMISSION_CATALOG/LEGACY_ROLES_SEED addition (a new permission granted
- * to an existing role, e.g. this slice's own `manageAccessRequests`) never
- * reached a role document seeded before the addition, on any later re-run
- * or process restart. Roles now merge freshly-computed permissionIds into
- * whatever the role already has, instead of skipping existing docs
- * outright — `roleId` (and everything else `existing` already carries)
- * stays untouched, preserving the idempotency contract
- * rbac-catalog-seed.service.test.js already asserts on it.
+ * the first time this ran, so a later grant never reached it.
+ *
+ * #1341: a role's permission set is catalog-owned. The v4.0.0 requirements
+ * make only the user-to-role link runtime-managed (RF003 AC3 and AC6), and
+ * dict-02 gives UserRoleAssignment its grant and revoke audit fields while
+ * Role.permissionIds (P1X-0214) has none. Nothing at runtime writes
+ * permissionIds either. So the stored role is SET to the seed's list on
+ * every boot, not merged with it. A merge let a grant added by hand stay
+ * forever and brought a revoked one back, and it needed a list of retired
+ * grants (#662) to withdraw one; setting it covers both directions.
+ *
+ * `roleId` and every other field on the existing document stay untouched,
+ * and a boot that changes nothing issues no write.
  */
-async function upsertRole(collection, doc, retiredPermissionIds = []) {
+async function upsertRole(collection, doc) {
   const filter = { roleCode: doc.roleCode };
   const existing = await collection.findOne(filter);
   if (!existing) {
@@ -448,18 +433,14 @@ async function upsertRole(collection, doc, retiredPermissionIds = []) {
     return doc;
   }
 
-  // #662: a retired grant is removed AFTER the merge, so it cannot come back
-  // through either side of the union.
-  const retired = new Set(retiredPermissionIds);
   const existingIds = existing.permissionIds || [];
-  const mergedPermissionIds = Array.from(new Set([...existingIds, ...doc.permissionIds]))
-    .filter((id) => !retired.has(id));
-  const unchanged = mergedPermissionIds.length === existingIds.length
-    && mergedPermissionIds.every((id) => existingIds.includes(id));
+  const seededIds = Array.from(new Set(doc.permissionIds));
+  const unchanged = seededIds.length === existingIds.length
+    && seededIds.every((id) => existingIds.includes(id));
   if (unchanged) return existing;
 
-  await collection.updateOne(filter, { $set: { permissionIds: mergedPermissionIds, updatedAt: new Date() } });
-  return { ...existing, permissionIds: mergedPermissionIds };
+  await collection.updateOne(filter, { $set: { permissionIds: seededIds, updatedAt: new Date() } });
+  return { ...existing, permissionIds: seededIds };
 }
 
 async function seedRolesAndPermissions(db) {
@@ -476,12 +457,7 @@ async function seedRolesAndPermissions(db) {
   const roleDocs = buildRoleDocs(permissionIdByCode);
   const storedRoles = [];
   for (const doc of roleDocs) {
-    // A retired code the catalogue no longer seeds anywhere has no stored
-    // permission row, so it maps to no id and has nothing to pull.
-    const retiredPermissionIds = (RETIRED_SEED_GRANTS[doc.roleCode] || [])
-      .map((code) => permissionIdByCode[code])
-      .filter(Boolean);
-    storedRoles.push(await upsertRole(rolesCollection, doc, retiredPermissionIds));
+    storedRoles.push(await upsertRole(rolesCollection, doc));
   }
 
   return { roles: storedRoles, permissions: storedPermissions };
@@ -493,5 +469,4 @@ module.exports = {
   PERMISSION_CATALOG,
   LEGACY_ROLES_SEED,
   ADDITIONAL_ROLES_SEED,
-  RETIRED_SEED_GRANTS,
 };

@@ -177,11 +177,13 @@ export default function SecurityPage() {
     );
   }
 
-  const profileNames: Record<string, string> = {
-    '1': t('roles.externalUser'),
-    '2': t('roles.technician'),
-    '3': t('roles.coordinator'),
-    '4': t('roles.administrator')
+  // #1341: localized labels by roleCode; a role with none (the additive
+  // auditor) shows its stored displayName.
+  const roleNames: Record<string, string> = {
+    external_user: t('roles.externalUser'),
+    technician: t('roles.technician'),
+    coordinator: t('roles.coordinator'),
+    administrator: t('roles.administrator')
   };
 
   return (
@@ -711,20 +713,22 @@ export default function SecurityPage() {
               {/* #1149: read-only. The save this tab had wrote a store no
                   authorization path reads, so it is gone rather than kept. */}
               <p data-testid="security-permissions-readonly-note">{t('security.permissions.readOnlyNote')}</p>
+              {/* #1341: every seeded role, the additive auditor included,
+                  against every permission, as enforcement reads them. */}
               <div className="permissions-grid">
-                {Object.keys(localPermissions).map((profile) => (
-                  <div key={profile} className="permission-profile">
-                    <h3>{profileNames[profile] || t('security.permissions.profile').replace('{id}', profile)}</h3>
-                    {Object.keys(localPermissions[profile]).map((permission) => (
-                      <label key={permission} className="config-switch">
+                {localPermissions.roles.map((role) => (
+                  <div key={role.roleCode} className="permission-profile" data-testid={`security-permission-role-${role.roleCode}`}>
+                    <h3>{roleNames[role.roleCode] || role.displayName || role.roleCode}</h3>
+                    {localPermissions.permissions.map((permission) => (
+                      <label key={permission.permissionCode} className="config-switch" title={permission.permissionCode}>
                         <input title="security-input"
-                          data-testid={`security-permission-toggle-${profile}-${permission}`}
+                          data-testid={`security-permission-toggle-${role.roleCode}-${permission.permissionCode}`}
                           type="checkbox"
-                          checked={localPermissions[profile][permission] || false}
+                          checked={role.permissionCodes.includes(permission.permissionCode)}
                           disabled
                           readOnly
                         />
-                        <span>{permission}</span>
+                        <span>{permission.displayName || permission.permissionCode}</span>
                       </label>
                     ))}
                   </div>

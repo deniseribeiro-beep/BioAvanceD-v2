@@ -9,6 +9,7 @@ const configurationValidationService = require('./configurationValidation.servic
 const { invariantForPath } = require('../governance/invariants');
 const { CATALOG_VERSION, SECURITY_SETTING_CATALOG, entriesOfKind, profileFields } = require('../governance/securitySettingCatalog');
 const logLevel = require('../utils/logLevel');
+const { getCollection } = require('../utils/collectionResolver');
 
 /**
  * Service de Configurações de Segurança
@@ -1062,55 +1063,53 @@ class SecurityService {
   }
 
   /**
-   * Retorna permissões por perfil
+   * Retorna os papéis e as permissões que cada um concede.
+   *
+   * #1341: read from the seeded `roles` and `permissions` collections, the
+   * rows enforcement reads (userHasPermission), which the RBAC seed sets to
+   * PERMISSION_CATALOG on every boot. This used to be a hardcoded accessType
+   * map that listed a code the catalog does not have (manageSecurity), left
+   * out most of the catalog, and had no slot for the additive `auditor`
+   * role. Read-only: role grants are catalog-owned, and the user-to-role
+   * link is what an Administrador manages (RF003 AC3).
+   *
+   * #1149: a `security_permissions` overlay that the removed PUT wrote is
+   * not read. No enforcement path ever read it.
    */
-  async getPermissions(_db) {
-    // Permissões padrão baseadas em accessType
-    const defaultPermissions = {
-      '1': { // Usuário Externo
-        viewReports: true
-      },
-      '2': { // Técnico
-        createSample: true,
-        withdrawSample: true,
-        viewTemperature: true,
-        uploadFiles: true,
-        viewReports: true
-      },
-      '3': { // Coordenador
-        createUser: true,
-        createPatient: true,
-        createSample: true,
-        withdrawSample: true,
-        viewTemperature: true,
-        uploadFiles: true,
-        viewReports: true
-      },
-      '4': { // Administrador
-        createUser: true,
-        createPatient: true,
-        createSample: true,
-        withdrawSample: true,
-        viewTemperature: true,
-        uploadFiles: true,
-        viewReports: true,
-        manageSystem: true,
-        manageBackup: true,
-        manageSecurity: true,
-        resetMFA: true
-      }
-    };
+  async getPermissions(db) {
+    const rolesCollection = await getCollection(db, 'roles');
+    const permissionsCollection = await getCollection(db, 'permissions');
+    const [roleDocs, permissionDocs] = await Promise.all([
+      rolesCollection.find({}).toArray(),
+      permissionsCollection.find({}).toArray(),
+    ]);
 
-    // #1149: this map is returned as-is. It used to be merged with a
-    // `security_permissions` overlay that PUT /api/security/permissions
-    // wrote. No enforcement path ever read that collection: requirePermission
-    // reads the in-process catalog and userHasPermission reads the seeded
-    // roles/permissions (see #1123). So an edit changed nothing, yet it was
-    // shown back as the profile's permissions and audited as a critical
-    // change. The write surface is gone, and this read no longer echoes
-    // rows it left behind. Those rows are kept, not deleted, as part of the
-    // record of what was once saved.
-    return defaultPermissions;
+    const codeById = new Map(permissionDocs.map((p) => [p.permissionId, p.permissionCode]));
+    const permissions = permissionDocs
+      .map((p) => ({
+        permissionCode: p.permissionCode,
+        displayName: p.displayName,
+        resourceType: p.resourceType,
+        allowedActions: p.allowedActions || [],
+      }))
+      .sort((a, b) => a.permissionCode.localeCompare(b.permissionCode));
+
+    // Primary roles by hierarchyLevel, highest first; additive roles
+    // (hierarchyLevel null, #429) after them.
+    const rank = (r) => (typeof r.hierarchyLevel === 'number' ? r.hierarchyLevel : -1);
+    const roles = roleDocs
+      .map((r) => ({
+        roleCode: r.roleCode,
+        displayName: r.displayName,
+        hierarchyLevel: typeof r.hierarchyLevel === 'number' ? r.hierarchyLevel : null,
+        permissionCodes: (r.permissionIds || [])
+          .map((id) => codeById.get(id))
+          .filter(Boolean)
+          .sort(),
+      }))
+      .sort((a, b) => rank(b) - rank(a) || a.roleCode.localeCompare(b.roleCode));
+
+    return { roles, permissions };
   }
 
 }

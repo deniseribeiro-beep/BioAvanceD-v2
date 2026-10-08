@@ -151,13 +151,15 @@ describe('rbac-catalog-seed.service', () => {
     expect(roles.find((r) => r.roleCode === 'coordinator').permissionIds).toContain(idOf('createUser'));
   });
 
-  // upsertRole merges, so deleting the code from the seed alone would leave
-  // every database seeded before #662 enforcing the old grant, since
-  // userHasPermission reads the stored role document.
-  it('#662: pulls the retired Coordenador grant off an already-seeded role, keeping its roleId and every other grant', async () => {
+  // #1341: role grants are catalog-owned, so upsertRole sets the stored
+  // role to the seed's list. A database seeded before #662 still holding
+  // the withdrawn grant loses it, and so does a grant added by hand: the
+  // stored role equals the catalog after the boot.
+  it('#662, #1341: sets an already-seeded role to the catalog, pulling a withdrawn grant and a hand-added one, keeping its roleId', async () => {
     const db = createFakeDb();
     const first = await seedRolesAndPermissions(db);
     const permissionIdByCode = Object.fromEntries(first.permissions.map((p) => [p.permissionCode, p.permissionId]));
+    const seededCoordinatorIds = [...first.roles.find((r) => r.roleCode === 'coordinator').permissionIds];
 
     // A database seeded before #662: the Coordenador still holds the grant,
     // plus one an operator added by hand.
@@ -169,7 +171,8 @@ describe('rbac-catalog-seed.service', () => {
 
     const coordinator = second.roles.find((r) => r.roleCode === 'coordinator');
     expect(coordinator.permissionIds).not.toContain(permissionIdByCode.manageAccessRequests);
-    expect(coordinator.permissionIds).toContain(permissionIdByCode.manageBackup);
+    expect(coordinator.permissionIds).not.toContain(permissionIdByCode.manageBackup);
+    expect([...coordinator.permissionIds].sort()).toEqual([...seededCoordinatorIds].sort());
     expect(coordinator.permissionIds).toContain(permissionIdByCode.createUser);
     expect(coordinator.roleId).toBe(roleId);
     const stored = db.collections.roles.docs.find((r) => r.roleCode === 'coordinator');
@@ -265,6 +268,24 @@ describe('rbac-catalog-seed.service', () => {
 
     expect(updateCalls).toBe(0);
     expect(permissions.docs).toHaveLength(insertedCount);
+  });
+
+  // #1341: setting a role compares as a set, so a stored list in another
+  // order is not a change and a no-op boot writes no role either.
+  it('#1341 control: a re-seed of roles matching the catalog, in any order, issues no role write', async () => {
+    const db = createFakeDb();
+    await seedRolesAndPermissions(db);
+
+    const roles = db.collections.roles;
+    const coordinatorDoc = roles.docs.find((r) => r.roleCode === 'coordinator');
+    coordinatorDoc.permissionIds = [...coordinatorDoc.permissionIds].reverse();
+    let updateCalls = 0;
+    const realUpdateOne = roles.updateOne.bind(roles);
+    roles.updateOne = async (...args) => { updateCalls += 1; return realUpdateOne(...args); };
+
+    await seedRolesAndPermissions(db);
+
+    expect(updateCalls).toBe(0);
   });
 
 

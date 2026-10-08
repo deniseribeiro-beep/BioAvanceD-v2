@@ -1688,7 +1688,6 @@
     },
     "passwordChange": "Cambiar contraseña",
     "permissions": {
-      "profile": "Perfil {id}",
       "readOnlyNote": "Solo lectura. Estos permisos los define el catálogo de roles del sistema y no se pueden modificar en esta pantalla.",
       "title": "Permisos por perfil"
     },

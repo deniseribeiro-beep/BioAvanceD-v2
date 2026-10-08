@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const securityService = require('../../src/services/security.service');
 const logger = require('../../src/utils/logger');
 const auditLogger = require('../../src/utils/auditLogger');
+const { seedRolesAndPermissions, PERMISSION_CATALOG } = require('../../src/services/rbac-catalog-seed.service');
 
 describe('SecurityService.getDefaultConfig', () => {
   it('returns object with authentication section', () => {
@@ -600,47 +601,85 @@ describe('SecurityService.getPermissions', () => {
     vi.restoreAllMocks();
   });
 
-  it('returns default permissions when no custom permissions are stored', async () => {
-    const findOne = vi.fn().mockResolvedValue(null);
-    const db = { collection: vi.fn(() => ({ findOne })) };
+  // #1341: the roles and permissions come from the collections the RBAC seed
+  // writes, through the real seed, so the payload is what enforcement reads.
+  function createSeedDb() {
+    const store = {};
+    const matches = (doc, filter) => Object.keys(filter).every((k) => doc[k] === filter[k]);
+    const collectionOf = (name) => {
+      if (!store[name]) {
+        const docs = [];
+        store[name] = {
+          docs,
+          async insertOne(doc) { docs.push(doc); return { insertedId: docs.length }; },
+          async findOne(filter = {}) { return docs.find((d) => matches(d, filter)) || null; },
+          async updateOne(filter, update) {
+            const doc = docs.find((d) => matches(d, filter));
+            if (doc && update.$set) Object.assign(doc, update.$set);
+            return { matchedCount: doc ? 1 : 0 };
+          },
+          find(filter = {}) { return { toArray: async () => docs.filter((d) => matches(d, filter)) }; },
+        };
+      }
+      return store[name];
+    };
+    return { store, collection: vi.fn(collectionOf) };
+  }
 
-    const result = await securityService.getPermissions(db);
+  async function seededDb() {
+    const db = createSeedDb();
+    await seedRolesAndPermissions(db);
+    return db;
+  }
 
-    expect(result['4'].manageSystem).toBe(true);
-    expect(result['1'].createUser).toBeUndefined();
+  it('#1341: lists every seeded role, the additive auditor included, with its displayName', async () => {
+    const db = await seededDb();
+
+    const { roles } = await securityService.getPermissions(db);
+
+    expect(roles.map((r) => r.roleCode)).toEqual(['administrator', 'coordinator', 'technician', 'external_user', 'auditor']);
+    const auditor = roles.find((r) => r.roleCode === 'auditor');
+    expect(auditor.hierarchyLevel).toBeNull();
+    expect(auditor.permissionCodes).toEqual(['viewAuditLogs']);
+    for (const role of roles) expect(typeof role.displayName).toBe('string');
   });
 
-  // #1149: this used to merge a `security_permissions` overlay over the
-  // defaults. That overlay was written by the removed PUT and read by no
-  // enforcement path, so echoing it showed a permission change that had not
-  // happened. A stored overlay is now ignored, and the collection is not read.
-  it('#1149: ignores a stored security_permissions overlay and never reads the collection', async () => {
-    const findOne = vi.fn().mockResolvedValue({ permissions: { '2': { viewReports: false, createUser: true } } });
-    const db = { collection: vi.fn(() => ({ findOne })) };
+  it("#1341: a role's codes are the ones its stored permissionIds name, not a hardcoded map", async () => {
+    const db = await seededDb();
+    const idOf = (code) => db.store.permissions.docs.find((p) => p.permissionCode === code).permissionId;
+    const technician = db.store.roles.docs.find((r) => r.roleCode === 'technician');
+    technician.permissionIds = [idOf('viewReports'), idOf('manageBackup')];
 
-    const result = await securityService.getPermissions(db);
+    const { roles } = await securityService.getPermissions(db);
 
-    expect(db.collection).not.toHaveBeenCalled();
-    expect(findOne).not.toHaveBeenCalled();
-    expect(result['2'].viewReports).toBe(true); // the default, not the overlay's false
-    expect(result['2']).not.toHaveProperty('createUser');
+    expect(roles.find((r) => r.roleCode === 'technician').permissionCodes).toEqual(['manageBackup', 'viewReports']);
   });
 
-  // #1110: Usuario Externo was granted useAssistant: true by default. It
-  // appeared nowhere else in the tracked tree -- no gate read it, no caller
-  // sent it -- so it granted nothing while the UI told the user they had
-  // assistant access. RF012 AC#10 excludes the feature from this scope.
-  it('#1110: grants no useAssistant permission to any profile', async () => {
-    const findOne = vi.fn().mockResolvedValue(null);
-    const db = { collection: vi.fn(() => ({ findOne })) };
+  // The old map listed manageSecurity, which the catalog does not have, and
+  // #1110 removed useAssistant, which nothing gated.
+  it('#1341: lists every stored permission with its catalog displayName, and no code the catalog lacks', async () => {
+    const db = await seededDb();
 
-    const result = await securityService.getPermissions(db);
+    const { roles, permissions } = await securityService.getPermissions(db);
 
-    for (const profile of Object.values(result)) {
-      expect(profile).not.toHaveProperty('useAssistant');
+    expect(permissions).toHaveLength(db.store.permissions.docs.length);
+    for (const p of permissions) {
+      expect(PERMISSION_CATALOG[p.permissionCode]).toBeDefined();
+      expect(p.displayName).toBe(PERMISSION_CATALOG[p.permissionCode].displayName);
     }
-    // control: profile 1 still carries its one real grant
-    expect(result['1'].viewReports).toBe(true);
+    const granted = new Set(roles.flatMap((r) => r.permissionCodes));
+    expect(granted.has('manageSecurity')).toBe(false);
+    expect(granted.has('useAssistant')).toBe(false);
+  });
+
+  // #1149: the `security_permissions` overlay the removed PUT wrote is
+  // never read, since no enforcement path read it.
+  it('#1149: never reads the security_permissions collection', async () => {
+    const db = await seededDb();
+
+    await securityService.getPermissions(db);
+
+    expect(db.collection.mock.calls.map(([name]) => name)).not.toContain('security_permissions');
   });
 });
 

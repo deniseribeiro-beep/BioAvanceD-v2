@@ -295,7 +295,12 @@ describe('Security routes', () => {
 
   it('GET /permissions deve listar permissões', async () => {
     const handler = getHandler(securityRoutes, 'get', '/permissions');
-    vi.spyOn(securityService, 'getPermissions').mockResolvedValue({ '4': { manageSecurity: true } });
+    // #1341: the payload is the seeded roles and the permissions they grant.
+    const payload = {
+      roles: [{ roleCode: 'administrator', displayName: 'Administrador', hierarchyLevel: 4, permissionCodes: ['manageSystem'] }],
+      permissions: [{ permissionCode: 'manageSystem', displayName: 'Gerenciar sistema', resourceType: 'System', allowedActions: ['READ'] }],
+    };
+    vi.spyOn(securityService, 'getPermissions').mockResolvedValue(payload);
 
     const req = createRequest();
     const res = createResponse();
@@ -304,7 +309,7 @@ describe('Security routes', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.payload.success).toBe(true);
-    expect(res.payload.data['4'].manageSecurity).toBe(true);
+    expect(res.payload.data).toEqual(payload);
   });
 
   it('GET /permissions deve retornar 503 quando o banco de dados não está disponível', async () => {

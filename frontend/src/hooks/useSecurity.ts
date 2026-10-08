@@ -120,10 +120,25 @@ export interface SecurityConfig {
   lastUpdatedBy?: string;
 }
 
+// #1341: GET /security/permissions returns the seeded roles and the
+// permissions each grants, the rows enforcement reads. Read-only.
+export interface PermissionEntry {
+  permissionCode: string;
+  displayName: string;
+  resourceType: string;
+  allowedActions: string[];
+}
+
+export interface RoleEntry {
+  roleCode: string;
+  displayName: string;
+  hierarchyLevel: number | null;
+  permissionCodes: string[];
+}
+
 export interface ProfilePermissions {
-  [profile: string]: {
-    [permission: string]: boolean;
-  };
+  roles: RoleEntry[];
+  permissions: PermissionEntry[];
 }
 
 export function useSecurity() {
