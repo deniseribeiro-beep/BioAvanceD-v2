@@ -1290,6 +1290,11 @@ class PatientService {
       responses,
       ipAddress,
       userAgent
+    }, {
+      // RF010 AC4: the participant's own acceptance through the token link.
+      channel: 'electronic_link',
+      signerRole: 'participant',
+      authenticationLevel: 'token'
     });
 
     const patientsCollection = await this.getPatientsCollection(db);

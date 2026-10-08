@@ -1566,21 +1566,68 @@ describe('ConsentService.createPatientConsent', () => {
     const patients = makeCollection({ findOne: vi.fn(async () => ({ participantId: '12345678' })) });
     const templates = makeCollection({ findOne: vi.fn(async () => activeTemplate) });
     const consents = makeCollection({ insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })) });
-    const db = makeDb({ patients, consent_templates: templates, patientConsents: consents });
+    const decisionEvents = makeCollection();
+    const db = makeDb({ patients, consent_templates: templates, patientConsents: consents, consentDecisionEvents: decisionEvents });
 
     const result = await consentService.createPatientConsent(db, {
       participantId: '12345678',
       consentTemplateId: templateId.toString(),
       responses: { analytics: true },
       ...validSignature,
-    });
+    }, { channel: 'staff_portal', signerRole: 'participant', authenticationLevel: 'session' });
 
     expect(result._id).toBeDefined();
     expect(result.status).toBe('ACTIVE');
-    expect(consents.updateMany).toHaveBeenCalledWith(
-      { participantId: '12345678', status: 'ACTIVE' },
-      expect.objectContaining({ $set: expect.objectContaining({ status: 'REVOKED' }) })
+    expect(result.currentStateDerived).toBe('active');
+    // RF010 AC4: the acceptance is an appended decision event.
+    expect(decisionEvents.insertOne).toHaveBeenCalledWith(expect.objectContaining({
+      consentId: result.consentId,
+      decision: 'accepted',
+      channel: 'staff_portal',
+      signerRole: 'participant',
+      signerId: '12345678',
+      authenticationLevel: 'session',
+      evidenceUri: 'objstore://consents/stub/evidence.json',
+    }));
+    // RF010 AC5: no earlier consent is overwritten in bulk.
+    expect(consents.updateMany).not.toHaveBeenCalled();
+  });
+
+  // RF010 AC5: a newer consent supersedes the participant's consent in force
+  // through that consent's history -- a `superseded` decision event and a
+  // pointer -- and its state is derived from it.
+  it('supersedes the participant\'s consent in force through its history', async () => {
+    const priorId = new ObjectId();
+    const prior = { _id: priorId, consentId: 'prior-uuid', participantId: '12345678', consentTemplateId: 'tmpl-0', status: 'ACTIVE', responses: { analytics: true } };
+    const patients = makeCollection({ findOne: vi.fn(async () => ({ participantId: '12345678' })) });
+    const templates = makeCollection({ findOne: vi.fn(async () => activeTemplate) });
+    const consents = makeCollection({ find: vi.fn(() => makeCursor([prior])) });
+    const supersededEvent = { consentId: 'prior-uuid', decision: 'superseded', occurredAt: new Date() };
+    const decisionEvents = makeCollection({
+      find: vi.fn((query) => makeCursor(query.consentId === 'prior-uuid' ? [supersededEvent] : [])),
+    });
+    const db = makeDb({ patients, consent_templates: templates, patientConsents: consents, consentDecisionEvents: decisionEvents });
+
+    const result = await consentService.createPatientConsent(db, {
+      participantId: '12345678',
+      consentTemplateId: templateId.toString(),
+      responses: { analytics: true },
+    });
+
+    expect(result.supersedesConsentId).toBe('prior-uuid');
+    expect(decisionEvents.insertOne).toHaveBeenCalledWith(expect.objectContaining({
+      consentId: 'prior-uuid',
+      decision: 'superseded',
+    }));
+    expect(consents.updateOne).toHaveBeenCalledWith(
+      { _id: priorId },
+      { $set: { supersededByConsentId: result.consentId } }
     );
+    expect(consents.updateOne).toHaveBeenCalledWith(
+      { _id: priorId },
+      { $set: expect.objectContaining({ currentStateDerived: 'superseded', status: 'REVOKED' }) }
+    );
+    expect(consents.updateMany).not.toHaveBeenCalled();
   });
 
   // #820: the path production actually takes. POST /api/e-consent/update --
@@ -1910,23 +1957,91 @@ describe('ConsentService.createPatientConsent', () => {
 });
 
 describe('ConsentService.revokeConsent', () => {
+  // RF010 AC4/AC6: a revocation stores its own evidence document; kept off
+  // the disk here, consentEvidence.service.unit.test.js owns it.
+  beforeEach(() => {
+    vi.spyOn(consentEvidence, 'storeRevocationEvidence').mockReturnValue({
+      evidenceUri: 'objstore://consents/stub/revocation.json',
+      evidenceHash: `sha256:${'1'.repeat(64)}`,
+    });
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
+  // The history a revocation appends is what the state is derived from, so
+  // the fake revocations collection hands back what was inserted into it.
+  function makeHistoryCollections() {
+    const rows = { consentDecisionEvents: [], consentRevocations: [] };
+    const collections = {};
+    for (const name of Object.keys(rows)) {
+      collections[name] = makeCollection({
+        find: vi.fn(() => makeCursor(rows[name])),
+        insertOne: vi.fn(async (doc) => { rows[name].push(doc); return { insertedId: new ObjectId() }; }),
+      });
+    }
+    return collections;
+  }
+
   it('revokes an active consent', async () => {
     const consentId = new ObjectId();
-    const consent = { _id: consentId, status: 'ACTIVE', patientId: '12345678' };
+    const consent = { _id: consentId, consentId: 'c-uuid', status: 'ACTIVE', participantId: '12345678', consentTemplateId: 'tmpl-1', responses: { analytics: true } };
     const consents = makeCollection({ findOne: vi.fn(async () => consent) });
-    const db = makeDb({ patientConsents: consents });
+    const history = makeHistoryCollections();
+    const db = makeDb({ patientConsents: consents, ...history });
 
     const result = await consentService.revokeConsent(db, consentId.toString());
 
     expect(result.status).toBe('REVOKED');
+    expect(result.currentStateDerived).toBe('revoked');
+    expect(history.consentDecisionEvents.insertOne).toHaveBeenCalledWith(expect.objectContaining({
+      consentId: 'c-uuid',
+      decision: 'revoked',
+      evidenceUri: 'objstore://consents/stub/revocation.json',
+    }));
+    expect(history.consentRevocations.insertOne).toHaveBeenCalledWith(expect.objectContaining({
+      consentId: 'c-uuid',
+      scope: ['all'],
+      priorUseDisposition: 'retain_history',
+    }));
     expect(consents.updateOne).toHaveBeenCalledWith(
       { _id: consentId },
-      expect.objectContaining({ $set: expect.objectContaining({ status: 'REVOKED' }) })
+      expect.objectContaining({ $set: expect.objectContaining({ status: 'REVOKED', currentStateDerived: 'revoked' }) })
     );
+  });
+
+  // RF010 AC6: a scope naming some permissions leaves the consent in force
+  // with those permissions blocked, and sends no revocation notice.
+  it('revokes only the scoped permissions and keeps the consent in force', async () => {
+    const consentId = new ObjectId();
+    const consent = { _id: consentId, consentId: 'c-uuid', status: 'ACTIVE', participantId: 'PART-1', consentTemplateId: 'tmpl-1', responses: { analytics: true, contact: true } };
+    const consents = makeCollection({ findOne: vi.fn(async () => consent) });
+    const history = makeHistoryCollections();
+    const db = makeDb({ patientConsents: consents, ...history });
+    const dispatchSpy = vi.spyOn(notificationDispatchService, 'dispatchNotification').mockResolvedValue(null);
+
+    const result = await consentService.revokeConsent(db, consentId.toString(), { scope: ['contact'], reason: 'não quer contato' });
+
+    expect(result.status).toBe('ACTIVE');
+    expect(result.currentStateDerived).toBe('partially_revoked');
+    expect(result.effectivePermissions).toEqual({ analytics: true, contact: false });
+    expect(result.responses).toEqual({ analytics: true, contact: true });
+    expect(history.consentRevocations.insertOne).toHaveBeenCalledWith(expect.objectContaining({ scope: ['contact'], reason: 'não quer contato' }));
+    expect(dispatchSpy).not.toHaveBeenCalled();
+  });
+
+  it('refuses a scope naming no permission of the consent with a 422', async () => {
+    const consentId = new ObjectId();
+    const consent = { _id: consentId, consentId: 'c-uuid', status: 'ACTIVE', participantId: 'PART-1', consentTemplateId: 'tmpl-1', responses: { analytics: true } };
+    const consents = makeCollection({ findOne: vi.fn(async () => consent) });
+    const history = makeHistoryCollections();
+    const db = makeDb({ patientConsents: consents, ...history });
+
+    await expect(consentService.revokeConsent(db, consentId.toString(), { scope: ['genetic'] }))
+      .rejects.toMatchObject({ statusCode: 422 });
+    expect(history.consentDecisionEvents.insertOne).not.toHaveBeenCalled();
+    expect(history.consentRevocations.insertOne).not.toHaveBeenCalled();
   });
 
   it('returns the consent unchanged when it is already revoked', async () => {
@@ -1945,7 +2060,7 @@ describe('ConsentService.revokeConsent', () => {
     const consentId = new ObjectId();
     const consent = { _id: consentId, status: 'ACTIVE', participantId: 'PART-1' };
     const consents = makeCollection({ findOne: vi.fn(async () => consent) });
-    const db = makeDb({ patientConsents: consents });
+    const db = makeDb({ patientConsents: consents, ...makeHistoryCollections() });
     const dispatchSpy = vi.spyOn(notificationDispatchService, 'dispatchNotification').mockResolvedValue(null);
 
     await consentService.revokeConsent(db, consentId.toString());
@@ -1977,7 +2092,7 @@ describe('ConsentService.revokeConsent', () => {
     const consentId = new ObjectId();
     const consent = { _id: consentId, status: 'ACTIVE', participantId: 'PART-1' };
     const consents = makeCollection({ findOne: vi.fn(async () => consent) });
-    const db = makeDb({ patientConsents: consents });
+    const db = makeDb({ patientConsents: consents, ...makeHistoryCollections() });
     vi.spyOn(notificationDispatchService, 'dispatchNotification').mockRejectedValue(new Error('notificationRules lookup failed'));
     const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
 

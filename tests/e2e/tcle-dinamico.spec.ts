@@ -144,4 +144,118 @@ test.describe('RF010 Consent versioned by consentId — real backend, red-first 
 
     expect(response.status()).toBe(422);
   });
+
+  // RF010 AC4-AC6: every manifestation is an appended ConsentDecisionEvent, a
+  // revocation carries its scope as a ConsentRevocation, and the consent's
+  // state is derived from that history -- a scoped revocation narrows it, a
+  // newer consent supersedes it, and the responses as given never change.
+  test('AC4-AC6: acceptance, scoped revocation, supersession and revocation are appended history the state derives from', async ({ request }) => {
+    const admin = await realLogin(request);
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+
+    // A term with two granular permissions. Its createdAt is old, so it is
+    // never the newest active term other specs read as "the" active one.
+    const client = new MongoClient(mongoUri);
+    await client.connect();
+    try {
+      const db = client.db(mongoDbName);
+      const template = await db.collection('consent_templates').findOneAndUpdate(
+        { e2eFixture: 'rf010-consent-history-template' },
+        {
+          $setOnInsert: {
+            title: 'RF010 e2e consent history template',
+            content: 'Termo com permissões granulares para o teste de histórico (RF010).',
+            version: 'v1',
+            permissions: [
+              { key: 'storage', label: 'Armazenamento', required: false },
+              { key: 'contact', label: 'Contato futuro', required: false },
+            ],
+            createdAt: new Date('2000-01-01T00:00:00Z'),
+          },
+          $set: { active: true, updatedAt: new Date() },
+        },
+        { upsert: true, returnDocument: 'after' }
+      );
+      const templateId = String(template?._id);
+
+      const sign = async () => {
+        const response = await request.post(`${apiBaseURL}/api/e-consent/consents`, {
+          headers: auth,
+          data: { participantId: participant.participantId, consentTemplateId: templateId, responses: { storage: true, contact: true } },
+        });
+        expect(response.status()).toBe(201);
+        return (await response.json()).data;
+      };
+      const history = async (id: string) => {
+        const response = await request.get(`${apiBaseURL}/api/e-consent/consents/${id}/history`, { headers: auth });
+        expect(response.status()).toBe(200);
+        return (await response.json()).data;
+      };
+      const revoke = (id: string, data: Record<string, unknown>) =>
+        request.post(`${apiBaseURL}/api/e-consent/consents/${id}/revoke`, { headers: auth, data });
+
+      // AC4: the acceptance is an event naming channel, signer and evidence.
+      const first = await sign();
+      expect(first.currentStateDerived).toBe('active');
+      const accepted = await history(first._id);
+      expect(accepted.decisionEvents).toHaveLength(1);
+      expect(accepted.decisionEvents[0]).toMatchObject({
+        consentId: first.consentId,
+        decision: 'accepted',
+        channel: 'staff_portal',
+        signerRole: 'participant',
+        signerId: participant.participantId,
+        authenticationLevel: 'session',
+        evidenceUri: first.evidenceDocumentUri,
+      });
+      expect(accepted.decisionEvents[0].evidenceHash).toMatch(/^sha256:[a-f0-9]{64}$/);
+
+      // AC6: a scoped revocation blocks only its permission, from now on.
+      const scoped = await revoke(first._id, { scope: ['contact'], reason: 'Não deseja contato futuro' });
+      expect(scoped.status()).toBe(200);
+      const narrowed = (await scoped.json()).data;
+      expect(narrowed).toMatchObject({
+        status: 'ACTIVE',
+        currentStateDerived: 'partially_revoked',
+        responses: { storage: true, contact: true },
+        effectivePermissions: { storage: true, contact: false },
+        withdrawalScope: ['contact'],
+      });
+
+      // A scope naming no permission of the consent is refused, and appends nothing.
+      const unknown = await revoke(first._id, { scope: ['genetic'] });
+      expect(unknown.status()).toBe(422);
+      expect(Array.isArray((await unknown.json()).details)).toBe(true);
+
+      // AC5: a newer consent supersedes the first through its history.
+      const second = await sign();
+      expect(second.supersedesConsentId).toBe(first.consentId);
+      const superseded = await history(first._id);
+      expect(superseded.currentStateDerived).toBe('superseded');
+      expect(superseded.supersededByConsentId).toBe(second.consentId);
+      expect(superseded.decisionEvents.map((event: { decision: string }) => event.decision))
+        .toEqual(['accepted', 'revoked', 'superseded']);
+      expect(superseded.revocations).toHaveLength(1);
+      expect(superseded.revocations[0]).toMatchObject({ scope: ['contact'], priorUseDisposition: 'retain_history' });
+
+      // AC6: revoking every use revokes the consent; the revocation names its event.
+      const full = await revoke(second._id, {});
+      expect(full.status()).toBe(200);
+      expect((await full.json()).data).toMatchObject({ status: 'REVOKED', currentStateDerived: 'revoked' });
+      const revoked = await history(second._id);
+      const revokedEvent = revoked.decisionEvents.find((event: { decision: string }) => event.decision === 'revoked');
+      expect(revoked.revocations[0]).toMatchObject({ scope: ['all'], decisionEventId: revokedEvent.consentDecisionEventId });
+
+      // A repeat revokes nothing more and appends nothing.
+      expect((await revoke(second._id, {})).status()).toBe(200);
+      expect((await history(second._id)).decisionEvents).toHaveLength(revoked.decisionEvents.length);
+
+      // No manifestation was overwritten.
+      const stored = await db.collection('patientConsents').findOne({ _id: new ObjectId(first._id) });
+      expect(stored?.responses).toEqual({ storage: true, contact: true });
+    } finally {
+      await client.close();
+    }
+  });
 });

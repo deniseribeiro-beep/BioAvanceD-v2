@@ -215,6 +215,8 @@ module.exports = {
   COLL_ACCESS_POLICIES: process.env.COLL_ACCESS_POLICIES || 'accessPolicies',
   COLL_COLLECTION_GOVERNANCE_APPROVALS: process.env.COLL_COLLECTION_GOVERNANCE_APPROVALS || 'collectionGovernanceApprovals',
   COLL_COLLECTION_GOVERNANCE_EVENTS: process.env.COLL_COLLECTION_GOVERNANCE_EVENTS || 'collectionGovernanceEvents',
+  COLL_CONSENT_DECISION_EVENTS: process.env.COLL_CONSENT_DECISION_EVENTS || 'consentDecisionEvents',
+  COLL_CONSENT_REVOCATIONS: process.env.COLL_CONSENT_REVOCATIONS || 'consentRevocations',
   COLL_REAGENT_LOTS: process.env.COLL_REAGENT_LOTS || 'reagentLots',
   COLL_NONCONFORMANCES: process.env.COLL_NONCONFORMANCES || 'nonconformances',
   COLL_LEGAL_HOLDS: process.env.COLL_LEGAL_HOLDS || 'legalHolds',

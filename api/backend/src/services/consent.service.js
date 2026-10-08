@@ -6,6 +6,7 @@ const ConsentTemplateModel = require('../models/ConsentTemplate');
 const ConsentPolicyModel = require('../models/ConsentPolicy');
 const PatientConsentModel = require('../models/PatientConsent');
 const consentEvidence = require('./consentEvidence.service');
+const consentHistory = require('./consentHistory.service');
 const { validateParticipantId } = require('../utils/patientAnonymization');
 const logger = require('../utils/logger');
 const { getCollection } = require('../utils/collectionResolver');
@@ -819,7 +820,21 @@ class ConsentService {
       .toArray();
   }
 
-  async createPatientConsent(db, payload) {
+  /**
+   * Who manifested a decision, and how (dict v2.0.0 V2E-0124..0127). A
+   * caller that names none is a participant signing on paper with no
+   * further authentication.
+   */
+  resolveDecisionActor(actor, participantId) {
+    return {
+      channel: actor?.channel || 'paper',
+      signerRole: actor?.signerRole || 'participant',
+      signerId: actor?.signerId ? String(actor.signerId) : String(participantId || ''),
+      authenticationLevel: actor?.authenticationLevel || 'basic',
+    };
+  }
+
+  async createPatientConsent(db, payload, actor = null) {
     try {
       // Suporte ao campo signatureBase64 vindo do frontend
       let patchedPayload = { ...payload };
@@ -905,10 +920,10 @@ class ConsentService {
       }
 
       const consentsCollection = await getCollection(db, 'consents');
-      await consentsCollection.updateMany(
-        { participantId, status: 'ACTIVE' },
-        { $set: { status: 'REVOKED', revokedAt: new Date(), updatedAt: new Date() } }
-      );
+      // RF010 AC5: the participant's consents still in force are superseded
+      // by this one through their history, after it is written, never by
+      // overwriting their status.
+      const supersededConsents = await consentsCollection.find({ participantId, status: 'ACTIVE' }).toArray();
 
       // Logar apenas o tamanho da assinatura, se existir
       if (normalizedPayload.signatureImageBase64) {
@@ -943,8 +958,18 @@ class ConsentService {
         ...evidence,
         status: 'ACTIVE'
       });
+      if (supersededConsents.length > 0) {
+        consent.supersedesConsentId = consentHistory.consentKeyOf(supersededConsents[0]);
+      }
 
       const insertResult = await consentsCollection.insertOne(consent);
+      const decisionActor = this.resolveDecisionActor(actor, participantId);
+      const recorded = await consentHistory.recordAcceptance(
+        db, { _id: insertResult.insertedId, ...consent }, decisionActor
+      );
+      for (const prior of supersededConsents) {
+        await consentHistory.recordSupersession(db, prior, consent, decisionActor);
+      }
       await this.recordConsentProjectionEvent(db, {
         participantId,
         consentId: insertResult.insertedId.toString(),
@@ -952,17 +977,21 @@ class ConsentService {
         signedAt: consent.signedAt || new Date(),
       });
 
-      return {
-        _id: insertResult.insertedId,
-        ...consent
-      };
+      return recorded;
     } catch (error) {
       logger.error('Erro ao criar consentimento do paciente:', error.message);
       throw error;
     }
   }
 
-  async revokeConsent(db, consentId) {
+  /**
+   * RF010 AC6: revoke `request.scope` (default: every use) of a consent from
+   * now on, as a ConsentRevocation and its decision event. A scope naming
+   * some permissions narrows what the consent permits and leaves it in
+   * force; one blocking every use revokes it. A request that blocks nothing
+   * still permitted returns the consent unchanged.
+   */
+  async revokeConsent(db, consentId, request = {}, actor = null) {
     const consentsCollection = await getCollection(db, 'consents');
 
     let objectId;
@@ -977,17 +1006,18 @@ class ConsentService {
       return null;
     }
 
-    if (consent.status === 'REVOKED') {
+    const recorded = await consentHistory.recordRevocation(
+      db, consent, request, this.resolveDecisionActor(actor, consent.participantId)
+    );
+    if (!recorded) {
       return consent;
     }
-
-    await consentsCollection.updateOne(
-      { _id: objectId },
-      { $set: { status: 'REVOKED', revokedAt: new Date(), updatedAt: new Date() } }
-    );
+    if (recorded.consent.status !== 'REVOKED') {
+      return recorded.consent;
+    }
 
     await this.recordConsentProjectionEvent(db, {
-      participantId: consent.participantId || consent.participantId || null,
+      participantId: consent.participantId || null,
       consentId: objectId.toString(),
       status: 'REVOKED',
       signedAt: consent.signedAt || consent.createdAt || new Date(),
@@ -1011,15 +1041,30 @@ class ConsentService {
       logger.error('[NOTIFICATION_DISPATCH] Falha ao disparar notificação de revogação de consentimento:', dispatchError.message || dispatchError);
     });
 
-    const revokedConsent = {
-      ...consent,
-      status: 'REVOKED',
-      revokedAt: new Date(),
-      updatedAt: new Date()
-    };
+    return recorded.consent;
+  }
 
+  /** RF010 AC5: a consent's derived state with the history it derives from. */
+  async getConsentHistory(db, consentId) {
+    let objectId;
+    try {
+      objectId = new ObjectId(consentId);
+    } catch (error) {
+      throw new Error('ID de consentimento inválido');
+    }
+    const consent = await (await getCollection(db, 'consents')).findOne({ _id: objectId });
+    if (!consent) {
+      return null;
+    }
+    const { events, revocations } = await consentHistory.getHistory(db, consent);
     return {
-      ...revokedConsent
+      consentId: consentHistory.consentKeyOf(consent),
+      participantId: consent.participantId || null,
+      currentStateDerived: consentHistory.deriveConsentState(consent, events, revocations).currentStateDerived,
+      supersededByConsentId: consent.supersededByConsentId || null,
+      supersedesConsentId: consent.supersedesConsentId || null,
+      decisionEvents: events,
+      revocations
     };
   }
 

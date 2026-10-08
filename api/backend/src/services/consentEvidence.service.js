@@ -81,8 +81,54 @@ function storeConsentEvidence(input) {
   };
 }
 
+/**
+ * RF010 AC4/AC6: a revocation's own evidence, the document its
+ * ConsentDecisionEvent's evidenceUri/evidenceHash (V2E-0129/0130) name. It
+ * binds the scope, prospective effect, prior-use disposition and signer,
+ * stored beside the consent's acceptance evidence through the same path.
+ */
+function storeRevocationEvidence(input) {
+  assertFileEncryptionConfigured();
+
+  const document = {
+    evidenceSchema: 'bioavanced.consent-revocation-evidence/v1',
+    consentId: input.consentId,
+    consentRevocationId: input.consentRevocationId,
+    participantId: input.participantId || null,
+    scope: input.scope,
+    reason: input.reason || null,
+    priorUseDisposition: input.priorUseDisposition,
+    effectiveAt: new Date(input.effectiveAt).toISOString(),
+    channel: input.channel,
+    signerRole: input.signerRole,
+    signerId: input.signerId,
+  };
+  const plaintext = Buffer.from(JSON.stringify(document), 'utf8');
+  const checksum = computeChecksum(plaintext);
+  const encryption = encryptFileBuffer(plaintext);
+
+  const fileName = `revocation-${input.consentRevocationId}.json`;
+  const dir = path.join(STORAGE_BASE, 'consents', String(input.consentId));
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, fileName), encryption ? encryption.ciphertext : plaintext);
+
+  return {
+    evidenceUri: `objstore://consents/${input.consentId}/${fileName}`,
+    evidenceHash: `sha256:${checksum}`,
+    evidenceEncryption: encryption
+      ? {
+          algorithm: encryption.algorithm,
+          keyId: encryption.keyId,
+          iv: encryption.iv,
+          tag: encryption.tag,
+        }
+      : null,
+  };
+}
+
 module.exports = {
   EVIDENCE_MIME_TYPE,
   buildConsentEvidenceDocument,
   storeConsentEvidence,
+  storeRevocationEvidence,
 };

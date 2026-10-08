@@ -183,6 +183,19 @@ describe('consent.validator - validateAccess', () => {
     ).rejects.toThrow('Consentimento não permite o escopo solicitado: genetic');
   });
 
+  // RF010 AC6: a scoped revocation blocks the permission without touching
+  // the responses as given.
+  it('throws for a requiredScope a scoped revocation blocked', async () => {
+    const sample = { _id: new ObjectId(), participantId: 'p7' };
+    const samplesCollection = makeSamplesCollection(async (query) => (query._id ? sample : null));
+    const consentsCollection = makeConsentsCollection([{ responses: { genetic: true }, effectivePermissions: { genetic: false } }]);
+    consentValidator.init(makeFakeDb({ samplesCollection, consentsCollection }));
+
+    await expect(
+      consentValidator.validateAccess(sample._id.toString(), 'genetic')
+    ).rejects.toThrow('Consentimento não permite o escopo solicitado: genetic');
+  });
+
   it('throws with the exact scope name when requiredScope is missing from responses', async () => {
     const sample = { _id: new ObjectId(), participantId: 'p8' };
     const samplesCollection = makeSamplesCollection(async (query) => (query._id ? sample : null));

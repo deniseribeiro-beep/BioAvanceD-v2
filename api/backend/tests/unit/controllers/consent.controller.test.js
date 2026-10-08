@@ -838,7 +838,7 @@ describe('ConsentController.createPatientConsent', () => {
       templateId: 't1',
       ipAddress: '10.0.0.1',
       userAgent: 'test-agent',
-    }));
+    }), { channel: 'staff_portal', signerRole: 'participant', authenticationLevel: 'session' });
     expect(res.status).toHaveBeenCalledWith(201);
     expect(res.json).toHaveBeenCalledWith({
       success: true,
@@ -869,7 +869,7 @@ describe('ConsentController.createPatientConsent', () => {
 
     await consentController.createPatientConsent(req, res);
 
-    expect(createSpy).toHaveBeenCalledWith(req.app.locals.db, expect.objectContaining({ ipAddress: '1.2.3.4' }));
+    expect(createSpy).toHaveBeenCalledWith(req.app.locals.db, expect.objectContaining({ ipAddress: '1.2.3.4' }), expect.any(Object));
   });
 
   it('falls back to req.connection.remoteAddress when req.ip and forwarded header are absent', async () => {
@@ -885,7 +885,7 @@ describe('ConsentController.createPatientConsent', () => {
 
     await consentController.createPatientConsent(req, res);
 
-    expect(createSpy).toHaveBeenCalledWith(req.app.locals.db, expect.objectContaining({ ipAddress: '5.6.7.8' }));
+    expect(createSpy).toHaveBeenCalledWith(req.app.locals.db, expect.objectContaining({ ipAddress: '5.6.7.8' }), expect.any(Object));
   });
 
   it('logs audit entry when req.user is present', async () => {

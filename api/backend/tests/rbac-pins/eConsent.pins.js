@@ -16,5 +16,6 @@ module.exports = {
     { method: 'GET', path: '/consent-policies', roles: [3, 4] },
     { method: 'POST', path: '/consents', roles: [3, 4] },
     { method: 'POST', path: '/consents/:id/revoke', roles: [3, 4] },
+    { method: 'GET', path: '/consents/:id/history', roles: [3, 4] },
   ],
 };

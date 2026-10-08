@@ -102,4 +102,38 @@ describe('#827 consentEvidence.storeConsentEvidence', () => {
     expect(() => consentEvidence.storeConsentEvidence(input)).toThrow(/ENCRYPTION_KEY/);
     expect(written).toBeNull();
   });
+
+  // RF010 AC4/AC6: a revocation's evidence, stored the same way, binds its
+  // scope and signer, and returns what decrypts it.
+  it('stores a revocation\'s evidence encrypted beside the acceptance', () => {
+    const key = Buffer.alloc(32, 9);
+    vi.spyOn(keyRegistry, 'getActiveKey').mockReturnValue(key);
+    vi.spyOn(keyRegistry, 'getActiveKeyId').mockReturnValue('k2');
+    vi.spyOn(keyRegistry, 'getKeyById').mockReturnValue(key);
+
+    const result = consentEvidence.storeRevocationEvidence({
+      consentId: input.consentId,
+      consentRevocationId: 'rev-1',
+      participantId: '12345678',
+      scope: ['contact'],
+      reason: null,
+      priorUseDisposition: 'retain_history',
+      effectiveAt: new Date('2026-10-08T12:00:00Z'),
+      channel: 'staff_portal',
+      signerRole: 'staff_on_behalf',
+      signerId: 'user-1',
+    });
+
+    expect(result.evidenceUri).toBe(`objstore://consents/${input.consentId}/revocation-rev-1.json`);
+    expect(result.evidenceHash).toMatch(/^sha256:[a-f0-9]{64}$/);
+    const plaintext = fileCrypto.decryptFileBuffer(written.data, {
+      encryptionKeyId: 'k2',
+      encryptionIv: result.evidenceEncryption.iv,
+      encryptionTag: result.evidenceEncryption.tag,
+    });
+    expect(`sha256:${fileCrypto.computeChecksum(plaintext)}`).toBe(result.evidenceHash);
+    expect(JSON.parse(plaintext.toString('utf8'))).toMatchObject({
+      consentRevocationId: 'rev-1', scope: ['contact'], signerRole: 'staff_on_behalf', effectiveAt: '2026-10-08T12:00:00.000Z',
+    });
+  });
 });

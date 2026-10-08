@@ -1,6 +1,7 @@
 const { ObjectId } = require('mongodb');
 const logger = require('../utils/logger');
 const { getCollection } = require('../utils/collectionResolver');
+const { effectivePermissionsOf } = require('./consentHistory.service');
 
 class ConsentValidator {
   constructor() {
@@ -62,7 +63,8 @@ class ConsentValidator {
     }
 
     if (requiredScope && typeof requiredScope === 'string') {
-      const responses = activeConsent.responses || {};
+      // RF010 AC6: a scoped revocation narrows what the consent permits.
+      const responses = effectivePermissionsOf(activeConsent);
       if (responses[requiredScope] !== true) {
         throw new Error(`Consentimento não permite o escopo solicitado: ${requiredScope}`);
       }

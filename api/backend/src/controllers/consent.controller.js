@@ -524,7 +524,12 @@ class ConsentController {
         userAgent: req.headers['user-agent']
       };
 
-      const consent = await consentService.createPatientConsent(db, payload);
+      // A participant signing at the staff portal, under the staff session.
+      const consent = await consentService.createPatientConsent(db, payload, {
+        channel: 'staff_portal',
+        signerRole: 'participant',
+        authenticationLevel: 'session'
+      });
 
       if (req.user) {
         const auditLogger = require('../utils/auditLogger');
@@ -571,7 +576,20 @@ class ConsentController {
         });
       }
 
-      const consent = await consentService.revokeConsent(db, req.params.id);
+      // RF010 AC6: staff record the revocation on the participant's behalf;
+      // the body may narrow it to some permissions and give a reason.
+      const body = req.body || {};
+      const consent = await consentService.revokeConsent(db, req.params.id, {
+        scope: body.scope,
+        reason: body.reason,
+        priorUseDisposition: body.priorUseDisposition,
+        retentionObligationIds: body.retentionObligationIds
+      }, {
+        channel: 'staff_portal',
+        signerRole: 'staff_on_behalf',
+        signerId: req.user?.userID || req.user?.id || req.user?._id || null,
+        authenticationLevel: 'session'
+      });
       if (!consent) {
         return res.status(404).json({
           success: false,
@@ -592,7 +610,9 @@ class ConsentController {
           payload: {
             participantId: consent.participantId,
             consentTemplateId: consent.consentTemplateId,
-            status: 'REVOKED'
+            status: consent.status,
+            currentStateDerived: consent.currentStateDerived || null,
+            withdrawalScope: consent.withdrawalScope || null
           },
           req: req,
           module: 'Consentimento'
@@ -606,9 +626,39 @@ class ConsentController {
       });
     } catch (error) {
       logger.error('Erro ao revogar consentimento:', error.message);
-      return res.status(400).json({
+      return res.status(error.statusCode === 422 ? 422 : 400).json({
         success: false,
         error: 'Erro ao revogar consentimento',
+        message: error.message,
+        details: error.details
+      });
+    }
+  }
+
+  async getConsentHistory(req, res) {
+    try {
+      const db = req.app.locals.db;
+      if (!db) {
+        return res.status(503).json({
+          success: false,
+          error: 'Banco de dados não disponível'
+        });
+      }
+
+      const history = await consentService.getConsentHistory(db, req.params.id);
+      if (!history) {
+        return res.status(404).json({
+          success: false,
+          error: 'Consentimento não encontrado'
+        });
+      }
+
+      return res.status(200).json({ success: true, data: history });
+    } catch (error) {
+      logger.error('Erro ao buscar histórico do consentimento:', error.message);
+      return res.status(400).json({
+        success: false,
+        error: 'Erro ao buscar histórico do consentimento',
         message: error.message
       });
     }

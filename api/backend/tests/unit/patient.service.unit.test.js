@@ -563,7 +563,7 @@ describe('PatientService.acceptConsentToken', () => {
       responses: { storage: true, contact: false },
       ipAddress: '203.0.113.7',
       userAgent: 'Mozilla/5.0',
-    });
+    }, { channel: 'electronic_link', signerRole: 'participant', authenticationLevel: 'token' });
     expect(recordSpy.mock.invocationCallOrder[0])
       .toBeLessThan(patientsCollection.updateOne.mock.invocationCallOrder[0]);
     expect(patientsCollection.updateOne).toHaveBeenCalledWith(

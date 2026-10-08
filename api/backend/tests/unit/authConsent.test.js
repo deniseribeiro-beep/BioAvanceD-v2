@@ -247,6 +247,29 @@ describe('authConsent middleware', () => {
     expect(next).not.toHaveBeenCalled();
   });
 
+  // RF010 AC6: a scoped revocation leaves the consent ACTIVE and its
+  // responses as given; the permission it blocks is gone from what the
+  // consent permits, and enforcement reads that.
+  it('returns 403 INSUFFICIENT_SCOPE for a permission a scoped revocation blocked', async () => {
+    const req = createReq({ app: { locals: { db: fakeDb } }, body: { participantId: 'p1' } });
+    const res = createRes();
+    fakeConsentsCollection.findOne.mockResolvedValue({
+      _id: { toString: () => 'c1' },
+      status: 'ACTIVE',
+      currentStateDerived: 'partially_revoked',
+      responses: { uso_pesquisa: true, uso_comercial: true },
+      effectivePermissions: { uso_pesquisa: false, uso_comercial: true },
+      signedAt: new Date()
+    });
+
+    const middleware = authConsent({ allowedScopes: ['uso_pesquisa'], strictMode: true });
+    await middleware(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'INSUFFICIENT_SCOPE' }));
+    expect(next).not.toHaveBeenCalled();
+  });
+
   it('falls through to next() when scope insufficient but strictMode is false', async () => {
     const req = createReq({ app: { locals: { db: fakeDb } }, body: { participantId: 'p1' } });
     const res = createRes();

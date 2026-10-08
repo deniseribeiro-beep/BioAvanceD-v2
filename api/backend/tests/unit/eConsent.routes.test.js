@@ -467,7 +467,7 @@ describe('eConsent.routes POST /update', () => {
       participantId: '12345678',
       consentTemplateId: 'tmpl-1',
       responses: { general: true },
-    }));
+    }), { channel: 'electronic_link', signerRole: 'participant', authenticationLevel: 'token' });
     expect(consentService.revokeConsent).not.toHaveBeenCalled();
   });
 
@@ -482,7 +482,7 @@ describe('eConsent.routes POST /update', () => {
       .send({ token, consents: [{ key: 'general', status: 'REVOKED' }] });
 
     expect(res.status).toBe(200);
-    expect(consentService.revokeConsent).toHaveBeenCalledWith(db, 'consent-1');
+    expect(consentService.revokeConsent).toHaveBeenCalledWith(db, 'consent-1', {}, { channel: 'electronic_link', signerRole: 'participant', authenticationLevel: 'token' });
     expect(consentService.createPatientConsent).not.toHaveBeenCalled();
   });
 
@@ -732,7 +732,10 @@ describe('eConsent.routes POST /consents/:id/revoke (#684)', () => {
     const res = await request(app).post('/e-consent/consents/consent-1/revoke').send({});
 
     expect(res.status).not.toBe(403);
-    expect(revokeSpy).toHaveBeenCalledWith(expect.anything(), 'consent-1');
+    // RF010 AC6: staff revoke on the participant's behalf, under their session.
+    expect(revokeSpy).toHaveBeenCalledWith(expect.anything(), 'consent-1', expect.any(Object), expect.objectContaining({
+      channel: 'staff_portal', signerRole: 'staff_on_behalf', signerId: 'user-1', authenticationLevel: 'session',
+    }));
   });
 });
 
@@ -930,6 +933,7 @@ describe('eConsent.routes RBAC gate argument pinning (issue #921)', () => {
     // pinned here so the argument cannot drift back.
     { label: 'POST /consents', method: 'post', path: '/consents', expectedArgs: [3, 4] },
     { label: 'POST /consents/:id/revoke', method: 'post', path: '/consents/consent-1/revoke', expectedArgs: [3, 4] },
+    { label: 'GET /consents/:id/history', method: 'get', path: '/consents/consent-1/history', expectedArgs: [3, 4] },
   ];
 
   for (const { label, method, path, expectedArgs } of ROLE_CASES) {

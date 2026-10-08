@@ -10,7 +10,15 @@ const { requireRole, requirePermission } = require('../infrastructure/middleware
 const consentController = require('../controllers/consent.controller');
 const participantIdentityService = require('../services/participantIdentity.service');
 const logger = require('../utils/logger');
+const { effectivePermissionsOf } = require('../services/consentHistory.service');
 const CONSENT_EXPIRATION = 60 * 60 * 2; // 2h
+// RF010 AC4: a manifestation through the signed consent link is the
+// participant's own, authenticated by the link's token.
+const PARTICIPANT_LINK_ACTOR = Object.freeze({
+  channel: 'electronic_link',
+  signerRole: 'participant',
+  authenticationLevel: 'token'
+});
 
 /**
  * #1097: read the secret at CALL time, not at module load.
@@ -162,7 +170,8 @@ router.get('/validate/:token', async (req, res) => {
       template: template
         ? { id: String(template._id), title: template.title, permissions: template.permissions || [] }
         : null,
-      responses: currentConsent && currentConsent.status === 'ACTIVE' ? (currentConsent.responses || {}) : {},
+      // RF010 AC6: what the consent still permits, less any scoped revocation.
+      responses: currentConsent && currentConsent.status === 'ACTIVE' ? effectivePermissionsOf(currentConsent) : {},
     });
   } catch (err) {
     res.status(401).json({ error: 'Token inválido ou expirado' });
@@ -205,7 +214,7 @@ router.post('/update', async (req, res) => {
       if (isFullRevocation) {
         const currentConsent = await consentService.getPatientConsent(db, participantId);
         if (currentConsent && currentConsent.status === 'ACTIVE') {
-          await consentService.revokeConsent(db, String(currentConsent._id));
+          await consentService.revokeConsent(db, String(currentConsent._id), {}, PARTICIPANT_LINK_ACTOR);
         }
       } else {
         const template = await consentService.getActiveTemplate(db);
@@ -218,7 +227,7 @@ router.post('/update', async (req, res) => {
           responses,
           ipAddress: req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress,
           userAgent: req.headers['user-agent'],
-        });
+        }, PARTICIPANT_LINK_ACTOR);
       }
     }
 
@@ -351,6 +360,8 @@ router.post('/consents', authenticate, requireRole(3, 4), consentController.crea
 // into `users`, never a participantId, so there is nothing on this route
 // to compare against the consent's owner.
 router.post('/consents/:id/revoke', authenticate, requireRole(3, 4), consentController.revokeConsent.bind(consentController));
+// RF010 AC5: the decision events and revocations a consent's state derives from.
+router.get('/consents/:id/history', authenticate, requireRole(3, 4), consentController.getConsentHistory.bind(consentController));
 router.get('/patients/:participantId/consent', authenticate, consentController.getPatientConsent.bind(consentController));
 
 // Consent token validation/acceptance (public)
