@@ -336,6 +336,39 @@ describe('accessRequest.service', () => {
       expect(decided.committeeDecision.status).toBe('rejected');
       expect(decided.approvalPeriod).toBeNull();
     });
+
+    // RF024 AC6: an evaluated but incompatible request cannot be approved.
+    async function seedIncompatible() {
+      const db = createFakeDb({
+        samples: [{ specimenId: 'SPEC-1', participantId: 'participant-1' }],
+        consents: [],
+        studies: [{ studyId: 'study-1', studyStatus: 'active' }],
+      });
+      const created = await accessRequestService.createRequest(db, baseRequestPayload());
+      const evaluated = await accessRequestService.evaluateCompatibility(db, created.accessRequestId);
+      expect(evaluated.overallCompatible).toBe(false);
+      return { db, accessRequestId: created.accessRequestId };
+    }
+
+    it.each(['approved', 'conditioned'])('refuses a %s decision on an incompatible request', async (status) => {
+      const { db, accessRequestId } = await seedIncompatible();
+
+      await expect(
+        accessRequestService.recordDecision(db, accessRequestId, { status, justification: 'ok' })
+      ).rejects.toThrow(/incompatível/);
+      expect((await accessRequestService.getById(db, accessRequestId)).committeeDecision.status).toBe('pending');
+    });
+
+    it('still records a rejection of an incompatible request', async () => {
+      const { db, accessRequestId } = await seedIncompatible();
+
+      const decided = await accessRequestService.recordDecision(db, accessRequestId, {
+        status: 'rejected',
+        justification: 'Sem consentimento ativo',
+      });
+
+      expect(decided.committeeDecision.status).toBe('rejected');
+    });
   });
 
   describe('markDistributed (AC#4) and revokeAccess (AC#5)', () => {
@@ -385,6 +418,17 @@ describe('accessRequest.service', () => {
 
       await expect(accessRequestService.markDistributed(db, accessRequestId)).rejects.toThrow(/revoked/);
     });
+
+    it('blocks distribution once a re-evaluation of an approved request comes back incompatible (RF024 AC6)', async () => {
+      const { db, accessRequestId } = await seedApproved();
+      db.collection('patientConsents').docs.length = 0; // the participant withdraws
+
+      const reevaluated = await accessRequestService.evaluateCompatibility(db, accessRequestId);
+      expect(reevaluated.overallCompatible).toBe(false);
+
+      await expect(accessRequestService.markDistributed(db, accessRequestId)).rejects.toThrow(/incompatible/);
+      expect(await accessRequestService.getAccessCheck(db, accessRequestId)).toMatchObject({ allowed: false, reason: 'incompatible' });
+    });
   });
 
   describe('getAccessCheck (AC#5 read path)', () => {
@@ -402,20 +446,29 @@ describe('accessRequest.service', () => {
       [{ committeeDecision: { status: 'rejected' } }, { allowed: false, reason: 'denied' }],
       [{ committeeDecision: { status: 'revoked' } }, { allowed: false, reason: 'revoked' }],
       [
-        { committeeDecision: { status: 'approved' }, approvalPeriod: { start: '2026-01-01', end: '2026-01-31' } },
+        { committeeDecision: { status: 'approved' }, overallCompatible: true, approvalPeriod: { start: '2026-01-01', end: '2026-01-31' } },
         { allowed: false, reason: 'expired' },
       ],
       [
-        { committeeDecision: { status: 'approved' }, approvalPeriod: { start: '2026-12-01', end: null } },
+        { committeeDecision: { status: 'approved' }, overallCompatible: true, approvalPeriod: { start: '2026-12-01', end: null } },
         { allowed: false, reason: 'not_yet_active' },
       ],
       [
-        { committeeDecision: { status: 'approved' }, approvalPeriod: { start: '2026-01-01', end: null } },
+        { committeeDecision: { status: 'approved' }, overallCompatible: true, approvalPeriod: { start: '2026-01-01', end: null } },
         { allowed: true, reason: 'approved' },
       ],
       [
-        { committeeDecision: { status: 'conditioned' }, approvalPeriod: { start: '2026-01-01', end: '2026-12-31' } },
+        { committeeDecision: { status: 'conditioned' }, overallCompatible: true, approvalPeriod: { start: '2026-01-01', end: '2026-12-31' } },
         { allowed: true, reason: 'conditioned' },
+      ],
+      // RF024 AC6: incompatible, or never shown compatible, blocks an approval.
+      [
+        { committeeDecision: { status: 'approved' }, overallCompatible: false, approvalPeriod: { start: '2026-01-01', end: null } },
+        { allowed: false, reason: 'incompatible' },
+      ],
+      [
+        { committeeDecision: { status: 'conditioned' }, overallCompatible: null, approvalPeriod: { start: '2026-01-01', end: null } },
+        { allowed: false, reason: 'incompatible' },
       ],
     ])('%j -> %j', (accessRequest, expected) => {
       expect(evaluateAccessState(accessRequest, now)).toEqual(expected);

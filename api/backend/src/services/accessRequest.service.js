@@ -17,6 +17,12 @@ function evaluateAccessState(accessRequest, now = new Date()) {
   if (status === 'rejected') return { allowed: false, reason: 'denied' };
   if (status === 'revoked') return { allowed: false, reason: 'revoked' };
 
+  // RF024 AC6 ("bloquear acesso ... incompatível"): an approval stands only
+  // on a compatibility evaluation that passed, and the latest one wins, so a
+  // re-evaluation that turns incompatible blocks an approved request too.
+  // Fail-closed: a document with no passing evaluation is incompatible.
+  if (accessRequest.overallCompatible !== true) return { allowed: false, reason: 'incompatible' };
+
   const end = accessRequest.approvalPeriod?.end ? new Date(accessRequest.approvalPeriod.end) : null;
   if (end && end.getTime() < now.getTime()) {
     return { allowed: false, reason: 'expired' };
@@ -167,6 +173,12 @@ class AccessRequestService {
 
     if (!accessRequest.compatibilityEvaluatedAt) {
       throw new Error('A compatibilidade de consentimento/DUO/política deve ser avaliada antes da decisão do comitê');
+    }
+
+    // RF024 AC6: evaluated is not enough; an approval needs the evaluation to
+    // have passed. A rejection stays open whatever the evaluation said.
+    if (['approved', 'conditioned'].includes(payload.status) && accessRequest.overallCompatible !== true) {
+      throw new Error('Uma solicitação incompatível com consentimento/DUO/política não pode ser aprovada ou condicionada');
     }
 
     const committeeDecision = {

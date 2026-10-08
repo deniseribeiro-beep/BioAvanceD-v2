@@ -305,6 +305,18 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
     return (await create.json()).data;
   }
 
+  // An approval needs a passing evaluation (AC#6): seed the ACTIVE consent
+  // for the request's real participant, then evaluate it compatible.
+  async function evaluateCompatible(request: any, token: string, accessRequestId: string): Promise<void> {
+    const url = `${apiBaseURL}/api/access-requests/${accessRequestId}/evaluate`;
+    const first = await request.post(url, { headers: { Authorization: `Bearer ${token}` } });
+    expect(first.status()).toBe(200);
+    await seedActiveConsent((await first.json()).data.consentCompatibility[0].participantId);
+    const second = await request.post(url, { headers: { Authorization: `Bearer ${token}` } });
+    expect(second.status()).toBe(200);
+    expect((await second.json()).data.overallCompatible).toBe(true);
+  }
+
   test('registers a request, evaluates real consent/DUO/study compatibility, and only an approved in-force decision unblocks distribution (AC#1/2/3/4)', async ({
     request,
   }) => {
@@ -339,6 +351,17 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
     expect(earlyBody.overallCompatible).toBe(false);
     const participantId = earlyBody.consentCompatibility[0].participantId;
     expect(participantId).toBeTruthy();
+
+    // AC#6 - an evaluated but incompatible request cannot be approved.
+    const incompatibleApproval = await request.post(
+      `${apiBaseURL}/api/access-requests/${accessRequest.accessRequestId}/decision`,
+      {
+        headers: { Authorization: `Bearer ${admin.token}` },
+        data: { status: 'approved', justification: 'Aprovação sem consentimento ativo — RF024 e2e' },
+      }
+    );
+    expect(incompatibleApproval.status()).toBe(400);
+    expect((await incompatibleApproval.json()).message).toMatch(/incompatível/);
 
     // Seed the real ACTIVE consent for that real participant, then re-evaluate.
     await seedActiveConsent(participantId);
@@ -426,10 +449,8 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
 
     // Revoked branch — starts from a genuine approval, then gets revoked.
     const toRevoke = await createRequestForSample(request, admin.token, { studyId });
-    await request.post(`${apiBaseURL}/api/access-requests/${toRevoke.accessRequestId}/evaluate`, {
-      headers: { Authorization: `Bearer ${admin.token}` },
-    });
-    await request.post(`${apiBaseURL}/api/access-requests/${toRevoke.accessRequestId}/decision`, {
+    await evaluateCompatible(request, admin.token, toRevoke.accessRequestId);
+    const approve = await request.post(`${apiBaseURL}/api/access-requests/${toRevoke.accessRequestId}/decision`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: {
         status: 'approved',
@@ -440,6 +461,7 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
         },
       },
     });
+    expect(approve.status(), await approve.text()).toBe(200);
 
     const revoke = await request.post(`${apiBaseURL}/api/access-requests/${toRevoke.accessRequestId}/revoke`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -461,10 +483,8 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
     await seedStudy(studyId);
 
     const accessRequest = await createRequestForSample(request, admin.token, { studyId });
-    await request.post(`${apiBaseURL}/api/access-requests/${accessRequest.accessRequestId}/evaluate`, {
-      headers: { Authorization: `Bearer ${admin.token}` },
-    });
-    await request.post(`${apiBaseURL}/api/access-requests/${accessRequest.accessRequestId}/decision`, {
+    await evaluateCompatible(request, admin.token, accessRequest.accessRequestId);
+    const approve = await request.post(`${apiBaseURL}/api/access-requests/${accessRequest.accessRequestId}/decision`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: {
         status: 'approved',
@@ -472,6 +492,7 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
         approvalPeriod: { start: '2020-01-01T00:00:00.000Z', end: '2020-01-31T00:00:00.000Z' },
       },
     });
+    expect(approve.status(), await approve.text()).toBe(200);
 
     const expiredCheck = await request.get(
       `${apiBaseURL}/api/access-requests/${accessRequest.accessRequestId}/access-check`,
