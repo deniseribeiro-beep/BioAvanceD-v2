@@ -31,7 +31,8 @@ RF012 AC5 and RNF009 C6 forbid the application to alter or delete audit events. 
 
 If the mirror into `audit_events` fails, `log.service.js` raises a critical `AUDIT_TRAIL_WRITE_FAILURE` security alert, and the request goes on. Failing every business write while the audit store is down would turn an audit outage into a full outage. No requirement asks for that. The failure is recorded as an alert, so it does not pass in silence.
 
-## Not built here
+## Events written before this change stay where they are
 
-- An e2e test that reaches tamper detection through the real stack. The unit and route tests above rebuild the chain in memory.
-- Back-filling events written before this change. Each of those stays in its own one-event chain, keyed by its log record's id.
+Each event written before this change sits in its own one-event chain, keyed by its log record's id, and is left there. Moving those events into the new chain would mean rewriting stored audit events, which RF012 AC5 forbids. They were never verifiable, because no head was ever sealed under those ids, so leaving them takes nothing away.
+
+`tests/e2e/audit-chain-integrity.spec.ts` proves this decision against the real stack. It seals the chain, verifies a real event, and reads INVALID after one event is rewritten in Mongo.

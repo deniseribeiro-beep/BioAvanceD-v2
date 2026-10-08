@@ -9,9 +9,10 @@
  * postRetentionAction 'archive' é suportado para AuditEvent: o evento é
  * movido para `audit_events_archive` (mesmo documento, nunca mutado) em
  * vez de removido, então a cadeia permanece totalmente verificável --
- * `audit_tree_heads` nunca é tocado, e qualquer evento arquivado ainda
- * pode ser recuperado para validar seu eventHash/canonicalLeaf/inclusionProof
- * contra a raiz registrada no seu treeSize. Qualquer outra ação
+ * `audit_tree_heads` nunca é tocado, e auditV2Service.loadChain lê o
+ * arquivo junto com a coleção viva: a verificação (#1307) reconstrói a
+ * árvore do tree head selado a partir dos dois e recalcula o eventHash de
+ * cada evento arquivado. Qualquer outra ação
  * (especialmente 'destroy') é recusada para AuditEvent em vez de rebaixada
  * silenciosamente para archive.
  *
