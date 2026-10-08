@@ -174,6 +174,7 @@ const ENTITY_MAP = {
   'result': 'Result',
 
   // #1115: the 40 mounted prefixes that previously fell through to Sistema.
+  'access-policies': 'AccessPolicy',
   'access-requests': 'AccessRequest',
   'analysis-files': 'AnalysisFile',
   'analysis-types': 'AnalysisType',

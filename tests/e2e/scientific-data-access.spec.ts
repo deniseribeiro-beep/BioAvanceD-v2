@@ -425,6 +425,9 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
     expect(decisionBody.committeeDecision).toHaveProperty('configurationReleaseId');
     expect(decisionBody.committeeDecision.decidedAt).toBeTruthy();
     expect(decisionBody.committeeDecision.decisionId).toBeTruthy();
+    // AC#3 - no AccessPolicy covers this request's organization, so the
+    // effect was review_required, which this committee decision resolved.
+    expect(decisionBody.committeeDecision).toMatchObject({ policyEffect: 'review_required', appliedPolicies: [] });
 
     // AC#5 - now allowed.
     const allowedCheck = await request.get(
@@ -444,6 +447,78 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
     expect(distributeBody.distributedAt).toBeTruthy();
     // AC#7 - the distribution names the decision that authorized it.
     expect(distributeBody.distributionDecisionId).toBe(decisionBody.committeeDecision.decisionId);
+  });
+
+  test('an AccessPolicy permits, a newer deny version refuses the approval, and the decision names each version (AC#3, RNF008 AC4)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const studyId = `rf024-study-${Date.now()}`;
+    await seedStudy(studyId);
+    const accessRequest = await createRequestForSample(request, admin.token, { studyId });
+    await evaluateCompatible(request, admin.token, accessRequest.accessRequestId);
+
+    // A permit policy scoped to this request's own organization.
+    const policyBody = {
+      policyName: `RF024 e2e ${Date.now()}`,
+      policyVersion: '1.0.0',
+      applicableEntityTypes: ['AccessRequest'],
+      decisionEffect: 'permit',
+      ruleExpression: 'all-conditions',
+      effectivePeriod: { start: new Date(Date.now() - 60_000).toISOString() },
+      roleCodes: ['researcher'],
+      organizationScopeIds: [accessRequest.organizationId],
+      resourceScopes: ['Specimen'],
+      conditions: [{ consent: 'compatible', study: 'active' }],
+      decisionReasonsRequired: true,
+    };
+    const created = await request.post(`${apiBaseURL}/api/access-policies`, { headers: auth, data: policyBody });
+    expect(created.status(), await created.text()).toBe(201);
+    const accessPolicyId = (await created.json()).data.accessPolicyId;
+
+    const evaluateUrl = `${apiBaseURL}/api/access-requests/${accessRequest.accessRequestId}/evaluate`;
+    const permitted = (await (await request.post(evaluateUrl, { headers: auth })).json()).data;
+    expect(permitted.policyDecision).toMatchObject({
+      effect: 'permit',
+      appliedPolicies: [expect.objectContaining({ accessPolicyId, policyVersion: '1.0.0', decisionEffect: 'permit' })],
+    });
+
+    // A new version, never an edit: 1.1.0 denies, and it is the one in force.
+    const denyVersion = await request.post(`${apiBaseURL}/api/access-policies/${accessPolicyId}/versions`, {
+      headers: auth,
+      data: { ...policyBody, policyVersion: '1.1.0', decisionEffect: 'deny' },
+    });
+    expect(denyVersion.status(), await denyVersion.text()).toBe(201);
+    const stale = await request.post(`${apiBaseURL}/api/access-policies/${accessPolicyId}/versions`, {
+      headers: auth,
+      data: { ...policyBody, policyVersion: '1.0.1' },
+    });
+    expect(stale.status()).toBe(422);
+    const versions = (await (await request.get(`${apiBaseURL}/api/access-policies/${accessPolicyId}`, { headers: auth })).json()).data;
+    expect(versions.map((v: any) => v.policyVersion)).toEqual(['1.1.0', '1.0.0']);
+
+    const denied = (await (await request.post(evaluateUrl, { headers: auth })).json()).data;
+    expect(denied.overallCompatible).toBe(true);
+    expect(denied.policyDecision.effect).toBe('deny');
+
+    const approval = await request.post(`${apiBaseURL}/api/access-requests/${accessRequest.accessRequestId}/decision`, {
+      headers: auth,
+      data: { status: 'approved', justification: 'Aprovação contra uma política que nega — RF024 e2e' },
+    });
+    expect(approval.status()).toBe(400);
+    expect((await approval.json()).message).toMatch(/negada pela política de acesso/);
+
+    const rejection = await request.post(`${apiBaseURL}/api/access-requests/${accessRequest.accessRequestId}/decision`, {
+      headers: auth,
+      data: { status: 'rejected', justification: 'Negada pela política de acesso — RF024 e2e' },
+    });
+    expect(rejection.status()).toBe(200);
+    expect((await rejection.json()).data.committeeDecision).toMatchObject({
+      status: 'rejected',
+      policyEffect: 'deny',
+      appliedPolicies: [{ accessPolicyId, policyVersion: '1.1.0', decisionEffect: 'deny' }],
+    });
   });
 
   test('blocks access for a rejected decision, and separately for a revoked one (AC#5)', async ({ request }) => {

@@ -60,6 +60,7 @@ function createFakeDb({
   organizations = [{ organizationId: 'org-1' }],
   protocols = [{ protocolId: 'protocol-1', protocolVersion: '2.1', approvalStatus: 'approved' }],
   securityConfig = [{ _id: 'main', configurationReleaseId: 'release-1' }],
+  accessPolicies = [],
 } = {}) {
   const collections = {
     accessRequests: createFakeCollection(),
@@ -71,6 +72,7 @@ function createFakeDb({
     organizations: createFakeCollection(organizations),
     protocols: createFakeCollection(protocols),
     security_config: createFakeCollection(securityConfig),
+    accessPolicies: createFakeCollection(accessPolicies),
   };
   return {
     collection(name) {
@@ -107,8 +109,12 @@ describe('accessRequest.service', () => {
         decidedBy: null,
         decidedAt: null,
         policyVersion: null,
+        appliedPolicies: [],
+        policyEffect: null,
+        policyReasons: [],
         configurationReleaseId: null,
       });
+      expect(created.policyDecision).toBeNull();
       expect(created.distributionStatus).toBe('pending');
       expect(created.distributionDecisionId).toBeNull();
       expect(created.overallCompatible).toBeNull();
@@ -456,6 +462,102 @@ describe('accessRequest.service', () => {
     });
   });
 
+  // RF024 AC3, RNF008 AC4/AC5: the AccessPolicy effect of each evaluation.
+  describe('AccessPolicy effect (RF024 AC3)', () => {
+    function policy(overrides = {}) {
+      return {
+        accessPolicyId: 'policy-1',
+        policyName: 'Oncologia',
+        policyVersion: '1.0.0',
+        applicableEntityTypes: ['AccessRequest'],
+        purposeCodes: [],
+        decisionEffect: 'permit',
+        ruleExpression: 'all-conditions',
+        effectivePeriod: { start: new Date('2020-01-01'), end: null },
+        roleCodes: ['researcher'],
+        organizationScopeIds: ['org-1'],
+        resourceScopes: ['Specimen'],
+        conditions: [{ consent: 'compatible' }],
+        decisionReasonsRequired: true,
+        ...overrides,
+      };
+    }
+
+    async function seedEvaluatedWith(accessPolicies) {
+      const db = createFakeDb({
+        samples: [{ specimenId: 'SPEC-1', participantId: 'participant-1' }],
+        consents: [{ participantId: 'participant-1', status: 'ACTIVE' }],
+        studies: [{ studyId: 'study-1', studyStatus: 'active' }],
+        accessPolicies,
+      });
+      const created = await accessRequestService.createRequest(db, baseRequestPayload());
+      const evaluated = await accessRequestService.evaluateCompatibility(db, created.accessRequestId);
+      return { db, accessRequestId: created.accessRequestId, evaluated };
+    }
+
+    it('is review_required, with its reason, when no policy applies, and the committee may approve', async () => {
+      const { db, accessRequestId, evaluated } = await seedEvaluatedWith([]);
+
+      expect(evaluated.policyDecision).toMatchObject({ effect: 'review_required', appliedPolicies: [] });
+      expect(evaluated.policyDecision.reasons.join(' ')).toMatch(/nenhuma AccessPolicy aplicável/);
+
+      const decided = await accessRequestService.recordDecision(db, accessRequestId, { status: 'approved', justification: 'revisado' });
+      expect(decided.committeeDecision).toMatchObject({ status: 'approved', policyEffect: 'review_required', appliedPolicies: [] });
+    });
+
+    it('permits under a policy whose conditions hold, and the decision records the policy and version', async () => {
+      const { db, accessRequestId, evaluated } = await seedEvaluatedWith([policy()]);
+
+      expect(evaluated.policyDecision.effect).toBe('permit');
+
+      const decided = await accessRequestService.recordDecision(db, accessRequestId, { status: 'approved', justification: 'ok' });
+      expect(decided.committeeDecision.appliedPolicies).toEqual([
+        { accessPolicyId: 'policy-1', policyVersion: '1.0.0', decisionEffect: 'permit' },
+      ]);
+      expect(decided.committeeDecision.policyEffect).toBe('permit');
+      expect(decided.committeeDecision.policyReasons).toEqual(['Oncologia 1.0.0: permit']);
+    });
+
+    it.each(['approved', 'conditioned'])('refuses a %s decision when a policy denies, and still records a rejection', async (status) => {
+      const { db, accessRequestId, evaluated } = await seedEvaluatedWith([
+        policy(),
+        policy({ accessPolicyId: 'policy-2', policyName: 'Embargo', decisionEffect: 'deny', conditions: [{ organizationId: 'org-1' }] }),
+      ]);
+
+      expect(evaluated.overallCompatible).toBe(true);
+      expect(evaluated.policyDecision.effect).toBe('deny');
+      await expect(
+        accessRequestService.recordDecision(db, accessRequestId, { status, justification: 'ok' })
+      ).rejects.toThrow(/negada pela política de acesso.*Embargo 1\.0\.0: deny/);
+
+      const rejected = await accessRequestService.recordDecision(db, accessRequestId, { status: 'rejected', justification: 'embargo' });
+      expect(rejected.committeeDecision).toMatchObject({ status: 'rejected', policyEffect: 'deny' });
+    });
+
+    it('refuses an approval of a request evaluated before it carried a policy decision', async () => {
+      const { db, accessRequestId } = await seedEvaluatedWith([]);
+      delete db.collection('accessRequests').docs[0].policyDecision;
+
+      await expect(
+        accessRequestService.recordDecision(db, accessRequestId, { status: 'approved', justification: 'ok' })
+      ).rejects.toThrow(/reavaliada contra as políticas/);
+    });
+
+    it('blocks an approved request once a re-evaluation meets a deny policy', async () => {
+      const { db, accessRequestId } = await seedEvaluatedWith([policy()]);
+      await accessRequestService.recordDecision(db, accessRequestId, { status: 'approved', justification: 'ok' });
+      db.collection('accessPolicies').docs.push(policy({ policyVersion: '2.0.0', decisionEffect: 'deny' }));
+
+      const reevaluated = await accessRequestService.evaluateCompatibility(db, accessRequestId);
+      expect(reevaluated.policyDecision.appliedPolicies).toEqual([
+        expect.objectContaining({ accessPolicyId: 'policy-1', policyVersion: '2.0.0', decisionEffect: 'deny' }),
+      ]);
+
+      expect(await accessRequestService.getAccessCheck(db, accessRequestId)).toMatchObject({ allowed: false, reason: 'policy_denied' });
+      await expect(accessRequestService.markDistributed(db, accessRequestId)).rejects.toThrow(/policy_denied/);
+    });
+  });
+
   describe('markDistributed (AC#4) and revokeAccess (AC#5)', () => {
     async function seedApproved(approvalPeriod) {
       const db = createFakeDb({
@@ -558,6 +660,15 @@ describe('accessRequest.service', () => {
       [
         { committeeDecision: { status: 'approved' }, overallCompatible: false, approvalPeriod: { start: '2026-01-01', end: null } },
         { allowed: false, reason: 'incompatible' },
+      ],
+      // RF024 AC3: a deny effect blocks an approval; review_required does not.
+      [
+        { committeeDecision: { status: 'approved' }, overallCompatible: true, policyDecision: { effect: 'deny' }, approvalPeriod: { start: '2026-01-01', end: null } },
+        { allowed: false, reason: 'policy_denied' },
+      ],
+      [
+        { committeeDecision: { status: 'approved' }, overallCompatible: true, policyDecision: { effect: 'review_required' }, approvalPeriod: { start: '2026-01-01', end: null } },
+        { allowed: true, reason: 'approved' },
       ],
       [
         { committeeDecision: { status: 'conditioned' }, overallCompatible: null, approvalPeriod: { start: '2026-01-01', end: null } },

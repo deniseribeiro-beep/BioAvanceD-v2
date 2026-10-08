@@ -82,6 +82,9 @@ class AccessRequestModel {
       consentCompatibility: [],
       compatibilityEvaluatedAt: null,
       overallCompatible: null,
+      // RF024 AC3: the AccessPolicy effect (permit, deny or review_required),
+      // the policies applied and the reasons, written by each evaluation.
+      policyDecision: null,
       // RF024 AC4/AC7: each decision carries its own id, the policyVersion and
       // configurationReleaseId in force (V2E-0145/0146's names) and decidedAt.
       committeeDecision: {
@@ -91,6 +94,9 @@ class AccessRequestModel {
         decidedBy: null,
         decidedAt: null,
         policyVersion: null,
+        appliedPolicies: [],
+        policyEffect: null,
+        policyReasons: [],
         configurationReleaseId: null,
       },
       approvalPeriod: null,

@@ -47,6 +47,7 @@ function flattenKeys(value, prefix = '') {
 // (catalog entity is "RCSAssessment", all-caps RCS).
 const ENTITY_TARGETS = {
   SecurityConfiguration: () => require('../../src/services/security.service').getDefaultConfig(),
+  AccessPolicy: () => require('../../src/models/AccessPolicy').fieldsOf(),
   AllergyIntolerance: () => require('../../src/models/AllergyIntolerance').fieldsOf(),
   ClinicalObservation: () => require('../../src/models/ClinicalObservation').fieldsOf(),
   ConfigurationChangeEvent: () => require('../../src/models/ConfigurationChangeEvent').fieldsOf(),

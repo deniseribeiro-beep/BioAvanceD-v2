@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const { ObjectId } = require('mongodb');
 const AccessRequestModel = require('../models/AccessRequest');
+const { evaluatePolicies } = require('../models/AccessPolicy');
 const { getCollection } = require('../utils/collectionResolver');
 
 // sources/duo.js's own fixed systemUri for every DUO-imported TerminologyConcept.
@@ -24,6 +25,10 @@ function evaluateAccessState(accessRequest, now = new Date()) {
   // Fail-closed: a document with no passing evaluation is incompatible.
   if (accessRequest.overallCompatible !== true) return { allowed: false, reason: 'incompatible' };
 
+  // RF024 AC3/AC6: a re-evaluation whose AccessPolicy effect is deny blocks
+  // an approved request as well.
+  if (accessRequest.policyDecision?.effect === 'deny') return { allowed: false, reason: 'policy_denied' };
+
   const end = accessRequest.approvalPeriod?.end ? new Date(accessRequest.approvalPeriod.end) : null;
   if (end && end.getTime() < now.getTime()) {
     return { allowed: false, reason: 'expired' };
@@ -45,11 +50,11 @@ function unprocessable(message) {
 }
 
 /**
- * RF024 AC4: the version of the rule set a decision applies. No AccessPolicy
- * entity exists yet (#663), so the policy in force is evaluateCompatibility's
- * own rules: active consent per participant-linked item, an active DUO
- * concept when a duoCode is given, and an active Study. Bump it whenever
- * those rules change, so a stored decision names the rules it stood on.
+ * RF024 AC4: the version of evaluateCompatibility's own rules: active consent
+ * per participant-linked item, an active DUO concept when a duoCode is
+ * given, and an active Study. Bump it whenever those rules change, so a
+ * stored decision names the rules it stood on. The AccessPolicy versions a
+ * decision applied are recorded beside it, in appliedPolicies.
  */
 const ACCESS_COMPATIBILITY_POLICY_VERSION = 'rf024-compatibility/1.0.0';
 
@@ -63,11 +68,20 @@ async function activeConfigurationReleaseId(db) {
   return config?.configurationReleaseId || null;
 }
 
-async function decisionContext(db) {
+async function decisionContext(db, policyDecision) {
   return {
     decisionId: crypto.randomUUID(),
     decidedAt: new Date(),
     policyVersion: ACCESS_COMPATIBILITY_POLICY_VERSION,
+    // RNF008 AC4: the AccessPolicy/version pairs the decision stood on, and
+    // the effect and reasons they produced (RF024 AC3).
+    appliedPolicies: (policyDecision?.appliedPolicies || []).map(({ accessPolicyId, policyVersion, decisionEffect }) => ({
+      accessPolicyId,
+      policyVersion,
+      decisionEffect,
+    })),
+    policyEffect: policyDecision?.effect || null,
+    policyReasons: policyDecision?.reasons || [],
     configurationReleaseId: await activeConfigurationReleaseId(db),
   };
 }
@@ -108,11 +122,11 @@ class AccessRequestService {
 
   /**
    * AC#2: avalia consentimento (por item vinculado a um participante real),
-   * DUO (o duoCode da própria solicitação, se informado) e política de
-   * acesso (o Study de destino precisa estar `active`, mesmo gate que RF021
-   * já usa para Sample/Consent/Patient). Nenhum AccessPolicy dedicado
-   * existe neste repositório ainda — o status do Study é o proxy real e
-   * verificável disponível hoje para essa terceira perna da AC.
+   * DUO (o duoCode da própria solicitação, se informado), o Study de destino
+   * (precisa estar `active`, mesmo gate que RF021 já usa para
+   * Sample/Consent/Patient) e as AccessPolicy vigentes. AC#3: o resultado
+   * das políticas é `policyDecision` (permit, deny ou review_required, com
+   * as políticas aplicadas e as razões; ver models/AccessPolicy.js).
    *
    * #661: 'file' items (SampleFile) always carry the specimenId they were
    * uploaded against, so they resolve to a real participant the same way a
@@ -200,12 +214,15 @@ class AccessRequestService {
     const overallCompatible = consentCompatibility.length > 0 && consentCompatibility.every((entry) => entry.compatible);
     const compatibilityEvaluatedAt = new Date();
 
+    const policies = await (await getCollection(db, 'accessPolicies')).find({}).toArray();
+    const policyDecision = evaluatePolicies(policies, accessRequest, consentCompatibility, compatibilityEvaluatedAt);
+
     await collection.updateOne(
       { accessRequestId },
-      { $set: { consentCompatibility, compatibilityEvaluatedAt, overallCompatible, updatedAt: new Date() } }
+      { $set: { consentCompatibility, compatibilityEvaluatedAt, overallCompatible, policyDecision, updatedAt: new Date() } }
     );
 
-    return { ...accessRequest, consentCompatibility, compatibilityEvaluatedAt, overallCompatible };
+    return { ...accessRequest, consentCompatibility, compatibilityEvaluatedAt, overallCompatible, policyDecision };
   }
 
   /** AC#3: registra decisão, justificativa e vigência. */
@@ -231,8 +248,21 @@ class AccessRequestService {
       throw new Error('Uma solicitação incompatível com consentimento/DUO/política não pode ser aprovada ou condicionada');
     }
 
+    // RF024 AC3: the AccessPolicy effect gates the approval. deny refuses it;
+    // review_required is what the committee's decision resolves; a request
+    // evaluated before policies existed has no effect and is re-evaluated.
+    if (['approved', 'conditioned'].includes(payload.status)) {
+      const effect = accessRequest.policyDecision?.effect;
+      if (!effect) {
+        throw new Error('A solicitação deve ser reavaliada contra as políticas de acesso antes da aprovação');
+      }
+      if (effect === 'deny') {
+        throw new Error(`Uma solicitação negada pela política de acesso não pode ser aprovada ou condicionada: ${accessRequest.policyDecision.reasons.join('; ')}`);
+      }
+    }
+
     const committeeDecision = {
-      ...(await decisionContext(db)),
+      ...(await decisionContext(db, accessRequest.policyDecision)),
       status: payload.status,
       justification: payload.justification.trim(),
       decidedBy: decidedBy || null,
@@ -303,7 +333,7 @@ class AccessRequestService {
     // policyVersion and configurationReleaseId in force now.
     const committeeDecision = {
       ...accessRequest.committeeDecision,
-      ...(await decisionContext(db)),
+      ...(await decisionContext(db, accessRequest.policyDecision)),
       status: 'revoked',
       justification: String(justification).trim(),
       decidedBy: decidedBy || accessRequest.committeeDecision.decidedBy,

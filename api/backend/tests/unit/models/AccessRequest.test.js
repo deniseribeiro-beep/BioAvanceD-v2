@@ -104,8 +104,12 @@ describe('AccessRequestModel', () => {
         decidedBy: null,
         decidedAt: null,
         policyVersion: null,
+        appliedPolicies: [],
+        policyEffect: null,
+        policyReasons: [],
         configurationReleaseId: null,
       });
+      expect(created.policyDecision).toBeNull();
       expect(created.approvalPeriod).toBeNull();
       expect(created.distributionStatus).toBe('pending');
       expect(created.distributionDecisionId).toBeNull();
