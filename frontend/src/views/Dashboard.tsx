@@ -1,14 +1,15 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Card from '../components/UI/Card';
-import { AlertTriangle, Users, FlaskConical, FileText, Thermometer, FileSearch } from 'lucide-react';
+import { AlertTriangle, Users, FlaskConical, FileText, Thermometer, FileSearch, Boxes, BarChart3, UserCog, ShieldCheck, ScrollText, Settings } from 'lucide-react';
 import { usePatients } from '../hooks/usePatients';
 import { useSamples } from '../hooks/useSamples';
 import { useResults } from '../hooks/useResults';
 import { useTemperature } from '../hooks/useTemperature';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
-import { securityService } from '../services/api';
+import { securityService, reportsService } from '../services/api';
+import { DASHBOARD_CARDS, dashboardRole, needsReportCount, type DashboardCardKey } from './dashboardCards';
 import { onDashboardDataChanged } from '../utils/dashboardRefresh';
 import './Dashboard.css';
 
@@ -54,6 +55,19 @@ export default function Dashboard() {
     { time: '10:09:00', sensor1: -80.1, sensor2: -79.5, sensor3: -81.0 },
   ]);
   const [activeAlerts, setActiveAlerts] = useState<ActiveTemperatureAlert[]>([]);
+  const role = dashboardRole(user);
+  // RF002 AC2/AC4: saved reports, which the backend limits to the granted
+  // ones for an external user. null until loaded or when the call fails.
+  const [reportCount, setReportCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!needsReportCount(role)) return;
+    let cancelled = false;
+    reportsService.getAll()
+      .then((response) => { if (!cancelled) setReportCount(Array.isArray(response.data) ? response.data.length : 0); })
+      .catch(() => { if (!cancelled) setReportCount(null); });
+    return () => { cancelled = true; };
+  }, [role]);
 
   // TEMPORARIAMENTE DESATIVADO: Não há sensores cadastrados ainda
   const TEMPERATURE_READING_DISABLED = true;
@@ -252,7 +266,7 @@ export default function Dashboard() {
     { label: t('dashboard.sensor3', 'Sensor 3'), color: '#dc2626' },
   ]), [t]);
 
-  const isAdmin = user?.roleName === 'Administrador' || user?.accessType === 4;
+  const isAdmin = role === 'administrator';
   const activeTemperatureAlertsCount = activeAlerts.length;
 
   useEffect(() => {
@@ -286,81 +300,27 @@ export default function Dashboard() {
     };
   }, [isAdmin]);
 
-  // Define quais cards cada tipo de acesso pode ver
+  // RF002: each role's cards come from DASHBOARD_CARDS (dashboardCards.ts).
   const statCards = useMemo(() => {
-    if (!user) return [];
-
-    const allCards = [
-      {
-        title: t('dashboard.patients'),
-        value: stats.patients,
-        icon: Users,
-        color: 'var(--primary)',
-        link: '/patients',
-        allowedRoles: ['Administrador', 'Coordenador', 'Técnico'],
-        allowedAccessTypes: [1, 2, 3, 4], // Inclui Administrador (4)
-      },
-      {
-        title: t('dashboard.samples'),
-        value: stats.samples,
-        icon: FlaskConical,
-        color: 'var(--success)',
-        link: '/samples',
-        allowedRoles: ['Administrador', 'Coordenador', 'Técnico'],
-        allowedAccessTypes: [1, 2, 3],
-      },
-      {
-        title: t('dashboard.custodyReports', 'Relatórios de Custódia'),
-        value: stats.samples,
-        icon: FileSearch,
-        link: '/samples/custody-reports',
-        allowedRoles: ['Administrador', 'Coordenador', 'Técnico'],
-        allowedAccessTypes: [2, 3, 4],
-      },
-      {
-        title: t('dashboard.results'),
-        value: stats.results,
-        icon: FileText,
-        color: 'var(--warning)',
-        link: '/results',
-        allowedRoles: ['Administrador', 'Coordenador', 'Técnico'],
-        allowedAccessTypes: [1, 2, 3],
-      },
-      {
-        title: t('dashboard.temperatureAlerts'),
-        value: activeTemperatureAlertsCount,
-        icon: Thermometer,
-        color: 'var(--danger)',
-        link: '/temperature',
-        allowedRoles: ['Administrador', 'Coordenador', 'Técnico'],
-        allowedAccessTypes: [2, 3, 4], // Administrador (4) também tem acesso
-      },
-    ];
-
-    // Filtra cards baseado no role ou accessType
-    return allCards.filter(card => {
-      // Se tem roleName, usa ele
-      if (user.roleName) {
-        return card.allowedRoles.includes(user.roleName);
-      }
-      
-      // Fallback para accessType com lógica hierárquica
-      // Administrador (4) tem acesso a tudo
-      if (user.accessType === 4) {
-        return true;
-      }
-      // Coordenador (3) tem acesso a tudo exceto itens exclusivos de admin
-      if (user.accessType === 3) {
-        return card.allowedAccessTypes.includes(3) || card.allowedAccessTypes.includes(2);
-      }
-      // Técnico (2) tem acesso aos seus itens
-      if (user.accessType === 2) {
-        return card.allowedAccessTypes.includes(2) || card.allowedAccessTypes.includes(1);
-      }
-      // Usuário Externo (1) tem acesso apenas aos seus itens
-      return card.allowedAccessTypes.includes(user.accessType || 0);
-    });
-  }, [user, stats, t, activeTemperatureAlertsCount]);
+    if (!role) return [];
+    const open = t('dashboard.openCard', 'Abrir');
+    const reports = reportCount === null ? '—' : reportCount;
+    const cards: Record<DashboardCardKey, { title: string; value: number | string; icon: typeof Users; link: string }> = {
+      patients: { title: t('dashboard.patients'), value: stats.patients, icon: Users, link: '/patients' },
+      samples: { title: t('dashboard.samples'), value: stats.samples, icon: FlaskConical, link: '/samples' },
+      custodyReports: { title: t('dashboard.custodyReports', 'Relatórios de Custódia'), value: stats.samples, icon: FileSearch, link: '/samples/custody-reports' },
+      storage: { title: t('dashboard.storage', 'Armazenamento'), value: open, icon: Boxes, link: '/locations' },
+      results: { title: t('dashboard.results'), value: stats.results, icon: FileText, link: '/results' },
+      temperatureAlerts: { title: t('dashboard.temperatureAlerts'), value: activeTemperatureAlertsCount, icon: Thermometer, link: '/temperature' },
+      governanceReports: { title: t('dashboard.governanceReports', 'Relatórios de Governança'), value: reports, icon: BarChart3, link: '/reports' },
+      authorizedReports: { title: t('dashboard.authorizedReports', 'Relatórios Autorizados'), value: reports, icon: BarChart3, link: '/reports' },
+      users: { title: t('dashboard.users', 'Usuários'), value: open, icon: UserCog, link: '/users' },
+      security: { title: t('dashboard.security', 'Segurança'), value: open, icon: ShieldCheck, link: '/security' },
+      audit: { title: t('dashboard.audit', 'Auditoria'), value: open, icon: ScrollText, link: '/logs' },
+      settings: { title: t('dashboard.settings', 'Configurações'), value: open, icon: Settings, link: '/system-management' },
+    };
+    return DASHBOARD_CARDS[role].map((key) => ({ key, ...cards[key] }));
+  }, [role, stats, t, activeTemperatureAlertsCount, reportCount]);
 
   return (
     <div className="dashboard-bento">
@@ -392,7 +352,8 @@ export default function Dashboard() {
             : 'primary';
           return (
             <Card
-              key={stat.title}
+              key={stat.key}
+              data-testid={`dashboard-card-${stat.key}`}
               className={`kpi-card ${isAlert ? 'alert' : ''} ${stat.link ? 'is-clickable' : ''}`}
               onClick={handleClick}
             >
@@ -408,7 +369,8 @@ export default function Dashboard() {
         })}
       </div>
 
-      {/* Main Area: Temperature Chart + Alerts */}
+      {/* Main Area: Temperature Chart + Alerts. RF002 AC4: not for an external user. */}
+      {role !== 'external' && (
       <div className="content-grid">
         <Card
           className="temperature-card"
@@ -542,6 +504,7 @@ export default function Dashboard() {
           )}
         </div>
       </div>
+      )}
     </div>
   );
 }
