@@ -22,6 +22,7 @@ function makeCollection(overrides = {}) {
     find: vi.fn(() => makeCursor([])),
     findOne: vi.fn(async () => null),
     insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })),
+    insertMany: vi.fn(async (docs) => ({ insertedCount: docs.length })),
     updateOne: vi.fn(async () => ({ modifiedCount: 1 })),
     updateMany: vi.fn(async () => ({ modifiedCount: 1 })),
     countDocuments: vi.fn(async () => 0),

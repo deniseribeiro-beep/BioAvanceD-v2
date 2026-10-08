@@ -252,6 +252,9 @@ test.describe('RF010 Consent versioned by consentId — real backend, red-first 
         evidenceUri: first.evidenceDocumentUri,
       });
       expect(accepted.decisionEvents[0].evidenceHash).toMatch(/^sha256:[a-f0-9]{64}$/);
+      // AC3: each answered permission is a computable ConsentPermission.
+      expect(accepted.permissions.map((row: { permissionCode: string; decision: string }) => [row.permissionCode, row.decision]).sort())
+        .toEqual([['contact', 'permit'], ['storage', 'permit']]);
 
       // AC6: a scoped revocation blocks only its permission, from now on.
       const scoped = await revoke(first._id, { scope: ['contact'], reason: 'Não deseja contato futuro' });

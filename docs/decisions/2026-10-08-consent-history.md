@@ -25,6 +25,11 @@ Requirements: RF010 AC4-AC6, Requisitos v4.0.0; dictionary v2.0.0 ConsentDecisio
 13. **Every term records `language` (P1X-0093, BCP 47), `jurisdiction` (V2E-0430), `checksum` (V2E-0432) and `consentModel`,** on all three write paths (`createTemplate`, `updateTemplate`, `createPolicy`). The checksum is the SHA-256 of the exact text, computed by the server and never taken from the caller. Language and jurisdiction default to `pt-BR` and `BR`, this deployment's language and law.
 14. **`consentModel` is ENUM-0043..0046 (`specific`, `broad`, `tiered`, `dynamic`) and is optional on a term,** since the builder does not yet offer it. A Consent records its term's modality (ELM-0095), null when the term names none.
 
+## Computable permissions (RF010 AC3)
+
+15. **Each answered permission becomes a ConsentPermission row (V2E-0113..0120) when the consent is recorded,** in `consentPermissions`: its code (the term's permission key), `permit` or `deny`, the term version as `policyVersion` and the term's validity (from its `validFrom`, or the signing time, to its `validTo`). The rows are written once; a revocation narrows the consent's derived state and never rewrites them.
+16. **`purpose` is the term's own label coded by its key** until the builder offers governed purpose codes (DUO or institutional). That is why a scoped revocation still gives `review_required` in item 11.
+
 ## Read
 
 `GET /api/e-consent/consents/:id/history` (roles 3 and 4, as revoke) returns the derived state with the events and revocations it derives from.

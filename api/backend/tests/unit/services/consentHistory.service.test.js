@@ -127,6 +127,42 @@ describe('ConsentDecisionEventModel', () => {
   });
 });
 
+describe('ConsentPermissionModel.fromAnswers (RF010 AC3)', () => {
+  const ConsentPermissionModel = require('../../../src/models/ConsentPermission');
+
+  it('writes one permit or deny row per answer, under the term version and validity', () => {
+    const rows = ConsentPermissionModel.fromAnswers({
+      consentId: 'c-1',
+      participantId: 'p-1',
+      responses: { storage: true, contact: false },
+      template: {
+        version: 'v3',
+        validFrom: '2026-01-01T00:00:00Z',
+        validTo: '2027-01-01T00:00:00Z',
+        permissions: [{ key: 'storage', label: 'Armazenamento' }],
+      },
+      signedAt: new Date('2026-10-08T00:00:00Z'),
+    });
+
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({
+      consentId: 'c-1',
+      permissionCode: 'storage',
+      purpose: { code: 'storage', display: 'Armazenamento' },
+      decision: 'permit',
+      policyVersion: 'v3',
+      validityPeriod: { start: new Date('2026-01-01T00:00:00Z'), end: new Date('2027-01-01T00:00:00Z') },
+    });
+    expect(rows[1]).toMatchObject({ permissionCode: 'contact', purpose: { code: 'contact', display: 'contact' }, decision: 'deny' });
+  });
+
+  it('names the dictionary elements V2E-0113..0120', () => {
+    expect(Object.keys(ConsentPermissionModel.fieldsOf())).toEqual([
+      'consentPermissionId', 'consentId', 'permissionCode', 'purpose', 'decision', 'conditions', 'policyVersion', 'validityPeriod',
+    ]);
+  });
+});
+
 describe('ConsentRevocationModel', () => {
   const valid = { consentId: 'c-1', decisionEventId: 'e-1', scope: ['contact'], priorUseDisposition: 'retain_history' };
 

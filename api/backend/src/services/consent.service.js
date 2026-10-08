@@ -5,6 +5,7 @@ const { ObjectId } = require('mongodb');
 const ConsentTemplateModel = require('../models/ConsentTemplate');
 const ConsentPolicyModel = require('../models/ConsentPolicy');
 const PatientConsentModel = require('../models/PatientConsent');
+const ConsentPermissionModel = require('../models/ConsentPermission');
 const consentEvidence = require('./consentEvidence.service');
 const consentHistory = require('./consentHistory.service');
 const { validateParticipantId } = require('../utils/patientAnonymization');
@@ -975,6 +976,17 @@ class ConsentService {
       }
 
       const insertResult = await consentsCollection.insertOne(consent);
+      // RF010 AC3: one computable ConsentPermission per answered permission.
+      const permissionRows = ConsentPermissionModel.fromAnswers({
+        consentId,
+        participantId,
+        responses: consent.responses,
+        template,
+        signedAt,
+      });
+      if (permissionRows.length > 0) {
+        await (await getCollection(db, 'consentPermissions')).insertMany(permissionRows);
+      }
       const decisionActor = this.resolveDecisionActor(actor, participantId);
       const recorded = await consentHistory.recordAcceptance(
         db, { _id: insertResult.insertedId, ...consent }, decisionActor
@@ -1069,8 +1081,11 @@ class ConsentService {
       return null;
     }
     const { events, revocations } = await consentHistory.getHistory(db, consent);
+    const permissions = await (await getCollection(db, 'consentPermissions'))
+      .find({ consentId: consentHistory.consentKeyOf(consent) }).toArray();
     return {
       consentId: consentHistory.consentKeyOf(consent),
+      permissions,
       participantId: consent.participantId || null,
       currentStateDerived: consentHistory.deriveConsentState(consent, events, revocations).currentStateDerived,
       supersededByConsentId: consent.supersededByConsentId || null,
