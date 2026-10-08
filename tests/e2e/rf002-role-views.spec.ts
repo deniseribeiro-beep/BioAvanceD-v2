@@ -89,9 +89,13 @@ test.describe('RF002: role views on the real backend', () => {
     const readOther = await request.get(`${apiBaseURL}/api/reports/${ungranted}`, { headers: extAuth });
     expect(readOther.status(), await readOther.text()).toBe(403);
 
-    // A type no grant names is refused; the granted type builds.
-    const otherType = await request.post(`${apiBaseURL}/api/reports/sensor/preview`, { headers: extAuth, data: {} });
+    // A type no grant names is refused; the granted type builds. The type is
+    // a code the seed's active templates hold ('sensors', not its handler key
+    // 'sensor'): an unknown code answers the no-preview 200 before the grant
+    // check runs.
+    const otherType = await request.post(`${apiBaseURL}/api/reports/sensors/preview`, { headers: extAuth, data: {} });
     expect(otherType.status(), await otherType.text()).toBe(403);
+    expect((await otherType.json()).message).toBe('Relatório não autorizado para este usuário.');
     const grantedType = await request.post(`${apiBaseURL}/api/reports/equipment/preview`, { headers: extAuth, data: {} });
     expect(grantedType.status(), await grantedType.text()).toBe(200);
 
