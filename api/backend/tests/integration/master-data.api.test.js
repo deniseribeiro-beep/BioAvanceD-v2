@@ -350,6 +350,7 @@ describe('PUT /api/collections/:id (governanceRegime is immutable)', () => {
 
     expect(res.status).toBe(422);
     expect(res.body.message).toMatch(/governanceRegime não pode ser alterado/);
+    expect(res.body.details).toEqual([res.body.message]);
     expect(coll.findOneAndUpdate).not.toHaveBeenCalled();
   });
 

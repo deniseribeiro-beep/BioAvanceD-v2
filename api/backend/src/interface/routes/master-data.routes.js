@@ -209,10 +209,12 @@ function createMasterDataRouter({ collectionName, idField, model, validateRefere
           (key) => existing[key] !== undefined && existing[key] !== null && existing[key] !== body[key]
         );
         if (refused.length > 0) {
+          const message = `${refused.join(', ')} não pode ser alterado por edição`;
           return res.status(422).json({
             success: false,
             error: 'Campo imutável',
-            message: `${refused.join(', ')} não pode ser alterado por edição`,
+            message,
+            details: [message],
           });
         }
       }
