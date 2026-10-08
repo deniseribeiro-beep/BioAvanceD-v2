@@ -1700,6 +1700,25 @@
       "purgeAfterDays": "Purgar después de (días)",
       "title": "Privacidad y retención de datos"
     },
+    "releases": {
+      "approvedBy": "Aprobada por",
+      "empty": "Ninguna release registrada. El primer guardado registra la configuración vigente.",
+      "intro": "Cada cambio guardado es una nueva release. Un rollback restaura la configuración de una release anterior como una nueva release que la referencia.",
+      "loadError": "No se pudieron cargar las releases",
+      "restores": "Restaura",
+      "rollback": "Restaurar",
+      "rollbackError": "No se pudo restaurar la configuración",
+      "rollbackSuccess": "Release {{version}} restaurada como nueva release",
+      "since": "Vigente desde",
+      "status": "Estado",
+      "statuses": {
+        "active": "Activa",
+        "draft": "Rechazada (borrador)",
+        "superseded": "Sustituida"
+      },
+      "title": "Releases de configuración",
+      "version": "Versión"
+    },
     "saveError": "Error al guardar configuraciones",
     "saveSuccess": "Configuraciones guardadas con éxito",
     "sections": {
@@ -1713,6 +1732,7 @@
       "permissions": "Permisos por perfil",
       "policies": "Políticas y directrices",
       "privacy": "Privacidad",
+      "releases": "Releases de configuración",
       "session": "Sesión y timeout"
     },
     "session": {

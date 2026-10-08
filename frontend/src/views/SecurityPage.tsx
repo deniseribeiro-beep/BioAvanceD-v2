@@ -6,6 +6,7 @@ import { useSecurity, SecurityConfig, ProfilePermissions } from '../hooks/useSec
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useToast } from '../components/UI/ToastContainer';
+import ConfigurationReleasesPanel from '../components/security/ConfigurationReleasesPanel';
 import './SecurityPage.css';
 
 // #1248: the retention keys are decided by the active RetentionPolicy, so
@@ -32,7 +33,7 @@ export default function SecurityPage() {
   const { user, isLoading: authLoading, hasRole } = useAuth();
   const { t } = useLanguage();
   const { showToast } = useToast();
-  const { config, permissions, loading, error, saving, updateConfig, exportLogs } = useSecurity();
+  const { config, permissions, loading, error, saving, loadConfig, updateConfig, exportLogs } = useSecurity();
   const [localConfig, setLocalConfig] = useState<SecurityConfig | null>(null);
   const [localPermissions, setLocalPermissions] = useState<ProfilePermissions | null>(null);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'success' | 'error'>('idle');
@@ -279,6 +280,13 @@ export default function SecurityPage() {
               onClick={() => setActiveSection('policies')}
             >
               {t('security.sections.policies')}
+            </button>
+            <button
+              data-testid="security-nav-releases"
+              className={activeSection === 'releases' ? 'active' : ''}
+              onClick={() => setActiveSection('releases')}
+            >
+              {t('security.sections.releases')}
             </button>
           </nav>
         </div>
@@ -947,6 +955,10 @@ export default function SecurityPage() {
           )}
 
           {/* Seção: Políticas e Diretrizes Técnicas */}
+          {activeSection === 'releases' && (
+            <ConfigurationReleasesPanel t={t} showToast={showToast} onRolledBack={loadConfig} />
+          )}
+
           {activeSection === 'policies' && (
             <div className="security-policies">
               <Card className="security-section">

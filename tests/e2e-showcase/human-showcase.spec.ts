@@ -206,6 +206,12 @@ test.describe('Human-paced e2e showcase reel — Wave 3 (#646)', () => {
       // screen while the viewer registers it.
       await expect(page.locator('.security-success')).toBeVisible();
       await beat(page, MEDIUM);
+      // RF014 AC4 (#1339): the save is a new release, active at the top of
+      // the history, with the one it replaced offering a rollback.
+      await page.getByTestId('security-nav-releases').click();
+      await expect(page.getByTestId('security-release-row').first()).toHaveAttribute('data-status', 'active');
+      await expect(page.getByTestId('security-release-rollback').first()).toBeVisible();
+      await beat(page, LARGE);
 
       // 3. Equipment management through the real UI. (RF017, #646 Wave 3)
       await page.goto('/facility-management?tab=equipment');

@@ -1700,6 +1700,25 @@
       "purgeAfterDays": "Purge after (days)",
       "title": "Privacy and Data Retention"
     },
+    "releases": {
+      "approvedBy": "Approved by",
+      "empty": "No release recorded yet. The first save records the configuration in force.",
+      "intro": "Every saved change is a new release. A rollback restores an earlier release's settings as a new release that names it.",
+      "loadError": "Could not load the releases",
+      "restores": "Restores",
+      "rollback": "Roll back",
+      "rollbackError": "Could not roll back the configuration",
+      "rollbackSuccess": "Release {{version}} restored as a new release",
+      "since": "In force since",
+      "status": "Status",
+      "statuses": {
+        "active": "Active",
+        "draft": "Refused (draft)",
+        "superseded": "Superseded"
+      },
+      "title": "Configuration releases",
+      "version": "Version"
+    },
     "saveError": "Error saving settings",
     "saveSuccess": "Settings saved successfully!",
     "sections": {
@@ -1713,6 +1732,7 @@
       "permissions": "Permissions by Profile",
       "policies": "Policies and Guidelines",
       "privacy": "Privacy",
+      "releases": "Configuration releases",
       "session": "Session and Timeout"
     },
     "session": {

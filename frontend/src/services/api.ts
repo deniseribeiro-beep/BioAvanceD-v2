@@ -987,6 +987,10 @@ export const importLGPDService = {
 export const securityService = {
   getConfig: () => api.get('/security/config'),
   updateConfig: (data: any) => api.put('/security/config', data),
+  // RF014 AC4: the configuration's releases, newest first, and a governed
+  // rollback to one of them, recorded as a new release.
+  getReleases: () => api.get('/security/config/releases'),
+  rollbackConfig: (configurationReleaseId: string) => api.post('/security/config/rollback', { configurationReleaseId }),
   // #1149: read-only. The PUT it paired with wrote a store nothing enforced.
   getPermissions: () => api.get('/security/permissions'),
   getSessions: () => api.get('/auth/sessions'),

@@ -1589,6 +1589,61 @@ test.describe('Security policy management (RF014) — real backend', () => {
     expect(past.status(), await past.text()).toBe(400);
   });
 
+  // RF014 AC4, #1339: the Security page lists the releases and rolls back to
+  // a superseded one from the page. The change uses passwordRules.expirationDays,
+  // which ends no session, so a rollback here logs no other spec out.
+  test('RF014 AC4: the Security page lists the configuration releases and rolls back to a superseded one', async ({
+    page,
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const config = async () => (await (await request.get(`${apiBaseURL}/api/security/config`, { headers: auth })).json()).data;
+    const releases = async () => (await (await request.get(`${apiBaseURL}/api/security/config/releases`, { headers: auth })).json()).data;
+    const original = (await config()).passwordRules.expirationDays;
+    const changed = original === 30 ? 31 : 30;
+
+    const put = await request.put(`${apiBaseURL}/api/security/config`, {
+      headers: auth,
+      data: { passwordRules: { expirationDays: changed } },
+    });
+    expect(put.ok(), await put.text()).toBeTruthy();
+    const active = (await put.json()).data.configurationReleaseId;
+    const history = await releases();
+    const superseded = history.find((release: { configurationReleaseId: string }) =>
+      release.configurationReleaseId === history.find((r: { configurationReleaseId: string }) => r.configurationReleaseId === active).supersedesId);
+    expect(superseded.status).toBe('superseded');
+    let rolledBack = false;
+    try {
+      await seedRealAuth(page, admin);
+      await page.goto('/system-management?tab=security');
+      await page.getByTestId('security-nav-releases').click();
+      const rows = page.getByTestId('security-release-row');
+      await expect(rows.first()).toHaveAttribute('data-status', 'active');
+      await expect(rows.first().getByTestId('security-release-rollback')).toHaveCount(0);
+
+      const target = rows.filter({ has: page.getByTestId('security-release-version').getByText(superseded.semanticVersion, { exact: true }) });
+      await target.getByTestId('security-release-rollback').click();
+      rolledBack = true;
+
+      // The new active release names the one it restored, on the page and in the API.
+      await expect(rows.first()).toHaveAttribute('data-status', 'active');
+      await expect(rows.first().getByTestId('security-release-restores')).toHaveText(superseded.semanticVersion);
+      const after = await releases();
+      expect(after[0].status).toBe('active');
+      expect(after[0].rollbackTargetId).toBe(superseded.configurationReleaseId);
+      expect((await config()).passwordRules.expirationDays).toBe(original);
+    } finally {
+      if (!rolledBack) {
+        const restore = await request.put(`${apiBaseURL}/api/security/config`, {
+          headers: auth,
+          data: { passwordRules: { expirationDays: original } },
+        });
+        expect(restore.ok(), await restore.text()).toBeTruthy();
+      }
+    }
+  });
+
   // #1260, #1261: the logging switches RNF009 makes mandatory and the privacy
   // keys whose behaviour is fixed show that behaviour and render read-only.
   // logging.level is a real input and round-trips with the fixed values
