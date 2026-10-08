@@ -240,13 +240,15 @@ class ResultWorker {
       }
 
       // Busca amostra
+      // #1340: query only the identifiers the row carries. A row with no
+      // barcode column has row.barcode undefined, which the driver sends as
+      // { barcode: null }, and that matches every sample without a barcode:
+      // the result was attached to whichever such sample came first.
+      const identifierClauses = [];
+      if (row.specimenId) identifierClauses.push({ specimenId: row.specimenId });
+      if (row.barcode) identifierClauses.push({ barcode: row.barcode });
       const samplesCollection = getCollection(db, 'samples');
-      const sample = await samplesCollection.findOne({
-        $or: [
-          { specimenId: row.specimenId },
-          { barcode: row.barcode },
-        ],
-      });
+      const sample = await samplesCollection.findOne({ $or: identifierClauses });
 
       if (!sample) {
         throw new Error(
