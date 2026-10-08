@@ -54,7 +54,7 @@ async function collectionFor(db, entry) {
   return entry.collectionKey ? getCollection(db, entry.collectionKey) : db.collection(entry.collectionName);
 }
 
-function worklistFilter(cipherFields, activeKeyId, all) {
+function buildEncryptionWorklistQuery(cipherFields, activeKeyId, all) {
   if (all) {
     return { $or: cipherFields.map((field) => ({ [field]: { $type: 'object' } })) };
   }
@@ -83,7 +83,7 @@ function blindIndexUpdates(entry, doc, plain) {
 async function rewriteEntry(db, entry, { apply, all, activeKeyId }) {
   const collection = await collectionFor(db, entry);
   const cipherFields = Object.values(entry.fields);
-  const docs = await collection.find(worklistFilter(cipherFields, activeKeyId, all)).toArray();
+  const docs = await collection.find(buildEncryptionWorklistQuery(cipherFields, activeKeyId, all)).toArray();
   const summary = { candidates: docs.length, rewritten: 0, unreadable: 0, changedMeanwhile: 0 };
 
   for (const doc of docs) {
@@ -192,4 +192,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { rewriteEncryptedFields, worklistFilter, run };
+module.exports = { rewriteEncryptedFields, buildEncryptionWorklistQuery, run };

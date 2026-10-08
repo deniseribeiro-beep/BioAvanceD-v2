@@ -1664,6 +1664,7 @@ test('#1088: every helper-wrapped filter whose argument is unresolvable is enume
     'controllers/createLinkedFileController.js:buildParentIdQuery': 'keys checked via QUERY_BUILDER',
     'interface/routes/reportTemplates.routes.js:resolveTemplateQuery': 'UNCHECKED -- name does not match build*Query',
     'interface/routes/workflow-run-file-link.routes.js:buildWorkflowRunQuery': 'keys checked via QUERY_BUILDER',
+    'scripts/rewriteEncryptedFields.js:buildEncryptionWorklistQuery': 'keys computed from utils/encryptedFieldRegistry.js, which encrypted-field-registry.arch pins',
     'services/SampleGraphValidator.js:normalizeSampleIdFilter': 'UNCHECKED -- name does not match build*Query',
     'services/equipment-sensor-quarantine.service.js:buildSensorLookup': 'UNCHECKED -- name does not match build*Query'
   };
