@@ -335,6 +335,38 @@ describe('auth.routes.js (integration, real router mounted)', () => {
       expect(res.body.data).toEqual({ mfaEnabled: true, mfaLocked: false });
     });
 
+    // #1306 (RF001 AC4): authenticate refused an inactive account only at
+    // login, so a session opened before the inactivation kept working.
+    it.each(['inactive', 'blocked', 'suspended'])(
+      'authenticate refuses a live session whose account is %s',
+      async (status) => {
+        vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
+        vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+        const authRoutes = loadAuthRoutes();
+        const app = buildApp(authRoutes, makeDb({ status, mfaEnabled: true, mfaLocked: false }));
+
+        const res = await request(app)
+          .get('/api/auth/two-factor/status')
+          .set('Authorization', `Bearer ${signAccessToken()}`);
+
+        expect(res.status).toBe(401);
+        expect(res.body.accountInactive).toBe(true);
+      }
+    );
+
+    it('CONTROL: authenticate admits an active account, and one stored before status existed', async () => {
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      const authRoutes = loadAuthRoutes();
+      for (const doc of [{ status: 'active' }, { status: 'Ativo' }, {}]) {
+        const app = buildApp(authRoutes, makeDb({ ...doc, mfaEnabled: false, mfaLocked: false }));
+        const res = await request(app)
+          .get('/api/auth/two-factor/status')
+          .set('Authorization', `Bearer ${signAccessToken()}`);
+        expect(res.status).toBe(200);
+      }
+    });
+
     it('returns 500 when the db lookup throws', async () => {
       vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
       vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
@@ -715,6 +747,33 @@ describe('auth.routes.js (integration, real router mounted)', () => {
       expect(rotateSpy).toHaveBeenCalledTimes(1);
       expect(res.headers['set-cookie']?.some((c) => c.startsWith('refresh_token='))).toBe(true);
     });
+
+    // #1306 (RNF021 C2): refresh checked only that the user existed.
+    it.each(['inactive', 'blocked', 'suspended', 'Inativo'])(
+      'refuses to renew for an account whose status is %s, ending the session',
+      async (status) => {
+        const userId = new ObjectId();
+        vi.spyOn(sessionService, 'getSessionByRefreshToken').mockResolvedValue({ userID: userId.toString(), sessionID: 's9' });
+        const rotateSpy = vi.spyOn(sessionService, 'rotateSessionTokens').mockResolvedValue(true);
+        const invalidateSpy = vi.spyOn(sessionService, 'invalidateSession').mockResolvedValue(undefined);
+        const db = makeDbWithRbac(
+          { _id: userId, email: 'a@b.com', username: 'u', name: 'A', status },
+          [{ userAccountId: userId.toString(), accessType: 2 }]
+        );
+        const app = appWithDb(db);
+        const refreshToken = jwt.sign({ userID: userId.toString(), type: 'refresh' }, JWT_REFRESH_SECRET, { expiresIn: '7d' });
+
+        const res = await request(app)
+          .post('/api/auth/refresh')
+          .set('Cookie', `refresh_token=${refreshToken}`);
+
+        expect(res.status).toBe(401);
+        expect(res.body.code).toBe('ACCOUNT_INACTIVE');
+        expect(invalidateSpy).toHaveBeenCalledWith(expect.anything(), 's9', 'admin_action', 'system');
+        expect(rotateSpy).not.toHaveBeenCalled();
+        expect(res.headers['set-cookie']?.some((c) => c.startsWith('refresh_token=;'))).toBe(true);
+      }
+    );
   });
 
   describe('POST /password-reset/request and /password-reset/reset', () => {

@@ -466,6 +466,19 @@ router.post('/refresh', async (req, res) => {
       });
     }
 
+    // #1306 (RNF021 C2): refresh used to check only that the user exists, so
+    // an inactivated account kept renewing its access token.
+    const UserModel = require('../../models/User');
+    if (UserModel.normalizeStatus(user.status) !== 'active') {
+      await sessionService.invalidateSession(db, session.sessionID, 'admin_action', 'system');
+      clearRefreshCookie(res);
+      return res.status(401).json({
+        success: false,
+        code: 'ACCOUNT_INACTIVE',
+        error: 'Conta inativa'
+      });
+    }
+
     // #431: accessType resolved fresh from the RBAC assignment via
     // authService.issueAccessToken, not read off the (no-longer-populated,
     // since #427) User document field.

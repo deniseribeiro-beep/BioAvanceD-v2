@@ -761,6 +761,16 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
     if (req.body.status && req.body.status !== targetUser.status) {
       changes.status = { from: targetUser.status, to: req.body.status };
     }
+
+    // #1306 (RF001 AC4, RNF021 C2, RNF008 C7): inactivation and a role change
+    // revoke the user's live sessions. A role change counts whichever way it
+    // goes, since the access token carries the old level until it is renewed.
+    const leftActive = Boolean(changes.status) && req.body.status !== 'active';
+    const roleChanged = Boolean(changes.accessType) || changes.auditorRole !== undefined;
+    if (leftActive || roleChanged) {
+      const sessionService = require('../../services/session.service');
+      await sessionService.invalidateUserSessions(db, targetUser._id.toString(), 'admin_action', req.user?.userID, { req });
+    }
     
     // Registra log de atualização
     const auditLogger = require('../../utils/auditLogger');
@@ -843,32 +853,37 @@ router.delete('/:id', authenticate, requirePermission('createUser'), async (req,
     // #1008: the #998 floor covered granting a level above your own but not
     // DELETING a user above your own, so a Coordenador could delete an
     // Administrador. Same root cause as the role-assignment gate: createUser
-    // gates every verb on this resource. A missing target falls through to
-    // deleteOne, which answers the 404 below as before.
+    // gates every verb on this resource.
     const targetUser = await usersCollection.findOne(userFilter);
-    if (targetUser) {
-      const { resolveUserHierarchyLevel } = require('../../services/rbac-assignment.service');
-      const [targetLevel, callerLevel] = await Promise.all([
-        resolveUserHierarchyLevel(db, targetUser._id.toString()),
-        resolveUserHierarchyLevel(db, req.user?.userID),
-      ]);
-      if (Number(targetLevel || 0) > Number(callerLevel || 0)) {
-        return res.status(403).json({
-          success: false,
-          error: req.t('errors.forbidden'),
-          message: 'Não é possível excluir um usuário com nível de acesso superior ao seu.'
-        });
-      }
-    }
-
-    const result = await usersCollection.deleteOne(userFilter);
-
-    if (result.deletedCount === 0) {
+    if (!targetUser) {
       return res.status(404).json({
         success: false,
         error: 'Usuário não encontrado'
       });
     }
+    const { resolveUserHierarchyLevel } = require('../../services/rbac-assignment.service');
+    const [targetLevel, callerLevel] = await Promise.all([
+      resolveUserHierarchyLevel(db, targetUser._id.toString()),
+      resolveUserHierarchyLevel(db, req.user?.userID),
+    ]);
+    if (Number(targetLevel || 0) > Number(callerLevel || 0)) {
+      return res.status(403).json({
+        success: false,
+        error: req.t('errors.forbidden'),
+        message: 'Não é possível excluir um usuário com nível de acesso superior ao seu.'
+      });
+    }
+
+    // #1306 (RF003 AC4, RNF022 C5): deletion is logical. The account is
+    // inactivated and its sessions revoked; the document, its audit trail and
+    // its role history stay. A hard deleteOne left audit rows naming an
+    // account that no longer existed.
+    await usersCollection.updateOne(
+      { _id: targetUser._id },
+      { $set: { status: 'inactive', updatedAt: new Date() } }
+    );
+    const sessionService = require('../../services/session.service');
+    await sessionService.invalidateUserSessions(db, targetUser._id.toString(), 'admin_action', req.user?.userID, { req });
 
     // Registra log de exclusão de usuário
     const auditLogger = require('../../utils/auditLogger');

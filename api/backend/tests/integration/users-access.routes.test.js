@@ -1123,6 +1123,65 @@ describe('Users and Access routes', () => {
     expect(sessionsCollection.updateMany).not.toHaveBeenCalled();
   });
 
+  // #1306 (RF001 AC4, RNF021 C2): PUT never revoked, so an inactivated or
+  // re-roled user's live session kept working under the old state.
+  describe('#1306: PUT /api/users/:id revokes sessions on inactivation and role change', () => {
+    async function put(body, { status = 'active', accessType = 2 } = {}) {
+      const handler = getHandler(userRoutes, 'put', '/:id');
+      const targetUser = {
+        _id: 'user-target-1306',
+        name: 'Alvo 1306',
+        email: 'alvo-1306@bioavanced.com.br',
+        username: 'alvo1306',
+        status,
+      };
+      usersCollection.findOne
+        .mockResolvedValueOnce(targetUser)
+        .mockResolvedValueOnce({ ...targetUser, ...body });
+      usersCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
+      const rbacCollections = buildRbacCollections([
+        { userAccountId: '507f1f77bcf86cd799439011', accessType: 4 },
+        { userAccountId: 'user-target-1306', accessType },
+      ]);
+      const req = createRequest({ params: { id: 'user-target-1306' }, body });
+      req.app.locals.db = {
+        collection: vi.fn((name) => {
+          if (name === 'users') return usersCollection;
+          if (rbacCollections[name]) return rbacCollections[name];
+          return db.collection(name);
+        }),
+      };
+      const res = createResponse();
+      await handler(req, res);
+      return res;
+    }
+
+    const revokedAsAdminAction = () => expect(sessionsCollection.updateMany).toHaveBeenCalledWith(
+      { userID: 'user-target-1306', isActive: true },
+      expect.objectContaining({
+        $set: expect.objectContaining({ isRevoked: true, revocationReason: 'admin_action', revokedBy: '507f1f77bcf86cd799439011' }),
+      })
+    );
+
+    it.each(['inactive', 'Inativo', 'blocked', 'suspended'])('status %s revokes the sessions', async (status) => {
+      const res = await put({ status });
+      expect(res.statusCode).toBe(200);
+      revokedAsAdminAction();
+    });
+
+    it('a level change revokes the sessions', async () => {
+      const res = await put({ accessType: 3 });
+      expect(res.statusCode).toBe(200);
+      revokedAsAdminAction();
+    });
+
+    it('CONTROL: an echoed unchanged status and level revoke nothing, nor does a reactivation', async () => {
+      expect((await put({ status: 'active', accessType: 2 })).statusCode).toBe(200);
+      expect((await put({ status: 'active' }, { status: 'inactive' })).statusCode).toBe(200);
+      expect(sessionsCollection.updateMany).not.toHaveBeenCalled();
+    });
+  });
+
   // #993: mfaSecretCiphertext/mfaActivationDate sat on ALLOWED_USER_UPDATE_FIELDS, and
   // the admin branch above keeps whatever the caller sent when mfaEnabled is
   // explicitly true. So one PUT could set a target's password AND replace
@@ -1914,12 +1973,13 @@ describe('Users and Access routes', () => {
 
       expect(res.statusCode).toBe(403);
       expect(usersCollection.deleteOne).not.toHaveBeenCalled();
+      expect(usersCollection.updateOne).not.toHaveBeenCalled();
     });
 
     it('CONTROL: a Coordenador may still delete a user at or below their level', async () => {
       const handler = getHandler(userRoutes, 'delete', '/:id');
       usersCollection.findOne.mockResolvedValueOnce({ _id: 'tec-target-1008', username: 'tec' });
-      usersCollection.deleteOne.mockResolvedValueOnce({ deletedCount: 1 });
+      usersCollection.updateOne.mockResolvedValueOnce({ matchedCount: 1 });
 
       const req = createRequest({ params: { id: 'tec-target-1008' }, user: COORD });
       req.app.locals.db = dbWithUsers([
@@ -1931,13 +1991,22 @@ describe('Users and Access routes', () => {
       await handler(req, res);
 
       expect(res.statusCode).toBe(200);
-      expect(usersCollection.deleteOne).toHaveBeenCalledTimes(1);
+      // #1306 (RF003 AC4, RNF022 C5): the delete is logical -- the account is
+      // inactivated, never removed, and its sessions are revoked.
+      expect(usersCollection.deleteOne).not.toHaveBeenCalled();
+      expect(usersCollection.updateOne).toHaveBeenCalledWith(
+        { _id: 'tec-target-1008' },
+        { $set: expect.objectContaining({ status: 'inactive' }) }
+      );
+      expect(sessionsCollection.updateMany).toHaveBeenCalledWith(
+        { userID: 'tec-target-1008', isActive: true },
+        expect.objectContaining({ $set: expect.objectContaining({ revocationReason: 'admin_action', revokedBy: COORD.userID }) })
+      );
     });
 
     it('CONTROL: a missing target still answers 404', async () => {
       const handler = getHandler(userRoutes, 'delete', '/:id');
       usersCollection.findOne.mockResolvedValueOnce(null);
-      usersCollection.deleteOne.mockResolvedValueOnce({ deletedCount: 0 });
 
       const req = createRequest({ params: { id: 'nobody-1008' }, user: COORD });
       req.app.locals.db = dbWithUsers([{ userAccountId: COORD.userID, accessType: 3 }]);
@@ -1946,6 +2015,8 @@ describe('Users and Access routes', () => {
       await handler(req, res);
 
       expect(res.statusCode).toBe(404);
+      expect(usersCollection.updateOne).not.toHaveBeenCalled();
+      expect(sessionsCollection.updateMany).not.toHaveBeenCalled();
     });
   });
 

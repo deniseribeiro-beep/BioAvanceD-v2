@@ -450,10 +450,9 @@ test.describe('User management (RF003) — real backend', () => {
     expect(registerResponse.ok(), await registerResponse.text()).toBeTruthy();
     const userID = (await registerResponse.json()).data?._id || (await registerResponse.json()).data?.id;
 
-    // Inactivation here is PUT /:id with status: 'inactive', not DELETE
-    // /:id — that route does a hard `deleteOne` (confirmed reading
-    // user.routes.js), which would destroy the history AC#4 requires be
-    // kept, so it can't be the mechanism this criterion is proven with.
+    // Inactivation here is PUT /:id with status: 'inactive'. DELETE /:id is
+    // logical too since #1306; the session-lifecycle block at the end of this
+    // file proves that route.
     const inactivateResponse = await request.put(`${apiBaseURL}/api/users/${userID}`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: { status: 'inactive' },
@@ -2294,5 +2293,150 @@ test.describe('Administrator password set (RF003 criteria 2 and 5, #1013) — re
     const withCodeBody = await withCode.json();
     expect(withCodeBody.requiresPasswordChange).toBe(true);
     expect(withCodeBody.data?.token).toBeFalsy();
+  });
+});
+
+// #1306: the session and account lifecycle on the live stack. Inactivation,
+// a role change, a logical delete and a logout each end the sessions they
+// should (RF001 AC4, RNF021 C2), refresh refuses an inactive account, and the
+// per-account lockout holds against the right password (RF001 AC2).
+test.describe('Session and account lifecycle (RF001 criteria 2 and 4, RNF021, #1306) — real backend', () => {
+  const trustedHopURL = process.env.E2E_TRUSTED_HOP_URL || 'http://localhost:3100';
+  const password = 'Tecnico@123456-forte';
+
+  async function registerTecnico(request: APIRequestContext, adminToken: string, label: string) {
+    const username = `tecnico.${label}.${Date.now()}`;
+    const register = await request.post(`${apiBaseURL}/api/users/register`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+      data: { name: `Fixture ${label}`, email: `${username}@example.com`, username, password, accessType: 2, roleName: 'Técnico' },
+    });
+    expect(register.ok(), await register.text()).toBeTruthy();
+    const body = await register.json();
+    return { userID: body.data?._id || body.data?.id, username };
+  }
+
+  // The first-login enrolment, inline so the refresh cookie it sets is kept.
+  async function openSession(request: APIRequestContext, username: string) {
+    const qr = await request.post(`${apiBaseURL}/api/auth/two-factor/qr-first-login`, { data: { username, password } });
+    expect(qr.ok(), await qr.text()).toBeTruthy();
+    const secret = (await qr.json()).data?.secret;
+    const enable = await request.post(`${apiBaseURL}/api/auth/two-factor/enable-first-login`, {
+      data: { username, password, code: computeTotp(secret) },
+    });
+    expect(enable.ok(), await enable.text()).toBeTruthy();
+    const refreshCookie = /refresh_token=[^;]+/.exec(enable.headers()['set-cookie'] || '')?.[0];
+    expect(refreshCookie, 'enrolment sets the refresh cookie').toBeTruthy();
+    return { token: (await enable.json()).data.token as string, refreshCookie: refreshCookie! };
+  }
+
+  const status = (request: APIRequestContext, token: string) =>
+    request.get(`${apiBaseURL}/api/user/security/status`, { headers: { Authorization: `Bearer ${token}` } });
+
+  test('inactivation ends the live session and refresh refuses the account (RF001 criterion 4, RNF021 criterion 2)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const target = await registerTecnico(request, admin.token, 'inact1306');
+    const session = await openSession(request, target.username);
+    expect((await status(request, session.token)).status(), 'the session works before').toBe(200);
+
+    const inactivate = await request.put(`${apiBaseURL}/api/users/${target.userID}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { status: 'inactive' },
+    });
+    expect(inactivate.ok(), await inactivate.text()).toBeTruthy();
+
+    expect((await status(request, session.token)).status()).toBe(401);
+    const refreshed = await request.post(`${apiBaseURL}/api/auth/refresh`, { headers: { Cookie: session.refreshCookie } });
+    expect(refreshed.status()).toBe(401);
+    expect((await refreshed.json()).data?.token).toBeFalsy();
+
+    const revoked = await findLatestSession(target.userID);
+    expect(revoked?.isActive).toBe(false);
+    expect(revoked?.revocationReason).toBe('admin_action');
+    await closeSessionsDb();
+  });
+
+  test('a role change ends the live session (RNF021 criterion 2, RNF008 criterion 7)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const target = await registerTecnico(request, admin.token, 'role1306');
+    const session = await openSession(request, target.username);
+    expect((await status(request, session.token)).status()).toBe(200);
+
+    const promote = await request.put(`${apiBaseURL}/api/users/${target.userID}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { accessType: 3, roleName: 'Coordenador' },
+    });
+    expect(promote.ok(), await promote.text()).toBeTruthy();
+    expect((await status(request, session.token)).status()).toBe(401);
+  });
+
+  test('DELETE inactivates the account and keeps its record; its session ends and it cannot log in (RF003 criterion 4, RNF022 criterion 5)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const target = await registerTecnico(request, admin.token, 'del1306');
+    const session = await openSession(request, target.username);
+
+    const removed = await request.delete(`${apiBaseURL}/api/users/${target.userID}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(removed.ok(), await removed.text()).toBeTruthy();
+
+    const kept = await request.get(`${apiBaseURL}/api/users/${target.userID}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(kept.ok(), 'the record survives the delete').toBeTruthy();
+    expect((await kept.json()).data.status).toBe('Inativo');
+    expect((await status(request, session.token)).status()).toBe(401);
+    const login = await request.post(`${apiBaseURL}/api/auth/login`, { data: { username: target.username, password } });
+    expect(login.ok()).toBeFalsy();
+  });
+
+  test('logout ends the session it was sent on (RF001 criterion 4)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const target = await registerTecnico(request, admin.token, 'logout1306');
+    const session = await openSession(request, target.username);
+    expect((await status(request, session.token)).status()).toBe(200);
+
+    const logout = await request.post(`${apiBaseURL}/api/auth/logout`, { headers: { Authorization: `Bearer ${session.token}` } });
+    expect(logout.ok(), await logout.text()).toBeTruthy();
+    expect((await status(request, session.token)).status()).toBe(401);
+  });
+
+  // The failures go through the trusted hop, each from its own TEST-NET-3
+  // address (RFC 5737), so no source reaches blockIPAfterAttempts and the
+  // runner's own address, shared by every spec, counts nothing.
+  test('maxLoginAttempts failed passwords lock the account, and the right password is then refused (RF001 criterion 2)', async ({ request }) => {
+    const admin = await realLogin(request);
+    try {
+      const config = (await (await request.get(`${apiBaseURL}/api/security/config`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+      })).json()).data;
+      const maxAttempts = Number(config.authentication.maxLoginAttempts);
+      expect(maxAttempts, 'precondition: maxLoginAttempts is positive').toBeGreaterThan(0);
+      const target = await registerTecnico(request, admin.token, 'lock1306');
+
+      // CONTROL: the right password is accepted before any failure.
+      const before = await request.post(`${apiBaseURL}/api/auth/login`, { data: { username: target.username, password } });
+      expect(before.ok(), await before.text()).toBeTruthy();
+
+      let wrongMessage = '';
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        const failed = await request.post(`${trustedHopURL}/api/auth/login`, {
+          headers: { 'X-Forwarded-For': `203.0.113.${100 + attempt}` },
+          data: { username: target.username, password: 'Not@TheRight1306' },
+        });
+        expect(failed.status(), `failure ${attempt} of ${maxAttempts}`).toBe(401);
+        wrongMessage = (await failed.json()).message;
+      }
+
+      const locked = await request.post(`${apiBaseURL}/api/auth/login`, { data: { username: target.username, password } });
+      expect(locked.status()).toBe(401);
+      const lockedBody = await locked.json();
+      expect(lockedBody.data?.tempToken ?? lockedBody.data?.token).toBeFalsy();
+      // The same answer as a wrong password: a distinct one would tell a
+      // caller the account exists and is locked.
+      expect(lockedBody.message).toBe(wrongMessage);
+    } finally {
+      await clearLoginAttempts();
+      await closeLoginAttemptsDb();
+    }
   });
 });
