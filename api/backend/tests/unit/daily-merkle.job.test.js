@@ -49,6 +49,7 @@ vi.spyOn(auditRootService, 'saveDailyRoot').mockResolvedValue({ ok: true });
 vi.spyOn(auditRootService, 'getRootByDate').mockResolvedValue({ root: 'existing' });
 vi.spyOn(auditRootService, 'processTimestampBacklog').mockResolvedValue(undefined);
 vi.spyOn(auditV2Service, 'createTreeHead').mockResolvedValue({ status: 'ok' });
+vi.spyOn(auditV2Service, 'sealChain').mockResolvedValue({ treeSize: 2, anchorStatus: 'TIMESTAMPED' });
 vi.spyOn(logger, 'info').mockImplementation(() => {});
 vi.spyOn(logger, 'warn').mockImplementation(() => {});
 vi.spyOn(logger, 'error').mockImplementation(() => {});
@@ -66,6 +67,7 @@ function resetAllMocks() {
   auditRootService.getRootByDate.mockClear().mockResolvedValue({ root: 'existing' });
   auditRootService.processTimestampBacklog.mockClear().mockResolvedValue(undefined);
   auditV2Service.createTreeHead.mockClear().mockResolvedValue({ status: 'ok' });
+  auditV2Service.sealChain.mockClear().mockResolvedValue({ treeSize: 2, anchorStatus: 'TIMESTAMPED' });
   logger.info.mockClear();
   logger.warn.mockClear();
   logger.error.mockClear();
@@ -171,6 +173,17 @@ describe('daily-merkle.job', () => {
         expect.objectContaining({ logId: 'audit-2026-07-01', previousTreeHeadHash: null }),
         expect.anything()
       );
+    });
+
+    // #1307: the audit_events chain is sealed on the same nightly run.
+    it('seals the audit_events chain after anchoring the day', async () => {
+      const db = makeFakeDb([]);
+      mongo.connectDB.mockResolvedValue(db);
+
+      await job.runOnce();
+
+      expect(auditV2Service.sealChain).toHaveBeenCalledWith(db);
+      expect(logger.error).not.toHaveBeenCalled();
     });
 
     it('carries forward previousTreeHeadHash from the most recent existing tree head', async () => {

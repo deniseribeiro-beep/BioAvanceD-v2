@@ -33,12 +33,18 @@ class AuditController {
         return res.status(400).json({ success: false, error: 'date deve estar no formato YYYY-MM-DD' });
       }
 
+      // #1307: the audit_events chain is sealed whatever the date holds.
+      const chainHead = await dailyMerkleJob.sealEventChain(db);
+      const eventChain = chainHead
+        ? { logId: chainHead.logId, treeSize: chainHead.treeSize, rootHash: chainHead.rootHash, anchorStatus: chainHead.anchorStatus }
+        : null;
       const treeHead = await dailyMerkleJob.anchorDate(db, date);
       if (!treeHead) {
         return res.status(422).json({
           success: false,
           error: `Nenhum resultado Merkle válido para ${date}; nada foi selado.`,
           details: [`Nenhum resultado Merkle válido para ${date}`],
+          eventChain,
         });
       }
 
@@ -54,6 +60,7 @@ class AuditController {
           // even on a fully anchored corpus. Both are returned, outcome first.
           anchorStatus: treeHead.anchorStatus,
           status: treeHead.status,
+          eventChain,
         },
       });
     } catch (error) {
@@ -94,13 +101,25 @@ class AuditController {
       const event = await events.findOne({ eventId });
       if (!event) return res.status(404).json({ success: false, error: 'Evento de auditoria não encontrado.' });
 
+      // Without an explicit head, the first one sealed after this event.
       const treeHead = treeHeadId
         ? await heads.findOne({ _id: treeHeadId })
-        : await heads.findOne({ logId: event.logId, treeSize: event.treeSize });
+        : (await heads.find({ logId: event.logId, treeSize: { $gte: event.sequenceNumber || event.treeSize || 1 } })
+          .sort({ treeSize: 1 }).limit(1).toArray())[0] || null;
       if (!treeHead) return res.status(404).json({ success: false, error: 'Tree head oficial não encontrado.' });
 
-      const leaves = await events.find({ logId: event.logId }).sort({ sequenceNumber: 1 }).toArray();
-      const inclusion = auditTreeService.verifyInclusion(event.canonicalLeaf, event.inclusionProof || [], treeHead.rootHash);
+      // #1307: the proof is computed from the chain as stored now (archived
+      // events included), against the head's sealed size. A rewritten,
+      // inserted or deleted event moves the recomputed root off the signed one.
+      const leaves = await auditV2Service.loadChain(db, event.logId);
+      const sealed = leaves.slice(0, treeHead.treeSize);
+      const sealedTree = auditTreeService.buildTree(sealed.map((item) => item.canonicalLeaf));
+      const inSeal = sealed.length === treeHead.treeSize && sealedTree.rootHash === treeHead.rootHash;
+      const leafIndex = sealed.findIndex((item) => item.eventId === event.eventId);
+      const inclusionProof = leafIndex >= 0 ? auditTreeService.inclusionProof(sealedTree, leafIndex) : [];
+      const inclusion = leafIndex >= 0 && auditTreeService.verifyInclusion(event.canonicalLeaf, inclusionProof, treeHead.rootHash);
+      const chain = auditV2Service.verifyChain(sealed);
+      const eventIntegrity = auditV2Service.verifyEventHash(event);
       const treeHeadEnvelope = {
         schemaVersion: treeHead.schemaVersion,
         logId: treeHead.logId,
@@ -119,20 +138,29 @@ class AuditController {
       const signatureCheck = signingProvider.verify(Buffer.from(require('../services/audit-canonicalization.service').canonicalize(treeHeadEnvelope), 'utf8'), treeHead.signature, treeHead.keyId);
       const token = await tokens.findOne({ logId: treeHead.logId, treeSize: treeHead.treeSize }) || treeHead.timestampToken || null;
       const witnessRecord = await witnesses.findOne({ logId: treeHead.logId, treeSize: treeHead.treeSize }) || treeHead.witness || null;
-      const consistencyValid = treeHead.treeSize === leaves.length && auditTreeService.verifyConsistency(Math.max(0, treeHead.treeSize - 1), (await heads.findOne({ logId: treeHead.logId, treeSize: Math.max(0, treeHead.treeSize - 1) }))?.rootHash || null, leaves.map((item) => item.canonicalLeaf));
+      // Consistency: this head's sealed leaves still reproduce the head sealed
+      // before it (an append-only extension), and its own root.
+      const priorHead = (await heads.find({ logId: treeHead.logId, treeSize: { $lt: treeHead.treeSize } })
+        .sort({ treeSize: -1 }).limit(1).toArray())[0] || null;
+      const consistencyValid = inSeal && (!priorHead || auditTreeService.verifyConsistency(priorHead.treeSize, priorHead.rootHash, sealed.map((item) => item.canonicalLeaf)));
+      const chainValid = chain.valid;
+      const integrityOk = eventIntegrity && inclusion && chainValid && consistencyValid;
       return res.status(200).json({
         success: true,
         data: {
-          eventIntegrity: Boolean(event.eventHash && event.payloadDigest && event.eventHash === event.canonicalLeaf.eventHash),
+          eventIntegrity,
           inclusionValid: !!inclusion,
+          chainValid,
+          chainBrokenAt: chain.brokenAt,
           treeHeadSignatureValid: !!signatureCheck.ok,
           timestampValid: Boolean(token && (token.token || token.tokenDerHex || token.status === 'TIMESTAMPED')),
           externalWitnessValid: Boolean(witnessRecord && (witnessRecord.receipt || witnessRecord.receiptEnvelope)),
           consistencyValid,
-          overallStatus: inclusion && signatureCheck.ok && token && witnessRecord && consistencyValid ? 'VALID' : (token && !witnessRecord ? 'PARTIALLY_ANCHORED' : 'INVALID'),
+          overallStatus: integrityOk && signatureCheck.ok && token && witnessRecord ? 'VALID' : (integrityOk && signatureCheck.ok && token && !witnessRecord ? 'PARTIALLY_ANCHORED' : 'INVALID'),
           failures: [
-            ...(!event.eventHash || !event.payloadDigest ? ['eventIntegrity'] : []),
+            ...(eventIntegrity ? [] : ['eventIntegrity']),
             ...(inclusion ? [] : ['inclusion']),
+            ...(chainValid ? [] : ['chain']),
             ...(signatureCheck.ok ? [] : ['treeHeadSignature']),
             ...(token && (token.token || token.tokenDerHex || token.status === 'TIMESTAMPED') ? [] : ['timestamp']),
             ...(witnessRecord && (witnessRecord.receipt || witnessRecord.receiptEnvelope) ? [] : ['witness']),

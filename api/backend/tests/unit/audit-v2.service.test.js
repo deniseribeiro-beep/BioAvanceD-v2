@@ -195,8 +195,15 @@ describe('audit-v2.service', () => {
 
       const result = await auditV2Service.ingestLogRecord(logRecord);
 
-      expect(result.logId).toBe('rec-1');
-      expect(result.actorPseudonym).toBe('alice');
+      // #1307: every record joins the one chain, never a chain of its own.
+      expect(result.logId).toBe('audit-events');
+      // A raw name is pseudonymized, never copied (RF012 AC1).
+      expect(result.actorPseudonym).toMatch(/^USR-[0-9A-F]{8}$/);
+      expect(result.actorPseudonym).not.toBe('alice');
+      expect(result.purpose).toBe('operations');
+      expect(result.policyVersion).toBe('governance-invariants-1.0.0');
+      expect(result.canonicalModelReleaseId).toMatch(/^release-/);
+      expect(result.canonicalEventHash).toBe(result.eventHash);
       expect(result.action).toBe('DELETE');
       expect(result.entityType).toBe('Sample');
       expect(result.result).toBe('failure');
@@ -210,14 +217,38 @@ describe('audit-v2.service', () => {
 
       const result = await auditV2Service.ingestLogRecord({});
 
-      expect(result.actorPseudonym).toBe('system');
+      expect(result.actorPseudonym).toBe('USR-SYSTEM');
       expect(result.action).toBe('UNKNOWN');
       expect(result.entityType).toBe('Log');
       expect(result.entityId).toBeNull();
       expect(result.result).toBe('success');
       expect(result.source).toBe('backend');
       expect(result.correlationId).toBeNull();
-      expect(typeof result.logId).toBe('string');
+      expect(result.logId).toBe('audit-events');
+    });
+
+    // #1307: the defect itself. Each record used to key its own chain on its
+    // own _id, so every chain was one event long and previousEventHash was
+    // always null.
+    it('chains consecutive log records into one chain, each naming the previous event hash', async () => {
+      const db = createFakeDb();
+      const first = await auditV2Service.ingestLogRecord({ _id: 'rec-a', action: 'CREATE', userName: 'USR-0A1B2C3D' }, db);
+      const second = await auditV2Service.ingestLogRecord({ _id: 'rec-b', action: 'UPDATE', userName: 'USR-0A1B2C3D' }, db);
+
+      expect(first.sequenceNumber).toBe(1);
+      expect(first.previousEventHash).toBeNull();
+      expect(second.logId).toBe(first.logId);
+      expect(second.sequenceNumber).toBe(2);
+      expect(second.previousEventHash).toBe(first.eventHash);
+      expect(auditV2Service.verifyChain(await auditV2Service.loadChain(db))).toEqual({ valid: true, brokenAt: null, reason: null });
+    });
+
+    it('takes purpose and policyVersion from the record or its details when it carries them', async () => {
+      const db = createFakeDb();
+      const result = await auditV2Service.ingestLogRecord({ action: 'RETENTION_SWEEP', details: { purpose: 'retention', policyVersion: 3 } }, db);
+
+      expect(result.purpose).toBe('retention');
+      expect(result.policyVersion).toBe('3');
     });
 
     it('does not close the connection when given an externalDb', async () => {
@@ -327,6 +358,109 @@ describe('audit-v2.service', () => {
 
       expect(mongo.connectDB).not.toHaveBeenCalled();
       expect(mongo.closeConnection).not.toHaveBeenCalled();
+    });
+  });
+
+  // #1307: RF012 AC3/AC6 -- the chain detects a rewritten, removed or
+  // relinked event, and sealing leaves every event as written (AC4).
+  describe('chain integrity and sealing', () => {
+    async function chainOf(db, n) {
+      for (let i = 1; i <= n; i += 1) {
+        await auditV2Service.ingestLogRecord({ _id: `rec-${i}`, action: `ACT-${i}`, userName: 'USR-0A1B2C3D' }, db);
+      }
+      return db.collection('audit_events').docs;
+    }
+
+    it('reads an intact chain as valid', async () => {
+      const db = createFakeDb();
+      await chainOf(db, 3);
+      expect(auditV2Service.verifyChain(await auditV2Service.loadChain(db)).valid).toBe(true);
+    });
+
+    it('finds an event whose field was rewritten in place', async () => {
+      const db = createFakeDb();
+      const docs = await chainOf(db, 3);
+      docs[1].action = 'FORGED';
+      expect(auditV2Service.verifyChain(await auditV2Service.loadChain(db))).toEqual({ valid: false, brokenAt: 2, reason: 'eventHash' });
+    });
+
+    it('finds a removed event', async () => {
+      const db = createFakeDb();
+      const docs = await chainOf(db, 3);
+      docs.splice(1, 1);
+      expect(auditV2Service.verifyChain(await auditV2Service.loadChain(db))).toEqual({ valid: false, brokenAt: 2, reason: 'sequence' });
+    });
+
+    it('finds an event re-hashed onto a forged predecessor', async () => {
+      const db = createFakeDb();
+      const docs = await chainOf(db, 3);
+      // A forger who rewrites event 2 and recomputes its own hashes still
+      // breaks event 3's previousEventHash.
+      const forged = { ...auditV2Service.eventFieldsOf(docs[1]), action: 'FORGED' };
+      const { digestCanonical } = require('../../src/services/audit-canonicalization.service');
+      const { hash } = digestCanonical(forged);
+      Object.assign(docs[1], forged, { eventHash: hash, canonicalLeaf: { ...forged, eventHash: hash } });
+      expect(auditV2Service.verifyChain(await auditV2Service.loadChain(db))).toEqual({ valid: false, brokenAt: 3, reason: 'previousEventHash' });
+    });
+
+    it('reads archived events as part of the chain, and continues the chain after them', async () => {
+      const db = createFakeDb();
+      const docs = await chainOf(db, 2);
+      const archived = docs.splice(0, 2);
+      for (const doc of archived) await db.collection('audit_events_archive').insertOne({ ...doc, archivedAt: new Date() });
+
+      const next = await auditV2Service.ingestLogRecord({ action: 'AFTER' }, db);
+
+      expect(next.sequenceNumber).toBe(3);
+      expect(next.previousEventHash).toBe(archived[1].eventHash);
+      expect(auditV2Service.verifyChain(await auditV2Service.loadChain(db)).valid).toBe(true);
+    });
+
+    it('re-reads the chain and appends after a concurrent writer took the sequence number', async () => {
+      const db = createFakeDb();
+      await chainOf(db, 1);
+      const events = db.collection('audit_events');
+      const insertOne = events.insertOne.bind(events);
+      let raced = false;
+      events.insertOne = async (doc) => {
+        if (!raced) {
+          raced = true;
+          // Another writer appends sequence 2 first; this insert is refused.
+          await auditV2Service.ingestLogRecord({ action: 'RIVAL' }, db);
+          const error = new Error('E11000 duplicate key');
+          error.code = 11000;
+          throw error;
+        }
+        return insertOne(doc);
+      };
+
+      const result = await auditV2Service.ingestLogRecord({ action: 'MINE' }, db);
+
+      expect(result.sequenceNumber).toBe(3);
+      expect(auditV2Service.verifyChain(await auditV2Service.loadChain(db)).valid).toBe(true);
+    });
+
+    it('seals the chain at its current size over every leaf, and links the next head to it', async () => {
+      const tree = require('../../src/services/audit-tree.service');
+      const db = createFakeDb();
+      await chainOf(db, 3);
+
+      const head = await auditV2Service.sealChain(db);
+      const leaves = await auditV2Service.loadChain(db);
+
+      expect(head.logId).toBe('audit-events');
+      expect(head.treeSize).toBe(3);
+      expect(head.rootHash).toBe(tree.buildTree(leaves.map((item) => item.canonicalLeaf)).rootHash);
+      expect(head.previousTreeHeadHash).toBeNull();
+
+      await chainOf(db, 1);
+      const next = await auditV2Service.sealChain(db);
+      expect(next.treeSize).toBe(4);
+      expect(next.previousTreeHeadHash).toBe(head.rootHash);
+    });
+
+    it('seals nothing for an empty chain', async () => {
+      expect(await auditV2Service.sealChain(createFakeDb())).toBeNull();
     });
   });
 });

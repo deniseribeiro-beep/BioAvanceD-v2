@@ -101,6 +101,7 @@ async function runOnce() {
 
     await auditRootService.saveDailyRoot({ date: targetDate, root: result.root, treeSize: result.leaves.length, db });
     await anchorV2ForDate(db, targetDate, result);
+    await sealEventChain(db);
     await recoverMissingDates(db, targetDate);
     await auditRootService.processTimestampBacklog({ externalDb: db });
     logger.info(`[daily-merkle] Root salva para ${targetDate} -> ${result.root}`);
@@ -134,6 +135,15 @@ async function anchorV2ForDate(db, date, result) {
   }, db);
   logger.info(`[daily-merkle] Tree head v2 gerado para ${date} com anchorStatus=${treeHead.anchorStatus}`);
   return treeHead;
+}
+
+// #1307: the audit_events chain is sealed as its own signed tree head, at its
+// current size, beside the daily roots of `logs` above. Without it no event
+// could be verified (verifyAudit looks the head up by the event's own logId).
+async function sealEventChain(db) {
+  const head = await auditV2Service.sealChain(db);
+  if (head) logger.info(`[daily-merkle] Cadeia audit_events selada em treeSize=${head.treeSize} com anchorStatus=${head.anchorStatus}`);
+  return head;
 }
 
 // #959: the ONLY caller of createTreeHead used to be scheduleNextRun's bare
@@ -171,4 +181,4 @@ if (require.main === module) {
   scheduleNextRun();
 }
 
-module.exports = { runOnce, scheduleNextRun, anchorDate };
+module.exports = { runOnce, scheduleNextRun, anchorDate, sealEventChain };

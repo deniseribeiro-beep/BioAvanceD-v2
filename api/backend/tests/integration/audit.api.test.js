@@ -110,105 +110,65 @@ describe('POST /api/audit/verify', () => {
     expect(res.body.success).toBe(false);
   });
 
-  it('verifies a stored event by eventId and returns overallStatus VALID', async () => {
+  // #1307: a real chain in an in-memory store, through the route. Only the
+  // head's signature and its anchoring evidence are faked.
+  async function sealedChainDb(n) {
+    const { createFakeDb } = require('../unit/foundation/helpers/fake-db');
+    const auditV2Service = require('../../src/services/audit-v2.service');
     const auditTreeService = require('../../src/services/audit-tree.service');
+    const store = createFakeDb();
+    for (let i = 1; i <= n; i += 1) {
+      await auditV2Service.ingestLogRecord({ _id: `rec-${i}`, action: `ACT-${i}`, userName: 'USR-0A1B2C3D' }, store);
+    }
+    const leaves = await auditV2Service.loadChain(store);
+    await store.collection('audit_tree_heads').insertOne({
+      _id: `th-${n}`, logId: 'audit-events', treeSize: n,
+      rootHash: auditTreeService.buildTree(leaves.map((item) => item.canonicalLeaf)).rootHash,
+      signature: 'sig', keyId: 'key-1', status: 'PENDING_TIMESTAMP',
+      schemaVersion: 'audit.treehead.v1', previousTreeHeadHash: null, periodStart: null, periodEnd: null,
+      createdAt: '2026-10-08T00:00:00.000Z', hashAlgorithm: 'SHA-256', merkleAlgorithm: 'RFC9162-STYLE', signatureAlgorithm: 'Ed25519',
+    });
+    await store.collection('audit_timestamp_tokens').insertOne({ logId: 'audit-events', treeSize: n, token: 'tk' });
+    await store.collection('audit_witnesses').insertOne({ logId: 'audit-events', treeSize: n, receipt: 'r' });
+    const names = ['audit_events', 'audit_events_archive', 'audit_tree_heads', 'audit_timestamp_tokens', 'audit_witnesses'];
+    app.locals.db = createDbMock({ ...Object.fromEntries(names.map((name) => [name, store.collection(name)])), ...rbacCollections });
+    return store.collection('audit_events').docs;
+  }
+
+  it('verifies a stored event by eventId and returns overallStatus VALID', async () => {
     const signingProvider = require('../../src/services/audit-signing.provider');
-    vi.spyOn(auditTreeService, 'verifyInclusion').mockReturnValue(true);
-    vi.spyOn(auditTreeService, 'verifyConsistency').mockReturnValue(true);
     vi.spyOn(signingProvider, 'verify').mockReturnValue({ ok: true });
-
-    const event = {
-      eventId: 'evt-1',
-      logId: 'log-1',
-      treeSize: 1,
-      sequenceNumber: 0,
-      eventHash: 'hash-1',
-      payloadDigest: 'digest-1',
-      canonicalLeaf: { eventHash: 'hash-1' },
-      inclusionProof: [],
-    };
-    const treeHead = {
-      _id: 'th-1', logId: 'log-1', treeSize: 1, rootHash: 'root-1', signature: 'sig', keyId: 'key-1',
-      schemaVersion: 1, previousTreeHeadHash: null, periodStart: null, periodEnd: null,
-      createdAt: '2026-07-04T00:00:00.000Z', hashAlgorithm: 'sha256', merkleAlgorithm: 'sha256', signatureAlgorithm: 'ed25519', status: 'ANCHORED',
-    };
-    const token = { token: 'tk-1' };
-    const witnessRecord = { receipt: 'r-1' };
-
-    const eventsColl = createCollectionMock({
-      findOne: vi.fn().mockResolvedValue(event),
-      find: vi.fn().mockReturnValue({ sort: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([event]) }) }),
-    });
-    const headsColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(treeHead) });
-    const tokensColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(token) });
-    const witnessesColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(witnessRecord) });
-    app.locals.db = createDbMock({
-      audit_events: eventsColl,
-      audit_tree_heads: headsColl,
-      audit_timestamp_tokens: tokensColl,
-      audit_witnesses: witnessesColl,
-      ...rbacCollections,
-    });
+    const events = await sealedChainDb(3);
 
     const res = await request(app)
       .post('/api/audit/verify')
       .set('Authorization', `Bearer ${makeToken(4)}`)
-      .send({ eventId: 'evt-1' });
+      .send({ eventId: events[1].eventId });
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     expect(res.body.data.overallStatus).toBe('VALID');
+    expect(res.body.data.chainValid).toBe(true);
     expect(res.body.data.failures).toEqual([]);
   });
 
-  it('returns overallStatus INVALID with failures when checks fail', async () => {
-    const auditTreeService = require('../../src/services/audit-tree.service');
+  it('returns overallStatus INVALID with failures when an event was rewritten after sealing', async () => {
     const signingProvider = require('../../src/services/audit-signing.provider');
-    vi.spyOn(auditTreeService, 'verifyInclusion').mockReturnValue(false);
-    vi.spyOn(auditTreeService, 'verifyConsistency').mockReturnValue(false);
     vi.spyOn(signingProvider, 'verify').mockReturnValue({ ok: false });
-
-    const event = {
-      eventId: 'evt-2',
-      logId: 'log-2',
-      treeSize: 1,
-      sequenceNumber: 0,
-      eventHash: null,
-      payloadDigest: null,
-      canonicalLeaf: { eventHash: 'hash-2' },
-      inclusionProof: [],
-    };
-    const treeHead = {
-      _id: 'th-2', logId: 'log-2', treeSize: 1, rootHash: 'root-2', signature: 'sig', keyId: 'key-2',
-      schemaVersion: 1, previousTreeHeadHash: null, periodStart: null, periodEnd: null,
-      createdAt: '2026-07-04T00:00:00.000Z', hashAlgorithm: 'sha256', merkleAlgorithm: 'sha256', signatureAlgorithm: 'ed25519', status: 'ANCHORED',
-    };
-
-    const eventsColl = createCollectionMock({
-      findOne: vi.fn().mockResolvedValue(event),
-      find: vi.fn().mockReturnValue({ sort: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([event]) }) }),
-    });
-    const headsColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(treeHead) });
-    const tokensColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(null) });
-    const witnessesColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(null) });
-    app.locals.db = createDbMock({
-      audit_events: eventsColl,
-      audit_tree_heads: headsColl,
-      audit_timestamp_tokens: tokensColl,
-      audit_witnesses: witnessesColl,
-      ...rbacCollections,
-    });
+    const events = await sealedChainDb(3);
+    events[0].result = 'failure';
 
     const res = await request(app)
       .post('/api/audit/verify')
       .set('Authorization', `Bearer ${makeToken(4)}`)
-      .send({ eventId: 'evt-2' });
+      .send({ eventId: events[0].eventId });
 
     expect(res.status).toBe(200);
     expect(res.body.data.overallStatus).toBe('INVALID');
-    expect(res.body.data.failures).toEqual(
-      expect.arrayContaining(['eventIntegrity', 'inclusion', 'treeHeadSignature', 'timestamp', 'witness', 'consistency'])
-    );
+    expect(res.body.data.chainBrokenAt).toBe(1);
+    // The sealed leaf (canonicalLeaf) is untouched, so inclusion and the root
+    // still hold; the rewritten document no longer digests to its hash.
+    expect(res.body.data.failures).toEqual(['eventIntegrity', 'chain', 'treeHeadSignature']);
   });
 
   it('returns 404 when the audit event is not found', async () => {
