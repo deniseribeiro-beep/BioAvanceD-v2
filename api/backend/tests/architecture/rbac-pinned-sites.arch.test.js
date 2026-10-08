@@ -84,11 +84,13 @@ test('#1342: every pin row matches a gate its route file declares', () => {
 test('#1342: every pin table names the mount app.js gives its route file', () => {
   const app = fs.readFileSync(APP_JS, 'utf8');
   const wrong = pinTables().filter((table) => {
-    const requirePath = `./src/${table.file.replace(/\.js$/, '')}`;
-    const mount = new RegExp(
-      `app\\.use\\(\\s*["'\`]${escapeRegExp(table.mount)}["'\`]\\s*,\\s*require\\(\\s*["'\`]${escapeRegExp(requirePath)}(?:\\.js)?["'\`]`
-    );
-    return !mount.test(app);
+    const requirePath = escapeRegExp(`./src/${table.file.replace(/\.js$/, '')}`);
+    const requireCall = `require\\(\\s*["'\`]${requirePath}(?:\\.js)?["'\`]\\s*\\)`;
+    const mountAt = `app\\.use\\(\\s*["'\`]${escapeRegExp(table.mount)}["'\`]\\s*,\\s*`;
+    if (new RegExp(mountAt + requireCall).test(app)) return false;
+    // A router factory: `const make = require(...)`, then `app.use(mount, make(...))`.
+    const binding = app.match(new RegExp(`const\\s+([A-Za-z_$][\\w$]*)\\s*=\\s*${requireCall}`));
+    return !(binding && new RegExp(`${mountAt}${escapeRegExp(binding[1])}\\(`).test(app));
   }).map((table) => `${table.name}: ${table.mount} -> ${table.file}`);
   assert.deepEqual(wrong, [], 'These tables name a mount app.js does not give their file:\n  ' + wrong.join('\n  '));
 });
