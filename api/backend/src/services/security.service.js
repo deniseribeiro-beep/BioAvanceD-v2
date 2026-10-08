@@ -5,6 +5,8 @@ const logger = require('../utils/logger');
 const auditLogger = require('../utils/auditLogger');
 const sessionService = require('./session.service');
 const configurationReleaseService = require('./configurationRelease.service');
+const configurationValidationService = require('./configurationValidation.service');
+const { invariantForPath } = require('../governance/invariants');
 const logLevel = require('../utils/logLevel');
 
 /**
@@ -201,6 +203,36 @@ const FIXED_PATHS = {
   'lgpd.anonymizeOnExport': { value: true, reason: 'export-pseudonymised' },
 };
 const GOVERNED_PATHS = [...RETENTION_GOVERNED_PATHS, ...Object.keys(FIXED_PATHS)];
+
+// RF014 AC6, CFG-008: the fixed keys a request tries to set to anything but
+// their fixed value, each with the governance invariant that fixes it (none
+// for a key fixed only because no job applies it).
+function fixedKeyAttempts(config) {
+  const attempts = [];
+  for (const [path, { value }] of Object.entries(FIXED_PATHS)) {
+    const [group, key] = path.split('.');
+    const values = config && config[group];
+    if (!isPlainObject(values) || !Object.prototype.hasOwnProperty.call(values, key)) continue;
+    if (values[key] === undefined || isDeepStrictEqual(values[key], value)) continue;
+    const invariant = invariantForPath(path);
+    attempts.push({ path, invariantId: invariant ? invariant.invariantId : null });
+  }
+  return attempts;
+}
+
+const EMPTY_FINDINGS = Object.freeze({ structural: [], semantic: [], dependency: [], security: [], unknownPaths: [] });
+
+// The candidate a refused request proposed: the stored groups with the
+// request's groups over them, one level deep, as updateConfig merges.
+function mergeGroups(currentConfig, newConfig) {
+  const merged = {};
+  for (const group of CONFIG_GROUPS) {
+    if (currentConfig[group] || newConfig[group]) {
+      merged[group] = { ...(isPlainObject(currentConfig[group]) ? currentConfig[group] : {}), ...(isPlainObject(newConfig[group]) ? newConfig[group] : {}) };
+    }
+  }
+  return merged;
+}
 
 function applyFixedValues(config) {
   for (const [path, { value }] of Object.entries(FIXED_PATHS)) {
@@ -513,14 +545,29 @@ class SecurityService {
       // whole config, governed and fixed keys included, on every save, so a
       // 4xx on their presence would refuse every save. The response carries
       // the real values and governedBy, so an API caller sees what applied.
-      newConfig = withoutRetentionGoverned(newConfig || {});
+      // RF014 AC6, CFG-008: a fixed key sent at its fixed value is the page's
+      // echo and is dropped with the rest; one sent at any other value is an
+      // attempt to override a governance rule, refused below and recorded.
+      const fixedAttempts = fixedKeyAttempts(newConfig || {});
+      const proposedConfig = newConfig || {};
+      newConfig = withoutRetentionGoverned(proposedConfig);
       currentConfig = withoutRetentionGoverned(currentConfig || {});
 
       // Detecta mudanças para auditoria
       const changes = this.detectChanges(currentConfig, newConfig);
-      
-      // Valida configurações
-      this.validateConfig(newConfig, currentConfig);
+
+      // RF014 AC3/AC4: the gates the ConfigurationValidationRun records. A
+      // failed run is refused before anything is merged or stored; the
+      // refused candidate is kept as a draft release with its run.
+      const validation = configurationValidationService.evaluate({
+        findings: this.configFindings(newConfig, currentConfig),
+        fixedAttempts,
+      });
+      if (validation.error) {
+        // The draft keeps what was proposed, refused fixed values included.
+        await this.recordRefusal(db, validation, mergeGroups(currentConfig, proposedConfig), req);
+        throw validation.error;
+      }
 
       // Mescla com configuração atual, grupo a grupo (um nível de profundidade),
       // para não apagar flags do grupo que o chamador não enviou (#904)
@@ -577,6 +624,7 @@ class SecurityService {
         actorId: mergedConfig.lastUpdatedBy,
         changes,
         rollbackTargetId: options.rollbackTargetId || null,
+        validationRun: validation.run,
       });
       mergedConfig.securityConfigId = currentConfig.securityConfigId || crypto.randomUUID();
       mergedConfig.environment = env.NODE_ENV;
@@ -680,24 +728,53 @@ class SecurityService {
    * document is recorded as the baseline release, so the first change can
    * be rolled back.
    */
-  async activateRelease(db, { settings, actorId, changes = [], rollbackTargetId = null }) {
+  /**
+   * RF014 AC4, CFG-008: records a refused candidate, its failed run and the
+   * refusal's events. Recording is the evidence, not the refusal: if it
+   * fails, the change is still refused and the failure is logged.
+   */
+  async recordRefusal(db, validation, candidate, req) {
+    try {
+      const profile = await this.securityProfile(db);
+      await configurationValidationService.recordRefusal(db, {
+        run: validation.run,
+        violated: validation.violated,
+        profileId: profile.profileId,
+        settings: settingsOf(candidate),
+        actorId: req?.user?.userID || 'SYSTEM',
+      });
+    } catch (recordError) {
+      logger.error(`RF014: falha ao registrar a ConfigurationValidationRun recusada ${validation.run.configurationValidationRunId}:`, recordError.message);
+    }
+  }
+
+  async activateRelease(db, { settings, actorId, changes = [], rollbackTargetId = null, validationRun = null }) {
     const profile = await this.securityProfile(db);
     const stored = await db.collection('security_config').findOne({ _id: 'main' });
     const paths = changes.map((change) => change.path);
     const impactSummary = rollbackTargetId
       ? `Rollback para a release ${rollbackTargetId}${paths.length ? `: ${paths.join(', ')}` : ''}.`
       : (paths.length ? `Alterado: ${paths.join(', ')}.` : 'Nenhuma chave alterada.');
-    return configurationReleaseService.activate(db, {
-      profileId: profile.profileId,
-      settings,
+    // RF014 AC3/AC4: the candidate is activated only once its
+    // ConfigurationValidationRun passes. The baseline records what was
+    // already in force and is not a candidate, so it is not validated.
+    const run = validationRun || configurationValidationService.evaluate({ findings: EMPTY_FINDINGS }).run;
+    return configurationValidationService.activateValidated(db, {
+      run,
       actorId,
-      impactSummary,
-      rollbackTargetId,
-      baseline: stored ? {
-        settings: settingsOf(stored),
-        approvedBy: stored.lastUpdatedBy || 'SYSTEM',
-        since: stored.lastUpdatedAt instanceof Date ? stored.lastUpdatedAt : undefined,
-      } : null,
+      activate: (configurationReleaseId) => configurationReleaseService.activate(db, {
+        configurationReleaseId,
+        profileId: profile.profileId,
+        settings,
+        actorId,
+        impactSummary,
+        rollbackTargetId,
+        baseline: stored ? {
+          settings: settingsOf(stored),
+          approvedBy: stored.lastUpdatedBy || 'SYSTEM',
+          since: stored.lastUpdatedAt instanceof Date ? stored.lastUpdatedAt : undefined,
+        } : null,
+      }),
     });
   }
 
@@ -781,8 +858,18 @@ class SecurityService {
   /**
    * Valida configurações antes de salvar
    */
-  validateConfig(config, currentConfig = {}) {
-    const errors = [];
+  /**
+   * RF014 AC3, RULE-015: the ConfigurationValidationRun's gates over a
+   * candidate configuration, one list of failure messages per gate.
+   * `unknownPaths` names the keys outside the profile's catalog, which
+   * INV-SCOPE-001 also refuses. validateConfig throws on any of them.
+   */
+  configFindings(config, currentConfig = {}) {
+    const structural = [];
+    const semantic = [];
+    const dependency = [];
+    const security = [];
+    const unknownPaths = [];
 
     // #909: a path-aware schema over getDefaultConfig()'s groups. Every key a
     // group carries must be one the default declares, holding the default's
@@ -800,7 +887,7 @@ class SecurityService {
       if (!Object.prototype.hasOwnProperty.call(config, group) || config[group] === undefined) continue;
       const values = config[group];
       if (!isPlainObject(values)) {
-        errors.push(`${group} deve ser um objeto`);
+        structural.push(`${group} deve ser um objeto`);
         continue;
       }
       const stored = isPlainObject(currentConfig && currentConfig[group]) ? currentConfig[group] : {};
@@ -808,12 +895,13 @@ class SecurityService {
         if (value === undefined) continue;
         if (Object.prototype.hasOwnProperty.call(stored, key) && isDeepStrictEqual(stored[key], value)) continue;
         if (!Object.prototype.hasOwnProperty.call(defaults[group], key)) {
-          errors.push(`${group}.${key} não é uma configuração conhecida`);
+          structural.push(`${group}.${key} não é uma configuração conhecida`);
+          unknownPaths.push(`${group}.${key}`);
           continue;
         }
         const expected = typeof defaults[group][key];
         const ok = expected === 'number' ? isNumber(value) : typeof value === expected;
-        if (!ok) errors.push(`${group}.${key} deve ser ${TYPE_NAMES[expected]}`);
+        if (!ok) structural.push(`${group}.${key} deve ser ${TYPE_NAMES[expected]}`);
       }
     }
 
@@ -823,12 +911,12 @@ class SecurityService {
     // Validações de autenticação
     if (config.authentication) {
       if (isNumber(config.authentication.maxLoginAttempts) && (config.authentication.maxLoginAttempts < 1 || config.authentication.maxLoginAttempts > 10)) {
-        errors.push('maxLoginAttempts deve estar entre 1 e 10');
+        semantic.push('maxLoginAttempts deve estar entre 1 e 10');
       }
       // #1249: TOTP is the only method implemented (dict-02 P1X-0279 says so),
       // so the policy cannot name one that would never be offered.
       if (typeof config.authentication.mfaMethod === 'string' && config.authentication.mfaMethod !== 'totp') {
-        errors.push('mfaMethod deve ser: totp (único método implementado)');
+        security.push('mfaMethod deve ser: totp (único método implementado)');
       }
     }
 
@@ -839,7 +927,7 @@ class SecurityService {
       const blockAfter = config.loginAttempts.blockIPAfterAttempts;
       if (blockAfter !== undefined && blockAfter !== null
         && !(Number.isInteger(blockAfter) && blockAfter >= 0 && blockAfter <= 100)) {
-        errors.push('blockIPAfterAttempts deve ser um inteiro entre 0 e 100');
+        semantic.push('blockIPAfterAttempts deve ser um inteiro entre 0 e 100');
       }
     }
 
@@ -847,7 +935,7 @@ class SecurityService {
     if (config.passwordRules) {
       // #1253: 8 is NIST SP 800-63B §5.1.1.2's floor (see password.service).
       if (isNumber(config.passwordRules.minLength) && (config.passwordRules.minLength < 8 || config.passwordRules.minLength > 128)) {
-        errors.push('minLength deve estar entre 8 e 128');
+        security.push('minLength deve estar entre 8 e 128');
       }
       // #1257: the same 8 floor, which SP 800-63B-4 sets for a password used
       // with MFA. Above minLength is refused rather than silently capped
@@ -859,13 +947,13 @@ class SecurityService {
           ? config.passwordRules.minLength
           : currentConfig?.passwordRules?.minLength;
         if (mfaMin < 8 || mfaMin > 128) {
-          errors.push('minLengthWithMFA deve estar entre 8 e 128');
+          security.push('minLengthWithMFA deve estar entre 8 e 128');
         } else if (isNumber(singleFactorMin) && mfaMin > singleFactorMin) {
-          errors.push('minLengthWithMFA não pode exceder minLength');
+          dependency.push('minLengthWithMFA não pode exceder minLength');
         }
       }
       if (isNumber(config.passwordRules.expirationDays) && (config.passwordRules.expirationDays < 0 || config.passwordRules.expirationDays > 365)) {
-        errors.push('expirationDays deve estar entre 0 e 365');
+        semantic.push('expirationDays deve estar entre 0 e 365');
       }
       // #1244: password.service now reads this depth, so an out-of-range
       // value is refused here rather than silently replaced by the default
@@ -873,27 +961,33 @@ class SecurityService {
       const reuseHistory = config.passwordRules.maxReuseHistory;
       if (reuseHistory !== undefined && reuseHistory !== null
         && !(Number.isInteger(reuseHistory) && reuseHistory >= 1 && reuseHistory <= 20)) {
-        errors.push('maxReuseHistory deve ser um inteiro entre 1 e 20');
+        semantic.push('maxReuseHistory deve ser um inteiro entre 1 e 20');
       }
     }
 
     // Validações de sessão
     if (config.session) {
       if (isNumber(config.session.timeoutMinutes) && (config.session.timeoutMinutes < 5 || config.session.timeoutMinutes > 480)) {
-        errors.push('timeoutMinutes deve estar entre 5 e 480');
+        semantic.push('timeoutMinutes deve estar entre 5 e 480');
       }
       if (isNumber(config.session.maxSessionDurationHours) && (config.session.maxSessionDurationHours < 1 || config.session.maxSessionDurationHours > 24)) {
-        errors.push('maxSessionDurationHours deve estar entre 1 e 24 horas');
+        semantic.push('maxSessionDurationHours deve estar entre 1 e 24 horas');
       }
     }
 
     // Validações de logs
     if (config.logging) {
       if (typeof config.logging.level === 'string' && !['info', 'warning', 'error', 'critical'].includes(config.logging.level)) {
-        errors.push('level deve ser: info, warning, error ou critical');
+        semantic.push('level deve ser: info, warning, error ou critical');
       }
     }
 
+    return { structural, semantic, dependency, security, unknownPaths };
+  }
+
+  validateConfig(config, currentConfig = {}) {
+    const { structural, semantic, dependency, security } = this.configFindings(config, currentConfig);
+    const errors = [...structural, ...semantic, ...dependency, ...security];
     if (errors.length > 0) {
       throw new Error(`Configurações inválidas: ${errors.join(', ')}`);
     }

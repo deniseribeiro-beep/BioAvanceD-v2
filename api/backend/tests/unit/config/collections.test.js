@@ -15,7 +15,10 @@ const ENV_KEYS = [
   'COLL_READINESS_REPORTS',
   'COLL_CONFIGURATION_PROFILES',
   'COLL_CONFIGURATION_RELEASES',
-  'COLL_CONFIGURATION_CHANGE_EVENTS'
+  'COLL_CONFIGURATION_CHANGE_EVENTS',
+  'COLL_CONFIGURATION_VALIDATION_RUNS',
+  'COLL_CANONICAL_MODEL_RELEASES',
+  'COLL_GOVERNANCE_INVARIANT_CATALOGS'
 ];
 
 const DEFAULTS = {
@@ -36,6 +39,9 @@ const DEFAULTS = {
   configurationProfiles: 'configurationProfiles',
   configurationReleases: 'configurationReleases',
   configurationChangeEvents: 'configurationChangeEvents',
+  configurationValidationRuns: 'configurationValidationRuns',
+  canonicalModelReleases: 'canonicalModelReleases',
+  governanceInvariantCatalogs: 'governanceInvariantCatalogs',
   participantIdentities: 'participantIdentities',
   rcsAssessments: 'rcsAssessments',
   encounters: 'encounters',
@@ -143,6 +149,9 @@ describe('config/collections', () => {
       configurationProfiles: 'custom_coll_configuration_profiles',
       configurationReleases: 'custom_coll_configuration_releases',
       configurationChangeEvents: 'custom_coll_configuration_change_events',
+      configurationValidationRuns: 'custom_coll_configuration_validation_runs',
+      canonicalModelReleases: 'custom_coll_canonical_model_releases',
+      governanceInvariantCatalogs: 'custom_coll_governance_invariant_catalogs',
       participantIdentities: 'participantIdentities',
       rcsAssessments: 'rcsAssessments',
       // COLL_ENCOUNTERS/COLL_CONDITIONS/COLL_PHENOTYPE_OBSERVATIONS/

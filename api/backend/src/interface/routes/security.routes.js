@@ -71,11 +71,17 @@ router.put('/config', async (req, res) => {
   } catch (error) {
     logger.error('Erro ao atualizar configurações de segurança:', error.message);
     // A ConfigurationReleaseError carries its status (409: another change
-    // was activated first); anything else is a refused configuration.
+    // was activated first), and a ConfigurationValidationError its own (422:
+    // a governance invariant was broken, 400: another gate failed); anything
+    // else is a refused configuration.
     return res.status(error.statusCode || 400).json({
       success: false,
       error: (req.t && req.t('security.updateConfigError')) || 'Erro ao atualizar configurações de segurança',
-      message: error.message
+      message: error.message,
+      ...(error.validationRun ? {
+        configurationValidationRunId: error.validationRun.configurationValidationRunId,
+        violatedInvariants: error.violatedInvariants,
+      } : {})
     });
   }
 });

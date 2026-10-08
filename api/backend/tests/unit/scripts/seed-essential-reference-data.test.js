@@ -102,14 +102,15 @@ describe('Foundation job: apply', () => {
 
     expect(reportsOf(db)).toEqual([report]);
     expect(report).toMatchObject({ status: 'ready', blockers: [], foundationDataRunId: run.foundationDataRunId, canonicalModelReleaseId: CANONICAL_MODEL_RELEASE_ID, environment: 'test' });
-    for (const name of ['version', 'schemas', 'reference-mechanisms', 'storage-constraints', 'zero-operational-data', 'zero-reference-data']) {
+    const evaluated = ['version', 'schemas', 'reference-mechanisms', 'governance-registry', 'configuration', 'storage-constraints', 'zero-operational-data', 'zero-reference-data'];
+    for (const name of evaluated) {
       expect(gateOf(report, name)).toMatchObject({ result: 'pass', p0: true });
     }
     for (const { gate } of DEFERRED_P0_GATES) {
       expect(gateOf(report, gate)).toMatchObject({ result: 'not_evaluated', p0: true });
     }
-    // Six evaluated P0 gates pass; the deferred ones keep coverage below 1.
-    expect(report.p0Coverage).toBeCloseTo(6 / (6 + DEFERRED_P0_GATES.length));
+    // The evaluated P0 gates pass; the deferred ones keep coverage below 1.
+    expect(report.p0Coverage).toBeCloseTo(evaluated.length / (evaluated.length + DEFERRED_P0_GATES.length));
     expect(ReadinessReportModel.validate(report)).toEqual({ isValid: true, errors: [] });
     expect(exitCodeFor({ run, report })).toBe(0);
   });
@@ -176,6 +177,54 @@ describe('Foundation job: apply', () => {
     expect(report.blockers).toContain('gate:zero-operational-data');
   });
 
+  it('registers the CanonicalModelRelease and its invariant catalog once, and a re-run writes neither again (#1304, F1.2)', async () => {
+    const db = createFakeDb();
+    const first = await apply(db);
+    const second = await apply(db);
+
+    const releases = db.collection(CANONICAL_COLLECTIONS.canonicalModelReleases).docs;
+    const catalogs = db.collection(CANONICAL_COLLECTIONS.governanceInvariantCatalogs).docs;
+    expect(releases).toHaveLength(1);
+    expect(catalogs).toHaveLength(1);
+    expect(releases[0]).toMatchObject({ canonicalModelReleaseId: CANONICAL_MODEL_RELEASE_ID, semanticVersion: '2.0.0', releaseStatus: 'active' });
+    expect(catalogs[0].canonicalModelReleaseId).toBe(CANONICAL_MODEL_RELEASE_ID);
+    expect(first.run.steps.find((step) => step.step === 'governance-registry').plannedCounts).toEqual({ inserted: 2, conflicts: 0 });
+    expect(second.run.steps.find((step) => step.step === 'governance-registry').plannedCounts).toEqual({ inserted: 0, conflicts: 0 });
+    expect(second.report.status).toBe('ready');
+  });
+
+  it('blocks readiness when the registered release carries a different checksum, and leaves it untouched (#1304)', async () => {
+    const db = createFakeDb();
+    await apply(db);
+    const releases = db.collection(CANONICAL_COLLECTIONS.canonicalModelReleases);
+    releases.docs[0].checksum = 'sha256:registered-elsewhere';
+
+    const { run, report } = await apply(db);
+    expect(run.steps.find((step) => step.step === 'governance-registry').plannedCounts).toEqual({ inserted: 0, conflicts: 1 });
+    expect(report.status).toBe('blocked');
+    expect(report.blockers).toEqual(['gate:governance-registry']);
+    expect(gateOf(report, 'governance-registry').evidence.failures).toEqual(['checksum da canonicalModelRelease diverge']);
+    expect(releases.docs[0].checksum).toBe('sha256:registered-elsewhere');
+  });
+
+  it('blocks readiness when an active ConfigurationRelease has no passed validation run (plano §9, CFG-005)', async () => {
+    const db = createFakeDb();
+    await db.collection(CANONICAL_COLLECTIONS.configurationReleases).insertOne({ configurationReleaseId: 'never-validated', profileId: 'p', status: 'active' });
+    const { report } = await apply(db);
+    expect(report.blockers).toEqual(['gate:configuration']);
+    expect(gateOf(report, 'configuration').evidence.unvalidated).toEqual([{ configurationReleaseId: 'never-validated', run: null }]);
+
+    await db.collection(CANONICAL_COLLECTIONS.configurationValidationRuns).insertOne({ releaseId: 'never-validated', status: 'passed', executedAt: new Date() });
+    expect((await apply(db)).report.status).toBe('ready');
+  });
+
+  it('blocks readiness when the governance registry step did not run', async () => {
+    const db = createFakeDb();
+    const { report } = await runSeed({ db, args: parseArgs([]), ...quiet, configurationSeeds: [] });
+    expect(report.blockers).toEqual(['gate:governance-registry']);
+    expect(gateOf(report, 'governance-registry').evidence.failures).toEqual(['canonicalModelRelease ausente', 'governanceInvariantCatalog ausente']);
+  });
+
   it('blocks before applying when the same release arrives with a different dictionary checksum', async () => {
     const db = createFakeDb();
     await db.collection(CANONICAL_COLLECTIONS.foundationDataRuns).insertOne({
@@ -209,7 +258,8 @@ describe('Foundation job: the other modes', () => {
 
     expect(result.run.executionMode).toBe('validate');
     expect(result.report.status).toBe('blocked');
-    expect(result.report.blockers).toEqual(['no_completed_apply']);
+    // Nothing was ever applied, so the governance registry is empty too.
+    expect(result.report.blockers).toEqual(['gate:governance-registry', 'no_completed_apply']);
   });
 
   it('--verify after an apply writes a new ready report', async () => {

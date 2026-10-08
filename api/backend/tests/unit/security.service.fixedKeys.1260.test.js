@@ -9,7 +9,8 @@ const logLevel = require('../../src/utils/logLevel');
 // #1260: logging.level drives the backend logger's minimum level, and the
 // logging switches RNF009 makes mandatory are fixed at true.
 // #1261: privacy.anonymizeLogs is fixed at true, and the two privacy periods
-// no job applies are fixed at null. A write to a fixed key is dropped.
+// no job applies are fixed at null. A fixed key echoed at its fixed value is
+// dropped; one sent at any other value is refused (RF014 AC6, CFG-008).
 
 const stored = () => ({
   _id: 'main',
@@ -76,15 +77,16 @@ describe('#1260 #1261 getConfig shows the fixed keys at their fixed values', () 
   });
 });
 
-describe('#1260 #1261 updateConfig drops writes to the fixed keys', () => {
-  it('stores the fixed values and audits no change for them', async () => {
+describe('#1260 #1261 updateConfig keeps the fixed keys fixed', () => {
+  it('stores the fixed values and audits no change for them when the page echoes them back', async () => {
     const db = makeDb();
     const current = await securityService.getConfig(db);
+    // The page sends the whole document it was given, fixed values included.
     await securityService.updateConfig(db, {
-      logging: { level: 'error', logLoginAttempts: false, logAllActions: false },
-      privacy: { anonymizeLogs: false, dataRetentionDays: 7, anonymizeAfterDays: 7 },
-      enhancedSecurity: { logAllActions: false },
-      lgpd: { requireConsent: false, consentExpirationDays: 9 },
+      logging: { ...current.logging, level: 'error' },
+      privacy: current.privacy,
+      enhancedSecurity: current.enhancedSecurity,
+      lgpd: current.lgpd,
     }, current, { user: { userID: 'admin' } });
 
     const set = db._c.updateOne.mock.calls[0][1].$set;
@@ -103,6 +105,31 @@ describe('#1260 #1261 updateConfig drops writes to the fixed keys', () => {
     for (const path of Object.keys(securityService.FIXED_PATHS)) {
       expect(auditedPaths).not.toContain(path);
     }
+  });
+
+  // RF014 AC6, CFG-008: before RF014 a write to a fixed key was dropped
+  // silently. Now it is refused, naming the invariant it would break, and
+  // nothing is stored.
+  it('refuses a fixed key sent at another value with 422, naming each invariant, and stores nothing', async () => {
+    const db = makeDb();
+    const current = await securityService.getConfig(db);
+    const refused = securityService.updateConfig(db, {
+      logging: { level: 'error', logLoginAttempts: false, logAllActions: false },
+      privacy: { anonymizeLogs: false, dataRetentionDays: 7, anonymizeAfterDays: 7 },
+      enhancedSecurity: { logAllActions: false },
+      lgpd: { requireConsent: false, consentExpirationDays: 9, anonymizeOnExport: false },
+    }, current, { user: { userID: 'admin' } });
+
+    await expect(refused).rejects.toMatchObject({
+      statusCode: 422,
+      violatedInvariants: ['INV-AUDIT-001', 'INV-PRIVACY-001', 'INV-CONSENT-001', 'INV-IDENTITY-001'],
+    });
+    await expect(refused).rejects.toThrow('logging.logAllActions é fixo pelo invariante INV-AUDIT-001');
+    // A key fixed only because no job applies it is refused too, by no invariant.
+    await expect(refused).rejects.toThrow('privacy.dataRetentionDays é fixo e não pode ser alterado');
+    expect(db._c.updateOne.mock.calls.filter(([filter]) => filter && filter._id === 'main')).toEqual([]);
+    expect(securityService.activateRelease).not.toHaveBeenCalled();
+    expect(auditLogger.log).not.toHaveBeenCalled();
   });
 });
 

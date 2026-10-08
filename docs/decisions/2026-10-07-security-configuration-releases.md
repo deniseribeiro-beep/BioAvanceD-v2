@@ -21,7 +21,7 @@ Requirement: RF014 AC2 ("Criar nova ConfigurationRelease para cada alteração; 
 
 ## Not decided here
 
-These stay open on #1304:
+The validation run before activation (AC3) and the invariant catalog (AC6) were decided later the same day: `2026-10-07-configuration-validation-and-governance-registry.md`. When this record was written, these were open on #1304:
 
 - the setting catalog (RF014 AC1);
 - proposal and approval as separate steps, with a ConfigurationValidationRun before activation (AC3, AC7). Until then, the administrator who saves a change is recorded as its approver;

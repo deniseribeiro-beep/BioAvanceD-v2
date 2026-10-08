@@ -78,9 +78,9 @@ class ConfigurationReleaseModel {
    * the semanticVersion is `<version>.0.0`, since each release is a whole
    * new settings snapshot rather than a patch on the previous one.
    */
-  static createActive({ profileId, settings, version, approvedBy, supersedesId = null, rollbackTargetId = null, now = new Date() } = {}) {
+  static createActive({ configurationReleaseId = crypto.randomUUID(), profileId, settings, version, approvedBy, supersedesId = null, rollbackTargetId = null, now = new Date() } = {}) {
     const release = {
-      configurationReleaseId: crypto.randomUUID(),
+      configurationReleaseId,
       profileId,
       semanticVersion: `${version}.0.0`,
       checksum: settingsChecksum(settings),
@@ -91,6 +91,32 @@ class ConfigurationReleaseModel {
       supersedesId,
       status: 'active',
       rollbackTargetId,
+      createdAt: now,
+    };
+    const { isValid, errors } = ConfigurationReleaseModel.validate(release);
+    if (!isValid) throw new Error(`ConfigurationRelease inválida: ${errors.join('; ')}`);
+    return release;
+  }
+
+  /**
+   * RF014 AC4: a candidate its ConfigurationValidationRun refused. It stays
+   * a `draft`, never active: no approver, no effective period. `ordinal`
+   * numbers the drafts of the profile's next version, so each is distinct
+   * (`<next>.0.0-draft.<ordinal>`, SemVer pre-release).
+   */
+  static createDraft({ configurationReleaseId = crypto.randomUUID(), profileId, settings, version, ordinal, now = new Date() } = {}) {
+    const release = {
+      configurationReleaseId,
+      profileId,
+      semanticVersion: `${version}.0.0-draft.${ordinal}`,
+      checksum: settingsChecksum(settings),
+      settings,
+      effectivePeriod: { start: now, end: now },
+      approvedBy: null,
+      approvedAt: null,
+      supersedesId: null,
+      status: 'draft',
+      rollbackTargetId: null,
       createdAt: now,
     };
     const { isValid, errors } = ConfigurationReleaseModel.validate(release);

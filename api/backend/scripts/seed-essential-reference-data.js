@@ -49,6 +49,12 @@ const { CANONICAL_MODEL_RELEASE_ID, MIGRATION_PLAN_ID, DEFERRED_P0_GATES } = req
 // --list never needs.
 const CONFIGURATION_SEEDS = [
   {
+    // #1304, F1.2: the CanonicalModelRelease and its GovernanceInvariantCatalog.
+    step: 'governance-registry',
+    seed: (db) => require('../src/governance/registry').registerGovernance(db),
+    count: ({ inserted, conflicts }) => ({ inserted: inserted.length, conflicts: conflicts.length }),
+  },
+  {
     step: 'rbac-catalog',
     seed: (db) => require('../src/services/rbac-catalog-seed.service').seedRolesAndPermissions(db),
     count: ({ roles, permissions }) => ({ roles: roles.length, permissions: permissions.length }),
@@ -190,6 +196,26 @@ function versionGate(previousCompleted) {
   };
 }
 
+// #1304, F1.2/F1.10: the release this run names is registered, with the
+// invariant catalog bound to it, and both checksums match this build's.
+async function governanceGate(db) {
+  const { passed, evidence } = await require('../src/governance/registry').verifyGovernance(db);
+  return gate('governance-registry', passed, true, evidence);
+}
+
+// plano §9 "Configuração": every active ConfigurationRelease went through a
+// ConfigurationValidationRun that passed (RF014 AC3, CFG-005).
+async function configurationGate(db) {
+  const { latestRunOf } = require('../src/services/configurationValidation.service');
+  const active = await db.collection(CANONICAL_COLLECTIONS.configurationReleases).find({ status: 'active' }).toArray();
+  const unvalidated = [];
+  for (const release of active) {
+    const run = await latestRunOf(db, release.configurationReleaseId);
+    if (!run || run.status !== 'passed') unvalidated.push({ configurationReleaseId: release.configurationReleaseId, run: run ? run.status : null });
+  }
+  return gate('configuration', unvalidated.length === 0, true, { activeReleases: active.length, unvalidated });
+}
+
 function indexGates(builds, missing) {
   const failedUnique = builds.filter((build) => build.unique && (build.ok === false || missing.includes(build)));
   const failedLookup = builds.filter((build) => !build.unique && (build.ok === false || missing.includes(build)));
@@ -273,6 +299,8 @@ async function runApply({ db, args, environment, deploymentId, selected, configu
   const populatedReferences = Object.keys(referencesAfter).filter((name) => referencesAfter[name] > referencesBefore[name]);
   const verifyGates = [
     mechanismsGate(plan),
+    await governanceGate(db),
+    await configurationGate(db),
     ...indexGates(builds, missingIndexes),
     gate('zero-operational-data', createdOperational.length === 0, true, { before: operationalBefore, after: operationalAfter }),
     gate('zero-reference-data', populatedReferences.length === 0, true, { before: referencesBefore, after: referencesAfter }),
@@ -331,6 +359,8 @@ async function runVerify({ db, args, environment, deploymentId, selected }) {
   const gateResults = [
     ...versionGates,
     mechanismsGate(plan),
+    await governanceGate(db),
+    await configurationGate(db),
     ...indexGates(builds, missingIndexes),
   ];
   const passed = gateResults.every((g) => g.result !== 'fail');

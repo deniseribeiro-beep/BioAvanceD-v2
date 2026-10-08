@@ -4,6 +4,7 @@ const canonicalDictionary = require('../src/reference-data/canonical-dictionary'
 const canonicalDictionaryV2 = require('../src/reference-data/canonical-dictionary/v2');
 const {
   parseDictionary, SOURCE_MD, parseDictionaryV2, SOURCE_MD_V2,
+  readReleaseManifest, SOURCE_RELEASE_MANIFEST, OUTPUT_RELEASE_MANIFEST,
 } = require('./generate-dictionary-catalog');
 
 /**
@@ -59,6 +60,13 @@ function main() {
   const freshV2Checksum = crypto.createHash('sha256').update(JSON.stringify(freshV2)).digest('hex');
   if (freshV2Checksum !== canonicalDictionaryV2.dictionaryChecksum()) {
     messages.push('catalog.2.0.0.json is stale relative to docs/extracted-v2.0.0/dict-DICIONARIO.md — run `npm run dictionary:generate`.');
+  }
+
+  // #1304: the release manifest the CanonicalModelRelease is built from.
+  const freshManifest = readReleaseManifest(fs.readFileSync(SOURCE_RELEASE_MANIFEST, 'utf8'));
+  const carriedManifest = readReleaseManifest(fs.readFileSync(OUTPUT_RELEASE_MANIFEST, 'utf8'));
+  if (JSON.stringify(freshManifest) !== JSON.stringify(carriedManifest)) {
+    messages.push('release-manifest.2.0.0.json is stale relative to docs/RELEASE_MANIFEST.json — run `npm run dictionary:generate`.');
   }
 
   if (messages.length) fail(messages);

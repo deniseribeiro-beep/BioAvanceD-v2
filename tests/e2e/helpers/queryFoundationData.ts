@@ -79,6 +79,20 @@ export async function latestFoundationDataRun(): Promise<Record<string, any> | n
 }
 
 /**
+ * #1304 (plano §4 F1.2): the CanonicalModelRelease and the
+ * GovernanceInvariantCatalog the Foundation job registered for a release.
+ */
+export async function governanceRegistry(canonicalModelReleaseId: string): Promise<{
+  release: Record<string, any> | null;
+  catalogs: Record<string, any>[];
+}> {
+  const db = await getDb();
+  const release = await db.collection('canonicalModelReleases').findOne({ canonicalModelReleaseId });
+  const catalogs = await db.collection('governanceInvariantCatalogs').find({ canonicalModelReleaseId }).toArray();
+  return { release, catalogs };
+}
+
+/**
  * RF028 (#330) fixture: dict-08_MAIN_GAPS.md's "Reference data pipeline" row
  * names ReferenceDatasetRelease as the entity a Fase 2 importer must write
  * before any concept/relation load is considered valid (RF028 AC 1, 8) —

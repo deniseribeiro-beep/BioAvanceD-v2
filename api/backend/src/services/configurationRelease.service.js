@@ -9,11 +9,11 @@
  * the old row (plano §10: "Nenhuma evidência ou registro histórico é
  * sobrescrito").
  *
- * Not built here, and still open on the issue that tracks RF014: the
- * setting catalog (AC1), proposal and approval as separate steps with a
- * ConfigurationValidationRun before activation (AC3, AC7), and the
- * invariant catalog (AC6). Until they exist the administrator who saves a
- * change is recorded as its approver.
+ * Each candidate passes a ConfigurationValidationRun first
+ * (configurationValidation.service.js); a refused one is kept as a draft.
+ * Still open on the issue that tracks RF014: the setting catalog (AC1) and
+ * approval as a step separate from saving (AC7). Until then the
+ * administrator who saves a change is recorded as its approver.
  */
 const { CANONICAL_COLLECTIONS } = require('../config/collections');
 const ConfigurationProfileModel = require('../models/ConfigurationProfile');
@@ -87,12 +87,13 @@ async function activationEventOf(db, releaseId) {
  *   first release exists, so the first change has something to roll back
  *   to. It is skipped once the profile has any release.
  */
-async function activate(db, { profileId, settings, actorId, impactSummary, rollbackTargetId = null, baseline = null, now = new Date() }) {
+async function activate(db, { configurationReleaseId, profileId, settings, actorId, impactSummary, rollbackTargetId = null, baseline = null, now = new Date() }) {
   const { releases, events } = collections(db);
   await ensureConfigurationReleaseIndexes(releases);
 
   let current = await activeRelease(db, profileId);
-  let count = await releases.countDocuments({ profileId });
+  // Drafts never activated (RF014 AC4) take no version number.
+  let count = await releases.countDocuments({ profileId, status: { $ne: 'draft' } });
   if (!current && count === 0 && baseline) {
     const first = ConfigurationReleaseModel.createActive({
       profileId, settings: baseline.settings, version: 1, approvedBy: baseline.approvedBy, now: baseline.since || now,
@@ -121,6 +122,7 @@ async function activate(db, { profileId, settings, actorId, impactSummary, rollb
   }
 
   const release = ConfigurationReleaseModel.createActive({
+    configurationReleaseId,
     profileId,
     settings,
     version: count + 1,
@@ -165,6 +167,19 @@ async function activate(db, { profileId, settings, actorId, impactSummary, rollb
 }
 
 /**
+ * RF014 AC4: records a candidate its ConfigurationValidationRun refused, as
+ * a draft that was never active, so the run's releaseId names a release.
+ */
+async function recordDraft(db, { configurationReleaseId, profileId, settings, now = new Date() }) {
+  const { releases } = collections(db);
+  const version = (await releases.countDocuments({ profileId, status: { $ne: 'draft' } })) + 1;
+  const ordinal = (await releases.countDocuments({ profileId, status: 'draft' })) + 1;
+  const draft = ConfigurationReleaseModel.createDraft({ configurationReleaseId, profileId, settings, version, ordinal, now });
+  await releases.insertOne(draft);
+  return draft;
+}
+
+/**
  * The release a rollback may restore: one of this profile's, and not the
  * one already in force. Throws 404 or 409 otherwise.
  */
@@ -172,6 +187,9 @@ async function rollbackTarget(db, profileId, configurationReleaseId) {
   const target = configurationReleaseId ? await getRelease(db, configurationReleaseId) : null;
   if (!target || target.profileId !== profileId) {
     throw new ConfigurationReleaseError(`ConfigurationRelease ${configurationReleaseId} não encontrada para este perfil.`, 404);
+  }
+  if (target.status === 'draft') {
+    throw new ConfigurationReleaseError(`ConfigurationRelease ${configurationReleaseId} nunca foi ativada e não pode ser restaurada.`, 409);
   }
   if (target.status === 'active') {
     throw new ConfigurationReleaseError(`ConfigurationRelease ${configurationReleaseId} já está ativa.`, 409);
@@ -187,5 +205,6 @@ module.exports = {
   listReleases,
   activationEventOf,
   activate,
+  recordDraft,
   rollbackTarget,
 };

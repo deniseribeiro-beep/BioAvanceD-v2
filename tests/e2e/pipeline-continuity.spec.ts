@@ -27,6 +27,7 @@ import {
   countFoundationDataRuns,
   latestFoundationDataRun,
   latestReadinessReport,
+  governanceRegistry,
   indexNamesOf,
   countReferenceDatasetReleases,
   countTerminologyConcepts,
@@ -327,10 +328,25 @@ test.describe('Foundation Data Pipeline bootstrap (RF022) — real backend', () 
       'storage-constraints': 'pass',
       'zero-operational-data': 'pass',
       'zero-reference-data': 'pass',
-      configuration: 'not_evaluated',
+      'governance-registry': 'pass',
+      configuration: 'pass',
     });
     expect(report!.p0Coverage).toBeGreaterThan(0);
     expect(report!.p0Coverage).toBeLessThan(1);
+  });
+
+  // #1304, plano §4 F1.2: the job registered the release this build follows,
+  // once, with the invariant catalog bound to it (RF014 AC6, CFG-003).
+  test('the bootstrap registered the CanonicalModelRelease and its invariant catalog', async () => {
+    const { release, catalogs } = await governanceRegistry('release-2.0.0');
+    expect(release).toMatchObject({ semanticVersion: '2.0.0', releaseStatus: 'active' });
+    expect(release!.checksum).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(release!.artifactManifest.map((entry: any) => entry.artifact)).toContain('catalog.2.0.0.json');
+    expect(catalogs).toHaveLength(1);
+    expect(catalogs[0]).toMatchObject({ semanticVersion: '1.0.0', status: 'active' });
+    expect(catalogs[0].invariants.map((invariant: any) => invariant.invariantId)).toEqual(
+      expect.arrayContaining(['INV-AUDIT-001', 'INV-CONSENT-001', 'INV-SCOPE-001']),
+    );
   });
 
   // RF022 AC2: Foundation builds the model indexes before the API serves its

@@ -766,6 +766,41 @@ test.describe('Security policy management (RF014) — real backend', () => {
       expect(afterRollback[0].configurationReleaseId).toBe(restored.configurationReleaseId);
       expect(afterRollback[0].rollbackTargetId).toBe(previous.configurationReleaseId);
 
+      // RF014 AC3/AC6/AC7, CFG-008 — a change that would switch the audit
+      // trail off breaks a governance invariant: it is refused with 422
+      // naming it, kept as a draft release that was never activated, and
+      // the configuration in force does not move.
+      const override = await request.put(`${apiBaseURL}/api/security/config`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+        data: { logging: { logAllActions: false } },
+      });
+      expect(override.status(), await override.text()).toBe(422);
+      const overrideBody = await override.json();
+      expect(overrideBody.violatedInvariants).toEqual(['INV-AUDIT-001']);
+      expect(overrideBody.configurationValidationRunId).toBeTruthy();
+      // A failed gate that breaks no invariant is a plain 400.
+      const outOfRange = await request.put(`${apiBaseURL}/api/security/config`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+        data: { session: { timeoutMinutes: 1 } },
+      });
+      expect(outOfRange.status(), await outOfRange.text()).toBe(400);
+      expect((await outOfRange.json()).violatedInvariants).toEqual([]);
+      const afterRefusals = (await (await request.get(`${apiBaseURL}/api/security/config/releases`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+      })).json()).data;
+      // Newest first: the two refused candidates, as drafts.
+      const [secondRefusal, firstRefusal] = afterRefusals;
+      expect([firstRefusal.status, secondRefusal.status]).toEqual(['draft', 'draft']);
+      expect(firstRefusal.settings.logging.logAllActions).toBe(false);
+      expect(secondRefusal.settings.session.timeoutMinutes).toBe(1);
+      expect(afterRefusals.filter((release: { status: string }) => release.status === 'active')
+        .map((release: { configurationReleaseId: string }) => release.configurationReleaseId)).toEqual([restored.configurationReleaseId]);
+      const inForce = (await (await request.get(`${apiBaseURL}/api/security/config`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+      })).json()).data;
+      expect(inForce.configurationReleaseId).toBe(restored.configurationReleaseId);
+      expect(inForce.logging.logAllActions).toBe(true);
+
       // Criterion 7 — the change is registered as a critical AuditEvent.
       // requireMFA is one of security.service.js's own criticalPaths, so
       // this isn't just "some audit event fired" (assertAuditEventRecorded

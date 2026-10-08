@@ -133,9 +133,27 @@ function writeCatalog(catalog, outputJson) {
   console.log(`Wrote ${catalog.length} elements to ${path.relative(REPO_ROOT, outputJson)}`);
 }
 
+/**
+ * #1304 (GOV-001/GOV-002): the CanonicalModelRelease the Foundation job
+ * registers names the approved release's artifacts and their checksums.
+ * Their record is docs/RELEASE_MANIFEST.json, which the backend image
+ * cannot see (its build context is api/backend), so it is carried beside
+ * the catalog the same way: parsed, re-serialised, and checked for
+ * staleness by `dictionary:validate`.
+ */
+const SOURCE_RELEASE_MANIFEST = path.join(REPO_ROOT, 'docs', 'RELEASE_MANIFEST.json');
+const OUTPUT_RELEASE_MANIFEST = path.join(__dirname, '..', 'src', 'reference-data', 'canonical-dictionary', 'release-manifest.2.0.0.json');
+
+function readReleaseManifest(text) {
+  return JSON.parse(text);
+}
+
 function main() {
   writeCatalog(parseDictionary(fs.readFileSync(SOURCE_MD, 'utf8')), OUTPUT_JSON);
   writeCatalog(parseDictionaryV2(fs.readFileSync(SOURCE_MD_V2, 'utf8')), OUTPUT_JSON_V2);
+  const manifest = readReleaseManifest(fs.readFileSync(SOURCE_RELEASE_MANIFEST, 'utf8'));
+  fs.writeFileSync(OUTPUT_RELEASE_MANIFEST, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+  console.log(`Wrote ${manifest.artifacts.length} release artifacts to ${path.relative(REPO_ROOT, OUTPUT_RELEASE_MANIFEST)}`);
 }
 
 if (require.main === module) {
@@ -154,4 +172,7 @@ module.exports = {
   COLUMNS_V2,
   SOURCE_MD_V2,
   OUTPUT_JSON_V2,
+  readReleaseManifest,
+  SOURCE_RELEASE_MANIFEST,
+  OUTPUT_RELEASE_MANIFEST,
 };

@@ -13,6 +13,11 @@
 const { CANONICAL_COLLECTIONS } = require('../config/collections');
 const { ensureConfigurationReleaseIndexes } = require('../utils/configurationReleaseIndexes');
 const { ensureFacilityIndexes, ensureRoomIndexes } = require('../utils/facilityIndexes');
+const {
+  ensureCanonicalModelReleaseIndexes,
+  ensureGovernanceInvariantCatalogIndexes,
+  ensureConfigurationValidationRunIndexes,
+} = require('../utils/governanceRegistryIndexes');
 const { ensureParticipantIdentityIndexes } = require('../utils/participantIdentityIndexes');
 const { ensureSampleIndexes } = require('../utils/sampleIndexes');
 const { ensureSessionIndexes } = require('../utils/sessionIndexes');
@@ -35,6 +40,9 @@ const INDEX_TARGETS = [
   { collection: 'storageBoxes', ensure: ensureStorageBoxIndexes },
   { collection: 'sensorMetadata', ensure: ensureSensorMetadataIndexes },
   { collection: CANONICAL_COLLECTIONS.configurationReleases, ensure: ensureConfigurationReleaseIndexes },
+  { collection: CANONICAL_COLLECTIONS.canonicalModelReleases, ensure: ensureCanonicalModelReleaseIndexes },
+  { collection: CANONICAL_COLLECTIONS.governanceInvariantCatalogs, ensure: ensureGovernanceInvariantCatalogIndexes },
+  { collection: CANONICAL_COLLECTIONS.configurationValidationRuns, ensure: ensureConfigurationValidationRunIndexes },
 ];
 
 function recordingCollection(collection, builds, collectionName) {

@@ -172,7 +172,10 @@ describe('securityService: saving and rolling back the security configuration (R
 
     const events = eventsOf(db);
     const rollbackEvent = events[events.length - 1];
-    const undone = events.find((event) => event.releaseId === change.configurationReleaseId);
+    // RF014 AC7: each activation is proposed and approved first.
+    expect(events.filter((event) => event.releaseId === change.configurationReleaseId).map((event) => event.changeType))
+      .toEqual(['proposed', 'approved', 'activated']);
+    const undone = events.find((event) => event.releaseId === change.configurationReleaseId && event.changeType === 'activated');
     expect(rollbackEvent).toEqual(expect.objectContaining({ changeType: 'rolled_back', releaseId: restoring.configurationReleaseId, rollbackOf: undone.configurationChangeEventId, actorId: 'admin-1' }));
 
     const listed = await securityService.listReleases(db);
