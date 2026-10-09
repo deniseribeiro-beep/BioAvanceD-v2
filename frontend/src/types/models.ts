@@ -415,6 +415,8 @@ export interface ConsentTemplate {
   version: string;
   versionGroupId?: string;
   caae: string;
+  // RF010 AC1 (ENUM-0043..0046): the modality the term offers.
+  consentModel?: 'specific' | 'broad' | 'tiered' | 'dynamic' | null;
   active: boolean;
   permissions: ConsentPermission[];
   granularPermissions?: ConsentPolicyPermission[];

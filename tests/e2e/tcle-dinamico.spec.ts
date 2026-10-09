@@ -58,6 +58,7 @@ test.describe('TCLE builder (/admin/tcle/new)', () => {
     await page.goto('/admin/tcle/new');
     await page.getByLabel('Nome do Modelo').fill('TCLE E2E Teste');
     await page.getByLabel('CAAE').fill('12345678.9.0000.0000');
+    await page.getByLabel('Modalidade de Consentimento').selectOption('broad');
     await page.getByLabel('Data de Início da Vigência').fill('2026-01-01');
     await page.getByLabel('Data Final de Vigência').fill('2027-01-01');
 
@@ -71,6 +72,8 @@ test.describe('TCLE builder (/admin/tcle/new)', () => {
     await page.getByRole('button', { name: 'Criar versão do TCLE' }).click();
 
     await expect.poll(() => createdPayload?.title ?? (createdPayload as any)?.name).toBeTruthy();
+    // RF010 AC1: the builder sends the modality it offers.
+    expect(createdPayload!.consentModel).toBe('broad');
   });
 });
 

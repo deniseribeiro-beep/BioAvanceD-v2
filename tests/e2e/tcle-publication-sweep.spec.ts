@@ -78,6 +78,8 @@ test.describe('#824 TCLE builder revision runs the consent-invitation sweep -- r
     const editor = page.getByRole('textbox', { name: 'Editor do corpo do TCLE' });
     await expect(editor).toContainText('Versão 1 do termo e2e 824', { timeout: 15_000 });
     await editor.fill('Versão 2 do termo e2e 824, revisada pelo operador.');
+    // RF010 AC1: the revision records the modality chosen in the builder.
+    await page.getByLabel('Modalidade de Consentimento').selectOption('dynamic');
 
     await page.getByRole('button', { name: 'Salvar nova versão do TCLE' }).click();
 
@@ -90,6 +92,7 @@ test.describe('#824 TCLE builder revision runs the consent-invitation sweep -- r
     expect(v2?.previousPolicyId).toBe(v1Id.toString());
     expect(v2?.revisionType).toBe('update');
     expect(v2?.version).toBe('v2');
+    expect(v2?.consentModel).toBe('dynamic');
     // The validity period survives the builder's path (dropped before #824).
     expect(v2?.validTo).toBeTruthy();
 

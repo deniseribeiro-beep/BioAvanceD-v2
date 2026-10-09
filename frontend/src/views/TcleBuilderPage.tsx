@@ -497,6 +497,9 @@ export default function TcleBuilderPage() {
   const [activeTab, setActiveTab] = useState<'editor' | 'history'>('editor');
   const [title, setTitle] = useState('');
   const [caae, setCaae] = useState('');
+  // RF010 AC1 (ENUM-0043..0046): the modality the term offers, which each
+  // Consent signed on it records (ELM-0095).
+  const [consentModel, setConsentModel] = useState<NonNullable<ConsentTemplate['consentModel']> | ''>('');
   const [validFrom, setValidFrom] = useState('');
   const [validTo, setValidTo] = useState('');
   const [bodyHtml, setBodyHtml] = useState(DEFAULT_BODY_HTML.trim());
@@ -574,6 +577,7 @@ export default function TcleBuilderPage() {
         setLoadedTemplate(template);
         setTitle(String(template.title || ''));
         setCaae(String(template.caae || ''));
+        setConsentModel(template.consentModel || '');
         setValidFrom(toDateInputValue(template.validFrom || null));
         setValidTo(toDateInputValue(template.validTo || null));
         setBodyHtml(String(template.htmlContent || template.content || DEFAULT_BODY_HTML.trim()));
@@ -724,6 +728,7 @@ export default function TcleBuilderPage() {
     const payload = {
       title: trimmedTitle,
       ...(caae.trim() ? { caae: caae.trim() } : {}),
+      ...(consentModel ? { consentModel } : {}),
       htmlContent: bodyHtml.trim(),
       content: bodyHtml.trim(), // Ensure 'content' is sent for backend validation
       ...(activeHistoryEntry?.version ? { version: String(activeHistoryEntry.version).trim() } : {}),
@@ -752,6 +757,7 @@ export default function TcleBuilderPage() {
       setLoadedTemplate(savedTemplate);
       setTitle(String(savedTemplate.title || trimmedTitle));
       setCaae(String(savedTemplate.caae || caae));
+      setConsentModel(savedTemplate.consentModel || consentModel);
       setValidFrom(toDateInputValue(savedTemplate.validFrom || null));
       setValidTo(toDateInputValue(savedTemplate.validTo || null));
       setBodyHtml(String(savedTemplate.htmlContent || savedTemplate.content || DEFAULT_BODY_HTML.trim()));
@@ -861,6 +867,22 @@ export default function TcleBuilderPage() {
                 placeholder="Ex.: 12345678.9.0000.0000"
                 helperText="Informe o número CAAE associado a esta versão do TCLE."
               />
+              <div className="input-group">
+                <label className="input-label mb-1.5 text-sm font-semibold text-gray-700" htmlFor="tcleConsentModel">Modalidade de Consentimento</label>
+                <select
+                  id="tcleConsentModel"
+                  className="input w-full rounded-lg border border-gray-300 px-3 py-2"
+                  data-testid="tcle-consent-model-select"
+                  value={consentModel}
+                  onChange={(event) => setConsentModel(event.target.value as typeof consentModel)}
+                >
+                  <option value="">Não informada</option>
+                  <option value="specific">Específico</option>
+                  <option value="broad">Amplo</option>
+                  <option value="tiered">Escalonado</option>
+                  <option value="dynamic">Dinâmico</option>
+                </select>
+              </div>
               <Input
                 label="Data de Início da Vigência"
                 type="date"
