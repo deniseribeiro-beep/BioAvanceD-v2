@@ -142,6 +142,43 @@ describe('reference-imports pipeline runImport (HPO)', () => {
       });
     });
 
+    // #1313 (RF023 AC3): on a replica set each promoted record and its event
+    // are written in one transaction, a transaction per record.
+    it('writes each promoted record and its outbox event in the same transaction on a replica set', async () => {
+      const fakeDb = createFakeDb();
+      let sessionCount = 0;
+      fakeDb.client = {
+        db: () => ({ command: async () => ({ setName: 'rs0' }) }),
+        startSession: () => {
+          sessionCount += 1;
+          const session = { id: sessionCount };
+          return {
+            ...session,
+            withTransaction: async (fn) => { await fn(); },
+            endSession: async () => {},
+          };
+        },
+      };
+      const sessionsOf = (collection) => {
+        const seen = [];
+        const { insertOne, updateOne } = collection;
+        collection.insertOne = async (doc, options) => { seen.push(options?.session?.id); return insertOne.call(collection, doc, options); };
+        collection.updateOne = async (filter, update, options) => { seen.push(options?.session?.id); return updateOne.call(collection, filter, update, options); };
+        return seen;
+      };
+      const conceptSessions = sessionsOf(fakeDb.collections.terminologyConcepts);
+      const relationSessions = sessionsOf(fakeDb.collections.terminologyRelations);
+      const outboxSessions = sessionsOf(fakeDb.collections.graph_projection_outbox);
+
+      await runImport({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor' });
+
+      const recordSessions = [...conceptSessions, ...relationSessions];
+      expect(recordSessions).toHaveLength(15);
+      expect(recordSessions.every((id) => typeof id === 'number')).toBe(true);
+      expect(new Set(recordSessions).size).toBe(15);
+      expect(outboxSessions).toEqual(recordSessions);
+    });
+
     it('does not append duplicate outbox events on a second, idempotent run', async () => {
       const fakeDb = createFakeDb();
 

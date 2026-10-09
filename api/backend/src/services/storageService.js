@@ -174,37 +174,23 @@ class StorageService {
           },
           session
         );
-      });
 
-      // #1312 (RF023 AC8): the graph learns the placement through the outbox,
-      // never a direct Neo4j write; the projector writes the canonical
-      // Sample-[:STORED_AT]->StoragePosition. The event carries assignedPosition,
-      // the transaction-committed position, never the pre-transaction scan
-      // (#1004). It is appended after the commit (a transactional append is
-      // the outbox contract's own work), and a failed append rolls the
-      // position back, as a failed direct write did, so Mongo never keeps a
-      // placement the projection was not told about.
-      if (assignedPosition) {
-        try {
+        // #1312 (RF023 AC8): the graph learns the placement through the
+        // outbox, never a direct Neo4j write; the projector writes the
+        // canonical Sample-[:STORED_AT]->StoragePosition. The event carries
+        // assignedPosition, the position this transaction writes, never the
+        // pre-transaction scan (#1004). #1313 (RF023 AC3): appended in the
+        // same transaction, so a failed append aborts the placement and Mongo
+        // never keeps one the projection was not told about.
+        if (assignedPosition) {
           await this.graphProjection.appendStoragePositionEvent(this.db, {
             specimenId: String(sampleObjId),
             boxId: String(boxObjId),
             position: assignedPosition,
             sourceService: 'storage-service'
-          });
-        } catch (outboxError) {
-          // #994: the compensation runs through the repository's own
-          // transaction entry point, never a fabricated `getMongo()`.
-          await this.storageRepository.withTransaction(async (rollbackSession) => {
-            await this.storageRepository.rollbackAutoAssignedPosition(
-              { specimenId: sampleObjId, boxId: boxObjId, position: assignedPosition },
-              rollbackSession
-            );
-          });
-
-          throw outboxError;
+          }, { session });
         }
-      }
+      });
 
       logger.info(`✅ Alocação inteligente realizada para amostra ${specimenId} em ${boxId}/${assignedPosition}`);
 

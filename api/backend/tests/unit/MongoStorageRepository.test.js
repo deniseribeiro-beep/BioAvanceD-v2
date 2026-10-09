@@ -872,54 +872,6 @@ describe('MongoStorageRepository', () => {
     });
   });
 
-  describe('rollbackAutoAssignedPosition', () => {
-    it('unsets the occupancyGrid entry and the sample storageLocation', async () => {
-      const specimenId = new ObjectId();
-      const boxId = new ObjectId();
-      const samples = makeCollection({ updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 }) });
-      const storageBoxes = makeCollection({ updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 }) });
-      const db = makeDb({ samples, storageBoxes });
-      const repo = new MongoStorageRepository(db);
-
-      await repo.rollbackAutoAssignedPosition({ specimenId, boxId, position: 'A2' }, {});
-
-      const boxUnsetCall = storageBoxes.updateOne.mock.calls[0];
-      expect(boxUnsetCall[1].$unset[`occupancyGrid.A2`]).toBe('');
-      expect(boxUnsetCall[1].$inc.currentOccupancy).toBe(-1);
-
-      const sampleUnsetCall = samples.updateOne.mock.calls[0];
-      expect(sampleUnsetCall[1].$unset.storageLocation).toBe('');
-    });
-
-    // #1003: compensates the openStorageAssignment hunk added to
-    // autoAssignSamplePosition -- a rollback must close the StorageAssignment
-    // it opened, or the specimen would be left with an OPEN placement-history
-    // record for a position it no longer occupies.
-    it('closes the StorageAssignment for the rolled-back position (#1003)', async () => {
-      const specimenId = new ObjectId();
-      const boxId = new ObjectId();
-      const samples = makeCollection({ updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 }) });
-      const storageBoxes = makeCollection({ updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 }) });
-      const storageAssignmentsUpdateOne = vi.fn().mockResolvedValueOnce({ matchedCount: 1 });
-      const storageAssignments = makeCollection({ updateOne: storageAssignmentsUpdateOne });
-      const db = makeDb({ samples, storageBoxes, storageAssignments });
-      const repo = new MongoStorageRepository(db);
-
-      await repo.rollbackAutoAssignedPosition({ specimenId, boxId, position: 'A2' }, {});
-
-      expect(storageAssignmentsUpdateOne).toHaveBeenCalledWith(
-        expect.objectContaining({
-          specimenId: String(specimenId),
-          boxId: String(boxId),
-          positionCode: 'A2',
-          removedAt: null
-        }),
-        expect.objectContaining({ $set: expect.objectContaining({ removedAt: expect.any(Date), occupancyStatus: 'livre' }) }),
-        { session: {} }
-      );
-    });
-  });
-
   describe('releaseSamplePosition', () => {
     const sampleId = new ObjectId().toString();
     const boxId = new ObjectId();

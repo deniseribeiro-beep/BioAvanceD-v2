@@ -13,6 +13,7 @@ const { validateParticipantId } = require('../utils/patientAnonymization');
 const logger = require('../utils/logger');
 const { getCollection } = require('../utils/collectionResolver');
 const { GraphProjectionService } = require('./graphProjection.service');
+const { withTransactionWhereSupported } = require('../utils/mongoTransaction');
 const participantIdentityService = require('./participantIdentity.service');
 const notificationDispatchService = require('./notificationDispatch.service');
 const { hashConsentToken } = require('../utils/consentTokenHash');
@@ -1092,7 +1093,6 @@ class ConsentService {
         consent.supersedesConsentId = consentHistory.consentKeyOf(supersededConsents[0]);
       }
 
-      const insertResult = await consentsCollection.insertOne(consent);
       // RF010 AC3: one computable ConsentPermission per answered permission.
       const permissionRows = ConsentPermissionModel.fromAnswers({
         consentId,
@@ -1101,24 +1101,33 @@ class ConsentService {
         template,
         signedAt,
       });
-      if (permissionRows.length > 0) {
-        await (await getCollection(db, 'consentPermissions')).insertMany(permissionRows);
-      }
       const decisionActor = this.resolveDecisionActor(actor, participantId);
-      const recorded = await consentHistory.recordAcceptance(
-        db, { _id: insertResult.insertedId, ...consent }, decisionActor
-      );
-      for (const prior of supersededConsents) {
-        await consentHistory.recordSupersession(db, prior, consent, decisionActor);
-      }
-      await this.recordConsentProjectionEvent(db, {
-        participantId,
-        consentId: insertResult.insertedId.toString(),
-        status: 'ACTIVE',
-        signedAt: consent.signedAt || new Date(),
-      });
+      const permissionsCollection = permissionRows.length > 0
+        ? await getCollection(db, 'consentPermissions')
+        : null;
+      // #1313 (RF023 AC3): the consent, its permissions, its decision events
+      // and its outbox event commit together, or none of them does.
+      return withTransactionWhereSupported(db, async (session) => {
+        const sessionArg = session ? [{ session }] : [];
+        const insertResult = await consentsCollection.insertOne(consent, ...sessionArg);
+        if (permissionsCollection) {
+          await permissionsCollection.insertMany(permissionRows, ...sessionArg);
+        }
+        const recorded = await consentHistory.recordAcceptance(
+          db, { _id: insertResult.insertedId, ...consent }, decisionActor, session
+        );
+        for (const prior of supersededConsents) {
+          await consentHistory.recordSupersession(db, prior, consent, decisionActor, session);
+        }
+        await this.recordConsentProjectionEvent(db, {
+          participantId,
+          consentId: insertResult.insertedId.toString(),
+          status: 'ACTIVE',
+          signedAt: consent.signedAt || new Date(),
+        }, session);
 
-      return recorded;
+        return recorded;
+      });
     } catch (error) {
       logger.error('Erro ao criar consentimento do paciente:', error.message);
       throw error;
@@ -1147,22 +1156,28 @@ class ConsentService {
       return null;
     }
 
-    const recorded = await consentHistory.recordRevocation(
-      db, consent, request, this.resolveDecisionActor(actor, consent.participantId)
-    );
+    // #1313 (RF023 AC3): the revocation, its decision event and, when it
+    // revokes the consent, its outbox event commit together.
+    const recorded = await withTransactionWhereSupported(db, async (session) => {
+      const revocation = await consentHistory.recordRevocation(
+        db, consent, request, this.resolveDecisionActor(actor, consent.participantId), session
+      );
+      if (revocation && revocation.consent.status === 'REVOKED') {
+        await this.recordConsentProjectionEvent(db, {
+          participantId: consent.participantId || null,
+          consentId: objectId.toString(),
+          status: 'REVOKED',
+          signedAt: consent.signedAt || consent.createdAt || new Date(),
+        }, session);
+      }
+      return revocation;
+    });
     if (!recorded) {
       return consent;
     }
     if (recorded.consent.status !== 'REVOKED') {
       return recorded.consent;
     }
-
-    await this.recordConsentProjectionEvent(db, {
-      participantId: consent.participantId || null,
-      consentId: objectId.toString(),
-      status: 'REVOKED',
-      signedAt: consent.signedAt || consent.createdAt || new Date(),
-    });
 
     // #650 (RF015, consentimento domain) - fire-and-forget, same shape as
     // auth.service.js's mfa_brute_force_lockout call: a missing/
@@ -1223,7 +1238,7 @@ class ConsentService {
     return consent[0] || null;
   }
 
-  async recordConsentProjectionEvent(db, { participantId, consentId, status, signedAt }) {
+  async recordConsentProjectionEvent(db, { participantId, consentId, status, signedAt }, session = null) {
     if (!db) return null;
     return this.graphProjectionService.appendConsentEvent(db, {
       participantId,
@@ -1232,7 +1247,7 @@ class ConsentService {
       status,
       signedAt,
       sourceService: 'consent.service'
-    });
+    }, { session });
   }
 }
 

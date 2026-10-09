@@ -132,6 +132,10 @@ class Neo4jOutboxService {
     });
     const { updatedAt, ...docWithoutUpdatedAt } = doc;
 
+    // #1313 (RF023 AC3, RNF019 C1): `options.session` is the aggregate's own
+    // transaction, so the event commits or aborts with the write it records.
+    // The index build above stays outside it; an index build is not a
+    // transactional operation.
     await collection.updateOne(
       { eventId: doc.eventId },
       {
@@ -140,7 +144,7 @@ class Neo4jOutboxService {
           updatedAt: new Date(),
         },
       },
-      { upsert: true }
+      options.session ? { upsert: true, session: options.session } : { upsert: true }
     );
 
     return doc;

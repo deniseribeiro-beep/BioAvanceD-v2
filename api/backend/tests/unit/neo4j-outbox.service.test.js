@@ -42,6 +42,28 @@ describe('Neo4jOutboxService', () => {
     // eventId unique index) on its own write path, not only from the
     // manual rebuild script.
     expect(indexes.length).toBe(3);
+    // No session given: the append is its own write.
+    expect(updates[0][2]).toEqual({ upsert: true });
+  });
+
+  // #1313 (RF023 AC3, RNF019 C1): the event commits with its aggregate.
+  it('appends inside the caller transaction when given its session', async () => {
+    const updates = [];
+    const collection = {
+      createIndex: async () => {},
+      updateOne: async (...args) => { updates.push(args); },
+    };
+    const session = { id: 'session-1' };
+    const service = new Neo4jOutboxService({ collectionName: 'outbox_session_case' });
+
+    await service.appendEvent({ collection: () => collection }, {
+      eventId: 'evt-s',
+      eventType: 'CONSENT_UPSERTED',
+      aggregateType: 'EthicalConsent',
+      aggregateId: 'consent-1',
+    }, { session });
+
+    expect(updates[0][2]).toEqual({ upsert: true, session });
   });
 
   it('reschedules abandoned processing events back to retrying', async () => {

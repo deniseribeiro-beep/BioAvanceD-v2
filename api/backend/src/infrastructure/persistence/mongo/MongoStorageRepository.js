@@ -582,66 +582,6 @@ class MongoStorageRepository {
   }
 
   /**
-   * Undoes an autoAssignSamplePosition write (used when a downstream step,
-   * e.g. the Neo4j sync, fails after the Mongo allocation already committed).
-   *
-   * @param {{ specimenId: string|import('mongodb').ObjectId, boxId: string|import('mongodb').ObjectId, position: string }} input
-   * @param {import('mongodb').ClientSession} session
-   */
-  async rollbackAutoAssignedPosition(input, session) {
-    const samplesCollection = await getCollection(this.db, 'samples');
-    const storageBoxesCollection = this.db.collection('storageBoxes');
-    const sampleObjId = this.toObjectId(input.specimenId);
-    const boxObjId = this.toObjectId(input.boxId);
-
-    await storageBoxesCollection.updateOne(
-      {
-        _id: boxObjId,
-        [`occupancyGrid.${input.position}`]: sampleObjId
-      },
-      {
-        $unset: {
-          [`occupancyGrid.${input.position}`]: ''
-        },
-        $inc: {
-          currentOccupancy: -1
-        },
-        $set: {
-          updatedAt: new Date(),
-          lastModified: new Date()
-        }
-      },
-      { session }
-    );
-
-    await samplesCollection.updateOne(
-      {
-        _id: sampleObjId,
-        'storageLocation.boxId': boxObjId,
-        'storageLocation.position': input.position
-      },
-      {
-        $unset: {
-          storageLocation: ''
-        },
-        $set: {
-          updatedAt: new Date()
-        }
-      },
-      { session }
-    );
-
-    // #1003: compensates the openStorageAssignment hunk A added to
-    // autoAssignSamplePosition above -- without this, a rollback (e.g. the
-    // Neo4j-sync-failed path in storageService.js) would leave an OPEN
-    // StorageAssignment for a specimen that is no longer allocated.
-    await this.closeStorageAssignment(
-      { specimenId: input.specimenId, boxId: boxObjId, positionCode: input.position },
-      session
-    );
-  }
-
-  /**
    * @param {{ specimenId: string }} input
    * @param {import('mongodb').ClientSession} session
    */

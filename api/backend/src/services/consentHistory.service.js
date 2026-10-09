@@ -103,34 +103,43 @@ function effectivePermissionsOf(consent) {
   return consent.effectivePermissions || consent.responses || {};
 }
 
-async function readHistory(db, consentKey) {
+/** #1313: the options argument for `session`, the caller's transaction, if
+ *  any; none without one. Every read and write below takes it, so a
+ *  recompute inside a transaction reads the decision event the same
+ *  transaction just wrote. */
+function sessionArg(session) {
+  return session ? [{ session }] : [];
+}
+
+async function readHistory(db, consentKey, session = null) {
   const events = await (await getCollection(db, 'consentDecisionEvents'))
-    .find({ consentId: consentKey }).sort({ occurredAt: 1 }).toArray();
+    .find({ consentId: consentKey }, ...sessionArg(session)).sort({ occurredAt: 1 }).toArray();
   const revocations = await (await getCollection(db, 'consentRevocations'))
-    .find({ consentId: consentKey }).sort({ effectiveAt: 1 }).toArray();
+    .find({ consentId: consentKey }, ...sessionArg(session)).sort({ effectiveAt: 1 }).toArray();
   return { events, revocations };
 }
 
-async function recomputeConsentState(db, consent) {
-  const { events, revocations } = await readHistory(db, consentKeyOf(consent));
+async function recomputeConsentState(db, consent, session = null) {
+  const { events, revocations } = await readHistory(db, consentKeyOf(consent), session);
   const derived = deriveConsentState(consent, events, revocations);
   await (await getCollection(db, 'consents')).updateOne(
     { _id: consent._id },
-    { $set: { ...derived, updatedAt: new Date() } }
+    { $set: { ...derived, updatedAt: new Date() } },
+    ...sessionArg(session)
   );
   return { ...consent, ...derived };
 }
 
-async function appendDecisionEvent(db, data) {
+async function appendDecisionEvent(db, data, session = null) {
   const validation = ConsentDecisionEventModel.validate(data);
   if (!validation.isValid) throw validationError(validation.errors);
   const event = ConsentDecisionEventModel.create(data);
-  await (await getCollection(db, 'consentDecisionEvents')).insertOne(event);
+  await (await getCollection(db, 'consentDecisionEvents')).insertOne(event, ...sessionArg(session));
   return event;
 }
 
 /** The acceptance a newly written consent document records. */
-async function recordAcceptance(db, consent, actor) {
+async function recordAcceptance(db, consent, actor, session = null) {
   await appendDecisionEvent(db, {
     ...actor,
     consentId: consentKeyOf(consent),
@@ -140,13 +149,13 @@ async function recordAcceptance(db, consent, actor) {
     evidenceUri: consent.evidenceDocumentUri,
     evidenceHash: consent.evidenceHash,
     occurredAt: consent.signedAt,
-  });
-  return recomputeConsentState(db, consent);
+  }, session);
+  return recomputeConsentState(db, consent, session);
 }
 
 /** A newer consent of the same participant supersedes `prior`. The newer
  *  manifestation's evidence is the evidence of the supersession. */
-async function recordSupersession(db, prior, successor, actor) {
+async function recordSupersession(db, prior, successor, actor, session = null) {
   await appendDecisionEvent(db, {
     ...actor,
     consentId: consentKeyOf(prior),
@@ -156,12 +165,13 @@ async function recordSupersession(db, prior, successor, actor) {
     evidenceUri: successor.evidenceDocumentUri,
     evidenceHash: successor.evidenceHash,
     occurredAt: successor.signedAt,
-  });
+  }, session);
   await (await getCollection(db, 'consents')).updateOne(
     { _id: prior._id },
-    { $set: { supersededByConsentId: consentKeyOf(successor) } }
+    { $set: { supersededByConsentId: consentKeyOf(successor) } },
+    ...sessionArg(session)
   );
-  return recomputeConsentState(db, { ...prior, supersededByConsentId: consentKeyOf(successor) });
+  return recomputeConsentState(db, { ...prior, supersededByConsentId: consentKeyOf(successor) }, session);
 }
 
 /**
@@ -170,7 +180,7 @@ async function recordSupersession(db, prior, successor, actor) {
  * revoked or superseded, or permissions already revoked -- so a repeat is a
  * no-op that appends nothing.
  */
-async function recordRevocation(db, consent, request = {}, actor) {
+async function recordRevocation(db, consent, request = {}, actor, session = null) {
   const permitted = effectivePermissionsOf(consent);
   const scope = Array.isArray(request.scope) && request.scope.length > 0 ? request.scope : [SCOPE_ALL];
   const priorUseDisposition = request.priorUseDisposition
@@ -216,12 +226,12 @@ async function recordRevocation(db, consent, request = {}, actor) {
     evidenceUri: evidence.evidenceUri,
     evidenceHash: evidence.evidenceHash,
     occurredAt: effectiveAt,
-  });
+  }, session);
   revocation.decisionEventId = event.consentDecisionEventId;
   // What decrypts the evidence the decision event names.
   revocation.evidenceEncryption = evidence.evidenceEncryption || null;
-  await (await getCollection(db, 'consentRevocations')).insertOne(revocation);
-  const updated = await recomputeConsentState(db, consent);
+  await (await getCollection(db, 'consentRevocations')).insertOne(revocation, ...sessionArg(session));
+  const updated = await recomputeConsentState(db, consent, session);
   return { consent: updated, revocation, event };
 }
 

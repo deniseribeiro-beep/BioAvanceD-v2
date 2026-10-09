@@ -8,12 +8,14 @@ function stableHash(payload) {
   return crypto.createHash('sha256').update(ordered).digest('hex');
 }
 
+// #1313 (RF023 AC3): each append takes `options.session`, the aggregate
+// write's transaction, and the outbox appends the event inside it.
 class GraphProjectionService {
   constructor(options = {}) {
     this.outbox = options.outbox || new Neo4jOutboxService();
   }
 
-  async appendConsentEvent(db, payload) {
+  async appendConsentEvent(db, payload, options = {}) {
     return this.outbox.appendEvent(db, {
       eventType: payload.status === 'REVOKED' ? 'CONSENT_REVOKED' : 'CONSENT_UPSERTED',
       aggregateType: 'EthicalConsent',
@@ -28,14 +30,14 @@ class GraphProjectionService {
       sourceService: payload.sourceService || 'graph-projection-service',
       traceId: payload.traceId || null,
       schemaVersion: 1,
-    });
+    }, options);
   }
 
   // #1225: the sample's own projection event. It carries the donor, so the
   // projector can write Donor-[:DONATED]->Sample and govern the sample by the
   // donor's consents. specimenId is the Mongo _id, the key the lineage gate
   // reads.
-  async appendSpecimenEvent(db, payload) {
+  async appendSpecimenEvent(db, payload, options = {}) {
     return this.outbox.appendEvent(db, {
       eventType: 'SPECIMEN_UPSERTED',
       aggregateType: 'Sample',
@@ -47,10 +49,10 @@ class GraphProjectionService {
       sourceService: payload.sourceService || 'graph-projection-service',
       traceId: payload.traceId || null,
       schemaVersion: 1,
-    });
+    }, options);
   }
 
-  async appendLineageEvent(db, payload) {
+  async appendLineageEvent(db, payload, options = {}) {
     return this.outbox.appendEvent(db, {
       eventType: 'LINEAGE_REGISTERED',
       aggregateType: 'Sample',
@@ -62,10 +64,10 @@ class GraphProjectionService {
       sourceService: payload.sourceService || 'graph-projection-service',
       traceId: payload.traceId || null,
       schemaVersion: 1,
-    });
+    }, options);
   }
 
-  async appendQualityEvent(db, payload) {
+  async appendQualityEvent(db, payload, options = {}) {
     return this.outbox.appendEvent(db, {
       eventType: 'QUALITY_ASSESSED',
       aggregateType: 'Sample',
@@ -80,10 +82,10 @@ class GraphProjectionService {
       sourceService: payload.sourceService || 'graph-projection-service',
       traceId: payload.traceId || null,
       schemaVersion: 1,
-    });
+    }, options);
   }
 
-  async appendTelemetryEvent(db, payload) {
+  async appendTelemetryEvent(db, payload, options = {}) {
     return this.outbox.appendEvent(db, {
       eventType: 'TELEMETRY_INCIDENT_RECORDED',
       aggregateType: 'Sample',
@@ -98,13 +100,13 @@ class GraphProjectionService {
       sourceService: payload.sourceService || 'graph-projection-service',
       traceId: payload.traceId || null,
       schemaVersion: 1,
-    });
+    }, options);
   }
 
   // #1312 (RF023 AC8): a sample's current storage position, written by
   // storageService's allocation. Projected as the canonical
   // Sample-[:STORED_AT]->StoragePosition {boxId, position}.
-  async appendStoragePositionEvent(db, payload) {
+  async appendStoragePositionEvent(db, payload, options = {}) {
     return this.outbox.appendEvent(db, {
       eventType: 'STORAGE_POSITION_ASSIGNED',
       aggregateType: 'Sample',
@@ -117,13 +119,13 @@ class GraphProjectionService {
       sourceService: payload.sourceService || 'graph-projection-service',
       traceId: payload.traceId || null,
       schemaVersion: 1,
-    });
+    }, options);
   }
 
   // #1312 (RF023 AC8/AC9, RNF019 C8): a sustained freezer excursion marks the
   // root sample and its descendants COMPROMISED. The event carries the
   // excursion (freezer and start), never a temperature reading.
-  async appendSpecimenCompromiseEvent(db, payload) {
+  async appendSpecimenCompromiseEvent(db, payload, options = {}) {
     return this.outbox.appendEvent(db, {
       eventType: 'SPECIMEN_COMPROMISED',
       aggregateType: 'Sample',
@@ -136,14 +138,14 @@ class GraphProjectionService {
       sourceService: payload.sourceService || 'graph-projection-service',
       traceId: payload.traceId || null,
       schemaVersion: 1,
-    });
+    }, options);
   }
 
   // RF028 AC9: "Persistir primeiro no MongoDB e projetar no Neo4j
   // exclusivamente pelo outbox" — appended by reference-imports/pipeline.js's
   // promote() on the same write that inserts a TerminologyConcept, same
   // outbox pattern RF023 uses for consent/lineage/quality/telemetry.
-  async appendTerminologyConceptEvent(db, payload) {
+  async appendTerminologyConceptEvent(db, payload, options = {}) {
     return this.outbox.appendEvent(db, {
       eventType: 'TERMINOLOGY_CONCEPT_PROMOTED',
       aggregateType: 'TerminologyConcept',
@@ -160,10 +162,10 @@ class GraphProjectionService {
       sourceService: payload.sourceService || 'graph-projection-service',
       traceId: payload.traceId || null,
       schemaVersion: 1,
-    });
+    }, options);
   }
 
-  async appendTerminologyRelationEvent(db, payload) {
+  async appendTerminologyRelationEvent(db, payload, options = {}) {
     return this.outbox.appendEvent(db, {
       eventType: 'TERMINOLOGY_RELATION_PROMOTED',
       aggregateType: 'TerminologyRelation',
@@ -179,7 +181,7 @@ class GraphProjectionService {
       sourceService: payload.sourceService || 'graph-projection-service',
       traceId: payload.traceId || null,
       schemaVersion: 1,
-    });
+    }, options);
   }
 }
 

@@ -82,7 +82,18 @@ describe('graphProjection.service', () => {
           status: 'ACTIVE',
           signedAt: '2026-01-01T00:00:00Z',
         }),
-      }));
+      }), {});
+    });
+
+    // #1313 (RF023 AC3): the caller's transaction reaches the outbox append.
+    it('forwards the caller session to the outbox append', async () => {
+      const outbox = createFakeOutbox();
+      const service = new GraphProjectionService({ outbox });
+      const session = { id: 'session-1' };
+
+      await service.appendConsentEvent({}, { ethicalConsentId: 'ec-9' }, { session });
+
+      expect(outbox.appendEvent.mock.calls[0][2]).toEqual({ session });
     });
 
     it('emits CONSENT_REVOKED when status is REVOKED', async () => {

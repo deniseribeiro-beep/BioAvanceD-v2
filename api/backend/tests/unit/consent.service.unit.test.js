@@ -38,6 +38,24 @@ function makeDb(collectionsByName = {}) {
   };
 }
 
+// #1313: a replica-set client whose one session runs each transaction, so a
+// case can read which writes carried it.
+function makeTransactionalClient() {
+  const session = { id: 'consent-session', withTransaction: vi.fn(async (fn) => { await fn(); }), endSession: vi.fn(async () => {}) };
+  return {
+    session,
+    client: {
+      db: () => ({ command: async () => ({ setName: 'rs0' }) }),
+      startSession: vi.fn(() => session),
+    },
+  };
+}
+
+// The session each call of a spy carried, read from its options argument.
+function sessionsOf(spy, optionsIndex) {
+  return spy.mock.calls.map((call) => call[optionsIndex]?.session);
+}
+
 describe('ConsentService.parseVersionNumber', () => {
   it('parses integer string', () => {
     expect(consentService.parseVersionNumber('3')).toBe(3);
@@ -1597,6 +1615,43 @@ describe('ConsentService.createPatientConsent', () => {
     vi.restoreAllMocks();
   });
 
+  // #1313 (RF023 AC3): on a replica set the consent, its decision event, its
+  // derived state and its outbox event are written in one transaction.
+  it('writes the consent, its history and its outbox event in one transaction on a replica set', async () => {
+    const patients = makeCollection({ findOne: vi.fn(async () => ({ participantId: '12345678' })) });
+    const templates = makeCollection({ findOne: vi.fn(async () => activeTemplate) });
+    const consents = makeCollection({ insertOne: vi.fn(async () => ({ insertedId: new ObjectId() })) });
+    const decisionEvents = makeCollection();
+    const permissions = makeCollection();
+    const outbox = makeCollection({ createIndex: vi.fn(async () => 'ok') });
+    const db = makeDb({
+      patients,
+      consent_templates: templates,
+      patientConsents: consents,
+      consentDecisionEvents: decisionEvents,
+      consentPermissions: permissions,
+      graph_projection_outbox: outbox,
+    });
+    const { session, client } = makeTransactionalClient();
+    db.client = client;
+
+    await consentService.createPatientConsent(db, {
+      participantId: '12345678',
+      consentTemplateId: templateId.toString(),
+      responses: { analytics: true },
+      ...validSignature,
+    }, { channel: 'staff_portal', signerRole: 'participant', authenticationLevel: 'session' });
+
+    expect(session.withTransaction).toHaveBeenCalledTimes(1);
+    expect(sessionsOf(consents.insertOne, 1)).toEqual([session]);
+    expect(sessionsOf(permissions.insertMany, 1)).toEqual([session]);
+    expect(sessionsOf(decisionEvents.insertOne, 1)).toEqual([session]);
+    expect(sessionsOf(decisionEvents.find, 1)).toEqual([session]);
+    expect(sessionsOf(consents.updateOne, 2)).toEqual([session]);
+    expect(sessionsOf(outbox.updateOne, 2)).toEqual([session]);
+    expect(outbox.updateOne.mock.calls[0][1].$setOnInsert.eventType).toBe('CONSENT_UPSERTED');
+  });
+
   it('creates a consent when patient and template are valid', async () => {
     const patients = makeCollection({ findOne: vi.fn(async () => ({ participantId: '12345678' })) });
     const templates = makeCollection({ findOne: vi.fn(async () => activeTemplate) });
@@ -2018,6 +2073,29 @@ describe('ConsentService.revokeConsent', () => {
     }
     return collections;
   }
+
+  // #1313 (RF023 AC3): the revocation, its decision event, the derived state
+  // and the CONSENT_REVOKED event share one transaction on a replica set.
+  it('writes the revocation, its history and its outbox event in one transaction on a replica set', async () => {
+    const consentId = new ObjectId();
+    const consent = { _id: consentId, consentId: 'c-uuid', status: 'ACTIVE', participantId: '12345678', consentTemplateId: 'tmpl-1', responses: { analytics: true } };
+    const consents = makeCollection({ findOne: vi.fn(async () => consent) });
+    const history = makeHistoryCollections();
+    const outbox = makeCollection({ createIndex: vi.fn(async () => 'ok') });
+    const db = makeDb({ patientConsents: consents, ...history, graph_projection_outbox: outbox });
+    const { session, client } = makeTransactionalClient();
+    db.client = client;
+
+    const result = await consentService.revokeConsent(db, consentId.toString());
+
+    expect(result.status).toBe('REVOKED');
+    expect(session.withTransaction).toHaveBeenCalledTimes(1);
+    expect(sessionsOf(history.consentDecisionEvents.insertOne, 1)).toEqual([session]);
+    expect(sessionsOf(history.consentRevocations.insertOne, 1)).toEqual([session]);
+    expect(sessionsOf(consents.updateOne, 2)).toEqual([session]);
+    expect(sessionsOf(outbox.updateOne, 2)).toEqual([session]);
+    expect(outbox.updateOne.mock.calls[0][1].$setOnInsert.eventType).toBe('CONSENT_REVOKED');
+  });
 
   it('revokes an active consent', async () => {
     const consentId = new ObjectId();

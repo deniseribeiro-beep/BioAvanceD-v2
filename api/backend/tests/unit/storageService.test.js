@@ -252,8 +252,8 @@ describe('StorageService.autoAssignSampleToBox', () => {
     samplesUpdateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
     // No open StorageAssignment by default (sample not currently allocated).
     storageAssignmentsFindOne = vi.fn().mockResolvedValue(null);
-    // #1003: autoAssignSamplePosition/rollbackAutoAssignedPosition now open/
-    // close a StorageAssignment row (insertOne/updateOne respectively) --
+    // #1003: autoAssignSamplePosition now opens a StorageAssignment row
+    // (insertOne; updateOne closes one) --
     // without these spies the existing cases below would go red on "insertOne
     // is not a function" rather than on anything this block actually tests.
     storageAssignmentsInsertOne = vi.fn().mockResolvedValue({ insertedId: 'stub' });
@@ -583,12 +583,13 @@ describe('StorageService.autoAssignSampleToBox', () => {
     expect(result.success).toBe(true);
     expect(result.graphPersisted).toBe(true);
     expect(graphProjection.appendStoragePositionEvent).toHaveBeenCalledTimes(1);
+    // #1313 (RF023 AC3): appended with the placement's own session.
     expect(graphProjection.appendStoragePositionEvent).toHaveBeenCalledWith(db, {
       specimenId: specimenId.toString(),
       boxId: boxId.toString(),
       position: 'A1',
       sourceService: 'storage-service'
-    });
+    }, { session: expect.objectContaining({ withTransaction: expect.any(Function) }) });
   });
 
   it('#1004: the event carries the transaction-committed position when it diverges from the pre-scan', async () => {
@@ -628,41 +629,23 @@ describe('StorageService.autoAssignSampleToBox', () => {
     expect(graphProjection.appendStoragePositionEvent.mock.calls[0][1].position).toBe('A3');
   });
 
-  it('rolls back the Mongo allocation when the outbox append fails, and surfaces the error', async () => {
+  // #1313 (RF023 AC3): the append runs inside the placement's transaction, so
+  // a failed append aborts the placement with it; no compensating write runs.
+  it('appends inside the placement transaction, and a failed append surfaces with no compensating write', async () => {
     const boxId = new ObjectId();
     const specimenId = new ObjectId();
-    graphProjection.appendStoragePositionEvent.mockRejectedValue(new Error('outbox unreachable'));
-
-    const rollbackBoxUpdate = vi.fn().mockResolvedValue({});
-    const rollbackSampleUpdate = vi.fn().mockResolvedValue({});
-    // Second startSession() call (rollback) needs its own session object.
-    const rollbackSession = makeSession();
-    let sessionCallCount = 0;
-    // #994: was `db.getMongo = vi.fn(() => ({ startSession: ... }))`. This
-    // site passed even with the fabrication left in place -- the block's
-    // default `db.client.startSession` already returned a fresh session per
-    // call, so the test went green while this override was never consulted
-    // and the two-session distinction it exists to express was silently
-    // inert. Repointed at the real entry point so the second startSession
-    // (the rollback's own transaction) is observable again.
-    db.client = {
-      ...db.client,
-      startSession: vi.fn(() => {
-        sessionCallCount += 1;
-        return sessionCallCount === 1 ? makeSession() : rollbackSession;
-      })
-    };
-    // Route updateOne calls made during rollback to dedicated spies while keeping
-    // the original allocation-phase updateOne behavior for the first calls.
-    boxesUpdateOne.mockImplementation((...args) => {
-      if (args[1]?.$unset) return rollbackBoxUpdate(...args);
-      return Promise.resolve({ matchedCount: 1 });
+    const session = makeSession();
+    let inTransaction = false;
+    session.withTransaction = vi.fn(async (fn) => {
+      inTransaction = true;
+      try { await fn(); } finally { inTransaction = false; }
     });
-    samplesUpdateOne.mockImplementation((...args) => {
-      if (args[1]?.$unset) return rollbackSampleUpdate(...args);
-      return Promise.resolve({ matchedCount: 1 });
+    db.client = { ...db.client, startSession: vi.fn(() => session) };
+    let appendedInTransaction = null;
+    graphProjection.appendStoragePositionEvent.mockImplementation(async (_db, _payload, options) => {
+      appendedInTransaction = inTransaction && options?.session === session;
+      throw new Error('outbox unreachable');
     });
-
     service = new StorageService(db, { graphProjection });
 
     boxesFindOne.mockResolvedValue({
@@ -676,11 +659,13 @@ describe('StorageService.autoAssignSampleToBox', () => {
 
     const result = await service.autoAssignSampleToBox(specimenId.toString(), boxId.toString());
 
+    expect(appendedInTransaction).toBe(true);
+    expect(db.client.startSession).toHaveBeenCalledTimes(1);
     expect(result.success).toBe(false);
     expect(result.error).toBe('AUTO_ASSIGNMENT_ERROR');
     expect(result.message).toBe('outbox unreachable');
-    expect(rollbackBoxUpdate).toHaveBeenCalledTimes(1);
-    expect(rollbackSampleUpdate).toHaveBeenCalledTimes(1);
+    const unsets = [...boxesUpdateOne.mock.calls, ...samplesUpdateOne.mock.calls].filter((call) => call[1]?.$unset);
+    expect(unsets).toHaveLength(0);
   });
 
   // #988 Part 1: same topology refusal MongoStorageRepository.withTransaction

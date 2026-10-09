@@ -7,6 +7,7 @@ const TerminologyConceptModel = require('../../models/TerminologyConcept');
 const TerminologyRelationModel = require('../../models/TerminologyRelation');
 const { CANONICAL_COLLECTIONS } = require('../../config/collections');
 const { GraphProjectionService } = require('../../services/graphProjection.service');
+const { withTransactionWhereSupported } = require('../../utils/mongoTransaction');
 
 // AC 10-style gate: a batch this bad blocks promotion outright rather than
 // letting a mostly-broken parse silently become an "active" release.
@@ -290,22 +291,25 @@ async function promote({ db, releases, concepts, relations, source, stagedConcep
       version: source.datasetVersion,
       referenceDatasetReleaseId: releaseDoc.referenceDatasetReleaseId,
     });
-    await concepts.insertOne(conceptDoc);
-    codeToConceptId.set(candidate.code, conceptDoc.terminologyConceptId);
-    recordsInserted += 1;
     // AC9: Mongo write is the source of truth, appended on the same request
     // the concept is actually inserted — never for the skip-existing branch
-    // above, mirroring RF023's "append on write" outbox discipline.
-    await graphProjection.appendTerminologyConceptEvent(db, {
-      terminologyConceptId: conceptDoc.terminologyConceptId,
-      systemUri: conceptDoc.systemUri,
-      code: conceptDoc.code,
-      version: conceptDoc.version,
-      display: conceptDoc.display,
-      conceptStatus: conceptDoc.conceptStatus,
-      referenceDatasetReleaseId: conceptDoc.referenceDatasetReleaseId,
-      sourceService: 'reference-imports-pipeline',
+    // above, mirroring RF023's "append on write" outbox discipline. #1313
+    // (RF023 AC3): the insert and its event share one transaction.
+    await withTransactionWhereSupported(db, async (session) => {
+      await concepts.insertOne(conceptDoc, ...(session ? [{ session }] : []));
+      await graphProjection.appendTerminologyConceptEvent(db, {
+        terminologyConceptId: conceptDoc.terminologyConceptId,
+        systemUri: conceptDoc.systemUri,
+        code: conceptDoc.code,
+        version: conceptDoc.version,
+        display: conceptDoc.display,
+        conceptStatus: conceptDoc.conceptStatus,
+        referenceDatasetReleaseId: conceptDoc.referenceDatasetReleaseId,
+        sourceService: 'reference-imports-pipeline',
+      }, { session });
     });
+    codeToConceptId.set(candidate.code, conceptDoc.terminologyConceptId);
+    recordsInserted += 1;
   }
 
   for (const candidate of stagedRelations) {
@@ -343,17 +347,19 @@ async function promote({ db, releases, concepts, relations, source, stagedConcep
       relationSystem: 'http://www.w3.org/2000/01/rdf-schema#subClassOf',
       referenceDatasetReleaseId: releaseDoc.referenceDatasetReleaseId,
     });
-    await relations.insertOne(relationDoc);
-    recordsInserted += 1;
-    await graphProjection.appendTerminologyRelationEvent(db, {
-      terminologyRelationId: relationDoc.terminologyRelationId,
-      sourceConceptId: relationDoc.sourceConceptId,
-      targetConceptId: relationDoc.targetConceptId,
-      relationType: relationDoc.relationType,
-      relationVersion: relationDoc.relationVersion,
-      referenceDatasetReleaseId: relationDoc.referenceDatasetReleaseId,
-      sourceService: 'reference-imports-pipeline',
+    await withTransactionWhereSupported(db, async (session) => {
+      await relations.insertOne(relationDoc, ...(session ? [{ session }] : []));
+      await graphProjection.appendTerminologyRelationEvent(db, {
+        terminologyRelationId: relationDoc.terminologyRelationId,
+        sourceConceptId: relationDoc.sourceConceptId,
+        targetConceptId: relationDoc.targetConceptId,
+        relationType: relationDoc.relationType,
+        relationVersion: relationDoc.relationVersion,
+        referenceDatasetReleaseId: relationDoc.referenceDatasetReleaseId,
+        sourceService: 'reference-imports-pipeline',
+      }, { session });
     });
+    recordsInserted += 1;
   }
 
   return { releaseId: releaseDoc.referenceDatasetReleaseId, recordsInserted, recordsUpdated, recordsSkipped, issues };
