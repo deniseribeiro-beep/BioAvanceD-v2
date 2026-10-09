@@ -202,6 +202,8 @@ module.exports = {
   COLL_SPECIMEN_CONTAINER_ASSIGNMENTS: process.env.COLL_SPECIMEN_CONTAINER_ASSIGNMENTS || 'specimenContainerAssignments',
   COLL_CONTAINER_POSITION_ASSIGNMENTS: process.env.COLL_CONTAINER_POSITION_ASSIGNMENTS || 'containerPositionAssignments',
   COLL_RACK_LOCATION_ASSIGNMENTS: process.env.COLL_RACK_LOCATION_ASSIGNMENTS || 'rackLocationAssignments',
+  COLL_LABEL_IDENTIFIERS: process.env.COLL_LABEL_IDENTIFIERS || 'labelIdentifiers',
+  COLL_SCAN_EVENTS: process.env.COLL_SCAN_EVENTS || 'scanEvents',
   COLL_REFERENCE_DATASET_RELEASES: process.env.COLL_REFERENCE_DATASET_RELEASES || 'referenceDatasetReleases',
   COLL_REFERENCE_IMPORT_RUNS: process.env.COLL_REFERENCE_IMPORT_RUNS || 'referenceImportRuns',
   COLL_REFERENCE_IMPORT_ISSUES: process.env.COLL_REFERENCE_IMPORT_ISSUES || 'referenceImportIssues',
