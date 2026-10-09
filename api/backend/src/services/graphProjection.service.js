@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const { Neo4jOutboxService } = require('./neo4jOutbox.service');
 const logger = require('../utils/logger');
+const { withTransactionWhereSupported } = require('../utils/mongoTransaction');
 
 function stableHash(payload) {
   const safePayload = payload || {};
@@ -199,8 +200,34 @@ async function recordSpecimenProjection(db, { specimenId, participantId, sourceS
   }
 }
 
+// #1313 (RF023 AC3): inserts a sample and appends its SPECIMEN_UPSERTED in one
+// transaction where the deployment runs one, so neither lands without the
+// other and a failed append fails the insert. Without a transaction it is
+// the insert followed by recordSpecimenProjection, as before.
+async function insertSampleWithProjection(db, samplesCollection, sample, { sourceService }, service = new GraphProjectionService()) {
+  return withTransactionWhereSupported(db, async (session) => {
+    if (!session) {
+      const insertResult = await samplesCollection.insertOne(sample);
+      await recordSpecimenProjection(db, {
+        specimenId: String(insertResult.insertedId),
+        participantId: sample.participantId,
+        sourceService,
+      }, service);
+      return insertResult;
+    }
+    const insertResult = await samplesCollection.insertOne(sample, { session });
+    await service.appendSpecimenEvent(db, {
+      specimenId: String(insertResult.insertedId),
+      participantId: sample.participantId,
+      sourceService,
+    }, { session });
+    return insertResult;
+  });
+}
+
 module.exports = {
   GraphProjectionService,
+  insertSampleWithProjection,
   recordSpecimenProjection,
   stableHash,
 };

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
-const { GraphProjectionService, recordSpecimenProjection, stableHash } = require('../../src/services/graphProjection.service');
+const { GraphProjectionService, insertSampleWithProjection, recordSpecimenProjection, stableHash } = require('../../src/services/graphProjection.service');
 
 function createFakeOutbox() {
   return { appendEvent: vi.fn().mockResolvedValue({ ok: true }) };
@@ -150,6 +150,51 @@ describe('graphProjection.service', () => {
       const service = { appendSpecimenEvent: vi.fn().mockRejectedValue(new Error('outbox down')) };
       await expect(recordSpecimenProjection({}, { specimenId: 'mongo-1', participantId: 'P-1' }, service)).resolves.toBeNull();
       expect(service.appendSpecimenEvent).toHaveBeenCalledWith({}, { specimenId: 'mongo-1', participantId: 'P-1', sourceService: undefined });
+    });
+
+    // #1313 (RF023 AC3): on a replica set the sample and its event share a
+    // transaction, and a failed append fails the insert with it.
+    describe('insertSampleWithProjection', () => {
+      const sample = { specimenId: 'S-1', participantId: 'P-1' };
+      const replicaSetDb = (session) => ({
+        client: {
+          db: () => ({ command: async () => ({ setName: 'rs0' }) }),
+          startSession: () => session,
+        },
+      });
+
+      it('inserts and appends with the same session on a replica set', async () => {
+        const session = { withTransaction: vi.fn(async (fn) => { await fn(); }), endSession: vi.fn(async () => {}) };
+        const db = replicaSetDb(session);
+        const samples = { insertOne: vi.fn().mockResolvedValue({ insertedId: 'mongo-1' }) };
+        const service = { appendSpecimenEvent: vi.fn().mockResolvedValue({ eventId: 'e-1' }) };
+
+        const result = await insertSampleWithProjection(db, samples, sample, { sourceService: 'import.service' }, service);
+
+        expect(result.insertedId).toBe('mongo-1');
+        expect(samples.insertOne).toHaveBeenCalledWith(sample, { session });
+        expect(service.appendSpecimenEvent).toHaveBeenCalledWith(db, { specimenId: 'mongo-1', participantId: 'P-1', sourceService: 'import.service' }, { session });
+      });
+
+      it('fails the insert when the append fails inside the transaction', async () => {
+        const session = { withTransaction: vi.fn(async (fn) => { await fn(); }), endSession: vi.fn(async () => {}) };
+        const samples = { insertOne: vi.fn().mockResolvedValue({ insertedId: 'mongo-1' }) };
+        const service = { appendSpecimenEvent: vi.fn().mockRejectedValue(new Error('outbox down')) };
+
+        await expect(insertSampleWithProjection(replicaSetDb(session), samples, sample, { sourceService: 'import.service' }, service))
+          .rejects.toThrow('outbox down');
+      });
+
+      it('without a transaction inserts, then appends as recordSpecimenProjection does', async () => {
+        const samples = { insertOne: vi.fn().mockResolvedValue({ insertedId: 'mongo-2' }) };
+        const service = { appendSpecimenEvent: vi.fn().mockRejectedValue(new Error('outbox down')) };
+
+        const result = await insertSampleWithProjection({}, samples, sample, { sourceService: 'import.service' }, service);
+
+        expect(result.insertedId).toBe('mongo-2');
+        expect(samples.insertOne).toHaveBeenCalledWith(sample);
+        expect(service.appendSpecimenEvent).toHaveBeenCalledWith({}, { specimenId: 'mongo-2', participantId: 'P-1', sourceService: 'import.service' });
+      });
     });
 
     it('recordSpecimenProjection appends nothing without a specimen id', async () => {
