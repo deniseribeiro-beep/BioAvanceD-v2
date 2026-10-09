@@ -204,6 +204,7 @@ module.exports = {
   COLL_RACK_LOCATION_ASSIGNMENTS: process.env.COLL_RACK_LOCATION_ASSIGNMENTS || 'rackLocationAssignments',
   COLL_LABEL_IDENTIFIERS: process.env.COLL_LABEL_IDENTIFIERS || 'labelIdentifiers',
   COLL_SCAN_EVENTS: process.env.COLL_SCAN_EVENTS || 'scanEvents',
+  COLL_CUSTODIANSHIP_ASSIGNMENTS: process.env.COLL_CUSTODIANSHIP_ASSIGNMENTS || 'custodianshipAssignments',
   COLL_REFERENCE_DATASET_RELEASES: process.env.COLL_REFERENCE_DATASET_RELEASES || 'referenceDatasetReleases',
   COLL_REFERENCE_IMPORT_RUNS: process.env.COLL_REFERENCE_IMPORT_RUNS || 'referenceImportRuns',
   COLL_REFERENCE_IMPORT_ISSUES: process.env.COLL_REFERENCE_IMPORT_ISSUES || 'referenceImportIssues',
