@@ -1782,6 +1782,8 @@ class ImportLGPDService {
         patientName: sampleData.patientName,
         birthDate: sampleData.patientBirthDate,
         identityDocument: sampleData.identityDocument,
+        // #1353: a participant this row creates is stamped like the sample.
+        clinicalUnitId: organizationId,
       });
 
       sampleData.participantId = String(matchedPatient?.patient?.participantId || '').trim();

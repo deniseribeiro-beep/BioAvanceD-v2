@@ -85,6 +85,23 @@ describe('PatientIdentityService (import-time matching) resolves via Participant
     expect(patients.insertOne).not.toHaveBeenCalled();
   });
 
+  // #1353: a create path's organization lands on the participant it creates,
+  // and never moves a participant it matches.
+  it('stamps a supplied clinicalUnitId on a created participant only (#1353)', async () => {
+    const patients = makeCollection([
+      { _id: 'p1', participantId: '11111111', clinicalUnitId: 'org-old' },
+    ]);
+    const db = makeDb({ patients, participantIdentities: makeCollection([]) });
+
+    await participantIdentityService.matchOrUpsertParticipant(db, {
+      patientName: 'Carla Souza', birthDate: '05/03/1988', clinicalUnitId: 'org-a',
+    });
+    expect(patients.insertOne.mock.calls[0][0].clinicalUnitId).toBe('org-a');
+
+    await participantIdentityService.matchOrUpsertParticipant(db, { participantId: '11111111', clinicalUnitId: 'org-a' });
+    expect(patients.updateOne.mock.calls.at(-1)[1].$set).not.toHaveProperty('clinicalUnitId');
+  });
+
   it('creates a new participant and dual-writes ParticipantIdentity when no match exists', async () => {
     const patients = makeCollection([]);
     const participantIdentities = makeCollection([]);

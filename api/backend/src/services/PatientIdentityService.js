@@ -179,6 +179,14 @@ class participantIdentityService {
       createdAt: new Date(),
       updatedAt: new Date()
     };
+    // #1353: the tenancy key the scoped participant readers filter on, for a
+    // participant a create path makes here (a sample import row). Only the
+    // insert takes it: a match is not a create, and moving an existing
+    // participant between organizations is a reparent (#1053).
+    const clinicalUnitId = normalizeString(payload.clinicalUnitId);
+    if (clinicalUnitId) {
+      toInsert.clinicalUnitId = clinicalUnitId;
+    }
     const result = await participants.insertOne(toInsert);
     await identities.updateOne(
       { participantId: generatedParticipantId },

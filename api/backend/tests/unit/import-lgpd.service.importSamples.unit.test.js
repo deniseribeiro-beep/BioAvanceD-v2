@@ -473,6 +473,8 @@ describe('ImportLGPDService.importSamples', () => {
 
     expect(result.success).toBe(1);
     expect(samplesCollection.insertOne.mock.calls[0][0].collectionSite).toBe('ORG-OWN');
+    // A participant the row creates is stamped the same way.
+    expect(patientIdentityService.matchOrUpsertParticipant.mock.calls[0][1]).toMatchObject({ clinicalUnitId: 'ORG-OWN' });
   });
 
   it('leaves collectionSite unset when no organizationId was resolved, a global caller naming none (#1353)', async () => {
