@@ -302,6 +302,15 @@ async function backfillUserRoleAssignments(db) {
       organizationId,
     });
     granted.push(assignment);
+    // #1358: a legacy user in several organizations keeps each of them, one
+    // assignment per organization, not only the first.
+    if (assignment.scopeType === 'organization' && Array.isArray(user.organizationIds)) {
+      for (const extraId of user.organizationIds) {
+        if (!extraId || extraId === assignment.scopeId) continue;
+        const extra = await grantOrganizationScope(db, { userAccountId, organizationId: extraId, grantedBy: 'system-backfill' });
+        if (extra.created) granted.push(extra.assignment);
+      }
+    }
   }
   return { granted, skipped };
 }

@@ -630,9 +630,12 @@ describe('rbac-assignment.service organization scoping (#615)', () => {
 
     const result = await backfillUserRoleAssignments(db);
 
-    const byUser = Object.fromEntries(result.granted.map((a) => [a.userAccountId, a]));
-    expect(byUser.u1.scopeId).toBe('org-1');
-    expect(byUser.u2.scopeId).toBe('org-2');
+    const scopesOf = (id) => result.granted.filter((a) => a.userAccountId === id).map((a) => a.scopeId);
+    expect(scopesOf('u1')).toEqual(['org-1']);
+    // #1358: the primary grant takes organizationIds[0], and each further
+    // organization gets its own assignment of the same role.
+    expect(scopesOf('u2')).toEqual(['org-2', 'org-3']);
+    expect(new Set(result.granted.filter((a) => a.userAccountId === 'u2').map((a) => a.roleId)).size).toBe(1);
   });
 
   describe('#340: organization-scope query helpers', () => {
