@@ -4,6 +4,7 @@ import {
   Sample,
   Result,
   ConsentTemplate,
+  PurposeCode,
   PatientConsent,
   Equipment,
   Temperature,
@@ -877,6 +878,8 @@ export const consentService = {
   getActiveTemplate: () => api.get<{ success: boolean; data: ConsentTemplate | null; source?: string; message?: string }>('/e-consent/consent-templates/current'),
   getTemplateById: (id: string) => api.get<{ success: boolean; data: ConsentTemplate }>(`/e-consent/consent-templates/${id}`),
   updateTemplate: (id: string, data: Partial<ConsentTemplate>) => api.put<{ success: boolean; data: ConsentTemplate }>(`/e-consent/consent-templates/${id}`, data),
+  // #1349: the active DUO purposes a term's permission may name.
+  getPurposeCodes: () => api.get<{ success: boolean; data: PurposeCode[] }>('/e-consent/purpose-codes'),
   // The following endpoints are for legacy or other flows, not for TCLE builder:
   // createPolicy: (data: Partial<ConsentPolicy>) => api.post<ConsentPolicy>('/consent-policies', data),
   // updatePolicy: (id: string, data: Partial<ConsentPolicy>) => api.put<{ success: boolean; data: ConsentPolicy }>(`/consent-policies/${id}`, data),

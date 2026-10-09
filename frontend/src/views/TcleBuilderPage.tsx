@@ -21,7 +21,7 @@ import Input from '../components/UI/Input';
 import Spinner from '../components/UI/Spinner';
 import { useToast } from '../components/UI/ToastContainer';
 import { consentService } from '../services/api';
-import type { ConsentTemplate, ConsentPolicy } from '../types/models';
+import type { ConsentTemplate, ConsentPolicy, PurposeCode } from '../types/models';
 import { describeConsentPublication, type ConsentNotificationCounts } from './tclePublication';
 import './TcleBuilderPage.css';
 
@@ -31,6 +31,9 @@ type ConsentItemDraft = {
   id: string;
   label: string;
   required: boolean;
+  // RF010 AC3 (#1349): the governed purpose (a GA4GH DUO code) the
+  // permission covers, which an access decision is judged against.
+  purposeCode?: string;
 };
 
 const PREVIEW_VALUES: PreviewValueMap = {
@@ -173,6 +176,7 @@ function normalizeDraftItems(items: Array<Partial<ConsentItemDraft> | null | und
       id: createId(),
       label: String(item?.label || '').trim(),
       required: Boolean(item?.required),
+      ...(item?.purposeCode ? { purposeCode: String(item.purposeCode) } : {}),
     }))
     .filter((item) => item.label.length > 0);
 
@@ -213,9 +217,10 @@ function normalizeGranularPermissions(items: ConsentItemDraft[]) {
         key,
         label,
         required: Boolean(item.required),
+        ...(item.purposeCode ? { purposeCode: item.purposeCode } : {}),
       };
     })
-    .filter(Boolean) as Array<{ key: string; label: string; required: boolean }>;
+    .filter(Boolean) as Array<{ key: string; label: string; required: boolean; purposeCode?: string }>;
 }
 
 function parseVersionNumber(version: string) {
@@ -513,6 +518,7 @@ export default function TcleBuilderPage() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState('');
   const [editorReady, setEditorReady] = useState(false);
+  const [purposeCodes, setPurposeCodes] = useState<PurposeCode[]>([]);
 
   const normalizedBody = useMemo(() => stripHtml(bodyHtml), [bodyHtml]);
   const currentModelTitle = useMemo(() => normalizeTitle(historyAnchorTitle || title), [historyAnchorTitle, title]);
@@ -524,6 +530,22 @@ export default function TcleBuilderPage() {
     active: historyItems.filter((item) => item.active).length,
     obsolete: historyItems.filter((item) => !item.active).length,
   }), [historyItems]);
+
+  // #1349: the active DUO purposes a permission may name. A failed load
+  // leaves the select with "no purpose" only; publishing still works.
+  useEffect(() => {
+    let active = true;
+    consentService.getPurposeCodes()
+      .then((response) => {
+        if (active) setPurposeCodes(Array.isArray(response.data?.data) ? response.data.data : []);
+      })
+      .catch(() => {
+        if (active) setPurposeCodes([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     const editor = editorRef.current;
@@ -1029,6 +1051,22 @@ export default function TcleBuilderPage() {
                             />
                             Checkbox obrigatório
                           </label>
+                          <div className="tcle-builder-consent-item__field">
+                            <label htmlFor={`consent-purpose-${item.id}`}>Finalidade (DUO)</label>
+                            <select
+                              id={`consent-purpose-${item.id}`}
+                              data-testid={`consent-purpose-${index + 1}`}
+                              value={item.purposeCode || ''}
+                              onChange={(event) => updateConsentItem(item.id, { purposeCode: event.target.value || undefined })}
+                            >
+                              <option value="">Sem finalidade codificada</option>
+                              {purposeCodes.map((purpose) => (
+                                <option key={purpose.code} value={purpose.code}>
+                                  {purpose.display} ({purpose.code})
+                                </option>
+                              ))}
+                            </select>
+                          </div>
                         </div>
 
                         <Button type="button" variant="secondary" className="btn-small btn-ghost tcle-builder-consent-item__remove" onClick={() => removeConsentItem(item.id)}>

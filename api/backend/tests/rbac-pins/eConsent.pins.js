@@ -8,6 +8,7 @@ module.exports = {
     { method: 'GET', path: '/consent-policies/:id/pending-patients', roles: [3, 4] },
     { method: 'POST', path: '/consent-templates', roles: [4] },
     { method: 'GET', path: '/consent-templates', roles: [3, 4] },
+    { method: 'GET', path: '/purpose-codes', roles: [3, 4] },
     { method: 'GET', path: '/consent-templates/:id', roles: [4] },
     { method: 'PUT', path: '/consent-templates/:id', roles: [4] },
     { method: 'POST', path: '/consent-policies', roles: [3, 4] },

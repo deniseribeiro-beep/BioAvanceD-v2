@@ -55,6 +55,17 @@ describe('governed purpose codes on a term\'s permissions (#1347)', () => {
     expect(db.collection(CANONICAL_COLLECTIONS.consentTemplates).docs).toHaveLength(0);
   });
 
+  it('lists the active DUO concepts for the builder, by code, leaving out obsolete ones and other systems (#1349)', async () => {
+    const concepts = db.collection(CANONICAL_COLLECTIONS.terminologyConcepts);
+    await concepts.insertOne({ systemUri: DUO_SYSTEM_URI, code: 'DUO:0000004', display: 'no restriction', conceptStatus: 'active' });
+    await concepts.insertOne({ systemUri: 'http://loinc.org', code: '1234-5', display: 'not a purpose', conceptStatus: 'active' });
+
+    await expect(consentService.listPurposeCodes(db)).resolves.toEqual([
+      { code: 'DUO:0000004', display: 'no restriction' },
+      { code: 'DUO:0000006', display: 'DUO:0000006' },
+    ]);
+  });
+
   it('codes a consent\'s permission rows with the term\'s DUO purpose, and keeps the label for one without', () => {
     const rows = ConsentPermissionModel.fromAnswers({
       consentId: 'consent-1',

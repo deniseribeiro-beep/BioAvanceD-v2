@@ -286,6 +286,16 @@ class ConsentService {
     }
   }
 
+  // #1349: the purposes a term's permission may name, for the builder.
+  async listPurposeCodes(db) {
+    const concepts = await getCollection(db, 'terminologyConcepts');
+    const active = await concepts
+      .find({ systemUri: DUO_SYSTEM_URI, conceptStatus: 'active' })
+      .sort({ code: 1 })
+      .toArray();
+    return active.map(concept => ({ code: concept.code, display: concept.display || concept.code }));
+  }
+
   ensureUniquePermissionKeys(permissions) {
     const keys = new Set();
     for (const permission of permissions) {

@@ -27,6 +27,7 @@ let client: MongoClient | null = null;
 let db: Db;
 let v1Id: ObjectId;
 const versionGroupId = `e2e-824-${RUN}`;
+const PURPOSE_CODE = `DUO:e2e-1349-${RUN}`;
 const participantId = String(crypto.randomInt(70_000_000, 80_000_000));
 
 test.describe('#824 TCLE builder revision runs the consent-invitation sweep -- real backend', () => {
@@ -52,6 +53,18 @@ test.describe('#824 TCLE builder revision runs the consent-invitation sweep -- r
       updatedAt: new Date(),
     });
     v1Id = inserted.insertedId;
+    // #1349: a DUO purpose the builder lists and the revision may name.
+    await db.collection('terminologyConcepts').insertOne({
+      terminologyConceptId: `e2e-1349-${versionGroupId}`,
+      systemUri: 'http://purl.obolibrary.org/obo/duo.owl',
+      code: PURPOSE_CODE,
+      display: `Finalidade e2e 1349 ${versionGroupId}`,
+      conceptStatus: 'active',
+      version: 'e2e-1349',
+      referenceDatasetReleaseId: 'e2e-1349',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
 
     // Pending on v1, never invited: no token yet.
     await db.collection('patients').insertOne({
@@ -67,6 +80,7 @@ test.describe('#824 TCLE builder revision runs the consent-invitation sweep -- r
     if (!client) return;
     await db.collection('patients').deleteMany({ participantId });
     await db.collection('consent_templates').deleteMany({ versionGroupId });
+    await db.collection('terminologyConcepts').deleteMany({ code: PURPOSE_CODE });
     await client.close();
     client = null;
   });
@@ -80,6 +94,9 @@ test.describe('#824 TCLE builder revision runs the consent-invitation sweep -- r
     await editor.fill('Versão 2 do termo e2e 824, revisada pelo operador.');
     // RF010 AC1: the revision records the modality chosen in the builder.
     await page.getByLabel('Modalidade de Consentimento').selectOption('dynamic');
+    // RF010 AC3 (#1349): the item names its governed purpose, from the list
+    // the builder reads off the real backend.
+    await page.getByTestId('consent-purpose-1').selectOption(PURPOSE_CODE);
 
     await page.getByRole('button', { name: 'Salvar nova versão do TCLE' }).click();
 
@@ -93,6 +110,7 @@ test.describe('#824 TCLE builder revision runs the consent-invitation sweep -- r
     expect(v2?.revisionType).toBe('update');
     expect(v2?.version).toBe('v2');
     expect(v2?.consentModel).toBe('dynamic');
+    expect(v2?.permissions?.[0]).toMatchObject({ label: 'Uso das amostras em pesquisa', purposeCode: PURPOSE_CODE });
     // The validity period survives the builder's path (dropped before #824).
     expect(v2?.validTo).toBeTruthy();
 

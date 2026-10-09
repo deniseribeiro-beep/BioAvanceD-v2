@@ -336,6 +336,8 @@ router.post('/import/fhir/consent/:token/accept', async (req, res) => {
 router.get('/consent-policies/:id/pending-patients', authenticate, requireRole(3, 4), consentController.getPendingPatientsForPolicy.bind(consentController));
 router.post('/consent-templates', authenticate, requireRole(4), consentController.createTemplate.bind(consentController));
 router.get('/consent-templates', authenticate, requireRole(3, 4), consentController.getAllTemplates.bind(consentController));
+// #1349: the builder's purpose select, read by whoever may list terms.
+router.get('/purpose-codes', authenticate, requireRole(3, 4), consentController.listPurposeCodes.bind(consentController));
 router.get('/consent-templates/current', authenticate, consentController.getCurrentTemplate.bind(consentController));
 router.get('/consent-templates/active', authenticate, consentController.getActiveTemplate.bind(consentController));
 router.get('/consent-templates/:id', authenticate, requireRole(4), consentController.getTemplateById.bind(consentController));

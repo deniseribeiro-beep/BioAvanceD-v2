@@ -445,6 +445,27 @@ class ConsentController {
     }
   }
 
+  // #1349: the active DUO purposes a term's permission may name.
+  async listPurposeCodes(req, res) {
+    try {
+      const db = req.app.locals.db;
+      if (!db) {
+        return res.status(503).json({
+          success: false,
+          error: 'Banco de dados não disponível'
+        });
+      }
+      const purposeCodes = await consentService.listPurposeCodes(db);
+      return res.status(200).json({ success: true, data: purposeCodes });
+    } catch (error) {
+      logger.error('Erro ao listar finalidades DUO:', error.message);
+      return res.status(500).json({
+        success: false,
+        error: 'Erro ao listar finalidades'
+      });
+    }
+  }
+
   async getAllTemplates(req, res) {
     try {
       const db = req.app.locals.db;

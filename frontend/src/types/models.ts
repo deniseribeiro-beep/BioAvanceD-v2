@@ -405,6 +405,14 @@ export interface ConsentPolicyPermission {
   key: string;
   label: string;
   required?: boolean;
+  // RF010 AC3 (#1349): a GA4GH DUO code, the purpose the permission covers.
+  purposeCode?: string;
+}
+
+// #1349: an active DUO concept a term's permission may name.
+export interface PurposeCode {
+  code: string;
+  display: string;
 }
 
 export interface ConsentTemplate {

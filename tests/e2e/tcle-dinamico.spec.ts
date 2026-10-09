@@ -15,6 +15,16 @@ const mongoDbName = process.env.E2E_MONGO_DB || 'bioavanced_test';
 test.describe('TCLE builder (/admin/tcle/new)', () => {
   test.beforeEach(async ({ page }) => {
     await mockLogin(page);
+    // #1349: the builder loads the DUO purposes a permission may name. With
+    // mockLogin's unsigned token the real route answers 401, and api.ts's
+    // interceptor would log the session out mid-test.
+    await page.route('**/api/e-consent/purpose-codes', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ success: true, data: [{ code: 'DUO:0000006', display: 'health or medical or biomedical research use' }] }),
+      });
+    });
   });
 
   test('renders the builder form and accepts template metadata', async ({ page }) => {
@@ -68,12 +78,19 @@ test.describe('TCLE builder (/admin/tcle/new)', () => {
     await page.getByRole('textbox', { name: 'Editor do corpo do TCLE' }).fill('Corpo do termo de consentimento para o teste e2e.');
     // A default consent item already exists on a fresh template — just fill it in.
     await page.getByPlaceholder('Ex.: Aceito ceder minhas amostras para estudos genéticos').first().fill('Aceito participar do estudo e2e');
+    // RF010 AC3 (#1349): the item names the governed purpose it covers.
+    await page.getByTestId('consent-purpose-1').selectOption('DUO:0000006');
 
     await page.getByRole('button', { name: 'Criar versão do TCLE' }).click();
 
     await expect.poll(() => createdPayload?.title ?? (createdPayload as any)?.name).toBeTruthy();
     // RF010 AC1: the builder sends the modality it offers.
     expect(createdPayload!.consentModel).toBe('broad');
+    // RF010 AC3 (#1349): and each permission's governed purpose.
+    expect((createdPayload!.permissions as Array<Record<string, unknown>>)[0]).toMatchObject({
+      label: 'Aceito participar do estudo e2e',
+      purposeCode: 'DUO:0000006',
+    });
   });
 });
 
