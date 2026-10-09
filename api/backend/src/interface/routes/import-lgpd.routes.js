@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const importLGPDController = require('../../controllers/import-lgpd.controller');
 const { authenticate } = require('../../infrastructure/middleware/auth');
-const { requirePermission } = require('../../infrastructure/middleware/rbac');
+const { requirePermission, requireOrganizationScope } = require('../../infrastructure/middleware/rbac');
 
 /**
  * Rotas de Importação LGPD
@@ -57,12 +57,14 @@ router.post('/amostras',
 router.get('/batches',
   authenticate,
   requirePermission('createSample'),
+  requireOrganizationScope,
   importLGPDController.listQuarantineBatches.bind(importLGPDController)
 );
 
 router.get('/batches/:batchId',
   authenticate,
   requirePermission('createSample'),
+  requireOrganizationScope,
   importLGPDController.getQuarantineBatch.bind(importLGPDController)
 );
 
@@ -71,6 +73,7 @@ router.get('/batches/:batchId',
 router.post('/batches/:batchId/records/:recordId/resubmit',
   authenticate,
   requirePermission('createSample'),
+  requireOrganizationScope,
   importLGPDController.resubmitQuarantinedRow.bind(importLGPDController)
 );
 

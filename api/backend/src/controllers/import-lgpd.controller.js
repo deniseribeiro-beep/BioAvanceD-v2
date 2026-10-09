@@ -198,6 +198,24 @@ class ImportLGPDController {
   }
 
   /**
+   * #800 on this branch: the organizations a quarantine batch is stamped
+   * with, which are the importer's own scoped organizations. Global scope
+   * (Administrador) and an org-less caller both stamp none, and an
+   * unstamped batch is readable only by global scope. Fails closed to none,
+   * the narrowest reach, if the lookup throws.
+   */
+  async resolveImportOrganizationIds(db, req) {
+    try {
+      const { resolveUserOrganizationScope } = require('../services/rbac-assignment.service');
+      const scope = await resolveUserOrganizationScope(db, req.user?.userID);
+      return scope?.scope === 'organization' ? [...scope.organizationIds] : [];
+    } catch (error) {
+      logger.warn('Falha ao resolver organizacoes do importador para a quarentena LGPD:', error.message || error);
+      return [];
+    }
+  }
+
+  /**
    * GET /api/import-lgpd/batches/:batchId (#794, RNF011 AC#4)
    *
    * Le de volta um lote de quarentena criado pelo #787. Sem isto as linhas
@@ -217,6 +235,7 @@ class ImportLGPDController {
       const types = await this.resolveReadableQuarantineTypes(db, req);
       const { batch, records } = await importLGPDService.getQuarantineBatch(db, req.params.batchId, {
         types,
+        organizationScope: req.organizationScope,
       });
 
       return res.status(200).json({ success: true, batch, records });
@@ -255,6 +274,7 @@ class ImportLGPDController {
         req.params.recordId,
         req.body?.row,
         {
+          organizationScope: req.organizationScope,
           neo4jDriver: req.app.locals.neo4jDriver || null,
           // Both spellings, as importSamples passes them (#911).
           actor: {
@@ -304,6 +324,7 @@ class ImportLGPDController {
         limit: req.query.limit,
         page: req.query.page,
         types,
+        organizationScope: req.organizationScope,
       });
 
       return res.status(200).json({
@@ -483,7 +504,10 @@ class ImportLGPDController {
           userName: req.user?.name || req.user?.email || 'IMPORT_LGPD',
           userRole: req.user?.role || null,
           ipAddress: req.ip || null,
-          userAgent: req.get?.('user-agent') || null
+          userAgent: req.get?.('user-agent') || null,
+          // #800 on this branch: the batch a rejected row opens is stamped
+          // with the importer's organizations, which the readers scope on.
+          organizationIds: await this.resolveImportOrganizationIds(db, req),
         }
       });
 
@@ -664,7 +688,10 @@ class ImportLGPDController {
           userName: req.user?.name || req.user?.email || 'IMPORT_LGPD',
           userRole: req.user?.role || null,
           ipAddress: req.ip || null,
-          userAgent: req.get?.('user-agent') || null
+          userAgent: req.get?.('user-agent') || null,
+          // #800 on this branch: the batch a rejected row opens is stamped
+          // with the importer's organizations, which the readers scope on.
+          organizationIds: await this.resolveImportOrganizationIds(db, req),
         }
       });
 
@@ -848,7 +875,10 @@ class ImportLGPDController {
           userName: req.user?.name || req.user?.email || 'IMPORT_LGPD',
           userRole: req.user?.role || null,
           ipAddress: req.ip || null,
-          userAgent: req.get?.('user-agent') || null
+          userAgent: req.get?.('user-agent') || null,
+          // #800 on this branch: the batch a rejected row opens is stamped
+          // with the importer's organizations, which the readers scope on.
+          organizationIds: await this.resolveImportOrganizationIds(db, req),
         }
       });
 
@@ -929,6 +959,7 @@ class ImportLGPDController {
               actor: {
                 userID: req.user?.userID || req.user?.id || req.user?._id || null,
                 userId: req.user?.userID || req.user?.id || req.user?._id || null,
+                organizationIds: await this.resolveImportOrganizationIds(db, req),
               },
               importOptions: {
                 startBoxId: req.body?.boxId || null,

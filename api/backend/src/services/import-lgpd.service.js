@@ -63,6 +63,22 @@ const READABLE_QUARANTINE_TYPES = Object.freeze(Object.values(QUARANTINE_BATCH_T
  * vazio nunca vire um `$in: []` (que nao casa nada) nem um filtro ausente
  * (que casaria tudo).
  */
+// #800 on this branch: a quarantine batch carries the organizations of the
+// importer that opened it (`organizationIds`, the controller's
+// resolveImportOrganizationIds). A reader with organization scope reaches only
+// batches stamped with one of its organizations; an unstamped batch (legacy,
+// or opened by global scope) only global scope reaches. No scope passed means
+// an internal caller, which is unfiltered.
+function stampedOrganizationIds(actor) {
+  return Array.isArray(actor?.organizationIds) ? actor.organizationIds.filter(Boolean) : [];
+}
+
+function isBatchInOrganizationScope(batch, organizationScope) {
+  if (!organizationScope) return true;
+  const { isRecordInOrganizationScope } = require('./rbac-assignment.service');
+  return isRecordInOrganizationScope(batch, organizationScope, 'organizationIds');
+}
+
 function normalizeQuarantineTypes(types) {
   const requested = Array.isArray(types) ? types : [types];
   const allowed = READABLE_QUARANTINE_TYPES.filter((t) => requested.includes(t));
@@ -1120,7 +1136,7 @@ class ImportLGPDService {
    *
    * Um id malformado e 400, nao um cast de BSON estourando como 500.
    */
-  async getQuarantineBatch(db, batchIdRaw, { types } = {}) {
+  async getQuarantineBatch(db, batchIdRaw, { types, organizationScope } = {}) {
     // ObjectId e exigido inline neste arquivo (ver linhas 503/803), nao no topo.
     const { ObjectId } = require('mongodb');
     const raw = String(batchIdRaw || '').trim();
@@ -1141,6 +1157,12 @@ class ImportLGPDService {
     if (!batch) {
       const error = new Error('Lote de quarentena LGPD nao encontrado.');
       error.statusCode = 404;
+      throw error;
+    }
+
+    if (!isBatchInOrganizationScope(batch, organizationScope)) {
+      const error = new Error('Lote de quarentena fora do escopo organizacional do usuario.');
+      error.statusCode = 403;
       throw error;
     }
 
@@ -1176,12 +1198,16 @@ class ImportLGPDService {
    * deles, e transformar "um lote" em "todos os lotes" seria ampliar a
    * exposicao na direcao errada.
    */
-  async listQuarantineBatches(db, { limit = 20, page = 1, types } = {}) {
+  async listQuarantineBatches(db, { limit = 20, page = 1, types, organizationScope } = {}) {
     const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
     const safePage = Math.max(parseInt(page, 10) || 1, 1);
     const skip = (safePage - 1) * safeLimit;
 
     const filter = { type: { $in: normalizeQuarantineTypes(types) } };
+    if (organizationScope) {
+      const { applyOrganizationScopeFilter } = require('./rbac-assignment.service');
+      applyOrganizationScopeFilter(filter, organizationScope, 'organizationIds');
+    }
     const collection = db.collection('import_batches');
 
     const [batches, total] = await Promise.all([
@@ -1258,6 +1284,7 @@ class ImportLGPDService {
         // the matching cursor.
         importOptions: this.sanitizeImportOptions(importOptions),
         createdBy: actor?.userID || actor?.userId || null,
+        organizationIds: stampedOrganizationIds(actor),
         createdAt: now,
         updatedAt: now,
       };
@@ -1366,6 +1393,7 @@ class ImportLGPDService {
       error: errorMessage,
       importOptions: this.sanitizeImportOptions(importOptions),
       createdBy: actor?.userID || actor?.userId || null,
+      organizationIds: stampedOrganizationIds(actor),
       createdAt: now,
       updatedAt: now,
     };
@@ -1559,7 +1587,7 @@ class ImportLGPDService {
    * Only sample batches are resubmittable; a patient batch (#814) is a 404
    * here, like any batch of another type.
    */
-  async resubmitQuarantinedSampleRow(db, batchIdRaw, recordIdRaw, correctedRow, { neo4jDriver = null, actor = {} } = {}) {
+  async resubmitQuarantinedSampleRow(db, batchIdRaw, recordIdRaw, correctedRow, { neo4jDriver = null, actor = {}, organizationScope = null } = {}) {
     const { ObjectId } = require('mongodb');
     const fail = (statusCode, message, extra = {}) => {
       const error = new Error(message);
@@ -1590,6 +1618,9 @@ class ImportLGPDService {
     const batch = await batches.findOne({ _id: batchId, type: QUARANTINE_BATCH_TYPES.SAMPLE });
     if (!batch) {
       throw fail(404, 'Lote de quarentena LGPD nao encontrado.');
+    }
+    if (!isBatchInOrganizationScope(batch, organizationScope)) {
+      throw fail(403, 'Lote de quarentena fora do escopo organizacional do usuario.');
     }
 
     const records = sealedStagingCollection(db.collection('import_staging_records'));

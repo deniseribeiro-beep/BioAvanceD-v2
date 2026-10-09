@@ -46,6 +46,14 @@ const EXEMPT = new Map([
   ['reports.routes.js GET /:type/export/pdf', 'scoped in buildPreviewData per handlerKey (#341)'],
   // Template metadata for a report type -- no organization-owned data.
   ['reports.routes.js GET /:type/filters', 'report-type filter metadata, no organization data'],
+  // Import templates and smart-import column metadata: static files and
+  // global counts, no organization data. The file is scoped by its quarantine
+  // routes (#800 on this branch, #1352).
+  ['import-lgpd.routes.js GET /pacientes/template/csv', 'static import template, no organization data'],
+  ['import-lgpd.routes.js GET /pacientes/template/xlsx', 'static import template, no organization data'],
+  ['import-lgpd.routes.js GET /amostras/template/csv', 'static import template, no organization data'],
+  ['import-lgpd.routes.js GET /amostras/template/xlsx', 'static import template, no organization data'],
+  ['import-lgpd.routes.js GET /pacientes/smart-import/metadata', 'column metadata and a global template count, no organization data'],
 ]);
 
 // NOT exemptions: routes that DO need the gate and do not have it yet, each
@@ -59,6 +67,13 @@ const EXEMPT = new Map([
 // #1211 scoped all thirteen, mutations and reads, and emptied this list. It
 // stays, with its stale check, as the place the next known gap is recorded.
 const TRACKED_UNSCOPED = new Map([
+  // #1353: the LGPD imports write samples and participants with no
+  // organization gate and no tenancy stamp; the reports listing reads their
+  // stored summaries the same way.
+  ['import-lgpd.routes.js POST /pacientes', '#1353'],
+  ['import-lgpd.routes.js POST /pacientes/smart-import', '#1353'],
+  ['import-lgpd.routes.js GET /pacientes/smart-import/reports', '#1353'],
+  ['import-lgpd.routes.js POST /amostras', '#1353'],
 ]);
 
 function routeFiles() {
