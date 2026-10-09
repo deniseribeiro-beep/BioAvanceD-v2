@@ -85,6 +85,7 @@ const ENTITY_TARGETS = {
   RackLocationAssignment: () => require('../../src/models/RackLocationAssignment').fieldsOf(),
   StorageRack: () => require('../../src/models/StorageRack').fieldsOf(),
   StoragePosition: () => require('../../src/models/StoragePosition').fieldsOf(),
+  LabelIdentifier: () => require('../../src/models/LabelIdentifier').fieldsOf(),
   UserRoleAssignment: () => require('../../src/models/UserRoleAssignment').fieldsOf(),
   UserAccount: () => require('../../src/models/User').fieldsOf(),
   Session: () => require('../../src/models/Session').fieldsOf(),
