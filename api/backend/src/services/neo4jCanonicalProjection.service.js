@@ -61,6 +61,12 @@ class Neo4jCanonicalProjectionService {
     if (type === 'TELEMETRY_INCIDENT_RECORDED') {
       return this.applyTelemetryProjection(session, event);
     }
+    if (type === 'STORAGE_POSITION_ASSIGNED') {
+      return this.applyStoragePositionProjection(session, event);
+    }
+    if (type === 'SPECIMEN_COMPROMISED') {
+      return this.applySpecimenCompromiseProjection(session, event);
+    }
     if (type === 'TERMINOLOGY_CONCEPT_PROMOTED') {
       return this.applyTerminologyConceptProjection(session, event);
     }
@@ -315,6 +321,86 @@ class Neo4jCanonicalProjectionService {
       severity: normalizeText(payload.severity || 'UNKNOWN'),
       status: normalizeText(payload.status || 'OPEN'),
       occurredAt: normalizeIso(payload.occurredAt || event.occurredAt) || new Date().toISOString(),
+    });
+    return { projected: true, eventType: event.eventType, specimenId };
+  }
+
+  // #1312: a sample sits in one position at a time, so an earlier STORED_AT
+  // edge to another position is removed before the current one is merged.
+  async applyStoragePositionProjection(session, event) {
+    const payload = event.payload || {};
+    const specimenId = normalizeText(payload.specimenId || event.aggregateId);
+    const boxId = normalizeText(payload.boxId);
+    const position = normalizeText(payload.position);
+    if (!specimenId || !boxId || !position) {
+      return { skipped: true, eventType: event.eventType, specimenId, reason: 'missing specimenId, boxId or position' };
+    }
+
+    const cypher = `
+      MERGE (sample:Sample {id: $specimenId})
+      ON CREATE SET sample.createdAt = datetime(), sample.source = $sourceService
+      SET sample.updatedAt = datetime(),
+          sample.lastProjectionEventId = $eventId,
+          sample.lastProjectionAt = datetime()
+
+      MERGE (pos:StoragePosition {boxId: $boxId, position: $position})
+      ON CREATE SET pos.createdAt = datetime(), pos.source = $sourceService
+      SET pos.updatedAt = datetime()
+
+      WITH sample, pos
+      OPTIONAL MATCH (sample)-[old:STORED_AT]->(other:StoragePosition)
+      WHERE other <> pos
+      DELETE old
+
+      WITH DISTINCT sample, pos
+      MERGE (sample)-[r:STORED_AT]->(pos)
+      ON CREATE SET r.createdAt = datetime(), r.source = $sourceService
+      SET r.updatedAt = datetime(), r.schemaVersion = $schemaVersion, r.eventId = $eventId
+
+      RETURN sample.id AS specimenId, pos.boxId AS boxId, pos.position AS position
+    `;
+
+    await session.run(cypher, {
+      specimenId,
+      boxId,
+      position,
+      schemaVersion: Number(event.schemaVersion || 1),
+      sourceService: normalizeText(event.sourceService) || 'unknown',
+      eventId: normalizeText(event.eventId),
+    });
+    return { projected: true, eventType: event.eventType, specimenId };
+  }
+
+  // #1312: the root sample and every descendant reachable through
+  // DERIVED_FROM (child -> parent, so walked backwards from the root, *0..
+  // to include the root itself). A root not yet projected marks nothing.
+  async applySpecimenCompromiseProjection(session, event) {
+    const payload = event.payload || {};
+    const specimenId = normalizeText(payload.specimenId || event.aggregateId);
+    if (!specimenId) {
+      return { skipped: true, eventType: event.eventType, specimenId, reason: 'missing specimenId' };
+    }
+
+    const cypher = `
+      MATCH (root:Sample {id: $specimenId})
+      OPTIONAL MATCH (root)<-[:DERIVED_FROM*0..]-(descendant:Sample)
+      WITH collect(DISTINCT root) + collect(DISTINCT descendant) AS samples
+      UNWIND samples AS sample
+      WITH DISTINCT sample WHERE sample IS NOT NULL
+      SET sample.status = 'COMPROMISED',
+          sample.compromisedAt = coalesce(sample.compromisedAt, datetime()),
+          sample.compromiseFreezerKey = $freezerKey,
+          sample.compromiseBreachedSince = $breachedSince,
+          sample.lastProjectionEventId = $eventId,
+          sample.lastProjectionAt = datetime()
+      RETURN count(sample) AS compromisedCount
+    `;
+
+    await session.run(cypher, {
+      specimenId,
+      freezerKey: normalizeText(payload.freezerKey) || null,
+      breachedSince: normalizeIso(payload.breachedSince),
+      eventId: normalizeText(event.eventId),
     });
     return { projected: true, eventType: event.eventType, specimenId };
   }

@@ -101,6 +101,44 @@ class GraphProjectionService {
     });
   }
 
+  // #1312 (RF023 AC8): a sample's current storage position, written by
+  // storageService's allocation. Projected as the canonical
+  // Sample-[:STORED_AT]->StoragePosition {boxId, position}.
+  async appendStoragePositionEvent(db, payload) {
+    return this.outbox.appendEvent(db, {
+      eventType: 'STORAGE_POSITION_ASSIGNED',
+      aggregateType: 'Sample',
+      aggregateId: String(payload.specimenId || ''),
+      payload: {
+        specimenId: payload.specimenId ? String(payload.specimenId) : null,
+        boxId: payload.boxId ? String(payload.boxId) : null,
+        position: payload.position || null,
+      },
+      sourceService: payload.sourceService || 'graph-projection-service',
+      traceId: payload.traceId || null,
+      schemaVersion: 1,
+    });
+  }
+
+  // #1312 (RF023 AC8/AC9, RNF019 C8): a sustained freezer excursion marks the
+  // root sample and its descendants COMPROMISED. The event carries the
+  // excursion (freezer and start), never a temperature reading.
+  async appendSpecimenCompromiseEvent(db, payload) {
+    return this.outbox.appendEvent(db, {
+      eventType: 'SPECIMEN_COMPROMISED',
+      aggregateType: 'Sample',
+      aggregateId: String(payload.specimenId || ''),
+      payload: {
+        specimenId: payload.specimenId ? String(payload.specimenId) : null,
+        freezerKey: payload.freezerKey ? String(payload.freezerKey) : null,
+        breachedSince: payload.breachedSince || null,
+      },
+      sourceService: payload.sourceService || 'graph-projection-service',
+      traceId: payload.traceId || null,
+      schemaVersion: 1,
+    });
+  }
+
   // RF028 AC9: "Persistir primeiro no MongoDB e projetar no Neo4j
   // exclusivamente pelo outbox" — appended by reference-imports/pipeline.js's
   // promote() on the same write that inserts a TerminologyConcept, same

@@ -198,32 +198,30 @@ describe('TelemetryMonitor', () => {
   });
 
   describe('runCycle()', () => {
-    it('logs a warning and returns early without calling getNeo4jDriver when db is falsy', async () => {
-      const getNeo4jDriver = vi.fn();
-      const monitor = new TelemetryMonitor({ db: null, getNeo4jDriver });
-
-      await monitor.runCycle();
-
-      expect(loggerWarnSpy).toHaveBeenCalledWith(expect.stringContaining('Banco Mongo indisponível'));
-      expect(getNeo4jDriver).not.toHaveBeenCalled();
-    });
-
-    it('logs a warning and returns early without calling findCriticalFreezers when neo4j driver is falsy', async () => {
-      const getNeo4jDriver = vi.fn().mockResolvedValue(null);
-      const monitor = new TelemetryMonitor({ db: {}, getNeo4jDriver });
+    it('logs a warning and returns early without calling findCriticalFreezers when db is falsy', async () => {
+      const monitor = new TelemetryMonitor({ db: null });
       monitor.findCriticalFreezers = vi.fn();
 
       await monitor.runCycle();
 
-      expect(getNeo4jDriver).toHaveBeenCalledTimes(1);
-      expect(loggerWarnSpy).toHaveBeenCalledWith(expect.stringContaining('Neo4j indisponível'));
+      expect(loggerWarnSpy).toHaveBeenCalledWith(expect.stringContaining('Banco Mongo indisponível'));
       expect(monitor.findCriticalFreezers).not.toHaveBeenCalled();
     });
 
+    // #1312: the cycle no longer needs a Neo4j connection; compromise reaches
+    // the graph through the outbox.
+    it('runs findCriticalFreezers with no Neo4j connection at all', async () => {
+      const monitor = new TelemetryMonitor({ db: {} });
+      monitor.checkMissingReadings = vi.fn().mockResolvedValue([]);
+      monitor.findCriticalFreezers = vi.fn().mockResolvedValue([]);
+
+      await monitor.runCycle();
+
+      expect(monitor.findCriticalFreezers).toHaveBeenCalledTimes(1);
+    });
+
     it('returns early (without calling propagateCompromise) when findCriticalFreezers returns an empty array', async () => {
-      const neo4jDriver = { session: vi.fn() };
-      const getNeo4jDriver = vi.fn().mockResolvedValue(neo4jDriver);
-      const monitor = new TelemetryMonitor({ db: {}, getNeo4jDriver });
+      const monitor = new TelemetryMonitor({ db: {} });
       monitor.findCriticalFreezers = vi.fn().mockResolvedValue([]);
       monitor.propagateCompromise = vi.fn();
 
@@ -233,10 +231,8 @@ describe('TelemetryMonitor', () => {
       expect(monitor.propagateCompromise).not.toHaveBeenCalled();
     });
 
-    it('calls propagateCompromise once per critical freezer entry with mapped fields', async () => {
-      const neo4jDriver = { session: vi.fn() };
-      const getNeo4jDriver = vi.fn().mockResolvedValue(neo4jDriver);
-      const monitor = new TelemetryMonitor({ db: {}, getNeo4jDriver });
+    it('calls propagateCompromise once per critical freezer entry with mapped fields, and no temperature', async () => {
+      const monitor = new TelemetryMonitor({ db: {} });
 
       const entries = [
         { rootSampleId: 'sample-1', freezerKey: 'freezer-A', breachedSince: 'ts-1', maxObservedTemp: -50 },
@@ -249,18 +245,14 @@ describe('TelemetryMonitor', () => {
 
       expect(monitor.propagateCompromise).toHaveBeenCalledTimes(2);
       expect(monitor.propagateCompromise).toHaveBeenNthCalledWith(1, {
-        neo4jDriver,
         rootSampleId: 'sample-1',
         freezerKey: 'freezer-A',
-        breachedSince: 'ts-1',
-        maxObservedTemp: -50
+        breachedSince: 'ts-1'
       });
       expect(monitor.propagateCompromise).toHaveBeenNthCalledWith(2, {
-        neo4jDriver,
         rootSampleId: 'sample-2',
         freezerKey: 'freezer-B',
-        breachedSince: 'ts-2',
-        maxObservedTemp: -40
+        breachedSince: 'ts-2'
       });
     });
   });
@@ -654,98 +646,68 @@ describe('TelemetryMonitor', () => {
     });
   });
 
+  // #1312: propagation is an outbox append; the projector does the graph
+  // write (neo4jCanonicalProjection.service's SPECIMEN_COMPROMISED handler).
   describe('propagateCompromise()', () => {
-    function fakeSession(records) {
-      return {
-        run: vi.fn().mockResolvedValue({ records }),
-        close: vi.fn().mockResolvedValue(undefined)
-      };
-    }
-
-    function fakeRecord(compromisedCount) {
-      return { get: vi.fn((key) => (key === 'compromisedCount' ? { toNumber: () => compromisedCount } : undefined)) };
+    function fakeProjection() {
+      return { appendSpecimenCompromiseEvent: vi.fn().mockResolvedValue({ eventId: 'evt-1' }) };
     }
 
     it('logs the expected message shape and returns undefined', async () => {
-      const session = fakeSession([fakeRecord(2)]);
-      const neo4jDriver = { session: vi.fn().mockReturnValue(session) };
-      const monitor = new TelemetryMonitor({});
-      const args = {
-        neo4jDriver,
+      const graphProjection = fakeProjection();
+      const monitor = new TelemetryMonitor({ db: {}, graphProjection });
+
+      await expect(monitor.propagateCompromise({
         rootSampleId: 'sample-1',
         freezerKey: 'freezer-A',
-        breachedSince: '2026-01-01T00:00:00.000Z',
-        maxObservedTemp: -50
-      };
-
-      await expect(monitor.propagateCompromise(args)).resolves.toBeUndefined();
+        breachedSince: '2026-01-01T00:00:00.000Z'
+      })).resolves.toBeUndefined();
       expect(loggerInfoSpy).toHaveBeenCalledWith(
         expect.stringContaining('Propagando comprometimento: freezer=freezer-A, sample=sample-1')
       );
     });
 
-    it('opens a Neo4j session against the configured database and marks the root + descendant Sample nodes COMPROMISED', async () => {
-      const session = fakeSession([fakeRecord(3)]);
-      const neo4jDriver = { session: vi.fn().mockReturnValue(session) };
-      const monitor = new TelemetryMonitor({ database: 'neo4j' });
+    it('appends SPECIMEN_COMPROMISED for the root sample with the excursion, and no temperature reading', async () => {
+      const db = {};
+      const graphProjection = fakeProjection();
+      const monitor = new TelemetryMonitor({ db, graphProjection });
 
       await monitor.propagateCompromise({
-        neo4jDriver,
         rootSampleId: 'sample-1',
         freezerKey: 'freezer-A',
         breachedSince: '2026-01-01T00:00:00.000Z',
         maxObservedTemp: -50
       });
 
-      expect(neo4jDriver.session).toHaveBeenCalledWith({ database: 'neo4j' });
-      expect(session.run).toHaveBeenCalledWith(
-        expect.stringContaining('SET sample.status = \'COMPROMISED\''),
-        {
-          rootSampleId: 'sample-1',
-          freezerKey: 'freezer-A',
-          breachedSince: '2026-01-01T00:00:00.000Z',
-          maxObservedTemp: -50
-        }
-      );
-      expect(session.close).toHaveBeenCalled();
+      expect(graphProjection.appendSpecimenCompromiseEvent).toHaveBeenCalledTimes(1);
+      const [calledDb, payload] = graphProjection.appendSpecimenCompromiseEvent.mock.calls[0];
+      expect(calledDb).toBe(db);
+      expect(payload).toEqual({
+        specimenId: 'sample-1',
+        freezerKey: 'freezer-A',
+        breachedSince: '2026-01-01T00:00:00.000Z',
+        sourceService: 'telemetry-monitor'
+      });
     });
 
-    it('closes the session even when the write throws', async () => {
-      const session = {
-        run: vi.fn().mockRejectedValue(new Error('boom')),
-        close: vi.fn().mockResolvedValue(undefined)
-      };
-      const neo4jDriver = { session: vi.fn().mockReturnValue(session) };
-      const monitor = new TelemetryMonitor({});
+    it('surfaces an append failure', async () => {
+      const graphProjection = { appendSpecimenCompromiseEvent: vi.fn().mockRejectedValue(new Error('boom')) };
+      const monitor = new TelemetryMonitor({ db: {}, graphProjection });
 
       await expect(
-        monitor.propagateCompromise({
-          neo4jDriver,
-          rootSampleId: 'sample-1',
-          freezerKey: 'freezer-A',
-          breachedSince: null,
-          maxObservedTemp: -50
-        })
+        monitor.propagateCompromise({ rootSampleId: 'sample-1', freezerKey: 'freezer-A', breachedSince: null })
       ).rejects.toThrow('boom');
-
-      expect(session.close).toHaveBeenCalled();
     });
 
-    it('skips the Neo4j write entirely when rootSampleId is null (no root sample resolved for the freezer)', async () => {
-      const neo4jDriver = { session: vi.fn() };
-      const monitor = new TelemetryMonitor({});
+    it('appends nothing when rootSampleId is null (no root sample resolved for the freezer)', async () => {
+      const graphProjection = fakeProjection();
+      const monitor = new TelemetryMonitor({ db: {}, graphProjection });
 
       await expect(
-        monitor.propagateCompromise({
-          neo4jDriver,
-          rootSampleId: null,
-          freezerKey: 'freezer-A',
-          breachedSince: null,
-          maxObservedTemp: -50
-        })
+        monitor.propagateCompromise({ rootSampleId: null, freezerKey: 'freezer-A', breachedSince: null })
       ).resolves.toBeUndefined();
 
-      expect(neo4jDriver.session).not.toHaveBeenCalled();
+      expect(graphProjection.appendSpecimenCompromiseEvent).not.toHaveBeenCalled();
     });
   });
 });

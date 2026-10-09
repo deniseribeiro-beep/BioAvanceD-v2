@@ -10,6 +10,7 @@ const {
 } = require('../database/influxdb/connection');
 const EnvironmentalExcursionModel = require('../../models/EnvironmentalExcursion');
 const { quarantineByColdChainIncident } = require('../../services/equipment-sensor-quarantine.service');
+const { GraphProjectionService } = require('../../services/graphProjection.service');
 
 // #688: TemperaturePolicy.schema.js's minimumDuration is in MINUTES (see
 // that file's field comment), while criticalDurationHours below is in
@@ -18,21 +19,21 @@ const { quarantineByColdChainIncident } = require('../../services/equipment-sens
 const MINUTES_PER_HOUR = 60;
 
 /**
- * Monitor de Telemetria (InfluxDB -> Neo4j)
+ * Monitor de Telemetria (InfluxDB -> outbox -> Neo4j)
  *
  * Se a temperatura ficar acima do limite crítico (ex.: -80°C) por > N horas,
- * marca amostra raiz como COMPROMETIDA e propaga para descendentes no grafo.
+ * registra no outbox o comprometimento da amostra raiz, que a projeção
+ * propaga para os descendentes no grafo (#1312).
  */
 class TelemetryMonitor {
   constructor(options = {}) {
     this.db = options.db;
-    this.getNeo4jDriver = options.getNeo4jDriver;
+    this.graphProjection = options.graphProjection || new GraphProjectionService();
     this.cronExpression = options.cronExpression || process.env.TELEMETRY_MONITOR_CRON || '*/5 * * * *';
     this.criticalTemp = Number(options.criticalTemp ?? process.env.TELEMETRY_CRITICAL_TEMP ?? -80);
     this.criticalDurationHours = Number(options.criticalDurationHours ?? process.env.TELEMETRY_CRITICAL_DURATION_HOURS ?? 2);
     this.lookbackHours = Number(options.lookbackHours ?? process.env.TELEMETRY_LOOKBACK_HOURS ?? Math.max(3, this.criticalDurationHours + 1));
     this.triggerCooldownMinutes = Number(options.triggerCooldownMinutes ?? process.env.TELEMETRY_TRIGGER_COOLDOWN_MINUTES ?? 30);
-    this.database = options.database || process.env.NEO4J_DATABASE || 'neo4j';
     // AC#4 "leituras ausentes": a sensor with no InfluxDB point in this
     // many minutes is treated as missing, distinct from criticalDurationHours
     // (which governs the sustained out-of-range case, not absence).
@@ -81,23 +82,15 @@ class TelemetryMonitor {
       logger.error('[ISO20387][TELEMETRY] Falha ao verificar leituras ausentes:', error.message || error);
     }
 
-    const neo4jDriver = this.getNeo4jDriver ? await this.getNeo4jDriver() : null;
-    if (!neo4jDriver) {
-      logger.warn('[ISO20387][TELEMETRY] Neo4j indisponível; ciclo ignorado');
-      return;
-    }
     const criticalFreezers = await this.findCriticalFreezers();
     if (criticalFreezers.length === 0) {
       return;
     }
     for (const critical of criticalFreezers) {
-      // Aqui você pode implementar a lógica de propagação para samples comprometidas
       await this.propagateCompromise({
-        neo4jDriver,
         rootSampleId: critical.rootSampleId,
         freezerKey: critical.freezerKey,
-        breachedSince: critical.breachedSince,
-        maxObservedTemp: critical.maxObservedTemp
+        breachedSince: critical.breachedSince
       });
     }
   }
@@ -401,13 +394,12 @@ class TelemetryMonitor {
     return missingSensors;
   }
 
-  // AC#6 (real Neo4j write, #304): marks the root sample node COMPROMISED
-  // and propagates the same status to every descendant reachable via
-  // DERIVED_FROM (child -[:DERIVED_FROM]-> parent, per
-  // neo4jCanonicalProjection.service.js/LineageRepository.js — so
-  // descendants of root are matched by walking DERIVED_FROM backwards from
-  // root, `*0..` to include root itself in one write).
-  async propagateCompromise({ neo4jDriver, rootSampleId, freezerKey, breachedSince, maxObservedTemp }) {
+  // AC#6 (#304), through the outbox since #1312 (RF023 AC8/AC9, RNF019 C8):
+  // appends SPECIMEN_COMPROMISED for the root sample, and the projector marks
+  // it and every DERIVED_FROM descendant COMPROMISED. No request or job
+  // writes Neo4j directly, and the event carries the excursion (freezer and
+  // start), never the temperature reading itself.
+  async propagateCompromise({ rootSampleId, freezerKey, breachedSince }) {
     logger.info(`[ISO20387][TELEMETRY] Propagando comprometimento: freezer=${freezerKey}, sample=${rootSampleId}`);
 
     if (!rootSampleId) {
@@ -415,35 +407,13 @@ class TelemetryMonitor {
       return;
     }
 
-    const session = neo4jDriver.session({ database: this.database });
-    try {
-      const result = await session.run(
-        `
-          MATCH (root:Sample {id: $rootSampleId})
-          OPTIONAL MATCH (root)<-[:DERIVED_FROM*0..]-(descendant:Sample)
-          WITH collect(DISTINCT root) + collect(DISTINCT descendant) AS samples
-          UNWIND samples AS sample
-          WITH DISTINCT sample WHERE sample IS NOT NULL
-          SET sample.status = 'COMPROMISED',
-              sample.compromisedAt = coalesce(sample.compromisedAt, datetime()),
-              sample.compromiseFreezerKey = $freezerKey,
-              sample.compromiseBreachedSince = $breachedSince,
-              sample.compromiseMaxObservedTemp = $maxObservedTemp
-          RETURN count(sample) AS compromisedCount
-        `,
-        {
-          rootSampleId: String(rootSampleId),
-          freezerKey,
-          breachedSince: breachedSince ? new Date(breachedSince).toISOString() : null,
-          maxObservedTemp: maxObservedTemp ?? null
-        }
-      );
-
-      const compromisedCount = result.records[0]?.get('compromisedCount')?.toNumber?.() ?? 0;
-      logger.info(`[ISO20387][TELEMETRY] ${compromisedCount} amostra(s) marcadas COMPROMISED para freezer=${freezerKey}`);
-    } finally {
-      await session.close();
-    }
+    await this.graphProjection.appendSpecimenCompromiseEvent(this.db, {
+      specimenId: String(rootSampleId),
+      freezerKey,
+      breachedSince: breachedSince ? new Date(breachedSince).toISOString() : null,
+      sourceService: 'telemetry-monitor',
+    });
+    logger.info(`[ISO20387][TELEMETRY] SPECIMEN_COMPROMISED registrado no outbox para freezer=${freezerKey}`);
   }
 }
 

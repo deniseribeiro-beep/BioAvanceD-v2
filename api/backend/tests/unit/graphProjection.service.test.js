@@ -234,6 +234,42 @@ describe('graphProjection.service', () => {
     });
   });
 
+  // #1312: the two writers that used to MERGE into Neo4j directly.
+  describe('appendStoragePositionEvent', () => {
+    it('emits STORAGE_POSITION_ASSIGNED keyed by the sample, with box and position as strings', async () => {
+      const outbox = createFakeOutbox();
+      const service = new GraphProjectionService({ outbox });
+
+      await service.appendStoragePositionEvent({}, { specimenId: { toString: () => 's-9' }, boxId: 'box-1', position: 'B2', sourceService: 'storage-service' });
+
+      const call = outbox.appendEvent.mock.calls[0][1];
+      expect(call.eventType).toBe('STORAGE_POSITION_ASSIGNED');
+      expect(call.aggregateType).toBe('Sample');
+      expect(call.aggregateId).toBe('s-9');
+      expect(call.sourceService).toBe('storage-service');
+      expect(call.payload).toEqual({ specimenId: 's-9', boxId: 'box-1', position: 'B2' });
+    });
+  });
+
+  describe('appendSpecimenCompromiseEvent', () => {
+    it('emits SPECIMEN_COMPROMISED with the excursion and drops any temperature field', async () => {
+      const outbox = createFakeOutbox();
+      const service = new GraphProjectionService({ outbox });
+
+      await service.appendSpecimenCompromiseEvent({}, {
+        specimenId: 's-1',
+        freezerKey: 'freezer-A',
+        breachedSince: '2026-01-01T00:00:00.000Z',
+        maxObservedTemp: -50,
+      });
+
+      const call = outbox.appendEvent.mock.calls[0][1];
+      expect(call.eventType).toBe('SPECIMEN_COMPROMISED');
+      expect(call.aggregateId).toBe('s-1');
+      expect(call.payload).toEqual({ specimenId: 's-1', freezerKey: 'freezer-A', breachedSince: '2026-01-01T00:00:00.000Z' });
+    });
+  });
+
   describe('appendTelemetryEvent', () => {
     it('emits TELEMETRY_INCIDENT_RECORDED with provided fields', async () => {
       const outbox = createFakeOutbox();

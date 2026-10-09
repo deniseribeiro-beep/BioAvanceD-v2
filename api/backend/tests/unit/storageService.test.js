@@ -241,8 +241,11 @@ describe('StorageService.autoAssignSampleToBox', () => {
   let counters;
   let db;
   let service;
+  // #1312: the placement reaches the graph only as an outbox event.
+  let graphProjection;
 
   beforeEach(() => {
+    graphProjection = { appendStoragePositionEvent: vi.fn().mockResolvedValue({ eventId: 'evt-1' }) };
     boxesFindOne = vi.fn();
     boxesUpdateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
     samplesFindOne = vi.fn();
@@ -292,10 +295,10 @@ describe('StorageService.autoAssignSampleToBox', () => {
       // both derive the session from (`db?.client || db?.s?.client`).
       client: { startSession: vi.fn(() => makeSession()) }
     });
-    service = new StorageService(db);
+    service = new StorageService(db, { graphProjection });
   });
 
-  it('happy path: finds the first free position and allocates the specimen there (no neo4j configured)', async () => {
+  it('happy path: finds the first free position and allocates the specimen there', async () => {
     const boxId = new ObjectId();
     const specimenId = new ObjectId();
 
@@ -316,7 +319,7 @@ describe('StorageService.autoAssignSampleToBox', () => {
 
     expect(result.success).toBe(true);
     expect(result.sampleLocation.position).toBe('A2');
-    expect(result.graphPersisted).toBe(false);
+    expect(result.graphPersisted).toBe(true);
 
     const boxUpdateCall = boxesUpdateOne.mock.calls[0];
     expect(boxUpdateCall[0][`occupancyGrid.A2`]).toEqual({ $exists: false });
@@ -562,15 +565,9 @@ describe('StorageService.autoAssignSampleToBox', () => {
     expect(boxesUpdateOne).not.toHaveBeenCalled();
   });
 
-  it('persists to Neo4j and reports graphPersisted:true when a driver is configured', async () => {
+  it('#1312: appends STORAGE_POSITION_ASSIGNED to the outbox, never a Neo4j write, and reports graphPersisted:true', async () => {
     const boxId = new ObjectId();
     const specimenId = new ObjectId();
-    const runMock = vi.fn().mockResolvedValue({});
-    const closeMock = vi.fn().mockResolvedValue(undefined);
-    const neo4jSessionMock = vi.fn(() => ({ run: runMock, close: closeMock }));
-    const neo4jDriver = { session: neo4jSessionMock };
-
-    service = new StorageService(db, neo4jDriver);
 
     boxesFindOne.mockResolvedValue({
       _id: boxId,
@@ -585,25 +582,18 @@ describe('StorageService.autoAssignSampleToBox', () => {
 
     expect(result.success).toBe(true);
     expect(result.graphPersisted).toBe(true);
-    expect(neo4jSessionMock).toHaveBeenCalled();
-    expect(runMock).toHaveBeenCalledTimes(1);
-    expect(runMock.mock.calls[0][1]).toMatchObject({
+    expect(graphProjection.appendStoragePositionEvent).toHaveBeenCalledTimes(1);
+    expect(graphProjection.appendStoragePositionEvent).toHaveBeenCalledWith(db, {
       specimenId: specimenId.toString(),
       boxId: boxId.toString(),
-      coordinate: 'A1'
+      position: 'A1',
+      sourceService: 'storage-service'
     });
-    expect(closeMock).toHaveBeenCalled();
   });
 
-  it('#1004: Neo4j MERGE row/column stay consistent with coordinate when the transaction-committed position diverges from the pre-scan', async () => {
+  it('#1004: the event carries the transaction-committed position when it diverges from the pre-scan', async () => {
     const boxId = new ObjectId();
     const specimenId = new ObjectId();
-    const runMock = vi.fn().mockResolvedValue({});
-    const closeMock = vi.fn().mockResolvedValue(undefined);
-    const neo4jSessionMock = vi.fn(() => ({ run: runMock, close: closeMock }));
-    const neo4jDriver = { session: neo4jSessionMock };
-
-    service = new StorageService(db, neo4jDriver);
 
     // Pre-transaction scan sees only A1 occupied -> would pick A2.
     boxesFindOne.mockResolvedValueOnce({
@@ -633,22 +623,15 @@ describe('StorageService.autoAssignSampleToBox', () => {
     expect(result.success).toBe(true);
     expect(result.sampleLocation.position).toBe('A3');
 
-    const mergeParams = runMock.mock.calls[0][1];
-    // The MERGE must describe a single, self-consistent position: rowLetter
-    // and column must match coordinate, not the stale pre-transaction scan
-    // (which would have decomposed to row 'A', column 2).
-    expect(mergeParams.coordinate).toBe('A3');
-    expect(mergeParams.rowLetter).toBe('A');
-    expect(mergeParams.column).toBe(3);
+    // The event names the committed slot, never the stale pre-transaction
+    // scan's A2.
+    expect(graphProjection.appendStoragePositionEvent.mock.calls[0][1].position).toBe('A3');
   });
 
-  it('rolls back the Mongo allocation when the Neo4j sync fails, and surfaces the Neo4j error', async () => {
+  it('rolls back the Mongo allocation when the outbox append fails, and surfaces the error', async () => {
     const boxId = new ObjectId();
     const specimenId = new ObjectId();
-    const neo4jError = new Error('neo4j unreachable');
-    const runMock = vi.fn().mockRejectedValue(neo4jError);
-    const closeMock = vi.fn().mockResolvedValue(undefined);
-    const neo4jDriver = { session: vi.fn(() => ({ run: runMock, close: closeMock })) };
+    graphProjection.appendStoragePositionEvent.mockRejectedValue(new Error('outbox unreachable'));
 
     const rollbackBoxUpdate = vi.fn().mockResolvedValue({});
     const rollbackSampleUpdate = vi.fn().mockResolvedValue({});
@@ -680,7 +663,7 @@ describe('StorageService.autoAssignSampleToBox', () => {
       return Promise.resolve({ matchedCount: 1 });
     });
 
-    service = new StorageService(db, neo4jDriver);
+    service = new StorageService(db, { graphProjection });
 
     boxesFindOne.mockResolvedValue({
       _id: boxId,
@@ -695,10 +678,9 @@ describe('StorageService.autoAssignSampleToBox', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toBe('AUTO_ASSIGNMENT_ERROR');
-    expect(result.message).toBe('neo4j unreachable');
+    expect(result.message).toBe('outbox unreachable');
     expect(rollbackBoxUpdate).toHaveBeenCalledTimes(1);
     expect(rollbackSampleUpdate).toHaveBeenCalledTimes(1);
-    expect(closeMock).toHaveBeenCalled();
   });
 
   // #988 Part 1: same topology refusal MongoStorageRepository.withTransaction
@@ -794,7 +776,7 @@ describe('StorageService.autoAssignSampleToBox', () => {
       // the session in its own finally, so the ordering assertion below (audit
       // write BEFORE endSession) still measures the same thing.
       db.client = { ...db.client, startSession: vi.fn(() => txSession) };
-      service = new StorageService(db);
+      service = new StorageService(db, { graphProjection });
 
       boxesFindOne.mockResolvedValue({
         _id: boxId,

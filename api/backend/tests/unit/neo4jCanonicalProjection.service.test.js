@@ -252,6 +252,59 @@ describe('neo4jCanonicalProjection.service', () => {
     });
   });
 
+  // #1312: the placement and the cold-chain compromise, projected from the
+  // outbox instead of written by storageService and TelemetryMonitor.
+  describe('#1312 storage and compromise projections', () => {
+    it('routes STORAGE_POSITION_ASSIGNED to a canonical STORED_AT, replacing an earlier position', async () => {
+      const service = new Neo4jCanonicalProjectionService();
+      const session = makeSession();
+      const result = await service.applyEvent(session, {
+        eventType: 'STORAGE_POSITION_ASSIGNED',
+        eventId: 'evt-s',
+        payload: { specimenId: 'sample-1', boxId: 'box-1', position: 'A3' },
+      });
+      expect(result).toMatchObject({ projected: true, specimenId: 'sample-1' });
+      const [cypher, params] = session.run.mock.calls[0];
+      expect(cypher).toContain('MERGE (pos:StoragePosition {boxId: $boxId, position: $position})');
+      expect(cypher).toContain('DELETE old');
+      expect(cypher).toContain('MERGE (sample)-[r:STORED_AT]->(pos)');
+      expect(cypher).not.toContain('STORED_IN');
+      expect(params).toMatchObject({ specimenId: 'sample-1', boxId: 'box-1', position: 'A3', eventId: 'evt-s' });
+    });
+
+    it('skips a STORAGE_POSITION_ASSIGNED missing its box or position, writing nothing', async () => {
+      const service = new Neo4jCanonicalProjectionService();
+      const session = makeSession();
+      const result = await service.applyEvent(session, { eventType: 'STORAGE_POSITION_ASSIGNED', payload: { specimenId: 'sample-1', boxId: 'box-1' } });
+      expect(result.skipped).toBe(true);
+      expect(session.run).not.toHaveBeenCalled();
+    });
+
+    it('routes SPECIMEN_COMPROMISED to the root and its DERIVED_FROM descendants, with no temperature', async () => {
+      const service = new Neo4jCanonicalProjectionService();
+      const session = makeSession();
+      const result = await service.applyEvent(session, {
+        eventType: 'SPECIMEN_COMPROMISED',
+        eventId: 'evt-c',
+        payload: { specimenId: 'root-1', freezerKey: 'freezer-A', breachedSince: '2026-01-01T00:00:00Z', maxObservedTemp: -50 },
+      });
+      expect(result).toMatchObject({ projected: true, specimenId: 'root-1' });
+      const [cypher, params] = session.run.mock.calls[0];
+      expect(cypher).toContain('(root)<-[:DERIVED_FROM*0..]-(descendant:Sample)');
+      expect(cypher).toContain("SET sample.status = 'COMPROMISED'");
+      expect(cypher).not.toContain('Temp');
+      expect(params).toEqual({ specimenId: 'root-1', freezerKey: 'freezer-A', breachedSince: '2026-01-01T00:00:00.000Z', eventId: 'evt-c' });
+    });
+
+    it('skips a SPECIMEN_COMPROMISED with no sample, writing nothing', async () => {
+      const service = new Neo4jCanonicalProjectionService();
+      const session = makeSession();
+      const result = await service.applyEvent(session, { eventType: 'SPECIMEN_COMPROMISED', payload: {} });
+      expect(result.skipped).toBe(true);
+      expect(session.run).not.toHaveBeenCalled();
+    });
+  });
+
   describe('applyQualityProjection', () => {
     it('projects score and evaluatedAt from payload', async () => {
       const service = new Neo4jCanonicalProjectionService();

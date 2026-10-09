@@ -254,24 +254,10 @@ async function startServer() {
       app.locals.topologicalQuarantine = null;
     }
 
-    // Monitor de telemetria com invalidação em cascata no Neo4j
+    // Monitor de telemetria: a invalidação em cascata chega ao Neo4j pelo
+    // outbox (#1312), então o monitor não abre conexão com o grafo.
     try {
-      const telemetryMonitor = new TelemetryMonitor({
-        db,
-        getNeo4jDriver: async () => {
-          if (app.locals.neo4jDriver) {
-            return app.locals.neo4jDriver;
-          }
-
-          try {
-            app.locals.neo4jDriver = await connectNeo4j();
-            return app.locals.neo4jDriver;
-          } catch (error) {
-            logger.warn('[ISO20387][TELEMETRY] Neo4j indisponível para ciclo de monitoramento');
-            return null;
-          }
-        }
-      });
+      const telemetryMonitor = new TelemetryMonitor({ db });
 
       telemetryMonitor.start();
       app.locals.telemetryMonitor = telemetryMonitor;

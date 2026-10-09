@@ -22,7 +22,7 @@ function createAutoAssignSampleController() {
         });
       }
 
-      const storageService = new StorageService(db, req.app.locals.neo4jDriver || null);
+      const storageService = new StorageService(db);
       const result = await storageService.autoAssignSampleToBox(sampleId, boxId);
 
       if (!result.success) {

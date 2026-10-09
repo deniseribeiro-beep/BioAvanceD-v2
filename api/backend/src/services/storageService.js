@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 const { ObjectId } = require('mongodb'); // Native MongoDB driver para evitar conflitos BSON
-const env = require('../config/env');
 const logger = require('../utils/logger');
+const { GraphProjectionService } = require('./graphProjection.service');
 const { getCollection } = require('../utils/collectionResolver');
 const MongoStorageRepository = require('../infrastructure/persistence/mongo/MongoStorageRepository');
 const MongoAuditRepository = require('../infrastructure/persistence/mongo/MongoAuditRepository');
@@ -36,9 +36,10 @@ const STANDALONE_DEPLOYMENT_TRANSACTION_ERROR =
  * RFC: ISO 20387 compliance
  */
 class StorageService {
-  constructor(db, neo4jDriver = null) {
+  // #1312: no Neo4j driver. The graph is reached only through the outbox.
+  constructor(db, options = {}) {
     this.db = db;
-    this.neo4jDriver = neo4jDriver || db?.neo4jDriver || null;
+    this.graphProjection = options?.graphProjection || new GraphProjectionService();
     this.storageRepository = new MongoStorageRepository(db);
     this.auditRepository = new MongoAuditRepository(db);
   }
@@ -175,64 +176,25 @@ class StorageService {
         );
       });
 
-      // #1004: rowLetter/column must be derived from assignedPosition (the
-      // transaction-committed position from the in-transaction re-scan), not
-      // from nextPosition (the pre-transaction scan). The two can diverge
-      // when a concurrent request claims the pre-scanned slot -- that is the
-      // designed retry behaviour of session.withTransaction -- and decomposing
-      // the stale nextPosition here previously fed the Neo4j MERGE below a
-      // self-contradicting coordinate/row/column (e.g. coordinate 'A2' with
-      // row 'A', column 1 derived from a different slot).
-      const canPersistGraph = this.neo4jDriver && typeof this.neo4jDriver.session === 'function';
-      if (canPersistGraph && assignedPosition) {
-        const positionMatch = assignedPosition.match(/^([A-Z])(\d+)$/);
-        const rowLetter = positionMatch?.[1] || 'A';
-        const column = Number(positionMatch?.[2] || 1);
-        const neo4jSession = this.neo4jDriver.session({ database: env.NEO4J_DATABASE || 'neo4j' });
-
+      // #1312 (RF023 AC8): the graph learns the placement through the outbox,
+      // never a direct Neo4j write; the projector writes the canonical
+      // Sample-[:STORED_AT]->StoragePosition. The event carries assignedPosition,
+      // the transaction-committed position, never the pre-transaction scan
+      // (#1004). It is appended after the commit (a transactional append is
+      // the outbox contract's own work), and a failed append rolls the
+      // position back, as a failed direct write did, so Mongo never keeps a
+      // placement the projection was not told about.
+      if (assignedPosition) {
         try {
-          await neo4jSession.run(
-            `
-              MERGE (specimen:Sample:Specimen {specimenId: $specimenId})
-              ON CREATE SET specimen.createdAt = datetime(), specimen.source = 'BioAvanceD'
-              SET specimen.updatedAt = datetime(),
-                  specimen.barcode = coalesce($barcode, specimen.barcode)
-
-              MERGE (box:StorageBox:Box {mongoBoxId: $boxId})
-              ON CREATE SET box.createdAt = datetime(), box.source = 'BioAvanceD'
-              SET box.updatedAt = datetime(),
-                  box.name = coalesce($boxName, box.name)
-
-              MERGE (location:Location:StoragePosition {boxId: $boxId, coordinate: $coordinate})
-              ON CREATE SET location.createdAt = datetime()
-              SET location.updatedAt = datetime(),
-                  location.coordinate = $coordinate,
-                  location.row = $rowLetter,
-                  location.column = $column,
-                  location.capacity = $capacity
-
-              MERGE (specimen)-[:STORED_IN]->(location)
-              MERGE (location)-[:PART_OF]->(box)
-
-              RETURN specimen.specimenId AS specimenId,
-                     location.coordinate AS coordinate,
-                     box.mongoBoxId AS boxId
-            `,
-            {
-              specimenId: String(sampleObjId),
-              boxId: String(boxObjId),
-              barcode: sampleSnapshot?.barcode || null,
-              boxName: boxSnapshot?.name || null,
-              coordinate: assignedPosition,
-              rowLetter,
-              column,
-              capacity: Number(boxSnapshot?.dimension?.rows || 0) * Number(boxSnapshot?.dimension?.cols || 0)
-            }
-          );
-        } catch (neo4jError) {
-          // #994: the second `getMongo()` call site. Same fix, same reason --
-          // this compensation path was equally dead, which is why #988 part 3
-          // (what compensates the compensation) could not even be observed.
+          await this.graphProjection.appendStoragePositionEvent(this.db, {
+            specimenId: String(sampleObjId),
+            boxId: String(boxObjId),
+            position: assignedPosition,
+            sourceService: 'storage-service'
+          });
+        } catch (outboxError) {
+          // #994: the compensation runs through the repository's own
+          // transaction entry point, never a fabricated `getMongo()`.
           await this.storageRepository.withTransaction(async (rollbackSession) => {
             await this.storageRepository.rollbackAutoAssignedPosition(
               { specimenId: sampleObjId, boxId: boxObjId, position: assignedPosition },
@@ -240,9 +202,7 @@ class StorageService {
             );
           });
 
-          throw neo4jError;
-        } finally {
-          await neo4jSession.close();
+          throw outboxError;
         }
       }
 
@@ -250,7 +210,8 @@ class StorageService {
 
       return {
         success: true,
-        graphPersisted: Boolean(this.neo4jDriver && typeof this.neo4jDriver.session === 'function'),
+        // The placement's projection event is recorded; the projector applies it.
+        graphPersisted: Boolean(assignedPosition),
         sampleLocation: {
           specimenId: String(sampleObjId),
           boxId: String(boxObjId),
