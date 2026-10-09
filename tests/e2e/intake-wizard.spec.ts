@@ -1,6 +1,9 @@
 import { test, expect } from '@playwright/test';
 import { mockLogin } from './helpers/mockAuth';
-import { realLogin, realAuthLogin } from './helpers/realAuth';
+import { realLogin, realAuthLogin, seedRealAuth } from './helpers/realAuth';
+import { completeFirstLoginMfa } from './helpers/completeFirstLoginMfa';
+import { deleteOrganizations } from './helpers/listOrganizations';
+import { randomUUID } from 'crypto';
 import {
   createRealParticipant,
   closeSeedDb,
@@ -628,5 +631,136 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
     });
     const scoreComponentCodes = derivedScores[0].scoreComponents.map((c: { condition: { code: string } }) => c.condition.code);
     expect(scoreComponentCodes.sort()).toEqual(['chronicPulmonaryDisease', 'renalDisease']);
+  });
+
+  // #1354/#1355: the intake resolves one organization per submission and
+  // stamps it as the sample's collectionSite and the created participant's
+  // clinicalUnitId, the keys the scoped reads filter on. A caller assigned
+  // to two organizations must name one, through the wizard's picker.
+  const organizationIds: string[] = [];
+
+  test.afterAll(async ({ request }) => {
+    await deleteOrganizations(request, apiBaseURL!, organizationIds);
+  });
+
+  test('a Coordenador assigned to two organizations registers through the wizard, picks the second, and reads the sample and participant back (#1354, #1355)', async ({ page, request }) => {
+    const admin = await realLogin(request);
+    const adminAuth = { Authorization: `Bearer ${admin.token}` };
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    const orgIds: string[] = [];
+    for (const label of ['A', 'B']) {
+      const orgRes = await request.post(`${apiBaseURL}/api/organizations`, {
+        headers: adminAuth,
+        data: { officialName: `#1354 intake ${label} ${suffix}`, countryCode: 'BR' },
+      });
+      expect(orgRes.ok(), await orgRes.text()).toBeTruthy();
+      orgIds.push((await orgRes.json()).data.organizationId as string);
+    }
+    organizationIds.push(...orgIds);
+    const [firstOrg, secondOrg] = orgIds;
+
+    const username = `coord.1354.${Date.now()}`;
+    const password = 'Coordenador@123';
+    const registerRes = await request.post(`${apiBaseURL}/api/users/register`, {
+      headers: adminAuth,
+      data: {
+        name: '#1354 Coordenador Fixture',
+        email: `${username}@example.com`,
+        username,
+        password,
+        accessType: 3,
+        roleName: 'Coordenador',
+        organizationId: firstOrg,
+      },
+    });
+    expect(registerRes.ok(), await registerRes.text()).toBeTruthy();
+
+    // No route gives a user a second organization under the same role (an
+    // organization edit re-scopes every assignment), so the second
+    // assignment is written the way a migrated multi-organization account
+    // holds it: a copy of the first, scoped to the other organization.
+    const db = mongoClient.db(mongoDbName);
+    const user = await db.collection('users').findOne({ username });
+    expect(user, 'the registered fixture user').toBeTruthy();
+    const firstAssignment = await db.collection('userRoleAssignments').findOne({
+      userAccountId: String(user!._id),
+      assignmentStatus: 'active',
+      scopeType: 'organization',
+      scopeId: firstOrg,
+    });
+    expect(firstAssignment, 'the registration grants an assignment scoped to the first organization').toBeTruthy();
+    const { _id: _ignored, ...assignmentFields } = firstAssignment!;
+    await db.collection('userRoleAssignments').insertOne({ ...assignmentFields, assignmentId: randomUUID(), scopeId: secondOrg });
+
+    const coordinator = await completeFirstLoginMfa(request, apiBaseURL!, username, password);
+    const coordinatorAuth = { Authorization: `Bearer ${coordinator.token}` };
+
+    const mine = await request.get(`${apiBaseURL}/api/organizations/mine`, { headers: coordinatorAuth });
+    expect(mine.status(), await mine.text()).toBe(200);
+    const mineData = (await mine.json()).data;
+    expect(mineData.scope).toBe('organization');
+    expect(mineData.organizations.map((org: { organizationId: string }) => org.organizationId).sort()).toEqual([...orgIds].sort());
+
+    await seedRealAuth(page, coordinator);
+    await page.goto('/next/intake');
+    await expect(page.getByTestId('intake-wizard-root')).toBeVisible();
+
+    await page.getByTestId('wizard-full-name').fill(`#1354 e2e patient ${suffix}`);
+    await page.getByTestId('wizard-birth-date').fill('01/01/1990');
+    await page.getByTestId('wizard-gender').selectOption('F');
+    await page.getByTestId('wizard-email').fill(`e2e-1354-${suffix}@example.com`);
+    await page.getByTestId('wizard-document').fill(generateValidCpf());
+    await page.getByTestId('wizard-next-button').click();
+
+    await expect(page.getByTestId('wizard-sprec-axis-1')).toBeVisible();
+    await page.getByTestId('wizard-sprec-matrix').selectOption('fluid');
+    await page.getByTestId('wizard-sample-type').selectOption({ index: 1 });
+    await page.getByTestId('wizard-sample-origin').selectOption({ index: 1 });
+    await page.getByTestId('wizard-extraction-protocol').selectOption({ index: 1 });
+    await page.getByTestId('wizard-sprec-axis-1').selectOption({ index: 1 });
+    await page.getByTestId('wizard-sprec-axis-2').selectOption({ index: 1 });
+    await page.getByTestId('wizard-processing-unknown').check();
+    await page.getByTestId('wizard-sprec-axis-7').selectOption({ index: 1 });
+    await page.getByTestId('wizard-quantity').fill('5');
+    // Two organizations: the picker is shown, and a choice is required.
+    await expect(page.getByTestId('wizard-organization')).toBeVisible();
+    await page.getByTestId('wizard-organization').selectOption(secondOrg);
+    await page.getByTestId('wizard-linked-project').fill(`E2E-1354-${suffix}`);
+    await page.getByTestId('wizard-institution-name').fill('Hospital E2E 1354');
+    await page.getByTestId('wizard-next-button').click();
+
+    await expect(page.getByTestId('wizard-diagnosis-search')).toBeVisible();
+    await page.getByTestId('wizard-diagnosis-search').fill(diseaseLabel);
+    await expect(page.getByTestId('wizard-diagnosis-option-0')).toBeVisible({ timeout: 10_000 });
+    await page.getByTestId('wizard-diagnosis-option-0').click();
+    await expect(page.locator('.phenotype-card', { hasText: phenotypeLabel })).toBeVisible({ timeout: 10_000 });
+    // Required for a clinical sample (MIABIS); NAIVE needs no medication.
+    await page.getByTestId('wizard-treatment-status').selectOption('NAIVE');
+
+    const submissionResponse = page.waitForResponse((response) => response.url().includes('/intake-wizard') && response.request().method() === 'POST');
+    await page.getByTestId('wizard-submit-button').click();
+    const response = await submissionResponse;
+    const rawBody = await response.text();
+    expect(response.ok(), `POST /intake-wizard -> ${response.status()}: ${rawBody.slice(0, 500)}`).toBe(true);
+    const participantId = String((await response.json())?.patientMatch?.patientID || '');
+    expect(participantId).toBeTruthy();
+
+    // Read back through the coordinator's own scoped reads: the sample list
+    // filters on collectionSite, the participant read on clinicalUnitId.
+    const list = await request.get(
+      `${apiBaseURL}/api/samples?participantId=${encodeURIComponent(participantId)}&limit=200`,
+      { headers: coordinatorAuth }
+    );
+    expect(list.status(), await list.text()).toBe(200);
+    const listBody = await list.json();
+    const samples = (listBody?.data?.samples ?? listBody?.data ?? []) as Array<Record<string, unknown>>;
+    expect(samples, 'the scoped coordinator cannot read back the sample it registered').toHaveLength(1);
+    expect(samples[0]).toMatchObject({ collectionSite: secondOrg });
+
+    const participantRes = await request.get(`${apiBaseURL}/api/patients/${encodeURIComponent(participantId)}`, { headers: coordinatorAuth });
+    expect(participantRes.status(), await participantRes.text()).toBe(200);
+    const participant = await db.collection('patients').findOne({ participantId });
+    expect(participant?.clinicalUnitId).toBe(secondOrg);
   });
 });
