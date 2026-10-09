@@ -827,4 +827,65 @@ test.describe('Human-paced e2e showcase reel — W6 collection governance', () =
       await request.delete(`${apiBaseURL}/api/organizations/${organizationId}`, { headers }).catch(() => {});
     }
   });
+
+  // RF010 AC3 (#1349): a term published from the builder names, per permission,
+  // the governed DUO purpose it covers, picked from the active DUO concepts the
+  // real backend lists. The concept is seeded, as tcle-publication-sweep.spec.ts
+  // does, since only the reference import populates terminologyConcepts.
+  test('RF010 AC3 an operator publishes a term whose permission names its DUO purpose', async ({ page, request }) => {
+    const session = await realLogin(request);
+    await seedRealAuth(page, session);
+
+    const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const purposeCode = `DUO:showcase-${stamp}`;
+    const title = `0 Showcase TCLE finalidade ${stamp}`;
+    const client = new MongoClient(process.env.E2E_MONGO_URI || 'mongodb://localhost:27017?directConnection=true');
+    await client.connect();
+    const db = client.db(process.env.E2E_MONGO_DB || 'bioavanced_test');
+    await db.collection('terminologyConcepts').insertOne({
+      terminologyConceptId: `showcase-${stamp}`,
+      systemUri: 'http://purl.obolibrary.org/obo/duo.owl',
+      code: purposeCode,
+      display: 'Pesquisa em saúde, médica ou biomédica (showcase)',
+      conceptStatus: 'active',
+      version: 'showcase',
+      referenceDatasetReleaseId: 'showcase',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    try {
+      await page.goto('/admin/tcle/new');
+      await beat(page, LARGE);
+      await page.getByLabel('Nome do Modelo').fill(title);
+      await page.getByLabel('CAAE').fill('00000000.0.0000.0000');
+      await page.getByLabel('Modalidade de Consentimento').selectOption('broad');
+      await page.getByLabel('Data de Início da Vigência').fill('2026-01-01');
+      await page.getByLabel('Data Final de Vigência').fill('2030-12-31');
+      await beat(page, SMALL);
+      await page.getByRole('textbox', { name: 'Editor do corpo do TCLE' }).fill('Termo de consentimento para pesquisa com amostras do biorrepositório.');
+      await beat(page, SMALL);
+      await page.getByPlaceholder('Ex.: Aceito ceder minhas amostras para estudos genéticos').first().fill('Aceito o uso das minhas amostras em pesquisa em saúde');
+      await beat(page, SMALL);
+
+      // The purpose the permission covers, from the backend's DUO list.
+      const purpose = page.getByTestId('consent-purpose-1');
+      await purpose.scrollIntoViewIfNeeded();
+      await purpose.selectOption(purposeCode);
+      await beat(page, MEDIUM);
+
+      await page.getByRole('button', { name: 'Criar versão do TCLE' }).click();
+      await expect(page.getByRole('alert').filter({ hasText: 'TCLE criado com sucesso' })).toBeVisible({ timeout: 15_000 });
+      await expect(page).toHaveURL(/\/admin\/tcle\/edit\//);
+      await beat(page, LARGE);
+
+      // Stored as a coded permission, the input a partial revocation is judged on.
+      const stored = await db.collection('consent_templates').findOne({ title });
+      expect(stored?.permissions?.[0]).toMatchObject({ purposeCode });
+    } finally {
+      await db.collection('consent_templates').deleteMany({ title });
+      await db.collection('terminologyConcepts').deleteMany({ code: purposeCode });
+      await client.close();
+    }
+  });
 });
