@@ -49,7 +49,9 @@ async function registerLabel(db, data) {
 }
 
 // Returns { resolved, reason, label, containerId, specimenId, scanEvent }.
-async function resolveScan(db, scan, { policy = null, retainRawValue = false } = {}) {
+// `inScope`, when given, is asked about the resolved specimen before any
+// ScanEvent is written, so a scan the caller may not see leaves no event.
+async function resolveScan(db, scan, { policy = null, retainRawValue = false, inScope = null } = {}) {
   const normalizedValue = normalizeScannedValue(scan.rawValue ?? scan.normalizedValue);
   const symbology = String(scan.symbology || '').toLowerCase();
   if (policy && !IdentificationPolicyModel.allows(policy, symbology)) {
@@ -67,6 +69,9 @@ async function resolveScan(db, scan, { policy = null, retainRawValue = false } =
   const open = await (await getCollection(db, 'specimenContainerAssignments')).findOne({ containerId: label.targetId, assignmentStatus: 'active' });
   if (!open) {
     return { resolved: false, reason: 'EMPTY_CONTAINER', normalizedValue, label, containerId: label.targetId };
+  }
+  if (inScope && !(await inScope(open.specimenId))) {
+    return { resolved: false, reason: 'OUT_OF_SCOPE', normalizedValue };
   }
 
   const scanEvent = ScanEventModel.create({

@@ -83,6 +83,19 @@ describe('labelResolver.service (RF016 AC6)', () => {
     });
   });
 
+  it('refuses a specimen the inScope guard denies, before any ScanEvent is written', async () => {
+    const db = await seeded();
+    await physicalChain.loadSpecimen(db, { specimenId: 'SPC-1', containerId: 'CT-1', sourceEventId: 'evt-1' });
+
+    const asked = [];
+    const result = await resolver.resolveScan(db, scan, { inScope: async (specimenId) => { asked.push(specimenId); return false; } });
+
+    expect(result).toMatchObject({ resolved: false, reason: 'OUT_OF_SCOPE' });
+    expect(result.specimenId).toBeUndefined();
+    expect(asked).toEqual(['SPC-1']);
+    expect(db.collections.scanEvents?.docs ?? []).toHaveLength(0);
+  });
+
   it('an empty tube resolves to its container and no specimen, and records no scan (RULE-032)', async () => {
     const db = await seeded();
 

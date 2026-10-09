@@ -43,12 +43,12 @@ const LEGACY_ROLES_SEED = {
     {
       accessType: 3,
       roleName: 'Coordenador',
-      permissions: ['createUser', 'createSample', 'editSample', 'createPatient', 'requestConsent', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageTemperaturePolicy', 'manageSensor', 'recordTemperature', 'viewReports', 'createResult', 'editResult', 'deleteResult', 'manageReportTemplates', 'viewEquipment', 'viewStorageTopology', 'manageStorageAllocation', 'manageStorageTopology'],
+      permissions: ['createUser', 'createSample', 'editSample', 'createPatient', 'requestConsent', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageTemperaturePolicy', 'manageSensor', 'recordTemperature', 'viewReports', 'createResult', 'editResult', 'deleteResult', 'manageReportTemplates', 'viewEquipment', 'viewStorageTopology', 'manageStorageAllocation', 'manageStorageTopology', 'manageCustody'],
     },
     {
       accessType: 4,
       roleName: 'Administrador',
-      permissions: ['createUser', 'assignRole', 'createSample', 'editSample', 'deleteSample', 'createPatient', 'requestConsent', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageTemperaturePolicy', 'manageSensor', 'recordTemperature', 'viewReports', 'manageBackup', 'manageSystem', 'resetMFA', 'forcePasswordReset', 'disableMFA', 'revokeSessions', 'setUserPassword', 'manageOrganizations', 'createResult', 'editResult', 'deleteResult', 'reidentifyParticipant', 'manageAccessRequests', 'manageReportTemplates', 'viewEquipment', 'viewStorageTopology', 'manageStorageAllocation', 'manageStorageTopology'],
+      permissions: ['createUser', 'assignRole', 'createSample', 'editSample', 'deleteSample', 'createPatient', 'requestConsent', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageTemperaturePolicy', 'manageSensor', 'recordTemperature', 'viewReports', 'manageBackup', 'manageSystem', 'resetMFA', 'forcePasswordReset', 'disableMFA', 'revokeSessions', 'setUserPassword', 'manageOrganizations', 'createResult', 'editResult', 'deleteResult', 'reidentifyParticipant', 'manageAccessRequests', 'manageReportTemplates', 'viewEquipment', 'viewStorageTopology', 'manageStorageAllocation', 'manageStorageTopology', 'manageCustody'],
     },
   ],
 };
@@ -178,6 +178,13 @@ const PERMISSION_CATALOG = {
   // (rolePermissions.ts:133 gates /facility-management to STAFF), so the one
   // principal that loses access had no UI path to these routes.
   viewStorageTopology: { resourceType: 'StorageContainer', allowedActions: ['READ'], displayName: 'Visualizar topologia de armazenamento' },
+  // #1316: RF021 names the Coordenador as custody's actor, so the code is
+  // granted to Coordenador + Administrador. Its own code rather than
+  // manageStorageTopology: custody is WHO answers for a specimen, not WHAT
+  // the container tree is. CREATE only: both custody routes are POSTs (an
+  // assignment is closed by POST .../end), and the read takes
+  // viewStorageTopology.
+  manageCustody: { resourceType: 'CustodianshipAssignment', allowedActions: ['CREATE'], displayName: 'Gerenciar custódia' },
   // #1087: the three equipment GETs carried no permission at all, so every
   // authenticated principal could list the inventory -- UsuarioExterno
   // included, whose only seeded grant is viewReports. The sibling route

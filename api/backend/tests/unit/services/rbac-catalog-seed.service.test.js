@@ -357,6 +357,8 @@ describe('rbac-catalog-seed.service', () => {
       // nothing and would let the code later gate a read or a delete the way
       // 'viewTemperature' did before #1073.
       ['requestConsent', ['CREATE']],
+      // #1316: custody's two routes are POSTs.
+      ['manageCustody', ['CREATE']],
     ])('%s allows exactly %j', (permissionCode, expectedActions) => {
       expect(PERMISSION_CATALOG[permissionCode].allowedActions).toEqual(expectedActions);
     });
