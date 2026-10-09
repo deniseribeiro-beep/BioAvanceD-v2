@@ -119,6 +119,9 @@ function buildApp(router, db) {
   const app = express();
   app.use(express.json());
   app.locals.db = db;
+  // #1355: the scope requireOrganizationScope supplies in front of this
+  // router (intakeWizard.routes.js); global, as the fixtures' caller.
+  app.use((req, _res, next) => { req.organizationScope = req.organizationScope || { scope: 'global', organizationIds: [] }; next(); });
   app.use('/api/intake-wizard', router);
   return app;
 }

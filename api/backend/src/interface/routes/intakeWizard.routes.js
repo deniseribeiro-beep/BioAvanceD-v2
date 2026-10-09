@@ -3,7 +3,7 @@ const express = require('express');
 const { ObjectId } = require('mongodb');
 const intakeWizardRouter = require('../../../src/routes/intakeWizard');
 const { authenticate } = require('../../infrastructure/middleware/auth');
-const { requirePermission } = require('../../infrastructure/middleware/rbac');
+const { requirePermission, requireOrganizationScope } = require('../../infrastructure/middleware/rbac');
 const { getCollection } = require('../../utils/collectionResolver');
 const { SampleModel } = require('../../models/Sample');
 const quarantineActionService = require('../../services/quarantine-action.service');
@@ -199,6 +199,8 @@ async function intakeGovernanceResponseGuard(req, res, next) {
   return next();
 }
 
-router.use(authenticate, requirePermission('createSample'), intakeGovernanceResponseGuard, intakeWizardRouter);
+// #1355: the intake writes a sample and may create a participant, both
+// organization-owned, so it resolves the caller's scope like POST /api/samples.
+router.use(authenticate, requirePermission('createSample'), requireOrganizationScope, intakeGovernanceResponseGuard, intakeWizardRouter);
 
 module.exports = router;

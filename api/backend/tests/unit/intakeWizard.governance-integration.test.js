@@ -82,6 +82,8 @@ function loadApp({ consentActive, samplesCollection, quarantineActionsCollection
 
   const rbacModule = require(rbacPath);
   rbacModule.requirePermission = () => (req, res, next) => next();
+  // #1355: the wrapper now mounts requireOrganizationScope too.
+  rbacModule.requireOrganizationScope = (req, res, next) => { req.organizationScope = { scope: 'global', organizationIds: [] }; next(); };
 
   const notificationServiceModule = require(notificationServicePath);
   notificationServiceModule.buildConsentMetadata = vi.fn(() => ({ token: 'tok-1' }));

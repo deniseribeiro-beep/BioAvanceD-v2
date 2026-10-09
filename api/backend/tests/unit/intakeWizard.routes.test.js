@@ -103,6 +103,9 @@ function buildApp(router, db = {}) {
   const app = express();
   app.use(express.json());
   app.locals.db = db;
+  // #1355: the scope requireOrganizationScope supplies in front of this
+  // router (intakeWizard.routes.js); global, as the fixtures' caller.
+  app.use((req, _res, next) => { req.organizationScope = req.organizationScope || { scope: 'global', organizationIds: [] }; next(); });
   app.use('/api/intake-wizard', router);
   return app;
 }
@@ -223,6 +226,72 @@ describe('intakeWizard routes', () => {
       expect(auditLoggerModule.log).toHaveBeenCalledWith(
         expect.objectContaining({ action: 'PATIENT_MATCH_UPSERT' })
       );
+    });
+
+    // #1355: the intake stamps the caller's organization on the sample and on
+    // a participant it creates, resolved before anything is written.
+    describe('organization scope (#1355)', () => {
+      function scopedApp(router, db, organizationScope) {
+        const app = express();
+        app.use(express.json());
+        app.locals.db = db;
+        app.use((req, _res, next) => { req.organizationScope = organizationScope; next(); });
+        app.use('/api/intake-wizard', router);
+        return app;
+      }
+
+      function placementDb() {
+        return {
+          collection: (name) => {
+            if (name === 'sensors') return { find: () => makeCursor([{ sensorId: 'SEN-1', sensorType: 'temperature', locationId: 'EQ-1', maintenanceStatus: 'operational' }]) };
+            if (name === 'equipment') return { findOne: vi.fn().mockResolvedValue({ equipmentID: 'EQ-1', status: 'active' }) };
+            if (name === 'storageBoxes') return { find: () => makeCursor([{ _id: 'box-1', name: 'Box A', status: 'ACTIVE', dimension: { rows: 1, cols: 1 }, currentOccupancy: 0, occupancyGrid: {}, parent_id: 'rack-1' }]) };
+            if (name === 'storageContainers') {
+              return {
+                findOne: vi.fn(async ({ _id }) => ({
+                  'rack-1': { _id: 'rack-1', containerType: 'RACK', parent_id: 'shelf-1' },
+                  'shelf-1': { _id: 'shelf-1', containerType: 'SHELF', parent_id: 'freezer-1' },
+                  'freezer-1': { _id: 'freezer-1', containerType: 'FREEZER', containerID: 'EQ-1' },
+                })[_id] || null),
+              };
+            }
+            throw new Error(`unexpected collection ${name}`);
+          },
+        };
+      }
+
+      it("stamps a single-organization caller's organization as collectionSite and on the participant match", async () => {
+        const getCollectionImpl = vi.fn(async (_db, key) => ({
+          samples: { findOne: vi.fn().mockResolvedValue({ _id: 'sample-1', participantId: '12345678' }), updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) },
+          patients: { updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) },
+          consents: { findOne: vi.fn().mockResolvedValue(null) },
+        })[key]);
+        const { router, patientIdentityServiceModule } = loadRoute({ getCollectionImpl });
+        const sampleServiceModule = require(sampleServicePath);
+        vi.spyOn(sampleServiceModule, 'createSample').mockResolvedValue({ _id: 'sample-1', participantId: '12345678' });
+        const scope = { scope: 'organization', organizationIds: ['org-a'] };
+
+        const res = await request(scopedApp(router, placementDb(), scope)).post('/api/intake-wizard').send(VALID_PAYLOAD);
+
+        expect(res.status).toBe(200);
+        expect(sampleServiceModule.createSample.mock.calls[0][1].collectionSite).toBe('org-a');
+        const [, payload, options] = patientIdentityServiceModule.matchOrUpsertParticipant.mock.calls[0];
+        expect(payload.clinicalUnitId).toBe('org-a');
+        expect(options).toEqual({ organizationScope: scope });
+      });
+
+      it('refuses a multi-organization caller who names no collectionSite, writing nothing', async () => {
+        const { router, patientIdentityServiceModule } = loadRoute();
+        const sampleServiceModule = require(sampleServicePath);
+        vi.spyOn(sampleServiceModule, 'createSample');
+
+        const res = await request(scopedApp(router, placementDb(), { scope: 'organization', organizationIds: ['org-a', 'org-b'] }))
+          .post('/api/intake-wizard').send(VALID_PAYLOAD);
+
+        expect(res.status).toBe(400);
+        expect(patientIdentityServiceModule.matchOrUpsertParticipant).not.toHaveBeenCalled();
+        expect(sampleServiceModule.createSample).not.toHaveBeenCalled();
+      });
     });
 
     // #1332: the consent decision names one consent; with several, it must

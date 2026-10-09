@@ -38,6 +38,9 @@ const specimenSchema = {
     registeredAt: { type: 'string' },
     specimenStatus: { type: 'string' },
     linkedProject: { type: 'string' },
+    // ELM-0128: the collection site, an Organization reference. The intake
+    // stamps the caller's resolved organization here (#1355).
+    collectionSite: { type: 'string' },
     merkleRoot: { type: 'string' },
     sprec: {
       type: 'object',

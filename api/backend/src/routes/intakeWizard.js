@@ -21,6 +21,7 @@ const clinicalOutcomeService = require('../services/clinical-outcome.service');
 const derivedScoreService = require('../services/derived-score.service');
 const { computeCharlsonScore, ALGORITHM_VERSION: CCI_ALGORITHM_VERSION, SCORE_TYPE: CCI_SCORE_TYPE } = require('../services/charlsonComorbidityIndex');
 const logger = require('../utils/logger');
+const { resolveOrganizationIdForCreate } = require('../services/rbac-assignment.service');
 const { validate } = require('../contracts/canonical/v1');
 
 // #693 (RF005 clinical-data slice 5/5): systemUri constants matching this
@@ -515,15 +516,19 @@ function buildSampleDocumentFromIntake(data = {}, matchedPatient = null) {
   };
 }
 
-async function resolveMatchedPatient(db, data = {}) {
+async function resolveMatchedPatient(db, data = {}, { organizationId = null, organizationScope = null } = {}) {
   const participant = normalizeObject(data?.participant);
 
+  // #1355: a participant the intake creates carries the intake's
+  // organization; a matched one outside the caller's scope is linked but
+  // never written (#1356).
   const result = await patientIdentityService.matchOrUpsertParticipant(db, {
     participantId: participant.participantId,
     patientName: participant.patientName,
     birthDate: parseBirthDate(participant.birthDate),
     identityDocument: normalizeString(participant.identityDocument) || null,
-  });
+    clinicalUnitId: organizationId,
+  }, { organizationScope });
 
   return result;
 }
@@ -816,7 +821,18 @@ async function handleIntakeWizard(req, res) {
       });
     }
 
-    const matchOutcome = await resolveMatchedPatient(db, data);
+    // #1355: the organization the intake stamps, by the rule POST /api/samples
+    // uses (#1185): a single-organization caller's own, a multi-organization
+    // caller's pick named as specimen.collectionSite (ELM-0128), or a global
+    // caller's pick or none. Resolved before anything is written.
+    let organizationId;
+    try {
+      organizationId = resolveOrganizationIdForCreate(req.organizationScope, data?.specimen?.collectionSite);
+    } catch (scopeError) {
+      return res.status(scopeError.statusCode || 403).json({ success: false, error: scopeError.message });
+    }
+
+    const matchOutcome = await resolveMatchedPatient(db, data, { organizationId, organizationScope: req.organizationScope });
     const consentDecision = await resolveConsentDecision(db, matchOutcome.patient);
     const automaticLocation = await resolveAutomaticLocation(db);
     const qualidade = resolverQualidadeMetodologica(data?.specimen || {});
@@ -842,6 +858,9 @@ async function handleIntakeWizard(req, res) {
     });
 
     const sampleToPersist = buildSampleDocumentFromIntake(data, matchOutcome.patient);
+    if (organizationId) {
+      sampleToPersist.collectionSite = String(organizationId);
+    }
     sampleToPersist.boxId = automaticLocation.box._id;
     sampleToPersist.positionCode = automaticLocation.previewPosition;
     const qualityAllowsRelease = qualidade.governance_status === 1 && qualidade.final_grade !== 'E';

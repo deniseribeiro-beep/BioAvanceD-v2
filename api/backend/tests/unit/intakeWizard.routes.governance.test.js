@@ -58,6 +58,8 @@ function loadRouter({ getCollectionImpl, innerRouterBuilder } = {}) {
 
   const rbacModule = require(rbacPath);
   rbacModule.requirePermission = () => (req, res, next) => next();
+  // #1355: the wrapper now mounts requireOrganizationScope too.
+  rbacModule.requireOrganizationScope = (req, res, next) => { req.organizationScope = { scope: 'global', organizationIds: [] }; next(); };
 
   const collectionResolverModule = require(collectionResolverPath);
   collectionResolverModule.getCollection = getCollectionImpl || vi.fn();

@@ -27,6 +27,7 @@ import { VALIDATION_MESSAGES, VALIDATION_RULES } from '../../../config/constants
 import { SPREC_FLUID_DICTIONARY, SPREC_SOLID_DICTIONARY } from '../../../constants/sprecDictionary';
 import { SPECIMEN_TYPES, SAMPLE_ORIGINS, EXTRACTION_PROTOCOLS } from '../../../config/constants/specimen.constants';
 import { buildSampleMerkleRoot } from '../../../utils/sampleMerkleIntegrity';
+import { useCreateOrganizationChoice } from '../../../hooks/useCreateOrganizationChoice';
 import './ClinicalIntakeWizard.css';
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -1606,6 +1607,11 @@ export default function ClinicalIntakeWizard(props) {
   const [touched, setTouched] = useState(false);
   const [step1Attempted, setStep1Attempted] = useState(false);
   const [submitError, setSubmitError] = useState('');
+  // #1354/#1355: the organization the intake stamps (ELM-0128 collectionSite).
+  // Asked only when the caller has a choice; a single-organization caller's
+  // own is stamped by the backend.
+  const organizationChoice = useCreateOrganizationChoice();
+  const [intakeOrganizationId, setIntakeOrganizationId] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [consentTemplates, setConsentTemplates] = useState([]);
   const [consentTemplatesLoading, setConsentTemplatesLoading] = useState(false);
@@ -2689,12 +2695,21 @@ export default function ClinicalIntakeWizard(props) {
       return;
     }
 
+    if (organizationChoice.required && !intakeOrganizationId) {
+      setSubmitError(t('wizard.validation.organization', 'Selecione a organização da coleta: sua conta pertence a mais de uma.'));
+      setActiveStep(1);
+      return;
+    }
+
     setIsSubmitting(true);
 
     try {
       const payload = buildSubmissionPayload(formData, clinicalComorbidityDefinitions, biomarkerDefinitions, sampleMerkleRoot || null);
       if (patientMatchInfo?.patient?.patientID) {
         payload.participant.participantId = String(patientMatchInfo.patient.patientID).trim();
+      }
+      if (intakeOrganizationId) {
+        payload.specimen.collectionSite = intakeOrganizationId;
       }
       console.log('[DEBUG] Payload pronto:', payload);
 
@@ -3045,6 +3060,20 @@ export default function ClinicalIntakeWizard(props) {
                 <span className="inline-flex h-10 items-center rounded-lg border border-gray-300 bg-gray-100 px-3 text-sm font-semibold text-gray-700">{quantityUnit}</span>
               </div>
             </div>
+            {organizationChoice.show && (
+              <Select
+                id="wizard-organization"
+                data-testid="wizard-organization"
+                label={organizationChoice.required ? t('wizard.fields.organization', 'Organização da coleta') : t('wizard.fields.organizationOptional', 'Organização da coleta (opcional)')}
+                value={intakeOrganizationId}
+                onChange={(event) => setIntakeOrganizationId(event.target.value)}
+              >
+                <option value="">{organizationChoice.required ? t('wizard.fields.organizationPlaceholder', 'Selecione…') : t('wizard.fields.organizationNone', 'Nenhuma')}</option>
+                {organizationChoice.options.map((option) => (
+                  <option key={option.organizationId} value={option.organizationId}>{option.officialName || option.organizationId}</option>
+                ))}
+              </Select>
+            )}
             <Input id="linkedProject" name="linkedProject" data-testid="wizard-linked-project" className="w-full rounded-lg px-3 py-2" label={t('wizard.fields.linkedProject', 'Projeto vinculado')} value={formData.linkedProject} onChange={handleFieldChange('linkedProject')} required />
             <Input id="institutionName" name="institutionName" data-testid="wizard-institution-name" className="w-full rounded-lg px-3 py-2" label={t('wizard.fields.institutionName', 'Nome da Instituição')} value={formData.collectionInstitution} onChange={handleFieldChange('collectionInstitution')} required />
             <Input className="w-full rounded-lg px-3 py-2 uppercase bg-gray-100" label={t('wizard.fields.institutionAcronym', 'Sigla da Instituição')} value={String(formData.collectionInstitutionAcronym || '').toUpperCase()} readOnly />

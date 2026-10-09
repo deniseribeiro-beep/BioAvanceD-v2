@@ -62,9 +62,10 @@ const METHOD_TO_ACTION = {
 // rather than inheriting the exemption.
 const SUBROUTER_MOUNT_GATES = new Set([
   // `router.use(authenticate, requirePermission('createSample'),
-  //  intakeGovernanceResponseGuard, intakeWizardRouter)` — the verbs are on
-  //  intakeWizardRouter, in src/routes/intakeWizard.js.
-  'interface/routes/intakeWizard.routes.js:202',
+  //  requireOrganizationScope, intakeGovernanceResponseGuard,
+  //  intakeWizardRouter)` — the verbs are on intakeWizardRouter, in
+  //  src/routes/intakeWizard.js.
+  'interface/routes/intakeWizard.routes.js:204',
 ]);
 
 function sweep() {
