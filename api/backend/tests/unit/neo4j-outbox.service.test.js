@@ -496,20 +496,32 @@ describe('Neo4jOutboxService', () => {
 
   // #1313 (RF023 AC4, RNF019 C4): ordering and the projection checkpoint.
   describe('#1313 ordering and checkpoint', () => {
-    it('finds an earlier unprojected version of the same aggregate', async () => {
+    it('finds an earlier unprojected version of the same aggregate, a dead letter included', async () => {
       let query;
-      const db = { collection: () => ({ findOne: async (q) => { query = q; return { eventId: 'evt-0' }; } }) };
+      const blocker = { eventId: 'evt-0', status: 'DEAD_LETTER' };
+      const db = { collection: () => ({ findOne: async (q) => { query = q; return blocker; } }) };
       const service = new Neo4jOutboxService();
 
-      const found = await service.hasEarlierUnprojectedVersion(db, { aggregateType: 'Sample', aggregateId: 's-1', aggregateVersion: 3 });
+      const found = await service.findEarlierUnprojectedVersion(db, { aggregateType: 'Sample', aggregateId: 's-1', aggregateVersion: 3 });
 
-      expect(found).toBe(true);
+      expect(found).toBe(blocker);
       expect(query).toEqual({
         aggregateType: 'Sample',
         aggregateId: 's-1',
         aggregateVersion: { $lt: 3 },
-        status: { $in: ['PENDING', 'RETRYING', 'PROCESSING'] },
+        status: { $in: ['PENDING', 'RETRYING', 'PROCESSING', 'DEAD_LETTER'] },
       });
+    });
+
+    it('holds an event behind a dead letter for the longest backoff', async () => {
+      const updates = [];
+      const db = { collection: () => ({ updateOne: async (...args) => { updates.push(args); } }) };
+      const before = Date.now();
+
+      await new Neo4jOutboxService().markDeferred(db, 'evt-h', { blockedByDeadLetter: true });
+
+      expect(updates[0][1].$set.lastError).toBe('awaiting_dead_letter_repair');
+      expect(updates[0][1].$set.nextAttemptAt.getTime()).toBeGreaterThanOrEqual(before + MAX_RETRY_BACKOFF_MS);
     });
 
     it('defers an event and gives its lease attempt back', async () => {
@@ -550,6 +562,91 @@ describe('Neo4jOutboxService', () => {
       await new Neo4jOutboxService().getCheckpoint(db, 'projector-a', 'Sample:s-1');
 
       expect(query).toEqual({ _id: 'projector-a:Sample:s-1' });
+    });
+  });
+
+  // #1313 (RNF019 C7): detecting and repairing stalled projections.
+  describe('#1313 reconciliation', () => {
+    // In-memory collections matching the filter shapes the reconciliation
+    // issues: equality, $in, $gt and $lt.
+    function matches(doc, filter) {
+      return Object.entries(filter).every(([key, cond]) => {
+        if (cond && typeof cond === 'object' && !Array.isArray(cond)) {
+          if ('$in' in cond) return cond.$in.includes(doc[key]);
+          if ('$gt' in cond) return doc[key] > cond.$gt;
+          if ('$lt' in cond) return doc[key] < cond.$lt;
+        }
+        return doc[key] === cond;
+      });
+    }
+    function makeCollection(docs) {
+      return {
+        docs,
+        find: (filter) => ({ toArray: async () => docs.filter((doc) => matches(doc, filter)) }),
+        findOne: async (filter) => docs.find((doc) => matches(doc, filter)) || null,
+        updateMany: async (filter, update) => {
+          const hit = docs.filter((doc) => matches(doc, filter));
+          hit.forEach((doc) => Object.assign(doc, update.$set));
+          return { modifiedCount: hit.length };
+        },
+      };
+    }
+    function makeDb({ counters, checkpoints, events }) {
+      const collections = {
+        graph_projection_outbox: makeCollection(events),
+        graph_projection_outbox_aggregate_versions: makeCollection(counters),
+        graph_projection_checkpoints: makeCollection(checkpoints),
+      };
+      return { collections, collection: (name) => collections[name] };
+    }
+    const counter = (aggregateId, version) => ({ _id: `Sample:${aggregateId}`, aggregateType: 'Sample', aggregateId, version });
+    const checkpoint = (aggregateId, lastAggregateVersion) => ({ _id: `p:Sample:${aggregateId}`, lastAggregateVersion });
+    const event = (eventId, aggregateId, aggregateVersion, status, extra = {}) => ({
+      eventId, aggregateType: 'Sample', aggregateId, aggregateVersion, status, attempts: 8, ...extra,
+    });
+
+    it('reports a stalled aggregate with its dead letters, and passes one caught up or still queued', async () => {
+      const db = makeDb({
+        counters: [counter('caught-up', 2), counter('queued', 3), counter('stalled', 3), counter('gap', 2)],
+        checkpoints: [checkpoint('caught-up', 2), checkpoint('queued', 2), checkpoint('stalled', 1), checkpoint('gap', 1)],
+        events: [
+          event('q-3', 'queued', 3, 'RETRYING'),
+          event('s-2', 'stalled', 2, 'DEAD_LETTER'),
+          event('s-3', 'stalled', 3, 'RETRYING'),
+        ],
+      });
+
+      const found = await new Neo4jOutboxService().findUnprojectedAggregates(db, 'p');
+
+      expect(found).toEqual([
+        { aggregateType: 'Sample', aggregateId: 'stalled', aggregateVersion: 3, checkpointVersion: 1, deadLetterEventIds: ['s-2'] },
+        { aggregateType: 'Sample', aggregateId: 'gap', aggregateVersion: 2, checkpointVersion: 1, deadLetterEventIds: [] },
+      ]);
+    });
+
+    it('requeues dead letters with their attempts reset and releases the events they held', async () => {
+      const db = makeDb({
+        counters: [],
+        checkpoints: [],
+        events: [
+          event('s-2', 'stalled', 2, 'DEAD_LETTER', { lastError: 'neo4j offline' }),
+          event('s-3', 'stalled', 3, 'RETRYING', { lastError: 'awaiting_dead_letter_repair', nextAttemptAt: new Date(Date.now() + 60000) }),
+          event('other', 'other', 1, 'DEAD_LETTER'),
+        ],
+      });
+
+      const requeued = await new Neo4jOutboxService().requeueDeadLetters(db, ['s-2']);
+
+      const [deadLetter, held, other] = db.collections.graph_projection_outbox.docs;
+      expect(requeued).toBe(1);
+      expect(deadLetter).toMatchObject({ status: 'PENDING', attempts: 0, nextAttemptAt: null, lastError: 'neo4j offline' });
+      expect(held.nextAttemptAt).toBeNull();
+      expect(other.status).toBe('DEAD_LETTER');
+    });
+
+    it('requeues nothing when given no event ids', async () => {
+      const db = makeDb({ counters: [], checkpoints: [], events: [] });
+      expect(await new Neo4jOutboxService().requeueDeadLetters(db, [])).toBe(0);
     });
   });
 });

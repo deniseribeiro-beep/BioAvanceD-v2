@@ -117,10 +117,35 @@ describe('neo4jProjection.worker', () => {
     expect(retries).toEqual([{ eventId: 'evt-b', options: { attempts: 3 } }]);
   });
 
+  // #1313 (RNF019 C5/C7): a dead letter is logged as an error, naming it.
+  it('logs a dead letter as an error with its aggregate and version', async () => {
+    const logger = require('../../src/utils/logger');
+    const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
+    const outboxService = {
+      rescheduleStaleProcessing: async () => 0,
+      leaseNextBatch: async () => [{ eventId: 'evt-x', eventType: 'T', aggregateType: 'Sample', aggregateId: 's-x', attempts: 7 }],
+      markProjected: async () => undefined,
+      markRetrying: async () => undefined,
+      markDeadLetter: async () => undefined,
+    };
+    const projector = { applyEvent: async () => { throw new Error('neo4j offline'); } };
+    const neo4jDriver = { session: () => ({ close: async () => undefined }) };
+
+    try {
+      await runProjectionOnce({ db: {}, neo4jDriver, outboxService, projector, maxAttempts: 8 });
+
+      const deadLetterLogs = errorSpy.mock.calls.filter(([message]) => String(message).includes('DEAD_LETTER'));
+      expect(deadLetterLogs).toHaveLength(1);
+      expect(deadLetterLogs[0][1]).toMatchObject({ eventId: 'evt-x', aggregateId: 's-x', aggregateVersion: null, attempts: 8, error: 'neo4j offline' });
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   // #1313 (RF023 AC4, RNF019 C3/C4): versioned events apply in aggregate
   // version order, once per projector, under a GraphProjectionCheckpoint.
   describe('#1313 versioned events and the checkpoint', () => {
-    function makeOutbox({ checkpoint = null, earlier = false } = {}) {
+    function makeOutbox({ checkpoint = null, blocker = null } = {}) {
       const calls = [];
       return {
         calls,
@@ -131,8 +156,8 @@ describe('neo4jProjection.worker', () => {
             calls.push(['getCheckpoint', projectorName, partitionKey]);
             return checkpoint;
           },
-          hasEarlierUnprojectedVersion: async (_db, event) => { calls.push(['hasEarlier', event.eventId]); return earlier; },
-          markDeferred: async (_db, eventId) => calls.push(['deferred', eventId]),
+          findEarlierUnprojectedVersion: async (_db, event) => { calls.push(['hasEarlier', event.eventId]); return blocker; },
+          markDeferred: async (_db, eventId, options) => calls.push(['deferred', eventId, options]),
           recordCheckpoint: async (_db, projectorName, event) => calls.push(['checkpoint', projectorName, event.eventId]),
           markProjected: async (_db, eventId) => calls.push(['projected', eventId]),
           markRetrying: async (_db, eventId) => calls.push(['retrying', eventId]),
@@ -177,14 +202,25 @@ describe('neo4jProjection.worker', () => {
     });
 
     it('defers a version while an earlier version of its aggregate is unprojected', async () => {
-      const outbox = makeOutbox({ earlier: true });
+      const outbox = makeOutbox({ blocker: { eventId: 'evt-v2', status: 'RETRYING' } });
       const applied = [];
 
       const result = await run(outbox, applied);
 
       expect(applied).toEqual([]);
       expect(outbox.calls.map((c) => c[0])).toEqual(['getCheckpoint', 'hasEarlier', 'deferred']);
+      expect(outbox.calls[2][2]).toEqual({ blockedByDeadLetter: false });
       expect(result).toMatchObject({ projected: 0, skipped: 0, deferred: 1, failed: 0 });
+    });
+
+    it('holds a version behind a dead letter of its aggregate', async () => {
+      const outbox = makeOutbox({ blocker: { eventId: 'evt-v2', status: 'DEAD_LETTER' } });
+      const applied = [];
+
+      await run(outbox, applied);
+
+      expect(applied).toEqual([]);
+      expect(outbox.calls[2]).toEqual(['deferred', 'evt-v3', { blockedByDeadLetter: true }]);
     });
 
     it('applies an event from before the versioned contract without touching the checkpoint', async () => {

@@ -28,6 +28,7 @@
     "audit:migrate": "node scripts/audit-migrate-v2.js",
     "audit:e2e-real": "node scripts/audit-e2e-real.js",
     "neo4j:canonical:rebuild": "node scripts/neo4j-canonical-rebuild.js",
+    "neo4j:projection:reconcile": "node scripts/graph-projection-reconcile.js",
     "neo4j:canonical:worker": "node src/workers/neo4jProjection.worker.js",
     "setup": "node setup-env.js",
     "find-port": "node scripts/find-port.js",

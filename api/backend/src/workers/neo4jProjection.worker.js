@@ -89,8 +89,11 @@ async function runProjectionOnce(options = {}) {
             skipped += 1;
             continue;
           }
-          if (await outboxService.hasEarlierUnprojectedVersion(db, event)) {
-            await outboxService.markDeferred(db, event.eventId);
+          const blocker = await outboxService.findEarlierUnprojectedVersion(db, event);
+          if (blocker) {
+            await outboxService.markDeferred(db, event.eventId, {
+              blockedByDeadLetter: blocker.status === 'DEAD_LETTER',
+            });
             deferred += 1;
             continue;
           }
@@ -108,6 +111,18 @@ async function runProjectionOnce(options = {}) {
         const nextAttempts = Number(event.attempts || 0) + 1;
         if (nextAttempts >= maxAttempts) {
           await outboxService.markDeadLetter(db, event.eventId, error);
+          // #1313 (RNF019 C5/C7): a dead letter holds its aggregate's later
+          // versions until it is repaired (scripts/graph-projection-reconcile.js),
+          // so it is logged as an error, not a warning.
+          logger.error('[GRAPH_OUTBOX] DEAD_LETTER: evento parou após o limite de tentativas', {
+            eventId: event.eventId,
+            eventType: event.eventType,
+            aggregateType: event.aggregateType,
+            aggregateId: event.aggregateId,
+            aggregateVersion: event.aggregateVersion ?? null,
+            attempts: nextAttempts,
+            error: String(error?.message || error),
+          });
         } else {
           await outboxService.markRetrying(db, event.eventId, error, { attempts: nextAttempts });
         }

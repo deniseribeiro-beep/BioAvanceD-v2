@@ -339,26 +339,30 @@ class Neo4jOutboxService {
   // #1313 (RF023 AC4, RNF019 C4): an event is applied in its aggregate's
   // version order. One leased while an earlier version of its aggregate is
   // still unprojected goes back to the queue, and the lease's attempt is
-  // given back, since the event itself did not fail.
-  async hasEarlierUnprojectedVersion(db, event) {
-    const earlier = await this.getCollection(db).findOne({
+  // given back, since the event itself did not fail. A dead letter blocks
+  // too, so the checkpoint never passes a version the graph lacks; it holds
+  // its aggregate until scripts/graph-projection-reconcile.js requeues it.
+  async findEarlierUnprojectedVersion(db, event) {
+    return this.getCollection(db).findOne({
       aggregateType: event.aggregateType,
       aggregateId: event.aggregateId,
       aggregateVersion: { $lt: event.aggregateVersion },
-      status: { $in: ['PENDING', 'RETRYING', 'PROCESSING'] },
-    }, { projection: { eventId: 1 } });
-    return Boolean(earlier);
+      status: { $in: ['PENDING', 'RETRYING', 'PROCESSING', 'DEAD_LETTER'] },
+    }, { projection: { eventId: 1, status: 1 } });
   }
 
+  // An event held by a dead letter waits the longest backoff, since only a
+  // repair releases it; one held by a queued event waits the base delay.
   async markDeferred(db, eventId, options = {}) {
     const now = new Date();
+    const delayMs = options.blockedByDeadLetter ? MAX_RETRY_BACKOFF_MS : this.retryDelayMs(1, options);
     await this.getCollection(db).updateOne(
       { eventId },
       {
         $set: {
           status: 'RETRYING',
-          lastError: 'awaiting_earlier_aggregate_version',
-          nextAttemptAt: new Date(now.getTime() + this.retryDelayMs(1, options)),
+          lastError: options.blockedByDeadLetter ? 'awaiting_dead_letter_repair' : 'awaiting_earlier_aggregate_version',
+          nextAttemptAt: new Date(now.getTime() + delayMs),
           leaseUntil: null,
           updatedAt: now
         },
@@ -427,6 +431,77 @@ class Neo4jOutboxService {
         }
       }
     );
+  }
+
+  // #1313 (RNF019 C7): an aggregate whose counter is ahead of the projector's
+  // checkpoint, with none of its later events still queued, will never reach
+  // the graph on its own. Each one is reported with the dead letters that
+  // hold its unprojected versions; one with none took a version no event
+  // holds, a write that failed outside a transaction, and needs a rebuild.
+  async findUnprojectedAggregates(db, projectorName) {
+    const outbox = this.getCollection(db);
+    const counters = await db.collection(this.versionCollectionName).find({}).toArray();
+    const found = [];
+    for (const counter of counters) {
+      const partitionKey = Neo4jOutboxService.partitionKeyOf(counter);
+      const checkpoint = await this.getCheckpoint(db, projectorName, partitionKey);
+      const checkpointVersion = Number(checkpoint?.lastAggregateVersion || 0);
+      const aggregateVersion = Number(counter.version || 0);
+      if (aggregateVersion <= checkpointVersion) continue;
+
+      const later = {
+        aggregateType: counter.aggregateType,
+        aggregateId: counter.aggregateId,
+        aggregateVersion: { $gt: checkpointVersion },
+      };
+      // A dead letter holds every later version behind it, so its aggregate
+      // is stalled whatever else is queued.
+      const deadLetters = await outbox
+        .find({ ...later, status: 'DEAD_LETTER' }, { projection: { eventId: 1 } })
+        .toArray();
+      if (!deadLetters.length) {
+        const queued = await outbox.findOne(
+          { ...later, status: { $in: ['PENDING', 'RETRYING', 'PROCESSING'] } },
+          { projection: { eventId: 1 } }
+        );
+        if (queued) continue;
+      }
+      found.push({
+        aggregateType: counter.aggregateType,
+        aggregateId: counter.aggregateId,
+        aggregateVersion,
+        checkpointVersion,
+        deadLetterEventIds: deadLetters.map((event) => event.eventId),
+      });
+    }
+    return found;
+  }
+
+  // #1313 (RNF019 C7): the repair. A dead letter goes back to the queue with
+  // its attempts reset; its lastError stays as the record of why it stopped.
+  // The events it held are released for the next lease, which re-checks
+  // their order.
+  async requeueDeadLetters(db, eventIds) {
+    if (!eventIds.length) return 0;
+    const collection = this.getCollection(db);
+    const result = await collection.updateMany(
+      { eventId: { $in: eventIds }, status: 'DEAD_LETTER' },
+      {
+        $set: {
+          status: 'PENDING',
+          attempts: 0,
+          nextAttemptAt: null,
+          leaseUntil: null,
+          processedAt: null,
+          updatedAt: new Date(),
+        },
+      }
+    );
+    await collection.updateMany(
+      { status: 'RETRYING', lastError: 'awaiting_dead_letter_repair' },
+      { $set: { nextAttemptAt: null, updatedAt: new Date() } }
+    );
+    return result.modifiedCount || 0;
   }
 
   async recoverProcessing(db, leaseMs = env.GRAPH_OUTBOX_LEASE_MS || 5 * 60 * 1000) {
