@@ -11,6 +11,9 @@ const rbacPath = require.resolve('../../src/infrastructure/middleware/rbac.js');
 const innerRoutePath = require.resolve('../../src/routes/intakeWizard.js');
 const collectionResolverPath = require.resolve('../../src/utils/collectionResolver.js');
 const quarantineActionServicePath = require.resolve('../../src/services/quarantine-action.service.js');
+// RF019 AC#6: the decision is audited through this singleton, kept out of
+// clearCache so a spy on it reaches the freshly required service.
+const auditLogger = require('../../src/utils/auditLogger.js');
 
 // quarantine-action.service.js destructures `getCollection` from
 // collectionResolver at require-time — if it's already cached from an
@@ -144,7 +147,8 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
     expect(res.body.sample.status).toBe('AVAILABLE');
   });
 
-  it('persists BLOCKED status, sets specimenStatus quarantined, and records a QuarantineAction when consent is inactive', async () => {
+  it('persists BLOCKED status, sets specimenStatus quarantined, and records and audits a QuarantineAction when consent is inactive', async () => {
+    const auditLog = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
     const existingSample = { _id: 'sample-1', specimenId: 'spec-1', specimenStatus: 'available' };
     const samplesCollection = buildSamplesCollection({ existingSample });
     const quarantineActionsCollection = buildQuarantineActionsCollection();
@@ -180,6 +184,14 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
       expect.objectContaining({ specimenIds: ['spec-1'], reasonCodes: ['PENDING_SIGNATURE'] }),
       undefined
     );
+    const recorded = quarantineActionsCollection.insertOne.mock.calls[0][0];
+    expect(auditLog).toHaveBeenCalledTimes(1);
+    expect(auditLog.mock.calls[0][0]).toMatchObject({
+      action: 'QUARANTINE_APPLIED',
+      resourceType: 'QuarantineAction',
+      resourceId: recorded.quarantineActionId,
+      payload: { specimenIds: ['spec-1'], reasonCodes: ['PENDING_SIGNATURE'] },
+    });
   });
 
   it('persists BLOCKED status when the persisted specimenStatus itself is unavailable (consent active)', async () => {
@@ -243,7 +255,8 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
     expect(quarantineActionsCollection.insertOne).not.toHaveBeenCalled();
   });
 
-  it('releases the active QuarantineAction, attributed to the authenticated user, when a previously quarantined sample resolves to AVAILABLE', async () => {
+  it('releases and audits the active QuarantineAction, attributed to the authenticated user, when a previously quarantined sample resolves to AVAILABLE', async () => {
+    const auditLog = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
     const existingSample = { _id: 'sample-9', specimenId: 'spec-9', specimenStatus: 'quarantined' };
     const activeAction = { quarantineActionId: 'qa-9', specimenIds: ['sample-9'], actionStatus: 'active' };
     const samplesCollection = buildSamplesCollection({ existingSample });
@@ -265,6 +278,12 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
       expect.objectContaining({ $set: expect.objectContaining({ actionStatus: 'released', authorizedBy: 'user-1' }) }),
       undefined
     );
+    expect(auditLog).toHaveBeenCalledTimes(1);
+    expect(auditLog.mock.calls[0][0]).toMatchObject({
+      action: 'QUARANTINE_RELEASED',
+      resourceId: 'qa-9',
+      payload: { actionStatus: 'released', authorizedBy: 'user-1' },
+    });
   });
 
   it('persists AVAILABLE status and builds the query from _id when it is a valid ObjectId', async () => {

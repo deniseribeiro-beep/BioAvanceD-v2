@@ -100,11 +100,45 @@ async function markPendingReview(db, specimenId, session) {
   return updated;
 }
 
+/**
+ * RF019 AC#6 — audits a quarantine decision, applied or released, in the
+ * audit log. For a caller that writes no audit record of its own: the
+ * sample and cold-chain paths audit through their hash-chained movement
+ * instead. A missing action (nothing was active to release) audits
+ * nothing. auditLogger never throws; a failed write raises its own
+ * AUDIT_TRAIL_WRITE_FAILURE alert.
+ */
+async function auditDecision(db, { decision, action, req = null } = {}) {
+  if (!db || !action) return;
+  const released = decision === 'released';
+  const auditLogger = require('../utils/auditLogger');
+  auditLogger.init(db);
+  await auditLogger.log({
+    action: released ? 'QUARANTINE_RELEASED' : 'QUARANTINE_APPLIED',
+    resourceType: 'QuarantineAction',
+    resourceId: action.quarantineActionId,
+    status: 'success',
+    severity: 'warning',
+    message: released
+      ? `Quarentena liberada (${action.specimenIds.length} espécime(s))`
+      : `Quarentena aplicada (${action.reasonCodes.join(', ')})`,
+    payload: {
+      specimenIds: action.specimenIds,
+      reasonCodes: action.reasonCodes,
+      actionStatus: action.actionStatus,
+      authorizedBy: action.authorizedBy ?? null,
+    },
+    req,
+    module: 'Quarentena',
+  });
+}
+
 module.exports = {
   recordAction,
   getActionsForSpecimen,
   releaseActiveAction,
   markPendingReview,
+  auditDecision,
   specimenKeys,
   canonicalSpecimenId,
 };

@@ -249,10 +249,11 @@ router.post('/update', async (req, res) => {
             { $set: { specimenStatus, updatedAt: new Date() } }
           );
           if (!wasQuarantined) {
-            await quarantineActionService.recordAction(db, {
+            const action = await quarantineActionService.recordAction(db, {
               specimenIds: [quarantineActionService.canonicalSpecimenId(sample)],
               reasonCodes: ['CONSENT_REVOKED'],
             });
+            await quarantineActionService.auditDecision(db, { decision: 'applied', action, req });
           }
         }
       }
@@ -280,7 +281,8 @@ router.post('/update', async (req, res) => {
             { $set: { specimenStatus, updatedAt: new Date() } }
           );
           if (wasQuarantined) {
-            await quarantineActionService.releaseActiveAction(db, sample, 'SYSTEM');
+            const action = await quarantineActionService.releaseActiveAction(db, sample, 'SYSTEM');
+            await quarantineActionService.auditDecision(db, { decision: 'released', action, req });
           }
         }
       }

@@ -1,8 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
-const { recordAction, getActionsForSpecimen, releaseActiveAction, markPendingReview, canonicalSpecimenId } = require('../../../src/services/quarantine-action.service');
+const { recordAction, getActionsForSpecimen, releaseActiveAction, markPendingReview, auditDecision, canonicalSpecimenId } = require('../../../src/services/quarantine-action.service');
 
 /**
  * Real query-matching fake — a scalar filter value against an array field
@@ -241,5 +241,54 @@ describe('quarantine-action.service', () => {
       expect(released?.actionStatus).toBe('released');
       expect(db.collections.quarantineActions.docs[0].actionStatus).toBe('released');
     });
+  });
+});
+
+describe("auditDecision (RF019 AC#6)", () => {
+  const auditLogger = require("../../../src/utils/auditLogger");
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("audits an applied quarantine under the action id, with its specimens and reasons", async () => {
+    const db = createFakeDb();
+    const log = vi.spyOn(auditLogger, "log").mockResolvedValue(undefined);
+    const action = await recordAction(db, { specimenIds: ["SPC-1"], reasonCodes: ["CONSENT_REVOKED"] });
+    const req = { path: "/api/e-consent/update" };
+
+    await auditDecision(db, { decision: "applied", action, req });
+
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(log.mock.calls[0][0]).toMatchObject({
+      action: "QUARANTINE_APPLIED",
+      resourceType: "QuarantineAction",
+      resourceId: action.quarantineActionId,
+      req,
+      payload: { specimenIds: ["SPC-1"], reasonCodes: ["CONSENT_REVOKED"], actionStatus: "active" },
+    });
+  });
+
+  it("audits a release as QUARANTINE_RELEASED with the releasing actor", async () => {
+    const db = createFakeDb();
+    const log = vi.spyOn(auditLogger, "log").mockResolvedValue(undefined);
+    await recordAction(db, { specimenIds: ["SPC-2"], reasonCodes: ["INTAKE_GOVERNANCE"] });
+    const released = await releaseActiveAction(db, "SPC-2", "user-7");
+
+    await auditDecision(db, { decision: "released", action: released });
+
+    expect(log.mock.calls[0][0]).toMatchObject({
+      action: "QUARANTINE_RELEASED",
+      resourceId: released.quarantineActionId,
+      payload: { actionStatus: "released", authorizedBy: "user-7" },
+    });
+  });
+
+  it("audits nothing when no action was recorded or released", async () => {
+    const log = vi.spyOn(auditLogger, "log").mockResolvedValue(undefined);
+
+    await auditDecision(createFakeDb(), { decision: "released", action: null });
+
+    expect(log).not.toHaveBeenCalled();
   });
 });

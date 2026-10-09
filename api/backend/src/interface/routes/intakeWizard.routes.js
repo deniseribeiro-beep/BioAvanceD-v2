@@ -148,12 +148,14 @@ async function enforcePersistedGovernanceStatus(req, body) {
 
   if (existingSample?._id) {
     if (specimenStatus === 'quarantined' && !wasQuarantined) {
-      await quarantineActionService.recordAction(db, {
+      const action = await quarantineActionService.recordAction(db, {
         specimenIds: [quarantineActionService.canonicalSpecimenId(existingSample)],
         reasonCodes: [governanceStatus.quarantineReason || 'INTAKE_GOVERNANCE'],
       });
+      await quarantineActionService.auditDecision(db, { decision: 'applied', action, req });
     } else if (specimenStatus !== 'quarantined' && wasQuarantined) {
-      await quarantineActionService.releaseActiveAction(db, existingSample, req.user?.userID || 'SYSTEM');
+      const action = await quarantineActionService.releaseActiveAction(db, existingSample, req.user?.userID || 'SYSTEM');
+      await quarantineActionService.auditDecision(db, { decision: 'released', action, req });
     }
   }
 

@@ -65,7 +65,7 @@ const SUBROUTER_MOUNT_GATES = new Set([
   //  requireOrganizationScope, intakeGovernanceResponseGuard,
   //  intakeWizardRouter)` — the verbs are on intakeWizardRouter, in
   //  src/routes/intakeWizard.js.
-  'interface/routes/intakeWizard.routes.js:204',
+  'interface/routes/intakeWizard.routes.js:206',
 ]);
 
 function sweep() {

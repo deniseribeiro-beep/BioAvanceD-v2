@@ -536,6 +536,7 @@ describe('eConsent.routes POST /update', () => {
   it('quarantines samples and records one QuarantineAction per newly-quarantined sample when any consent is REVOKED', async () => {
     const sample = { _id: 'sample-1', participantId: '12345678', specimenStatus: 'available' };
     const db = buildMockDb({ samples: [sample] });
+    const auditSpy = vi.spyOn(quarantineActionService, 'auditDecision').mockResolvedValue(undefined);
     const app = buildApp(loadRealAuthRouter(), db);
     const token = signToken({ participantId: '12345678' });
     const emit = vi.fn();
@@ -570,6 +571,10 @@ describe('eConsent.routes POST /update', () => {
       expect.objectContaining({ specimenIds: ['sample-1'], reasonCodes: ['CONSENT_REVOKED'] }),
       undefined
     );
+    // RF019 AC#6: the quarantine decision is audited, naming the action just recorded.
+    const recorded = db.quarantineActionsCollection.insertOne.mock.calls[0][0];
+    expect(auditSpy).toHaveBeenCalledTimes(1);
+    expect(auditSpy).toHaveBeenCalledWith(db, expect.objectContaining({ decision: 'applied', action: recorded }));
     expect(io.to).toHaveBeenCalledWith('patient-12345678');
     expect(emit).toHaveBeenCalledWith('sample-quarantined', { participantId: '12345678' });
   });
@@ -593,7 +598,9 @@ describe('eConsent.routes POST /update', () => {
   it('releases quarantined samples and calls releaseActiveAction when every consent is ACTIVE or GRANTED', async () => {
     const sample = { _id: 'sample-1', participantId: '12345678', specimenStatus: 'quarantined' };
     const db = buildMockDb({ samples: [sample] });
-    const releaseSpy = vi.spyOn(quarantineActionService, 'releaseActiveAction').mockResolvedValue(null);
+    const releasedAction = { quarantineActionId: 'qa-1', specimenIds: ['sample-1'], reasonCodes: ['CONSENT_REVOKED'], actionStatus: 'released' };
+    const releaseSpy = vi.spyOn(quarantineActionService, 'releaseActiveAction').mockResolvedValue(releasedAction);
+    const auditSpy = vi.spyOn(quarantineActionService, 'auditDecision').mockResolvedValue(undefined);
     const app = buildApp(loadRealAuthRouter(), db);
     const token = signToken({ participantId: '12345678' });
     const emit = vi.fn();
@@ -626,6 +633,7 @@ describe('eConsent.routes POST /update', () => {
     expect(db.samplesCollection.updateOne.mock.calls[0][1].$set.status).toBeUndefined();
     // #1219: handed the sample, so the release matches its specimenId and its _id.
     expect(releaseSpy).toHaveBeenCalledWith(db, expect.objectContaining({ _id: 'sample-1' }), 'SYSTEM');
+    expect(auditSpy).toHaveBeenCalledWith(db, expect.objectContaining({ decision: 'released', action: releasedAction }));
     expect(io.to).toHaveBeenCalledWith('patient-12345678');
     expect(emit).toHaveBeenCalledWith('sample-released', { participantId: '12345678' });
   });
