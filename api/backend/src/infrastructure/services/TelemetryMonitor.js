@@ -11,6 +11,7 @@ const {
 const EnvironmentalExcursionModel = require('../../models/EnvironmentalExcursion');
 const { quarantineByColdChainIncident } = require('../../services/equipment-sensor-quarantine.service');
 const { GraphProjectionService } = require('../../services/graphProjection.service');
+const { withTransactionWhereSupported } = require('../../utils/mongoTransaction');
 
 // #688: TemperaturePolicy.schema.js's minimumDuration is in MINUTES (see
 // that file's field comment), while criticalDurationHours below is in
@@ -407,12 +408,17 @@ class TelemetryMonitor {
       return;
     }
 
-    await this.graphProjection.appendSpecimenCompromiseEvent(this.db, {
+    // #1313 (RF023 AC3, RNF019 C1): the compromise writes nothing in Mongo
+    // in this call, so the event joins no aggregate write. Its own two
+    // writes, the aggregate's version counter and the event, commit
+    // together wherever a transaction runs, so a failed insert cannot
+    // leave a version no event holds.
+    await withTransactionWhereSupported(this.db, (session) => this.graphProjection.appendSpecimenCompromiseEvent(this.db, {
       specimenId: String(rootSampleId),
       freezerKey,
       breachedSince: breachedSince ? new Date(breachedSince).toISOString() : null,
       sourceService: 'telemetry-monitor',
-    });
+    }, session ? { session } : {}));
     logger.info(`[ISO20387][TELEMETRY] SPECIMEN_COMPROMISED registrado no outbox para freezer=${freezerKey}`);
   }
 }

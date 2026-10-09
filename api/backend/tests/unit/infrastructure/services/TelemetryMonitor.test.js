@@ -690,6 +690,32 @@ describe('TelemetryMonitor', () => {
       });
     });
 
+    // #1313 (RF023 AC3): the version counter and the event commit together.
+    it('appends inside a transaction on a replica set, and with no session where none runs', async () => {
+      const session = {
+        withTransaction: vi.fn(async (fn) => fn()),
+        endSession: vi.fn().mockResolvedValue(undefined),
+      };
+      const client = {
+        db: () => ({ command: vi.fn().mockResolvedValue({ setName: 'rs0' }) }),
+        startSession: vi.fn(() => session),
+      };
+      const replicaDb = { client };
+      const graphProjection = fakeProjection();
+
+      await new TelemetryMonitor({ db: replicaDb, graphProjection })
+        .propagateCompromise({ rootSampleId: 'sample-1', freezerKey: 'freezer-A', breachedSince: null });
+
+      expect(session.withTransaction).toHaveBeenCalledTimes(1);
+      expect(graphProjection.appendSpecimenCompromiseEvent.mock.calls[0][2]).toEqual({ session });
+      expect(session.endSession).toHaveBeenCalledTimes(1);
+
+      const standalone = fakeProjection();
+      await new TelemetryMonitor({ db: {}, graphProjection: standalone })
+        .propagateCompromise({ rootSampleId: 'sample-1', freezerKey: 'freezer-A', breachedSince: null });
+      expect(standalone.appendSpecimenCompromiseEvent.mock.calls[0][2]).toEqual({});
+    });
+
     it('surfaces an append failure', async () => {
       const graphProjection = { appendSpecimenCompromiseEvent: vi.fn().mockRejectedValue(new Error('boom')) };
       const monitor = new TelemetryMonitor({ db: {}, graphProjection });
