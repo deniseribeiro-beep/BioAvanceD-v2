@@ -586,6 +586,9 @@ class ImportLGPDService {
   async importPatients(db, file, options = {}) {
     const groupFields = options?.groupFields || {};
     const actor = options?.actor || {};
+    // #1353: the tenancy key the scoped participant readers filter on
+    // (clinicalUnitId), resolved by the controller from the importer's scope.
+    const organizationId = options?.organizationId || null;
     const results = {
       total: 0,
       success: 0,
@@ -856,6 +859,10 @@ class ImportLGPDService {
           }
 
           // Cria paciente
+          // #1353: stamped as POST /api/pacientes stamps it (#1185).
+          if (organizationId) {
+            patientData.clinicalUnitId = organizationId;
+          }
           const patient = PatientModel.create(omitLegacyIdentityFields(patientData));
 
           // Insere no banco
@@ -1250,6 +1257,9 @@ class ImportLGPDService {
       startBoxId: importOptions?.startBoxId ? String(importOptions.startBoxId) : null,
       autoIncrement: Boolean(importOptions?.autoIncrement),
       groupFields,
+      // #1353: the organization the import stamped as each sample's
+      // collectionSite, so a resubmitted row lands in the same one.
+      organizationId: importOptions?.organizationId ? String(importOptions.organizationId) : null,
     };
   }
 
@@ -1409,7 +1419,7 @@ class ImportLGPDService {
   }
 
   async importSamples(db, file, options = {}) {
-    const { startBoxId = null, autoIncrement = false, groupFields = {}, neo4jDriver = null, actor = {} } = options;
+    const { startBoxId = null, autoIncrement = false, groupFields = {}, neo4jDriver = null, actor = {}, organizationId = null } = options;
     const results = {
       total: 0,
       success: 0,
@@ -1438,6 +1448,7 @@ class ImportLGPDService {
         autoIncrement,
         startBoxId,
         actor,
+        organizationId,
       };
 
       for (let i = 0; i < rows.length; i++) {
@@ -1493,7 +1504,7 @@ class ImportLGPDService {
       // and the file, while the half that did import was already canonically
       // persisted.
       const stagingBatchId = await this.quarantineRejectedSampleRows(db, {
-        importOptions: { startBoxId, autoIncrement, groupFields },
+        importOptions: { startBoxId, autoIncrement, groupFields, organizationId },
         fileName: file?.originalname || null,
         rows,
         results,
@@ -1639,6 +1650,13 @@ class ImportLGPDService {
     const options = this.sanitizeImportOptions(batch.importOptions || {});
     let outcome;
     try {
+      // #1353: the batch's organization, re-resolved against the resubmitter's
+      // own scope, so a corrected row is stamped as its import would have
+      // been. Inside the try: a refusal releases the claim like any failure.
+      if (organizationScope) {
+        const { resolveOrganizationIdForCreate } = require('./rbac-assignment.service');
+        options.organizationId = resolveOrganizationIdForCreate(organizationScope, options.organizationId);
+      }
       const collaborators = await this.buildSampleRowCollaborators(db, { neo4jDriver });
       outcome = await this.processSampleRow(db, row, {
         ...collaborators,
@@ -1735,7 +1753,7 @@ class ImportLGPDService {
     const {
       samplesCollection, patientsCollection, validator, drugService, allocateUseCase,
       groupFields = {}, autoIncrement = false, startBoxId = null, actor = {},
-      slotIndex, rowNumber,
+      organizationId = null, slotIndex, rowNumber,
     } = context;
     let sampleData = null;
     let insertedId = null;
@@ -1946,6 +1964,14 @@ class ImportLGPDService {
       } else {
         // Converte para string se necessário
         sampleData.barcode = String(sampleData.barcode).trim();
+      }
+
+      // #1353: the tenancy key the scoped sample readers filter on, resolved
+      // once per import from the importer's organization scope, as
+      // POST /api/samples stamps it (#1185). Null only for a global caller
+      // who named no organization, which leaves the row as it was.
+      if (organizationId) {
+        sampleData.collectionSite = organizationId;
       }
 
       // Cria amostra
@@ -2531,6 +2557,8 @@ class ImportLGPDService {
     const groupFields = options?.groupFields || {};
     const mapping = options?.mapping || {};
     const actor = options?.actor || {};
+    // #1353: as importPatients.
+    const organizationId = options?.organizationId || null;
 
     if (!mapping || Object.keys(mapping).length === 0) {
       throw new Error('Mapeamento inteligente é obrigatório para importação em lote');
@@ -2681,6 +2709,10 @@ class ImportLGPDService {
         patientData.consentTokenCreatedAt = consentMetadata.createdAt;
         patientData.consentTokenExpiresAt = consentMetadata.expiresAt;
 
+        // #1353: stamped as POST /api/pacientes stamps it (#1185).
+        if (organizationId) {
+          patientData.clinicalUnitId = organizationId;
+        }
         const patient = PatientModel.create(omitLegacyIdentityFields(patientData));
         const insertResult = await patientsCollection.insertOne(patient);
 

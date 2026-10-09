@@ -109,6 +109,35 @@ describe('ImportLGPDService.resubmitQuarantinedSampleRow (#1352)', () => {
     });
   });
 
+  // #1353: a corrected row is stamped with the batch's organization, as its
+  // import stamped the rows that went through.
+  it('runs the row under the batch\'s organizationId, re-resolved against the resubmitter\'s scope (#1353)', async () => {
+    const { db, batchId, recordId, batch } = makeDb();
+    batch.organizationIds = ['ORG-A'];
+    batch.importOptions.organizationId = 'ORG-A';
+
+    await service.resubmitQuarantinedSampleRow(db, String(batchId), String(recordId), CORRECTED, {
+      actor: { userID: 'u1' },
+      organizationScope: { scope: 'organization', organizationIds: ['ORG-A', 'ORG-B'] },
+    });
+
+    expect(processSpy.mock.calls[0][2]).toMatchObject({ organizationId: 'ORG-A' });
+  });
+
+  it('refuses a multi-organization resubmitter when the batch names no organization, and releases the claim (#1353)', async () => {
+    const { db, batchId, recordId, batch, record } = makeDb();
+    batch.organizationIds = ['ORG-A'];
+
+    const error = await service.resubmitQuarantinedSampleRow(db, String(batchId), String(recordId), CORRECTED, {
+      actor: { userID: 'u1' },
+      organizationScope: { scope: 'organization', organizationIds: ['ORG-A', 'ORG-B'] },
+    }).catch((e) => e);
+
+    expect(error.statusCode).toBe(400);
+    expect(processSpy).not.toHaveBeenCalled();
+    expect(record.status).toBe('ERROR');
+  });
+
   it('marks an accepted row RESUBMITTED with the sample, who and when, and resolves a batch left with no ERROR record', async () => {
     const { db, batchId, recordId, batch, record } = makeDb();
 

@@ -27,7 +27,7 @@ describe('import-lgpd.controller importSamples success flag (issue #24)', () => 
   it('returns success:false when some rows fail', async () => {
     const db = createDb();
     const file = { path: '/tmp/s.csv', originalname: 's.csv' };
-    const req = { app: { locals: { db } }, file, body: {} };
+    const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, file, body: {} };
     const res = createRes();
 
     vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
@@ -47,7 +47,7 @@ describe('import-lgpd.controller importSamples success flag (issue #24)', () => 
   it('returns success:false when every row fails', async () => {
     const db = createDb();
     const file = { path: '/tmp/s.csv', originalname: 's.csv' };
-    const req = { app: { locals: { db } }, file, body: {} };
+    const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, file, body: {} };
     const res = createRes();
 
     vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
@@ -70,7 +70,7 @@ describe('import-lgpd.controller importSamples success flag (issue #24)', () => 
   it('returns success:true when all rows import cleanly', async () => {
     const db = createDb();
     const file = { path: '/tmp/s.csv', originalname: 's.csv' };
-    const req = { app: { locals: { db } }, file, body: {} };
+    const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, file, body: {} };
     const res = createRes();
 
     vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);

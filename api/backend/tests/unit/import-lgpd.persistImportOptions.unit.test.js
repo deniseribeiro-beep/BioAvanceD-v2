@@ -104,6 +104,7 @@ describe('#794: quarantined batches record the import options they were produced
       startBoxId: '65f0a1b2c3d4e5f6a7b8c9d0',
       autoIncrement: true,
       groupFields: { studyId: 'ST-1' },
+      organizationId: null,
     });
   });
 
@@ -130,6 +131,7 @@ describe('#794: quarantined batches record the import options they were produced
       startBoxId: null,
       autoIncrement: false,
       groupFields: {},
+      organizationId: null,
     });
   });
 

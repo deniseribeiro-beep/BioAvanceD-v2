@@ -216,6 +216,32 @@ class ImportLGPDController {
   }
 
   /**
+   * #1353: the organization an import stamps on what it writes, each
+   * sample's collectionSite and each participant's clinicalUnitId, by the
+   * rule POST /api/samples and POST /api/pacientes use (#1185,
+   * resolveOrganizationIdForCreate). A single-organization caller gets their
+   * own; a multi-organization caller names one of theirs in the form field
+   * `organizationId`; a global caller may name any existing one, or none,
+   * which leaves the rows unstamped as before. Throws with a statusCode on a
+   * refusal.
+   */
+  async resolveImportTargetOrganizationId(db, req) {
+    const { resolveOrganizationIdForCreate } = require('../services/rbac-assignment.service');
+    const requested = typeof req.body?.organizationId === 'string' ? req.body.organizationId.trim() : undefined;
+    const organizationId = resolveOrganizationIdForCreate(req.organizationScope, requested);
+    if (!organizationId) return null;
+    if (req.organizationScope?.scope === 'global') {
+      const organization = await db.collection('organizations').findOne({ organizationId: String(organizationId) });
+      if (!organization) {
+        const error = new Error(`organizationId ${organizationId} não encontrado`);
+        error.statusCode = 404;
+        throw error;
+      }
+    }
+    return String(organizationId);
+  }
+
+  /**
    * GET /api/import-lgpd/batches/:batchId (#794, RNF011 AC#4)
    *
    * Le de volta um lote de quarentena criado pelo #787. Sem isto as linhas
@@ -362,6 +388,13 @@ class ImportLGPDController {
 
       const reportsCollection = db.collection('importSummaryReports');
       const filter = { type: 'patients-smart-import' };
+      // #1353: an organization-scoped caller lists only reports stamped with
+      // one of their organizations; an unstamped (legacy) report is reachable
+      // by global scope only, the quarantine batches' rule.
+      if (req.organizationScope) {
+        const { applyOrganizationScopeFilter } = require('../services/rbac-assignment.service');
+        applyOrganizationScopeFilter(filter, req.organizationScope, 'organizationIds');
+      }
 
       const [items, total] = await Promise.all([
         reportsCollection.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).toArray(),
@@ -491,6 +524,15 @@ class ImportLGPDController {
       }
       const groupFields = parsedGroupFields.value;
 
+      // #1353: resolved before any row is read, so a refusal writes nothing.
+      let organizationId;
+      try {
+        organizationId = await this.resolveImportTargetOrganizationId(db, req);
+      } catch (scopeError) {
+        importLGPDService.cleanupFile(file.path);
+        return res.status(scopeError.statusCode || 500).json({ success: false, error: scopeError.message });
+      }
+
       // Processa importação
       // #814 (RNF011 AC#4 / RF029 AC#5-6): actor is required so a quarantine
       // batch for a rejected row records a real createdBy -- same shape
@@ -498,6 +540,7 @@ class ImportLGPDController {
       // real key, not id/_id).
       const results = await importLGPDService.importPatients(db, file, {
         groupFields,
+        organizationId,
         actor: {
           userID: req.user?.userID || req.user?.id || req.user?._id || null,
           userId: req.user?.userID || req.user?.id || req.user?._id || null,
@@ -651,6 +694,15 @@ class ImportLGPDController {
       }
       const mapping = parsedMapping.value;
 
+      // #1353: resolved before any row is read, so a refusal writes nothing.
+      let organizationId;
+      try {
+        organizationId = await this.resolveImportTargetOrganizationId(db, req);
+      } catch (scopeError) {
+        importLGPDService.cleanupFile(file.path);
+        return res.status(scopeError.statusCode || 500).json({ success: false, error: scopeError.message });
+      }
+
       const fileBuffer = fs.readFileSync(file.path);
       const fileHashSHA256 = crypto.createHash('sha256').update(fileBuffer).digest('hex');
 
@@ -682,6 +734,7 @@ class ImportLGPDController {
       const results = await importLGPDService.importPatientsSmart(db, file, {
         mapping,
         groupFields,
+        organizationId,
         actor: {
           userID: req.user?.userID || req.user?.id || req.user?._id || null,
           userId: req.user?.userID || req.user?.id || req.user?._id || null,
@@ -712,6 +765,9 @@ class ImportLGPDController {
         // matching fhir-import-staging.controller.js's own actor resolution.
         userId: req.user?.userID || req.user?.id || req.user?._id || null,
         userName: req.user?.name || req.user?.username || null,
+        // #1353: the importer's organizations, which the report list scopes
+        // on, as the quarantine batches are stamped (#800 on this branch).
+        organizationIds: await this.resolveImportOrganizationIds(db, req),
         totalSucesso: results.success,
         totalFalhas: results.errors.length,
         errorsDetails: stripInternalErrorFields(results.errors).slice(0, 200)
@@ -857,6 +913,15 @@ class ImportLGPDController {
       }
       const groupFields = parsedGroupFields.value;
 
+      // #1353: resolved before any row is read, so a refusal writes nothing.
+      let organizationId;
+      try {
+        organizationId = await this.resolveImportTargetOrganizationId(db, req);
+      } catch (scopeError) {
+        importLGPDService.cleanupFile(file.path);
+        return res.status(scopeError.statusCode || 500).json({ success: false, error: scopeError.message });
+      }
+
       logger.debug('Parâmetros de importação:', { startBoxId, autoIncrement });
 
       // Processa importação
@@ -864,6 +929,7 @@ class ImportLGPDController {
         startBoxId,
         autoIncrement,
         groupFields,
+        organizationId,
         neo4jDriver: req.app.locals.neo4jDriver || null,
         // #911: same null-actor bug as above. `userID` is emitted too because
         // quarantineRejectedSampleRows reads `actor?.userID` first for the

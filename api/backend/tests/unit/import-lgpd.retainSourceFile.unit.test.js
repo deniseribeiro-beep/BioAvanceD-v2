@@ -127,7 +127,7 @@ describe('#792: retaining the LGPD import source file when rows were quarantined
 
     function createReq(file) {
       return {
-        app: { locals: { db: { collection: vi.fn() } } },
+        organizationScope: { scope: 'global' }, app: { locals: { db: { collection: vi.fn() } } },
         file,
         body: {},
       };
@@ -188,7 +188,7 @@ describe('#792: retaining the LGPD import source file when rows were quarantined
       const insertOne = vi.fn().mockResolvedValue({ insertedId: 'batch-failed-806' });
       const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
       const db = { collection: vi.fn().mockReturnValue({ insertOne, updateOne }) };
-      const req = { app: { locals: { db } }, file, body: {} };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, file, body: {} };
       const res = createRes();
 
       vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);
@@ -221,7 +221,7 @@ describe('#792: retaining the LGPD import source file when rows were quarantined
       const file = createUploadedFile(tempDir);
       const insertOne = vi.fn().mockResolvedValue({ insertedId: 'batch-failed-807' });
       const db = { collection: vi.fn().mockReturnValue({ insertOne }) };
-      const req = { app: { locals: { db } }, file, body: {} };
+      const req = { organizationScope: { scope: 'global' }, app: { locals: { db } }, file, body: {} };
       const res = createRes();
 
       vi.spyOn(importLGPDService, 'validateFileFormat').mockReturnValue(true);

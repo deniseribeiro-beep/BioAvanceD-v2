@@ -66,15 +66,8 @@ const EXEMPT = new Map([
 // at all, the mutations included (#1211).
 // #1211 scoped all thirteen, mutations and reads, and emptied this list. It
 // stays, with its stale check, as the place the next known gap is recorded.
-const TRACKED_UNSCOPED = new Map([
-  // #1353: the LGPD imports write samples and participants with no
-  // organization gate and no tenancy stamp; the reports listing reads their
-  // stored summaries the same way.
-  ['import-lgpd.routes.js POST /pacientes', '#1353'],
-  ['import-lgpd.routes.js POST /pacientes/smart-import', '#1353'],
-  ['import-lgpd.routes.js GET /pacientes/smart-import/reports', '#1353'],
-  ['import-lgpd.routes.js POST /amostras', '#1353'],
-]);
+// #1353 gated the four LGPD import routes it held and emptied it again.
+const TRACKED_UNSCOPED = new Map([]);
 
 function routeFiles() {
   const files = [];

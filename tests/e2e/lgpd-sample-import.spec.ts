@@ -1,5 +1,7 @@
 import { test, expect, type APIRequestContext } from '@playwright/test';
 import { realLogin } from './helpers/realAuth';
+import { completeFirstLoginMfa } from './helpers/completeFirstLoginMfa';
+import { deleteOrganizations } from './helpers/listOrganizations';
 import { createRealParticipant, closeSeedDb } from './helpers/seedParticipant';
 import { findLgpdQuarantineBatch, findLgpdQuarantinedRows, closeFhirImportDb, seedForeignImportBatch, removeForeignImportBatch } from './helpers/queryFhirImport';
 
@@ -449,5 +451,70 @@ test.describe('LGPD sample import against the real backend (#759)', () => {
       // it up -- the named volumes persist across sessions.
       await removeForeignImportBatch(fhirBatchId);
     }
+  });
+});
+
+// #1353: the import stamps the importer's organization as each sample's
+// collectionSite, the key every scoped sample read filters on. Before it, an
+// organization-scoped importer's samples landed with none, so the importer
+// could not read back what they had just imported.
+test.describe('LGPD sample import by an organization-scoped user (#1353)', () => {
+  const organizationIds: string[] = [];
+
+  test.afterAll(async ({ request }) => {
+    await deleteOrganizations(request, apiBaseURL!, organizationIds);
+    await closeSeedDb();
+  });
+
+  test('a Coordenador scoped to one organization imports a sample and reads it back, stamped with that organization', async ({ request }) => {
+    const admin = await realLogin(request);
+    const adminAuth = { Authorization: `Bearer ${admin.token}` };
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    const orgRes = await request.post(`${apiBaseURL}/api/organizations`, {
+      headers: adminAuth,
+      data: { officialName: `#1353 import ${suffix}`, countryCode: 'BR' },
+    });
+    expect(orgRes.ok(), await orgRes.text()).toBeTruthy();
+    const ownOrg = (await orgRes.json()).data.organizationId as string;
+    organizationIds.push(ownOrg);
+
+    const username = `coord.1353.${Date.now()}`;
+    const password = 'Coordenador@123';
+    const registerRes = await request.post(`${apiBaseURL}/api/users/register`, {
+      headers: adminAuth,
+      data: {
+        name: '#1353 Coordenador Fixture',
+        email: `${username}@example.com`,
+        username,
+        password,
+        accessType: 3,
+        roleName: 'Coordenador',
+        organizationId: ownOrg,
+      },
+    });
+    expect(registerRes.ok(), await registerRes.text()).toBeTruthy();
+    const coordinator = await completeFirstLoginMfa(request, apiBaseURL!, username, password);
+
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const response = await importSamples(request, coordinator.token, [
+      `${participant.participantId},${SAMPLE_TYPE},${SAMPLE_ORIGIN},${EXTRACTION_PROTOCOL},5,GOOD,#1353 scoped import`,
+    ]);
+    expect(response.status(), await response.text()).toBe(200);
+    const body = await response.json();
+    expect(body.data.errorsDetails).toEqual([]);
+    expect(body.data).toMatchObject({ total: 1, success: 1, errors: 0 });
+
+    // Read back through the coordinator's own scoped list: under the bug the
+    // sample carried no collectionSite and this list came back without it.
+    const list = await request.get(
+      `${apiBaseURL}/api/samples?participantId=${encodeURIComponent(participant.participantId)}&limit=200`,
+      { headers: { Authorization: `Bearer ${coordinator.token}` } }
+    );
+    expect(list.status(), await list.text()).toBe(200);
+    const listBody = await list.json();
+    const samples = (listBody?.data?.samples ?? listBody?.data ?? []) as Array<Record<string, unknown>>;
+    expect(samples, 'the scoped importer cannot read back its own imported sample').toHaveLength(1);
+    expect(samples[0]).toMatchObject({ sampleType: SAMPLE_TYPE, collectionSite: ownOrg });
   });
 });

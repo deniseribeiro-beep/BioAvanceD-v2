@@ -465,6 +465,25 @@ describe('ImportLGPDService.importSamples', () => {
     expect(samplesCollection.insertOne).toHaveBeenCalledTimes(1);
   });
 
+  // #1353: the tenancy key the scoped sample readers filter on.
+  it('stamps the resolved organizationId as each imported sample\'s collectionSite (#1353)', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([{ ...VALID_ROW, collectionSite: 'ORG-FOREIGN' }]);
+
+    const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' }, { organizationId: 'ORG-OWN' });
+
+    expect(result.success).toBe(1);
+    expect(samplesCollection.insertOne.mock.calls[0][0].collectionSite).toBe('ORG-OWN');
+  });
+
+  it('leaves collectionSite unset when no organizationId was resolved, a global caller naming none (#1353)', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+
+    const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.success).toBe(1);
+    expect(samplesCollection.insertOne.mock.calls[0][0].collectionSite).toBeNull();
+  });
+
   it('persists externalQualityAssessment (camelCase) on the inserted document when rcsScore/scoreBasedGrade columns are present (#226)', async () => {
     vi.spyOn(service, 'readFile').mockResolvedValue([
       { ...VALID_ROW, rcsScore: '100', scoreBasedGrade: 'A' },

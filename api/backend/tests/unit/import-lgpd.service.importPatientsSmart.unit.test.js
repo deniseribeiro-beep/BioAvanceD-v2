@@ -254,6 +254,14 @@ describe('ImportLGPDService.importPatientsSmart', () => {
     expect(patientsCollection.deleteOne).toHaveBeenCalledWith({ _id: 'patient-id-1' });
   });
 
+  it('stamps the resolved organizationId as each imported participant\'s clinicalUnitId (#1353)', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([rowFromValid()]);
+    const result = await service.importPatientsSmart(db, { path: '/x.csv', originalname: 'x.csv' }, { mapping: MAPPING, organizationId: 'ORG-OWN' });
+
+    expect(result.success).toBe(1);
+    expect(patientsCollection.insertOne.mock.calls[0][0].clinicalUnitId).toBe('ORG-OWN');
+  });
+
   it('records a per-row error and does not insert when patientName is missing', async () => {
     vi.spyOn(service, 'readFile').mockResolvedValue([rowFromValid({ Nome: '' })]);
     const result = await service.importPatientsSmart(db, { path: '/x.csv', originalname: 'x.csv' }, { mapping: MAPPING });

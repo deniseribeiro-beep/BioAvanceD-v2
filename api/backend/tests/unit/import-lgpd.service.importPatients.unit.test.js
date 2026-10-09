@@ -348,6 +348,23 @@ describe('ImportLGPDService.importPatients', () => {
     expect(patientsCollection.insertOne.mock.calls[0][0].recordNumber).toBe('ABC-1');
   });
 
+  // #1353: the tenancy key the scoped participant readers filter on.
+  it('stamps the resolved organizationId as each imported participant\'s clinicalUnitId (#1353)', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+    const result = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' }, { organizationId: 'ORG-OWN' });
+
+    expect(result.success).toBe(1);
+    expect(patientsCollection.insertOne.mock.calls[0][0].clinicalUnitId).toBe('ORG-OWN');
+  });
+
+  it('leaves clinicalUnitId unset when no organizationId was resolved (#1353)', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+    const result = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' });
+
+    expect(result.success).toBe(1);
+    expect(patientsCollection.insertOne.mock.calls[0][0].clinicalUnitId).toBeNull();
+  });
+
   it('generates a clinicalUnit acronym when clinicalUnit is provided without one', async () => {
     vi.spyOn(service, 'readFile').mockResolvedValue([{ ...VALID_ROW, clinicalUnit: 'Hospital das Clinicas' }]);
     const result = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' });

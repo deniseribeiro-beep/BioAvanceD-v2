@@ -14,6 +14,7 @@ const { requirePermission, requireOrganizationScope } = require('../../infrastru
 router.post('/pacientes',
   authenticate,
   requirePermission('createPatient'),
+  requireOrganizationScope,
   importLGPDController.uploadMiddleware(),
   importLGPDController.importPatients.bind(importLGPDController)
 );
@@ -21,6 +22,7 @@ router.post('/pacientes',
 router.post('/pacientes/smart-import',
   authenticate,
   requirePermission('createPatient'),
+  requireOrganizationScope,
   importLGPDController.uploadMiddleware(),
   importLGPDController.importPatientsSmart.bind(importLGPDController)
 );
@@ -28,6 +30,7 @@ router.post('/pacientes/smart-import',
 router.get('/pacientes/smart-import/reports',
   authenticate,
   requirePermission('createPatient'),
+  requireOrganizationScope,
   importLGPDController.listSmartImportReports.bind(importLGPDController)
 );
 
@@ -38,9 +41,13 @@ router.get('/pacientes/smart-import/metadata',
 );
 
 // Importação de amostras (valida IDs de pacientes)
+// #1353: as importacoes gravam amostras e participantes de uma organizacao,
+// entao passam por requireOrganizationScope, e o controller carimba a
+// organizacao resolvida em collectionSite / clinicalUnitId.
 router.post('/amostras',
   authenticate,
   requirePermission('createSample'),
+  requireOrganizationScope,
   importLGPDController.uploadMiddleware(),
   importLGPDController.importSamples.bind(importLGPDController)
 );
