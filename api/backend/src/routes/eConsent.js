@@ -158,7 +158,8 @@ router.get('/validate/:token', async (req, res) => {
       : patient;
 
     const consentService = require('../services/consent.service');
-    const template = await consentService.getActiveTemplate(db);
+    // #1181: the active term of the participant's own lineage.
+    const template = await consentService.getActiveTemplateForParticipant(db, payload.participantId);
     const currentConsent = await consentService.getPatientConsent(db, payload.participantId);
 
     res.json({
@@ -217,7 +218,7 @@ router.post('/update', async (req, res) => {
           await consentService.revokeConsent(db, String(currentConsent._id), {}, PARTICIPANT_LINK_ACTOR);
         }
       } else {
-        const template = await consentService.getActiveTemplate(db);
+        const template = await consentService.getActiveTemplateForParticipant(db, participantId);
         if (!template) {
           return res.status(409).json({ error: 'Nenhum template de consentimento ativo' });
         }

@@ -299,7 +299,7 @@ describe('eConsent.routes GET /validate/:token', () => {
     const db = buildPatientDb({ patient, identity });
     const template = { _id: 'tmpl-1', title: 'TCLE v1', permissions: [{ key: 'general', label: 'Aceito participar' }] };
     const currentConsent = { _id: 'consent-1', status: 'ACTIVE', responses: { general: true } };
-    vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue(template);
+    vi.spyOn(consentService, 'getActiveTemplateForParticipant').mockResolvedValue(template);
     vi.spyOn(consentService, 'getPatientConsent').mockResolvedValue(currentConsent);
     const app = buildApp(loadRealAuthRouter(), db);
     const token = signToken({ participantId: '12345678' });
@@ -328,7 +328,7 @@ describe('eConsent.routes GET /validate/:token', () => {
     const ciphertextOnlyIdentity = { ...encrypted, patientName: null, birthDate: null, identityDocument: null };
     const db = buildPatientDb({ patient, identity: ciphertextOnlyIdentity });
     const template = { _id: 'tmpl-1', title: 'TCLE v1', permissions: [] };
-    vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue(template);
+    vi.spyOn(consentService, 'getActiveTemplateForParticipant').mockResolvedValue(template);
     vi.spyOn(consentService, 'getPatientConsent').mockResolvedValue(null);
     const app = buildApp(loadRealAuthRouter(), db);
     const token = signToken({ participantId: '12345678' });
@@ -345,7 +345,7 @@ describe('eConsent.routes GET /validate/:token', () => {
     const patient = { participantId: '12345678', name: 'Jane Doe' };
     const db = buildPatientDb({ patient, identity: null });
     const template = { _id: 'tmpl-1', title: 'TCLE v1', permissions: [] };
-    vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue(template);
+    vi.spyOn(consentService, 'getActiveTemplateForParticipant').mockResolvedValue(template);
     vi.spyOn(consentService, 'getPatientConsent').mockResolvedValue(null);
     const app = buildApp(loadRealAuthRouter(), db);
     const token = signToken({ participantId: '12345678' });
@@ -360,7 +360,7 @@ describe('eConsent.routes GET /validate/:token', () => {
     const patient = { participantId: '12345678', name: 'Jane Doe' };
     const db = buildPatientDb({ patient });
     const template = { _id: 'tmpl-1', title: 'TCLE v1', permissions: [{ key: 'general', label: 'Aceito participar' }] };
-    vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue(template);
+    vi.spyOn(consentService, 'getActiveTemplateForParticipant').mockResolvedValue(template);
     vi.spyOn(consentService, 'getPatientConsent').mockResolvedValue(null);
     const app = buildApp(loadRealAuthRouter(), db);
     const token = signToken({ participantId: '12345678' });
@@ -374,7 +374,7 @@ describe('eConsent.routes GET /validate/:token', () => {
   it('returns a null template when no ConsentTemplate is active', async () => {
     const patient = { participantId: '12345678', name: 'Jane Doe' };
     const db = buildPatientDb({ patient });
-    vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue(null);
+    vi.spyOn(consentService, 'getActiveTemplateForParticipant').mockResolvedValue(null);
     vi.spyOn(consentService, 'getPatientConsent').mockResolvedValue(null);
     const app = buildApp(loadRealAuthRouter(), db);
     const token = signToken({ participantId: '12345678' });
@@ -432,7 +432,7 @@ describe('eConsent.routes POST /update', () => {
   const activeTemplate = { _id: 'tmpl-1', title: 'TCLE v1' };
 
   beforeEach(() => {
-    vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue(activeTemplate);
+    vi.spyOn(consentService, 'getActiveTemplateForParticipant').mockResolvedValue(activeTemplate);
     vi.spyOn(consentService, 'getPatientConsent').mockResolvedValue(null);
     vi.spyOn(consentService, 'createPatientConsent').mockResolvedValue({ _id: 'consent-1', consentId: 'uuid-1' });
     vi.spyOn(consentService, 'revokeConsent').mockResolvedValue({ _id: 'consent-1', status: 'REVOKED' });
@@ -463,6 +463,8 @@ describe('eConsent.routes POST /update', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ success: true });
+    // #1181: the term is the active one of this participant's own lineage.
+    expect(consentService.getActiveTemplateForParticipant).toHaveBeenCalledWith(db, '12345678');
     expect(consentService.createPatientConsent).toHaveBeenCalledWith(db, expect.objectContaining({
       participantId: '12345678',
       consentTemplateId: 'tmpl-1',
@@ -503,7 +505,7 @@ describe('eConsent.routes POST /update', () => {
 
   it('returns 409 when no ConsentTemplate is active and at least one permission is accepted', async () => {
     const db = buildMockDb();
-    consentService.getActiveTemplate.mockResolvedValue(null);
+    consentService.getActiveTemplateForParticipant.mockResolvedValue(null);
     const app = buildApp(loadRealAuthRouter(), db);
     const token = signToken({ participantId: '12345678' });
 

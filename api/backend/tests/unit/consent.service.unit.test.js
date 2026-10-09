@@ -310,19 +310,28 @@ describe('ConsentService.generateNextPolicyVersion', () => {
     expect(version).toBe('v1');
   });
 
-  it('increments past the highest existing version', async () => {
+  it('increments past the highest version of the lineage, reading only that lineage (#1181)', async () => {
     const templates = makeCollection({
       find: vi.fn(() => makeCursor([{ version: 'v3' }, { version: 'v7' }, { version: 'v2' }])),
     });
     const db = makeDb({ consent_templates: templates });
 
-    const version = await consentService.generateNextPolicyVersion(db);
+    const version = await consentService.generateNextPolicyVersion(db, 'lineage-a');
     expect(version).toBe('v8');
+    expect(templates.find).toHaveBeenCalledWith({ versionGroupId: 'lineage-a' }, expect.anything());
+  });
+
+  it('starts a lineage with no id at v1 without reading other terms (#1181)', async () => {
+    const templates = makeCollection();
+    const db = makeDb({ consent_templates: templates });
+
+    await expect(consentService.generateNextPolicyVersion(db)).resolves.toBe('v1');
+    expect(templates.find).not.toHaveBeenCalled();
   });
 });
 
 describe('ConsentService.createTemplate', () => {
-  it('creates a template, deactivating previously active ones', async () => {
+  it('creates a template, deactivating the active term of its own lineage only (#1181)', async () => {
     const templates = makeCollection({
       find: vi.fn(() => makeCursor([])),
       insertOne: vi.fn(async (doc) => ({ insertedId: new ObjectId() })),
@@ -339,8 +348,9 @@ describe('ConsentService.createTemplate', () => {
     expect(result._id).toBeDefined();
     expect(result.title).toBe('My Template');
     expect(result.active).toBe(true);
+    expect(result.version).toBe('v1');
     expect(templates.updateMany).toHaveBeenCalledWith(
-      { active: true },
+      { versionGroupId: result.versionGroupId, active: true },
       expect.objectContaining({ $set: expect.objectContaining({ active: false }) })
     );
     expect(templates.insertOne).toHaveBeenCalled();

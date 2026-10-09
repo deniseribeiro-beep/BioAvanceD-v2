@@ -738,7 +738,8 @@ class ConsentController {
       // active policy sits behind `authenticate`.
       let template = null;
       try {
-        template = await consentService.getActiveTemplate(db);
+        // #1181: the active term of the participant's own lineage.
+        template = await consentService.getActiveTemplateForParticipant(db, result.participantId);
       } catch (templateError) {
         // A template-lookup failure is not an invalid token: reporting it as
         // one would tell the participant their link is bad and send them to

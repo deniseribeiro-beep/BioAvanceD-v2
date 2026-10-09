@@ -78,7 +78,7 @@ describe('#823: the consent-token endpoints are not a participant-enumeration or
     vi.spyOn(auditLogger, 'logError').mockResolvedValue(undefined);
     // Keep the control case focused on the token check: an active TCLE is a
     // separate lookup whose absence would 503 before the 200 is reached.
-    vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue(null);
+    vi.spyOn(consentService, 'getActiveTemplateForParticipant').mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -184,7 +184,7 @@ describe('#823: the consent-token endpoints are not a participant-enumeration or
     // #821: an accept now carries the manifestation and is recorded by the
     // canonical recorder before the status write; stubbed so this case keeps
     // exercising the token check and the write it guards.
-    vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue({ _id: 'tpl-1', active: true, permissions: [] });
+    vi.spyOn(consentService, 'getActiveTemplateForParticipant').mockResolvedValue({ _id: 'tpl-1', active: true, permissions: [] });
     vi.spyOn(consentService, 'createPatientConsent').mockResolvedValue({ consentId: 'uuid-1', consentVersion: '1' });
     useDb(patientDoc());
 

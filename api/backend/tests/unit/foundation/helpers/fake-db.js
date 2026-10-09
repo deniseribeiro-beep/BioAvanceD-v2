@@ -13,11 +13,14 @@ function valueAt(doc, path) {
   return path.split('.').reduce((value, key) => (value == null ? undefined : value[key]), doc);
 }
 
+const isObjectId = (value) => value != null && value._bsontype === 'ObjectId';
+
 // Equality as the driver applies it: an array field matches when any of its
-// elements does, and Dates compare by time.
+// elements does, Dates compare by time, and ObjectIds by value.
 function equals(actual, expected) {
   if (Array.isArray(actual) && !Array.isArray(expected)) return actual.some((item) => equals(item, expected));
   if (actual instanceof Date && expected instanceof Date) return +actual === +expected;
+  if (isObjectId(actual) && isObjectId(expected)) return actual.equals(expected);
   return actual === expected;
 }
 

@@ -1270,10 +1270,11 @@ class PatientService {
       throw consentManifestationRejection('consentTemplateId e responses são obrigatórios');
     }
 
-    // The page renders getActiveTemplate (consent.controller validate), so an
+    // The page renders getActiveTemplateForParticipant (consent.controller
+    // validate), so an
     // answer set is only meaningful against that same term. A republish in
     // between would otherwise record answers to a text never shown.
-    const activeTemplate = await consentService.getActiveTemplate(db);
+    const activeTemplate = await consentService.getActiveTemplateForParticipant(db, participantId);
     if (!activeTemplate || String(activeTemplate._id) !== String(consentTemplateId)) {
       throw consentManifestationRejection('O termo de consentimento foi atualizado');
     }

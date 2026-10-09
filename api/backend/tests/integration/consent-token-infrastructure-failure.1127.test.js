@@ -78,7 +78,7 @@ describe('#1127: an infrastructure failure in the token check is not reported as
     vi.spyOn(auditLogger, 'logError').mockResolvedValue(undefined);
     // The template lookup must SUCCEED throughout this file, so that any 503
     // observed below is the token check's and not the arm that already exists.
-    vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue(null);
+    vi.spyOn(consentService, 'getActiveTemplateForParticipant').mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -110,7 +110,7 @@ describe('#1127: an infrastructure failure in the token check is not reported as
     expect(JSON.stringify(response.body)).not.toContain('Link inválido ou expirado');
     // And the driver's own words are not for an unauthenticated caller.
     expect(JSON.stringify(response.body)).not.toContain(INFRA_MESSAGE);
-    // Not the template arm -- getActiveTemplate resolves in every case here.
+    // Not the template arm -- getActiveTemplateForParticipant resolves in every case here.
     expect(JSON.stringify(response.body)).not.toContain('Termo de consentimento indisponível');
   }
 
@@ -144,7 +144,7 @@ describe('#1127: an infrastructure failure in the token check is not reported as
       // #821: an accept now carries the manifestation and is recorded by the
       // canonical recorder before the status write; stubbed so this case keeps
       // exercising the token check and the write it guards.
-      vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue({ _id: 'tpl-1', active: true, permissions: [] });
+      vi.spyOn(consentService, 'getActiveTemplateForParticipant').mockResolvedValue({ _id: 'tpl-1', active: true, permissions: [] });
       vi.spyOn(consentService, 'createPatientConsent').mockResolvedValue({ consentId: 'uuid-1', consentVersion: '1' });
       useDb(patientDoc(), {
         updateOne: vi.fn().mockRejectedValue(new Error(INFRA_MESSAGE)),
@@ -213,7 +213,7 @@ describe('#1127: an infrastructure failure in the token check is not reported as
       // #821: an accept now carries the manifestation and is recorded by the
       // canonical recorder before the status write; stubbed so this case keeps
       // exercising the token check and the write it guards.
-      vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue({ _id: 'tpl-1', active: true, permissions: [] });
+      vi.spyOn(consentService, 'getActiveTemplateForParticipant').mockResolvedValue({ _id: 'tpl-1', active: true, permissions: [] });
       vi.spyOn(consentService, 'createPatientConsent').mockResolvedValue({ consentId: 'uuid-1', consentVersion: '1' });
       useDb(patientDoc());
 

@@ -548,7 +548,7 @@ describe('PatientService.acceptConsentToken', () => {
   });
 
   it('records a Consent for the manifestation, THEN activates the patient and clears the token', async () => {
-    vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue(activeTemplate);
+    vi.spyOn(consentService, 'getActiveTemplateForParticipant').mockResolvedValue(activeTemplate);
     const recordSpy = vi.spyOn(consentService, 'createPatientConsent').mockResolvedValue({
       _id: 'c1', consentId: 'uuid-1', consentVersion: '2', status: 'ACTIVE',
     });
@@ -574,7 +574,7 @@ describe('PatientService.acceptConsentToken', () => {
   });
 
   it('refuses a manifestation against a term that is no longer the active one, recording nothing', async () => {
-    vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue({ ...activeTemplate, _id: 'bbbbbbbbbbbbbbbbbbbbbbbb' });
+    vi.spyOn(consentService, 'getActiveTemplateForParticipant').mockResolvedValue({ ...activeTemplate, _id: 'bbbbbbbbbbbbbbbbbbbbbbbb' });
     const recordSpy = vi.spyOn(consentService, 'createPatientConsent');
     const patientsCollection = pendingPatient();
     const db = makeFakeDb({ patients: patientsCollection });
@@ -588,7 +588,7 @@ describe('PatientService.acceptConsentToken', () => {
   });
 
   it('refuses answers that decline a required purpose, recording nothing', async () => {
-    vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue(activeTemplate);
+    vi.spyOn(consentService, 'getActiveTemplateForParticipant').mockResolvedValue(activeTemplate);
     const recordSpy = vi.spyOn(consentService, 'createPatientConsent');
     const patientsCollection = pendingPatient();
     const db = makeFakeDb({ patients: patientsCollection });
@@ -604,7 +604,7 @@ describe('PatientService.acceptConsentToken', () => {
   });
 
   it('refuses a whole-term accept with no answers at all (the pre-#821 request shape)', async () => {
-    vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue(activeTemplate);
+    vi.spyOn(consentService, 'getActiveTemplateForParticipant').mockResolvedValue(activeTemplate);
     const recordSpy = vi.spyOn(consentService, 'createPatientConsent');
     const patientsCollection = pendingPatient();
     const db = makeFakeDb({ patients: patientsCollection });
@@ -617,7 +617,7 @@ describe('PatientService.acceptConsentToken', () => {
   });
 
   it('leaves the token live when the record cannot be written, so the participant can retry', async () => {
-    vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue(activeTemplate);
+    vi.spyOn(consentService, 'getActiveTemplateForParticipant').mockResolvedValue(activeTemplate);
     vi.spyOn(consentService, 'createPatientConsent').mockRejectedValue(new Error('connection <monitor> closed'));
     const patientsCollection = pendingPatient();
     const db = makeFakeDb({ patients: patientsCollection });

@@ -120,20 +120,36 @@ class ConsentService {
     return match ? Number(match[1]) : 0;
   }
 
-  async generateNextPolicyVersion(db) {
+  // #1181: a term's version counts within its lineage (P1X-0365
+  // versionGroupId), as updateTemplate's v<N+1> does. It used to be a global
+  // counter over the last 200 terms, so a new lineage started at whatever
+  // number an unrelated term had reached.
+  async generateNextPolicyVersion(db, versionGroupId) {
+    if (!versionGroupId) {
+      return 'v1';
+    }
     const templatesCollection = await getCollection(db, 'consentTemplates');
-    const latestPolicies = await templatesCollection
-      .find({}, { projection: { version: 1 } })
-      .sort({ createdAt: -1, _id: -1 })
-      .limit(200)
+    const lineage = await templatesCollection
+      .find({ versionGroupId }, { projection: { version: 1 } })
       .toArray();
 
-    const maxVersion = latestPolicies.reduce((max, item) => {
+    const maxVersion = lineage.reduce((max, item) => {
       const current = this.parseVersionNumber(item?.version);
       return current > max ? current : max;
     }, 0);
 
     return `v${maxVersion + 1}`;
+  }
+
+  // #1181: one active term per lineage. dict-02 groups a term's revisions by
+  // versionGroupId and carries a CAAE on each term, so terms of different
+  // lineages are independent documents that can be in force at once.
+  // Publishing deactivates only the publishing term's own lineage.
+  async deactivateLineage(templatesCollection, versionGroupId) {
+    await templatesCollection.updateMany(
+      { versionGroupId, active: true },
+      { $set: { active: false, updatedAt: new Date() } }
+    );
   }
 
   normalizeSignaturePayload(payload) {
@@ -271,9 +287,12 @@ class ConsentService {
       this.ensureUniquePermissionKeys(permissions);
 
       const templatesCollection = await getCollection(db, 'consentTemplates');
+      const versionGroupId = typeof payload.versionGroupId === 'string' && payload.versionGroupId.trim().length > 0
+        ? payload.versionGroupId.trim()
+        : crypto.randomUUID();
       const version = typeof payload.version === 'string' && payload.version.trim()
         ? payload.version.trim()
-        : await this.generateNextPolicyVersion(db);
+        : await this.generateNextPolicyVersion(db, versionGroupId);
       const htmlContent = typeof payload.htmlContent === 'string' && payload.htmlContent.trim()
         ? payload.htmlContent.trim()
         : typeof payload.content === 'string'
@@ -285,9 +304,7 @@ class ConsentService {
         htmlContent,
         content: htmlContent,
         version,
-        versionGroupId: typeof payload.versionGroupId === 'string' && payload.versionGroupId.trim().length > 0
-          ? payload.versionGroupId.trim()
-          : crypto.randomUUID(),
+        versionGroupId,
         caae: typeof payload.caae === 'string' ? payload.caae.trim() : undefined,
         active: payload.active === undefined ? true : Boolean(payload.active),
         permissions,
@@ -309,7 +326,7 @@ class ConsentService {
       }
 
       if (normalizedPayload.active === true) {
-        await templatesCollection.updateMany({ active: true }, { $set: { active: false, updatedAt: new Date() } });
+        await this.deactivateLineage(templatesCollection, versionGroupId);
       }
 
       const template = ConsentTemplateModel.create(normalizedPayload);
@@ -416,10 +433,7 @@ class ConsentService {
       });
 
       if (template.active) {
-        await templatesCollection.updateMany(
-          { versionGroupId, active: true },
-          { $set: { active: false, updatedAt: new Date() } }
-        );
+        await this.deactivateLineage(templatesCollection, versionGroupId);
       }
 
       await templatesCollection.updateOne(
@@ -596,12 +610,42 @@ class ConsentService {
     return consentNotifications;
   }
 
+  /**
+   * #1181: the policy route (POST/PUT /consent-policies) is a boundary over
+   * the builder's write paths, not a second implementation. dict-07 row 39
+   * makes ConsentPolicy and ConsentTemplate one entity, ConsentTemplate. The
+   * route keeps its stricter input contract (a validity period, at least one
+   * permission, the policy schema) and then publishes through createTemplate
+   * or, for a revision, updateTemplate, so version numbering, deactivation
+   * and the stored shape are the builder's.
+   */
   async createPolicy(db, payload, options = {}) {
     try {
       const previousPolicyId = options?.previousPolicyId ? String(options.previousPolicyId).trim() : '';
       const explicitVersionGroupId = options?.versionGroupId ? String(options.versionGroupId).trim() : '';
-      let versionGroupId = explicitVersionGroupId || '';
-      const nextVersion = await this.generateNextPolicyVersion(db);
+
+      const templatesCollection = await getCollection(db, 'consentTemplates');
+      let previousPolicy = null;
+
+      if (previousPolicyId) {
+        let previousObjectId;
+        try {
+          previousObjectId = new ObjectId(previousPolicyId);
+        } catch {
+          throw new Error('ID do TCLE para atualização é inválido');
+        }
+
+        previousPolicy = await templatesCollection.findOne({ _id: previousObjectId });
+        if (!previousPolicy) {
+          throw new Error('TCLE anterior não encontrado para atualização');
+        }
+      }
+
+      // The version the write path will assign, so the policy schema's
+      // required `version` is checked against the real one.
+      const nextVersion = previousPolicy
+        ? `v${Math.max(1, this.parseVersionNumber(previousPolicy.version) + 1)}`
+        : await this.generateNextPolicyVersion(db, explicitVersionGroupId);
 
       const normalizedPayload = {
         ...payload,
@@ -644,40 +688,6 @@ class ConsentService {
         : [];
       this.ensureUniquePermissionKeys(permissions);
 
-      const templatesCollection = await getCollection(db, 'consentTemplates');
-      let previousPolicy = null;
-
-      if (previousPolicyId) {
-        let previousObjectId;
-        try {
-          previousObjectId = new ObjectId(previousPolicyId);
-        } catch {
-          throw new Error('ID do TCLE para atualização é inválido');
-        }
-
-        previousPolicy = await templatesCollection.findOne({ _id: previousObjectId });
-        if (!previousPolicy) {
-          throw new Error('TCLE anterior não encontrado para atualização');
-        }
-
-        if (!versionGroupId) {
-          versionGroupId = String(previousPolicy.versionGroupId || previousPolicy._id || previousPolicyId).trim();
-        }
-      }
-
-      if (!versionGroupId) {
-        versionGroupId = crypto.randomUUID();
-      }
-
-      if (normalizedPayload.active === undefined || normalizedPayload.active === true) {
-        await templatesCollection.updateMany({ active: true }, { $set: { active: false, updatedAt: new Date() } });
-      }
-
-      const policy = ConsentPolicyModel.create({
-        ...normalizedPayload,
-        granularPermissions: permissions
-      });
-
       // RF010 AC1: the same document control the builder's paths record.
       const documentControlErrors = ConsentTemplateModel.documentControlErrors(normalizedPayload);
       if (documentControlErrors.length > 0) {
@@ -687,33 +697,37 @@ class ConsentService {
         throw validationError;
       }
 
-      const document = {
-        ...ConsentTemplateModel.documentControlOf(normalizedPayload, policy.htmlContent),
-        ...policy,
-        previousPolicyId: previousPolicyId || null,
-        versionGroupId,
+      const policy = ConsentPolicyModel.create({
+        ...normalizedPayload,
+        granularPermissions: permissions
+      });
+
+      // The builder's field names: `content`/`htmlContent` and `permissions`.
+      // An empty CAAE is absent, as the template schema reads it.
+      const { granularPermissions: _granular, version: _version, ...rest } = normalizedPayload;
+      const termPayload = {
+        ...rest,
+        title: policy.title,
         content: policy.htmlContent,
-        permissions: permissions,
         htmlContent: policy.htmlContent,
-        caae: policy.caae,
-        granularPermissions: permissions,
+        caae: policy.caae || undefined,
+        validFrom: policy.validFrom,
         validTo: policy.validTo,
-        revisionType: previousPolicyId ? 'update' : 'create'
+        permissions
       };
 
-      const result = await templatesCollection.insertOne(document);
-      // #824: the sweep is shared with the builder's paths (createTemplate,
-      // updateTemplate) -- dict-07 row 39 makes ConsentPolicy/ConsentTemplate
-      // one entity, so publication behaviour has one implementation.
-      const consentNotifications = await this.notifyPendingConsentCohort(db, {
-        newTemplateId: result.insertedId,
-        previousPolicyId,
-        versionGroupId
-      });
+      const term = previousPolicy
+        ? await this.updateTemplate(db, previousPolicyId, termPayload)
+        : await this.createTemplate(db, {
+            ...termPayload,
+            versionGroupId: explicitVersionGroupId || undefined
+          });
+
+      // The policy route's callers read `granularPermissions` (the audit
+      // line in consent.controller), so the response keeps that alias.
       return {
-        _id: result.insertedId,
-        ...document,
-        consentNotifications
+        ...term,
+        granularPermissions: term.permissions
       };
     } catch (error) {
       logger.error('Erro ao criar política de consentimento:', error.message);
@@ -730,6 +744,54 @@ class ConsentService {
       .toArray();
 
     return template[0] || null;
+  }
+
+  /**
+   * #1181: the term a participant is asked to answer is the active term of
+   * the lineage they were enrolled under (Patient.consentTemplateId's
+   * versionGroupId), not the newest active term system-wide. With one active
+   * term per lineage, the global pick would show a participant invited under
+   * one term the text of another lineage published later.
+   *
+   * A participant with no resolvable lineage (no consentTemplateId, or a term
+   * that predates versionGroupId), or whose lineage has no active term, gets
+   * the newest active term, the behaviour before lineages were kept apart.
+   */
+  async getActiveTemplateForParticipant(db, participantId) {
+    const patientsCollection = await getCollection(db, 'patients');
+    const patient = participantId
+      ? await patientsCollection.findOne(
+        { participantId: String(participantId) },
+        { projection: { consentTemplateId: 1 } }
+      )
+      : null;
+
+    let enrolledTemplateId = null;
+    try {
+      enrolledTemplateId = patient?.consentTemplateId ? new ObjectId(String(patient.consentTemplateId)) : null;
+    } catch {
+      enrolledTemplateId = null;
+    }
+
+    if (enrolledTemplateId) {
+      const templatesCollection = await getCollection(db, 'consentTemplates');
+      const enrolledTemplate = await templatesCollection.findOne(
+        { _id: enrolledTemplateId },
+        { projection: { versionGroupId: 1 } }
+      );
+      if (enrolledTemplate?.versionGroupId) {
+        const lineageActive = await templatesCollection
+          .find({ versionGroupId: enrolledTemplate.versionGroupId, active: true })
+          .sort({ createdAt: -1 })
+          .limit(1)
+          .toArray();
+        if (lineageActive[0]) {
+          return lineageActive[0];
+        }
+      }
+    }
+
+    return this.getActiveTemplate(db);
   }
 
   async getAllTemplates(db) {
@@ -797,6 +859,9 @@ class ConsentService {
         { version: { $regex: regex } },
         { caae: { $regex: regex } },
         { htmlContent: { $regex: regex } },
+        // #1181: a builder-published term stores `permissions` only.
+        { 'permissions.key': { $regex: regex } },
+        { 'permissions.label': { $regex: regex } },
         { 'granularPermissions.key': { $regex: regex } },
         { 'granularPermissions.label': { $regex: regex } }
       ];

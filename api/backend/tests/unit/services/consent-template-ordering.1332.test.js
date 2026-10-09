@@ -23,17 +23,20 @@ async function storeFour(db) {
 }
 
 describe('consent.service template ordering', () => {
-  it('generateNextPolicyVersion reads the newest 200 templates, so the newest version is counted', async () => {
+  it('generateNextPolicyVersion counts every version of the lineage, and only that lineage (#1181)', async () => {
     const db = createFakeDb();
     const templates = templatesOf(db);
     // v1 oldest to v201 newest, stored in a shuffled order.
     const order = Array.from({ length: 201 }, (_, i) => i + 1).sort((a, b) => ((a * 7919) % 201) - ((b * 7919) % 201));
     for (const n of order) {
       // eslint-disable-next-line no-await-in-loop
-      await templates.insertOne({ _id: `id-${String(n).padStart(3, '0')}`, version: `v${n}`, createdAt: new Date(Date.UTC(2026, 0, 1, 0, n)) });
+      await templates.insertOne({ _id: `id-${String(n).padStart(3, '0')}`, versionGroupId: 'lineage-a', version: `v${n}`, createdAt: new Date(Date.UTC(2026, 0, 1, 0, n)) });
     }
+    // Another lineage's higher number, newest of all, is not this lineage's.
+    await templates.insertOne({ _id: 'other', versionGroupId: 'lineage-b', version: 'v900', createdAt: new Date(Date.UTC(2026, 6, 1)) });
 
-    await expect(consentService.generateNextPolicyVersion(db)).resolves.toBe('v202');
+    await expect(consentService.generateNextPolicyVersion(db, 'lineage-a')).resolves.toBe('v202');
+    await expect(consentService.generateNextPolicyVersion(db, 'lineage-new')).resolves.toBe('v1');
   });
 
   it('getAllTemplates lists active templates first, newest first within each group', async () => {

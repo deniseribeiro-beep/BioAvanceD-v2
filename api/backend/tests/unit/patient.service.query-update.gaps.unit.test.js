@@ -421,7 +421,7 @@ describe('PatientService.acceptConsentToken', () => {
   // the status/token write that follows it.
   it('activates the patient and clears the consent token after validating it', async () => {
     const consentService = require('../../src/services/consent.service');
-    vi.spyOn(consentService, 'getActiveTemplate').mockResolvedValue({ _id: 'tpl-1', active: true, permissions: [] });
+    vi.spyOn(consentService, 'getActiveTemplateForParticipant').mockResolvedValue({ _id: 'tpl-1', active: true, permissions: [] });
     vi.spyOn(consentService, 'createPatientConsent').mockResolvedValue({ consentId: 'uuid-1', consentVersion: '1' });
     const patientsCollection = makeFakeCollection({
       findOne: vi.fn().mockResolvedValue({

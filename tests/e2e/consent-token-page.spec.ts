@@ -203,4 +203,51 @@ test.describe('RF010 bulk consent-token page (/patients/:id/consent?token=) -- r
     await expect(page.getByText('Versão e2e-809')).toBeVisible();
     expect(templateId).toBeTruthy();
   });
+
+  // #1181: terms of different lineages (versionGroupId) are in force at once,
+  // so the term a participant answers is the active term of the lineage they
+  // were enrolled under, not the newest active term system-wide.
+  test('a participant enrolled under one term lineage answers that lineage\'s term, not a newer one of another', async ({ page }) => {
+    const run = Date.now();
+    const lineageTerm = await db.collection('consent_templates').insertOne({
+      title: `TCLE e2e 1181 linhagem A ${run}`,
+      content: `Termo da linhagem A (#1181) ${run}.`,
+      version: 'e2e-809',
+      versionGroupId: `e2e-1181-a-${run}`,
+      active: true,
+      permissions: [{ key: 'research-1181a', label: 'Pesquisa na linhagem A', required: true }],
+      createdAt: new Date(Date.now() - 60_000),
+      updatedAt: new Date(),
+    });
+    const { participantId, token } = await seedPendingParticipant();
+    await db.collection('patients').updateOne(
+      { participantId },
+      { $set: { consentTemplateId: lineageTerm.insertedId.toString() } }
+    );
+    // Another lineage publishes later: it is the newest active term of all.
+    await db.collection('consent_templates').insertOne({
+      title: `TCLE e2e 1181 linhagem B ${run}`,
+      content: `Termo da linhagem B (#1181) ${run}.`,
+      version: 'e2e-809',
+      versionGroupId: `e2e-1181-b-${run}`,
+      active: true,
+      permissions: [{ key: 'research-1181b', label: 'Pesquisa na linhagem B', required: true }],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    await page.goto(`/patients/${participantId}/consent?token=${token}`);
+
+    await expect(page.getByTestId('consent-token-content')).toContainText(`Termo da linhagem A (#1181) ${run}.`, {
+      timeout: 15_000,
+    });
+    await expect(page.getByTestId('consent-token-content')).not.toContainText('linhagem B');
+    await page.getByTestId('consent-token-permission-research-1181a').check();
+    await page.getByTestId('consent-token-accept').click();
+    await expect(page.getByTestId('consent-token-success')).toBeVisible();
+
+    const consent = await db.collection('patientConsents').findOne({ participantId });
+    expect(consent?.consentTemplateId).toBe(lineageTerm.insertedId.toString());
+    expect(consent?.responses).toEqual({ 'research-1181a': true });
+  });
 });
