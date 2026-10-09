@@ -11,6 +11,7 @@ module.exports = {
     { method: 'POST', path: '/amostras', permission: 'createSample' },
     { method: 'GET', path: '/batches', permission: 'createSample' },
     { method: 'GET', path: '/batches/:batchId', permission: 'createSample' },
+    { method: 'POST', path: '/batches/:batchId/records/:recordId/resubmit', permission: 'createSample' },
     { method: 'GET', path: '/pacientes/template/csv', permission: 'createPatient' },
     { method: 'GET', path: '/pacientes/template/xlsx', permission: 'createPatient' },
     { method: 'GET', path: '/amostras/template/csv', permission: 'createSample' },

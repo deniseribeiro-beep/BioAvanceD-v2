@@ -66,6 +66,14 @@ router.get('/batches/:batchId',
   importLGPDController.getQuarantineBatch.bind(importLGPDController)
 );
 
+// Correcao e reenvio de uma linha em quarentena (#1352, RNF011 AC#4). Mesma
+// permissao da importacao de amostras: reenviar e importar uma linha.
+router.post('/batches/:batchId/records/:recordId/resubmit',
+  authenticate,
+  requirePermission('createSample'),
+  importLGPDController.resubmitQuarantinedRow.bind(importLGPDController)
+);
+
 // Download de templates - Pacientes CSV (#815: the fourth combination, missing
 // until now -- the frontend client built this URL for a route that never
 // existed, and only escaped notice because nothing called it.)

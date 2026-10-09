@@ -340,6 +340,74 @@ test.describe('LGPD sample import against the real backend (#759)', () => {
     expect(payload.records[0].row.sampleType).toBe('NOT_A_REAL_SAMPLE_TYPE');
   });
 
+  // #1352 (RNF011 AC#4, "sem correção silenciosa"): a quarantined row is
+  // corrected and resubmitted through the import's own row path. A
+  // correction that is still wrong is refused and recorded; a right one
+  // imports the sample, resolves the record and, with nothing left, the
+  // batch.
+  test('RNF011 AC#4: a quarantined row is corrected and resubmitted, and a still-wrong correction is refused (#1352)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const bad = await createRealParticipant(request, apiBaseURL!, admin.token);
+
+    const response = await importSamples(request, admin.token, [
+      `${bad.participantId},NOT_A_REAL_SAMPLE_TYPE,${SAMPLE_ORIGIN},${EXTRACTION_PROTOCOL},5,GOOD,RF-LGPD e2e resubmit`,
+    ]);
+    expect(response.status()).toBe(200);
+    const batchId = String((await response.json()).data.stagingBatchId);
+
+    const read = await request.get(`${apiBaseURL}/api/import-lgpd/batches/${batchId}`, { headers: auth });
+    expect(read.status()).toBe(200);
+    const record = (await read.json()).records[0];
+    const resubmitURL = `${apiBaseURL}/api/import-lgpd/batches/${batchId}/records/${record._id}/resubmit`;
+
+    // Still wrong: the same import validator refuses it, and the record keeps
+    // the attempt in ERROR rather than dropping it.
+    const stillWrong = await request.post(resubmitURL, {
+      headers: auth,
+      data: { row: { ...record.row, sampleType: 'STILL_NOT_A_SAMPLE_TYPE' } },
+    });
+    expect(stillWrong.status()).toBe(422);
+    const stillWrongBody = await stillWrong.json();
+    expect(stillWrongBody.success).toBe(false);
+    expect(JSON.stringify(stillWrongBody.errors)).toMatch(/sampleType/i);
+
+    // Corrected: every column the import's header rule requires is in the
+    // row (participantId, sampleType, sampleOrigin), carried from the file.
+    const corrected = await request.post(resubmitURL, {
+      headers: auth,
+      data: {
+        row: {
+          ...record.row,
+          participantId: String(bad.participantId),
+          sampleType: SAMPLE_TYPE,
+          sampleOrigin: SAMPLE_ORIGIN,
+        },
+      },
+    });
+    expect(corrected.status(), JSON.stringify(await corrected.json())).toBe(200);
+    expect((await corrected.json()).data).toMatchObject({ recordStatus: 'RESUBMITTED', batchStatus: 'RESOLVED' });
+
+    const after = await (await request.get(`${apiBaseURL}/api/import-lgpd/batches/${batchId}`, { headers: auth })).json();
+    expect(after.batch).toMatchObject({ status: 'RESOLVED' });
+    expect(after.batch.counts).toMatchObject({ success: 1, errors: 0, resubmitted: 1 });
+    expect(after.records[0]).toMatchObject({ status: 'RESUBMITTED' });
+    expect(after.records[0].resubmitAttempts).toHaveLength(2);
+
+    // The sample exists, through the real server-side participant filter.
+    const list = await request.get(
+      `${apiBaseURL}/api/samples?participantId=${encodeURIComponent(bad.participantId)}&limit=200`,
+      { headers: auth }
+    );
+    const listBody = await list.json();
+    const samples = (listBody?.data?.samples ?? listBody?.data ?? []) as Array<Record<string, unknown>>;
+    expect(samples.some((sample) => sample.sampleType === SAMPLE_TYPE)).toBe(true);
+
+    // A second resubmit of a resolved record is refused, so no second sample.
+    const again = await request.post(resubmitURL, { headers: auth, data: { row: record.row } });
+    expect(again.status()).toBe(409);
+  });
+
   test('an unknown batch id is a 404, and a malformed one does not 500 (#794)', async ({ request }) => {
     const admin = await realLogin(request);
 

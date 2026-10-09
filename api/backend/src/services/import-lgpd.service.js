@@ -15,7 +15,7 @@ const notificationService = require('./notification.service');
 const { generateUniqueParticipantId } = require('../utils/patientAnonymization');
 const { getCollection } = require('../utils/collectionResolver');
 const { omitLegacyIdentityFields } = require('../utils/legacyPatientIdentityFields');
-const { sealStagedRecord, revealStagedRecord } = require('../utils/stagedRowCrypto');
+const { sealStagedRecord, revealStagedRecord, sealedStagingCollection } = require('../utils/stagedRowCrypto');
 const { encryptFileBuffer, isFileEncryptionAvailable } = require('../utils/fileCrypto');
 const {
   SPECIMEN_TYPES,
@@ -1397,48 +1397,15 @@ class ImportLGPDService {
       // drop blank rows before this array exists. #1012: the unreachable
       // per-row backstop below is gone for that same reason.
       results.skipped = rows.skippedCount || 0;
-      const samplesCollection = await getCollection(db, 'samples');
-      const patientsCollection = await getCollection(db, 'patients');
-      const validator = new SampleGraphValidator(db);
-      const drugService = new DrugService(db);
-      // #477: samples are inserted unallocated, then AllocateSampleUseCase
-      // performs the atomic occupancyGrid write, storageLocation update,
-      // StorageAssignment record and audit/lineage trail — same use case
-      // sample.service.js's createSample reuses (#474). Replaces this
-      // loop's old direct storageLocation write + manual StorageAssignment
-      // insert, which never updated the box's occupancyGrid, so a fixed
-      // (non-auto-increment) target box silently double-booked its first
-      // free position across every row.
-      const allocateUseCase = new AllocateSampleUseCase({
-        storageRepository: new MongoStorageRepository(db),
-        auditRepository: new MongoAuditRepository(db),
-        lineageRepository: new LineageRepository(neo4jDriver)
-      });
-
-      // Campos obrigatórios para amostras.
-      const requiredFields = ['sampleType', 'sampleOrigin'];
+      const collaborators = await this.buildSampleRowCollaborators(db, { neo4jDriver });
 
       // Valida headers
       if (rows.length > 0) {
-        const headers = Object.keys(rows[0]);
-        const missingFields = requiredFields.filter(field => !headers.includes(field));
-        const hasPatientIdHeader = headers.includes('participantId') || headers.includes('participantId') || headers.includes('patient_id');
-        const hasPatientNameHeader = headers.includes('patientName') || headers.includes('nomePaciente') || headers.includes('nome');
-        const hasBirthDateHeader = headers.includes('birthDate') || headers.includes('dataNascimento') || headers.includes('patientBirthDate');
-        if (missingFields.length > 0) {
-          throw new Error(`Campos obrigatórios ausentes: ${missingFields.join(', ')}`);
-        }
-        if (!hasPatientIdHeader && !(hasPatientNameHeader && hasBirthDateHeader)) {
-          throw new Error('Identificação do paciente ausente: informe participantId ou as colunas patientName + birthDate.');
-        }
+        this.assertSampleHeaders(Object.keys(rows[0]));
       }
 
       const rowContext = {
-        samplesCollection,
-        patientsCollection,
-        validator,
-        drugService,
-        allocateUseCase,
+        ...collaborators,
         groupFields,
         autoIncrement,
         startBoxId,
@@ -1524,6 +1491,206 @@ class ImportLGPDService {
       logger.error('Erro ao importar amostras:', error.message);
       throw error;
     }
+  }
+
+  /**
+   * The header rule of a sample import: the required fields, and a patient
+   * identification (participantId, or patientName with a birth date). A file
+   * is checked on its first row's keys, and a resubmitted row (#1352) on its
+   * own keys, so both meet the same rule.
+   */
+  assertSampleHeaders(headers) {
+    const requiredFields = ['sampleType', 'sampleOrigin'];
+    const missingFields = requiredFields.filter(field => !headers.includes(field));
+    const hasPatientIdHeader = headers.includes('participantId') || headers.includes('patient_id');
+    const hasPatientNameHeader = headers.includes('patientName') || headers.includes('nomePaciente') || headers.includes('nome');
+    const hasBirthDateHeader = headers.includes('birthDate') || headers.includes('dataNascimento') || headers.includes('patientBirthDate');
+    if (missingFields.length > 0) {
+      throw new Error(`Campos obrigatórios ausentes: ${missingFields.join(', ')}`);
+    }
+    if (!hasPatientIdHeader && !(hasPatientNameHeader && hasBirthDateHeader)) {
+      throw new Error('Identificação do paciente ausente: informe participantId ou as colunas patientName + birthDate.');
+    }
+  }
+
+  /**
+   * The per-row collaborators importSamples and a resubmit (#1352) share,
+   * built in one place so the two paths cannot drift.
+   *
+   * #477: samples are inserted unallocated, then AllocateSampleUseCase
+   * performs the atomic occupancyGrid write, storageLocation update,
+   * StorageAssignment record and audit/lineage trail — same use case
+   * sample.service.js's createSample reuses (#474). Replaces the import
+   * loop's old direct storageLocation write + manual StorageAssignment
+   * insert, which never updated the box's occupancyGrid, so a fixed
+   * (non-auto-increment) target box silently double-booked its first
+   * free position across every row.
+   */
+  async buildSampleRowCollaborators(db, { neo4jDriver = null } = {}) {
+    return {
+      samplesCollection: await getCollection(db, 'samples'),
+      patientsCollection: await getCollection(db, 'patients'),
+      validator: new SampleGraphValidator(db),
+      drugService: new DrugService(db),
+      allocateUseCase: new AllocateSampleUseCase({
+        storageRepository: new MongoStorageRepository(db),
+        auditRepository: new MongoAuditRepository(db),
+        lineageRepository: new LineageRepository(neo4jDriver)
+      }),
+    };
+  }
+
+  /**
+   * #1352 (RNF011 AC#4, "sem correção silenciosa"): resubmit one corrected
+   * row of a quarantined sample batch through processSampleRow, the path
+   * that rejected it, never a second validator (#817).
+   *
+   * - The record is claimed atomically (ERROR -> RESUBMITTING), so two
+   *   concurrent resubmits cannot both insert a sample.
+   * - Accepted: the record becomes RESUBMITTED with the sample id, who and
+   *   when; the batch's counts move, and a batch with no ERROR record left
+   *   reads RESOLVED.
+   * - Rejected again: the record returns to ERROR with the new errors and
+   *   the corrected row, so the attempt is recorded, not lost.
+   * - Slot: the row takes the first free ready box from the batch's
+   *   startBoxId at resubmit time (slotIndex 0), unless it names its own
+   *   boxId. The batch-time index pointed into a box list that has changed.
+   *
+   * Only sample batches are resubmittable; a patient batch (#814) is a 404
+   * here, like any batch of another type.
+   */
+  async resubmitQuarantinedSampleRow(db, batchIdRaw, recordIdRaw, correctedRow, { neo4jDriver = null, actor = {} } = {}) {
+    const { ObjectId } = require('mongodb');
+    const fail = (statusCode, message, extra = {}) => {
+      const error = new Error(message);
+      error.statusCode = statusCode;
+      Object.assign(error, extra);
+      return error;
+    };
+
+    const batchRaw = String(batchIdRaw || '').trim();
+    const recordRaw = String(recordIdRaw || '').trim();
+    if (!ObjectId.isValid(batchRaw) || !ObjectId.isValid(recordRaw)) {
+      throw fail(400, 'Identificador de lote ou de registro invalido.');
+    }
+
+    const row = this.sanitizeCorrectedRow(correctedRow);
+    if (!row) {
+      throw fail(400, 'A linha corrigida deve ser um objeto de valores simples (texto, numero, booleano ou nulo).');
+    }
+    try {
+      this.assertSampleHeaders(Object.keys(row));
+    } catch (headerError) {
+      throw fail(400, headerError.message);
+    }
+
+    const batchId = new ObjectId(batchRaw);
+    const recordId = new ObjectId(recordRaw);
+    const batches = db.collection('import_batches');
+    const batch = await batches.findOne({ _id: batchId, type: QUARANTINE_BATCH_TYPES.SAMPLE });
+    if (!batch) {
+      throw fail(404, 'Lote de quarentena LGPD nao encontrado.');
+    }
+
+    const records = sealedStagingCollection(db.collection('import_staging_records'));
+    const existing = await db.collection('import_staging_records').findOne({ _id: recordId, batchId });
+    if (!existing) {
+      throw fail(404, 'Registro de quarentena nao encontrado neste lote.');
+    }
+    const claim = await records.updateOne(
+      { _id: recordId, batchId, status: 'ERROR' },
+      { $set: { status: 'RESUBMITTING', updatedAt: new Date() } }
+    );
+    if (!claim.matchedCount) {
+      throw fail(409, `Registro de quarentena ja esta em ${existing.status}, nao em ERROR.`);
+    }
+
+    const options = this.sanitizeImportOptions(batch.importOptions || {});
+    let outcome;
+    try {
+      const collaborators = await this.buildSampleRowCollaborators(db, { neo4jDriver });
+      outcome = await this.processSampleRow(db, row, {
+        ...collaborators,
+        ...options,
+        actor,
+        rowNumber: existing.rowNumber,
+        slotIndex: 0,
+      });
+    } catch (error) {
+      await records.updateOne({ _id: recordId, status: 'RESUBMITTING' }, { $set: { status: 'ERROR', updatedAt: new Date() } });
+      throw error;
+    }
+
+    const now = new Date();
+    const resubmittedBy = actor?.userID || actor?.userId || null;
+    const attempt = { at: now, by: resubmittedBy, ok: outcome.ok, errors: outcome.ok ? [] : outcome.errors };
+
+    if (!outcome.ok) {
+      await records.updateOne(
+        { _id: recordId, status: 'RESUBMITTING' },
+        {
+          $set: {
+            status: 'ERROR',
+            row,
+            errors: outcome.errors,
+            validationErrors: outcome.errors,
+            ...(outcome.sampleId ? { orphanSampleId: outcome.sampleId } : {}),
+            updatedAt: now,
+          },
+          $push: { resubmitAttempts: attempt },
+        }
+      );
+      throw fail(422, 'A linha corrigida foi rejeitada novamente.', { errors: outcome.errors });
+    }
+
+    await records.updateOne(
+      { _id: recordId, status: 'RESUBMITTING' },
+      {
+        $set: {
+          status: 'RESUBMITTED',
+          row,
+          sampleId: outcome.sampleId,
+          resubmittedBy,
+          resubmittedAt: now,
+          updatedAt: now,
+        },
+        $push: { resubmitAttempts: attempt },
+      }
+    );
+
+    const remaining = await db.collection('import_staging_records').countDocuments({ batchId, status: 'ERROR' });
+    await batches.updateOne(
+      { _id: batchId },
+      {
+        $inc: { 'counts.success': 1, 'counts.errors': -1, 'counts.resubmitted': 1 },
+        $set: { status: remaining === 0 ? 'RESOLVED' : batch.status, updatedAt: now },
+      }
+    );
+
+    return { sampleId: outcome.sampleId, recordStatus: 'RESUBMITTED', batchStatus: remaining === 0 ? 'RESOLVED' : batch.status };
+  }
+
+  /**
+   * A corrected row for #1352: a plain object whose keys carry no `$` or `.`
+   * and whose values are scalars, as a CSV row's are. Anything else is null.
+   */
+  sanitizeCorrectedRow(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    const entries = Object.entries(raw);
+    if (entries.length === 0 || entries.length > 200) return null;
+    const row = {};
+    for (const [key, value] of entries) {
+      if (!key || key.startsWith('$') || key.includes('.')) return null;
+      const type = typeof value;
+      if (value === null || type === 'number' || type === 'boolean') {
+        row[key] = value;
+      } else if (type === 'string' && value.length <= 10000) {
+        row[key] = value;
+      } else {
+        return null;
+      }
+    }
+    return row;
   }
 
   /**

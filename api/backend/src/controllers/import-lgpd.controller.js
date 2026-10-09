@@ -233,6 +233,56 @@ class ImportLGPDController {
   }
 
   /**
+   * POST /api/import-lgpd/batches/:batchId/records/:recordId/resubmit
+   * (#1352, RNF011 AC#4)
+   *
+   * Corrige e reenvia uma linha em quarentena pelo mesmo caminho da
+   * importacao (processSampleRow). Corpo: `{ row: { coluna: valor, ... } }`.
+   * 200 com o id da amostra; 422 com os novos erros quando a linha e
+   * rejeitada de novo (o registro volta a ERROR e guarda a tentativa); 409
+   * quando o registro ja nao esta em ERROR.
+   */
+  async resubmitQuarantinedRow(req, res) {
+    try {
+      const db = req.app.locals.db;
+      if (!db) {
+        return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
+      }
+
+      const result = await importLGPDService.resubmitQuarantinedSampleRow(
+        db,
+        req.params.batchId,
+        req.params.recordId,
+        req.body?.row,
+        {
+          neo4jDriver: req.app.locals.neo4jDriver || null,
+          // Both spellings, as importSamples passes them (#911).
+          actor: {
+            userID: req.user?.userID || req.user?.id || req.user?._id || null,
+            userId: req.user?.userID || req.user?.id || req.user?._id || null,
+            userName: req.user?.name || req.user?.email || 'IMPORT_LGPD',
+            userRole: req.user?.role || null,
+            ipAddress: req.ip || null,
+            userAgent: req.get?.('user-agent') || null,
+          },
+        }
+      );
+
+      return res.status(200).json({ success: true, data: result });
+    } catch (error) {
+      const status = error?.statusCode || 500;
+      if (status >= 500) {
+        logger.error('Erro ao reenviar linha de quarentena LGPD:', error.message || error);
+      }
+      return res.status(status).json({
+        success: false,
+        error: status >= 500 ? 'Erro ao reenviar linha de quarentena' : error.message,
+        ...(Array.isArray(error?.errors) ? { errors: error.errors } : {}),
+      });
+    }
+  }
+
+  /**
    * GET /api/import-lgpd/batches (#794 item 2, RNF011 AC#4)
    *
    * O ponto de entrada navegavel da quarentena. Sem ele so da para abrir um

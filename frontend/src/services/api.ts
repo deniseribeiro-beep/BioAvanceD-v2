@@ -1020,6 +1020,14 @@ export const importLGPDService = {
   getQuarantineBatch: (batchId: string) => {
     return api.get(`/import-lgpd/batches/${encodeURIComponent(batchId)}`);
   },
+  // #1352: correct-and-resubmit one quarantined sample row through the
+  // import's own row path.
+  resubmitQuarantinedRow: (batchId: string, recordId: string, row: Record<string, string>) => {
+    return api.post(
+      `/import-lgpd/batches/${encodeURIComponent(batchId)}/records/${encodeURIComponent(recordId)}/resubmit`,
+      { row }
+    );
+  },
 };
 
 // ========== SECURITY SERVICES ==========

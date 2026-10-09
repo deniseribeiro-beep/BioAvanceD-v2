@@ -9,11 +9,12 @@
  * tela. Esta página é o ponto de entrada — lista os lotes e abre as linhas
  * rejeitadas com os erros que as rejeitaram.
  *
- * A correção-e-reenvio de uma linha (item 3 do #794) ainda não existe; até lá
- * a tela é de revisão, e diz isso explicitamente em vez de sugerir uma ação
- * que não faria nada.
+ * #1352: uma linha de um lote de amostras ainda em ERROR pode ser corrigida e
+ * reenviada daqui. O reenvio roda pelo mesmo caminho da importação; uma
+ * correção ainda errada é recusada com os novos erros, e o registro guarda a
+ * tentativa.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, FileWarning, RefreshCw, FileCheck2, FileX2 } from 'lucide-react';
 import Card from '../components/UI/Card';
@@ -23,6 +24,9 @@ import {
   formatBatchSummary,
   formatRecordErrors,
   describeRowFields,
+  canResubmit,
+  toEditableRow,
+  resubmitErrorMessages,
   type QuarantineBatch,
   type QuarantineRecord,
 } from './importQuarantineFormatters';
@@ -41,6 +45,86 @@ const headStyle: React.CSSProperties = {
   whiteSpace: 'nowrap',
 };
 
+/**
+ * #1352: the correction form for one quarantined row. It starts from the
+ * retained row, sends every column back, and shows the backend's answer: on a
+ * rejection the new errors, on success nothing, since the page reloads the
+ * batch and the record then reads RESUBMITTED.
+ */
+function ResubmitForm({
+  batchId,
+  record,
+  onResubmitted,
+}: {
+  batchId: string;
+  record: QuarantineRecord;
+  onResubmitted: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [values, setValues] = useState<Record<string, string>>(() => toEditableRow(record));
+  const [submitting, setSubmitting] = useState(false);
+  const [errors, setErrors] = useState<string[]>([]);
+
+  if (!open) {
+    return (
+      <Button variant="secondary" onClick={() => setOpen(true)}>
+        Corrigir e reenviar
+      </Button>
+    );
+  }
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setSubmitting(true);
+    setErrors([]);
+    try {
+      await importLGPDService.resubmitQuarantinedRow(batchId, String(record._id), values);
+      onResubmitted();
+    } catch (err) {
+      const data = (err as { response?: { data?: unknown } })?.response?.data;
+      setErrors(resubmitErrorMessages(data));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <form onSubmit={submit} aria-label={`Corrigir linha ${record.rowNumber ?? ''}`} style={{ marginTop: 8 }}>
+      <table style={{ borderCollapse: 'collapse' }}>
+        <tbody>
+          {Object.keys(values).map((key) => (
+            <tr key={key}>
+              <td style={{ ...cellStyle, fontWeight: 600 }}>
+                <label htmlFor={`resubmit-${String(record._id)}-${key}`}>{key}</label>
+              </td>
+              <td style={cellStyle}>
+                <input
+                  id={`resubmit-${String(record._id)}-${key}`}
+                  value={values[key]}
+                  onChange={(event) => setValues((current) => ({ ...current, [key]: event.target.value }))}
+                />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {errors.length > 0 && (
+        <ul role="alert" style={{ color: '#b91c1c' }}>
+          {errors.map((message, index) => <li key={index}>{message}</li>)}
+        </ul>
+      )}
+      <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+        <Button type="submit" disabled={submitting}>
+          {submitting ? 'Reenviando...' : 'Reenviar linha'}
+        </Button>
+        <Button variant="secondary" type="button" onClick={() => setOpen(false)} disabled={submitting}>
+          Cancelar
+        </Button>
+      </div>
+    </form>
+  );
+}
+
 export default function ImportQuarantinePage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -52,6 +136,7 @@ export default function ImportQuarantinePage() {
   const [loadingList, setLoadingList] = useState(true);
   const [loadingBatch, setLoadingBatch] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   const loadBatches = useCallback(async () => {
     setLoadingList(true);
@@ -101,7 +186,7 @@ export default function ImportQuarantinePage() {
     return () => {
       cancelled = true;
     };
-  }, [selectedId]);
+  }, [selectedId, reloadKey]);
 
   const summaries = batches.map(formatBatchSummary);
 
@@ -121,8 +206,8 @@ export default function ImportQuarantinePage() {
 
       <p style={{ color: '#4b5563', marginTop: 0 }}>
         Linhas rejeitadas em importações LGPD ficam retidas aqui para revisão, em vez de
-        serem descartadas silenciosamente (RNF011). A correção e o reenvio de uma linha
-        ainda não estão disponíveis nesta tela.
+        serem descartadas silenciosamente (RNF011). Uma linha de um lote de amostras pode
+        ser corrigida e reenviada; o reenvio passa pela mesma validação da importação.
       </p>
 
       {error && (
@@ -227,6 +312,9 @@ export default function ImportQuarantinePage() {
                   style={{ borderTop: '1px solid #e5e7eb', paddingTop: 12, marginTop: 12 }}
                 >
                   <strong>Linha {record.rowNumber ?? '--'}</strong>
+                  {record.status && record.status !== 'ERROR' && (
+                    <span style={{ marginLeft: 8, color: '#047857' }}>{record.status}</span>
+                  )}
 
                   <ul style={{ color: '#b91c1c', marginTop: 6, marginBottom: 6 }}>
                     {errors.length === 0 ? (
@@ -252,6 +340,19 @@ export default function ImportQuarantinePage() {
                           ))}
                         </tbody>
                       </table>
+                    </div>
+                  )}
+
+                  {canResubmit(selectedBatch, record) && (
+                    <div style={{ marginTop: 8 }}>
+                      <ResubmitForm
+                        batchId={selectedId}
+                        record={record}
+                        onResubmitted={() => {
+                          setReloadKey((key) => key + 1);
+                          loadBatches();
+                        }}
+                      />
                     </div>
                   )}
                 </div>

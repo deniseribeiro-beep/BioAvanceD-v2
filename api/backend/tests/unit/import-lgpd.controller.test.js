@@ -62,6 +62,63 @@ describe('import-lgpd.controller', () => {
     });
   });
 
+  describe('resubmitQuarantinedRow (#1352)', () => {
+    function makeReq(body = { row: { sampleType: 'PLASMA' } }) {
+      return {
+        app: { locals: { db: {}, neo4jDriver: 'driver' } },
+        params: { batchId: 'b1', recordId: 'r1' },
+        body,
+        user: { userID: 'u1', name: 'Ana', role: 'Tecnico' },
+        ip: '10.0.0.1',
+        get: () => 'agent',
+      };
+    }
+
+    it('passes the ids, the row and the caller as actor, and answers 200 with the result', async () => {
+      const spy = vi.spyOn(importLGPDService, 'resubmitQuarantinedSampleRow')
+        .mockResolvedValue({ sampleId: 's1', recordStatus: 'RESUBMITTED', batchStatus: 'RESOLVED' });
+      const res = createRes();
+
+      await controller.resubmitQuarantinedRow(makeReq(), res);
+
+      const [, batchId, recordId, row, options] = spy.mock.calls[0];
+      expect([batchId, recordId, row]).toEqual(['b1', 'r1', { sampleType: 'PLASMA' }]);
+      expect(options.neo4jDriver).toBe('driver');
+      expect(options.actor).toMatchObject({ userID: 'u1', userId: 'u1', userName: 'Ana', userRole: 'Tecnico' });
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith({ success: true, data: { sampleId: 's1', recordStatus: 'RESUBMITTED', batchStatus: 'RESOLVED' } });
+    });
+
+    it('answers a rejected correction with 422 and its row errors', async () => {
+      const error = Object.assign(new Error('A linha corrigida foi rejeitada novamente.'), {
+        statusCode: 422,
+        errors: ['atcCode inválido: X'],
+      });
+      vi.spyOn(importLGPDService, 'resubmitQuarantinedSampleRow').mockRejectedValue(error);
+      const res = createRes();
+
+      await controller.resubmitQuarantinedRow(makeReq(), res);
+
+      expect(res.status).toHaveBeenCalledWith(422);
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'A linha corrigida foi rejeitada novamente.',
+        errors: ['atcCode inválido: X'],
+      });
+    });
+
+    it('hides an unexpected error behind a generic 500', async () => {
+      vi.spyOn(importLGPDService, 'resubmitQuarantinedSampleRow').mockRejectedValue(new Error('mongo down'));
+      vi.spyOn(logger, 'error').mockImplementation(() => {});
+      const res = createRes();
+
+      await controller.resubmitQuarantinedRow(makeReq(), res);
+
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Erro ao reenviar linha de quarentena' });
+    });
+  });
+
   describe('listSmartImportReports', () => {
     it('returns 503 when no db', async () => {
       const req = { app: { locals: {} }, query: {} };
