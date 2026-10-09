@@ -1433,6 +1433,18 @@ class ImportLGPDService {
         }
       }
 
+      const rowContext = {
+        samplesCollection,
+        patientsCollection,
+        validator,
+        drugService,
+        allocateUseCase,
+        groupFields,
+        autoIncrement,
+        startBoxId,
+        actor,
+      };
+
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
         // #1023: a linha FISICA no arquivo, vinda do reader via `sourceLines`
@@ -1440,7 +1452,6 @@ class ImportLGPDService {
         // mockam readFile com um array simples -- nesse caso a propriedade
         // nao-enumeravel nao existe e o comportamento antigo vale.
         const rowNumber = rows.sourceLines?.[i] ?? (i + 2);
-        let sampleData = null;
 
         // #1012: o guard isEmptyRow que existia aqui era inalcancavel -- pela
         // mesma razao do loop de importPatients (readCSV/readExcel ja
@@ -1454,379 +1465,28 @@ class ImportLGPDService {
         // import-lgpd.controller.js passes straight to auditLogger.logImport.
         // importPatientsSmart already counts in this position; importPatients
         // counts just after its empty-row guard. importSamples has no
-        // empty-row guard, so before the try is the equivalent spot.
+        // empty-row guard, so before processSampleRow is the equivalent spot.
         results.total++;
 
-        try {
-          // Parse dos dados do CSV/Excel
-          sampleData = this.parseSampleRow(row);
-
-          if (!sampleData.specimenId) {
-            const { generateUniqueSpecimenId } = require('../utils/sampleIDGenerator');
-            sampleData.specimenId = await generateUniqueSpecimenId(db, 'samples');
-          }
-
-          if (!sampleData.sampleType && groupFields?.sampleType) {
-            sampleData.sampleType = String(groupFields.sampleType).trim();
-          }
-          if (!sampleData.sampleOrigin && groupFields?.sampleOrigin) {
-            sampleData.sampleOrigin = String(groupFields.sampleOrigin).trim();
-          }
-          if (!sampleData.extractionProtocol && groupFields?.extractionProtocol) {
-            sampleData.extractionProtocol = String(groupFields.extractionProtocol).trim();
-          }
-
-          const matchedPatient = await participantIdentityService.matchOrUpsertParticipant(db, {
-            participantId: sampleData.participantId,
-            patientName: sampleData.patientName,
-            birthDate: sampleData.patientBirthDate,
-            identityDocument: sampleData.identityDocument,
-          });
-
-          sampleData.participantId = String(matchedPatient?.patient?.participantId || '').trim();
-          sampleData.patientObjectId = matchedPatient?.patient?._id || null;
-          sampleData.patientName = sampleData.patientName || matchedPatient?.patient?.patientName || null;
-
-          if (!sampleData.participantId) {
-            results.errors.push({ index: i,
-              row: rowNumber,
-              errors: ['Nao foi possivel resolver a identidade do paciente para a amostra'],
-              data: { participantId: null }
-            });
-            continue;
-          }
-
-          // Valida formato do ID (8 dígitos)
-          const participantIdStr = String(sampleData.participantId).trim();
-          if (participantIdStr.length !== 8 || !/^\d{8}$/.test(participantIdStr)) {
-            results.errors.push({ index: i,
-              row: rowNumber,
-              errors: [`ID de paciente inválido: deve ter exatamente 8 dígitos numéricos`],
-              data: { participantId: participantIdStr }
-            });
-            continue;
-          }
-
-          // Resolve/valida ATC por código ou nome do fármaco.
-          const pharmacology = sampleData.pharmacologyData && typeof sampleData.pharmacologyData === 'object'
-            ? sampleData.pharmacologyData
-            : {};
-          const treatmentStatus = String(pharmacology.treatmentStatus || '').trim().toUpperCase();
-          const isTreated = treatmentStatus === 'TREATED' || treatmentStatus === 'ON_TREATMENT';
-          const currentAtcCode = String(pharmacology.atcCode || '').trim().replace(/^ATC:/i, '').toUpperCase();
-          const currentDrugName = String(pharmacology.medicationName || '').trim();
-
-          if (currentAtcCode && !/^[A-Z]\d{2}[A-Z]{0,2}\d{0,2}$/.test(currentAtcCode)) {
-            results.errors.push({ index: i,
-              row: rowNumber,
-              errors: [`atcCode inválido: ${currentAtcCode}`],
-              data: { participantId: participantIdStr }
-            });
-            continue;
-          }
-
-          if (isTreated && !currentAtcCode && currentDrugName) {
-            const drugCandidates = await drugService.searchAndCacheDrug(currentDrugName, { limit: 5 });
-            const selectedDrug = Array.isArray(drugCandidates) && drugCandidates.length > 0 ? drugCandidates[0] : null;
-            if (selectedDrug) {
-              sampleData.pharmacologyData = {
-                ...pharmacology,
-                medicationName: String(selectedDrug.generic_name || selectedDrug.name || currentDrugName).trim(),
-                atcCode: String(selectedDrug.atcCode || '').trim().replace(/^ATC:/i, '').toUpperCase(),
-                atcClass: String(selectedDrug.drug_class || selectedDrug.atcClass || '').trim(),
-                drug_class: String(selectedDrug.drug_class || '').trim(),
-              };
-            }
-          }
-
-          // Valida dados da amostra
-          const validation = SampleModel.validate(sampleData);
-          if (!validation.isValid) {
-            results.errors.push({ index: i,
-              row: rowNumber,
-              errors: validation.errors,
-              data: { participantId: participantIdStr } // Apenas ID, sem dados sensíveis
-            });
-            continue;
-          }
-
-          // Validações específicas - verifica se os valores existem no banco.
-          // (SampleModel.validate() above already confirmed sampleType/sampleOrigin/extractionProtocol
-          // are valid per SampleModel.validateXxx, so only the findOne lookup can fail here)
-          // #702: consultado por `id`. Estes campos carregam o id MIABIS
-          // ("PLASMA"), enquanto `description` guarda o rótulo humano
-          // ("Plasma") -- consultar por description com um id nunca casava.
-          if (sampleData.sampleType) {
-            const sampleTypesCollection = db.collection('sampleTypes');
-            const validSampleType = await sampleTypesCollection.findOne({ id: sampleData.sampleType });
-            if (!validSampleType) {
-              results.errors.push({ index: i,
-                row: rowNumber,
-                errors: [`Tipo de amostra "${sampleData.sampleType}" não encontrado no banco de dados. Use um valor cadastrado.`],
-                data: { participantId: participantIdStr }
-              });
-              continue;
-            }
-          }
-
-          if (sampleData.sampleOrigin) {
-            const sampleOriginsCollection = db.collection('sampleOrigins');
-            const validOrigin = await sampleOriginsCollection.findOne({ id: sampleData.sampleOrigin });
-            if (!validOrigin) {
-              results.errors.push({ index: i,
-                row: rowNumber,
-                errors: [`Origem "${sampleData.sampleOrigin}" não encontrada no banco de dados. Use um valor cadastrado.`],
-                data: { participantId: participantIdStr }
-              });
-              continue;
-            }
-          }
-
-          if (sampleData.extractionProtocol) {
-            const extractionProtocolsCollection = db.collection('extractionProtocols');
-            const validProtocol = await extractionProtocolsCollection.findOne({ id: sampleData.extractionProtocol });
-            if (!validProtocol) {
-              results.errors.push({ index: i,
-                row: rowNumber,
-                errors: [`Protocolo de extração "${sampleData.extractionProtocol}" não encontrado no banco de dados. Use um valor cadastrado.`],
-                data: { participantId: participantIdStr }
-              });
-              continue;
-            }
-          }
-
-          // #944: era "RF004". Nenhum criterio do RF004 menciona barcode --
-          // AC#2 e sobre specimenId, outro identificador com outro gerador.
-          // O requisito que esta checagem serve e dict-02 ELM-0116
-          // (Specimen.barcodeValue), coluna Unicidade = `Unico`.
-          // #936 item 2: esta checagem roda ANTES da geracao (~linha 1507), entao so
-          // cobre barcodes VINDOS DO CSV, nunca um gerado. Foi avaliado e MANTIDO de
-          // proposito (2026-09-02), nao e descuido:
-          //   1. desde #932 o retry de generateUniqueBarcode consulta a colecao
-          //      certa, entao uma colisao gerada ja e detectada e re-tentada ali;
-          //   2. desde #936 item 1 existe indice unico real samples_barcode_unique_v1
-          //      (utils/sampleIndexes.js, montado em utils/collectionResolver.js:46-48),
-          //      entao uma colisao que escape ao retry falha alto com E11000 em vez de
-          //      corromper em silencio -- que e a protecao esperada desta guarda;
-          //   3. mover a guarda para depois da geracao transformaria uma colisao
-          //      gerada em REJEICAO da linha em vez de nova tentativa: pior para o
-          //      operador, e ELM-0116 nao pede isso.
-          // O ganho restante seria simetria; o custo e mudar o comportamento do
-          // import. INFERENCIA da preferencia do repositorio por mudancas estreitas,
-          // NAO citacao -- nenhum doc fala de ordem de guarda. Barato de reverter.
-          // Verifica duplicidade por barcode (se fornecido)
-          // #942: mesma propriedade de importPatients -- esta checagem consulta
-          // o BANCO, e duas linhas com o mesmo barcode no mesmo arquivo só são
-          // pegas porque o insert da linha N (:1537) é aguardado antes da
-          // checagem da linha N+1. Não há conjunto em memória dos barcodes já
-          // vistos neste arquivo. Não transforme o laço em lote sem adicionar um.
-          if (sampleData.barcode) {
-            const existingSample = await samplesCollection.findOne({ barcode: sampleData.barcode });
-            if (existingSample) {
-              results.errors.push({ index: i,
-                row: rowNumber,
-                errors: [`Já existe uma amostra com o código de barras ${sampleData.barcode}`],
-                data: { participantId: participantIdStr, barcode: sampleData.barcode }
-              });
-              // #931: chave de duplicidade deste caminho = barcode (RF004).
-              // Diferente da chave usada em importPatients, de proposito: sao
-              // entidades diferentes. Por isso `duplicatesFound` conta "linhas
-              // rejeitadas por duplicidade", nao "duplicidade por <uma> chave".
-              results.duplicates += 1;
-              continue;
-            }
-          }
-
-          // #459/#477: resolve a candidate storageLocation (boxId/positionCode)
-          // for this row — CSV-provided boxId first, then auto-increment
-          // from the StorageBox sequence, then a single fixed startBoxId
-          // applied to every location-less row — same precedence the legacy
-          // `getNextAvailableLocation`/`startLocationID` path used. Kept as a
-          // local candidate (not written onto sampleData) — the sample is
-          // inserted unallocated below, then AllocateSampleUseCase performs
-          // the actual atomic occupancyGrid reservation for this candidate.
-          let candidateLocation = null;
-          if (sampleData.boxId) {
-            const { ObjectId } = require('mongodb');
-            const boxesCollection = db.collection('storageBoxes');
-            const providedBoxId = ObjectId.isValid(String(sampleData.boxId))
-              ? new ObjectId(String(sampleData.boxId))
-              : null;
-            const providedBox = providedBoxId ? await boxesCollection.findOne({ _id: providedBoxId }) : null;
-            if (providedBox) {
-              candidateLocation = {
-                boxId: providedBox._id,
-                position: sampleData.positionCode || this.findFirstAvailablePositionInBox(providedBox),
-              };
-            }
-          }
-
-          if (!candidateLocation && autoIncrement && startBoxId) {
-            const nextSlot = await this.getNextAvailableStorageSlot(db, startBoxId, results.success);
-            if (nextSlot && nextSlot.position) {
-              candidateLocation = { boxId: nextSlot.boxId, position: nextSlot.position };
-              logger.debug(`Localização automática atribuída: caixa ${nextSlot.boxId} posição ${nextSlot.position} para linha ${rowNumber}`);
-            } else {
-              results.errors.push({ index: i,
-                row: rowNumber,
-                errors: ['Não há mais localizações de armazenamento disponíveis para incremento automático'],
-                data: { participantId: participantIdStr }
-              });
-              continue;
-            }
-          } else if (!candidateLocation && !autoIncrement && startBoxId) {
-            const { ObjectId } = require('mongodb');
-            const boxesCollection = db.collection('storageBoxes');
-            const startBoxObjectId = ObjectId.isValid(String(startBoxId)) ? new ObjectId(String(startBoxId)) : null;
-            const startBox = startBoxObjectId ? await boxesCollection.findOne({ _id: startBoxObjectId }) : null;
-            const position = startBox ? this.findFirstAvailablePositionInBox(startBox) : null;
-            if (startBox && position) {
-              candidateLocation = { boxId: startBox._id, position };
-            }
-          }
-
-          // #467: RF004 operational-sensor/equipment-readiness gate —
-          // `createSample`/`intakeWizard.js` both refuse to place a
-          // specimen in a freezer that isn't equipment-ready or has no
-          // operational sensor; bulk LGPD import bypasses `createSample`
-          // entirely and previously never checked this at all.
-          if (candidateLocation?.boxId) {
-            const storageBoxesCollection = db.collection('storageBoxes');
-            const placementBox = await storageBoxesCollection.findOne({ _id: candidateLocation.boxId });
-            const { freezer: placementFreezer } = placementBox
-              ? await this.resolveStorageHierarchyForBox(db, placementBox)
-              : {};
-            if (!placementFreezer || !(await this.isPlacementReady(db, placementFreezer))) {
-              results.errors.push({ index: i,
-                row: rowNumber,
-                errors: ['Localização física sem equipamento pronto ou sensor operacional associado.'],
-                data: { participantId: participantIdStr }
-              });
-              continue;
-            }
-          }
-
-          // Gera código de barras automaticamente se não fornecido
-          if (!sampleData.barcode || (typeof sampleData.barcode === 'string' && sampleData.barcode.trim() === '')) {
-            const { generateUniqueBarcode } = require('../utils/barcodeGenerator');
-            sampleData.barcode = await generateUniqueBarcode(db);
-            logger.info(`Código de barras gerado automaticamente para linha ${rowNumber}: ${sampleData.barcode}`);
-          } else {
-            // Converte para string se necessário
-            sampleData.barcode = String(sampleData.barcode).trim();
-          }
-
-          // Cria amostra
-          const sample = SampleModel.create(sampleData);
-          sample.patientName = sampleData.patientName || matchedPatient?.patient?.patientName || null;
-          sample.patient_name_confirmed = sample.patientName;
-          sample.patientObjectId = sampleData.patientObjectId || null;
-          sample.merkleRoot = generateSampleHash(sample);
-          
-          // Insere no banco (sem storageLocation — a amostra entra não alocada)
-          const insertResult = await samplesCollection.insertOne(sample);
-          results.importedSampleIds.push(insertResult.insertedId);
-          await recordSpecimenProjection(db, {
-            specimenId: String(insertResult.insertedId),
-            participantId: sample.participantId,
-            sourceService: 'import-lgpd.service'
-          });
-
-          // #499: mirrors import.service.js's CSV/XLSX branch — records the
-          // canonical, referenced RcsAssessment snapshot alongside the
-          // embedded copy this parser already computes.
-          if (sample.rcsEvaluation) {
-            try {
-              const assessment = await rcsAssessmentService.recordAssessment(db, sample.specimenId, sample.rcsEvaluation);
-              // #502: pins integrity verification to this snapshot, the one
-              // in effect when merkleRoot was sealed above, so a later
-              // re-assessment for the same specimenId can't false-positive
-              // a tamper report.
-              await samplesCollection.updateOne(
-                { _id: insertResult.insertedId },
-                { $set: { sealedRcsAssessmentId: assessment._id } }
-              );
-            } catch (assessmentError) {
-              logger.warn('[IMPORT_LGPD] Falha ao registrar snapshot RcsAssessment referenciado, amostra mantém cópia embutida', {
-                specimenId: sample.specimenId,
-                error: assessmentError?.message || String(assessmentError),
-              });
-            }
-          }
-
-          // #503: mirrors the RCS pin above and import.service.js's
-          // CSV/XLSX branch — records the canonical, referenced
-          // SpecimenPreanalytics snapshot alongside the embedded sprec copy.
-          if (sample.sprec) {
-            try {
-              const profile = await specimenPreanalyticsService.recordProfile(db, sample.specimenId, sample.sprec);
-              await samplesCollection.updateOne(
-                { _id: insertResult.insertedId },
-                { $set: { sealedSpecimenPreanalyticsId: profile._id } }
-              );
-            } catch (profileError) {
-              logger.warn('[IMPORT_LGPD] Falha ao registrar snapshot SpecimenPreanalytics referenciado, amostra mantém cópia embutida', {
-                specimenId: sample.specimenId,
-                error: profileError?.message || String(profileError),
-              });
-            }
-          }
-
-          // #477: AllocateSampleUseCase performs the atomic occupancyGrid
-          // write, storageLocation update, StorageAssignment record
-          // (dict-02 ELM-0167-0178) and audit/lineage trail for the
-          // candidate resolved above — replaces the old manual
-          // StorageAssignment insert, which never touched the box's
-          // occupancyGrid.
-          if (candidateLocation?.boxId) {
-            await allocateUseCase.execute({
-              specimenId: insertResult.insertedId,
-              boxId: String(candidateLocation.boxId),
-              position: candidateLocation.position,
-              actor: {
-                userId: actor?.userId || null,
-                userName: actor?.userName || 'IMPORT_LGPD',
-                userRole: actor?.userRole || null,
-                ipAddress: actor?.ipAddress || null,
-                userAgent: actor?.userAgent || null
-              }
-            });
-            sample.storageLocation = { boxId: candidateLocation.boxId, position: candidateLocation.position };
-          }
-
-          try {
-            await validator.validateSampleCompliance(String(insertResult.insertedId));
-          } catch (validationError) {
-            logger.warn('[IMPORT_LGPD] Falha no SampleGraphValidator durante importação', {
-              specimenId: String(insertResult.insertedId),
-              row: rowNumber,
-              error: validationError?.message || String(validationError),
-            });
-          }
-
-          // RF005/RNF007 (#575): patientName is civil identity — never
-          // written to Patient (was a bare patientName $set here before).
-          await patientsCollection.updateOne(
-            { _id: matchedPatient.patient._id },
-            {
-              $set: {
-                updatedAt: new Date(),
-                lastClinicalData: sample.clinicalData || {},
-              },
-              $addToSet: {
-                linkedSampleIds: String(insertResult.insertedId),
-              },
-            }
-          );
-          
+        // #817: the per-row work lives in processSampleRow so a resubmit of
+        // one quarantined row can run the same path that rejected it (#794),
+        // never a second validator. slotIndex is this loop's success count,
+        // the allocation cursor getNextAvailableStorageSlot always read.
+        const outcome = await this.processSampleRow(db, row, {
+          ...rowContext,
+          rowNumber,
+          slotIndex: results.success,
+        });
+        if (outcome.sampleId) {
+          results.importedSampleIds.push(outcome.sampleId);
+        }
+        if (outcome.ok) {
           results.success++;
-          
-        } catch (error) {
-          results.errors.push({ index: i,
-            row: rowNumber,
-            errors: [error.message],
-            data: { participantId: sampleData?.participantId || null }
-          });
+        } else {
+          results.errors.push({ index: i, row: rowNumber, errors: outcome.errors, data: outcome.data });
+          if (outcome.duplicate) {
+            results.duplicates += 1;
+          }
         }
       }
 
@@ -1863,6 +1523,344 @@ class ImportLGPDService {
     } catch (error) {
       logger.error('Erro ao importar amostras:', error.message);
       throw error;
+    }
+  }
+
+  /**
+   * #817: one sample row of importSamples, from parse to the patient link.
+   * Returns { ok: true, sampleId } or { ok: false, errors, data, duplicate? },
+   * and sets `sampleId` on a failure too once the sample was inserted, as the
+   * loop always listed it in importedSampleIds. `slotIndex` is the
+   * auto-increment allocation cursor; `rowNumber` is the physical file line.
+   */
+  async processSampleRow(db, row, context) {
+    const {
+      samplesCollection, patientsCollection, validator, drugService, allocateUseCase,
+      groupFields = {}, autoIncrement = false, startBoxId = null, actor = {},
+      slotIndex, rowNumber,
+    } = context;
+    let sampleData = null;
+    let insertedId = null;
+
+    try {
+      // Parse dos dados do CSV/Excel
+      sampleData = this.parseSampleRow(row);
+
+      if (!sampleData.specimenId) {
+        const { generateUniqueSpecimenId } = require('../utils/sampleIDGenerator');
+        sampleData.specimenId = await generateUniqueSpecimenId(db, 'samples');
+      }
+
+      if (!sampleData.sampleType && groupFields?.sampleType) {
+        sampleData.sampleType = String(groupFields.sampleType).trim();
+      }
+      if (!sampleData.sampleOrigin && groupFields?.sampleOrigin) {
+        sampleData.sampleOrigin = String(groupFields.sampleOrigin).trim();
+      }
+      if (!sampleData.extractionProtocol && groupFields?.extractionProtocol) {
+        sampleData.extractionProtocol = String(groupFields.extractionProtocol).trim();
+      }
+
+      const matchedPatient = await participantIdentityService.matchOrUpsertParticipant(db, {
+        participantId: sampleData.participantId,
+        patientName: sampleData.patientName,
+        birthDate: sampleData.patientBirthDate,
+        identityDocument: sampleData.identityDocument,
+      });
+
+      sampleData.participantId = String(matchedPatient?.patient?.participantId || '').trim();
+      sampleData.patientObjectId = matchedPatient?.patient?._id || null;
+      sampleData.patientName = sampleData.patientName || matchedPatient?.patient?.patientName || null;
+
+      if (!sampleData.participantId) {
+        return { ok: false, errors: ['Nao foi possivel resolver a identidade do paciente para a amostra'], data: { participantId: null } };
+      }
+
+      // Valida formato do ID (8 dígitos)
+      const participantIdStr = String(sampleData.participantId).trim();
+      if (participantIdStr.length !== 8 || !/^\d{8}$/.test(participantIdStr)) {
+        return { ok: false, errors: [`ID de paciente inválido: deve ter exatamente 8 dígitos numéricos`], data: { participantId: participantIdStr } };
+      }
+
+      // Resolve/valida ATC por código ou nome do fármaco.
+      const pharmacology = sampleData.pharmacologyData && typeof sampleData.pharmacologyData === 'object'
+        ? sampleData.pharmacologyData
+        : {};
+      const treatmentStatus = String(pharmacology.treatmentStatus || '').trim().toUpperCase();
+      const isTreated = treatmentStatus === 'TREATED' || treatmentStatus === 'ON_TREATMENT';
+      const currentAtcCode = String(pharmacology.atcCode || '').trim().replace(/^ATC:/i, '').toUpperCase();
+      const currentDrugName = String(pharmacology.medicationName || '').trim();
+
+      if (currentAtcCode && !/^[A-Z]\d{2}[A-Z]{0,2}\d{0,2}$/.test(currentAtcCode)) {
+        return { ok: false, errors: [`atcCode inválido: ${currentAtcCode}`], data: { participantId: participantIdStr } };
+      }
+
+      if (isTreated && !currentAtcCode && currentDrugName) {
+        const drugCandidates = await drugService.searchAndCacheDrug(currentDrugName, { limit: 5 });
+        const selectedDrug = Array.isArray(drugCandidates) && drugCandidates.length > 0 ? drugCandidates[0] : null;
+        if (selectedDrug) {
+          sampleData.pharmacologyData = {
+            ...pharmacology,
+            medicationName: String(selectedDrug.generic_name || selectedDrug.name || currentDrugName).trim(),
+            atcCode: String(selectedDrug.atcCode || '').trim().replace(/^ATC:/i, '').toUpperCase(),
+            atcClass: String(selectedDrug.drug_class || selectedDrug.atcClass || '').trim(),
+            drug_class: String(selectedDrug.drug_class || '').trim(),
+          };
+        }
+      }
+
+      // Valida dados da amostra
+      const validation = SampleModel.validate(sampleData);
+      if (!validation.isValid) {
+        return { ok: false, errors: validation.errors, data: { participantId: participantIdStr } }; // Apenas ID, sem dados sensíveis
+      }
+
+      // Validações específicas - verifica se os valores existem no banco.
+      // (SampleModel.validate() above already confirmed sampleType/sampleOrigin/extractionProtocol
+      // are valid per SampleModel.validateXxx, so only the findOne lookup can fail here)
+      // #702: consultado por `id`. Estes campos carregam o id MIABIS
+      // ("PLASMA"), enquanto `description` guarda o rótulo humano
+      // ("Plasma") -- consultar por description com um id nunca casava.
+      if (sampleData.sampleType) {
+        const sampleTypesCollection = db.collection('sampleTypes');
+        const validSampleType = await sampleTypesCollection.findOne({ id: sampleData.sampleType });
+        if (!validSampleType) {
+          return { ok: false, errors: [`Tipo de amostra "${sampleData.sampleType}" não encontrado no banco de dados. Use um valor cadastrado.`], data: { participantId: participantIdStr } };
+        }
+      }
+
+      if (sampleData.sampleOrigin) {
+        const sampleOriginsCollection = db.collection('sampleOrigins');
+        const validOrigin = await sampleOriginsCollection.findOne({ id: sampleData.sampleOrigin });
+        if (!validOrigin) {
+          return { ok: false, errors: [`Origem "${sampleData.sampleOrigin}" não encontrada no banco de dados. Use um valor cadastrado.`], data: { participantId: participantIdStr } };
+        }
+      }
+
+      if (sampleData.extractionProtocol) {
+        const extractionProtocolsCollection = db.collection('extractionProtocols');
+        const validProtocol = await extractionProtocolsCollection.findOne({ id: sampleData.extractionProtocol });
+        if (!validProtocol) {
+          return { ok: false, errors: [`Protocolo de extração "${sampleData.extractionProtocol}" não encontrado no banco de dados. Use um valor cadastrado.`], data: { participantId: participantIdStr } };
+        }
+      }
+
+      // #944: era "RF004". Nenhum criterio do RF004 menciona barcode --
+      // AC#2 e sobre specimenId, outro identificador com outro gerador.
+      // O requisito que esta checagem serve e dict-02 ELM-0116
+      // (Specimen.barcodeValue), coluna Unicidade = `Unico`.
+      // #936 item 2: esta checagem roda ANTES da geracao (~linha 1507), entao so
+      // cobre barcodes VINDOS DO CSV, nunca um gerado. Foi avaliado e MANTIDO de
+      // proposito (2026-09-02), nao e descuido:
+      //   1. desde #932 o retry de generateUniqueBarcode consulta a colecao
+      //      certa, entao uma colisao gerada ja e detectada e re-tentada ali;
+      //   2. desde #936 item 1 existe indice unico real samples_barcode_unique_v1
+      //      (utils/sampleIndexes.js, montado em utils/collectionResolver.js:46-48),
+      //      entao uma colisao que escape ao retry falha alto com E11000 em vez de
+      //      corromper em silencio -- que e a protecao esperada desta guarda;
+      //   3. mover a guarda para depois da geracao transformaria uma colisao
+      //      gerada em REJEICAO da linha em vez de nova tentativa: pior para o
+      //      operador, e ELM-0116 nao pede isso.
+      // O ganho restante seria simetria; o custo e mudar o comportamento do
+      // import. INFERENCIA da preferencia do repositorio por mudancas estreitas,
+      // NAO citacao -- nenhum doc fala de ordem de guarda. Barato de reverter.
+      // Verifica duplicidade por barcode (se fornecido)
+      // #942: mesma propriedade de importPatients -- esta checagem consulta
+      // o BANCO, e duas linhas com o mesmo barcode no mesmo arquivo só são
+      // pegas porque o insert da linha N (:1537) é aguardado antes da
+      // checagem da linha N+1. Não há conjunto em memória dos barcodes já
+      // vistos neste arquivo. Não transforme o laço em lote sem adicionar um.
+      if (sampleData.barcode) {
+        const existingSample = await samplesCollection.findOne({ barcode: sampleData.barcode });
+        if (existingSample) {
+          // #931: chave de duplicidade deste caminho = barcode (RF004).
+          // Diferente da chave usada em importPatients, de proposito: sao
+          // entidades diferentes. Por isso `duplicatesFound` conta "linhas
+          // rejeitadas por duplicidade", nao "duplicidade por <uma> chave".
+          return { ok: false, duplicate: true, errors: [`Já existe uma amostra com o código de barras ${sampleData.barcode}`], data: { participantId: participantIdStr, barcode: sampleData.barcode } };
+        }
+      }
+
+      // #459/#477: resolve a candidate storageLocation (boxId/positionCode)
+      // for this row — CSV-provided boxId first, then auto-increment
+      // from the StorageBox sequence, then a single fixed startBoxId
+      // applied to every location-less row — same precedence the legacy
+      // `getNextAvailableLocation`/`startLocationID` path used. Kept as a
+      // local candidate (not written onto sampleData) — the sample is
+      // inserted unallocated below, then AllocateSampleUseCase performs
+      // the actual atomic occupancyGrid reservation for this candidate.
+      let candidateLocation = null;
+      if (sampleData.boxId) {
+        const { ObjectId } = require('mongodb');
+        const boxesCollection = db.collection('storageBoxes');
+        const providedBoxId = ObjectId.isValid(String(sampleData.boxId))
+          ? new ObjectId(String(sampleData.boxId))
+          : null;
+        const providedBox = providedBoxId ? await boxesCollection.findOne({ _id: providedBoxId }) : null;
+        if (providedBox) {
+          candidateLocation = {
+            boxId: providedBox._id,
+            position: sampleData.positionCode || this.findFirstAvailablePositionInBox(providedBox),
+          };
+        }
+      }
+
+      if (!candidateLocation && autoIncrement && startBoxId) {
+        const nextSlot = await this.getNextAvailableStorageSlot(db, startBoxId, slotIndex);
+        if (nextSlot && nextSlot.position) {
+          candidateLocation = { boxId: nextSlot.boxId, position: nextSlot.position };
+          logger.debug(`Localização automática atribuída: caixa ${nextSlot.boxId} posição ${nextSlot.position} para linha ${rowNumber}`);
+        } else {
+          return { ok: false, errors: ['Não há mais localizações de armazenamento disponíveis para incremento automático'], data: { participantId: participantIdStr } };
+        }
+      } else if (!candidateLocation && !autoIncrement && startBoxId) {
+        const { ObjectId } = require('mongodb');
+        const boxesCollection = db.collection('storageBoxes');
+        const startBoxObjectId = ObjectId.isValid(String(startBoxId)) ? new ObjectId(String(startBoxId)) : null;
+        const startBox = startBoxObjectId ? await boxesCollection.findOne({ _id: startBoxObjectId }) : null;
+        const position = startBox ? this.findFirstAvailablePositionInBox(startBox) : null;
+        if (startBox && position) {
+          candidateLocation = { boxId: startBox._id, position };
+        }
+      }
+
+      // #467: RF004 operational-sensor/equipment-readiness gate —
+      // `createSample`/`intakeWizard.js` both refuse to place a
+      // specimen in a freezer that isn't equipment-ready or has no
+      // operational sensor; bulk LGPD import bypasses `createSample`
+      // entirely and previously never checked this at all.
+      if (candidateLocation?.boxId) {
+        const storageBoxesCollection = db.collection('storageBoxes');
+        const placementBox = await storageBoxesCollection.findOne({ _id: candidateLocation.boxId });
+        const { freezer: placementFreezer } = placementBox
+          ? await this.resolveStorageHierarchyForBox(db, placementBox)
+          : {};
+        if (!placementFreezer || !(await this.isPlacementReady(db, placementFreezer))) {
+          return { ok: false, errors: ['Localização física sem equipamento pronto ou sensor operacional associado.'], data: { participantId: participantIdStr } };
+        }
+      }
+
+      // Gera código de barras automaticamente se não fornecido
+      if (!sampleData.barcode || (typeof sampleData.barcode === 'string' && sampleData.barcode.trim() === '')) {
+        const { generateUniqueBarcode } = require('../utils/barcodeGenerator');
+        sampleData.barcode = await generateUniqueBarcode(db);
+        logger.info(`Código de barras gerado automaticamente para linha ${rowNumber}: ${sampleData.barcode}`);
+      } else {
+        // Converte para string se necessário
+        sampleData.barcode = String(sampleData.barcode).trim();
+      }
+
+      // Cria amostra
+      const sample = SampleModel.create(sampleData);
+      sample.patientName = sampleData.patientName || matchedPatient?.patient?.patientName || null;
+      sample.patient_name_confirmed = sample.patientName;
+      sample.patientObjectId = sampleData.patientObjectId || null;
+      sample.merkleRoot = generateSampleHash(sample);
+      
+      // Insere no banco (sem storageLocation — a amostra entra não alocada)
+      const insertResult = await samplesCollection.insertOne(sample);
+      insertedId = insertResult.insertedId;
+      await recordSpecimenProjection(db, {
+        specimenId: String(insertResult.insertedId),
+        participantId: sample.participantId,
+        sourceService: 'import-lgpd.service'
+      });
+
+      // #499: mirrors import.service.js's CSV/XLSX branch — records the
+      // canonical, referenced RcsAssessment snapshot alongside the
+      // embedded copy this parser already computes.
+      if (sample.rcsEvaluation) {
+        try {
+          const assessment = await rcsAssessmentService.recordAssessment(db, sample.specimenId, sample.rcsEvaluation);
+          // #502: pins integrity verification to this snapshot, the one
+          // in effect when merkleRoot was sealed above, so a later
+          // re-assessment for the same specimenId can't false-positive
+          // a tamper report.
+          await samplesCollection.updateOne(
+            { _id: insertResult.insertedId },
+            { $set: { sealedRcsAssessmentId: assessment._id } }
+          );
+        } catch (assessmentError) {
+          logger.warn('[IMPORT_LGPD] Falha ao registrar snapshot RcsAssessment referenciado, amostra mantém cópia embutida', {
+            specimenId: sample.specimenId,
+            error: assessmentError?.message || String(assessmentError),
+          });
+        }
+      }
+
+      // #503: mirrors the RCS pin above and import.service.js's
+      // CSV/XLSX branch — records the canonical, referenced
+      // SpecimenPreanalytics snapshot alongside the embedded sprec copy.
+      if (sample.sprec) {
+        try {
+          const profile = await specimenPreanalyticsService.recordProfile(db, sample.specimenId, sample.sprec);
+          await samplesCollection.updateOne(
+            { _id: insertResult.insertedId },
+            { $set: { sealedSpecimenPreanalyticsId: profile._id } }
+          );
+        } catch (profileError) {
+          logger.warn('[IMPORT_LGPD] Falha ao registrar snapshot SpecimenPreanalytics referenciado, amostra mantém cópia embutida', {
+            specimenId: sample.specimenId,
+            error: profileError?.message || String(profileError),
+          });
+        }
+      }
+
+      // #477: AllocateSampleUseCase performs the atomic occupancyGrid
+      // write, storageLocation update, StorageAssignment record
+      // (dict-02 ELM-0167-0178) and audit/lineage trail for the
+      // candidate resolved above — replaces the old manual
+      // StorageAssignment insert, which never touched the box's
+      // occupancyGrid.
+      if (candidateLocation?.boxId) {
+        await allocateUseCase.execute({
+          specimenId: insertResult.insertedId,
+          boxId: String(candidateLocation.boxId),
+          position: candidateLocation.position,
+          actor: {
+            userId: actor?.userId || null,
+            userName: actor?.userName || 'IMPORT_LGPD',
+            userRole: actor?.userRole || null,
+            ipAddress: actor?.ipAddress || null,
+            userAgent: actor?.userAgent || null
+          }
+        });
+        sample.storageLocation = { boxId: candidateLocation.boxId, position: candidateLocation.position };
+      }
+
+      try {
+        await validator.validateSampleCompliance(String(insertResult.insertedId));
+      } catch (validationError) {
+        logger.warn('[IMPORT_LGPD] Falha no SampleGraphValidator durante importação', {
+          specimenId: String(insertResult.insertedId),
+          row: rowNumber,
+          error: validationError?.message || String(validationError),
+        });
+      }
+
+      // RF005/RNF007 (#575): patientName is civil identity — never
+      // written to Patient (was a bare patientName $set here before).
+      await patientsCollection.updateOne(
+        { _id: matchedPatient.patient._id },
+        {
+          $set: {
+            updatedAt: new Date(),
+            lastClinicalData: sample.clinicalData || {},
+          },
+          $addToSet: {
+            linkedSampleIds: String(insertResult.insertedId),
+          },
+        }
+      );
+
+      return { ok: true, sampleId: insertResult.insertedId };
+    } catch (error) {
+      return {
+        ok: false,
+        errors: [error.message],
+        data: { participantId: sampleData?.participantId || null },
+        sampleId: insertedId,
+      };
     }
   }
 

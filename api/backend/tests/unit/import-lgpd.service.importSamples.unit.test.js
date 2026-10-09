@@ -814,6 +814,30 @@ describe('ImportLGPDService.importSamples', () => {
       expect(storageAssignments).toHaveLength(1);
     });
 
+    // #817: the per-row work moved into processSampleRow, and the loop now
+    // hands it the allocation cursor as `slotIndex`. The cursor is the count
+    // of rows imported so far, so a rejected row does not advance it.
+    it('passes the success count as the slot cursor, not advanced by a rejected row (#817)', async () => {
+      const chain = makeStorageChain(3);
+      const { db } = makeDbWithStorageChain(chain);
+      vi.spyOn(service, 'readFile').mockResolvedValue([
+        VALID_ROW,
+        { ...VALID_ROW, treatmentStatus: 'TREATED', atcCode: 'NOT-A-CODE' },
+        { ...VALID_ROW },
+      ]);
+      const slotSpy = vi.spyOn(service, 'getNextAvailableStorageSlot');
+
+      const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' }, {
+        autoIncrement: true,
+        startBoxId: String(chain.boxes[0]._id),
+      });
+
+      expect(result.success).toBe(2);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0]).toMatchObject({ index: 1 });
+      expect(slotSpy.mock.calls.map((call) => call[2])).toEqual([0, 1]);
+    });
+
     it('records a per-row error when autoIncrement is on but no more boxes are available', async () => {
       const chain = makeStorageChain(2);
       const { db } = makeDbWithStorageChain(chain);
@@ -1031,6 +1055,90 @@ describe('ImportLGPDService.importSamples', () => {
       expect(result.success).toBe(1);
       expect(result.errors).toHaveLength(1);
       expect(result.stagingBatchId).toBeNull();
+    });
+  });
+});
+
+// #817: processSampleRow is the one implementation of a sample row, called
+// by importSamples' loop and meant for a resubmit of one quarantined row
+// (#794). It reports the row's outcome and holds no batch state of its own.
+describe('ImportLGPDService.processSampleRow (#817)', () => {
+  let db;
+  let samplesCollection;
+  let patientsCollection;
+
+  function rowContext(overrides = {}) {
+    return {
+      samplesCollection,
+      patientsCollection,
+      validator: { validateSampleCompliance: vi.fn().mockResolvedValue({ ok: true }) },
+      drugService: new DrugService(db),
+      allocateUseCase: { execute: vi.fn() },
+      groupFields: {},
+      autoIncrement: false,
+      startBoxId: null,
+      actor: {},
+      slotIndex: 0,
+      rowNumber: 2,
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    ({ db, samplesCollection, patientsCollection } = makeDb());
+    vi.spyOn(patientIdentityService, 'matchOrUpsertParticipant').mockResolvedValue(MATCHED_PATIENT);
+    vi.spyOn(qualityDomain, 'resolveMethodologicalQuality').mockReturnValue({
+      governance_status: 1,
+      final_grade: 'A',
+      category: 'A',
+      score: 90,
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('returns ok with the inserted id for a valid row', async () => {
+    const outcome = await service.processSampleRow(db, VALID_ROW, rowContext());
+
+    expect(outcome).toEqual({ ok: true, sampleId: 'sample-id-1' });
+    expect(samplesCollection.insertOne).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns the rejection without inserting, for the caller to record', async () => {
+    const outcome = await service.processSampleRow(
+      db,
+      { ...VALID_ROW, treatmentStatus: 'TREATED', atcCode: 'NOT-A-CODE' },
+      rowContext()
+    );
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.errors[0]).toMatch(/atcCode inválido/);
+    expect(outcome.data).toEqual({ participantId: '12345678' });
+    expect(outcome.sampleId).toBeUndefined();
+    expect(samplesCollection.insertOne).not.toHaveBeenCalled();
+  });
+
+  it('flags a duplicate barcode as a duplicate rejection', async () => {
+    ({ db, samplesCollection, patientsCollection } = makeDb({ existingBarcode: { _id: 'other' } }));
+
+    const outcome = await service.processSampleRow(db, { ...VALID_ROW, barcode: 'BC-1' }, rowContext());
+
+    expect(outcome).toMatchObject({ ok: false, duplicate: true });
+    expect(outcome.errors[0]).toMatch(/código de barras BC-1/);
+  });
+
+  it('reports the inserted id with the error when a step after the insert throws', async () => {
+    patientsCollection.updateOne = vi.fn().mockRejectedValue(new Error('patients down'));
+
+    const outcome = await service.processSampleRow(db, VALID_ROW, rowContext());
+
+    expect(outcome).toEqual({
+      ok: false,
+      errors: ['patients down'],
+      data: { participantId: '12345678' },
+      sampleId: 'sample-id-1',
     });
   });
 });
