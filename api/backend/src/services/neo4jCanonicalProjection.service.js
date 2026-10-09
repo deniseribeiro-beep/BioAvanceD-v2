@@ -325,8 +325,14 @@ class Neo4jCanonicalProjectionService {
     return { projected: true, eventType: event.eventType, specimenId };
   }
 
-  // #1312: a sample sits in one position at a time, so an earlier STORED_AT
-  // edge to another position is removed before the current one is merged.
+  // #1312: a sample sits in one position at a time. #1313 (RF023 AC5): the
+  // placement is a temporal edge, validTime = [validFrom, validTo), with
+  // the projection instant as transactionTime. A new placement closes the
+  // open edge at its own validFrom rather than deleting it, so the graph
+  // keeps where the sample was and when. Each placement is its own edge,
+  // keyed by its validFrom, so a replay of the same event merges onto it and
+  // a return to an earlier position opens a new interval. An edge from
+  // before this change has no validFrom, and the next placement closes it.
   async applyStoragePositionProjection(session, event) {
     const payload = event.payload || {};
     const specimenId = normalizeText(payload.specimenId || event.aggregateId);
@@ -348,13 +354,15 @@ class Neo4jCanonicalProjectionService {
       SET pos.updatedAt = datetime()
 
       WITH sample, pos
-      OPTIONAL MATCH (sample)-[old:STORED_AT]->(other:StoragePosition)
-      WHERE other <> pos
-      DELETE old
+      OPTIONAL MATCH (sample)-[old:STORED_AT]->(:StoragePosition)
+      WHERE old.validTo IS NULL
+        AND (old.validFrom IS NULL OR old.validFrom < datetime($validFrom))
+      SET old.validTo = datetime($validFrom)
 
       WITH DISTINCT sample, pos
-      MERGE (sample)-[r:STORED_AT]->(pos)
-      ON CREATE SET r.createdAt = datetime(), r.source = $sourceService
+      MERGE (sample)-[r:STORED_AT {validFrom: datetime($validFrom)}]->(pos)
+      ON CREATE SET r.createdAt = datetime(), r.source = $sourceService,
+                    r.transactionTime = datetime()
       SET r.updatedAt = datetime(), r.schemaVersion = $schemaVersion, r.eventId = $eventId
 
       RETURN sample.id AS specimenId, pos.boxId AS boxId, pos.position AS position
@@ -364,6 +372,7 @@ class Neo4jCanonicalProjectionService {
       specimenId,
       boxId,
       position,
+      validFrom: normalizeIso(payload.assignedAt || event.occurredAt) || new Date().toISOString(),
       schemaVersion: Number(event.schemaVersion || 1),
       sourceService: normalizeText(event.sourceService) || 'unknown',
       eventId: normalizeText(event.eventId),

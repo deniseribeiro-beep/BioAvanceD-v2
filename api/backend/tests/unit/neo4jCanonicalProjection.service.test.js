@@ -255,21 +255,39 @@ describe('neo4jCanonicalProjection.service', () => {
   // #1312: the placement and the cold-chain compromise, projected from the
   // outbox instead of written by storageService and TelemetryMonitor.
   describe('#1312 storage and compromise projections', () => {
-    it('routes STORAGE_POSITION_ASSIGNED to a canonical STORED_AT, replacing an earlier position', async () => {
+    // #1313 (RF023 AC5): the placement is a temporal edge; the earlier one is
+    // closed at the new validFrom, never deleted.
+    it('routes STORAGE_POSITION_ASSIGNED to a temporal STORED_AT, closing an earlier position', async () => {
       const service = new Neo4jCanonicalProjectionService();
       const session = makeSession();
       const result = await service.applyEvent(session, {
         eventType: 'STORAGE_POSITION_ASSIGNED',
         eventId: 'evt-s',
+        occurredAt: '2026-10-09T10:00:00.000Z',
         payload: { specimenId: 'sample-1', boxId: 'box-1', position: 'A3' },
       });
       expect(result).toMatchObject({ projected: true, specimenId: 'sample-1' });
       const [cypher, params] = session.run.mock.calls[0];
       expect(cypher).toContain('MERGE (pos:StoragePosition {boxId: $boxId, position: $position})');
-      expect(cypher).toContain('DELETE old');
-      expect(cypher).toContain('MERGE (sample)-[r:STORED_AT]->(pos)');
+      expect(cypher).not.toContain('DELETE old');
+      expect(cypher).toContain('SET old.validTo = datetime($validFrom)');
+      expect(cypher).toContain('MERGE (sample)-[r:STORED_AT {validFrom: datetime($validFrom)}]->(pos)');
+      expect(cypher).toContain('r.transactionTime = datetime()');
       expect(cypher).not.toContain('STORED_IN');
-      expect(params).toMatchObject({ specimenId: 'sample-1', boxId: 'box-1', position: 'A3', eventId: 'evt-s' });
+      expect(params).toMatchObject({
+        specimenId: 'sample-1', boxId: 'box-1', position: 'A3', eventId: 'evt-s', validFrom: '2026-10-09T10:00:00.000Z',
+      });
+    });
+
+    it('takes the placement instant from payload.assignedAt over the event time', async () => {
+      const service = new Neo4jCanonicalProjectionService();
+      const session = makeSession();
+      await service.applyEvent(session, {
+        eventType: 'STORAGE_POSITION_ASSIGNED',
+        occurredAt: '2026-10-09T10:00:00.000Z',
+        payload: { specimenId: 'sample-1', boxId: 'box-1', position: 'A3', assignedAt: '2026-10-08T09:00:00.000Z' },
+      });
+      expect(session.run.mock.calls[0][1].validFrom).toBe('2026-10-08T09:00:00.000Z');
     });
 
     it('skips a STORAGE_POSITION_ASSIGNED missing its box or position, writing nothing', async () => {
