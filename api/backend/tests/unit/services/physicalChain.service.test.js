@@ -1,0 +1,206 @@
+import { describe, it, expect } from 'vitest';
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
+const service = require('../../../src/services/physicalChain.service');
+
+// #1314: a query-matching fake. Equality, `$or` and `$in` match the way Mongo
+// does, so the overlap check reads the rows a real query would return.
+function matches(doc, filter) {
+  return Object.entries(filter).every(([key, value]) => {
+    if (key === '$or') return value.some((branch) => matches(doc, branch));
+    if (value && typeof value === 'object' && Array.isArray(value.$in)) return value.$in.includes(doc[key]);
+    return doc[key] === value;
+  });
+}
+
+function createFakeCollection() {
+  const docs = [];
+  const indexes = [];
+  return {
+    docs,
+    indexes,
+    async createIndex(keys, options = {}) { indexes.push({ keys, options }); },
+    async insertOne(doc) {
+      // The partial unique indexes: two open rows on one key are refused.
+      for (const { keys, options } of indexes) {
+        if (!options.unique) continue;
+        const [field] = Object.keys(keys);
+        const inScope = (row) => !options.partialFilterExpression || matches(row, options.partialFilterExpression);
+        if (inScope(doc) && docs.some((row) => inScope(row) && row[field] === doc[field])) {
+          throw Object.assign(new Error('E11000 duplicate key'), { code: 11000 });
+        }
+      }
+      docs.push({ ...doc });
+      return { insertedId: docs.length };
+    },
+    async findOne(filter) { return docs.find((doc) => matches(doc, filter)) || null; },
+    find(filter = {}) { return { toArray: async () => docs.filter((doc) => matches(doc, filter)) }; },
+    async updateOne(filter, update) {
+      const doc = docs.find((row) => matches(row, filter));
+      if (doc) Object.assign(doc, update.$set);
+      return { matchedCount: doc ? 1 : 0 };
+    },
+  };
+}
+
+function createFakeDb() {
+  const collections = {};
+  return {
+    collections,
+    collection(name) {
+      collections[name] = collections[name] || createFakeCollection();
+      return collections[name];
+    },
+  };
+}
+
+async function expectRefusal(promise, code, statusCode) {
+  await expect(promise).rejects.toMatchObject({ name: 'PhysicalChainError', code, statusCode });
+}
+
+const T = (iso) => new Date(`2026-10-0${iso}T00:00:00.000Z`);
+
+describe('physicalChain.service (#1314, RF016 AC1/AC3, RF017 AC2-AC4)', () => {
+  it('creates an empty container, and a load makes it occupied and an unload empty again', async () => {
+    const db = createFakeDb();
+    const container = await service.createContainer(db, { containerId: 'CT-1', containerType: 'cryovial' });
+    expect(container.emptyStatus).toBe('empty');
+
+    const loaded = await service.loadSpecimen(db, { specimenId: 'SPC-1', containerId: 'CT-1', sourceEventId: 'evt-1', loadedAt: T(1) });
+    expect(loaded.assignmentStatus).toBe('active');
+    expect(db.collections.containers.docs[0].emptyStatus).toBe('occupied');
+
+    const unloaded = await service.unloadSpecimen(db, loaded.specimenContainerAssignmentId, T(2));
+    expect(unloaded).toMatchObject({ assignmentStatus: 'ended', unloadedAt: T(2) });
+    expect(db.collections.specimenContainerAssignments.docs[0]).toMatchObject({ assignmentStatus: 'ended', unloadedAt: T(2) });
+    expect(db.collections.containers.docs[0].emptyStatus).toBe('empty');
+  });
+
+  it('refuses a duplicate container id, and a container without its type (1..1)', async () => {
+    const db = createFakeDb();
+    await service.createContainer(db, { containerId: 'CT-1', containerType: 'cryovial' });
+    await expectRefusal(service.createContainer(db, { containerId: 'CT-1', containerType: 'cryovial' }), 'CONTAINER_EXISTS', 409);
+    await expectRefusal(service.createContainer(db, { containerId: 'CT-2' }), 'VALIDATION_ERROR', 422);
+  });
+
+  it('RF017 AC4: refuses a second container for a specimen over an overlapping interval, the history included', async () => {
+    const db = createFakeDb();
+    await service.createContainer(db, { containerId: 'CT-1', containerType: 'cryovial' });
+    await service.createContainer(db, { containerId: 'CT-2', containerType: 'cryovial' });
+    const first = await service.loadSpecimen(db, { specimenId: 'SPC-1', containerId: 'CT-1', sourceEventId: 'evt-1', loadedAt: T(1) });
+
+    await expectRefusal(
+      service.loadSpecimen(db, { specimenId: 'SPC-1', containerId: 'CT-2', sourceEventId: 'evt-2', loadedAt: T(3) }),
+      'ASSIGNMENT_OVERLAP', 409,
+    );
+
+    await service.unloadSpecimen(db, first.specimenContainerAssignmentId, T(5));
+    // A back-dated load inside the closed interval [T1, T5) still overlaps it.
+    await expectRefusal(
+      service.loadSpecimen(db, { specimenId: 'SPC-1', containerId: 'CT-2', sourceEventId: 'evt-3', loadedAt: T(3), unloadedAt: T(4) }),
+      'ASSIGNMENT_OVERLAP', 409,
+    );
+    // Half-open: a load at the unload instant does not overlap.
+    const next = await service.loadSpecimen(db, { specimenId: 'SPC-1', containerId: 'CT-2', sourceEventId: 'evt-4', loadedAt: T(5) });
+    expect(next.containerId).toBe('CT-2');
+  });
+
+  it('a concurrent open load the check could not see meets the partial unique index as the same overlap', async () => {
+    const db = createFakeDb();
+    await service.createContainer(db, { containerId: 'CT-1', containerType: 'cryovial' });
+    await service.loadSpecimen(db, { specimenId: 'SPC-1', containerId: 'CT-1', sourceEventId: 'evt-1', loadedAt: T(1) });
+    const assignments = db.collections.specimenContainerAssignments;
+    expect(assignments.indexes).toContainEqual({
+      keys: { specimenId: 1 }, options: { unique: true, name: 'uniq_open_specimen', partialFilterExpression: { assignmentStatus: 'active' } },
+    });
+
+    // The writer reads before the other's insert lands: hide the open row from find.
+    const find = assignments.find;
+    assignments.find = () => ({ toArray: async () => [] });
+    await expectRefusal(
+      service.loadSpecimen(db, { specimenId: 'SPC-1', containerId: 'CT-1', sourceEventId: 'evt-2', loadedAt: T(2) }),
+      'ASSIGNMENT_OVERLAP', 409,
+    );
+    assignments.find = find;
+  });
+
+  it('refuses a load into a container that does not exist, and an unload of an ended or unknown assignment', async () => {
+    const db = createFakeDb();
+    await expectRefusal(
+      service.loadSpecimen(db, { specimenId: 'SPC-1', containerId: 'CT-404', sourceEventId: 'evt-1' }),
+      'CONTAINER_NOT_FOUND', 404,
+    );
+    await service.createContainer(db, { containerId: 'CT-1', containerType: 'cryovial' });
+    const loaded = await service.loadSpecimen(db, { specimenId: 'SPC-1', containerId: 'CT-1', sourceEventId: 'evt-1', loadedAt: T(1) });
+    await service.unloadSpecimen(db, loaded.specimenContainerAssignmentId, T(2));
+    await expectRefusal(service.unloadSpecimen(db, loaded.specimenContainerAssignmentId, T(3)), 'ASSIGNMENT_ENDED', 409);
+    await expectRefusal(service.unloadSpecimen(db, 'nope'), 'ASSIGNMENT_NOT_FOUND', 404);
+  });
+
+  it('RULE-030: one container per position and one position per container over an interval', async () => {
+    const db = createFakeDb();
+    await service.createContainer(db, { containerId: 'CT-1', containerType: 'cryovial' });
+    await service.createContainer(db, { containerId: 'CT-2', containerType: 'cryovial' });
+    const placed = await service.placeContainer(db, { containerId: 'CT-1', storagePositionId: 'rack-96-001:A01', placedAt: T(1) });
+
+    await expectRefusal(
+      service.placeContainer(db, { containerId: 'CT-2', storagePositionId: 'rack-96-001:A01', placedAt: T(2) }),
+      'ASSIGNMENT_OVERLAP', 409,
+    );
+    await expectRefusal(
+      service.placeContainer(db, { containerId: 'CT-1', storagePositionId: 'rack-96-001:A02', placedAt: T(2) }),
+      'ASSIGNMENT_OVERLAP', 409,
+    );
+
+    await service.removeContainer(db, placed.containerPositionAssignmentId, T(3));
+    // A back-dated stay inside CT-1's closed [T1, T3) at A01 still overlaps it.
+    await expectRefusal(
+      service.placeContainer(db, { containerId: 'CT-2', storagePositionId: 'rack-96-001:A01', placedAt: T(2), removedAt: new Date('2026-10-02T12:00:00.000Z') }),
+      'ASSIGNMENT_OVERLAP', 409,
+    );
+    const moved = await service.placeContainer(db, { containerId: 'CT-2', storagePositionId: 'rack-96-001:A01', placedAt: T(3) });
+    expect(moved.storagePositionId).toBe('rack-96-001:A01');
+  });
+
+  it('records a historical interval given its end as closed, so the key can still take its open assignment', async () => {
+    const db = createFakeDb();
+    await service.createContainer(db, { containerId: 'CT-1', containerType: 'cryovial' });
+    const history = await service.placeContainer(db, { containerId: 'CT-1', storagePositionId: 'rack-96-001:A01', placedAt: T(1), removedAt: T(2) });
+    expect(history.assignmentStatus).toBe('ended');
+
+    const current = await service.placeContainer(db, { containerId: 'CT-1', storagePositionId: 'rack-96-001:A02', placedAt: T(2) });
+    expect(current.assignmentStatus).toBe('active');
+  });
+
+  it('RULE-035: a rack is in one location at a time', async () => {
+    const db = createFakeDb();
+    const located = await service.locateRack(db, { storageRackId: 'rack-96-001', storageLocationId: 'freezer-1', sourceEventId: 'evt-1', placedAt: T(1) });
+    await expectRefusal(
+      service.locateRack(db, { storageRackId: 'rack-96-001', storageLocationId: 'freezer-2', sourceEventId: 'evt-2', placedAt: T(2) }),
+      'ASSIGNMENT_OVERLAP', 409,
+    );
+    await service.removeRack(db, located.rackLocationAssignmentId, T(2));
+    await expect(
+      service.locateRack(db, { storageRackId: 'rack-96-001', storageLocationId: 'freezer-2', sourceEventId: 'evt-2', placedAt: T(2) }),
+    ).resolves.toMatchObject({ storageLocationId: 'freezer-2' });
+  });
+
+  it('RF016 AC3: resolves a specimen through container, position and rack at an instant', async () => {
+    const db = createFakeDb();
+    await service.createContainer(db, { containerId: 'CT-1', containerType: 'cryovial' });
+    await service.loadSpecimen(db, { specimenId: 'SPC-1', containerId: 'CT-1', sourceEventId: 'evt-1', loadedAt: T(2) });
+    await service.placeContainer(db, { containerId: 'CT-1', storagePositionId: 'rack-96-001:B03', placedAt: T(2) });
+    const first = await service.locateRack(db, { storageRackId: 'rack-96-001', storageLocationId: 'freezer-1', sourceEventId: 'evt-2', placedAt: T(1) });
+    await service.removeRack(db, first.rackLocationAssignmentId, T(4));
+    await service.locateRack(db, { storageRackId: 'rack-96-001', storageLocationId: 'freezer-2', sourceEventId: 'evt-3', placedAt: T(4) });
+
+    expect(await service.resolveSpecimenLocation(db, 'SPC-1', T(3))).toMatchObject({
+      containerId: 'CT-1', storagePositionId: 'rack-96-001:B03', storageRackId: 'rack-96-001', storageLocationId: 'freezer-1',
+    });
+    expect((await service.resolveSpecimenLocation(db, 'SPC-1', T(5))).storageLocationId).toBe('freezer-2');
+    expect(await service.resolveSpecimenLocation(db, 'SPC-1', T(1))).toMatchObject({
+      containerId: null, storagePositionId: null, storageRackId: null, storageLocationId: null,
+    });
+  });
+});
