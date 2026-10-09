@@ -39,6 +39,34 @@ test.describe('Intake wizard (/next/intake)', () => {
         body: JSON.stringify({ success: true, data: [] }),
       });
     });
+
+    // #1357: the mocked token has no refresh cookie, so a refresh 401s on the
+    // real backend at once. Without a backend it dies on a network error and
+    // the client's port scan delays the logout past a case's end, so a host
+    // run passed what the Docker gate failed. Answering 401 here makes an
+    // unfulfilled route fail the same way on both.
+    await page.route('**/api/auth/refresh', async (route) => {
+      await route.fulfill({
+        status: 401,
+        contentType: 'application/json',
+        body: JSON.stringify({ success: false, message: 'Unauthorized' }),
+      });
+    });
+
+    // #1357: useCreateOrganizationChoice looks up the caller's scope on
+    // mount. Unfulfilled, it reaches the real backend with the mocked token,
+    // 401s, and the client ends the session. One organization means no
+    // picker, so the demographic step renders as before.
+    await page.route('**/api/organizations/mine', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: true,
+          data: { scope: 'organization', organizations: [{ organizationId: 'org-e2e-mock', officialName: 'Mock Org' }] },
+        }),
+      });
+    });
   });
 
   test('renders the demographic step and accepts patient data entry', async ({ page }) => {
