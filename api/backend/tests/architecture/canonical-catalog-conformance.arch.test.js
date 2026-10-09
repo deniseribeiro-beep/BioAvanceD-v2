@@ -189,12 +189,18 @@ const KNOWN_DRIFT = {
   },
   SpecimenPreanalytics: {
     absent: [],
+    // Deliberate, all five (#1330's last item, decided 2026-10-09): these are
+    // the raw SPREC axis slots import.service.js fills from CSV columns, and
+    // fieldsOf() derives every sprec* canonical name from them. matrixType is
+    // the discriminator of that derivation (fluid vs solid relabel axes 2-6),
+    // and dict-02 has no row for it. Dropping the slots would leave a snapshot
+    // with derived values and no record of the input they came from.
     extra: [
-      { key: 'matrixType', note: "TODO(#1330): SpecimenPreanalytics.js's own header documents this as one of the generic axis-position slots import.service.js populates from CSV columns, from which the sprec* canonical names are derived -- no canonical field named exactly matrixType." },
-      { key: 'sampleType', note: 'TODO(#1330): generic axis slot; sprecSpecimenType is the derived canonical field, already present and matched.' },
-      { key: 'primaryContainer', note: 'TODO(#1330): generic axis slot; sprecPrimaryContainer/sprecCollectionType are the derived canonical fields, already present and matched.' },
-      { key: 'preCentrifugation', note: 'TODO(#1330): generic axis slot; warmIschemiaTime/preCentrifugationDelay are the derived canonical fields, already present and matched.' },
-      { key: 'centrifugation', note: 'TODO(#1330): generic axis slot; coldIschemiaTime/firstCentrifugation are the derived canonical fields, already present and matched.' }
+      { key: 'matrixType', note: 'Deliberate local extension: the fluid/solid discriminator fieldsOf() derives the sprec* names by; no canonical row.' },
+      { key: 'sampleType', note: 'Deliberate local extension: raw axis-1 slot; sprecSpecimenType is the derived canonical field, present and matched.' },
+      { key: 'primaryContainer', note: 'Deliberate local extension: raw axis-2 slot; sprecPrimaryContainer/sprecCollectionType are the derived canonical fields, present and matched.' },
+      { key: 'preCentrifugation', note: 'Deliberate local extension: raw axis-3 slot; warmIschemiaTime/preCentrifugationDelay are the derived canonical fields, present and matched.' },
+      { key: 'centrifugation', note: 'Deliberate local extension: raw axis-4 slot; coldIschemiaTime/firstCentrifugation are the derived canonical fields, present and matched.' }
     ]
   },
   UserAccount: {
