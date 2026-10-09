@@ -88,6 +88,7 @@ const ENTITY_TARGETS = {
   LabelIdentifier: () => require('../../src/models/LabelIdentifier').fieldsOf(),
   IdentifierNamespaceRegistry: () => require('../../src/models/IdentifierNamespaceRegistry').fieldsOf(),
   IdentificationPolicy: () => require('../../src/models/IdentificationPolicy').fieldsOf(),
+  ScanEvent: () => require('../../src/models/ScanEvent').fieldsOf(),
   UserRoleAssignment: () => require('../../src/models/UserRoleAssignment').fieldsOf(),
   UserAccount: () => require('../../src/models/User').fieldsOf(),
   Session: () => require('../../src/models/Session').fieldsOf(),
