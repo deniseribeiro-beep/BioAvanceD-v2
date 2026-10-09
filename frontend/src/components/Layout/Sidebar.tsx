@@ -99,6 +99,8 @@ export default function Sidebar() {
     // page is reachable only by typing the URL, which is the #659 defect and
     // would leave the rejected rows about as reachable as they were in Mongo.
     { path: '/import/quarantine', icon: FileWarning, label: t('navigation.importQuarantine', 'Quarentena de Importação'), roles: ['Administrador', 'Coordenador', 'Técnico'] },
+    // RF024 (#1350): access and distribution requests.
+    { path: '/access-requests', icon: Shield, label: t('navigation.accessRequests', 'Solicitações de Acesso'), roles: ['Administrador'] },
     { path: '/admin/tcle/new', icon: FileText, label: t('navigation.tcleBuilder', 'Construtor de TCLE'), roles: ['Administrador', 'Coordenador'] },
     { path: '/user/security', icon: Shield, label: t('navigation.userSecurity'), roles: ['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo'] },
     { path: '/reports', icon: BarChart3, label: t('navigation.reports'), roles: ['Administrador', 'Coordenador', 'Usuário Externo'] },

@@ -26,6 +26,8 @@ import {
   CollectionGovernanceApproval,
   CollectionGovernanceEvent,
   ReportTemplate,
+  AccessRequest,
+  AccessCheck,
 } from '../types/models';
 import { clearClientSession } from '../utils/sessionCleanup';
 
@@ -620,6 +622,21 @@ export const collectionGovernanceService = {
   recordEvent: (collectionId: string, data: Record<string, unknown>) =>
     api.post<ApiEnvelope<{ event: CollectionGovernanceEvent; governanceRegime: string; governanceContext: Record<string, unknown> }>>(
       `/collections/${encodeURIComponent(collectionId)}/governance/events`, data),
+};
+
+// RF024 (#1350): access and distribution requests, accessRequest.js's routes.
+// Every call needs manageAccessRequests, which only Administrador holds.
+export const accessRequestService = {
+  getAll: () => api.get<ApiEnvelope<AccessRequest[]>>('/access-requests'),
+  getById: (id: string) => api.get<ApiEnvelope<AccessRequest>>(`/access-requests/${encodeURIComponent(id)}`),
+  create: (data: Record<string, unknown>) => api.post<ApiEnvelope<AccessRequest>>('/access-requests', data),
+  evaluate: (id: string) => api.post<ApiEnvelope<AccessRequest>>(`/access-requests/${encodeURIComponent(id)}/evaluate`),
+  decide: (id: string, data: Record<string, unknown>) =>
+    api.post<ApiEnvelope<AccessRequest>>(`/access-requests/${encodeURIComponent(id)}/decision`, data),
+  distribute: (id: string) => api.post<ApiEnvelope<AccessRequest>>(`/access-requests/${encodeURIComponent(id)}/distribute`),
+  revoke: (id: string, data: { justification: string }) =>
+    api.post<ApiEnvelope<AccessRequest>>(`/access-requests/${encodeURIComponent(id)}/revoke`, data),
+  accessCheck: (id: string) => api.get<ApiEnvelope<AccessCheck>>(`/access-requests/${encodeURIComponent(id)}/access-check`),
 };
 
 // ========== ACCESS SERVICES ==========

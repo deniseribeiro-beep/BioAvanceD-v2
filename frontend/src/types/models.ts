@@ -1031,3 +1031,63 @@ export interface SampleFile {
   messageType?: string; // Ex: "ORU^R01", "OBR"
 }
 
+
+// RF024 (#1350): an access or distribution request, as /api/access-requests
+// returns it (api/backend/src/models/AccessRequest.js).
+export type AccessRequestItemType = 'specimen' | 'dataset' | 'file';
+export type AccessDecisionStatus = 'pending' | 'approved' | 'rejected' | 'conditioned' | 'revoked';
+
+export interface AccessRequestItem {
+  itemType: AccessRequestItemType;
+  itemId: string;
+  quantity?: number | null;
+}
+
+export interface AccessRequestItemCompatibility {
+  itemId: string;
+  itemType: AccessRequestItemType;
+  participantId: string | null;
+  consentValid: boolean | null;
+  consentAuthorizationDecisionId: string | null;
+  consentAuthorizationResult: 'permit' | 'deny' | 'review_required' | null;
+  consentAuthorizationReasons: string[];
+  duoCompatible: boolean | null;
+  studyActive: boolean;
+  compatible: boolean;
+}
+
+export interface AccessRequest {
+  accessRequestId: string;
+  requesterId: string;
+  organizationId: string;
+  studyId: string;
+  protocolId: string;
+  protocolVersion: string | null;
+  requestedPurpose: string;
+  duoCode: string | null;
+  requestedItems: AccessRequestItem[];
+  consentCompatibility: AccessRequestItemCompatibility[];
+  compatibilityEvaluatedAt: string | null;
+  overallCompatible: boolean | null;
+  policyDecision: { effect: 'permit' | 'deny' | 'review_required'; reasons: string[] } | null;
+  committeeDecision: {
+    decisionId: string | null;
+    status: AccessDecisionStatus;
+    justification: string | null;
+    decidedBy: string | null;
+    decidedAt: string | null;
+    policyVersion: string | null;
+    policyEffect: string | null;
+    configurationReleaseId: string | null;
+  };
+  approvalPeriod: { start: string; end?: string | null } | null;
+  distributionStatus: 'pending' | 'released';
+  distributedAt: string | null;
+  distributionDecisionId: string | null;
+  createdAt: string;
+}
+
+export interface AccessCheck {
+  allowed: boolean;
+  reason: string;
+}

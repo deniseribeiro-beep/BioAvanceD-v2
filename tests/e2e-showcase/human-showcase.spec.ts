@@ -2,7 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { MongoClient, Db, ObjectId } from 'mongodb';
 import { randomBytes, createHash } from 'crypto';
 import { realLogin, seedRealAuth } from '../e2e/helpers/realAuth';
-import { createRealParticipant, seedStorageBoxLocation, cleanupStorageBoxLocation, closeSeedDb, seedStudy, seedProtocol, seedCollectionEntity, type SeededStorageBox } from '../e2e/helpers/seedParticipant';
+import { createRealParticipant, seedStorageBoxLocation, cleanupStorageBoxLocation, closeSeedDb, seedStudy, seedProtocol, seedCollectionEntity, seedActiveConsent, seedDuoConcept, type SeededStorageBox } from '../e2e/helpers/seedParticipant';
 
 // Not a coverage spec — a human-paced showcase reel for Denise, recorded via
 // `playwright.showcase.config.ts` (video: 'on', single worker, real backend).
@@ -886,6 +886,103 @@ test.describe('Human-paced e2e showcase reel — W6 collection governance', () =
       await db.collection('consent_templates').deleteMany({ title });
       await db.collection('terminologyConcepts').deleteMany({ code: purposeCode });
       await client.close();
+    }
+  });
+});
+
+// RF024 reel (#1350): an access request from registration to distribution,
+// through /access-requests. access-requests-ui.spec.ts proves the same flow,
+// revocation and refusal included; the reel shows the path that ends in a
+// release. The study, protocol, DUO concept and consent are seeded.
+test.describe('Human-paced e2e showcase reel — RF024 access requests', () => {
+  const boxes: SeededStorageBox[] = [];
+
+  test.afterAll(async () => {
+    await Promise.all(boxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {})));
+    await closeSeedDb();
+  });
+
+  test('RF024 an operator registers a request, evaluates it, approves it and releases the specimen', async ({ page, request }) => {
+    const session = await realLogin(request);
+    await seedRealAuth(page, session);
+    const headers = { Authorization: `Bearer ${session.token}` };
+    const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const studyId = `showcase-rf024-study-${stamp}`;
+    const protocolId = `showcase-rf024-protocol-${stamp}`;
+    const duoCode = `DUO:showcase-rf024-${stamp}`;
+    await seedStudy(studyId);
+    await seedProtocol(protocolId, { protocolVersion: '1.0' });
+    await seedDuoConcept(duoCode);
+
+    const org = await request.post(`${apiBaseURL}/api/organizations`, {
+      headers,
+      data: { officialName: `0 Showcase Acesso ${stamp}`, countryCode: 'BR' },
+    });
+    expect(org.ok(), await org.text()).toBeTruthy();
+    const organizationId = (await org.json()).data.organizationId as string;
+
+    const participant = await createRealParticipant(request, apiBaseURL!, session.token);
+    await seedActiveConsent(participant.participantId);
+    const box = await seedStorageBoxLocation();
+    boxes.push(box);
+    const sample = await request.post(`${apiBaseURL}/api/samples`, {
+      headers,
+      data: {
+        participantId: participant.participantId,
+        sampleType: 'PLASMA',
+        sampleOrigin: 'VENOUS_BLOOD',
+        extractionProtocol: 'TUBE_EDTA',
+        quantity: 5,
+        quality: 'GOOD',
+        linkedProject: 'Showcase RF024',
+        registeredAt: new Date().toISOString(),
+        boxId: box.boxId,
+        positionCode: box.positionCode,
+      },
+    });
+    expect([201, 202]).toContain(sample.status());
+    const specimenId = (await sample.json()).data.specimenId as string;
+
+    try {
+      // 1. The researcher's request, registered by the operator.
+      await page.goto('/access-requests');
+      await beat(page, LARGE);
+      await page.getByTestId('access-request-requester-input').fill('Dra. Pesquisadora Solicitante');
+      await page.getByTestId('access-request-organization-select').selectOption(organizationId);
+      await page.getByTestId('access-request-study-input').fill(studyId);
+      await page.getByTestId('access-request-protocol-input').fill(protocolId);
+      await page.getByTestId('access-request-purpose-input').fill('Pesquisa em biomarcadores oncológicos');
+      await page.getByTestId('access-request-duo-select').selectOption(duoCode);
+      await page.getByTestId('access-request-item-id-1').fill(specimenId);
+      await beat(page, MEDIUM);
+      await page.getByTestId('access-request-submit').click();
+      await expect(page.getByTestId('access-request-detail')).toBeVisible();
+      await page.getByTestId('access-request-detail').scrollIntoViewIfNeeded();
+      await beat(page, LARGE);
+
+      // 2. Evaluated: the specimen's consent permits this use; no policy covers it, so the committee decides.
+      await page.getByTestId('access-request-evaluate').click();
+      await expect(page.getByTestId(`access-request-item-result-${specimenId}`)).toHaveText('permit');
+      await beat(page, LARGE);
+
+      // 3. The committee approves for a year.
+      const today = new Date();
+      const pad = (n: number) => String(n).padStart(2, '0');
+      const day = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+      await page.getByTestId('access-decision-justification-input').fill('Finalidade compatível com o consentimento');
+      await page.getByTestId('access-decision-start-input').fill(day(new Date(today.getTime() - 86_400_000)));
+      await page.getByTestId('access-decision-end-input').fill(day(new Date(today.getTime() + 365 * 86_400_000)));
+      await beat(page, SMALL);
+      await page.getByTestId('access-decision-submit').click();
+      await expect(page.getByTestId('access-request-access-check')).toContainText('Liberado');
+      await beat(page, MEDIUM);
+
+      // 4. Released, naming the decision behind it.
+      await page.getByTestId('access-request-distribute').click();
+      await expect(page.getByTestId('access-request-distribution-status')).toContainText('Disponibilizada em');
+      await beat(page, LARGE);
+    } finally {
+      await request.delete(`${apiBaseURL}/api/organizations/${organizationId}`, { headers }).catch(() => {});
     }
   });
 });

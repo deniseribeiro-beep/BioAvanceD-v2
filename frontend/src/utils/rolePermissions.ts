@@ -104,6 +104,7 @@ const ROUTE_ACCESS: ReadonlyArray<readonly [string, readonly RoleName[]]> = [
   ['/security', ADMIN],
   ['/system-management', ADMIN],
   ['/users', ADMIN],
+  ['/access-requests', ADMIN],
   ['/access', ADMIN],
   ['/backup', ADMIN],
   ['/settings/parameters', ADMIN],
