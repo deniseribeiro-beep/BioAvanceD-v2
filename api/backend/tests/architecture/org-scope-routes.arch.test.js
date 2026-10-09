@@ -54,6 +54,15 @@ const EXEMPT = new Map([
   ['import-lgpd.routes.js GET /amostras/template/csv', 'static import template, no organization data'],
   ['import-lgpd.routes.js GET /amostras/template/xlsx', 'static import template, no organization data'],
   ['import-lgpd.routes.js GET /pacientes/smart-import/metadata', 'column metadata and a global template count, no organization data'],
+  // The organization list is the scope's own reference data, which every
+  // create form's picker reads, not a record one organization owns; its
+  // mutations are manageOrganizations, an Administrador permission. The file
+  // reads as scoped only because GET /mine resolves the caller's scope (#1354).
+  ['organization.routes.js GET /', 'organizations are the scope reference list, not organization-owned records (#1354)'],
+  ['organization.routes.js GET /:id', 'organizations are the scope reference list, not organization-owned records (#1354)'],
+  ['organization.routes.js POST /', 'organizations are the scope reference list; manageOrganizations is Administrador-only (#1354)'],
+  ['organization.routes.js PUT /:id', 'organizations are the scope reference list; manageOrganizations is Administrador-only (#1354)'],
+  ['organization.routes.js DELETE /:id', 'organizations are the scope reference list; manageOrganizations is Administrador-only (#1354)'],
 ]);
 
 // NOT exemptions: routes that DO need the gate and do not have it yet, each

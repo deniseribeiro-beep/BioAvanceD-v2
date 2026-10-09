@@ -496,6 +496,16 @@ test.describe('LGPD sample import by an organization-scoped user (#1353)', () =>
     expect(registerRes.ok(), await registerRes.text()).toBeTruthy();
     const coordinator = await completeFirstLoginMfa(request, apiBaseURL!, username, password);
 
+    // #1354: the create forms read the caller's scope here to decide whether
+    // to ask for an organization; one organization means no picker.
+    const mine = await request.get(`${apiBaseURL}/api/organizations/mine`, {
+      headers: { Authorization: `Bearer ${coordinator.token}` },
+    });
+    expect(mine.status(), await mine.text()).toBe(200);
+    const mineData = (await mine.json()).data;
+    expect(mineData.scope).toBe('organization');
+    expect(mineData.organizations.map((org: { organizationId: string }) => org.organizationId)).toEqual([ownOrg]);
+
     const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
     const response = await importSamples(request, coordinator.token, [
       `${participant.participantId},${SAMPLE_TYPE},${SAMPLE_ORIGIN},${EXTRACTION_PROTOCOL},5,GOOD,#1353 scoped import`,

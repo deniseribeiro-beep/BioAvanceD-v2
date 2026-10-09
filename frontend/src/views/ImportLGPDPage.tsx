@@ -27,6 +27,7 @@ import { ArrowLeft, Download, FileWarning, FileCheck2, Upload, ShieldAlert } fro
 import Card from '../components/UI/Card';
 import Button from '../components/UI/Button';
 import { importLGPDService } from '../services/api';
+import { useCreateOrganizationChoice } from '../hooks/useCreateOrganizationChoice';
 import {
   availableTemplateFormats,
   summarizeImportResult,
@@ -64,6 +65,10 @@ export default function ImportLGPDPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [summary, setSummary] = useState<ImportSummary | null>(null);
+  // #1354: the organization the import stamps on what it writes. Asked only
+  // when the caller has a choice (several organizations, or global scope).
+  const organizationChoice = useCreateOrganizationChoice();
+  const [organizationId, setOrganizationId] = useState('');
 
   const templateFormats = useMemo(() => availableTemplateFormats(type), [type]);
 
@@ -111,6 +116,12 @@ export default function ImportLGPDPage() {
       return;
     }
 
+    if (organizationChoice.required && !organizationId) {
+      setError('Selecione a organização da importação: sua conta pertence a mais de uma.');
+      setSummary(null);
+      return;
+    }
+
     setBusy(true);
     setError(null);
     setSummary(null);
@@ -118,6 +129,7 @@ export default function ImportLGPDPage() {
     try {
       const formData = new FormData();
       formData.append('file', file as File);
+      if (organizationId) formData.append('organizationId', organizationId);
       const response = await importLGPDService.import(type, formData);
       setSummary(summarizeImportResult(response.data));
     } catch (err: any) {
@@ -132,7 +144,7 @@ export default function ImportLGPDPage() {
     } finally {
       setBusy(false);
     }
-  }, [file, type]);
+  }, [file, type, organizationChoice.required, organizationId]);
 
   return (
     <div style={{ padding: 24, maxWidth: 1100, margin: '0 auto' }}>
@@ -178,6 +190,27 @@ export default function ImportLGPDPage() {
               }}
             />
           </label>
+
+          {organizationChoice.show && (
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 14 }}>
+              <span style={{ fontWeight: 600 }}>
+                Organização{organizationChoice.required ? '' : ' (opcional)'}
+              </span>
+              <select
+                data-testid="import-lgpd-organization"
+                value={organizationId}
+                onChange={(event) => setOrganizationId(event.target.value)}
+                style={{ padding: '8px 10px', minWidth: 220 }}
+              >
+                <option value="">{organizationChoice.required ? 'Selecione…' : 'Nenhuma'}</option>
+                {organizationChoice.options.map((option) => (
+                  <option key={option.organizationId} value={option.organizationId}>
+                    {option.officialName || option.organizationId}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
 
           <Button data-testid="import-lgpd-submit" onClick={handleSubmit} disabled={busy}>
             <Upload size={16} style={{ marginRight: 6 }} />

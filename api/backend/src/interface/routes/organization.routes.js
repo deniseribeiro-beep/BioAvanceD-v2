@@ -47,6 +47,39 @@ router.get('/', authenticate, async (req, res) => {
   }
 });
 
+// #1354: the caller's own organization scope, for the create forms' picker.
+// A create resolves its organization with resolveOrganizationIdForCreate,
+// which refuses a multi-organization caller who names none, so the form has
+// to know whether to ask and which organizations to offer. Answers 'none'
+// rather than 403 for an org-less caller: the form then hides the picker and
+// the create itself refuses. Registered before /:id, which would take 'mine'.
+router.get('/mine', authenticate, async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
+    }
+
+    const { resolveUserOrganizationScope } = require('../../services/rbac-assignment.service');
+    const scope = await resolveUserOrganizationScope(db, req.user?.userID);
+    const ids = scope?.scope === 'organization' ? (scope.organizationIds || []).map(String) : [];
+
+    let organizations = [];
+    if (ids.length > 0) {
+      const collection = await getCollection(db, 'organizations');
+      const found = await collection
+        .find({ organizationId: { $in: ids } }, { projection: { _id: 0, organizationId: 1, officialName: 1 } })
+        .toArray();
+      const nameById = new Map(found.map((org) => [String(org.organizationId), org.officialName || null]));
+      organizations = ids.map((organizationId) => ({ organizationId, officialName: nameById.get(organizationId) || null }));
+    }
+
+    return res.status(200).json({ success: true, data: { scope: scope?.scope || 'none', organizations } });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: 'Erro ao resolver organizações do usuário', message: error.message });
+  }
+});
+
 router.get('/:id', authenticate, async (req, res) => {
   try {
     const db = req.app.locals.db;

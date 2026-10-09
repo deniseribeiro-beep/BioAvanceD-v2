@@ -584,6 +584,9 @@ export const organizationService = {
   // #1280: the route returns one sorted page (limit at most 500); useOrganizations pages through it.
   getAll: (params?: { limit?: number; skip?: number }) =>
     api.get<ApiEnvelope<Organization[]>>('/organizations', { params }),
+  // #1354: the caller's own organization scope, for the create forms' picker.
+  getMine: () =>
+    api.get<ApiEnvelope<{ scope: 'global' | 'organization' | 'none' | 'unassigned'; organizations: Array<{ organizationId: string; officialName: string | null }> }>>('/organizations/mine'),
   create: (data: Partial<Organization>) => api.post<Organization>('/organizations', data),
   update: (id: string, data: Partial<Organization>) => api.put<Organization>(`/organizations/${id}`, data),
   delete: (id: string) => api.delete(`/organizations/${id}`),

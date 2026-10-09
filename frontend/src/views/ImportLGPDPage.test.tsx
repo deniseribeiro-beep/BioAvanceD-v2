@@ -1,9 +1,9 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import ImportLGPDPage from './ImportLGPDPage';
-import { importLGPDService } from '../services/api';
+import { importLGPDService, organizationService } from '../services/api';
 
 // #997: the "N linha(s) em branco ignorada(s)" notice at
 // ImportLGPDPage.tsx:244-252 renders off `summary.skipped`, and `summary`
@@ -18,6 +18,12 @@ vi.mock('../services/api', () => ({
   importLGPDService: {
     import: vi.fn(),
     downloadTemplate: vi.fn(),
+  },
+  // #1354: the picker's scope lookup. Left unresolved it rejects, and the
+  // page shows no picker, which is what the #997 cases below rely on.
+  organizationService: {
+    getMine: vi.fn(),
+    getAll: vi.fn(),
   },
 }));
 
@@ -105,5 +111,65 @@ describe('ImportLGPDPage — blank-row "skipped" notice (#997)', () => {
       expect(screen.getByTestId('import-lgpd-counts')).toBeInTheDocument();
     });
     expect(screen.queryByTestId('import-lgpd-skipped')).toBeNull();
+  });
+});
+
+// #1354: a multi-organization user must name the organization an import
+// stamps; the backend refuses one that names none.
+describe('ImportLGPDPage — organization picker (#1354)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function mockScope(scope: string, organizations: Array<{ organizationId: string; officialName: string }>) {
+    vi.mocked(organizationService.getMine).mockResolvedValue({ data: { success: true, data: { scope, organizations } } } as any);
+  }
+
+  function sentOrganizationId() {
+    const formData = vi.mocked(importLGPDService.import).mock.calls[0][1] as FormData;
+    return formData.get('organizationId');
+  }
+
+  it('requires a multi-organization user to pick one, then sends it', async () => {
+    mockScope('organization', [
+      { organizationId: 'org-a', officialName: 'Hospital A' },
+      { organizationId: 'org-b', officialName: 'Hospital B' },
+    ]);
+    mockImportResult({ skipped: 0 });
+    render(
+      <MemoryRouter>
+        <ImportLGPDPage />
+      </MemoryRouter>
+    );
+
+    const picker = await screen.findByTestId('import-lgpd-organization');
+    await submitWithFile();
+    expect(screen.getByTestId('import-lgpd-error').textContent).toMatch(/Selecione a organização/);
+    expect(importLGPDService.import).not.toHaveBeenCalled();
+
+    await userEvent.setup().selectOptions(picker, 'org-b');
+    await userEvent.setup().click(screen.getByTestId('import-lgpd-submit'));
+    await waitFor(() => expect(importLGPDService.import).toHaveBeenCalledTimes(1));
+    expect(sentOrganizationId()).toBe('org-b');
+  });
+
+  it('shows no picker to a single-organization user, and sends no organization', async () => {
+    mockScope('organization', [{ organizationId: 'org-a', officialName: 'Hospital A' }]);
+    mockImportResult({ skipped: 0 });
+    render(
+      <MemoryRouter>
+        <ImportLGPDPage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(organizationService.getMine).toHaveBeenCalled());
+    await submitWithFile();
+    await waitFor(() => expect(importLGPDService.import).toHaveBeenCalledTimes(1));
+    expect(screen.queryByTestId('import-lgpd-organization')).toBeNull();
+    expect(sentOrganizationId()).toBeNull();
   });
 });

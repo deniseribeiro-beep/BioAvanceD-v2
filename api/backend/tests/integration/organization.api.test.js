@@ -105,6 +105,61 @@ describe('GET /api/organizations', () => {
   });
 });
 
+// #1354: the caller's own scope, for the create forms' organization picker.
+describe('GET /api/organizations/mine', () => {
+  const rbacAssignment = require('../../src/services/rbac-assignment.service');
+
+  beforeEach(() => { givenSession(); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  function givenOrganizations(docs) {
+    const find = vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue(docs) });
+    app.locals.db = createDbMock({
+      organizations: createCollectionMock({ find }),
+      ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]),
+    });
+    return find;
+  }
+
+  it('returns 401 without token', async () => {
+    const res = await request(app).get('/api/organizations/mine');
+    expect(res.status).toBe(401);
+  });
+
+  it("names an organization-scoped caller's organizations, in scope order, not /:id's lookup of 'mine'", async () => {
+    vi.spyOn(rbacAssignment, 'resolveUserOrganizationScope').mockResolvedValue({ scope: 'organization', organizationIds: ['org-b', 'org-a'] });
+    const find = givenOrganizations([
+      { organizationId: 'org-a', officialName: 'Hospital A' },
+      { organizationId: 'org-b', officialName: 'Hospital B' },
+    ]);
+
+    const res = await request(app).get('/api/organizations/mine').set('Authorization', `Bearer ${makeToken()}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual({
+      scope: 'organization',
+      organizations: [
+        { organizationId: 'org-b', officialName: 'Hospital B' },
+        { organizationId: 'org-a', officialName: 'Hospital A' },
+      ],
+    });
+    expect(find.mock.calls[0][0]).toEqual({ organizationId: { $in: ['org-b', 'org-a'] } });
+  });
+
+  it('answers global and org-less callers with their scope and no organizations, reading none', async () => {
+    const find = givenOrganizations([]);
+    const spy = vi.spyOn(rbacAssignment, 'resolveUserOrganizationScope');
+
+    for (const scope of ['global', 'none']) {
+      spy.mockResolvedValueOnce({ scope, organizationIds: [] });
+      const res = await request(app).get('/api/organizations/mine').set('Authorization', `Bearer ${makeToken()}`);
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual({ scope, organizations: [] });
+    }
+    expect(find).not.toHaveBeenCalled();
+  });
+});
+
 describe('GET /api/organizations/:id', () => {
   beforeEach(() => { givenSession(); });
   afterEach(() => { vi.restoreAllMocks(); });
