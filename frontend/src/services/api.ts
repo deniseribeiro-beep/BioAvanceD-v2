@@ -21,6 +21,9 @@ import {
   PhoneCodeEntry,
   Organization,
   Collection,
+  CollectionGovernance,
+  CollectionGovernanceApproval,
+  CollectionGovernanceEvent,
   ReportTemplate,
 } from '../types/models';
 import { clearClientSession } from '../utils/sessionCleanup';
@@ -600,6 +603,22 @@ export const collectionsService = {
   create: (data: Partial<Collection>) => api.post<Collection>('/collections', data),
   update: (id: string, data: Partial<Collection>) => api.put<Collection>(`/collections/${id}`, data),
   delete: (id: string) => api.delete(`/collections/${id}`),
+};
+
+// RF004 AC3-AC5, RF020 AC2-AC4, RF021 AC2/AC3: collection-governance.routes.js.
+// The regime and context change only through recordEvent.
+export const collectionGovernanceService = {
+  get: (collectionId: string) =>
+    api.get<ApiEnvelope<CollectionGovernance>>(`/collections/${encodeURIComponent(collectionId)}/governance`),
+  createApproval: (collectionId: string, data: Record<string, unknown>) =>
+    api.post<ApiEnvelope<CollectionGovernanceApproval>>(
+      `/collections/${encodeURIComponent(collectionId)}/governance/approvals`, data),
+  setApprovalStatus: (collectionId: string, approvalId: string, data: { status: string; reason?: string }) =>
+    api.post<ApiEnvelope<CollectionGovernanceApproval>>(
+      `/collections/${encodeURIComponent(collectionId)}/governance/approvals/${encodeURIComponent(approvalId)}/status`, data),
+  recordEvent: (collectionId: string, data: Record<string, unknown>) =>
+    api.post<ApiEnvelope<{ event: CollectionGovernanceEvent; governanceRegime: string; governanceContext: Record<string, unknown> }>>(
+      `/collections/${encodeURIComponent(collectionId)}/governance/events`, data),
 };
 
 // ========== ACCESS SERVICES ==========

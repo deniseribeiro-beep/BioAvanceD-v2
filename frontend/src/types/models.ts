@@ -574,6 +574,46 @@ export interface Collection {
   relatedPublications?: Array<Record<string, unknown>>;
 }
 
+// RF004 AC3, RF020 AC3, RF021 AC2 (V2E-0067..0075): an approval a
+// collection's governance rests on.
+export type CollectionGovernanceApprovalStatus = 'draft' | 'active' | 'suspended' | 'revoked';
+
+export interface CollectionGovernanceApproval {
+  approvalId: string;
+  collectionId: string;
+  authority: string;
+  caae?: string | null;
+  documentUri: string;
+  documentChecksum: string;
+  effectivePeriod: { start: string; end?: string | null };
+  status: CollectionGovernanceApprovalStatus;
+  responsibleOrganizationId: string;
+  statusHistory?: Array<{ from: string; to: string; reason?: string | null; changedAt?: string }>;
+  createdAt?: string;
+}
+
+// RF020 AC4 (V2E-0097..0104): the event that sets or converts a regime.
+export interface CollectionGovernanceEvent {
+  collectionGovernanceEventId: string;
+  collectionId: string;
+  previousRegime: 'biobank' | 'biorepository' | null;
+  newRegime: 'biobank' | 'biorepository';
+  decisionType: 'created' | 'regime_change';
+  approvalIds: string[];
+  justification: string;
+  occurredAt: string;
+}
+
+// GET /api/collections/:collectionId/governance. The context holds the
+// regime's own fields (BiorepositoryContext or BiobankGovernanceContext).
+export interface CollectionGovernance {
+  collectionId: string;
+  governanceRegime: 'biobank' | 'biorepository' | null;
+  governanceContext: Record<string, unknown> | null;
+  approvals: CollectionGovernanceApproval[];
+  events: CollectionGovernanceEvent[];
+}
+
 export interface User {
   _id?: string; // MongoDB ID
   userID?: string;

@@ -5,7 +5,7 @@ import Table from '../components/UI/Table';
 import Button from '../components/UI/Button';
 import Modal from '../components/UI/Modal';
 import Input from '../components/UI/Input';
-import { Plus, Edit, Trash2, UserCog, Shield, Shield as ShieldIcon, RotateCcw, XCircle, Building2, FlaskConical, KeyRound, LogOut } from 'lucide-react';
+import { Plus, Edit, Trash2, UserCog, Shield, Shield as ShieldIcon, RotateCcw, XCircle, Building2, FlaskConical, KeyRound, LogOut, Landmark } from 'lucide-react';
 import { useUsers } from '../hooks/useUsers';
 import { useOrganizations } from '../hooks/useOrganizations';
 import { useCollections } from '../hooks/useCollections';
@@ -14,6 +14,7 @@ import { useLanguage } from '../contexts/LanguageContext';
 import { userService } from '../services/api';
 import { Organization, Collection } from '../types/models';
 import SecurityPage from './SecurityPage';
+import CollectionGovernancePanel from './CollectionGovernancePanel';
 import './SystemManagementPage.css';
 
 type TabType = 'users' | 'organizations' | 'collections' | 'security';
@@ -680,10 +681,12 @@ export function buildCollectionSubmissionPayload(formData: CollectionFormState):
 
 // Seção de Coleções
 function CollectionsSection() {
-  const { collections, loading, error, createCollection, updateCollection, deleteCollection } = useCollections();
+  const { collections, loading, error, loadCollections, createCollection, updateCollection, deleteCollection } = useCollections();
+  const { organizations } = useOrganizations();
   const { t } = useLanguage();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingCollection, setEditingCollection] = useState<Collection | null>(null);
+  const [governedCollection, setGovernedCollection] = useState<Collection | null>(null);
 
   return (
     <>
@@ -737,6 +740,14 @@ function CollectionsSection() {
                       title={t('common.edit')}
                     >
                       <Edit size={16} />
+                    </button>
+                    <button
+                      data-testid={`governance-collection-button-${collection.collectionId}`}
+                      className="action-button"
+                      onClick={() => setGovernedCollection(collection)}
+                      title={t('system.collections.governance.title', 'Governança')}
+                    >
+                      <Landmark size={16} />
                     </button>
                     <button
                       data-testid={`delete-collection-button-${collection.collectionId}`}
@@ -798,6 +809,20 @@ function CollectionsSection() {
             setEditingCollection(null);
           }}
         />
+      </Modal>
+
+      <Modal
+        isOpen={governedCollection !== null}
+        onClose={() => {
+          setGovernedCollection(null);
+          // A decision may have set or converted the regime the table shows.
+          loadCollections();
+        }}
+        title={`${t('system.collections.governance.title', 'Governança')}: ${governedCollection?.collectionName ?? ''}`}
+      >
+        {governedCollection && (
+          <CollectionGovernancePanel collection={governedCollection} organizations={organizations} />
+        )}
       </Modal>
     </>
   );

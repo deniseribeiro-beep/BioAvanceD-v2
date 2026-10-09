@@ -1,8 +1,8 @@
 import { test, expect, type Page } from '@playwright/test';
 import { MongoClient, Db, ObjectId } from 'mongodb';
 import { randomBytes, createHash } from 'crypto';
-import { realLogin } from '../e2e/helpers/realAuth';
-import { createRealParticipant, seedStorageBoxLocation, cleanupStorageBoxLocation, closeSeedDb, type SeededStorageBox } from '../e2e/helpers/seedParticipant';
+import { realLogin, seedRealAuth } from '../e2e/helpers/realAuth';
+import { createRealParticipant, seedStorageBoxLocation, cleanupStorageBoxLocation, closeSeedDb, seedStudy, seedProtocol, seedCollectionEntity, type SeededStorageBox } from '../e2e/helpers/seedParticipant';
 
 // Not a coverage spec — a human-paced showcase reel for Denise, recorded via
 // `playwright.showcase.config.ts` (video: 'on', single worker, real backend).
@@ -744,6 +744,87 @@ test.describe('Human-paced e2e showcase reel — Wave 5', () => {
             .catch(() => {});
         }
       }
+    }
+  });
+});
+
+// W6 reel: collection governance through the collections tab (RF004 AC3/AC4,
+// RF020 AC3/AC4, RF021 AC2/AC3) -- an ethics approval registered, the
+// biorepository's first context recorded as a governed decision, and the
+// approval suspended. The study and protocol are seeded, as the e2e spec
+// collection-governance-ui.spec.ts does, since neither has a UI here.
+test.describe('Human-paced e2e showcase reel — W6 collection governance', () => {
+  test.afterAll(async () => {
+    await closeSeedDb();
+  });
+
+  test('RF004/RF020/RF021 an operator records a collection approval and its governance context', async ({ page, request }) => {
+    const session = await realLogin(request);
+    await seedRealAuth(page, session);
+    const headers = { Authorization: `Bearer ${session.token}` };
+
+    const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const ids = { collectionId: `showcase-governance-${stamp}`, studyId: `showcase-study-${stamp}`, protocolId: `showcase-protocol-${stamp}` };
+    await seedStudy(ids.studyId);
+    await seedProtocol(ids.protocolId, { protocolVersion: '1.0' });
+    await seedCollectionEntity(ids.collectionId);
+    const org = await request.post(`${apiBaseURL}/api/organizations`, {
+      headers,
+      data: { officialName: `0 Showcase Governança ${stamp}`, countryCode: 'BR' },
+    });
+    expect(org.ok(), await org.text()).toBeTruthy();
+    const organizationId = (await org.json()).data.organizationId as string;
+
+    try {
+      await page.goto('/system-management?tab=collections');
+      await beat(page, LARGE);
+      await page.getByTestId(`governance-collection-button-${ids.collectionId}`).click();
+      await expect(page.getByTestId('collection-governance-panel')).toBeVisible();
+      await beat(page, MEDIUM);
+
+      // 1. The ethics approval the collection rests on.
+      await page.getByTestId('governance-approval-authority-input').fill('CEP Hospital Universitário');
+      await beat(page, SMALL);
+      await page.getByTestId('governance-approval-caae-input').fill('00000000.0.0000.0000');
+      await page.getByTestId('governance-approval-document-uri-input').fill('https://docs.example.org/parecer-cep.pdf');
+      await page.getByTestId('governance-approval-checksum-input').fill(`sha256:${'d'.repeat(64)}`);
+      await page.getByTestId('governance-approval-start-input').fill('2026-01-01');
+      await page.getByTestId('governance-approval-end-input').fill('2030-12-31');
+      await page.getByTestId('governance-approval-organization-select').selectOption(organizationId);
+      await page.getByTestId('governance-approval-status-select').selectOption('active');
+      await beat(page, SMALL);
+      await page.getByTestId('governance-approval-submit').click();
+      const approvalRow = page.locator('[data-testid^="governance-approval-row-"]');
+      await expect(approvalRow).toHaveCount(1);
+      const approvalId = ((await approvalRow.getAttribute('data-testid')) || '').replace('governance-approval-row-', '');
+      await beat(page, MEDIUM);
+
+      // 2. The biorepository's first context, recorded as a decision.
+      await page.getByTestId('governance-context-study-input').fill(ids.studyId);
+      await page.getByTestId('governance-context-protocol-input').fill(ids.protocolId);
+      await page.getByTestId('governance-context-protocol-version-input').fill('1.0');
+      await page.getByTestId('governance-context-caae-input').fill('00000000.0.0000.0000');
+      await page.getByTestId('governance-context-organization-select').selectOption(organizationId);
+      await page.getByTestId('governance-context-investigator-input').fill('Dra. Pesquisadora Responsável');
+      await page.getByTestId('governance-context-ethics-approval-select').selectOption(approvalId);
+      await page.getByTestId('governance-context-validity-start-input').fill('2026-01-01');
+      await page.getByTestId('governance-context-planned-end-input').fill('2030-12-31');
+      await page.getByTestId(`governance-event-approval-${approvalId}`).check();
+      await beat(page, SMALL);
+      await page.getByTestId('governance-event-justification-input').fill('Contexto inicial do biorrepositório aprovado pelo CEP');
+      await beat(page, SMALL);
+      await page.getByTestId('governance-event-submit').click();
+      await expect(page.getByTestId('collection-governance-events')).toContainText('Contexto inicial do biorrepositório');
+      await page.getByTestId('collection-governance-context').scrollIntoViewIfNeeded();
+      await beat(page, LARGE);
+
+      // 3. The approval suspended: the collection takes no specimen until it is reinstated.
+      await page.getByTestId(`governance-approval-suspended-${approvalId}`).click();
+      await expect(page.getByTestId(`governance-approval-active-${approvalId}`)).toBeVisible();
+      await beat(page, LARGE);
+    } finally {
+      await request.delete(`${apiBaseURL}/api/collections/${ids.collectionId}`, { headers }).catch(() => {});
+      await request.delete(`${apiBaseURL}/api/organizations/${organizationId}`, { headers }).catch(() => {});
     }
   });
 });
