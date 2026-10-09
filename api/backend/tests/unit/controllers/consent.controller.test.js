@@ -637,6 +637,21 @@ describe('ConsentController.updateTemplate', () => {
     expect(res.status).toHaveBeenCalledWith(400);
   });
 
+  it('returns 422 with details when the service refuses the payload (RNF018)', async () => {
+    const refusal = Object.assign(new Error("template must have required property 'content'"), {
+      statusCode: 422,
+      details: ["template must have required property 'content'"],
+    });
+    vi.spyOn(consentService, 'updateTemplate').mockRejectedValue(refusal);
+    const req = createReq({ params: { id: '1' }, body: {} });
+    const res = createRes();
+
+    await consentController.updateTemplate(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(422);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ details: refusal.details }));
+  });
+
   it('returns 200 on success', async () => {
     const template = { _id: { toString: () => 't1' }, version: 'v2', active: true };
     vi.spyOn(consentService, 'updateTemplate').mockResolvedValue(template);

@@ -158,6 +158,8 @@ test.describe('RF010 Consent versioned by consentId — real backend, red-first 
       headers: auth,
       data: {
         title: 'RF010 AC1 e2e term',
+        // The template schema requires `content`; the builder sends both.
+        content: htmlContent,
         htmlContent,
         active: false,
         language: 'en-US',
@@ -182,9 +184,11 @@ test.describe('RF010 Consent versioned by consentId — real backend, red-first 
 
     const refused = await request.post(`${apiBaseURL}/api/e-consent/consent-templates`, {
       headers: auth,
-      data: { title: 'RF010 AC1 refused', htmlContent, active: false, consentModel: 'implied' },
+      data: { title: 'RF010 AC1 refused', content: htmlContent, htmlContent, active: false, consentModel: 'implied' },
     });
     expect(refused.status()).toBe(422);
+    // Refused for its modality, not for a missing field.
+    expect((await refused.json()).message).toContain('consentModel');
   });
 
   // RF010 AC4-AC6: every manifestation is an appended ConsentDecisionEvent, a

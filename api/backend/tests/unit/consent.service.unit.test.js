@@ -169,6 +169,18 @@ describe('ConsentService.validateTemplatePayload', () => {
   it('throws for empty title', () => {
     expect(() => consentService.validateTemplatePayload({ title: '', content: 'Terms' })).toThrow();
   });
+
+  // RNF018: a schema failure is a validation failure, answered 422 with details.
+  it('marks a schema failure 422 and lists each failure in details', () => {
+    let thrown;
+    try {
+      consentService.validateTemplatePayload({ title: 'Title', htmlContent: '<p>x</p>' });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown.statusCode).toBe(422);
+    expect(thrown.details).toEqual([expect.stringContaining("'content'")]);
+  });
 });
 
 describe('ConsentService.validatePolicyPayload', () => {
@@ -194,6 +206,18 @@ describe('ConsentService.validatePolicyPayload', () => {
     expect(() =>
       consentService.validatePolicyPayload({ ...validPolicy, granularPermissions: [] })
     ).toThrow();
+  });
+
+  it('marks a schema failure 422 and lists each failure in details', () => {
+    const { title: _t, ...noTitle } = validPolicy;
+    let thrown;
+    try {
+      consentService.validatePolicyPayload(noTitle);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown.statusCode).toBe(422);
+    expect(thrown.details).toEqual([expect.stringContaining("'title'")]);
   });
 });
 

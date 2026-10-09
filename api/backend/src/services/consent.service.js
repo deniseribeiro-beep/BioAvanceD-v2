@@ -192,11 +192,16 @@ class ConsentService {
     };
   }
 
+  // RNF018 (#1300): a schema failure is a validation failure, so it answers
+  // 422 with its details, as the model validation after it does.
   validateTemplatePayload(payload) {
     const valid = validateTemplateSchema(payload);
     if (!valid) {
       const errors = (validateTemplateSchema.errors || []).map(err => `${err.instancePath || 'template'} ${err.message}`);
-      throw new Error(errors.join(', '));
+      const error = new Error(errors.join(', '));
+      error.statusCode = 422;
+      error.details = errors;
+      throw error;
     }
   }
 
@@ -204,7 +209,10 @@ class ConsentService {
     const valid = validatePolicySchema(payload);
     if (!valid) {
       const errors = (validatePolicySchema.errors || []).map(err => `${err.instancePath || 'policy'} ${err.message}`);
-      throw new Error(errors.join(', '));
+      const error = new Error(errors.join(', '));
+      error.statusCode = 422;
+      error.details = errors;
+      throw error;
     }
   }
 
