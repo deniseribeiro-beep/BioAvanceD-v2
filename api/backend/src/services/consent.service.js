@@ -6,6 +6,7 @@ const ConsentTemplateModel = require('../models/ConsentTemplate');
 const ConsentPolicyModel = require('../models/ConsentPolicy');
 const PatientConsentModel = require('../models/PatientConsent');
 const ConsentPermissionModel = require('../models/ConsentPermission');
+const { DUO_SYSTEM_URI } = ConsentPermissionModel;
 const consentEvidence = require('./consentEvidence.service');
 const consentHistory = require('./consentHistory.service');
 const { validateParticipantId } = require('../utils/patientAnonymization');
@@ -37,7 +38,9 @@ const consentTemplateSchema = {
         properties: {
           key: { type: 'string', minLength: 1 },
           label: { type: 'string', minLength: 1 },
-          required: { type: 'boolean' }
+          required: { type: 'boolean' },
+          // #1347: a governed purpose (GA4GH DUO code) the permission covers.
+          purposeCode: { type: 'string', minLength: 1 }
         },
         additionalProperties: false
       }
@@ -66,7 +69,9 @@ const consentPolicySchema = {
         properties: {
           key: { type: 'string', minLength: 1 },
           label: { type: 'string', minLength: 1 },
-          required: { type: 'boolean' }
+          required: { type: 'boolean' },
+          // #1347: a governed purpose (GA4GH DUO code) the permission covers.
+          purposeCode: { type: 'string', minLength: 1 }
         },
         additionalProperties: false
       }
@@ -242,6 +247,45 @@ class ConsentService {
     }
   }
 
+  // A term's permission as stored: key, label, required, and the governed
+  // purpose it covers when the term names one (#1347).
+  normalizePermission(permission) {
+    const purposeCode = typeof permission.purposeCode === 'string' ? permission.purposeCode.trim() : '';
+    return {
+      key: permission.key.trim(),
+      label: permission.label.trim(),
+      required: Boolean(permission.required),
+      ...(purposeCode ? { purposeCode } : {})
+    };
+  }
+
+  /**
+   * #1347 (RF010 AC3, V2E-0116): a permission's purpose is a governed code,
+   * a GA4GH DUO concept the reference data holds as active, the vocabulary
+   * an access request's duoCode is checked against. Anything else is a 422.
+   */
+  async assertGovernedPurposeCodes(db, permissions) {
+    const codes = [...new Set(permissions.map(permission => permission.purposeCode).filter(Boolean))];
+    if (codes.length === 0) {
+      return;
+    }
+    const concepts = await getCollection(db, 'terminologyConcepts');
+    const unknown = [];
+    for (const code of codes) {
+      const concept = await concepts.findOne({ systemUri: DUO_SYSTEM_URI, code });
+      if (!concept || concept.conceptStatus !== 'active') {
+        unknown.push(code);
+      }
+    }
+    if (unknown.length > 0) {
+      const details = unknown.map(code => `purposeCode ${code} não é um conceito DUO ativo`);
+      const error = new Error(details.join(', '));
+      error.statusCode = 422;
+      error.details = details;
+      throw error;
+    }
+  }
+
   ensureUniquePermissionKeys(permissions) {
     const keys = new Set();
     for (const permission of permissions) {
@@ -278,13 +322,10 @@ class ConsentService {
       this.validateTemplatePayload(payload);
 
       const permissions = Array.isArray(payload.permissions)
-        ? payload.permissions.map(permission => ({
-            key: permission.key.trim(),
-            label: permission.label.trim(),
-            required: Boolean(permission.required)
-          }))
+        ? payload.permissions.map(permission => this.normalizePermission(permission))
         : [];
       this.ensureUniquePermissionKeys(permissions);
+      await this.assertGovernedPurposeCodes(db, permissions);
 
       const templatesCollection = await getCollection(db, 'consentTemplates');
       const versionGroupId = typeof payload.versionGroupId === 'string' && payload.versionGroupId.trim().length > 0
@@ -391,19 +432,16 @@ class ConsentService {
       });
 
       const permissions = Array.isArray(payload.permissions)
-        ? payload.permissions.map(permission => ({
-            key: permission.key.trim(),
-            label: permission.label.trim(),
-            required: Boolean(permission.required)
-          }))
+        ? payload.permissions.map(permission => this.normalizePermission(permission))
         : Array.isArray(existingTemplate.permissions)
-          ? existingTemplate.permissions.map(permission => ({
-              key: String(permission.key || '').trim(),
-              label: String(permission.label || '').trim(),
-              required: Boolean(permission.required)
+          ? existingTemplate.permissions.map(permission => this.normalizePermission({
+              ...permission,
+              key: String(permission.key || ''),
+              label: String(permission.label || '')
             }))
           : [];
       this.ensureUniquePermissionKeys(permissions);
+      await this.assertGovernedPurposeCodes(db, permissions);
 
       const htmlContent = typeof payload.htmlContent === 'string' && payload.htmlContent.trim()
         ? payload.htmlContent.trim()
@@ -680,11 +718,7 @@ class ConsentService {
       }
 
       const permissions = Array.isArray(normalizedPayload.granularPermissions)
-        ? normalizedPayload.granularPermissions.map(permission => ({
-            key: permission.key.trim(),
-            label: permission.label.trim(),
-            required: Boolean(permission.required)
-          }))
+        ? normalizedPayload.granularPermissions.map(permission => this.normalizePermission(permission))
         : [];
       this.ensureUniquePermissionKeys(permissions);
 

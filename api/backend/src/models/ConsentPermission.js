@@ -10,6 +10,9 @@ const crypto = require('crypto');
 
 // V2E-0117's example is `permit`; an answer is a grant or a refusal.
 const PERMISSION_DECISIONS = ['permit', 'deny'];
+// #1347: the governed vocabulary of purposes, GA4GH DUO, as the reference
+// data imports it (SRC_DUO) and an access request's duoCode is read.
+const DUO_SYSTEM_URI = 'http://purl.obolibrary.org/obo/duo.owl';
 
 class ConsentPermissionModel {
   /** The canonical element names, for the catalog conformance test. */
@@ -27,8 +30,9 @@ class ConsentPermissionModel {
   }
 
   /**
-   * The rows for a consent's answers. `purpose` is the term's own label for
-   * the permission, coded by its key, until purposes are governed codes.
+   * The rows for a consent's answers. `purpose` is the DUO concept the
+   * term's permission names (#1347); a permission that names none keeps the
+   * term's own label coded by its key, which no decision can compute on.
    */
   static fromAnswers({ consentId, participantId, responses = {}, template = {}, signedAt }) {
     const definitions = new Map((template.permissions || []).map((permission) => [permission.key, permission]));
@@ -37,7 +41,9 @@ class ConsentPermissionModel {
       consentId,
       participantId: participantId ?? null,
       permissionCode: key,
-      purpose: { code: key, display: definitions.get(key)?.label || key },
+      purpose: definitions.get(key)?.purposeCode
+        ? { system: DUO_SYSTEM_URI, code: definitions.get(key).purposeCode, display: definitions.get(key).label || key }
+        : { code: key, display: definitions.get(key)?.label || key },
       decision: responses[key] === true ? 'permit' : 'deny',
       conditions: [],
       policyVersion: template.version != null ? String(template.version) : null,
@@ -52,3 +58,4 @@ class ConsentPermissionModel {
 
 module.exports = ConsentPermissionModel;
 module.exports.PERMISSION_DECISIONS = PERMISSION_DECISIONS;
+module.exports.DUO_SYSTEM_URI = DUO_SYSTEM_URI;

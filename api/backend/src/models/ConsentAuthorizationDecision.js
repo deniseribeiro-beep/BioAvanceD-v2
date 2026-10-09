@@ -6,12 +6,13 @@
  * compatibility evaluation) and never updated.
  */
 const crypto = require('crypto');
+const { DUO_SYSTEM_URI } = require('./ConsentPermission');
 
 // V2E-0148's example is `permit`; RF010 AC7 names the three.
 const RESULTS = ['permit', 'deny', 'review_required'];
 // Bump whenever the rules in `evaluateConsentAuthorization` change, so a
 // stored decision names the rules it stood on (V2E-0145).
-const CONSENT_AUTHORIZATION_POLICY_VERSION = 'rf010-consent-authorization/1.0.0';
+const CONSENT_AUTHORIZATION_POLICY_VERSION = 'rf010-consent-authorization/1.1.0';
 
 /**
  * Evaluate a consent in force for a requested use. Pure: the caller found
@@ -19,10 +20,34 @@ const CONSENT_AUTHORIZATION_POLICY_VERSION = 'rf010-consent-authorization/1.0.0'
  *
  * - consent_study_scope: a consent given for one study permits no other.
  * - consent_partial_revocation: a consent with permissions revoked by scope
- *   goes to review, since a purpose is not yet computable against the
- *   template's untyped permission keys.
+ *   is judged on the requested purpose where it is computable (#1347):
+ *   the request names a DUO code and every permission the consent granted
+ *   names one. A granted permission covers the request when its code is the
+ *   request's or an `is_a` ancestor of it (GA4GH DUO matching). Covered by
+ *   one still in effect: no restriction; covered only by revoked ones: deny;
+ *   covered by none, or not computable: review.
+ *
+ * `context.permissions` are the consent's ConsentPermission rows and
+ * `context.requestedPurposeCodes` the request's DUO code with its ancestors;
+ * the caller reads both.
  */
-function evaluateConsentAuthorization(consent, use = {}) {
+function purposeCoverage(consent, use, { permissions = [], requestedPurposeCodes = null } = {}) {
+  if (!use.duoCode || !requestedPurposeCodes || requestedPurposeCodes.size === 0) {
+    return 'not_computable';
+  }
+  const granted = permissions.filter((row) => row.decision === 'permit');
+  if (granted.length === 0 || granted.some((row) => row.purpose?.system !== DUO_SYSTEM_URI || !row.purpose?.code)) {
+    return 'not_computable';
+  }
+  const covering = granted.filter((row) => requestedPurposeCodes.has(row.purpose.code));
+  if (covering.length === 0) {
+    return 'not_covered';
+  }
+  const effective = consent.effectivePermissions || {};
+  return covering.some((row) => effective[row.permissionCode] === true) ? 'permitted' : 'revoked';
+}
+
+function evaluateConsentAuthorization(consent, use = {}, context = {}) {
   const appliedRules = ['consent_in_force', 'consent_study_scope', 'consent_partial_revocation'];
   const denials = [];
   const reviews = [];
@@ -32,7 +57,14 @@ function evaluateConsentAuthorization(consent, use = {}) {
   }
   if (consent.currentStateDerived === 'partially_revoked') {
     const scope = Array.isArray(consent.withdrawalScope) ? consent.withdrawalScope.join(', ') : '';
-    reviews.push(`permissões revogadas (${scope}); a finalidade solicitada não é computável contra elas`);
+    const coverage = purposeCoverage(consent, use, context);
+    if (coverage === 'revoked') {
+      denials.push(`a finalidade solicitada (${use.duoCode}) foi revogada pelo participante (${scope})`);
+    } else if (coverage === 'not_covered') {
+      reviews.push(`permissões revogadas (${scope}); nenhuma permissão concedida cobre a finalidade solicitada (${use.duoCode})`);
+    } else if (coverage === 'not_computable') {
+      reviews.push(`permissões revogadas (${scope}); a finalidade solicitada não é computável contra elas`);
+    }
   }
 
   let result = 'permit';

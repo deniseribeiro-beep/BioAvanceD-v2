@@ -6,7 +6,36 @@ const ConsentAuthorizationDecisionModel = require('../models/ConsentAuthorizatio
 const { getCollection } = require('../utils/collectionResolver');
 
 // sources/duo.js's own fixed systemUri for every DUO-imported TerminologyConcept.
-const DUO_SYSTEM_URI = 'http://purl.obolibrary.org/obo/duo.owl';
+const { DUO_SYSTEM_URI } = require('../models/ConsentPermission');
+
+/**
+ * #1347: a DUO code and every code it `is_a` descends from, read from the
+ * imported terminology (TerminologyConcept, TerminologyRelation). A use
+ * requested for a purpose is covered by a permission for that purpose or
+ * for any broader one (GA4GH DUO matching).
+ */
+async function duoCodeWithAncestors(db, code) {
+  const concepts = await getCollection(db, 'terminologyConcepts');
+  const relations = await getCollection(db, 'terminologyRelations');
+  const codes = new Set();
+  const pending = [code];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (codes.has(current)) continue;
+    const concept = await concepts.findOne({ systemUri: DUO_SYSTEM_URI, code: current });
+    if (!concept) continue;
+    codes.add(current);
+    const parents = await relations
+      .find({ sourceConceptId: concept.terminologyConceptId, relationType: 'is_a' })
+      .toArray();
+    for (const relation of parents) {
+      if (relation.relationStatus && relation.relationStatus !== 'active') continue;
+      const parent = await concepts.findOne({ terminologyConceptId: relation.targetConceptId });
+      if (parent?.code) pending.push(parent.code);
+    }
+  }
+  return codes;
+}
 
 /**
  * RF024 AC#5 ("bloquear acesso expirado, negado ou revogado") — pure
@@ -172,7 +201,13 @@ class AccessRequestService {
     // ConsentAuthorizationDecision. A deny makes the item incompatible; a
     // review_required leaves it to the committee, with its reasons.
     const decisions = await getCollection(db, 'consentAuthorizationDecisions');
+    const consentPermissions = await getCollection(db, 'consentPermissions');
     const configurationReleaseId = await activeConfigurationReleaseId(db);
+    // #1347: the requested purpose with its DUO ancestors, so a partially
+    // revoked consent is judged on the purpose rather than sent to review.
+    const requestedPurposeCodes = duoCompatible
+      ? await duoCodeWithAncestors(db, accessRequest.duoCode)
+      : null;
     const resolveConsent = async (resolvedParticipantId, itemId) => {
       if (!resolvedParticipantId) {
         // Item references a specimen/file that doesn't resolve to a real
@@ -187,7 +222,12 @@ class AccessRequestService {
       if (!consent) {
         return { consentValid: false, decision: null };
       }
-      const evaluation = ConsentAuthorizationDecisionModel.evaluateConsentAuthorization(consent, accessRequest);
+      const permissions = consent.currentStateDerived === 'partially_revoked'
+        ? await consentPermissions.find({ consentId: consent.consentId || String(consent._id) }).toArray()
+        : [];
+      const evaluation = ConsentAuthorizationDecisionModel.evaluateConsentAuthorization(
+        consent, accessRequest, { permissions, requestedPurposeCodes }
+      );
       const decision = ConsentAuthorizationDecisionModel.create({
         ...evaluation,
         consentId: consent.consentId || String(consent._id),
@@ -400,3 +440,4 @@ module.exports = accessRequestService;
 module.exports.evaluateAccessState = evaluateAccessState;
 module.exports.DUO_SYSTEM_URI = DUO_SYSTEM_URI;
 module.exports.ACCESS_COMPATIBILITY_POLICY_VERSION = ACCESS_COMPATIBILITY_POLICY_VERSION;
+module.exports.duoCodeWithAncestors = duoCodeWithAncestors;

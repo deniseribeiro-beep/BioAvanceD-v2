@@ -61,6 +61,8 @@ function createFakeDb({
   protocols = [{ protocolId: 'protocol-1', protocolVersion: '2.1', approvalStatus: 'approved' }],
   securityConfig = [{ _id: 'main', configurationReleaseId: 'release-1' }],
   accessPolicies = [],
+  consentPermissions = [],
+  terminologyRelations = [],
 } = {}) {
   const collections = {
     accessRequests: createFakeCollection(),
@@ -74,6 +76,8 @@ function createFakeDb({
     security_config: createFakeCollection(securityConfig),
     accessPolicies: createFakeCollection(accessPolicies),
     consentAuthorizationDecisions: createFakeCollection(),
+    consentPermissions: createFakeCollection(consentPermissions),
+    terminologyRelations: createFakeCollection(terminologyRelations),
   };
   return {
     collections,
@@ -217,7 +221,7 @@ describe('accessRequest.service', () => {
         protocolId: 'protocol-1',
         accessRequestId: created.accessRequestId,
         itemId: 'SPEC-1',
-        policyVersion: 'rf010-consent-authorization/1.0.0',
+        policyVersion: 'rf010-consent-authorization/1.1.0',
         configurationReleaseId: 'release-1',
         result: 'permit',
         appliedRules: ['consent_in_force', 'consent_study_scope', 'consent_partial_revocation'],
@@ -253,6 +257,95 @@ describe('accessRequest.service', () => {
         compatible: true,
         consentAuthorizationResult: 'review_required',
         consentAuthorizationReasons: [expect.stringContaining('contact')],
+      });
+    });
+
+    // #1347: with governed purposes (GA4GH DUO) on the consent's permissions
+    // and on the request, a partial revocation is judged on the purpose. The
+    // seeded hierarchy is DUO's own: DS is_a HMB is_a GRU.
+    describe('a partially revoked consent with DUO-coded permissions (#1347)', () => {
+      const duoConcepts = [
+        { systemUri: DUO_SYSTEM_URI, code: 'DUO:0000042', terminologyConceptId: 'c-gru', conceptStatus: 'active' },
+        { systemUri: DUO_SYSTEM_URI, code: 'DUO:0000006', terminologyConceptId: 'c-hmb', conceptStatus: 'active' },
+        { systemUri: DUO_SYSTEM_URI, code: 'DUO:0000007', terminologyConceptId: 'c-ds', conceptStatus: 'active' },
+        { systemUri: DUO_SYSTEM_URI, code: 'DUO:0000004', terminologyConceptId: 'c-nres', conceptStatus: 'active' },
+      ];
+      const duoRelations = [
+        { sourceConceptId: 'c-ds', targetConceptId: 'c-hmb', relationType: 'is_a', relationStatus: 'active' },
+        { sourceConceptId: 'c-hmb', targetConceptId: 'c-gru', relationType: 'is_a', relationStatus: 'active' },
+      ];
+      const row = (permissionCode, code) => ({
+        consentId: 'consent-1',
+        permissionCode,
+        purpose: { system: DUO_SYSTEM_URI, code, display: permissionCode },
+        decision: 'permit',
+      });
+      const evaluate = async ({ duoCode, rows, effectivePermissions, withdrawalScope }) => {
+        const { db, created } = await seedAndCreate({ duoCode }, {
+          terminologyConcepts: duoConcepts,
+          terminologyRelations: duoRelations,
+          consentPermissions: rows,
+          consents: [{
+            consentId: 'consent-1', participantId: 'participant-1', status: 'ACTIVE',
+            currentStateDerived: 'partially_revoked', withdrawalScope, effectivePermissions,
+          }],
+        });
+        return (await accessRequestService.evaluateCompatibility(db, created.accessRequestId)).consentCompatibility[0];
+      };
+
+      it('permits a purpose a permission still in effect covers, through its DUO ancestor', async () => {
+        const item = await evaluate({
+          duoCode: 'DUO:0000007',
+          rows: [row('hmb', 'DUO:0000006'), row('ds', 'DUO:0000007')],
+          effectivePermissions: { hmb: true, ds: false },
+          withdrawalScope: ['ds'],
+        });
+
+        expect(item).toMatchObject({ consentAuthorizationResult: 'permit', consentValid: true, compatible: true });
+      });
+
+      it('denies, and makes the item incompatible, when only revoked permissions cover the purpose', async () => {
+        const item = await evaluate({
+          duoCode: 'DUO:0000006',
+          rows: [row('hmb', 'DUO:0000006'), row('ds', 'DUO:0000007')],
+          effectivePermissions: { hmb: false, ds: true },
+          withdrawalScope: ['hmb'],
+        });
+
+        expect(item).toMatchObject({
+          consentAuthorizationResult: 'deny',
+          consentValid: false,
+          compatible: false,
+          consentAuthorizationReasons: [expect.stringContaining('DUO:0000006')],
+        });
+      });
+
+      it('asks for review when no granted permission covers the purpose', async () => {
+        const item = await evaluate({
+          duoCode: 'DUO:0000006',
+          rows: [row('ds', 'DUO:0000007'), row('nres', 'DUO:0000004')],
+          effectivePermissions: { ds: true, nres: false },
+          withdrawalScope: ['nres'],
+        });
+
+        expect(item).toMatchObject({
+          consentAuthorizationResult: 'review_required',
+          consentAuthorizationReasons: [expect.stringContaining('nenhuma permissão concedida cobre')],
+        });
+      });
+
+      it('asks for review when a granted permission names no governed purpose', async () => {
+        const item = await evaluate({
+          duoCode: 'DUO:0000006',
+          rows: [row('hmb', 'DUO:0000006'), { consentId: 'consent-1', permissionCode: 'contact', purpose: { code: 'contact', display: 'Contato' }, decision: 'permit' }],
+          effectivePermissions: { hmb: false, contact: true },
+          withdrawalScope: ['hmb'],
+        });
+
+        expect(item).toMatchObject({
+          consentAuthorizationResult: 'review_required',
+          consentAuthorizationReasons: [expect.stringContaining('não é computável')],
+        });
       });
     });
 

@@ -84,6 +84,9 @@ class ConsentTemplateModel {
           if (permission.required !== undefined && typeof permission.required !== 'boolean') {
             errors.push(`permissions[${index}].required deve ser booleano`);
           }
+          if (permission.purposeCode !== undefined && (typeof permission.purposeCode !== 'string' || permission.purposeCode.trim().length === 0)) {
+            errors.push(`permissions[${index}].purposeCode deve ser um código DUO`);
+          }
         });
       }
     }

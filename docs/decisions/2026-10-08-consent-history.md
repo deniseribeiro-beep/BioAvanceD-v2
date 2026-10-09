@@ -17,7 +17,7 @@ Requirements: RF010 AC4-AC6, Requisitos v4.0.0; dictionary v2.0.0 ConsentDecisio
 ## Authorization decisions (RF010 AC7)
 
 10. **A ConsentAuthorizationDecision (V2E-0140..0150) is recorded where a use is evaluated against a consent:** an access request's compatibility evaluation, once per requested item whose participant has a consent in force, in `consentAuthorizationDecisions`. It names the purpose, study, protocol, `policyVersion` (`rf010-consent-authorization/1.0.0`), the ConfigurationRelease in force (null before any exists, as the access request's own decisions) and the access request and item it answered.
-11. **Rules.** `consent_in_force` (the consent read is the newest `ACTIVE` one); `consent_study_scope`: a consent given for one study denies use for another; `consent_partial_revocation`: a consent with permissions revoked by scope gives `review_required`, because a purpose is not computable against the template's untyped permission keys until ConsentPermission is typed (AC3). Deny wins over review, review over permit.
+11. *(Its `consent_partial_revocation` rule is superseded by `2026-10-09-consent-purpose-codes.md`.)* **Rules.** `consent_in_force` (the consent read is the newest `ACTIVE` one); `consent_study_scope`: a consent given for one study denies use for another; `consent_partial_revocation`: a consent with permissions revoked by scope gives `review_required`, because a purpose is not computable against the template's untyped permission keys until ConsentPermission is typed (AC3). Deny wins over review, review over permit.
 12. **Effect on the request.** `deny` makes the item incompatible, so the request cannot be approved (RF024 AC6). `review_required` leaves it compatible and carries its reasons in the item's `consentAuthorizationReasons`, for the committee whose decision resolves it. A participant with no consent in force is incompatible as before, and no decision is recorded, since the decision's `consentId` is 1..1.
 
 ## The term's document control (RF010 AC1)
@@ -28,7 +28,7 @@ Requirements: RF010 AC4-AC6, Requisitos v4.0.0; dictionary v2.0.0 ConsentDecisio
 ## Computable permissions (RF010 AC3)
 
 15. **Each answered permission becomes a ConsentPermission row (V2E-0113..0120) when the consent is recorded,** in `consentPermissions`: its code (the term's permission key), `permit` or `deny`, the term version as `policyVersion` and the term's validity (from its `validFrom`, or the signing time, to its `validTo`). The rows are written once; a revocation narrows the consent's derived state and never rewrites them.
-16. **`purpose` is the term's own label coded by its key** until the builder offers governed purpose codes (DUO or institutional). That is why a scoped revocation still gives `review_required` in item 11.
+16. *(Superseded by `2026-10-09-consent-purpose-codes.md`.)* **`purpose` is the term's own label coded by its key** until the builder offers governed purpose codes (DUO or institutional). That is why a scoped revocation still gives `review_required` in item 11.
 
 ## Read
 

@@ -525,6 +525,66 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
     });
   });
 
+  // #1347 (RF010 AC3/AC7): a term's permissions name governed purposes (DUO
+  // codes), so a consent revoked for one purpose is judged on the requested
+  // purpose: the revoked one is denied, rather than sent to review.
+  test('a consent revoked for the requested DUO purpose denies the request\'s item (RF010 AC7)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const run = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const studyId = `rf1347-study-${run}`;
+    await seedStudy(studyId);
+    const healthCode = `DUO:rf1347-hmb-${run}`;
+    const diseaseCode = `DUO:rf1347-ds-${run}`;
+    await seedDuoConcept(healthCode);
+    await seedDuoConcept(diseaseCode);
+
+    const accessRequest = await createRequestForSample(request, admin.token, { studyId, duoCode: healthCode });
+    const evaluateUrl = `${apiBaseURL}/api/access-requests/${accessRequest.accessRequestId}/evaluate`;
+    const first = await request.post(evaluateUrl, { headers: auth });
+    expect(first.status()).toBe(200);
+    const participantId = (await first.json()).data.consentCompatibility[0].participantId;
+    expect(participantId).toBeTruthy();
+
+    const term = await request.post(`${apiBaseURL}/api/e-consent/consent-templates`, {
+      headers: auth,
+      data: {
+        title: `TCLE e2e 1347 ${run}`,
+        content: 'Termo com finalidades codificadas pela DUO (#1347).',
+        permissions: [
+          { key: 'health-1347', label: 'Pesquisa em saúde', required: false, purposeCode: healthCode },
+          { key: 'disease-1347', label: 'Pesquisa da doença', required: false, purposeCode: diseaseCode },
+        ],
+      },
+    });
+    expect(term.status(), await term.text()).toBe(201);
+    const termBody = (await term.json()).data;
+    expect(termBody.permissions[0]).toMatchObject({ key: 'health-1347', purposeCode: healthCode });
+
+    const signed = await request.post(`${apiBaseURL}/api/e-consent/consents`, {
+      headers: auth,
+      data: { participantId, consentTemplateId: String(termBody._id), responses: { 'health-1347': true, 'disease-1347': true } },
+    });
+    expect(signed.status(), await signed.text()).toBe(201);
+    const consentDocId = String((await signed.json()).data._id);
+
+    const revoked = await request.post(`${apiBaseURL}/api/e-consent/consents/${consentDocId}/revoke`, {
+      headers: auth,
+      data: { scope: ['health-1347'] },
+    });
+    expect(revoked.status(), await revoked.text()).toBe(200);
+
+    const evaluated = await request.post(evaluateUrl, { headers: auth });
+    expect(evaluated.status()).toBe(200);
+    const body = (await evaluated.json()).data;
+    expect(body.overallCompatible).toBe(false);
+    expect(body.consentCompatibility[0]).toMatchObject({
+      consentValid: false,
+      consentAuthorizationResult: 'deny',
+      consentAuthorizationReasons: [expect.stringContaining(healthCode)],
+    });
+  });
+
   test('blocks access for a rejected decision, and separately for a revoked one (AC#5)', async ({ request }) => {
     const admin = await realLogin(request);
     const studyId = `rf024-study-${Date.now()}`;
