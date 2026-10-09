@@ -1419,7 +1419,7 @@ class ImportLGPDService {
   }
 
   async importSamples(db, file, options = {}) {
-    const { startBoxId = null, autoIncrement = false, groupFields = {}, neo4jDriver = null, actor = {}, organizationId = null } = options;
+    const { startBoxId = null, autoIncrement = false, groupFields = {}, neo4jDriver = null, actor = {}, organizationId = null, organizationScope = null } = options;
     const results = {
       total: 0,
       success: 0,
@@ -1449,6 +1449,8 @@ class ImportLGPDService {
         startBoxId,
         actor,
         organizationId,
+        // #1356: a matched participant outside it keeps its records unwritten.
+        organizationScope,
       };
 
       for (let i = 0; i < rows.length; i++) {
@@ -1662,6 +1664,7 @@ class ImportLGPDService {
         ...collaborators,
         ...options,
         actor,
+        organizationScope,
         rowNumber: existing.rowNumber,
         slotIndex: 0,
       });
@@ -1753,7 +1756,7 @@ class ImportLGPDService {
     const {
       samplesCollection, patientsCollection, validator, drugService, allocateUseCase,
       groupFields = {}, autoIncrement = false, startBoxId = null, actor = {},
-      organizationId = null, slotIndex, rowNumber,
+      organizationId = null, organizationScope = null, slotIndex, rowNumber,
     } = context;
     let sampleData = null;
     let insertedId = null;
@@ -1784,7 +1787,7 @@ class ImportLGPDService {
         identityDocument: sampleData.identityDocument,
         // #1353: a participant this row creates is stamped like the sample.
         clinicalUnitId: organizationId,
-      });
+      }, { organizationScope });
 
       sampleData.participantId = String(matchedPatient?.patient?.participantId || '').trim();
       sampleData.patientObjectId = matchedPatient?.patient?._id || null;

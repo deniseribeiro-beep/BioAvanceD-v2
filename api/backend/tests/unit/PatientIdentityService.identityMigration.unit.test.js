@@ -102,6 +102,26 @@ describe('PatientIdentityService (import-time matching) resolves via Participant
     expect(patients.updateOne.mock.calls.at(-1)[1].$set).not.toHaveProperty('clinicalUnitId');
   });
 
+  // #1356: a scoped caller never writes another organization's participant.
+  it('links an out-of-scope match without writing its records, and still updates an in-scope one (#1356)', async () => {
+    const patients = makeCollection([
+      { _id: 'p1', participantId: '11111111', clinicalUnitId: 'org-other' },
+      { _id: 'p2', participantId: '22222222', clinicalUnitId: 'org-a' },
+    ]);
+    const participantIdentities = makeCollection([]);
+    const db = makeDb({ patients, participantIdentities });
+    const scope = { organizationScope: { scope: 'organization', organizationIds: ['org-a'] } };
+
+    const foreign = await participantIdentityService.matchOrUpsertParticipant(db, { participantId: '11111111', sex: 'F', patientName: 'Overwrite' }, scope);
+    expect(foreign).toMatchObject({ created: false, outOfScope: true, patient: { participantId: '11111111' } });
+    expect(patients.updateOne).not.toHaveBeenCalled();
+    expect(participantIdentities.updateOne).not.toHaveBeenCalled();
+
+    const own = await participantIdentityService.matchOrUpsertParticipant(db, { participantId: '22222222', sex: 'F' }, scope);
+    expect(own.outOfScope).toBeUndefined();
+    expect(patients.updateOne).toHaveBeenCalledTimes(1);
+  });
+
   it('creates a new participant and dual-writes ParticipantIdentity when no match exists', async () => {
     const patients = makeCollection([]);
     const participantIdentities = makeCollection([]);

@@ -477,6 +477,15 @@ describe('ImportLGPDService.importSamples', () => {
     expect(patientIdentityService.matchOrUpsertParticipant.mock.calls[0][1]).toMatchObject({ clinicalUnitId: 'ORG-OWN' });
   });
 
+  it('passes the importer\'s organization scope to the participant match (#1356)', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+    const organizationScope = { scope: 'organization', organizationIds: ['ORG-OWN'] };
+
+    await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' }, { organizationId: 'ORG-OWN', organizationScope });
+
+    expect(patientIdentityService.matchOrUpsertParticipant.mock.calls[0][2]).toEqual({ organizationScope });
+  });
+
   it('leaves collectionSite unset when no organizationId was resolved, a global caller naming none (#1353)', async () => {
     vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
 

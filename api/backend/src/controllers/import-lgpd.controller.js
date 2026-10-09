@@ -930,6 +930,7 @@ class ImportLGPDController {
         autoIncrement,
         groupFields,
         organizationId,
+        organizationScope: req.organizationScope,
         neo4jDriver: req.app.locals.neo4jDriver || null,
         // #911: same null-actor bug as above. `userID` is emitted too because
         // quarantineRejectedSampleRows reads `actor?.userID` first for the

@@ -39,7 +39,7 @@ function parseBirthDate(value) {
 }
 
 class participantIdentityService {
-  async matchOrUpsertParticipant(db, payload = {}) {
+  async matchOrUpsertParticipant(db, payload = {}, { organizationScope = null } = {}) {
     const participants = await getCollection(db, 'patients');
     const identities = await getCollection(db, 'participantIdentities');
     const participantId = normalizeString(payload.participantId);
@@ -101,6 +101,17 @@ class participantIdentityService {
       : null;
 
     if (existing) {
+      // #1356: a caller scoped to other organizations may link to a matched
+      // participant (whether it should is #1192's question) but never writes
+      // that participant's records: that is the reparent class #1053 closed
+      // on the update routes. An unstamped participant is out of scope for
+      // everyone but global scope, the scope filters' own rule.
+      if (organizationScope) {
+        const { isRecordInOrganizationScope } = require('./rbac-assignment.service');
+        if (!isRecordInOrganizationScope(existing, organizationScope, 'clinicalUnitId')) {
+          return { created: false, matchType: matchedBySuppliedId ? 'participantId' : 'name+birthDate', patient: { ...existing, participantId: existing.participantId || matchedParticipantId }, outOfScope: true };
+        }
+      }
       // RF005/RNF007 (#575): patientName/birthDate/identityDocument (plus the
       // patientNameNormalized/birthDateKey helper fields, which only ever
       // existed to support matching against Patient — matching above already
