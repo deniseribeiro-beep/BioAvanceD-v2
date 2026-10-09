@@ -754,6 +754,8 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
       await updateAssignmentScope(db, {
         userAccountId: targetUser._id.toString(),
         organizationId: req.body.organizationId,
+        // #1358: only the home organization's assignment follows it.
+        previousOrganizationId: targetUser.organizationId ?? null,
         updatedBy: req.user?.userID,
       });
       changes.organizationId = { from: targetUser.organizationId ?? null, to: req.body.organizationId ?? null };
@@ -834,6 +836,113 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
       error: req.t('users.updateError'),
       message: error.message
     });
+  }
+});
+
+// #1358: a user's organization scopes. The account keeps one home
+// organization (UserAccount.organizationId, dict-02 P1X-0187, 0..1), changed
+// through PUT /:id; each further organization is its own UserRoleAssignment
+// of the user's role (P1X-0225..0237), granted and revoked here. Scope is
+// resolved on every request, so a change applies at once.
+async function findUserForScopeRoute(req, res) {
+  const db = req.app.locals.db;
+  if (!db) {
+    res.status(503).json({ success: false, error: req.t('errors.databaseUnavailable') });
+    return null;
+  }
+  const userFilter = buildUserFilterById(req.params.id);
+  const user = await db.collection('users').findOne(userFilter);
+  if (!user) {
+    res.status(404).json({ success: false, error: req.t('users.notFound') });
+    return null;
+  }
+  return { db, user };
+}
+
+async function sendOrganizationScopes(res, db, user, status = 200) {
+  const { listOrganizationScopes } = require('../../services/rbac-assignment.service');
+  const scopes = await listOrganizationScopes(db, user._id.toString());
+  return res.status(status).json({
+    success: true,
+    data: {
+      homeOrganizationId: user.organizationId ?? null,
+      global: scopes.global,
+      organizationIds: scopes.organizationIds,
+    }
+  });
+}
+
+router.get('/:id/organizations', authenticate, requirePermission('createUser'), async (req, res) => {
+  try {
+    const found = await findUserForScopeRoute(req, res);
+    if (!found) return undefined;
+    return sendOrganizationScopes(res, found.db, found.user);
+  } catch (error) {
+    logger.error('Erro ao listar organizações do usuário:', error.message);
+    return res.status(500).json({ success: false, error: req.t('errors.serverError'), message: error.message });
+  }
+});
+
+// Granting a scope is a role assignment (#1008), so assignRole gates it too.
+router.post('/:id/organizations', authenticate, requirePermission('createUser'), requirePermission('assignRole'), async (req, res) => {
+  try {
+    const found = await findUserForScopeRoute(req, res);
+    if (!found) return undefined;
+    const { db, user } = found;
+    const { grantOrganizationScope } = require('../../services/rbac-assignment.service');
+    const { created } = await grantOrganizationScope(db, {
+      userAccountId: user._id.toString(),
+      organizationId: req.body?.organizationId,
+      grantedBy: req.user?.userID,
+    });
+    if (created) {
+      const auditLogger = require('../../utils/auditLogger');
+      auditLogger.init(db);
+      await auditLogger.logPermissionChange(req, req.params.id, {
+        organizationScope: { added: String(req.body.organizationId).trim() }
+      });
+    }
+    return sendOrganizationScopes(res, db, user, created ? 201 : 200);
+  } catch (error) {
+    const status = error.statusCode || (/não encontrado/.test(error.message) ? 404 : 500);
+    if (status === 500) logger.error('Erro ao conceder organização ao usuário:', error.message);
+    return res.status(status).json({ success: false, error: error.message, message: error.message });
+  }
+});
+
+// assignRole allows CREATE and UPDATE; a removal revokes an assignment, an
+// UPDATE of it, as the revoke-sessions route passes its own action.
+router.delete('/:id/organizations/:organizationId', authenticate, requirePermission('createUser'), requirePermission('assignRole', 'UPDATE'), async (req, res) => {
+  try {
+    const found = await findUserForScopeRoute(req, res);
+    if (!found) return undefined;
+    const { db, user } = found;
+    const organizationId = String(req.params.organizationId);
+    if (organizationId === (user.organizationId ?? null)) {
+      return res.status(409).json({
+        success: false,
+        error: 'A organização principal do usuário é alterada por PUT /api/users/:id.',
+        message: 'A organização principal do usuário é alterada por PUT /api/users/:id.'
+      });
+    }
+    const { revokeOrganizationScope } = require('../../services/rbac-assignment.service');
+    const revoked = await revokeOrganizationScope(db, {
+      userAccountId: user._id.toString(),
+      organizationId,
+      revokedBy: req.user?.userID,
+    });
+    if (revoked.length > 0) {
+      const auditLogger = require('../../utils/auditLogger');
+      auditLogger.init(db);
+      await auditLogger.logPermissionChange(req, req.params.id, {
+        organizationScope: { removed: organizationId }
+      });
+    }
+    return sendOrganizationScopes(res, db, user);
+  } catch (error) {
+    const status = error.statusCode || 500;
+    if (status === 500) logger.error('Erro ao remover organização do usuário:', error.message);
+    return res.status(status).json({ success: false, error: error.message, message: error.message });
   }
 });
 

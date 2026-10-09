@@ -577,7 +577,20 @@ export const userService = {
   // suspected compromise, 'admin_action' a routine administrative revoke.
   revokeSessions: (id: number | string, reason: 'admin_action' | 'risk') =>
     api.post<{ success: boolean; data: { revoked: number; reason: string } }>(`/users/${id}/revoke-sessions`, { reason }),
+  // #1358: the organizations the user's role is scoped to, beyond the home one.
+  getOrganizationScopes: (id: number | string) =>
+    api.get<ApiEnvelope<UserOrganizationScopes>>(`/users/${id}/organizations`),
+  addOrganizationScope: (id: number | string, organizationId: string) =>
+    api.post<ApiEnvelope<UserOrganizationScopes>>(`/users/${id}/organizations`, { organizationId }),
+  removeOrganizationScope: (id: number | string, organizationId: string) =>
+    api.delete<ApiEnvelope<UserOrganizationScopes>>(`/users/${id}/organizations/${encodeURIComponent(organizationId)}`),
 };
+
+export interface UserOrganizationScopes {
+  homeOrganizationId: string | null;
+  global: boolean;
+  organizationIds: string[];
+}
 
 // ========== ORGANIZATION SERVICES ==========
 export const organizationService = {

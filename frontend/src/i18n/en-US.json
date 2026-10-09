@@ -1827,6 +1827,12 @@
   },
   "users": {
     "accessType": "Access Type",
+    "addOrganization": "Add organization",
+    "additionalOrganizations": "Additional organizations",
+    "additionalOrganizationsGlobal": "An Administrator has access to every organization.",
+    "additionalOrganizationsHelp": "The user's role also applies in these organizations, beside the main one. Each change is applied and audited at once.",
+    "additionalOrganizationsNone": "No additional organization.",
+    "removeOrganization": "Remove",
     "auditorBadge": "Auditor",
     "auditorRole": "Auditor role (read access to the audit trail)",
     "auditorRoleHelp": "Additional role: grants access to Logs and Audit without changing the main role.",

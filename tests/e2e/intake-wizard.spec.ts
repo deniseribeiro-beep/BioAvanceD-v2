@@ -3,7 +3,6 @@ import { mockLogin } from './helpers/mockAuth';
 import { realLogin, realAuthLogin, seedRealAuth } from './helpers/realAuth';
 import { completeFirstLoginMfa } from './helpers/completeFirstLoginMfa';
 import { deleteOrganizations } from './helpers/listOrganizations';
-import { randomUUID } from 'crypto';
 import {
   createRealParticipant,
   closeSeedDb,
@@ -676,22 +675,23 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
     });
     expect(registerRes.ok(), await registerRes.text()).toBeTruthy();
 
-    // No route gives a user a second organization under the same role (an
-    // organization edit re-scopes every assignment), so the second
-    // assignment is written the way a migrated multi-organization account
-    // holds it: a copy of the first, scoped to the other organization.
+    // #1358: the administrator gives the Coordenador the second organization
+    // through its route, a second assignment of the same role.
     const db = mongoClient.db(mongoDbName);
     const user = await db.collection('users').findOne({ username });
     expect(user, 'the registered fixture user').toBeTruthy();
-    const firstAssignment = await db.collection('userRoleAssignments').findOne({
+    const grantRes = await request.post(`${apiBaseURL}/api/users/${String(user!._id)}/organizations`, {
+      headers: adminAuth,
+      data: { organizationId: secondOrg },
+    });
+    expect(grantRes.status(), await grantRes.text()).toBe(201);
+    expect((await grantRes.json()).data.organizationIds.sort()).toEqual([...orgIds].sort());
+    const scopedAssignments = await db.collection('userRoleAssignments').find({
       userAccountId: String(user!._id),
       assignmentStatus: 'active',
       scopeType: 'organization',
-      scopeId: firstOrg,
-    });
-    expect(firstAssignment, 'the registration grants an assignment scoped to the first organization').toBeTruthy();
-    const { _id: _ignored, ...assignmentFields } = firstAssignment!;
-    await db.collection('userRoleAssignments').insertOne({ ...assignmentFields, assignmentId: randomUUID(), scopeId: secondOrg });
+    }).toArray();
+    expect(scopedAssignments.map((doc) => doc.scopeId).sort()).toEqual([...orgIds].sort());
 
     const coordinator = await completeFirstLoginMfa(request, apiBaseURL!, username, password);
     const coordinatorAuth = { Authorization: `Bearer ${coordinator.token}` };

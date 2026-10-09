@@ -7,6 +7,7 @@ import { User } from '../types/models';
 import { useUsers } from '../hooks/useUsers';
 import { userService } from '../services/api';
 import { useOrganizations } from '../hooks/useOrganizations';
+import UserOrganizationScopes from './UserOrganizationScopes';
 import { getAccessTypeForRole, getRoleDescription, RoleName } from '../utils/rolePermissions';
 import { useLanguage } from '../contexts/LanguageContext';
 import { validatePassword } from '../utils/passwordValidator';
@@ -449,6 +450,13 @@ export default function NewUserPage() {
               </p>
             </div>
           </div>
+
+          {editingUser && ((editingUser as any)._id || editingUser.id) && (
+            <UserOrganizationScopes
+              userId={(editingUser as any)._id || editingUser.id}
+              organizations={organizations}
+            />
+          )}
 
           {editingUser && (
             <div className="form-grid-full">

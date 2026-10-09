@@ -340,7 +340,26 @@ async function changeUserRole(db, { userAccountId, accessType, changedBy, organi
     );
   }
 
-  return grantRoleForAccessType(db, { userAccountId, accessType, grantedBy: changedBy, organizationId });
+  const granted = await grantRoleForAccessType(db, { userAccountId, accessType, grantedBy: changedBy, organizationId });
+
+  // #1358: the new role keeps every organization the old one was scoped to,
+  // not only `organizationId`. A global (Administrador) grant needs none.
+  if (granted.scopeType === 'organization') {
+    const otherScopeIds = [...new Set(docsToRevoke
+      .filter((doc) => doc.scopeType === 'organization' && doc.scopeId && doc.scopeId !== granted.scopeId)
+      .map((doc) => doc.scopeId))];
+    for (const scopeId of otherScopeIds) {
+      await assignments.insertOne(UserRoleAssignmentModel.create({
+        userAccountId: String(userAccountId),
+        roleId: granted.roleId,
+        scopeType: 'organization',
+        scopeId,
+        grantedBy: String(changedBy || 'system'),
+      }));
+    }
+  }
+
+  return granted;
 }
 
 /**
@@ -411,18 +430,131 @@ async function revokeAdditionalRole(db, { userAccountId, roleCode, revokedBy }) 
  * for an assignment that didn't actually change hands. Never touches
  * `global`-scoped (Administrador) assignments.
  */
-async function updateAssignmentScope(db, { userAccountId, organizationId }) {
+//
+// #1358: given `previousOrganizationId`, only the assignments scoped to it (or
+// to no organization) follow the home organization; a scope granted through
+// grantOrganizationScope stays. One that would duplicate a scope the role
+// already holds in the new organization is revoked instead.
+async function updateAssignmentScope(db, { userAccountId, organizationId, previousOrganizationId, updatedBy }) {
   const assignments = await getCollection(db, 'userRoleAssignments');
   const activeDocs = await getActiveAssignments(db, userAccountId);
   const scopeId = await validateOrganizationId(db, organizationId);
+  const followsHome = (doc) => previousOrganizationId === undefined
+    || doc.scopeId == null
+    || doc.scopeId === previousOrganizationId;
 
   const updatedAssignmentIds = [];
   for (const doc of activeDocs) {
-    if (doc.scopeType !== 'organization') continue;
-    await assignments.updateOne({ assignmentId: doc.assignmentId }, { $set: { scopeId } });
+    if (doc.scopeType !== 'organization' || !followsHome(doc)) continue;
+    const duplicate = scopeId != null && activeDocs.some((other) => other !== doc
+      && other.roleId === doc.roleId && other.scopeType === 'organization' && other.scopeId === scopeId);
+    if (duplicate) {
+      await assignments.updateOne(
+        { assignmentId: doc.assignmentId },
+        { $set: { assignmentStatus: 'revoked', revokedBy: String(updatedBy || 'system'), revokedAt: new Date(), revocationReason: 'scope_merged' } }
+      );
+    } else {
+      await assignments.updateOne({ assignmentId: doc.assignmentId }, { $set: { scopeId } });
+    }
     updatedAssignmentIds.push(doc.assignmentId);
   }
   return updatedAssignmentIds;
+}
+
+function scopeError(message, statusCode) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+}
+
+/**
+ * #1358: the user's active primary (accessType-derived) assignments, each
+ * with its role. An additive role such as `auditor` is not among them.
+ */
+async function getPrimaryAssignments(db, userAccountId) {
+  const activeDocs = await getActiveAssignments(db, userAccountId);
+  if (!activeDocs.length) return [];
+  const roles = await getCollection(db, 'roles');
+  const roleIds = [...new Set(activeDocs.map((doc) => doc.roleId))];
+  const roleDocs = await roles.find({ roleId: { $in: roleIds } }).toArray();
+  const roleById = new Map(roleDocs.map((role) => [role.roleId, role]));
+  const primaryRoleCodes = new Set(Object.values(ROLE_CODE_BY_ACCESS_TYPE));
+  return activeDocs
+    .map((doc) => ({ doc, role: roleById.get(doc.roleId) }))
+    .filter(({ role }) => role && primaryRoleCodes.has(role.roleCode));
+}
+
+/**
+ * #1358: the organizations the user's primary role is scoped to, one per
+ * active organization-scoped assignment (dict-02 UserRoleAssignment
+ * P1X-0225..0237: one row per scope, beside the account's single home
+ * organization, UserAccount.organizationId P1X-0187, 0..1).
+ */
+async function listOrganizationScopes(db, userAccountId) {
+  const primary = await getPrimaryAssignments(db, userAccountId);
+  const global = primary.some(({ role }) => Number(role.hierarchyLevel) === 4);
+  const organizationIds = [...new Set(primary
+    .filter(({ doc }) => doc.scopeType === 'organization' && doc.scopeId)
+    .map(({ doc }) => doc.scopeId))];
+  return { global, organizationIds };
+}
+
+/**
+ * #1358: scopes the user's primary role to one more organization, as its own
+ * assignment. Idempotent: an organization already held returns its
+ * assignment with `created: false`. An Administrador is global and gets
+ * none; a user with no organization-scoped primary role has none to extend.
+ */
+async function grantOrganizationScope(db, { userAccountId, organizationId, grantedBy }) {
+  const scopeId = await validateOrganizationId(db, organizationId);
+  if (!scopeId) throw scopeError('organizationId é obrigatório', 422);
+
+  const primary = await getPrimaryAssignments(db, userAccountId);
+  if (primary.some(({ role }) => Number(role.hierarchyLevel) === 4)) {
+    throw scopeError('Administrador tem escopo global e não recebe organização adicional', 409);
+  }
+  const scoped = primary.filter(({ doc }) => doc.scopeType === 'organization');
+  if (!scoped.length) {
+    throw scopeError('Usuário sem papel com escopo de organização', 409);
+  }
+  const held = scoped.find(({ doc }) => doc.scopeId === scopeId);
+  if (held) return { assignment: held.doc, created: false };
+
+  const doc = UserRoleAssignmentModel.create({
+    userAccountId: String(userAccountId),
+    roleId: scoped[0].doc.roleId,
+    scopeType: 'organization',
+    scopeId,
+    grantedBy: String(grantedBy || 'system'),
+  });
+  await (await getCollection(db, 'userRoleAssignments')).insertOne(doc);
+  return { assignment: doc, created: true };
+}
+
+/**
+ * #1358: revokes the user's primary-role assignments scoped to
+ * `organizationId`. Refuses the last one, which would leave the user with no
+ * organization (a hard 403 on every scoped route). Returns the revoked
+ * assignments, none when the organization was not held.
+ */
+async function revokeOrganizationScope(db, { userAccountId, organizationId, revokedBy }) {
+  const primary = await getPrimaryAssignments(db, userAccountId);
+  const scoped = primary.filter(({ doc }) => doc.scopeType === 'organization' && doc.scopeId);
+  const toRevoke = scoped.filter(({ doc }) => doc.scopeId === String(organizationId));
+  if (!toRevoke.length) return [];
+  if (toRevoke.length === scoped.length) {
+    throw scopeError('A última organização do usuário não pode ser removida', 409);
+  }
+
+  const assignments = await getCollection(db, 'userRoleAssignments');
+  const now = new Date();
+  for (const { doc } of toRevoke) {
+    await assignments.updateOne(
+      { assignmentId: doc.assignmentId },
+      { $set: { assignmentStatus: 'revoked', revokedBy: String(revokedBy || 'system'), revokedAt: now, revocationReason: 'scope_removed' } }
+    );
+  }
+  return toRevoke.map(({ doc }) => doc);
 }
 
 /**
@@ -657,6 +789,9 @@ module.exports = {
   grantAdditionalRole,
   revokeAdditionalRole,
   updateAssignmentScope,
+  listOrganizationScopes,
+  grantOrganizationScope,
+  revokeOrganizationScope,
   resolveUserOrganizationScope,
   isOrganizationScopeUsable,
   applyOrganizationScopeFilter,

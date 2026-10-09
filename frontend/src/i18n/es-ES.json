@@ -1827,6 +1827,12 @@
   },
   "users": {
     "accessType": "Tipo de acceso",
+    "addOrganization": "Agregar organización",
+    "additionalOrganizations": "Organizaciones adicionales",
+    "additionalOrganizationsGlobal": "Un Administrador tiene acceso a todas las organizaciones.",
+    "additionalOrganizationsHelp": "El rol del usuario también vale en estas organizaciones, además de la principal. Cada cambio se aplica y se audita al instante.",
+    "additionalOrganizationsNone": "Ninguna organización adicional.",
+    "removeOrganization": "Quitar",
     "auditorBadge": "Auditor",
     "auditorRole": "Perfil Auditor (acceso de lectura al registro de auditoría)",
     "auditorRoleHelp": "Rol adicional: permite consultar Logs y auditoría sin cambiar el rol principal.",

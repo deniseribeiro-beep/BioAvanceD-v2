@@ -11,6 +11,13 @@ module.exports = {
     { method: 'PUT', path: '/:id', permission: 'createUser' },
     { method: 'DELETE', path: '/:id', permission: 'createUser' },
     { method: 'GET', path: '/:id/validate-status', permission: 'createUser' },
+    // #1358: a user's organization scopes; granting or removing one is a
+    // role assignment.
+    { method: 'GET', path: '/:id/organizations', permission: 'createUser' },
+    { method: 'POST', path: '/:id/organizations', permission: 'createUser' },
+    { method: 'POST', path: '/:id/organizations', permission: 'assignRole' },
+    { method: 'DELETE', path: '/:id/organizations/:organizationId', permission: 'createUser' },
+    { method: 'DELETE', path: '/:id/organizations/:organizationId', permission: 'assignRole' },
     { method: 'POST', path: '/register-patient', permission: 'createPatient' },
     { method: 'POST', path: '/register-sample', permission: 'createSample' },
     { method: 'POST', path: '/record-withdrawal', permission: 'withdrawSample' },
