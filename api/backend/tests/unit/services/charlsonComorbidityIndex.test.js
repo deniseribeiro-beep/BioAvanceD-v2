@@ -81,4 +81,47 @@ describe('charlsonComorbidityIndex', () => {
     expect(result.scoreValue).toBe(4);
     expect(result.scoreComponents).toHaveLength(3);
   });
+
+  // #715: every one of the original index's 19 categories is now reachable.
+  it('scores each of the 19 categories at its 1987 weight', () => {
+    const expected = {
+      myocardialInfarction: 1, congestiveHeartFailure: 1, peripheralVascularDisease: 1, cerebrovascularDisease: 1,
+      dementia: 1, copd: 1, connectiveTissueDisease: 1, pepticUlcerDisease: 1, mildLiverDisease: 1, diabetesType1: 1,
+      hemiplegia: 2, ckd: 2, diabetesWithEndOrganDamage: 2, solidTumor: 2, leukemia: 2, lymphoma: 2,
+      moderateSevereLiverDisease: 3, metastaticSolidTumor: 6, aids: 6,
+    };
+    for (const [slug, weight] of Object.entries(expected)) {
+      expect(computeCharlsonScore([slug]).scoreValue, slug).toBe(weight);
+    }
+    expect(Object.keys(expected)).toHaveLength(19);
+  });
+
+  it('scores a severity pair once, at the severer weight, keeping both slugs on that component', () => {
+    expect(computeCharlsonScore(['diabetesType2', 'diabetesWithEndOrganDamage'])).toEqual({
+      scoreValue: 2,
+      scoreComponents: [
+        {
+          condition: { code: 'diabetesWithEndOrganDamage', display: 'Diabetes com lesão de órgão-alvo' },
+          weight: 2,
+          sourceSlugs: ['diabetesWithEndOrganDamage', 'diabetesType2'],
+        },
+      ],
+    });
+    expect(computeCharlsonScore(['mildLiverDisease', 'moderateSevereLiverDisease']).scoreValue).toBe(3);
+    expect(computeCharlsonScore(['solidTumor', 'metastaticSolidTumor']).scoreValue).toBe(6);
+  });
+
+  it('leukemia and lymphoma are their own categories, not superseded by a metastatic tumor', () => {
+    expect(computeCharlsonScore(['metastaticSolidTumor', 'leukemia', 'lymphoma']).scoreValue).toBe(10);
+  });
+
+  it("the index's maximum, every category with each pair at its severer grade, is 33", () => {
+    const all = [
+      'myocardialInfarction', 'congestiveHeartFailure', 'peripheralVascularDisease', 'cerebrovascularDisease', 'dementia',
+      'copd', 'connectiveTissueDisease', 'pepticUlcerDisease', 'mildLiverDisease', 'diabetesType1', 'hemiplegia', 'ckd',
+      'diabetesWithEndOrganDamage', 'solidTumor', 'leukemia', 'lymphoma', 'moderateSevereLiverDisease',
+      'metastaticSolidTumor', 'aids',
+    ];
+    expect(computeCharlsonScore(all).scoreValue).toBe(33);
+  });
 });

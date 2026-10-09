@@ -33,22 +33,65 @@ const SCORE_TYPE = { code: 'cci', display: 'Charlson Comorbidity Index' };
 // wizard slug -> Charlson category id. Slugs not listed here (hypertension,
 // obesity, asthma, smoking, alcoholUse, antibioticUse, insulinUse,
 // antiviralUse) are outside the original 1987 index's scope and are never
-// scored, by design -- see the file-level comment above.
+// scored, by design -- see the file-level comment above. #715: the wizard
+// now collects every one of the index's 19 categories, one slug each,
+// besides the two diabetes types and ckd it already had.
 const SLUG_TO_CATEGORY = {
+  myocardialInfarction: 'myocardialInfarction',
+  congestiveHeartFailure: 'congestiveHeartFailure',
+  peripheralVascularDisease: 'peripheralVascularDisease',
+  cerebrovascularDisease: 'cerebrovascularDisease',
+  dementia: 'dementia',
+  copd: 'chronicPulmonaryDisease',
+  connectiveTissueDisease: 'connectiveTissueDisease',
+  pepticUlcerDisease: 'pepticUlcerDisease',
+  mildLiverDisease: 'mildLiverDisease',
   diabetesType1: 'diabetes',
   diabetesType2: 'diabetes',
-  copd: 'chronicPulmonaryDisease',
+  hemiplegia: 'hemiplegia',
   ckd: 'renalDisease',
+  diabetesWithEndOrganDamage: 'diabetesWithEndOrganDamage',
+  solidTumor: 'anyTumor',
+  leukemia: 'leukemia',
+  lymphoma: 'lymphoma',
+  moderateSevereLiverDisease: 'moderateSevereLiverDisease',
+  metastaticSolidTumor: 'metastaticSolidTumor',
+  aids: 'aids',
 };
 
 // Category id -> { weight, display } per the original 1987 Charlson weight
-// table (Charlson et al. 1987, Table 1). Only the categories this wizard
-// can actually report today are included -- extending this table is a
-// UI-wiring question (a new checkbox), not a scoring-algorithm one.
+// table (Charlson et al. 1987, Table 1), all 19 categories.
 const CATEGORY_WEIGHTS = {
-  diabetes: { weight: 1, display: 'Diabetes (sem lesão de órgão-alvo)' },
+  myocardialInfarction: { weight: 1, display: 'Infarto do miocárdio' },
+  congestiveHeartFailure: { weight: 1, display: 'Insuficiência cardíaca congestiva' },
+  peripheralVascularDisease: { weight: 1, display: 'Doença vascular periférica' },
+  cerebrovascularDisease: { weight: 1, display: 'Doença cerebrovascular' },
+  dementia: { weight: 1, display: 'Demência' },
   chronicPulmonaryDisease: { weight: 1, display: 'Doença pulmonar crônica' },
+  connectiveTissueDisease: { weight: 1, display: 'Doença do tecido conjuntivo' },
+  pepticUlcerDisease: { weight: 1, display: 'Doença ulcerosa péptica' },
+  mildLiverDisease: { weight: 1, display: 'Doença hepática leve' },
+  diabetes: { weight: 1, display: 'Diabetes (sem lesão de órgão-alvo)' },
+  hemiplegia: { weight: 2, display: 'Hemiplegia' },
   renalDisease: { weight: 2, display: 'Doença renal moderada/grave' },
+  diabetesWithEndOrganDamage: { weight: 2, display: 'Diabetes com lesão de órgão-alvo' },
+  anyTumor: { weight: 2, display: 'Qualquer tumor (não metastático)' },
+  leukemia: { weight: 2, display: 'Leucemia' },
+  lymphoma: { weight: 2, display: 'Linfoma' },
+  moderateSevereLiverDisease: { weight: 3, display: 'Doença hepática moderada/grave' },
+  metastaticSolidTumor: { weight: 6, display: 'Tumor sólido metastático' },
+  aids: { weight: 6, display: 'AIDS' },
+};
+
+// #715: three pairs grade one condition by severity, so a patient with both
+// is scored once, at the severer weight: the hierarchy the Charlson-Deyo
+// and Quan adaptations apply, and the R `comorbidity` package implements
+// (Gasparini A., JOSS 2018;3(23):648). The milder category's slugs are kept
+// on the severer component, so no reported condition disappears silently.
+const SUPERSEDED_BY = {
+  diabetes: 'diabetesWithEndOrganDamage',
+  mildLiverDisease: 'moderateSevereLiverDisease',
+  anyTumor: 'metastaticSolidTumor',
 };
 
 /**
@@ -68,6 +111,13 @@ function computeCharlsonScore(charlsonConditions) {
     if (!category || !CATEGORY_WEIGHTS[category]) continue;
     if (!categoriesPresent.has(category)) categoriesPresent.set(category, []);
     categoriesPresent.get(category).push(slug);
+  }
+
+  for (const [milder, severer] of Object.entries(SUPERSEDED_BY)) {
+    if (categoriesPresent.has(milder) && categoriesPresent.has(severer)) {
+      categoriesPresent.get(severer).push(...categoriesPresent.get(milder));
+      categoriesPresent.delete(milder);
+    }
   }
 
   if (categoriesPresent.size === 0) {
@@ -95,4 +145,5 @@ module.exports = {
   SCORE_TYPE,
   SLUG_TO_CATEGORY,
   CATEGORY_WEIGHTS,
+  SUPERSEDED_BY,
 };
