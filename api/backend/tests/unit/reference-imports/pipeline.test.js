@@ -45,6 +45,19 @@ function createFakeCollection() {
       if (update.$set) Object.assign(doc, update.$set);
       return { matchedCount: 1, modifiedCount: 1 };
     },
+    // The outbox's per-aggregate version counter: an upserting $inc.
+    async findOneAndUpdate(filter, update, options = {}) {
+      calls.push({ method: 'findOneAndUpdate', filter, update, session: options.session });
+      let doc = docs.find((d) => matches(d, filter));
+      if (!doc) {
+        if (!options.upsert) return null;
+        doc = { ...filter };
+        docs.push(doc);
+      }
+      for (const [key, by] of Object.entries(update.$inc || {})) doc[key] = (doc[key] || 0) + by;
+      if (update.$set) Object.assign(doc, update.$set);
+      return doc;
+    },
     async countDocuments(filter = {}) {
       return docs.filter((doc) => matches(doc, filter)).length;
     },
@@ -60,6 +73,7 @@ function createFakeDb() {
     terminologyConcepts: createFakeCollection(),
     terminologyRelations: createFakeCollection(),
     graph_projection_outbox: createFakeCollection(),
+    graph_projection_outbox_aggregate_versions: createFakeCollection(),
   };
   return {
     collections,
@@ -177,6 +191,11 @@ describe('reference-imports pipeline runImport (HPO)', () => {
       expect(recordSessions.every((id) => typeof id === 'number')).toBe(true);
       expect(new Set(recordSessions).size).toBe(15);
       expect(outboxSessions).toEqual(recordSessions);
+      // #1313: each event's aggregateVersion is taken in the same transaction.
+      const versionSessions = fakeDb.collections.graph_projection_outbox_aggregate_versions.calls
+        .filter((call) => call.method === 'findOneAndUpdate')
+        .map((call) => call.session?.id);
+      expect(versionSessions).toEqual(recordSessions);
     });
 
     it('does not append duplicate outbox events on a second, idempotent run', async () => {

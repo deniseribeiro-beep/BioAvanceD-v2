@@ -13,6 +13,9 @@ const { Neo4jCanonicalProjectionService } = require('../services/neo4jCanonicalP
 // convention but not a container.
 const HEARTBEAT_PATH = '/tmp/neo4j-projection-heartbeat';
 
+// #1313 (V2E-0605): the projector a GraphProjectionCheckpoint names.
+const PROJECTOR_NAME = 'neo4j-canonical-projection';
+
 // #1040: observability-only, matching this file's own fatal-error style
 // (logger.error + process.exit(1), same as the require.main block's
 // runProjectionWorker().catch() below). The process must still die -- do NOT
@@ -58,17 +61,46 @@ async function runProjectionOnce(options = {}) {
   });
 
   if (!events.length) {
-    return { processed: 0, projected: 0, failed: 0 };
+    return { processed: 0, projected: 0, failed: 0, skipped: 0, deferred: 0 };
   }
 
   let projected = 0;
   let failed = 0;
+  let skipped = 0;
+  let deferred = 0;
   const session = neo4jDriver.session({ database: env.NEO4J_DATABASE || 'neo4j' });
 
   try {
     for (const event of events) {
+      // #1313 (RF023 AC4, RNF019 C3/C4): a versioned event is applied in its
+      // aggregate's version order, once per projector. Events appended
+      // before the versioned contract carry no aggregateVersion and are
+      // applied as they come.
+      const versioned = Number.isInteger(event.aggregateVersion);
       try {
+        if (versioned) {
+          const checkpoint = await outboxService.getCheckpoint(
+            db,
+            PROJECTOR_NAME,
+            Neo4jOutboxService.partitionKeyOf(event)
+          );
+          if (checkpoint && Number(checkpoint.lastAggregateVersion) >= event.aggregateVersion) {
+            await outboxService.markProjected(db, event.eventId);
+            skipped += 1;
+            continue;
+          }
+          if (await outboxService.hasEarlierUnprojectedVersion(db, event)) {
+            await outboxService.markDeferred(db, event.eventId);
+            deferred += 1;
+            continue;
+          }
+        }
         await projector.applyEvent(session, event);
+        // The checkpoint before the mark: a crash between them leaves an
+        // event the next lease skips, not one it applies twice.
+        if (versioned) {
+          await outboxService.recordCheckpoint(db, PROJECTOR_NAME, event);
+        }
         await outboxService.markProjected(db, event.eventId);
         projected += 1;
       } catch (error) {
@@ -77,7 +109,7 @@ async function runProjectionOnce(options = {}) {
         if (nextAttempts >= maxAttempts) {
           await outboxService.markDeadLetter(db, event.eventId, error);
         } else {
-          await outboxService.markRetrying(db, event.eventId, error);
+          await outboxService.markRetrying(db, event.eventId, error, { attempts: nextAttempts });
         }
         logger.warn('[GRAPH_OUTBOX] Falha ao projetar evento', {
           eventId: event.eventId,
@@ -95,6 +127,8 @@ async function runProjectionOnce(options = {}) {
     processed: events.length,
     projected,
     failed,
+    skipped,
+    deferred,
   };
 }
 
@@ -144,4 +178,5 @@ if (require.main === module) {
 module.exports = {
   runProjectionOnce,
   runProjectionWorker,
+  PROJECTOR_NAME,
 };

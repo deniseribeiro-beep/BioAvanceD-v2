@@ -25,6 +25,8 @@ function makeCollection(overrides = {}) {
     insertMany: vi.fn(async (docs) => ({ insertedCount: docs.length })),
     updateOne: vi.fn(async () => ({ modifiedCount: 1 })),
     updateMany: vi.fn(async () => ({ modifiedCount: 1 })),
+    // #1313: the outbox's per-aggregate version counter.
+    findOneAndUpdate: vi.fn(async () => ({ version: 1 })),
     countDocuments: vi.fn(async () => 0),
     ...overrides,
   };

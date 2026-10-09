@@ -78,13 +78,27 @@ function makeOutboxCollection() {
   };
 }
 
+// #1313: the outbox's per-aggregate version counter.
+function makeAggregateVersionsCollection() {
+  const versions = new Map();
+  return {
+    findOneAndUpdate: async (query) => {
+      const version = (versions.get(query._id) || 0) + 1;
+      versions.set(query._id, version);
+      return { _id: query._id, version };
+    },
+  };
+}
+
 function makeDb(collection, rcsAssessmentsCollection = makeRcsAssessmentsCollection(), specimenPreanalyticsCollection = makeSpecimenPreanalyticsCollection(), outboxCollection = makeOutboxCollection()) {
+  const aggregateVersionsCollection = makeAggregateVersionsCollection();
   return {
     outboxCollection,
     collection: (name) => {
       if (name === 'rcsAssessments') return rcsAssessmentsCollection;
       if (name === 'specimenPreanalytics') return specimenPreanalyticsCollection;
       if (name === 'graph_projection_outbox') return outboxCollection;
+      if (name === 'graph_projection_outbox_aggregate_versions') return aggregateVersionsCollection;
       return collection;
     },
   };

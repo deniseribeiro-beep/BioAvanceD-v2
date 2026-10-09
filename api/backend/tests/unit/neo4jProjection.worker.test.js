@@ -12,7 +12,7 @@ vi.spyOn(neo4jConnection, 'connectNeo4j').mockResolvedValue({
   session: () => ({ close: async () => undefined }),
 });
 
-const { runProjectionOnce, runProjectionWorker } = require('../../src/workers/neo4jProjection.worker');
+const { runProjectionOnce, runProjectionWorker, PROJECTOR_NAME } = require('../../src/workers/neo4jProjection.worker');
 
 describe('neo4jProjection.worker', () => {
   it('replays outbox events idempotently and marks dead letters after repeated failures', async () => {
@@ -99,6 +99,107 @@ describe('neo4jProjection.worker', () => {
     expect(state.dead).toEqual([]);
   });
 
+  // #1313 (RNF019 C5): the retry carries its attempt count, which sets its backoff.
+  it('passes the attempt count to markRetrying', async () => {
+    const retries = [];
+    const outboxService = {
+      rescheduleStaleProcessing: async () => 0,
+      leaseNextBatch: async () => [{ eventId: 'evt-b', aggregateType: 'Sample', aggregateId: 's-b', attempts: 2 }],
+      markProjected: async () => undefined,
+      markRetrying: async (_db, eventId, _error, options) => retries.push({ eventId, options }),
+      markDeadLetter: async () => undefined,
+    };
+    const projector = { applyEvent: async () => { throw new Error('transient neo4j error'); } };
+    const neo4jDriver = { session: () => ({ close: async () => undefined }) };
+
+    await runProjectionOnce({ db: {}, neo4jDriver, outboxService, projector, maxAttempts: 8 });
+
+    expect(retries).toEqual([{ eventId: 'evt-b', options: { attempts: 3 } }]);
+  });
+
+  // #1313 (RF023 AC4, RNF019 C3/C4): versioned events apply in aggregate
+  // version order, once per projector, under a GraphProjectionCheckpoint.
+  describe('#1313 versioned events and the checkpoint', () => {
+    function makeOutbox({ checkpoint = null, earlier = false } = {}) {
+      const calls = [];
+      return {
+        calls,
+        service: {
+          rescheduleStaleProcessing: async () => 0,
+          leaseNextBatch: async () => [],
+          getCheckpoint: async (_db, projectorName, partitionKey) => {
+            calls.push(['getCheckpoint', projectorName, partitionKey]);
+            return checkpoint;
+          },
+          hasEarlierUnprojectedVersion: async (_db, event) => { calls.push(['hasEarlier', event.eventId]); return earlier; },
+          markDeferred: async (_db, eventId) => calls.push(['deferred', eventId]),
+          recordCheckpoint: async (_db, projectorName, event) => calls.push(['checkpoint', projectorName, event.eventId]),
+          markProjected: async (_db, eventId) => calls.push(['projected', eventId]),
+          markRetrying: async (_db, eventId) => calls.push(['retrying', eventId]),
+          markDeadLetter: async (_db, eventId) => calls.push(['dead', eventId]),
+        },
+      };
+    }
+    const event = { eventId: 'evt-v3', aggregateType: 'Sample', aggregateId: 's-1', aggregateVersion: 3, attempts: 1 };
+    const neo4jDriver = { session: () => ({ close: async () => undefined }) };
+
+    async function run(outbox, applied) {
+      outbox.service.leaseNextBatch = async () => [event];
+      const projector = { applyEvent: async (_session, e) => { applied.push(e.eventId); } };
+      return runProjectionOnce({ db: {}, neo4jDriver, outboxService: outbox.service, projector, maxAttempts: 8 });
+    }
+
+    it('applies a new version, then records the checkpoint, then marks it projected', async () => {
+      const outbox = makeOutbox({ checkpoint: { lastAggregateVersion: 2 } });
+      const applied = [];
+
+      const result = await run(outbox, applied);
+
+      expect(applied).toEqual(['evt-v3']);
+      expect(outbox.calls).toEqual([
+        ['getCheckpoint', PROJECTOR_NAME, 'Sample:s-1'],
+        ['hasEarlier', 'evt-v3'],
+        ['checkpoint', PROJECTOR_NAME, 'evt-v3'],
+        ['projected', 'evt-v3'],
+      ]);
+      expect(result).toMatchObject({ processed: 1, projected: 1, skipped: 0, deferred: 0 });
+    });
+
+    it('skips a version the checkpoint already covers, without applying it again', async () => {
+      const outbox = makeOutbox({ checkpoint: { lastAggregateVersion: 3 } });
+      const applied = [];
+
+      const result = await run(outbox, applied);
+
+      expect(applied).toEqual([]);
+      expect(outbox.calls.map((c) => c[0])).toEqual(['getCheckpoint', 'projected']);
+      expect(result).toMatchObject({ projected: 0, skipped: 1, deferred: 0 });
+    });
+
+    it('defers a version while an earlier version of its aggregate is unprojected', async () => {
+      const outbox = makeOutbox({ earlier: true });
+      const applied = [];
+
+      const result = await run(outbox, applied);
+
+      expect(applied).toEqual([]);
+      expect(outbox.calls.map((c) => c[0])).toEqual(['getCheckpoint', 'hasEarlier', 'deferred']);
+      expect(result).toMatchObject({ projected: 0, skipped: 0, deferred: 1, failed: 0 });
+    });
+
+    it('applies an event from before the versioned contract without touching the checkpoint', async () => {
+      const outbox = makeOutbox();
+      const applied = [];
+      outbox.service.leaseNextBatch = async () => [{ eventId: 'evt-old', aggregateType: 'Sample', aggregateId: 's-1', attempts: 1 }];
+      const projector = { applyEvent: async (_session, e) => { applied.push(e.eventId); } };
+
+      await runProjectionOnce({ db: {}, neo4jDriver, outboxService: outbox.service, projector, maxAttempts: 8 });
+
+      expect(applied).toEqual(['evt-old']);
+      expect(outbox.calls).toEqual([['projected', 'evt-old']]);
+    });
+  });
+
   it('falls back to connectDB()/connectNeo4j() when options.db/neo4jDriver are not provided', async () => {
     mongo.connectDB.mockClear();
     neo4jConnection.connectNeo4j.mockClear();
@@ -116,7 +217,7 @@ describe('neo4jProjection.worker', () => {
 
     expect(mongo.connectDB).toHaveBeenCalledTimes(1);
     expect(neo4jConnection.connectNeo4j).toHaveBeenCalledTimes(1);
-    expect(result).toEqual({ processed: 0, projected: 0, failed: 0 });
+    expect(result).toEqual({ processed: 0, projected: 0, failed: 0, skipped: 0, deferred: 0 });
   });
 
   it('returns default processed/projected/failed counts when the batch is empty', async () => {
@@ -132,7 +233,7 @@ describe('neo4jProjection.worker', () => {
 
     const result = await runProjectionOnce({ db: {}, neo4jDriver, outboxService, projector, maxAttempts: 8 });
 
-    expect(result).toEqual({ processed: 0, projected: 0, failed: 0 });
+    expect(result).toEqual({ processed: 0, projected: 0, failed: 0, skipped: 0, deferred: 0 });
   });
 });
 
@@ -150,7 +251,7 @@ describe('neo4jProjection.worker - runProjectionWorker', () => {
 
     const result = await runProjectionWorker({ db: {}, neo4jDriver, outboxService, projector, maxAttempts: 8, once: true });
 
-    expect(result).toEqual({ processed: 1, projected: 1, failed: 0 });
+    expect(result).toEqual({ processed: 1, projected: 1, failed: 0, skipped: 0, deferred: 0 });
   });
 
   it('backs off between empty polls and keeps looping while options.once is not true', async () => {
@@ -210,7 +311,7 @@ describe('neo4jProjection.worker - runProjectionWorker', () => {
     });
 
     expect(calls).toBe(3);
-    expect(result).toEqual({ processed: 0, projected: 0, failed: 0 });
+    expect(result).toEqual({ processed: 0, projected: 0, failed: 0, skipped: 0, deferred: 0 });
 
     setTimeoutSpy.mockRestore();
   });
