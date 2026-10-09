@@ -7,6 +7,10 @@ require('dotenv').config({ path: require('path').join(__dirname, '..', '..', '.e
 //   that failed outside a transaction); neo4j:canonical:rebuild repairs it.
 // - a Mongo sample with no Sample node in the graph: its SPECIMEN_UPSERTED
 //   is appended again. The graph is only read.
+// - a Sample node that drifted from its Mongo aggregate: a donor or an open
+//   STORED_AT position that differs. The repair appends the sample's own
+//   events again; what no event can remove is reported for
+//   neo4j:canonical:rebuild.
 //
 //   npm run neo4j:projection:reconcile             report only
 //   npm run neo4j:projection:reconcile -- --repair report, then requeue
@@ -18,6 +22,7 @@ const { connectNeo4j } = require('../src/infrastructure/database/neo4j/connectio
 const { CANONICAL_COLLECTIONS } = require('../src/config/collections');
 const { Neo4jOutboxService } = require('../src/services/neo4jOutbox.service');
 const { GraphProjectionService } = require('../src/services/graphProjection.service');
+const { Neo4jCanonicalProjectionService } = require('../src/services/neo4jCanonicalProjection.service');
 const { PROJECTOR_NAME } = require('../src/workers/neo4jProjection.worker');
 
 const SAMPLE_BATCH_SIZE = 500;
@@ -48,6 +53,106 @@ async function findSamplesMissingFromGraph(db, neo4jSession) {
   }));
 }
 
+const DRIFT_CYPHER = `
+  MATCH (s:Sample) WHERE s.id IN $ids
+  OPTIONAL MATCH (d:Donor)-[:DONATED]->(s)
+  WITH s, collect(DISTINCT d.id) AS donorIds
+  OPTIONAL MATCH (s)-[r:STORED_AT]->(p:StoragePosition) WHERE r.validTo IS NULL
+  RETURN s.id AS id, donorIds, collect(DISTINCT p.boxId + '/' + p.position) AS openPositions
+`;
+
+// The graph side, a node that exists but has drifted from its Mongo
+// aggregate. The projection writes two facts about a sample: its donor
+// (Donor-[:DONATED]->Sample, the participant pseudonymized) and its current
+// position (the open STORED_AT edge). Mongo's truth for the position is the
+// open StorageAssignment, which every placement path keeps. A sample with no
+// node is findSamplesMissingFromGraph's, not this check's.
+async function findSamplesDriftedFromGraph(db, neo4jSession, options = {}) {
+  const pseudonymize = options.pseudonymizeDonorId
+    || ((participantId) => new Neo4jCanonicalProjectionService().pseudonymizeDonorId(participantId));
+  const drifted = [];
+  let donorCheck = 'ran';
+  const expectedDonor = (participantId) => {
+    if (!participantId || donorCheck === 'skipped') return undefined;
+    try {
+      return pseudonymize(String(participantId));
+    } catch (error) {
+      // No pseudonymization salt: the projector cannot write a donor either.
+      donorCheck = 'skipped';
+      return undefined;
+    }
+  };
+
+  const cursor = db.collection(CANONICAL_COLLECTIONS.samples).find({}, { projection: { _id: 1, participantId: 1 } });
+  let batch = [];
+  const flush = async () => {
+    if (!batch.length) return;
+    const ids = batch.map((sample) => String(sample._id));
+    const openAssignments = await db.collection('storageAssignments')
+      .find({ specimenId: { $in: ids }, removedAt: null }, { projection: { specimenId: 1, boxId: 1, positionCode: 1 } })
+      .toArray();
+    const expectedPosition = new Map(openAssignments.map((a) => [String(a.specimenId), `${a.boxId}/${a.positionCode}`]));
+    const result = await neo4jSession.run(DRIFT_CYPHER, { ids });
+    const nodes = new Map(result.records.map((record) => [record.get('id'), {
+      donorIds: record.get('donorIds'),
+      openPositions: record.get('openPositions'),
+    }]));
+
+    for (const sample of batch) {
+      const specimenId = String(sample._id);
+      const node = nodes.get(specimenId);
+      if (!node) continue;
+      const entry = { specimenId, participantId: sample.participantId ? String(sample.participantId) : null };
+
+      const donor = expectedDonor(sample.participantId);
+      if (donor !== undefined || !sample.participantId) {
+        const expected = donor ?? null;
+        const unexpected = node.donorIds.filter((id) => id !== expected);
+        if ((expected && !node.donorIds.includes(expected)) || unexpected.length) {
+          entry.donor = { expected, actual: node.donorIds };
+        }
+      }
+
+      const position = expectedPosition.get(specimenId) ?? null;
+      const positionMatches = position
+        ? node.openPositions.length === 1 && node.openPositions[0] === position
+        : node.openPositions.length === 0;
+      if (!positionMatches) {
+        entry.position = { expected: position, actual: node.openPositions };
+      }
+
+      if (entry.donor || entry.position) drifted.push(entry);
+    }
+    batch = [];
+  };
+  for await (const sample of cursor) {
+    batch.push(sample);
+    if (batch.length >= SAMPLE_BATCH_SIZE) await flush();
+  }
+  await flush();
+  return { drifted, donorCheck };
+}
+
+// What the outbox can repair: a missing donor edge, by the sample's own
+// SPECIMEN_UPSERTED, and a wrong position, by a STORAGE_POSITION_ASSIGNED
+// for the Mongo position. That closes the open edge at the repair instant,
+// since the graph never knew the true move time. A donor edge that should
+// not exist, or an open edge for a sample Mongo holds nowhere, has no event
+// that removes it: neo4j:canonical:rebuild does.
+function planDriftRepair(entry) {
+  const actions = [];
+  let needsRebuild = false;
+  if (entry.donor) {
+    if (entry.donor.expected && !entry.donor.actual.includes(entry.donor.expected)) actions.push('specimen');
+    if (entry.donor.actual.some((id) => id !== entry.donor.expected)) needsRebuild = true;
+  }
+  if (entry.position) {
+    if (entry.position.expected) actions.push('position');
+    else needsRebuild = true;
+  }
+  return { actions, needsRebuild };
+}
+
 async function reconcile(db, options = {}) {
   const outbox = options.outboxService || new Neo4jOutboxService();
   const projectorName = options.projectorName || PROJECTOR_NAME;
@@ -57,13 +162,39 @@ async function reconcile(db, options = {}) {
 
   let samplesMissingFromGraph = [];
   let reappended = 0;
+  let samplesDriftedFromGraph = [];
+  let donorCheck = null;
+  let driftRepaired = 0;
+  const driftNeedsRebuild = [];
   if (options.neo4jSession) {
     samplesMissingFromGraph = await findSamplesMissingFromGraph(db, options.neo4jSession);
+    ({ drifted: samplesDriftedFromGraph, donorCheck } = await findSamplesDriftedFromGraph(db, options.neo4jSession, options));
+    for (const entry of samplesDriftedFromGraph) {
+      if (planDriftRepair(entry).needsRebuild) driftNeedsRebuild.push(entry);
+    }
     if (options.repair) {
       const graphProjection = options.graphProjection || new GraphProjectionService({ outbox });
       for (const sample of samplesMissingFromGraph) {
         await graphProjection.appendSpecimenEvent(db, { ...sample, sourceService: 'graph-projection-reconcile' });
         reappended += 1;
+      }
+      for (const entry of samplesDriftedFromGraph) {
+        const { actions } = planDriftRepair(entry);
+        if (actions.includes('specimen')) {
+          await graphProjection.appendSpecimenEvent(db, {
+            specimenId: entry.specimenId, participantId: entry.participantId, sourceService: 'graph-projection-reconcile',
+          });
+        }
+        if (actions.includes('position')) {
+          const separator = entry.position.expected.lastIndexOf('/');
+          await graphProjection.appendStoragePositionEvent(db, {
+            specimenId: entry.specimenId,
+            boxId: entry.position.expected.slice(0, separator),
+            position: entry.position.expected.slice(separator + 1),
+            sourceService: 'graph-projection-reconcile',
+          });
+        }
+        if (actions.length) driftRepaired += 1;
       }
     }
   }
@@ -75,6 +206,10 @@ async function reconcile(db, options = {}) {
     requeued,
     samplesMissingFromGraph,
     reappended,
+    samplesDriftedFromGraph,
+    donorCheck,
+    driftRepaired,
+    driftNeedsRebuild,
   };
 }
 
@@ -91,9 +226,16 @@ async function main(argv = process.argv.slice(2)) {
       requeued: result.requeued,
       samplesMissingFromGraph: result.samplesMissingFromGraph.length,
       reappended: result.reappended,
+      samplesDriftedFromGraph: result.samplesDriftedFromGraph.length,
+      donorCheck: result.donorCheck,
+      driftRepaired: result.driftRepaired,
+      driftNeedsRebuild: result.driftNeedsRebuild.length,
     });
     for (const aggregate of result.unprojected) {
       logger.info('[GRAPH_OUTBOX] Agregado sem projeção', aggregate);
+    }
+    for (const entry of result.samplesDriftedFromGraph) {
+      logger.info('[GRAPH_OUTBOX] Nó Sample divergente do Mongo', entry);
     }
     return result;
   } finally {
@@ -113,4 +255,6 @@ if (require.main === module) {
 module.exports = {
   reconcile,
   findSamplesMissingFromGraph,
+  findSamplesDriftedFromGraph,
+  planDriftRepair,
 };

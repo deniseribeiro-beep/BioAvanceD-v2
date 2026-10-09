@@ -1,6 +1,6 @@
 // #1313 (RNF019 C7): the reconciliation script reports stalled aggregates
 // and, with --repair, requeues the dead letters that hold them.
-const { reconcile, findSamplesMissingFromGraph } = require('../../../scripts/graph-projection-reconcile');
+const { reconcile, findSamplesMissingFromGraph, findSamplesDriftedFromGraph, planDriftRepair } = require('../../../scripts/graph-projection-reconcile');
 const { PROJECTOR_NAME } = require('../../../src/workers/neo4jProjection.worker');
 
 function makeOutbox(unprojected) {
@@ -9,6 +9,50 @@ function makeOutbox(unprojected) {
     calls,
     findUnprojectedAggregates: async (_db, projectorName) => { calls.push(['find', projectorName]); return unprojected; },
     requeueDeadLetters: async (_db, eventIds) => { calls.push(['requeue', eventIds]); return eventIds.length; },
+  };
+}
+
+// samples: the Mongo samples. openAssignments: the open StorageAssignment
+// records the drift check reads for Mongo's position.
+function makeDb(samples, openAssignments = []) {
+  return {
+    collection: (name) => {
+      if (name === 'storageAssignments') {
+        return {
+          find: (filter) => ({
+            toArray: async () => openAssignments.filter((a) => filter.specimenId.$in.includes(a.specimenId) && filter.removedAt === null),
+          }),
+        };
+      }
+      expect(name).toBe('samples');
+      return {
+        find: () => ({
+          async *[Symbol.asyncIterator]() { yield* samples; },
+        }),
+      };
+    },
+  };
+}
+
+// nodes: the Sample nodes, each with what the drift query reads for it, its
+// donors and open positions; a node given {} has neither.
+function makeNeo4jSession(nodes) {
+  const runs = [];
+  return {
+    runs,
+    run: async (cypher, params) => {
+      runs.push({ cypher, params });
+      const present = params.ids.filter((id) => id in nodes);
+      if (!cypher.includes('donorIds')) {
+        return { records: present.map((id) => ({ get: () => id })) };
+      }
+      return {
+        records: present.map((id) => {
+          const row = { id, donorIds: [], openPositions: [], ...nodes[id] };
+          return { get: (key) => row[key] };
+        }),
+      };
+    },
   };
 }
 
@@ -25,6 +69,7 @@ describe('graph-projection-reconcile', () => {
     expect(result).toEqual({
       projectorName: PROJECTOR_NAME, unprojected: [stalled, gap], needsRebuild: [gap], requeued: 0,
       samplesMissingFromGraph: [], reappended: 0,
+      samplesDriftedFromGraph: [], donorCheck: null, driftRepaired: 0, driftNeedsRebuild: [],
     });
   });
 
@@ -39,37 +84,17 @@ describe('graph-projection-reconcile', () => {
 
   // The graph side: Mongo samples with no Sample node.
   describe('samples missing from the graph', () => {
-    function makeDb(samples) {
-      return {
-        collection: (name) => {
-          expect(name).toBe('samples');
-          return {
-            find: () => ({
-              async *[Symbol.asyncIterator]() { yield* samples; },
-            }),
-          };
-        },
-      };
-    }
-    function makeNeo4jSession(presentIds) {
-      const runs = [];
-      return {
-        runs,
-        run: async (cypher, params) => {
-          runs.push({ cypher, params });
-          const records = params.ids.filter((id) => presentIds.includes(id)).map((id) => ({ get: () => id }));
-          return { records };
-        },
-      };
-    }
     const samples = [
       { _id: 'smp-1', participantId: 'p-1' },
       { _id: 'smp-2', participantId: 'p-2' },
       { _id: 'smp-3' },
     ];
+    // smp-1's node carries its donor, so the drift check finds nothing here.
+    const pseudonymizeDonorId = (participantId) => `DONOR_${participantId}`;
+    const present = { 'smp-1': { donorIds: ['DONOR_p-1'] } };
 
     it('reads the graph for every Mongo sample and reports the ones with no node', async () => {
-      const neo4jSession = makeNeo4jSession(['smp-1']);
+      const neo4jSession = makeNeo4jSession(present);
 
       const missing = await findSamplesMissingFromGraph(makeDb(samples), neo4jSession);
 
@@ -87,18 +112,100 @@ describe('graph-projection-reconcile', () => {
       const graphProjection = { appendSpecimenEvent: async (_db, payload) => { appended.push(payload); } };
 
       const reported = await reconcile(makeDb(samples), {
-        outboxService: makeOutbox([]), neo4jSession: makeNeo4jSession(['smp-1']), graphProjection,
+        outboxService: makeOutbox([]), neo4jSession: makeNeo4jSession(present), graphProjection, pseudonymizeDonorId,
       });
       expect(reported.samplesMissingFromGraph).toHaveLength(2);
+      expect(reported.samplesDriftedFromGraph).toEqual([]);
       expect(appended).toEqual([]);
 
       const repaired = await reconcile(makeDb(samples), {
-        outboxService: makeOutbox([]), neo4jSession: makeNeo4jSession(['smp-1']), graphProjection, repair: true,
+        outboxService: makeOutbox([]), neo4jSession: makeNeo4jSession(present), graphProjection, pseudonymizeDonorId, repair: true,
       });
       expect(repaired.reappended).toBe(2);
       expect(appended).toEqual([
         { specimenId: 'smp-2', participantId: 'p-2', sourceService: 'graph-projection-reconcile' },
         { specimenId: 'smp-3', participantId: null, sourceService: 'graph-projection-reconcile' },
+      ]);
+    });
+  });
+
+  // The graph side: a node that exists but drifted from its Mongo aggregate.
+  describe('samples drifted from the graph', () => {
+    const pseudonymizeDonorId = (participantId) => `DONOR_${participantId}`;
+    const samples = [
+      { _id: 'smp-ok', participantId: 'p-1' },
+      { _id: 'smp-moved', participantId: 'p-1' },
+      { _id: 'smp-nodonor', participantId: 'p-2' },
+      { _id: 'smp-wrongdonor', participantId: 'p-3' },
+      { _id: 'smp-extradonor', participantId: 'p-5' },
+      { _id: 'smp-released' },
+      { _id: 'smp-missing', participantId: 'p-4' },
+    ];
+    const openAssignments = [
+      { specimenId: 'smp-ok', boxId: 'box-1', positionCode: 'A01' },
+      { specimenId: 'smp-moved', boxId: 'box-2', positionCode: 'B02' },
+    ];
+    const nodes = {
+      'smp-ok': { donorIds: ['DONOR_p-1'], openPositions: ['box-1/A01'] },
+      'smp-moved': { donorIds: ['DONOR_p-1'], openPositions: ['box-1/A05'] },
+      'smp-nodonor': { donorIds: [] },
+      'smp-wrongdonor': { donorIds: ['DONOR_p-9'] },
+      // Its own donor is there, and a second one that should not be.
+      'smp-extradonor': { donorIds: ['DONOR_p-5', 'DONOR_p-8'] },
+      'smp-released': { openPositions: ['box-1/C03'] },
+    };
+
+    it('reports each node whose donor or open position differs from Mongo, and skips the matching and the missing ones', async () => {
+      const { drifted, donorCheck } = await findSamplesDriftedFromGraph(
+        makeDb(samples, openAssignments), makeNeo4jSession(nodes), { pseudonymizeDonorId },
+      );
+
+      expect(donorCheck).toBe('ran');
+      expect(drifted).toEqual([
+        { specimenId: 'smp-moved', participantId: 'p-1', position: { expected: 'box-2/B02', actual: ['box-1/A05'] } },
+        { specimenId: 'smp-nodonor', participantId: 'p-2', donor: { expected: 'DONOR_p-2', actual: [] } },
+        { specimenId: 'smp-wrongdonor', participantId: 'p-3', donor: { expected: 'DONOR_p-3', actual: ['DONOR_p-9'] } },
+        { specimenId: 'smp-extradonor', participantId: 'p-5', donor: { expected: 'DONOR_p-5', actual: ['DONOR_p-5', 'DONOR_p-8'] } },
+        { specimenId: 'smp-released', participantId: null, position: { expected: null, actual: ['box-1/C03'] } },
+      ]);
+    });
+
+    it('skips the donor comparison, and says so, when the participant cannot be pseudonymized', async () => {
+      const { drifted, donorCheck } = await findSamplesDriftedFromGraph(
+        makeDb(samples, openAssignments), makeNeo4jSession(nodes),
+        { pseudonymizeDonorId: () => { throw new Error('Salt de pseudonimização ausente'); } },
+      );
+
+      expect(donorCheck).toBe('skipped');
+      expect(drifted.map((entry) => entry.specimenId)).toEqual(['smp-moved', 'smp-released']);
+    });
+
+    it('plans a repair only where an event can make it, and a rebuild for what no event removes', () => {
+      expect(planDriftRepair({ donor: { expected: 'D1', actual: [] } })).toEqual({ actions: ['specimen'], needsRebuild: false });
+      expect(planDriftRepair({ donor: { expected: 'D1', actual: ['D9'] } })).toEqual({ actions: ['specimen'], needsRebuild: true });
+      expect(planDriftRepair({ position: { expected: 'b/A01', actual: ['b/A05'] } })).toEqual({ actions: ['position'], needsRebuild: false });
+      expect(planDriftRepair({ position: { expected: null, actual: ['b/A05'] } })).toEqual({ actions: [], needsRebuild: true });
+    });
+
+    it('on repair appends the donor and position events through the outbox, and reports the rest for a rebuild', async () => {
+      const appended = [];
+      const graphProjection = {
+        appendSpecimenEvent: async (_db, payload) => { appended.push(['specimen', payload]); },
+        appendStoragePositionEvent: async (_db, payload) => { appended.push(['position', payload]); },
+      };
+
+      const result = await reconcile(makeDb(samples, openAssignments), {
+        outboxService: makeOutbox([]), neo4jSession: makeNeo4jSession(nodes), graphProjection, pseudonymizeDonorId, repair: true,
+      });
+
+      expect(result.samplesDriftedFromGraph).toHaveLength(5);
+      expect(result.driftRepaired).toBe(3);
+      expect(result.driftNeedsRebuild.map((entry) => entry.specimenId)).toEqual(['smp-wrongdonor', 'smp-extradonor', 'smp-released']);
+      expect(appended).toEqual([
+        ['specimen', { specimenId: 'smp-missing', participantId: 'p-4', sourceService: 'graph-projection-reconcile' }],
+        ['position', { specimenId: 'smp-moved', boxId: 'box-2', position: 'B02', sourceService: 'graph-projection-reconcile' }],
+        ['specimen', { specimenId: 'smp-nodonor', participantId: 'p-2', sourceService: 'graph-projection-reconcile' }],
+        ['specimen', { specimenId: 'smp-wrongdonor', participantId: 'p-3', sourceService: 'graph-projection-reconcile' }],
       ]);
     });
   });
