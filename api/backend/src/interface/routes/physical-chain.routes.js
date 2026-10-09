@@ -9,6 +9,7 @@ const physicalChain = require('../../services/physicalChain.service');
 const custodianship = require('../../services/custodianship.service');
 const labelResolver = require('../../services/labelResolver.service');
 const scope = require('../../services/physicalChainScope.service');
+const { deviceUsabilityRefusal } = require('../../services/deviceLifecycle.service');
 
 /**
  * Physical chain and custody routes (#1314, #1316; RF016 AC3/AC6, RF017
@@ -267,7 +268,8 @@ router.post('/rack-assignments/:rackLocationAssignmentId/remove', requirePermiss
  * Body: { rawValue, symbology, deviceId, locationId?, correlationId? }
  * 200 { data: { resolved, reason?, containerId?, specimenId?, scanEvent? } };
  * 403 SPECIMEN_OUT_OF_SCOPE when the tube holds another organization's
- * specimen, with no ScanEvent written.
+ * specimen, with no ScanEvent written; 422 DEVICE_UNUSABLE when the scanner
+ * is not a registered, homologated, unretired device (RF017 AC8).
  */
 router.post('/scan', requirePermission('manageStorageAllocation'), requireOrganizationScope, async (req, res) => {
   try {
@@ -276,6 +278,11 @@ router.post('/scan', requirePermission('manageStorageAllocation'), requireOrgani
     const missing = ['rawValue', 'symbology', 'deviceId'].filter((field) => !body[field]);
     if (missing.length) {
       return res.status(400).json({ success: false, error: 'INVALID_INPUT', message: `Obrigatório: ${missing.join(', ')}` });
+    }
+    // RF017 AC8: an unregistered, unhomologated or retired scanner is refused.
+    const deviceRefusal = await deviceUsabilityRefusal(db, body.deviceId);
+    if (deviceRefusal) {
+      return res.status(422).json({ success: false, error: 'DEVICE_UNUSABLE', message: deviceRefusal, details: [deviceRefusal] });
     }
     const scan = { ...body, actorId: actorId(req) ? String(actorId(req)) : null, correlationId: body.correlationId ? String(body.correlationId) : crypto.randomUUID() };
     const result = await labelResolver.resolveScan(db, scan, {

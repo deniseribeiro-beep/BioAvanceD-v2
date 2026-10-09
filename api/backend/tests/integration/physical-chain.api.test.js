@@ -47,7 +47,7 @@ function fakeCollection() {
 const DOMAIN = [
   'samples', 'collections', 'organizations', 'collectionGovernanceApprovals', 'custodianshipAssignments',
   'containers', 'specimenContainerAssignments', 'containerPositionAssignments', 'rackLocationAssignments',
-  'labelIdentifiers', 'scanEvents',
+  'labelIdentifiers', 'scanEvents', 'devices',
 ];
 
 // Users: Coordenador and Técnico in org-A, the same pair in org-B, and an
@@ -79,6 +79,7 @@ beforeEach(async () => {
   await domain.organizations.insertOne({ organizationId: 'org-A' });
   await domain.organizations.insertOne({ organizationId: 'org-B' });
   await domain.collectionGovernanceApprovals.insertOne({ approvalId: 'appr-1', collectionId: 'COL-1', status: 'active', effectivePeriod: { start: '2025-01-01T00:00:00Z', end: null } });
+  await domain.devices.insertOne({ deviceId: 'scanner-1', deviceType: 'scanner', qualificationStatus: 'qualified', retiredAt: null });
   app.locals.db = createDbMock({ ...domain, ...buildRbacCollections(USERS) });
 });
 
@@ -200,6 +201,10 @@ describe('physical-chain routes (#1314, RF016 AC3/AC6, RF017 AC3/AC4)', () => {
     const scan = { rawValue: ']d2BVA2:synthetic:8K3M', symbology: 'data_matrix', deviceId: 'scanner-1' };
 
     expect((await post('/scan', 'tech-a', { rawValue: 'x' })).status).toBe(400);
+    // RF017 AC8: an unregistered or unhomologated scanner is refused.
+    expect((await post('/scan', 'tech-a', { ...scan, deviceId: 'scanner-unknown' })).body.error).toBe('DEVICE_UNUSABLE');
+    await domain.devices.insertOne({ deviceId: 'scanner-pending', deviceType: 'scanner', qualificationStatus: 'pending', retiredAt: null });
+    expect((await post('/scan', 'tech-a', { ...scan, deviceId: 'scanner-pending' })).body.error).toBe('DEVICE_UNUSABLE');
     const denied = await post('/scan', 'tech-b', scan);
     expect(denied.status).toBe(403);
     expect(domain.scanEvents.docs).toHaveLength(0);

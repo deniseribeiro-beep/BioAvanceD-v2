@@ -205,6 +205,8 @@ module.exports = {
   COLL_LABEL_IDENTIFIERS: process.env.COLL_LABEL_IDENTIFIERS || 'labelIdentifiers',
   COLL_SCAN_EVENTS: process.env.COLL_SCAN_EVENTS || 'scanEvents',
   COLL_CUSTODIANSHIP_ASSIGNMENTS: process.env.COLL_CUSTODIANSHIP_ASSIGNMENTS || 'custodianshipAssignments',
+  COLL_DEVICES: process.env.COLL_DEVICES || 'devices',
+  COLL_DEVICE_LIFECYCLE_EVENTS: process.env.COLL_DEVICE_LIFECYCLE_EVENTS || 'deviceLifecycleEvents',
   COLL_REFERENCE_DATASET_RELEASES: process.env.COLL_REFERENCE_DATASET_RELEASES || 'referenceDatasetReleases',
   COLL_REFERENCE_IMPORT_RUNS: process.env.COLL_REFERENCE_IMPORT_RUNS || 'referenceImportRuns',
   COLL_REFERENCE_IMPORT_ISSUES: process.env.COLL_REFERENCE_IMPORT_ISSUES || 'referenceImportIssues',

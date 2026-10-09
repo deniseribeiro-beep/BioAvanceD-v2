@@ -15,6 +15,13 @@ const DeviceSchema = new mongoose.Schema(
     qualificationStatus: { type: String, trim: true, default: 'qualified' },
     calibrationDate: { type: Date, default: null },
     calibrationDueDate: { type: Date, default: null },
+    // ELM-0315 (#1316): references to preventive or corrective maintenance
+    // records.
+    maintenanceRecords: { type: [String], default: [] },
+    // #1316, RF017 AC6/AC8: state derived from deviceLifecycleEvents
+    // (DeviceLifecycleEvent.js), local fields outside the canon.
+    currentLocationId: { type: String, default: null },
+    retiredAt: { type: Date, default: null },
   },
   {
     collection: 'devices',

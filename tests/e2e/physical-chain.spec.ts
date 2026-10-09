@@ -15,7 +15,8 @@ import {
 // Real-backend proof for #1314 and #1316: custody as its own assignment
 // (RF021 AC4-AC6), the specimen -> container -> position and rack ->
 // location chain (RF016 AC3, RF017 AC3/AC4) and the scan resolver (RF016
-// AC6), all scoped by the specimen's custodian. Two organizations, a
+// AC6), all scoped by the specimen's custodian, and a scanner's lifecycle
+// (RF017 AC6/AC8). Two organizations, a
 // Coordenador and a Tecnico in the first, a Tecnico in the second.
 const apiBaseURL = process.env.PLAYWRIGHT_API_BASE_URL;
 
@@ -28,9 +29,10 @@ test.describe('Physical chain and custody (#1314, #1316) — real backend', () =
   const containerId = `CT-CHAIN-${suffix}`;
   const rackId = `rack-chain-${suffix}`;
   const tubeCode = `BVA2:synthetic:${suffix}`;
+  const scannerId = `scanner-chain-${suffix}`;
 
   test.afterAll(async ({ request }) => {
-    if (fixture) await cleanupCustodyFixture(fixture, [containerId], [rackId], [tubeCode]).catch(() => {});
+    if (fixture) await cleanupCustodyFixture(fixture, [containerId], [rackId], [tubeCode], [scannerId]).catch(() => {});
     await deleteOrganizations(request, apiBaseURL!, organizationIds);
     await closeCustodyDb();
   });
@@ -115,7 +117,23 @@ test.describe('Physical chain and custody (#1314, #1316) — real backend', () =
     // RF016 AC6: the tube code resolves to the specimen; another
     // organization's scan is refused and leaves no ScanEvent.
     await seedTubeLabel(tubeCode, containerId);
-    const scan = { rawValue: `]d2${tubeCode}`, symbology: 'data_matrix', deviceId: 'scanner-chain' };
+    const scan = { rawValue: `]d2${tubeCode}`, symbology: 'data_matrix', deviceId: scannerId };
+
+    // RF017 AC6/AC8: the scanner is registered not homologated, so it is
+    // refused until the Coordenador records its homologation.
+    const device = (path: string, data: Record<string, unknown>) => request.post(`${apiBaseURL}/api/devices${path}`, { headers: coordA, data });
+    const registered = await device('', { deviceId: scannerId, deviceType: 'scanner', maintenanceRecords: ['maint-chain'] });
+    expect(registered.status(), await registered.text()).toBe(201);
+    const unqualified = await post('/scan', techA, scan);
+    expect(unqualified.status(), await unqualified.text()).toBe(422);
+    expect((await unqualified.json()).error).toBe('DEVICE_UNUSABLE');
+    expect((await device(`/${scannerId}/events`, { eventType: 'installed', locationId: 'loc-chain' })).status()).toBe(201);
+    const qualified = await device(`/${scannerId}/events`, { eventType: 'qualified', evidenceUri: 'object://synthetic/scanner-pq.pdf' });
+    expect(qualified.status(), await qualified.text()).toBe(201);
+    const history = await request.get(`${apiBaseURL}/api/devices/${scannerId}`, { headers: techA });
+    expect(history.status(), await history.text()).toBe(200);
+    expect(((await history.json()).data.history as Array<{ eventType: string }>).map((e) => e.eventType)).toEqual(['installed', 'qualified']);
+
     expect((await post('/scan', techB, scan)).status()).toBe(403);
     expect(await countScanEvents(specimenId)).toBe(0);
     const resolved = await post('/scan', techA, scan);

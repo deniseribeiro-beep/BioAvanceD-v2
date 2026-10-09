@@ -78,7 +78,7 @@ export async function countScanEvents(specimenId: string): Promise<number> {
 }
 
 /** Removes every row the spec wrote, the assignments its routes created included. */
-export async function cleanupCustodyFixture(fixture: CustodyFixture, containerIds: string[], rackIds: string[], labelValues: string[]): Promise<void> {
+export async function cleanupCustodyFixture(fixture: CustodyFixture, containerIds: string[], rackIds: string[], labelValues: string[], deviceIds: string[]): Promise<void> {
   const db = await getDb();
   await Promise.all([
     db.collection('samples').deleteMany({ specimenId: fixture.specimenId }),
@@ -91,5 +91,7 @@ export async function cleanupCustodyFixture(fixture: CustodyFixture, containerId
     db.collection('containerPositionAssignments').deleteMany({ containerId: { $in: containerIds } }),
     db.collection('rackLocationAssignments').deleteMany({ storageRackId: { $in: rackIds } }),
     db.collection('labelIdentifiers').deleteMany({ encodedValue: { $in: labelValues } }),
+    db.collection('devices').deleteMany({ deviceId: { $in: deviceIds } }),
+    db.collection('deviceLifecycleEvents').deleteMany({ deviceId: { $in: deviceIds } }),
   ]);
 }
