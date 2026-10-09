@@ -1,7 +1,9 @@
-// RF016 AC1/AC3, RF017 AC4, RULE-031/RULE-032: the Container and the
-// specimen's content assignment over [loadedAt, unloadedAt).
+// RF016 AC1/AC3, RF017 AC2-AC4, RULE-030/031/032/035: the Container and the
+// three temporal assignments of the normalized physical chain.
 const ContainerModel = require('../../../src/models/Container');
 const SpecimenContainerAssignmentModel = require('../../../src/models/SpecimenContainerAssignment');
+const ContainerPositionAssignmentModel = require('../../../src/models/ContainerPositionAssignment');
+const RackLocationAssignmentModel = require('../../../src/models/RackLocationAssignment');
 
 describe('ContainerModel', () => {
   it('creates an empty, active container of a governed type', () => {
@@ -69,5 +71,56 @@ describe('SpecimenContainerAssignmentModel', () => {
     const other = SpecimenContainerAssignmentModel.create({ ...base, specimenId: 'spec-2', loadedAt: at(10) });
     expect(() => SpecimenContainerAssignmentModel.assertNoOverlap(other, [first])).not.toThrow();
     expect(() => SpecimenContainerAssignmentModel.assertNoOverlap(first, [first])).not.toThrow();
+  });
+});
+
+describe('ContainerPositionAssignmentModel', () => {
+  const at = (hour) => new Date(Date.UTC(2026, 9, 9, hour));
+  const place = (containerId, storagePositionId, hour) => ContainerPositionAssignmentModel.create({
+    containerId, storagePositionId, placedAt: at(hour),
+  });
+
+  it('creates an active placement, requiring its container and position, the scan event optional', () => {
+    const placement = place('cont-1', 'pos-A01', 10);
+    expect(placement).toMatchObject({ assignmentStatus: 'active', removedAt: null, sourceScanEventId: null });
+    expect(() => ContainerPositionAssignmentModel.create({ storagePositionId: 'pos-A01' })).toThrow('containerId');
+    expect(() => ContainerPositionAssignmentModel.create({ containerId: 'cont-1' })).toThrow('storagePositionId');
+  });
+
+  it('refuses a second container in an occupied position, and a container in two positions (RULE-030)', () => {
+    const occupied = place('cont-1', 'pos-A01', 10);
+    expect(() => ContainerPositionAssignmentModel.assertNoOverlap(place('cont-2', 'pos-A01', 11), [occupied])).toThrow('storagePositionId');
+    expect(() => ContainerPositionAssignmentModel.assertNoOverlap(place('cont-1', 'pos-B02', 11), [occupied])).toThrow('containerId');
+  });
+
+  it('frees the position at the removal instant, never before the placement', () => {
+    const occupied = place('cont-1', 'pos-A01', 10);
+    const removed = ContainerPositionAssignmentModel.remove(occupied, at(11));
+    expect(removed).toMatchObject({ assignmentStatus: 'ended', removedAt: at(11) });
+    expect(() => ContainerPositionAssignmentModel.assertNoOverlap(place('cont-2', 'pos-A01', 11), [removed])).not.toThrow();
+    expect(() => ContainerPositionAssignmentModel.remove(occupied, at(9))).toThrow('posterior');
+  });
+});
+
+describe('RackLocationAssignmentModel', () => {
+  const at = (hour) => new Date(Date.UTC(2026, 9, 9, hour));
+  const locate = (storageRackId, storageLocationId, hour) => RackLocationAssignmentModel.create({
+    storageRackId, storageLocationId, placedAt: at(hour), sourceEventId: 'evt-1',
+  });
+
+  it('requires its rack, location and source event', () => {
+    for (const field of ['storageRackId', 'storageLocationId', 'sourceEventId']) {
+      expect(() => RackLocationAssignmentModel.create({
+        storageRackId: 'rack-1', storageLocationId: 'loc-1', sourceEventId: 'evt-1', [field]: undefined,
+      })).toThrow(field);
+    }
+  });
+
+  it('refuses a rack in two locations at once, and lets two racks share a location (RULE-035)', () => {
+    const current = locate('rack-1', 'loc-1', 10);
+    expect(() => RackLocationAssignmentModel.assertNoOverlap(locate('rack-1', 'loc-2', 11), [current])).toThrow('loc-1');
+    expect(() => RackLocationAssignmentModel.assertNoOverlap(locate('rack-2', 'loc-1', 11), [current])).not.toThrow();
+    const moved = RackLocationAssignmentModel.remove(current, at(11));
+    expect(() => RackLocationAssignmentModel.assertNoOverlap(locate('rack-1', 'loc-2', 11), [moved])).not.toThrow();
   });
 });

@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const { overlaps, findConflict } = require('./temporalAssignment');
 
 // Canonical Data Model v2.0.0 SpecimenContainerAssignment (V2E-0677..0683),
 // RF016 AC3, RF017 AC3/AC4: which container holds a specimen, over
@@ -9,6 +10,7 @@ const crypto = require('crypto');
 // is a documented local extension for a closed interval, the same
 // mechanism QuarantineAction.js uses for its `released`.
 const ASSIGNMENT_STATUS_VALUES = ['active', 'ended'];
+const INTERVAL = { from: 'loadedAt', to: 'unloadedAt' };
 
 function toDate(value) {
   return value ? new Date(value) : null;
@@ -53,27 +55,18 @@ class SpecimenContainerAssignmentModel {
     return { ...assignment, unloadedAt: end, assignmentStatus: 'ended' };
   }
 
-  // Half-open intervals overlap when each starts before the other ends; an
-  // open interval (no unloadedAt) runs on indefinitely, and [a, b) and
-  // [b, c) do not overlap.
   static overlaps(a, b) {
-    const aEnd = a.unloadedAt ? new Date(a.unloadedAt).getTime() : Infinity;
-    const bEnd = b.unloadedAt ? new Date(b.unloadedAt).getTime() : Infinity;
-    return new Date(a.loadedAt).getTime() < bEnd && new Date(b.loadedAt).getTime() < aEnd;
+    return overlaps(a, b, INTERVAL);
   }
 
   // RF017 AC4: no two assignments of one specimen may overlap in time; a
   // specimen is in one container at a time.
   static assertNoOverlap(candidate, existing = []) {
-    const conflict = existing.find((other) => (
-      other.specimenContainerAssignmentId !== candidate.specimenContainerAssignmentId
-      && other.specimenId === candidate.specimenId
-      && this.overlaps(candidate, other)
-    ));
+    const conflict = findConflict(candidate, existing, { ...INTERVAL, idField: 'specimenContainerAssignmentId', keys: ['specimenId'] });
     if (conflict) {
       throw new Error(
-        `Espécime ${candidate.specimenId} já está no recipiente ${conflict.containerId} nesse intervalo `
-        + `(atribuição ${conflict.specimenContainerAssignmentId})`
+        `Espécime ${candidate.specimenId} já está no recipiente ${conflict.other.containerId} nesse intervalo `
+        + `(atribuição ${conflict.other.specimenContainerAssignmentId})`
       );
     }
   }
