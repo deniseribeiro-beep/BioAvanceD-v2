@@ -957,6 +957,56 @@ describe('sample.routes', () => {
       expect(svgText).toContain('AMOSTRA');
     });
 
+    // RF016 AC8: a label carries no name, CPF, medical record, diagnosis or
+    // genetic data, whatever the sample document holds. Every label route
+    // renders from a sample that carries all of them, and none may surface.
+    it('renders no civil or clinical field on any label route (RF016 AC8)', async () => {
+      const civil = {
+        participantName: 'CIVIL-NAME-Maria-Silva',
+        fullName: 'CIVIL-FULLNAME-Maria-Silva',
+        name: 'CIVIL-BARE-NAME',
+        cpf: '529.982.247-25',
+        cpfDigits: '52998224725',
+        medicalRecordNumber: 'CIVIL-PRONTUARIO-7781',
+        prontuario: 'CIVIL-PRONTUARIO-ALT',
+        diagnosis: 'CIVIL-DIAGNOSIS-Fabry',
+        diagnosisCode: 'E75.2',
+        geneticVariant: 'CIVIL-GENE-GLA-c.644A>G',
+        email: 'civil@example.org',
+        phone: '+55 19 99999-0000',
+      };
+      const sample = {
+        _id: { toString: () => '000000000000000000000000' },
+        specimenId: 'SPEC-AC8',
+        barcode: 'BC-AC8',
+        sampleType: 'PLASMA',
+        storageLocation: { boxName: 'Box-1', position: 'A1' },
+        ...civil,
+      };
+      const { router } = loadRoute();
+      const findOne = vi.fn().mockResolvedValue(sample);
+      const insertOne = vi.fn().mockResolvedValue({ insertedId: 'lg1' });
+      const app = buildApp(router, { collection: () => ({ findOne, insertOne }) });
+
+      const svg = await request(app).get('/api/samples/000000000000000000000000/label');
+      const printJob = await request(app).get('/api/samples/000000000000000000000000/label/print-job');
+      const batch = await request(app).post('/api/samples/labels/batch').send({ specimenIds: ['000000000000000000000000'] });
+
+      const rendered = [
+        Buffer.isBuffer(svg.body) ? svg.body.toString('utf-8') : svg.text,
+        JSON.stringify(printJob.body),
+        JSON.stringify(batch.body),
+      ];
+      expect([svg.status, printJob.status, batch.status]).toEqual([200, 200, 200]);
+      // The labels did render the specimen, so an empty body cannot pass.
+      for (const text of rendered) expect(text).toContain('BC-AC8');
+      for (const text of rendered) {
+        for (const value of Object.values(civil)) {
+          expect(text).not.toContain(value);
+        }
+      }
+    });
+
     it('falls back to req.params.id when sample has neither sampleID nor _id', async () => {
       const { router } = loadRoute();
       const findOne = vi.fn().mockResolvedValue({});
