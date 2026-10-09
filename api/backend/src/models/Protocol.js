@@ -15,6 +15,17 @@
  * versionGroupId/previousProtocolId pair here on the ConsentTemplate
  * precedent without a matching dictionary entry authorizing it first.
  */
+function isUri(value) {
+  if (typeof value !== 'string' || value.trim() === '') return false;
+  try {
+    // eslint-disable-next-line no-new
+    new URL(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 class ProtocolModel {
   static validate(data) {
     const errors = [];
@@ -25,6 +36,19 @@ class ProtocolModel {
 
     if (!data.protocolName || typeof data.protocolName !== 'string' || data.protocolName.trim() === '') {
       errors.push('protocolName é obrigatório e deve ser string');
+    }
+
+    // #1316, RF021 AC1/AC2: the type, the formal version and the protocol's
+    // document are each 1..1 Core (ELM-0070, ELM-0071, ELM-0073). A version
+    // is recorded as its own string, so a protocol is versioned by its
+    // version and document together, never by an unnamed edit.
+    for (const field of ['protocolType', 'protocolVersion']) {
+      if (typeof data[field] !== 'string' || data[field].trim() === '') {
+        errors.push(`${field} é obrigatório e deve ser string`);
+      }
+    }
+    if (!isUri(data.documentUri)) {
+      errors.push('documentUri é obrigatório e deve ser uma URI');
     }
 
     const period = data.effectivePeriod;
@@ -52,7 +76,10 @@ class ProtocolModel {
     return {
       protocolId: data.protocolId,
       protocolName: data.protocolName,
-      protocolVersion: data.protocolVersion || null,
+      protocolType: data.protocolType,
+      protocolVersion: data.protocolVersion,
+      documentUri: data.documentUri,
+      intendedUse: data.intendedUse ?? null,
       approvalStatus: data.approvalStatus || 'approved',
       effectivePeriod: {
         start: period.start !== undefined ? new Date(period.start) : null,

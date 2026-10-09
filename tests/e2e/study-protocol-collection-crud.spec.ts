@@ -20,7 +20,7 @@ const entities = [
   // ethicsApprovalId (#588, RF021 AC#3/ELM-0060) is required on Study.
   { path: 'studies', singular: 'study', idField: 'studyId', nameField: 'studyTitle', extraFields: { ethicsApprovalId: ['CAAE-e2e-crud'] } },
   // effectivePeriod (#588, RF021 AC#3/ELM-0072) is required on Protocol.
-  { path: 'protocols', singular: 'protocol', idField: 'protocolId', nameField: 'protocolName', extraFields: { effectivePeriod: { start: '2026-01-01' } } },
+  { path: 'protocols', singular: 'protocol', idField: 'protocolId', nameField: 'protocolName', extraFields: { effectivePeriod: { start: '2026-01-01' }, protocolType: 'processing', protocolVersion: '1.0', documentUri: 'object://protocols/e2e-crud.pdf' } },
   // governanceRegime (RF004 AC2, V2E-0427) is required on Collection.
   { path: 'collections', singular: 'collection', idField: 'collectionId', nameField: 'collectionName', extraFields: { governanceRegime: 'biobank' } },
 ];
@@ -102,6 +102,8 @@ test.describe('protocol version/approvalStatus round-trip (#326)', () => {
         protocolId: id,
         protocolName: `e2e protocol ${id}`,
         protocolVersion: '2.1',
+        protocolType: 'processing',
+        documentUri: 'object://protocols/e2e-version.pdf',
         approvalStatus: 'rejected',
         effectivePeriod: { start: '2026-01-01' },
       },

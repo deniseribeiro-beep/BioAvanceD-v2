@@ -369,7 +369,9 @@ export async function seedProtocol(
   await db.collection('protocols').insertOne({
     protocolId,
     protocolName: `RF004 e2e protocol ${protocolId}`,
-    protocolVersion: options.protocolVersion ?? null,
+    protocolType: 'processing',
+    protocolVersion: options.protocolVersion ?? '1.0',
+    documentUri: `object://protocols/${protocolId}.pdf`,
     approvalStatus: options.approvalStatus || 'approved',
     effectivePeriod: { start: new Date('2026-01-01'), end: null },
     createdAt: new Date(),

@@ -60,7 +60,29 @@ describe('StudyModel', () => {
 });
 
 describe('ProtocolModel', () => {
-  const baseProtocol = { protocolId: 'protocol-1', protocolName: 'Protocolo teste' };
+  const baseProtocol = {
+    protocolId: 'protocol-1', protocolName: 'Protocolo teste', protocolType: 'processing', protocolVersion: '2.0', documentUri: 'object://protocols/p1.pdf',
+  };
+
+  describe('validate — type, version and document (#1316, RF021 AC1/AC2, ELM-0070/0071/0073)', () => {
+    const valid = { ...baseProtocol, effectivePeriod: { start: '2026-01-01' } };
+
+    it.each(['protocolType', 'protocolVersion'])('refuses a missing or blank %s', (field) => {
+      expect(ProtocolModel.validate({ ...valid, [field]: undefined }).errors).toContain(`${field} é obrigatório e deve ser string`);
+      expect(ProtocolModel.validate({ ...valid, [field]: '  ' }).isValid).toBe(false);
+    });
+
+    it('refuses a missing or malformed documentUri', () => {
+      expect(ProtocolModel.validate({ ...valid, documentUri: undefined }).errors).toContain('documentUri é obrigatório e deve ser uma URI');
+      expect(ProtocolModel.validate({ ...valid, documentUri: 'not a uri' }).isValid).toBe(false);
+    });
+
+    it('stores the type, version, document and intended use', () => {
+      expect(ProtocolModel.create({ ...valid, intendedUse: 'Processamento de plasma' })).toMatchObject({
+        protocolType: 'processing', protocolVersion: '2.0', documentUri: 'object://protocols/p1.pdf', intendedUse: 'Processamento de plasma',
+      });
+    });
+  });
 
   describe('validate — effectivePeriod (RF021 AC#3, ELM-0072)', () => {
     it('missing effectivePeriod -> isValid false', () => {
