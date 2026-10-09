@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 import { createRequire } from 'module';
 import express from 'express';
 import request from 'supertest';
@@ -695,6 +695,18 @@ describe('eConsent.routes POST /consents/:id/revoke (#684)', () => {
     vi.spyOn(assignmentService, 'resolveUserHierarchyLevel').mockResolvedValue(hierarchyLevel);
     return require(routePath);
   }
+
+  // The first request that reaches the handler loads its lazy graph (audit
+  // logger, alerts) cold: about 260 ms alone, and past the 5000 ms case
+  // timeout under a parallel run's contention. Warm it once here, under its
+  // own timeout, as #1297 did; no case's timeout is raised.
+  beforeAll(async () => {
+    vi.spyOn(consentService, 'revokeConsent').mockResolvedValue({ _id: 'consent-1', status: 'REVOKED' });
+    const app = buildApp(loadRouterAsRole(3), { collection: () => ({}) });
+    await request(app).post('/e-consent/consents/consent-1/revoke').send({});
+    vi.restoreAllMocks();
+    clearRouteCache();
+  }, 30_000);
 
   it('refuses a Usuario Externo (level 1) instead of revoking', async () => {
     const revokeSpy = vi
