@@ -125,7 +125,8 @@ async function dispatchNotification(db, { eventType, sourceEventType, sourceEven
     confirmedAt: null,
     deliveryDurationMs: null,
     maxDeliveryMinutes: rule.maxDeliveryMinutes,
-    withinSla: null
+    withinSla: null,
+    slaBreached: false
   };
   const { insertedId } = await notificationsCollection.insertOne(document);
   // Each write carries copies of the attempts, never the array this loop edits.
@@ -147,19 +148,37 @@ async function dispatchNotification(db, { eventType, sourceEventType, sourceEven
   let delivered = false;
   let deliveredChannel = null;
 
-  for (const channel of rule.channels) {
-    const result = await attempt(channel, false, () => sendViaChannel(channel, { recipients, subject, message }));
-    if (result.success) {
-      delivered = true;
-      deliveredChannel = channel;
-      break;
+  // #903 (RNF026 AC2, RF015 AC6): each channel is retried as the rule
+  // configures, only inside its delivery window. [inference] Once the
+  // window closes undelivered, retrying stops and the escalation runs at
+  // once, whatever its failure count: the window is the rule's own maximum.
+  const maxAttempts = Math.max(1, rule.retry?.maxAttempts || 1);
+  const backoffMs = Math.max(0, (rule.retry?.backoffSeconds || 0) * 1000);
+  const deadline = createdAt.getTime() + rule.maxDeliveryMinutes * 60000;
+  const windowClosed = () => Date.now() >= deadline;
+  let windowLapsed = false;
+
+  channels: for (const channel of rule.channels) {
+    for (let n = 1; n <= maxAttempts; n += 1) {
+      if (attempts.length > 0 && windowClosed()) {
+        windowLapsed = true;
+        break channels;
+      }
+      if (n > 1 && backoffMs > 0) await sleep(backoffMs);
+      const result = await attempt(channel, false, () => sendViaChannel(channel, { recipients, subject, message }));
+      if (result.success) {
+        delivered = true;
+        deliveredChannel = channel;
+        break channels;
+      }
     }
   }
+  if (!delivered && windowClosed()) windowLapsed = true;
 
   let escalated = false;
   if (!delivered && rule.escalation?.enabled) {
     const failedAttempts = attempts.filter((attempt) => attempt.result === 'failure').length;
-    if (failedAttempts >= rule.escalation.afterFailures) {
+    if (windowLapsed || failedAttempts >= rule.escalation.afterFailures) {
       escalated = true;
       const escalationResult = await attempt(rule.escalation.channel, true, () => sendViaChannel(rule.escalation.channel, {
         recipients,
@@ -186,11 +205,15 @@ async function dispatchNotification(db, { eventType, sourceEventType, sourceEven
     // RNF026 AC#1 - measurable against the rule's own SLA; null while
     // undelivered rather than false, since "not yet delivered" and
     // "delivered late" are different states.
-    withinSla: deliveredAt ? deliveryDurationMs <= rule.maxDeliveryMinutes * 60000 : null
+    withinSla: deliveredAt ? deliveryDurationMs <= rule.maxDeliveryMinutes * 60000 : null,
+    // RF015 AC6: the window closed before delivery, so retrying stopped.
+    slaBreached: windowLapsed
   };
   await record(outcome);
   return { _id: insertedId, ...document, ...outcome };
 }
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // CFG-004 ("Toda execução ou decisão registra configurationReleaseId"): the
 // ConfigurationRelease the stored configuration names, or null before any.

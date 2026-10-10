@@ -226,6 +226,57 @@ describe('notificationDispatch.service', () => {
       expect(result).toMatchObject({ status: 'failed', configurationReleaseId: 'rel-7', ruleVersion: 'v1' });
     });
 
+    it('#903 (RNF026 AC2): retries a failing channel as the rule configures, recording each attempt', async () => {
+      const notificationRules = statefulCollection();
+      const notifications = statefulCollection();
+      const db = buildDb({ notificationRules: notificationRules.mock, notifications: notifications.mock });
+      await notificationRuleService.createRule(db, {
+        eventType: 'environmental_excursion',
+        channels: ['email'],
+        recipientRoleCodes: ['administrator'],
+        sensitiveFieldsAllowlist: [],
+        maxDeliveryMinutes: 2,
+        retry: { maxAttempts: 3, backoffSeconds: 0 },
+      });
+      let calls = 0;
+      vi.spyOn(notificationServiceV2, 'sendEmail').mockImplementation(async () => {
+        calls += 1;
+        if (calls < 3) throw new Error(`transient ${calls}`);
+      });
+
+      const result = await notificationDispatchService.dispatchNotification(db, { eventType: 'environmental_excursion', payload: {} });
+
+      expect(result).toMatchObject({ status: 'delivered', deliveredChannel: 'email', escalated: false, slaBreached: false });
+      expect(result.attempts.map((a) => a.result)).toEqual(['failure', 'failure', 'success']);
+    });
+
+    it('#903 (RF015 AC6): once the delivery window closes undelivered, retrying stops and the escalation runs at once', async () => {
+      const notificationRules = statefulCollection();
+      const notifications = statefulCollection();
+      const db = buildDb({ notificationRules: notificationRules.mock, notifications: notifications.mock });
+      await notificationRuleService.createRule(db, {
+        eventType: 'environmental_excursion',
+        channels: ['email'],
+        recipientRoleCodes: ['administrator'],
+        sensitiveFieldsAllowlist: [],
+        maxDeliveryMinutes: 0.0005, // 30 ms
+        retry: { maxAttempts: 10, backoffSeconds: 0 },
+        escalation: { enabled: true, afterFailures: 10, channel: 'in_app' },
+      });
+      vi.spyOn(notificationServiceV2, 'sendEmail').mockImplementation(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        throw new Error('transport down');
+      });
+
+      const result = await notificationDispatchService.dispatchNotification(db, { eventType: 'environmental_excursion', payload: {} });
+
+      const emailTries = result.attempts.filter((a) => a.channel === 'email');
+      expect(emailTries.length).toBeGreaterThan(0);
+      expect(emailTries.length).toBeLessThan(10);
+      expect(result).toMatchObject({ slaBreached: true, escalated: true, deliveredChannel: 'in_app', status: 'delivered', withinSla: false });
+      expect(result.attempts.at(-1)).toMatchObject({ channel: 'in_app', escalation: true, result: 'success' });
+    });
+
     it('does not escalate when escalation is disabled and every channel fails', async () => {
       const notificationRules = statefulCollection();
       const notifications = statefulCollection();
