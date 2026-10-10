@@ -878,6 +878,24 @@ describe('sample.service', () => {
       ).rejects.toThrow(/não está disponível para retirada/);
     });
 
+    it('rejects a withdrawal while an active legal hold covers the specimen, and writes nothing (RF006 AC6, #1315)', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(existingSample({ specimenId: 'SPC-HELD' }));
+      db.collections.legalHolds = makeCollection('legalHolds');
+      db.collections.legalHolds.find.mockImplementation(() => makeCursor([
+        { legalHoldId: 'hold-1', targetEntityType: 'Specimen', targetEntityIds: ['SPC-HELD'], status: 'active' },
+      ]));
+
+      await expect(
+        sampleService.withdrawSample(db, 'sample-1', {
+          withdrawalType: 'Total',
+          withdrawalResponsible: 'Jane Doe',
+          linkedProject: 'ProjectX'
+        })
+      ).rejects.toThrow(/Retirada bloqueada: .*hold-1/);
+      expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
+    });
+
     it('rejects an invalid withdrawal type', async () => {
       const db = makeDb();
       db.collections.samples.findOne.mockResolvedValue(existingSample());

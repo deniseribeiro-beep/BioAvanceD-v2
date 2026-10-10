@@ -25,6 +25,7 @@ const { StorageTopologyAuthoringService } = require('../../services/storage-topo
 const { assertSampleInScope, assertBoxInScope, assertContainerInScope } = require('../../services/storage-scope.service');
 const { getCollection } = require('../../utils/collectionResolver');
 const { findSampleByAnyId } = require('../../utils/sampleLookup');
+const legalHoldService = require('../../services/legalHold.service');
 
 /**
  * Storage Routes - Gerenciamento de Armazenagem Física (ISO 20387)
@@ -132,6 +133,29 @@ function requireStorageTargetsInScope({ sample, box, container } = {}) {
   };
 }
 
+// ==================== LEGAL HOLD (RF006 AC6, #1315) ====================
+// A specimen under an active legal hold is neither allocated nor moved.
+// Release stays open: taking a held specimen out of a position it must
+// leave is not a movement the hold forbids. Unknown specimens fall through
+// to the controller's own 404.
+function refuseSpecimenUnderLegalHold(sampleIdOf) {
+  return async (req, res, next) => {
+    const db = req.app.locals.db;
+    const raw = sampleIdOf(req);
+    if (!db || !raw) return next();
+    try {
+      const sample = await findSampleByAnyId(await getCollection(db, 'samples'), raw);
+      const refusal = await legalHoldService.specimenHoldRefusal(db, sample);
+      if (refusal) {
+        return res.status(409).json({ success: false, error: 'LEGAL_HOLD_ACTIVE', message: refusal });
+      }
+      return next();
+    } catch (error) {
+      return next(error);
+    }
+  };
+}
+
 // ==================== ENDPOINTS ====================
 
 /**
@@ -220,6 +244,7 @@ router.get('/samples/search', requireOrganizationScope, createSearchSamplesContr
 router.post('/allocate', requirePermission('manageStorageAllocation'), requireOrganizationScope,
   resolveSampleIdentifier('body'),
   requireStorageTargetsInScope({ sample: (req) => req.body?.sampleId, box: (req) => req.body?.boxId }),
+  refuseSpecimenUnderLegalHold((req) => req.body?.sampleId),
   createAllocateSampleController());
 
 /**
@@ -268,6 +293,7 @@ router.post('/allocate', requirePermission('manageStorageAllocation'), requireOr
 router.post('/allocate/auto', requirePermission('manageStorageAllocation'), requireOrganizationScope,
   resolveSampleIdentifier('body'),
   requireStorageTargetsInScope({ sample: (req) => req.body?.sampleId, box: (req) => req.body?.boxId }),
+  refuseSpecimenUnderLegalHold((req) => req.body?.sampleId),
   createAutoAssignSampleController());
 
 /**
@@ -286,6 +312,7 @@ router.post('/allocate/auto', requirePermission('manageStorageAllocation'), requ
 router.post('/move', requirePermission('manageStorageAllocation'), requireOrganizationScope,
   resolveSampleIdentifier('body'),
   requireStorageTargetsInScope({ sample: (req) => req.body?.sampleId, box: (req) => req.body?.targetBoxId }),
+  refuseSpecimenUnderLegalHold((req) => req.body?.sampleId),
   createMoveSampleController());
 
 /**

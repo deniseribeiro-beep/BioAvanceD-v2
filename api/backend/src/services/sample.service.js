@@ -17,6 +17,7 @@ const rcsAssessmentService = require('./rcs-assessment.service');
 const qualityDomain = require('./quality-domain.service');
 const specimenPreanalyticsService = require('./specimen-preanalytics.service');
 const quarantineActionService = require('./quarantine-action.service');
+const legalHoldService = require('./legalHold.service');
 const { applyOrganizationScopeFilter } = require('./rbac-assignment.service');
 const participantIdentityService = require('./participantIdentity.service');
 const AllocateSampleUseCase = require('../core/use-cases/AllocateSampleUseCase');
@@ -488,6 +489,11 @@ class SampleService {
       const currentSpecimenStatus = SampleModel.resolveSpecimenStatus(sample);
       if (BLOCKED_SPECIMEN_STATUSES.includes(currentSpecimenStatus)) {
         throw new Error(`Amostra não está disponível para retirada (Status: ${currentSpecimenStatus})`);
+      }
+      // RF006 AC6: a legal hold blocks the withdrawal too, not only destruction.
+      const holdRefusal = await legalHoldService.specimenHoldRefusal(db, sample);
+      if (holdRefusal) {
+        throw new Error(`Retirada bloqueada: ${holdRefusal}`);
       }
 
       // Validações MIABIS

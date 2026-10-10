@@ -10,6 +10,8 @@ const custodianship = require('../../services/custodianship.service');
 const labelResolver = require('../../services/labelResolver.service');
 const scope = require('../../services/physicalChainScope.service');
 const storageLocations = require('../../services/storageLocation.service');
+const legalHolds = require('../../services/legalHold.service');
+const { findSampleByAnyId } = require('../../utils/sampleLookup');
 const { deviceUsabilityRefusal } = require('../../services/deviceLifecycle.service');
 
 /**
@@ -233,6 +235,11 @@ router.post('/containers/:containerId/specimens', requirePermission('manageStora
     const refusal = await custodianship.operabilityRefusal(db, body.specimenId, at);
     if (refusal) {
       return res.status(422).json({ success: false, error: 'CUSTODY_INACTIVE', message: refusal, details: [refusal] });
+    }
+    // RF006 AC6: a specimen under an active legal hold is not loaded.
+    const holdRefusal = await legalHolds.specimenHoldRefusal(db, await findSampleByAnyId(await getCollection(db, 'samples'), body.specimenId));
+    if (holdRefusal) {
+      return res.status(409).json({ success: false, error: 'LEGAL_HOLD_ACTIVE', message: holdRefusal });
     }
     const sourceEventId = sourceEventIdOf(req);
     const assignment = await physicalChain.loadSpecimen(db, { ...body, containerId: req.params.containerId, sourceEventId });

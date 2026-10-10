@@ -47,7 +47,7 @@ function fakeCollection() {
 const DOMAIN = [
   'samples', 'collections', 'organizations', 'collectionGovernanceApprovals', 'custodianshipAssignments',
   'containers', 'specimenContainerAssignments', 'containerPositionAssignments', 'rackLocationAssignments',
-  'labelIdentifiers', 'scanEvents', 'devices', 'storageLocations',
+  'labelIdentifiers', 'scanEvents', 'devices', 'storageLocations', 'legalHolds',
 ];
 
 // Users: Coordenador and Técnico in org-A, the same pair in org-B, and an
@@ -155,6 +155,17 @@ describe('physical-chain routes (#1314, RF016 AC3/AC6, RF017 AC3/AC4)', () => {
     expect(res.status).toBe(201);
     expect(res.body.data.sourceEventId).toEqual(expect.any(String));
     expect(domain.containers.docs[0].emptyStatus).toBe('occupied');
+  });
+
+  it('refuses loading a specimen under an active legal hold, and loads it once released (RF006 AC6)', async () => {
+    await withCustodyAndContainer();
+    await domain.legalHolds.insertOne({ legalHoldId: 'hold-1', targetEntityType: 'Specimen', targetEntityIds: ['SPC-1'], status: 'active' });
+    const held = await post('/containers/CT-1/specimens', 'tech-a', { specimenId: 'SPC-1' });
+    expect(held.status).toBe(409);
+    expect(held.body).toMatchObject({ error: 'LEGAL_HOLD_ACTIVE', message: expect.stringContaining('hold-1') });
+    expect(domain.specimenContainerAssignments.docs).toHaveLength(0);
+    await domain.legalHolds.updateOne({ legalHoldId: 'hold-1' }, { $set: { status: 'released' } });
+    expect((await post('/containers/CT-1/specimens', 'tech-a', { specimenId: 'SPC-1' })).status).toBe(201);
   });
 
   it('refuses a Técnico creating a container, and a second container for one specimen (409)', async () => {

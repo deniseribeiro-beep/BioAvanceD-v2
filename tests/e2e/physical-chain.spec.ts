@@ -181,6 +181,21 @@ test.describe('Physical chain and custody (#1314, #1316) — real backend', () =
     expect(inactive.status(), await inactive.text()).toBe(422);
     expect((await inactive.json()).error).toBe('CUSTODY_INACTIVE');
     await setApprovalStatus(fixture.approvalId, 'active');
+
+    // RF006 AC6: an active legal hold on the specimen stops loading it;
+    // released, it loads.
+    const holdRes = await request.post(`${apiBaseURL}/api/legal-holds`, {
+      headers: coordA,
+      data: { targetEntityType: 'Specimen', targetEntityIds: [specimenId], reason: 'synthetic e2e hold' },
+    });
+    expect(holdRes.status(), await holdRes.text()).toBe(201);
+    const hold = (await holdRes.json()).data as { legalHoldId: string };
+    const heldLoad = await post(`/containers/${containerId}/specimens`, techA, { specimenId });
+    expect(heldLoad.status(), await heldLoad.text()).toBe(409);
+    expect((await heldLoad.json()).error).toBe('LEGAL_HOLD_ACTIVE');
+    const released = await request.post(`${apiBaseURL}/api/legal-holds/${hold.legalHoldId}/release`, { headers: coordA, data: { releaseReason: 'synthetic e2e release' } });
+    expect(released.status(), await released.text()).toBe(200);
+
     const reloaded = await post(`/containers/${containerId}/specimens`, techA, { specimenId });
     expect(reloaded.status(), await reloaded.text()).toBe(201);
   });

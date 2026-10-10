@@ -86,5 +86,6 @@ export async function cleanupCustodyFixture(fixture: CustodyFixture, containerId
     db.collection('devices').deleteMany({ deviceId: { $in: deviceIds } }),
     db.collection('deviceLifecycleEvents').deleteMany({ deviceId: { $in: deviceIds } }),
     db.collection('storageLocations').deleteMany({ storageLocationId: { $in: locationIds } }),
+    db.collection('legalHolds').deleteMany({ targetEntityIds: fixture.specimenId }),
   ]);
 }

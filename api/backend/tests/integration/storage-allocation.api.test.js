@@ -506,3 +506,45 @@ describe('storage mutations are bounded by the caller organization (#1211)', () 
     expect(res.status).toBe(201);
   });
 });
+
+describe('an active legal hold blocks allocation and movement (RF006 AC6, #1315)', () => {
+  const sample = { _id: SAMPLE_ID, specimenId: 'SPC-HELD', barcode: 'BR-001', collectionSite: HOME_ORG, storageLocation: null };
+  const box = { _id: BOX_ID, name: 'Box A1-01', parent_id: HOME_TREE.rackId, dimension: { rows: 9, cols: 9 }, occupancyGrid: {} };
+  const legalHoldsWith = (holds) => createCollectionMock({ find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue(holds) }) });
+  const held = [{ legalHoldId: 'hold-1', targetEntityType: 'Specimen', targetEntityIds: ['SPC-HELD'], status: 'active' }];
+
+  function heldDb(holds = held) {
+    const db = dbWithRbac({
+      samples: createCollectionMock({ findOne: vi.fn().mockResolvedValue(sample) }),
+      storageBoxes: createCollectionMock({ findOne: vi.fn().mockResolvedValue(box) }),
+      storageAssignments: createCollectionMock(),
+      legalHolds: legalHoldsWith(holds),
+      ...treeInOrg(HOME_ORG),
+      ...ledgerCollections(),
+    }, 2);
+    app.locals.db = db;
+    return db;
+  }
+
+  const send = (path, body) => request(app).post(`/api/storage${path}`).set('Authorization', `Bearer ${makeToken(2)}`).send(body);
+
+  it('refuses POST /allocate, /allocate/auto and /move with 409 LEGAL_HOLD_ACTIVE, opening no session', async () => {
+    for (const [path, body] of [
+      ['/allocate', { sampleId: SAMPLE_ID.toString(), boxId: BOX_ID.toString(), position: 'A1' }],
+      ['/allocate/auto', { sampleId: SAMPLE_ID.toString(), boxId: BOX_ID.toString() }],
+      ['/move', { sampleId: SAMPLE_ID.toString(), targetBoxId: TARGET_BOX_ID.toString(), targetPosition: 'B2' }],
+    ]) {
+      const db = heldDb();
+      const res = await send(path, body);
+      expect(res.status, path).toBe(409);
+      expect(res.body.error, path).toBe('LEGAL_HOLD_ACTIVE');
+      expect(res.body.message, path).toContain('hold-1');
+      expect(db.client.startSession, path).not.toHaveBeenCalled();
+    }
+  });
+
+  it('allocates once the hold is released (control)', async () => {
+    heldDb([{ ...held[0], status: 'released' }].filter((hold) => hold.status === 'active'));
+    expect((await send('/allocate', { sampleId: SAMPLE_ID.toString(), boxId: BOX_ID.toString(), position: 'A1' })).status).toBe(201);
+  });
+});

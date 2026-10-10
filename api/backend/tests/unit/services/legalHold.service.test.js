@@ -137,3 +137,24 @@ describe('legalHold.service', () => {
     });
   });
 });
+
+describe('legalHold.service.specimenHoldRefusal (RF006 AC6, #1315)', () => {
+  it('names an active hold on the specimen, by specimenId or stored _id, under Specimen or Sample', async () => {
+    const db = createFakeDb();
+    const byId = await legalHoldService.imposeHold(db, basePayload({ targetEntityType: 'Specimen', targetEntityIds: ['SPC-1'] }));
+    expect(await legalHoldService.specimenHoldRefusal(db, { specimenId: 'SPC-1', _id: 'oid-1' })).toContain(byId.legalHoldId);
+    await legalHoldService.imposeHold(db, basePayload({ targetEntityIds: ['oid-2'] }));
+    expect(await legalHoldService.specimenHoldRefusal(db, { specimenId: 'SPC-2', _id: 'oid-2' })).toContain('bloqueio legal ativo');
+  });
+
+  it('ignores a released hold, another entity type, another specimen and a missing sample', async () => {
+    const db = createFakeDb();
+    const hold = await legalHoldService.imposeHold(db, basePayload({ targetEntityIds: ['SPC-1'] }));
+    await legalHoldService.imposeHold(db, basePayload({ targetEntityType: 'Patient', targetEntityIds: ['SPC-3'] }));
+    expect(await legalHoldService.specimenHoldRefusal(db, { specimenId: 'SPC-3' })).toBeNull();
+    expect(await legalHoldService.specimenHoldRefusal(db, { specimenId: 'SPC-9' })).toBeNull();
+    expect(await legalHoldService.specimenHoldRefusal(db, null)).toBeNull();
+    await legalHoldService.releaseHold(db, hold.legalHoldId, 'user-1', 'ordem revogada');
+    expect(await legalHoldService.specimenHoldRefusal(db, { specimenId: 'SPC-1' })).toBeNull();
+  });
+});
