@@ -7,6 +7,7 @@ const SampleMovementModel = require('../models/SampleMovement');
 const { appendMovementWithHashChain } = require('../utils/sampleMovementLedger');
 const qualityDomain = require('./quality-domain.service');
 const quarantineActionService = require('./quarantine-action.service');
+const operationalStateDecisionService = require('./operationalStateDecision.service');
 
 function normalizeString(value) {
   return String(value || '').trim();
@@ -493,6 +494,8 @@ class SampleGraphValidator {
       { $set: setPayload }
     );
 
+    const reasonCodes = complianceGraphReasonCodes(graphPath);
+    let triggerAction = null;
     if (escalated) {
       // Close out a prior self-owned action before opening the new one, so
       // at most one compliance-graph QuarantineAction is ever active per
@@ -504,15 +507,27 @@ class SampleGraphValidator {
       if (isComplianceGraphOwnedAction(latestActiveAction)) {
         await quarantineActionService.releaseActiveAction(this.db, sample, 'SYSTEM_COMPLIANCE_GRAPH');
       }
-      const reasonCodes = complianceGraphReasonCodes(graphPath);
       if (reasonCodes.length > 0) {
-        await quarantineActionService.recordAction(this.db, {
+        triggerAction = await quarantineActionService.recordAction(this.db, {
           specimenIds: [quarantineActionService.canonicalSpecimenId(sample)],
           reasonCodes,
         });
       }
     } else if (downgraded) {
-      await quarantineActionService.releaseActiveAction(this.db, sample, 'SYSTEM_COMPLIANCE_GRAPH');
+      triggerAction = await quarantineActionService.releaseActiveAction(this.db, sample, 'SYSTEM_COMPLIANCE_GRAPH');
+    }
+
+    // RF006 AC7 (#1315): the change, triggered by the action it applied or
+    // released.
+    if (escalated || downgraded) {
+      await operationalStateDecisionService.recordStatusChange(this.db, {
+        specimenId: quarantineActionService.canonicalSpecimenId(sample),
+        previousStatus: currentSpecimenStatus,
+        newStatus: setPayload.specimenStatus,
+        triggerEventId: triggerAction?.quarantineActionId || crypto.randomUUID(),
+        rulesApplied: ['compliance_graph_validation'],
+        reasonCodes: escalated ? reasonCodes : ['COMPLIANCE_GRAPH_CLEARED'],
+      });
     }
 
     if (!isReleasable) {

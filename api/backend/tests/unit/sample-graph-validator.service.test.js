@@ -62,6 +62,7 @@ describe('SampleGraphValidator', () => {
   let rcsAssessmentsCollection;
   let specimenPreanalyticsCollection;
   let quarantineActionsCollection;
+  let operationalStateDecisionsCollection;
   let validator;
 
   beforeEach(() => {
@@ -149,6 +150,10 @@ describe('SampleGraphValidator', () => {
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
     };
 
+    operationalStateDecisionsCollection = {
+      insertOne: vi.fn().mockResolvedValue({ insertedId: 'osd-1' }),
+    };
+
     db = {
       listCollections: () => ({
         toArray: async () => ([{ name: 'samples' }, { name: 'consents' }]),
@@ -163,6 +168,7 @@ describe('SampleGraphValidator', () => {
         if (name === 'rcsAssessments') return rcsAssessmentsCollection;
         if (name === 'specimenPreanalytics') return specimenPreanalyticsCollection;
         if (name === 'quarantineActions') return quarantineActionsCollection;
+        if (name === 'operationalStateDecisions') return operationalStateDecisionsCollection;
         throw new Error(`Unexpected collection name: ${name}`);
       },
     };
@@ -418,6 +424,7 @@ describe('SampleGraphValidator', () => {
       const [, update] = samplesCollection.updateOne.mock.calls[0];
       expect(update.$set.specimenStatus).toBeUndefined();
       expect(quarantineActionsCollection.insertOne).not.toHaveBeenCalled();
+      expect(operationalStateDecisionsCollection.insertOne).not.toHaveBeenCalled();
     });
 
     it('escalates specimenStatus to quarantined and records a COMPLIANCE_GRAPH_QUALITY action when only quality fails', async () => {
@@ -445,6 +452,17 @@ describe('SampleGraphValidator', () => {
         expect.objectContaining({ reasonCodes: ['COMPLIANCE_GRAPH_QUALITY'] }),
         undefined
       );
+      // RF006 AC7 (#1315): the change is a decision triggered by that action.
+      const action = quarantineActionsCollection.insertOne.mock.calls[0][0];
+      expect(operationalStateDecisionsCollection.insertOne).toHaveBeenCalledTimes(1);
+      expect(operationalStateDecisionsCollection.insertOne.mock.calls[0][0]).toMatchObject({
+        specimenId: '507f1f77bcf86cd799439011',
+        previousStatus: 'available',
+        newStatus: 'quarantined',
+        triggerEventId: action.quarantineActionId,
+        rulesApplied: ['compliance_graph_validation'],
+        reasonCodes: ['COMPLIANCE_GRAPH_QUALITY'],
+      });
     });
 
     it('escalates specimenStatus to unavailable when only pharmacology fails (#532: previously silently AVAILABLE)', async () => {
@@ -527,6 +545,12 @@ describe('SampleGraphValidator', () => {
         undefined
       );
       expect(quarantineActionsCollection.insertOne).not.toHaveBeenCalled();
+      expect(operationalStateDecisionsCollection.insertOne.mock.calls[0][0]).toMatchObject({
+        previousStatus: 'quarantined',
+        newStatus: 'available',
+        triggerEventId: 'qa-existing',
+        reasonCodes: ['COMPLIANCE_GRAPH_CLEARED'],
+      });
     });
 
     it('does not downgrade specimenStatus when the active block belongs to an unrelated source', async () => {
@@ -542,6 +566,7 @@ describe('SampleGraphValidator', () => {
       expect(update.$set.specimenStatus).toBeUndefined();
       expect(quarantineActionsCollection.updateOne).not.toHaveBeenCalled();
       expect(quarantineActionsCollection.insertOne).not.toHaveBeenCalled();
+      expect(operationalStateDecisionsCollection.insertOne).not.toHaveBeenCalled();
     });
   });
 });
