@@ -152,7 +152,9 @@ class MqttTelemetryService {
         sensorId: payload.sensorId || payload.sensorID || payload.deviceId || null,
         temperatureValue: Number(payload.temperatureValue ?? payload.temperature ?? payload.value),
         temperatureUnit: payload.temperatureUnit || '°C',
-        timestamp: payload.timestamp ? new Date(payload.timestamp) : new Date(),
+        // #1317: no device time stays null, so the reading's clockStatus is
+        // unknown and its observedAt the receipt time, not a trusted guess.
+        timestamp: payload.timestamp ? new Date(payload.timestamp) : null,
         readingStatus: payload.readingStatus || 'valid',
         sensorStatus: payload.sensorStatus || 'normal',
         signalQuality: payload.signalQuality || null,

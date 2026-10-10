@@ -269,6 +269,20 @@ describe('mqtt-telemetry.service', () => {
       }));
     });
 
+    // #1317 (RF009 AC7): MQTT no longer stands in the receipt time for a
+    // missing device time, so the reading's clock reads as unknown.
+    it('passes a payload without a timestamp on with a null one, and a sent one as a Date', async () => {
+      vi.spyOn(mqttIngestionAuditService, 'append').mockResolvedValue();
+      const processSpy = vi.spyOn(iotStreamingService, 'processTemperatureData').mockResolvedValue('id');
+      vi.spyOn(mqttSignatureService, 'hashPayload').mockReturnValue('hash123');
+
+      await mqttTelemetryService.handleMessage(db, 'topic', Buffer.from(JSON.stringify({ sensorId: 'S1', temperatureValue: 4.5 }), 'utf8'), false);
+      await mqttTelemetryService.handleMessage(db, 'topic', Buffer.from(JSON.stringify({ sensorId: 'S1', temperatureValue: 4.5, timestamp: '2026-10-10T12:00:00.000Z' }), 'utf8'), false);
+
+      expect(processSpy.mock.calls[0][1].timestamp).toBeNull();
+      expect(processSpy.mock.calls[1][1].timestamp).toEqual(new Date('2026-10-10T12:00:00.000Z'));
+    });
+
     it('processes a fully valid payload with a verified signature', async () => {
       const auditSpy = vi.spyOn(mqttIngestionAuditService, 'append').mockResolvedValue();
       const processSpy = vi.spyOn(iotStreamingService, 'processTemperatureData').mockResolvedValue('inserted-id-2');

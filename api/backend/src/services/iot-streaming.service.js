@@ -1,6 +1,7 @@
 const logger = require('../utils/logger');
 const { getQueue } = require('../config/queue');
 const influxTelemetryWriteRepository = require('../infrastructure/persistence/influxdb/InfluxTelemetryWriteRepository');
+const { readingIdentityOf } = require('./telemetryReadingContract');
 
 /**
  * Serviço de IoT Streaming para Temperature Control
@@ -176,15 +177,16 @@ class IoTStreamingService {
     try {
       const temperaturesCollection = db.collection('temperatures');
 
-      // Insere registro
-      const result = await temperaturesCollection.insertOne(temperatureData);
+      // #1317 (RF009 AC1-AC3): the same reading contract as the temperature
+      // route. The fields the server adds are not part of the received
+      // payload's hash; InfluxDB is written and confirmed before the Mongo
+      // copy, and a failed write throws with nothing stored.
+      const { source: _source, createdAt: _createdAt, updatedAt: _updatedAt, ...received } = temperatureData;
+      const identity = readingIdentityOf(received);
+      const reading = { ...temperatureData, ...identity, timestamp: identity.observedAt };
+      reading.persistedAt = await influxTelemetryWriteRepository.writeTemperatureReadingNow(reading);
 
-      void Promise.resolve().then(() => {
-        influxTelemetryWriteRepository.enqueueTemperatureReading({
-          _id: result.insertedId,
-          ...temperatureData
-        });
-      });
+      const result = await temperaturesCollection.insertOne(reading);
 
       logger.debug(`✅ Dados de temperatura processados: ${result.insertedId}`);
       return result.insertedId;

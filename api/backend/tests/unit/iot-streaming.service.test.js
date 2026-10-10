@@ -171,23 +171,50 @@ describe('iot-streaming.service', () => {
       sensorStatus: 'normal',
     };
 
+    const persistedAt = new Date('2026-10-10T12:00:01.000Z');
     beforeEach(() => {
-      vi.spyOn(influxTelemetryWriteRepository, 'enqueueTemperatureReading').mockImplementation(() => {});
+      vi.spyOn(influxTelemetryWriteRepository, 'writeTemperatureReadingNow').mockResolvedValue(persistedAt);
     });
 
-    it('inserts the reading and enqueues an Influx telemetry write, without any FHIR conversion or device collection access', async () => {
+    // #1317 (RF009 AC1-AC3): the temperature route's reading contract.
+    it('writes InfluxDB first, then inserts the reading with its identity and persistedAt, without any FHIR conversion or device collection access', async () => {
       const { db, temperaturesCollection } = makeDb();
+      const order = [];
+      influxTelemetryWriteRepository.writeTemperatureReadingNow.mockImplementation(async () => { order.push('influx'); return persistedAt; });
+      temperaturesCollection.insertOne.mockImplementation(async () => { order.push('mongo'); return { insertedId: 'temp-id-1' }; });
 
       const insertedId = await service.processTemperatureData(db, baseTemperatureData);
 
       expect(insertedId).toBe('temp-id-1');
-      expect(temperaturesCollection.insertOne).toHaveBeenCalledWith(baseTemperatureData);
+      expect(order).toEqual(['influx', 'mongo']);
+      const stored = temperaturesCollection.insertOne.mock.calls[0][0];
+      expect(stored).toMatchObject({ ...baseTemperatureData, clockStatus: 'synchronized', persistedAt });
+      expect(stored.telemetryReadingId).toBeTruthy();
+      expect(stored.observedAt).toEqual(baseTemperatureData.timestamp);
       expect(db.collection).not.toHaveBeenCalledWith('devices');
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(influxTelemetryWriteRepository.enqueueTemperatureReading).toHaveBeenCalledWith(
-        expect.objectContaining({ _id: 'temp-id-1', sensorId: 'sensor-1' })
-      );
+    });
+
+    it('a reading with no device time is stored at its receipt time with clockStatus unknown', async () => {
+      const { db, temperaturesCollection } = makeDb();
+      await service.processTemperatureData(db, { ...baseTemperatureData, timestamp: null, source: 'mqtt', createdAt: new Date() });
+      const stored = temperaturesCollection.insertOne.mock.calls[0][0];
+      expect(stored.clockStatus).toBe('unknown');
+      expect(stored.timestamp).toBe(stored.receivedAt);
+    });
+
+    it('the server-added fields are not part of the payload hash', async () => {
+      const { db, temperaturesCollection } = makeDb();
+      await service.processTemperatureData(db, { ...baseTemperatureData, source: 'mqtt', createdAt: new Date(1), updatedAt: new Date(1) });
+      await service.processTemperatureData(db, { ...baseTemperatureData, source: 'mqtt', createdAt: new Date(2), updatedAt: new Date(2) });
+      const [first, second] = temperaturesCollection.insertOne.mock.calls.map(([doc]) => doc.payloadHash);
+      expect(first).toBe(second);
+    });
+
+    it('a failed InfluxDB write throws and stores nothing', async () => {
+      const { db, temperaturesCollection } = makeDb();
+      influxTelemetryWriteRepository.writeTemperatureReadingNow.mockRejectedValue(new Error('influx down'));
+      await expect(service.processTemperatureData(db, baseTemperatureData)).rejects.toThrow('influx down');
+      expect(temperaturesCollection.insertOne).not.toHaveBeenCalled();
     });
 
     it('logs and re-throws when insertOne rejects', async () => {
