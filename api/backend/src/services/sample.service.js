@@ -18,6 +18,7 @@ const qualityDomain = require('./quality-domain.service');
 const specimenPreanalyticsService = require('./specimen-preanalytics.service');
 const quarantineActionService = require('./quarantine-action.service');
 const legalHoldService = require('./legalHold.service');
+const operationalStateDecisionService = require('./operationalStateDecision.service');
 const { applyOrganizationScopeFilter } = require('./rbac-assignment.service');
 const participantIdentityService = require('./participantIdentity.service');
 const AllocateSampleUseCase = require('../core/use-cases/AllocateSampleUseCase');
@@ -592,6 +593,15 @@ class SampleService {
           { $set: update },
           { session }
         );
+        // RF006 AC7: the status change, append-only, in the same transaction.
+        await operationalStateDecisionService.recordStatusChange(db, {
+          specimenId: sample.specimenId || String(sample._id),
+          previousStatus: currentSpecimenStatus,
+          newStatus: specimenStatus,
+          triggerEventId: movementID,
+          rulesApplied: ['quantity_derived_status'],
+          reasonCodes: ['withdraw'],
+        }, { session });
       });
 
       logger.info(`Retirada registrada: Sample ${sample.barcode || sample._id}, Qtd: ${withdrawQty}, Novo saldo: ${newAvailableQty}`);
@@ -1039,6 +1049,15 @@ class SampleService {
           { $set: update },
           { session }
         );
+        // RF006 AC7: the status change, append-only, in the same transaction.
+        await operationalStateDecisionService.recordStatusChange(db, {
+          specimenId: sample.specimenId || String(sample._id),
+          previousStatus: currentSpecimenStatus,
+          newStatus: specimenStatus,
+          triggerEventId: movementID,
+          rulesApplied: ['quantity_derived_status'],
+          reasonCodes: ['return', returnData.condition],
+        }, { session });
       });
 
       logger.info(`Devolução registrada: Sample ${sample.barcode || sample._id}, Qtd: ${returnQty}, Condição: ${returnData.condition}, Novo saldo: ${newAvailableQty}`);

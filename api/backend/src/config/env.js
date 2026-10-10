@@ -203,6 +203,7 @@ module.exports = {
   COLL_CONTAINER_POSITION_ASSIGNMENTS: process.env.COLL_CONTAINER_POSITION_ASSIGNMENTS || 'containerPositionAssignments',
   COLL_RACK_LOCATION_ASSIGNMENTS: process.env.COLL_RACK_LOCATION_ASSIGNMENTS || 'rackLocationAssignments',
   COLL_STORAGE_LOCATIONS: process.env.COLL_STORAGE_LOCATIONS || 'storageLocations',
+  COLL_OPERATIONAL_STATE_DECISIONS: process.env.COLL_OPERATIONAL_STATE_DECISIONS || 'operationalStateDecisions',
   COLL_LABEL_IDENTIFIERS: process.env.COLL_LABEL_IDENTIFIERS || 'labelIdentifiers',
   COLL_SCAN_EVENTS: process.env.COLL_SCAN_EVENTS || 'scanEvents',
   COLL_CUSTODIANSHIP_ASSIGNMENTS: process.env.COLL_CUSTODIANSHIP_ASSIGNMENTS || 'custodianshipAssignments',

@@ -84,6 +84,7 @@ const ENTITY_TARGETS = {
   ContainerPositionAssignment: () => require('../../src/models/ContainerPositionAssignment').fieldsOf(),
   RackLocationAssignment: () => require('../../src/models/RackLocationAssignment').fieldsOf(),
   StorageLocation: () => require('../../src/models/StorageLocation').fieldsOf(),
+  OperationalStateDecision: () => require('../../src/models/OperationalStateDecision').fieldsOf(),
   StorageRack: () => require('../../src/models/StorageRack').fieldsOf(),
   StoragePosition: () => require('../../src/models/StoragePosition').fieldsOf(),
   LabelIdentifier: () => require('../../src/models/LabelIdentifier').fieldsOf(),

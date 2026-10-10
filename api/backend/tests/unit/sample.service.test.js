@@ -835,6 +835,34 @@ describe('sample.service', () => {
       expect(updateArg.$set.availabilityStatus).toBeUndefined();
     });
 
+    it('appends an OperationalStateDecision for the status change, in the transaction, and none when the status stays (RF006 AC7, #1315)', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(existingSample({ specimenId: 'SPC-1' }));
+      const result = await sampleService.withdrawSample(db, 'sample-1', {
+        withdrawalType: 'Total',
+        withdrawalResponsible: 'Jane Doe',
+        linkedProject: 'ProjectX'
+      });
+      const decisions = db.collections.operationalStateDecisions;
+      expect(decisions.insertOne).toHaveBeenCalledTimes(1);
+      const [decision, options] = decisions.insertOne.mock.calls[0];
+      expect(decision).toMatchObject({
+        specimenId: 'SPC-1', previousStatus: 'available', newStatus: 'depleted', triggerEventId: String(result.movementID),
+        rulesApplied: ['quantity_derived_status'], reasonCodes: ['withdraw'], decisionResult: 'permit',
+      });
+      expect(options).toEqual({ session: db.session });
+
+      const again = makeDb();
+      again.collections.samples.findOne.mockResolvedValue(existingSample({ specimenId: 'SPC-2', specimenStatus: 'partial', currentQuantity: 6 }));
+      await sampleService.withdrawSample(again, 'sample-1', {
+        withdrawalType: 'Parcial',
+        withdrawalQuantity: 2,
+        withdrawalResponsible: 'Jane Doe',
+        linkedProject: 'ProjectX'
+      });
+      expect(again.collections.operationalStateDecisions?.insertOne ?? vi.fn()).not.toHaveBeenCalled();
+    });
+
     it('performs a partial withdrawal within available quantity', async () => {
       const db = makeDb();
       db.collections.samples.findOne.mockResolvedValue(existingSample());
@@ -1572,6 +1600,20 @@ describe('sample.service', () => {
           returnType: 'Total'
         })
       ).rejects.toThrow('Amostra não encontrada');
+    });
+
+    it('appends an OperationalStateDecision when a total return makes the specimen available again (RF006 AC7, #1315)', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(withdrawnSample({ specimenId: 'SPC-R', specimenStatus: 'partial' }));
+      const result = await sampleService.returnSample(db, 'sample-1', {
+        returnResponsible: 'Jane Doe',
+        condition: 'intact',
+        returnType: 'Total'
+      });
+      const [decision, options] = db.collections.operationalStateDecisions.insertOne.mock.calls[0];
+      expect(decision).toMatchObject({ specimenId: 'SPC-R', previousStatus: 'partial', newStatus: 'available', reasonCodes: ['return', 'intact'] });
+      expect(decision.triggerEventId).toBe(String(result.movementID));
+      expect(options).toEqual({ session: db.session });
     });
 
     it('rejects when there is nothing pending to return', async () => {
