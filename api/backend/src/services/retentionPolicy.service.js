@@ -3,12 +3,27 @@ const RetentionPolicyModel = require('../models/RetentionPolicy');
 const { getCollection } = require('../utils/collectionResolver');
 const logger = require('../utils/logger');
 
-// #440's scope (RF014 foundation): only the audit trail collections are
-// targetable in this slice. The dictionary's applicableEntityTypes field is
-// generic ("BioAvanceD entity types"), but the sweep job (#441) is scoped to
-// audit_events/Log, so this service rejects anything else rather than
-// accepting a policy the sweep can never apply.
-const ALLOWED_ENTITY_TYPES = ['AuditEvent', 'Log'];
+// A policy may name only entity types something acts on, so none is accepted
+// and silently ignored (#1273). Two families do:
+//  - the audit trail (#440): the sweep (#441) archives or purges AuditEvent
+//    and Log;
+//  - specimens (RF026 AC1, #1365): a Specimen, or the legacy Sample, is
+//    destroyed or transferred through a DispositionAction bound to the
+//    policy, executed by a person (RF026 AC4-AC6), never by the sweep.
+// Each family keeps its own active policy: activating one deactivates the
+// active policies of the families it names, so a specimen policy never
+// switches off the audit trail's retention.
+const ENTITY_TYPE_FAMILIES = {
+  auditTrail: ['AuditEvent', 'Log'],
+  specimen: ['Specimen', 'Sample'],
+};
+const ALLOWED_ENTITY_TYPES = Object.values(ENTITY_TYPE_FAMILIES).flat();
+
+function familyTypesOf(applicableEntityTypes) {
+  return Object.values(ENTITY_TYPE_FAMILIES)
+    .filter((types) => types.some((type) => (applicableEntityTypes || []).includes(type)))
+    .flat();
+}
 
 class RetentionPolicyService {
   parseVersionNumber(version) {
@@ -96,7 +111,10 @@ class RetentionPolicyService {
       }
 
       if (normalizedPayload.active === undefined || normalizedPayload.active === true) {
-        await collection.updateMany({ active: true }, { $set: { active: false, updatedAt: new Date() } });
+        await collection.updateMany(
+          { active: true, applicableEntityTypes: { $in: familyTypesOf(normalizedPayload.applicableEntityTypes) } },
+          { $set: { active: false, updatedAt: new Date() } }
+        );
       }
 
       const policy = RetentionPolicyModel.create(normalizedPayload);
@@ -120,10 +138,12 @@ class RetentionPolicyService {
     return this.createPolicy(db, payload, { previousPolicyId: policyId });
   }
 
-  async getActivePolicy(db) {
+  // The active policy of one family, the audit trail's unless another is named:
+  // the sweep, the security settings and GET /active all read that one.
+  async getActivePolicy(db, family = 'auditTrail') {
     const collection = await getCollection(db, 'retentionPolicies');
     const policies = await collection
-      .find({ active: true })
+      .find({ active: true, applicableEntityTypes: { $in: ENTITY_TYPE_FAMILIES[family] } })
       .sort({ createdAt: -1 })
       .limit(1)
       .toArray();
@@ -153,3 +173,4 @@ class RetentionPolicyService {
 
 module.exports = new RetentionPolicyService();
 module.exports.ALLOWED_ENTITY_TYPES = ALLOWED_ENTITY_TYPES;
+module.exports.ENTITY_TYPE_FAMILIES = ENTITY_TYPE_FAMILIES;
