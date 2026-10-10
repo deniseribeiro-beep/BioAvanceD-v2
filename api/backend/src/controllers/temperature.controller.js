@@ -79,6 +79,16 @@ class TemperatureController {
         : await resolveMachineIngestOrganization(db, req.body);
       const temperature = await temperatureService.createTemperatureReading(db, temperatureData);
 
+      // RF009 AC7 (#1317): a replayed idempotencyKey wrote nothing, so it
+      // answers 200 with the stored reading and records no CREATE.
+      if (temperature.replayed) {
+        return res.status(200).json({
+          success: true,
+          message: 'Leitura já registrada com este idempotencyKey',
+          data: temperature
+        });
+      }
+
       // Registra log (anonimizado via auditLogger)
       //
       // #1080: this was guarded on `if (req.user)`, so the ONE route here with

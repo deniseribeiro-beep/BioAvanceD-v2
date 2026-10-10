@@ -43,6 +43,21 @@ describe('temperature.controller.createReading', () => {
     });
   });
 
+  // #1317 (RF009 AC7): a replayed idempotencyKey wrote nothing.
+  it('answers 200 with the stored reading for a replayed idempotencyKey, and records no CREATE', async () => {
+    const stored = { _id: { toString: () => 'r0' }, temperatureValue: 4.2, replayed: true };
+    vi.spyOn(temperatureService, 'createTemperatureReading').mockResolvedValue(stored);
+    const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
+    const req = { app: { locals: { db: {} } }, body: { idempotencyKey: 'k-1' }, organizationScope: { scope: 'global' } };
+    const res = buildRes();
+
+    await temperatureController.createReading(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true, data: stored }));
+    expect(logSpy).not.toHaveBeenCalled();
+  });
+
   it('returns 400 with the error message when the service throws', async () => {
     vi.spyOn(temperatureService, 'createTemperatureReading').mockRejectedValue(new Error('invalid payload'));
     const req = { app: { locals: { db: {} } }, body: {} };

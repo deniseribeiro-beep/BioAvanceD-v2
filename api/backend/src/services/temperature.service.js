@@ -9,6 +9,25 @@ const { applyOrganizationScopeFilter } = require('./rbac-assignment.service');
 // scheduler owns missing/stale readings; this module owns the threshold
 // breach.
 const { ALERT_TYPES, resolveActiveAlert, ensureActiveAlert } = require('./alertLifecycle.service');
+const { readingIdentityOf } = require('./telemetryReadingContract');
+
+// #1317: a client idempotencyKey is unique per sensor. Latched per collection
+// name before the await, like the custody indexes: a persistent failure is
+// logged once, and the replay lookup still runs without it.
+const temperatureIndexed = new Set();
+async function ensureTemperatureIndexes(collection) {
+  const name = collection?.collectionName || 'temperatures';
+  if (typeof collection?.createIndex !== 'function' || temperatureIndexed.has(name)) return;
+  temperatureIndexed.add(name);
+  try {
+    await collection.createIndex(
+      { sensorId: 1, idempotencyKey: 1 },
+      { unique: true, name: 'temperatures_client_idempotencyKey_v1', partialFilterExpression: { idempotencyKeySource: 'client' } }
+    );
+  } catch (error) {
+    logger.warn(`[TEMPERATURE] Falha ao criar índice de idempotencyKey: ${error.message}`);
+  }
+}
 
 function createTemperatureValidationError(message, statusCode = 422) {
   const error = new Error(message);
@@ -49,17 +68,37 @@ class TemperatureService {
         error.details = validation.errors;
         throw error;
       }
+      const identity = readingIdentityOf(temperatureData);
       await assertOrganizationIdResolves(db, temperatureData.organizationId);
 
       const temperaturesCollection = db.collection('temperatures');
-      const temperature = TemperatureModel.create(temperatureData);
+      // RF009 AC7 (#1317): a client key already stored for this sensor is a
+      // replay; it returns the stored reading and writes nothing.
+      const replayFilter = identity.idempotencyKeySource === 'client'
+        ? { sensorId: String(temperatureData.sensorId || temperatureData.sensorID), idempotencyKey: identity.idempotencyKey, idempotencyKeySource: 'client' }
+        : null;
+      if (replayFilter) {
+        await ensureTemperatureIndexes(temperaturesCollection);
+        const stored = await temperaturesCollection.findOne(replayFilter);
+        if (stored) return { ...stored, replayed: true };
+      }
+
+      const temperature = { ...TemperatureModel.create(temperatureData), ...identity };
 
       // Verifica política e gera alerta se necessário
       if (temperatureData.policyId || temperatureData.policyID) {
         await this.checkPolicyAndAlert(db, temperature);
       }
 
-      const result = await temperaturesCollection.insertOne(temperature);
+      let result;
+      try {
+        result = await temperaturesCollection.insertOne(temperature);
+      } catch (error) {
+        // Two concurrent sends of one key: the unique index lets one in.
+        const stored = replayFilter && error?.code === 11000 ? await temperaturesCollection.findOne(replayFilter) : null;
+        if (stored) return { ...stored, replayed: true };
+        throw error;
+      }
 
       void Promise.resolve().then(() => {
         influxTelemetryWriteRepository.enqueueTemperatureReading({

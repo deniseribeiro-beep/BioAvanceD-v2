@@ -1288,3 +1288,41 @@ test.describe('Alertas e notificações (RF015) — real backend', () => {
     });
   });
 });
+
+// #1317 (RF009 AC2/AC3/AC7): a reading carries its TelemetryReading identity
+// and time, and a replayed idempotencyKey returns the stored reading.
+test.describe('Telemetry reading identity and replay (#1317, RF009) — real backend', () => {
+  test('a reading carries identity and time, and a replayed idempotencyKey writes nothing', async ({ request }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const sensorId = `rf009-idem-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const timestamp = new Date().toISOString();
+    const send = (data: Record<string, unknown>) =>
+      request.post(`${apiBaseURL}/api/temperature/reading`, { headers: auth, data: { sensorId, temperatureValue: 4.5, ...data } });
+
+    const first = await send({ timestamp, idempotencyKey: `${sensorId}-k1` });
+    expect(first.status(), await first.text()).toBe(201);
+    const stored = (await first.json()).data;
+    expect(stored).toMatchObject({ clockStatus: 'synchronized', idempotencyKeySource: 'client', idempotencyKey: `${sensorId}-k1` });
+    expect(new Date(stored.observedAt).toISOString()).toBe(timestamp);
+    expect(stored.telemetryReadingId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(stored.receivedAt).toBeTruthy();
+    expect(stored.payloadHash).toMatch(/^[0-9a-f]{64}$/);
+
+    const replay = await send({ timestamp, idempotencyKey: `${sensorId}-k1`, temperatureValue: 9 });
+    expect(replay.status(), await replay.text()).toBe(200);
+    const replayed = (await replay.json()).data;
+    expect(replayed.telemetryReadingId).toBe(stored.telemetryReadingId);
+    expect(replayed.temperatureValue).toBe(4.5);
+
+    // Control: another key is a new reading, and no device time is unknown.
+    const other = await send({ idempotencyKey: `${sensorId}-k2` });
+    expect(other.status(), await other.text()).toBe(201);
+    const otherBody = (await other.json()).data;
+    expect(otherBody.telemetryReadingId).not.toBe(stored.telemetryReadingId);
+    expect(otherBody.clockStatus).toBe('unknown');
+
+    const invalid = await send({ timestamp: 'not-a-date' });
+    expect(invalid.status(), await invalid.text()).toBe(422);
+  });
+});
