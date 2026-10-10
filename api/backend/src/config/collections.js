@@ -21,6 +21,7 @@ const CANONICAL_COLLECTIONS = Object.freeze({
   configurationValidationRuns: env.COLL_CONFIGURATION_VALIDATION_RUNS || 'configurationValidationRuns',
   canonicalModelReleases: env.COLL_CANONICAL_MODEL_RELEASES || 'canonicalModelReleases',
   governanceInvariantCatalogs: env.COLL_GOVERNANCE_INVARIANT_CATALOGS || 'governanceInvariantCatalogs',
+  invariantViolations: env.COLL_INVARIANT_VIOLATIONS || 'invariantViolations',
   participantIdentities: env.COLL_PARTICIPANT_IDENTITIES || 'participantIdentities',
   rcsAssessments: env.COLL_RCS_ASSESSMENTS || 'rcsAssessments',
   encounters: env.COLL_ENCOUNTERS || 'encounters',

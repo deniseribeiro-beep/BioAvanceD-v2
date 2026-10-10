@@ -184,6 +184,7 @@ module.exports = {
   COLL_CONFIGURATION_VALIDATION_RUNS: process.env.COLL_CONFIGURATION_VALIDATION_RUNS || 'configurationValidationRuns',
   COLL_CANONICAL_MODEL_RELEASES: process.env.COLL_CANONICAL_MODEL_RELEASES || 'canonicalModelReleases',
   COLL_GOVERNANCE_INVARIANT_CATALOGS: process.env.COLL_GOVERNANCE_INVARIANT_CATALOGS || 'governanceInvariantCatalogs',
+  COLL_INVARIANT_VIOLATIONS: process.env.COLL_INVARIANT_VIOLATIONS || 'invariantViolations',
   COLL_PARTICIPANT_IDENTITIES: process.env.COLL_PARTICIPANT_IDENTITIES || 'participantIdentities',
   COLL_RCS_ASSESSMENTS: process.env.COLL_RCS_ASSESSMENTS || 'rcsAssessments',
   COLL_ENCOUNTERS: process.env.COLL_ENCOUNTERS || 'encounters',

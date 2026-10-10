@@ -21,6 +21,7 @@ const { createFakeDb } = require('../foundation/helpers/fake-db');
 const releasesOf = (db) => db.collection(CANONICAL_COLLECTIONS.configurationReleases).docs;
 const runsOf = (db) => db.collection(CANONICAL_COLLECTIONS.configurationValidationRuns).docs;
 const eventsOf = (db) => db.collection(CANONICAL_COLLECTIONS.configurationChangeEvents).docs;
+const violationsOf = (db) => db.collection(CANONICAL_COLLECTIONS.invariantViolations).docs;
 const req = { user: { userID: 'admin-1' }, headers: {} };
 
 beforeEach(() => {
@@ -69,6 +70,17 @@ describe('an invariant broken by a change is refused and recorded (RF014 AC6/AC7
     expect(run.invariantResults.find((entry) => entry.invariantId === 'INV-AUDIT-001')).toEqual({ invariantId: 'INV-AUDIT-001', result: 'fail', paths: ['logging.logAllActions'] });
     expect(eventsOf(db).filter((event) => event.releaseId === draft.configurationReleaseId).map((event) => event.changeType))
       .toEqual(['proposed', 'violation_attempted']);
+    // RF019 AC1/AC4 (#1315): the broken invariant is an InvariantViolation,
+    // correlated with the refused candidate and evidenced by its run.
+    expect(violationsOf(db)).toEqual([expect.objectContaining({
+      invariantViolationId: expect.any(String),
+      invariantId: 'INV-AUDIT-001',
+      sourceComponent: 'configurationValidation',
+      outcome: 'block',
+      evidenceUri: run.reportUri,
+      correlationId: draft.configurationReleaseId,
+      detectedAt: expect.any(Date),
+    })]);
 
     // The configuration in force did not move.
     const after = await securityService.getConfig(db);
@@ -110,6 +122,7 @@ describe('a change failing another gate is refused without a violation (RF014 AC
     expect(run.findings.security).toContain('minLength deve estar entre 8 e 128');
     expect(run.findings.semantic).toContain('timeoutMinutes deve estar entre 5 e 480');
     expect(eventsOf(db).map((event) => event.changeType)).toEqual(['proposed']);
+    expect(violationsOf(db)).toEqual([]);
   });
 
   it('a minLengthWithMFA above minLength fails the dependency gate', async () => {

@@ -20,9 +20,13 @@ const crypto = require('crypto');
 const { CANONICAL_COLLECTIONS } = require('../config/collections');
 const ConfigurationValidationRunModel = require('../models/ConfigurationValidationRun');
 const ConfigurationChangeEventModel = require('../models/ConfigurationChangeEvent');
+const InvariantViolationModel = require('../models/InvariantViolation');
 const configurationReleaseService = require('./configurationRelease.service');
 const { INVARIANTS } = require('../governance/invariants');
 const { ensureConfigurationValidationRunIndexes } = require('../utils/governanceRegistryIndexes');
+
+// The component an InvariantViolation names as its detector.
+const SOURCE_COMPONENT = 'configurationValidation';
 
 class ConfigurationValidationError extends Error {
   constructor(message, statusCode, { validationRun, violatedInvariants }) {
@@ -99,6 +103,19 @@ async function recordRefusal(db, { run, violated, profileId, settings, actorId, 
       impactSummary: `Tentativa de alterar ${paths.join(', ')} bloqueada: ${violated.join(', ')}.`,
       occurredAt: now,
     }));
+    // RF019 AC1/AC4 (#1315): one InvariantViolation per broken invariant,
+    // correlated with the refused candidate and evidenced by its run.
+    const violations = db.collection(CANONICAL_COLLECTIONS.invariantViolations);
+    for (const invariantId of violated) {
+      await violations.insertOne(InvariantViolationModel.create({
+        invariantId,
+        detectedAt: now,
+        sourceComponent: SOURCE_COMPONENT,
+        outcome: INVARIANTS.find((invariant) => invariant.invariantId === invariantId)?.violationOutcome,
+        evidenceUri: run.reportUri,
+        correlationId: run.releaseId,
+      }));
+    }
   }
 }
 

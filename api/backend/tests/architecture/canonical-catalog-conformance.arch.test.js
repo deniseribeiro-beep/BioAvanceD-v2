@@ -64,6 +64,7 @@ const ENTITY_TARGETS = {
   CanonicalModelRelease: () => require('../../src/models/CanonicalModelRelease').fieldsOf(),
   ConfigurationValidationRun: () => require('../../src/models/ConfigurationValidationRun').fieldsOf(),
   GovernanceInvariantCatalog: () => require('../../src/models/GovernanceInvariantCatalog').fieldsOf(),
+  InvariantViolation: () => require('../../src/models/InvariantViolation').fieldsOf(),
   GovernanceInvariant: () => require('../../src/models/GovernanceInvariantCatalog').invariantFieldsOf(),
   ClinicalOutcome: () => require('../../src/models/ClinicalOutcome').fieldsOf(),
   Condition: () => require('../../src/models/Condition').fieldsOf(),

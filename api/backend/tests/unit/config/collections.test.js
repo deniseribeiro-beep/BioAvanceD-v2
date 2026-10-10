@@ -42,6 +42,7 @@ const DEFAULTS = {
   configurationValidationRuns: 'configurationValidationRuns',
   canonicalModelReleases: 'canonicalModelReleases',
   governanceInvariantCatalogs: 'governanceInvariantCatalogs',
+  invariantViolations: 'invariantViolations',
   participantIdentities: 'participantIdentities',
   rcsAssessments: 'rcsAssessments',
   encounters: 'encounters',
@@ -170,6 +171,7 @@ describe('config/collections', () => {
       configurationValidationRuns: 'custom_coll_configuration_validation_runs',
       canonicalModelReleases: 'custom_coll_canonical_model_releases',
       governanceInvariantCatalogs: 'custom_coll_governance_invariant_catalogs',
+      invariantViolations: 'invariantViolations',
       participantIdentities: 'participantIdentities',
       rcsAssessments: 'rcsAssessments',
       // COLL_ENCOUNTERS/COLL_CONDITIONS/COLL_PHENOTYPE_OBSERVATIONS/

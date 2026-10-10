@@ -162,6 +162,15 @@ export async function latestReadinessReport(environment = 'test'): Promise<Recor
   return db.collection('readinessReports').find({ environment }).sort({ generatedAt: -1 }).limit(1).next();
 }
 
+/**
+ * RF019 AC1/AC4 (#1315): the InvariantViolations a refused configuration
+ * candidate recorded, keyed by its release id. No route reads them.
+ */
+export async function invariantViolationsFor(correlationId: string): Promise<Record<string, any>[]> {
+  const db = await getDb();
+  return db.collection('invariantViolations').find({ correlationId }).toArray();
+}
+
 /** RF022 AC2: the index names a collection carries, read from Mongo itself. */
 export async function indexNamesOf(collection: string): Promise<string[]> {
   const db = await getDb();

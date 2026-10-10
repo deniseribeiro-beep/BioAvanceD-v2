@@ -6,6 +6,7 @@ import { computeTotp } from './helpers/totp';
 import { deleteOrganizations } from './helpers/listOrganizations';
 import { listLoginAttemptRows, listLoginAttemptIndexes, clearLoginAttempts, closeLoginAttemptsDb, findLogRows } from './helpers/queryLoginAttempts';
 import { findLatestSession, closeSessionsDb, listSessionIndexNames, setPasswordChangedAt } from './helpers/querySessions';
+import { invariantViolationsFor, closeFoundationDb } from './helpers/queryFoundationData';
 
 // Real backend + real frontend only — see backend-integration.spec.ts for the
 // same skip rationale. Run via `npm run test:e2e:docker` against the compose
@@ -791,6 +792,12 @@ test.describe('Security policy management (RF014) — real backend', () => {
       const [secondRefusal, firstRefusal] = afterRefusals;
       expect([firstRefusal.status, secondRefusal.status]).toEqual(['draft', 'draft']);
       expect(firstRefusal.settings.logging.logAllActions).toBe(false);
+      // RF019 AC1/AC4 (#1315): the broken invariant is an InvariantViolation
+      // keyed by the refused candidate; the 400 recorded none.
+      expect(await invariantViolationsFor(firstRefusal.configurationReleaseId)).toEqual([
+        expect.objectContaining({ invariantId: 'INV-AUDIT-001', outcome: 'block', sourceComponent: 'configurationValidation' }),
+      ]);
+      expect(await invariantViolationsFor(secondRefusal.configurationReleaseId)).toEqual([]);
       expect(secondRefusal.settings.session.timeoutMinutes).toBe(1);
       expect(afterRefusals.filter((release: { status: string }) => release.status === 'active')
         .map((release: { configurationReleaseId: string }) => release.configurationReleaseId)).toEqual([restored.configurationReleaseId]);
@@ -846,6 +853,7 @@ test.describe('Security policy management (RF014) — real backend', () => {
           passwordRules: { minLength: originalConfig.passwordRules.minLength },
         },
       }).catch(() => {});
+      await closeFoundationDb();
     }
   });
 
