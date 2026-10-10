@@ -1795,6 +1795,30 @@ test.describe('Assay quality — reagents, equipment, controls, non-conformance 
     expect(stored.rootCause).toBeTruthy();
     expect(stored.correctiveAction.responsible).toBeTruthy();
     expect(stored.effectivenessVerification.outcome).toBe('effective');
+
+    // RF019 AC1 (#1315): a nonconformance naming the specimen quarantines it,
+    // with the rule on its state decision; the assay id quarantined nothing.
+    const onSpecimen = await request.post(`${apiBaseURL}/api/nonconformances`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        nonconformanceType: 'deviation',
+        detectedAt: new Date().toISOString(),
+        description: 'Hemólise visível no tubo após o ensaio',
+        affectedEntityIds: [specimenId],
+      },
+    });
+    expect(onSpecimen.status(), await onSpecimen.text()).toBe(201);
+    expect((await onSpecimen.json()).data.quarantinedSpecimenCount).toBe(1);
+    const specimen = await request.get(`${apiBaseURL}/api/samples/${specimenId}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect((await specimen.json()).data.specimenStatus).toBe('quarantined');
+    const decisions = await request.get(`${apiBaseURL}/api/samples/${specimenId}/state-decisions`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect((await decisions.json()).data).toEqual([
+      expect.objectContaining({ newStatus: 'quarantined', rulesApplied: ['nonconformance_quarantine'] }),
+    ]);
   });
 });
 

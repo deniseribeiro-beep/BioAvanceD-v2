@@ -1,6 +1,7 @@
 const NonconformanceModel = require('../models/Nonconformance');
 const { getCollection } = require('../utils/collectionResolver');
 const notificationDispatchService = require('./notificationDispatch.service');
+const quarantineService = require('./equipment-sensor-quarantine.service');
 const logger = require('../utils/logger');
 
 class NonconformanceService {
@@ -20,6 +21,17 @@ class NonconformanceService {
     const collection = await getCollection(db, 'nonconformances');
     const document = NonconformanceModel.create(payload);
     await collection.insertOne(document);
+
+    // RF019 AC1 (#1315): the affected specimens go into quarantine, each with
+    // its QuarantineAction, ledger movement and OperationalStateDecision.
+    const quarantine = await quarantineService.quarantineByNonconformance(db, document);
+    if (quarantine.quarantined > 0) {
+      await collection.updateOne(
+        { nonconformanceId: document.nonconformanceId },
+        { $set: { quarantinedSpecimenCount: quarantine.quarantined, updatedAt: new Date() } }
+      );
+      document.quarantinedSpecimenCount = quarantine.quarantined;
+    }
 
     // #650 (RF015, qualidade domain) - fire-and-forget, same shape as
     // dispositionAction.service.js's governança call: a missing/

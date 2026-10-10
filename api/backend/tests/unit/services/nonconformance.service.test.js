@@ -4,6 +4,7 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const nonconformanceService = require('../../../src/services/nonconformance.service');
 const notificationDispatchService = require('../../../src/services/notificationDispatch.service');
+const { matchesFilter } = require('../../factories/filter.factory');
 
 afterEach(() => { vi.restoreAllMocks(); });
 
@@ -45,11 +46,41 @@ function createFakeCollection() {
   };
 }
 
-function createFakeDb() {
-  const collections = { nonconformances: createFakeCollection() };
+/**
+ * #1315 (RF019 AC1): opening a nonconformance quarantines its affected
+ * specimens, which reads `samples` with $and/$in/$ne and writes the
+ * quarantine action, the ledger movement and the state decision. Those
+ * collections match through the shared filter factory.
+ */
+function createMatchingCollection(seed = []) {
+  const docs = [...seed];
+  const cursor = (items) => ({
+    sort() { return this; },
+    limit() { return this; },
+    async toArray() { return items; },
+    async next() { return items[0] || null; },
+  });
   return {
+    docs,
+    find: (filter = {}) => cursor(docs.filter((doc) => matchesFilter(doc, filter))),
+    findOne: async (filter = {}) => docs.find((doc) => matchesFilter(doc, filter)) || null,
+    insertOne: vi.fn(async (doc) => { docs.push(doc); return { insertedId: `fake-${docs.length}` }; }),
+    updateOne: async (filter, update) => {
+      const doc = docs.find((entry) => matchesFilter(entry, filter));
+      if (doc && update?.$set) Object.assign(doc, update.$set);
+      return { matchedCount: doc ? 1 : 0, modifiedCount: doc ? 1 : 0 };
+    },
+    createIndex: async () => 'idx',
+    findOneAndUpdate: async () => ({ value: { seq: 1 } }),
+  };
+}
+
+function createFakeDb({ samples = [] } = {}) {
+  const collections = { nonconformances: createFakeCollection(), samples: createMatchingCollection(samples) };
+  return {
+    collections,
     collection(name) {
-      if (!collections[name]) throw new Error(`unexpected collection: ${name}`);
+      if (!collections[name]) collections[name] = createMatchingCollection();
       return collections[name];
     },
   };
@@ -67,6 +98,33 @@ function basePayload(overrides = {}) {
 }
 
 describe('nonconformance.service', () => {
+  describe('open quarantines the affected specimens (RF019 AC1, #1315)', () => {
+    it('quarantines each affected id that names a specimen, records why, and leaves the other ids alone', async () => {
+      const db = createFakeDb({ samples: [
+        { _id: 'S1', specimenId: 'SPC-NC', specimenStatus: 'available', quantity: 1 },
+        { _id: 'S2', specimenId: 'SPC-OTHER', specimenStatus: 'available', quantity: 1 },
+      ] });
+
+      const opened = await nonconformanceService.open(db, basePayload({ affectedEntityIds: ['SPC-NC', 'equipment-7'] }));
+
+      expect(opened.quarantinedSpecimenCount).toBe(1);
+      const [quarantinedSample, untouched] = db.collections.samples.docs;
+      expect(quarantinedSample).toMatchObject({ specimenStatus: 'quarantined', quarantineSource: 'nonconformance', quarantineSourceId: opened.nonconformanceId });
+      expect(untouched.specimenStatus).toBe('available');
+      expect(db.collections.quarantineActions.docs).toHaveLength(1);
+      expect(db.collections.operationalStateDecisions.docs[0]).toMatchObject({
+        specimenId: 'SPC-NC', previousStatus: 'available', newStatus: 'quarantined', rulesApplied: ['nonconformance_quarantine'], reasonCodes: ['nonconformance'],
+      });
+    });
+
+    it('quarantines nothing when no affected id names a specimen', async () => {
+      const db = createFakeDb({ samples: [{ _id: 'S1', specimenId: 'SPC-NC', specimenStatus: 'available' }] });
+      const opened = await nonconformanceService.open(db, basePayload({ affectedEntityIds: ['assay-1'] }));
+      expect(opened.quarantinedSpecimenCount).toBeUndefined();
+      expect(db.collections.samples.docs[0].specimenStatus).toBe('available');
+    });
+  });
+
   describe('open (AC#5)', () => {
     it('opens a nonconformance with status open', async () => {
       const db = createFakeDb();

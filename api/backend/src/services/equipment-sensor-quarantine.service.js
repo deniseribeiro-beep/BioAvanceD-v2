@@ -352,6 +352,14 @@ function buildSampleFilterFromBoxIds(boxIds = []) {
   return { 'storageLocation.boxId': { $in: dedupeIds(boxIds) } };
 }
 
+// The rule a quarantine applied, named on its ledger movement and its
+// OperationalStateDecision: a caller's own, else the cold-chain or the
+// equipment/sensor rule.
+function quarantineRule(context = {}) {
+  if (context.rule) return context.rule;
+  return context.coldChainIncidentId ? 'cold_chain_incident_quarantine' : 'sensor_equipment_quarantine';
+}
+
 async function quarantineSamplesByFilter(db, filter, context = {}) {
   if (!filter) {
     return { matched: 0, quarantined: 0, movements: 0 };
@@ -453,7 +461,7 @@ async function quarantineSamplesByFilter(db, filter, context = {}) {
         unit: sample.unit || 'µL',
         responsible: 'SYSTEM',
         destination: 'Quarentena',
-        purpose: context.coldChainIncidentId ? 'cold_chain_incident_quarantine' : 'sensor_equipment_quarantine',
+        purpose: quarantineRule(context),
         linkedProject: sample.linkedProject || null,
         observations: context.reason || 'Quarentena automática por falha de equipamento/sensor',
         userId: context.auditInfo?.userId || null,
@@ -473,7 +481,7 @@ async function quarantineSamplesByFilter(db, filter, context = {}) {
       previousStatus,
       newStatus: specimenStatus,
       triggerEventId: movementID,
-      rulesApplied: [context.coldChainIncidentId ? 'cold_chain_incident_quarantine' : 'sensor_equipment_quarantine'],
+      rulesApplied: [quarantineRule(context)],
       reasonCodes: [context.coldChainIncidentId ? 'COLD_CHAIN_INCIDENT' : (context.source || 'AUTOMATIC')],
     }, { session: context.session });
 
@@ -662,8 +670,30 @@ async function markColdChainIncidentSamplesForReview(db, incident = {}, options 
   };
 }
 
+// RF019 AC1 (#1315): a nonconformance opened against specimens quarantines
+// those of its affectedEntityIds that name a specimen. The other ids (an
+// equipment, a document, a process) quarantine nothing. Release stays the
+// authorized, evidenced act RF019 AC5 asks for; closing the
+// nonconformance does not release.
+async function quarantineByNonconformance(db, nonconformance = {}, options = {}) {
+  const ids = (nonconformance.affectedEntityIds || []).map(String).filter(Boolean);
+  if (!ids.length) {
+    return { triggered: false, matched: 0, quarantined: 0, movements: 0 };
+  }
+  const result = await quarantineSamplesByFilter(db, { specimenId: { $in: ids } }, {
+    source: 'nonconformance',
+    sourceId: nonconformance.nonconformanceId || null,
+    reason: `Quarentena por não conformidade ${nonconformance.nonconformanceId} (${nonconformance.nonconformanceType})`,
+    rule: 'nonconformance_quarantine',
+    auditInfo: options.auditInfo,
+    session: options.session,
+  });
+  return { triggered: true, ...result };
+}
+
 module.exports = {
   isQuarantineTriggerStatus,
+  quarantineByNonconformance,
   quarantineByEquipmentStatus,
   quarantineBySensorStatus,
   quarantineByColdChainIncident,
