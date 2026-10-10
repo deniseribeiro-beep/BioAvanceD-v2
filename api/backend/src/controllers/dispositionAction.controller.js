@@ -87,7 +87,13 @@ class DispositionActionController {
       logger.error(`Erro ao ${label} ação de destinação:`, error.message);
       const blocked = /bloqueio legal ou ético ativo/.test(error.message);
       const status = blocked ? 409 : [404, 409, 422].includes(error.statusCode) ? error.statusCode : 400;
-      return res.status(status).json({ success: false, error: `Erro ao ${label} ação de destinação`, message: error.message });
+      return res.status(status).json({
+        success: false,
+        error: `Erro ao ${label} ação de destinação`,
+        message: error.message,
+        ...(error.code ? { code: error.code } : {}),
+        ...(error.unsatisfied ? { unsatisfied: error.unsatisfied } : {}),
+      });
     }
   }
 

@@ -45,11 +45,12 @@ function createFakeCollection(seedDocs = []) {
   };
 }
 
-function createFakeDb({ retentionPolicies = [], legalHolds = [] } = {}) {
+function createFakeDb({ retentionPolicies = [], legalHolds = [], ...others } = {}) {
   const collections = {
     dispositionActions: createFakeCollection(),
     retentionPolicies: createFakeCollection(retentionPolicies),
     legalHolds: createFakeCollection(legalHolds),
+    ...Object.fromEntries(Object.entries(others).map(([name, docs]) => [name, createFakeCollection(docs)])),
   };
   return {
     collection(name) {
@@ -305,6 +306,33 @@ describe('dispositionAction.service', () => {
 
       await legalHoldService.releaseHold(db, hold.legalHoldId, 'user-2', 'Encerrado');
       await dispositionActionService.approve(db, id, { authorizedBy: 'admin-1' });
+      expect((await dispositionActionService.execute(db, id, { executedBy: 'user-1', evidenceIds: ['file-1'] })).actionStatus).toBe('executed');
+    });
+
+    it('refuses executing a specimen destruction with no custody holding it, keeps it approved, and executes it once custody holds (#1363, RF026 AC6)', async () => {
+      const db = createFakeDb({
+        samples: [{ specimenId: 'SP-1' }],
+        custodianshipAssignments: [],
+        collectionGovernanceApprovals: [{ approvalId: 'APR-1', status: 'active', effectivePeriod: { start: new Date('2026-01-01T00:00:00Z'), end: null } }],
+      });
+      const policyId = new ObjectId();
+      db.collection('retentionPolicies').docs.push({ _id: policyId, version: 'v1', active: true });
+      const { dispositionActionId: id } = await dispositionActionService.recordDisposition(db, basePayload(policyId.toString(), {
+        entityType: 'Specimen', affectedRecordIds: ['SP-1'],
+      }));
+      await dispositionActionService.approve(db, id, { authorizedBy: 'admin-1' });
+
+      await expect(dispositionActionService.execute(db, id, { executedBy: 'user-1', evidenceIds: ['file-1'] })).rejects.toMatchObject({
+        statusCode: 409,
+        code: 'DISPOSITION_INCOMPATIBLE',
+        unsatisfied: [expect.objectContaining({ specimenId: 'SP-1', rule: 'custody' })],
+      });
+      expect((await dispositionActionService.getById(db, id)).actionStatus).toBe('approved');
+
+      db.collection('custodianshipAssignments').docs.push({
+        custodianshipAssignmentId: 'CUS-1', specimenId: 'SP-1', assignmentStatus: 'active',
+        effectivePeriod: { start: new Date('2026-01-01T00:00:00Z'), end: null }, authorizationId: 'APR-1',
+      });
       expect((await dispositionActionService.execute(db, id, { executedBy: 'user-1', evidenceIds: ['file-1'] })).actionStatus).toBe('executed');
     });
 

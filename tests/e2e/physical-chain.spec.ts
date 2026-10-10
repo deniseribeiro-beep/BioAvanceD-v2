@@ -200,3 +200,79 @@ test.describe('Physical chain and custody (#1314, #1316) — real backend', () =
     expect(reloaded.status(), await reloaded.text()).toBe(201);
   });
 });
+
+// #1363 (RF026 AC6): a specimen's destruction or transfer executes only when
+// compatible with custody, the collection's ethics approval and, for a
+// transfer, the participant's consent. The fixture specimen names no
+// participant, so its transfer can never pass the consent rule.
+test.describe('Disposition compatibility (#1363, RF026 AC6) — real backend', () => {
+  const organizationIds: string[] = [];
+  let fixture: CustodyFixture | null = null;
+  const suffix = `disp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+  test.afterAll(async ({ request }) => {
+    if (fixture) await cleanupCustodyFixture(fixture, [], [], [], []).catch(() => {});
+    await deleteOrganizations(request, apiBaseURL!, organizationIds);
+    await closeCustodyDb();
+  });
+
+  test('a specimen destruction waits for custody, and a transfer without consent is refused', async ({ request }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const org = await request.post(`${apiBaseURL}/api/organizations`, { headers: auth, data: { officialName: `#1363 custodian ${suffix}`, countryCode: 'BR' } });
+    expect(org.ok(), await org.text()).toBeTruthy();
+    const organizationId = (await org.json()).data.organizationId as string;
+    organizationIds.push(organizationId);
+    fixture = await seedCustodyFixture(suffix, organizationId);
+    const { specimenId, approvalId } = fixture;
+
+    const policy = await request.post(`${apiBaseURL}/api/retention-policies`, {
+      headers: auth,
+      data: {
+        applicableEntityTypes: ['Specimen'],
+        triggerEvent: 'creation',
+        postRetentionAction: 'destroy',
+        retentionPeriod: 'P365D',
+        jurisdiction: 'BR',
+        retentionBasis: ['RF026 AC6 e2e fixture basis'],
+        legalHoldRules: [{ when: 'legalHold=true', block: 'destroy' }],
+        reviewRequired: false,
+      },
+    });
+    expect(policy.status(), await policy.text()).toBe(201);
+    const retentionPolicyId = String((await policy.json()).data._id);
+    const plan = async (dispositionAction: string) => {
+      const res = await request.post(`${apiBaseURL}/api/disposition-actions`, {
+        headers: auth,
+        data: { retentionPolicyId, entityType: 'Specimen', affectedRecordIds: [specimenId], dispositionAction },
+      });
+      expect(res.status(), await res.text()).toBe(201);
+      return `${apiBaseURL}/api/disposition-actions/${(await res.json()).data.dispositionActionId}`;
+    };
+    const execute = (base: string) => request.post(`${base}/execute`, { headers: auth, data: { evidenceIds: ['file-rf026-ac6'] } });
+
+    // No custody holds the specimen: the destruction is refused and stays planned.
+    const destroy = await plan('destroy');
+    const refused = await execute(destroy);
+    expect(refused.status(), await refused.text()).toBe(409);
+    const refusedBody = await refused.json();
+    expect(refusedBody.code).toBe('DISPOSITION_INCOMPATIBLE');
+    expect(refusedBody.unsatisfied).toEqual([expect.objectContaining({ specimenId, rule: 'custody' })]);
+    expect((await (await request.get(destroy, { headers: auth })).json()).data.actionStatus).toBe('planned');
+
+    const custody = await request.post(`${apiBaseURL}/api/physical-chain/custody`, {
+      headers: auth,
+      data: { specimenId, custodianOrganizationId: organizationId, authorizationId: approvalId, responsibleInvestigatorId: 'inv-disp' },
+    });
+    expect(custody.status(), await custody.text()).toBe(201);
+
+    // In custody, a transfer still needs the participant's consent.
+    const transfer = await execute(await plan('transfer'));
+    expect(transfer.status(), await transfer.text()).toBe(409);
+    expect((await transfer.json()).unsatisfied).toEqual([expect.objectContaining({ specimenId, rule: 'consent' })]);
+
+    const executed = await execute(destroy);
+    expect(executed.status(), await executed.text()).toBe(200);
+    expect((await executed.json()).data.actionStatus).toBe('executed');
+  });
+});

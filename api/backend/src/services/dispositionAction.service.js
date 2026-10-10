@@ -3,6 +3,7 @@ const { ObjectId } = require('mongodb');
 const DispositionActionModel = require('../models/DispositionAction');
 const { TRANSITIONS } = require('../models/DispositionAction');
 const legalHoldService = require('./legalHold.service');
+const dispositionCompatibility = require('./dispositionCompatibility.service');
 const { getCollection } = require('../utils/collectionResolver');
 const notificationDispatchService = require('./notificationDispatch.service');
 const logger = require('../utils/logger');
@@ -143,6 +144,17 @@ class DispositionActionService {
     if (activeHold && this.blockedActions(policy).includes(action.dispositionAction)) {
       await this.writeTransition(collection, action, from, { actionStatus: 'blocked', legalHold: true });
       throw new Error('Destinação bloqueada: bloqueio legal ou ético ativo sobre um ou mais itens afetados');
+    }
+
+    // RF026 AC6 (#1363): a specimen's destruction or transfer must be
+    // compatible with consent, ethics and custody. The action keeps its
+    // status, so it executes once the rule is satisfied.
+    const unsatisfied = await dispositionCompatibility.incompatibilitiesOf(db, action);
+    if (unsatisfied.length > 0) {
+      throw Object.assign(
+        new Error(`Destinação incompatível: ${unsatisfied.map((row) => row.message).join('; ')}`),
+        { statusCode: 409, code: 'DISPOSITION_INCOMPATIBLE', unsatisfied }
+      );
     }
 
     const now = new Date();
