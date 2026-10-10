@@ -65,7 +65,10 @@ test.describe('Telemetria e monitoramento ambiental (RF009) — real backend, in
 
     expect(response.status()).toBe(200);
     const body = await response.json();
-    expect(body).toMatchObject({ success: true, accepted: true });
+    expect(body).toMatchObject({ success: true, accepted: true, clockStatus: 'synchronized' });
+    // #1317 (RF009 AC1): acknowledged only after InfluxDB persisted it.
+    expect(body.telemetryReadingId).toBeTruthy();
+    expect(body.persistedAt).toBeTruthy();
 
     // saveTelemetryPoint.js's Influx write is fired without awaiting the
     // controller's response, so the point may land a moment after the

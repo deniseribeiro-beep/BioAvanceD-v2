@@ -267,7 +267,7 @@ describe('IoT API integration', () => {
     });
 
     expect(response.status).toBe(200);
-    expect(response.body).toEqual({ success: true, accepted: true });
+    expect(response.body).toEqual(expect.objectContaining({ success: true, accepted: true, telemetryReadingId: expect.any(String) }));
 
     await vi.waitFor(() => {
       expect(saveTelemetryPoint).toHaveBeenCalledTimes(1);

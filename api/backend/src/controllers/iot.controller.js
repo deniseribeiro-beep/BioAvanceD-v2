@@ -13,6 +13,7 @@ require('../models/TemperaturePolicy.schema');
 // throws "Schema hasn't been registered for model \"Device\"" otherwise.
 require('../models/Device.schema');
 const { saveTelemetryPoint } = require('../services/saveTelemetryPoint');
+const { readingIdentityOf } = require('../services/telemetryReadingContract');
 const { sendCriticalAlertEmail } = require('../services/sendCriticalAlertEmail');
 const TemperatureIncidentModel = require('../models/TemperatureIncident');
 const EnvironmentalExcursionModel = require('../models/EnvironmentalExcursion');
@@ -231,10 +232,9 @@ async function upsertEnvironmentalExcursion(policyData, temperaturePolicy, norma
 
 async function ingestTelemetry(req, res) {
   try {
-    const { sensorId, temperature, timestamp } = req.body || {};
+    const { sensorId, temperature } = req.body || {};
     const normalizedSensorId = String(sensorId || '').trim();
     const normalizedTemperature = Number(temperature);
-    const normalizedTimestamp = timestamp ? new Date(timestamp) : new Date();
 
     if (!normalizedSensorId || !Number.isFinite(normalizedTemperature)) {
       // #1120 (Axis E E3): the audit row names which condition refused the
@@ -246,9 +246,27 @@ async function ingestTelemetry(req, res) {
       return res.status(400).json({ success: false, error: 'sensorId e temperature são obrigatórios' });
     }
 
-    void Promise.resolve().then(() => saveTelemetryPoint(normalizedSensorId, normalizedTemperature, normalizedTimestamp)).catch((error) => {
+    // #1317 (RF009 AC1-AC3): the reading contract the other ingestion paths
+    // use. InfluxDB is the reading's authority, so the point is written and
+    // confirmed before the reading is accepted; a failed write answers 503
+    // and nothing downstream runs. A timestamp that is not a date is a 422.
+    let identity;
+    try {
+      identity = readingIdentityOf(req.body || {}, new Date(), { ingestionService: 'iot-api' });
+    } catch (error) {
+      res.locals.auditReason = error.auditReason || 'invalid_payload';
+      return res.status(error.statusCode || 422).json({ success: false, error: error.message });
+    }
+    const normalizedTimestamp = identity.observedAt;
+    let persistedAt;
+    try {
+      await saveTelemetryPoint(normalizedSensorId, normalizedTemperature, normalizedTimestamp, identity);
+      persistedAt = new Date();
+    } catch (error) {
       logger.error('[ISO20387][IOT] Falha ao persistir telemetria no InfluxDB:', error.message || error);
-    });
+      res.locals.auditReason = 'telemetry_not_persisted';
+      return res.status(503).json({ success: false, code: 'TELEMETRY_NOT_PERSISTED', error: 'Leitura não persistida no InfluxDB' });
+    }
 
     let policyData = null;
     try {
@@ -321,8 +339,9 @@ async function ingestTelemetry(req, res) {
     // resourceType is the canonical entity for this body -- TelemetryReading,
     // ELM-0357..ELM-0365 -- rather than the sibling's 'Temperature', which
     // names the Mongo record that route creates. resourceId is the sensorId:
-    // the reading's only persistence here is the fire-and-forget InfluxDB
-    // write above, so there is no document id to name.
+    // the reading's only persistence here is the InfluxDB write above, so
+    // there is no document id to name; its telemetryReadingId is in the
+    // response (#1317).
     //
     // Only the ACCEPTED ingest is audited here, matching the #1080 sibling.
     // A rejection's row is the global audit.middleware.js one, which since
@@ -353,7 +372,15 @@ async function ingestTelemetry(req, res) {
       logger.error('[ISO20387][IOT] Falha ao registrar trilha de auditoria da telemetria:', error.message || error);
     }
 
-    return res.status(200).json({ success: true, accepted: true });
+    return res.status(200).json({
+      success: true,
+      accepted: true,
+      telemetryReadingId: identity.telemetryReadingId,
+      observedAt: identity.observedAt,
+      receivedAt: identity.receivedAt,
+      persistedAt,
+      clockStatus: identity.clockStatus
+    });
   } catch (error) {
     logger.error('[ISO20387][IOT] Falha no controller de telemetria:', error.message || error);
     return res.status(500).json({ success: false, error: 'Erro ao processar telemetria', message: error.message });

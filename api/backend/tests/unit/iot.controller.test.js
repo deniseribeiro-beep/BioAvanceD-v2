@@ -321,7 +321,7 @@ describe('iot.controller', () => {
     await ingestTelemetry(req, res);
 
     expect(res.statusCode).toBe(200);
-    expect(res.body).toEqual({ success: true, accepted: true });
+    expect(res.body).toEqual(expect.objectContaining({ success: true, accepted: true, telemetryReadingId: expect.any(String), clockStatus: expect.any(String) }));
     expect(saveTelemetryPointMock).toHaveBeenCalled();
     expect(connectMongoDBMock).toHaveBeenCalled();
 
@@ -455,8 +455,8 @@ describe('iot.controller', () => {
     await ingestTelemetry(req, res);
 
     expect(res.statusCode).toBe(200);
-    expect(res.body).toEqual({ success: true, accepted: true });
-    expect(saveTelemetryPointMock).toHaveBeenCalledWith('sensor-2', 5, expect.any(Date));
+    expect(res.body).toEqual(expect.objectContaining({ success: true, accepted: true, telemetryReadingId: expect.any(String), clockStatus: expect.any(String) }));
+    expect(saveTelemetryPointMock).toHaveBeenCalledWith('sensor-2', 5, expect.any(Date), expect.objectContaining({ telemetryReadingId: expect.any(String) }));
     expect(sendCriticalAlertEmailMock).not.toHaveBeenCalled();
   }, 15000);
 
@@ -544,11 +544,13 @@ describe('iot.controller', () => {
     await ingestTelemetry(req, res);
 
     expect(res.statusCode).toBe(200);
-    expect(res.body).toEqual({ success: true, accepted: true });
+    expect(res.body).toEqual(expect.objectContaining({ success: true, accepted: true, telemetryReadingId: expect.any(String), clockStatus: expect.any(String) }));
     expect(sendCriticalAlertEmailMock).not.toHaveBeenCalled();
   }, 15000);
 
-  it('retorna 500 quando ocorre um erro inesperado no processamento', async () => {
+  // #1317: an unparseable timestamp used to reach toISOString and answer 500;
+  // the reading contract refuses it first, with nothing written.
+  it('recusa com 422 um timestamp que não é data, sem gravar nada', async () => {
     const req = {
       body: {
         sensorId: 'sensor-2',
@@ -560,11 +562,9 @@ describe('iot.controller', () => {
 
     await ingestTelemetry(req, res);
 
-    expect(res.statusCode).toBe(500);
-    expect(res.body).toMatchObject({
-      success: false,
-      error: 'Erro ao processar telemetria',
-    });
+    expect(res.statusCode).toBe(422);
+    expect(res.body).toMatchObject({ success: false });
+    expect(saveTelemetryPointMock).not.toHaveBeenCalled();
   }, 15000);
 
   it('atualiza um incidente de temperatura existente em vez de criar um novo', async () => {
@@ -891,7 +891,9 @@ describe('iot.controller', () => {
     });
   }, 15000);
 
-  it('continua processamento quando saveTelemetryPoint falha ao persistir no InfluxDB', async () => {
+  // #1317 (RF009 AC1, RNF016 C3): this case asserted the reverse, a reading
+  // accepted although InfluxDB never held it. InfluxDB is the authority now.
+  it('answers 503 and evaluates no policy when InfluxDB does not persist the reading', async () => {
     const loggerModule = require('../../src/utils/logger');
     const errorSpy = vi.spyOn(loggerModule, 'error').mockImplementation(() => undefined);
     saveTelemetryPointMock.mockRejectedValue(new Error('influx boom'));
@@ -901,14 +903,24 @@ describe('iot.controller', () => {
 
     await ingestTelemetry(req, res);
 
-    expect(res.statusCode).toBe(200);
-    await vi.waitFor(() => {
-      expect(errorSpy).toHaveBeenCalledWith(
-        '[ISO20387][IOT] Falha ao persistir telemetria no InfluxDB:',
-        'influx boom'
-      );
-    });
+    expect(res.statusCode).toBe(503);
+    expect(res.body).toMatchObject({ success: false, code: 'TELEMETRY_NOT_PERSISTED' });
+    expect(sensorMetadataLeanMock).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith('[ISO20387][IOT] Falha ao persistir telemetria no InfluxDB:', 'influx boom');
     errorSpy.mockRestore();
+  }, 15000);
+
+  it('control: a persisted reading answers 200 with its identity, the point carrying it', async () => {
+    saveTelemetryPointMock.mockResolvedValue(true);
+    const req = { body: { sensorId: 'sensor-2', temperature: 5, timestamp: new Date().toISOString() } };
+    const res = createResponse();
+
+    await ingestTelemetry(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toMatchObject({ clockStatus: 'synchronized' });
+    expect(res.body.persistedAt).toBeInstanceOf(Date);
+    expect(saveTelemetryPointMock.mock.calls[0][3]).toMatchObject({ telemetryReadingId: res.body.telemetryReadingId, ingestionService: 'iot-api' });
   }, 15000);
 
   it('não dispara alerta quando a política de temperatura tem limites não numéricos', async () => {
