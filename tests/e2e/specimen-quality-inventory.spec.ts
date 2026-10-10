@@ -934,14 +934,15 @@ test.describe('Specimen quarantine (RF019) — real backend', () => {
   // consent revocation, environmental excursion, RCS governance
   // failure, critical non-conformity, criteria 1-4) blocks withdrawal
   // via the BLOCKED_SPECIMEN_STATUSES guard proven for RF006/#288
-  // (criterion 5), and a specimenStatus: 'available' update logs a
-  // sample_release audit entry (criteria 7, 8). specimenStatus is what
+  // (criterion 5). Release is POST /:id/quarantine/release, with evidence,
+  // and a PUT to 'available' is refused (#1315, RF019 AC5); the release
+  // logs a sample_release audit entry (AC6). specimenStatus is what
   // updateSample's derivation and the withdraw guard actually key off
   // since #409; quarantineReason has no specimenStatus equivalent and
   // stays legacy-sourced (#407/#408) — lifecycleStatus/quarantineStatus
-  // were the dual-write bridge (#405), removed in #408. No dedicated
-  // quarantine route exists — release, like RF006's blocked-status
-  // seeding, goes through the generic update route.
+  // were the dual-write bridge (#405), removed in #408. Entering
+  // quarantine, like RF006's blocked-status seeding, still goes through
+  // the generic update route.
   const seededStorageBoxes: SeededStorageBox[] = [];
   const seededQuarantineActionIds: string[] = [];
 
@@ -1030,16 +1031,30 @@ test.describe('Specimen quarantine (RF019) — real backend', () => {
 
     const watch = await watchAuditTrail(request, apiBaseURL!, admin.token);
 
-    const release = await request.put(`${apiBaseURL}/api/samples/${sampleID}`, {
+    // RF019 AC5 (#1315): leaving quarantine is not an edit of the status...
+    const edit = await request.put(`${apiBaseURL}/api/samples/${sampleID}`, {
       headers: { Authorization: `Bearer ${admin.token}` },
-      data: {
-        specimenStatus: 'available',
-        quarantineReason: 'RF019 e2e: cleared after evidence review',
-      },
+      data: { specimenStatus: 'available' },
     });
-    expect(release.status()).toBe(200);
-    const releaseBody = (await release.json()).data;
-    expect(releaseBody.specimenStatus).toBe('available');
+    expect(edit.status(), await edit.text()).toBe(409);
+    expect((await edit.json()).error).toBe('QUARANTINE_RELEASE_REQUIRED');
+
+    // ...nor a release without evidence...
+    const releaseUrl = `${apiBaseURL}/api/samples/${sampleID}/quarantine/release`;
+    const noEvidence = await request.post(releaseUrl, { headers: { Authorization: `Bearer ${admin.token}` }, data: { evidenceIds: [] } });
+    expect(noEvidence.status(), await noEvidence.text()).toBe(422);
+
+    // ...but an authorized release with its evidence, audited.
+    const release = await request.post(releaseUrl, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { evidenceIds: ['file-rf019-review'], reason: 'RF019 e2e: cleared after evidence review' },
+    });
+    expect(release.status(), await release.text()).toBe(200);
+    expect((await release.json()).data.specimenStatus).toBe('available');
+    const specimen = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, { headers: { Authorization: `Bearer ${admin.token}` } });
+    expect((await specimen.json()).data.specimenStatus).toBe('available');
+    const decisions = await request.get(`${apiBaseURL}/api/samples/${sampleID}/state-decisions`, { headers: { Authorization: `Bearer ${admin.token}` } });
+    expect((await decisions.json()).data.at(-1)).toMatchObject({ newStatus: 'available', rulesApplied: ['quarantine_release'] });
 
     await assertAuditEventRecorded(request, apiBaseURL!, admin.token, watch);
   });

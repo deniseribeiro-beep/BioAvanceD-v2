@@ -9,6 +9,7 @@ module.exports = {
     { method: 'PUT', path: '/:id', permission: 'editSample' },
     { method: 'DELETE', path: '/:id', permission: 'deleteSample' },
     { method: 'POST', path: '/:id/return', permission: 'withdrawSample' },
+    { method: 'POST', path: '/:id/quarantine/release', roles: [3, 4] },
     { method: 'POST', path: '/:specimenId/files/upload', permission: 'uploadSampleFiles' },
     { method: 'DELETE', path: '/:specimenId/files/:fileID', permission: 'deleteSampleFiles' },
     { method: 'PUT', path: '/:specimenId/files/:fileID/replace', permission: 'uploadSampleFiles' },

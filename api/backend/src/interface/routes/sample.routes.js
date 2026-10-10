@@ -4,7 +4,8 @@ const router = express.Router();
 const { validateMiabisCompliance } = require('../../services/miabisValidator.service');
 const SampleGraphValidator = require('../../services/SampleGraphValidator');
 const { authenticate } = require('../../infrastructure/middleware/auth');
-const { requireOrganizationScope } = require('../../infrastructure/middleware/rbac');
+const { requireOrganizationScope, requireRole } = require('../../infrastructure/middleware/rbac');
+const quarantineReleaseService = require('../../services/quarantine-release.service');
 // #1266: lgpd.allowDataExport switches the HL7/FHIR/CDA file exports off.
 const { requireDataExportAllowed } = require('../../infrastructure/middleware/lgpdExportGate');
 const { isRecordInOrganizationScope, assertOrganizationFieldNotReparented, resolveOrganizationIdForCreate, applyOrganizationScopeFilter } = require('../../services/rbac-assignment.service');
@@ -1120,6 +1121,17 @@ router.put('/:id', authenticate, requirePermission('editSample'), requireOrganiz
       assertOrganizationFieldNotReparented(req.organizationScope, sampleForScope.collectionSite, req.body?.collectionSite, 'collectionSite');
     }
 
+    // RF019 AC5 (#1315): leaving quarantine is an evidenced release with its
+    // own route, never an edit of the status field.
+    if (sampleForScope?.specimenStatus === 'quarantined'
+      && String(req.body?.specimenStatus || '').toLowerCase() === 'available') {
+      return res.status(409).json({
+        success: false,
+        error: 'QUARANTINE_RELEASE_REQUIRED',
+        message: 'Uma amostra em quarentena é liberada por POST /api/samples/:id/quarantine/release, com evidência',
+      });
+    }
+
     const result = await sampleService.updateSample(db, req.params.id, req.body);
 
     if (!result) {
@@ -1695,6 +1707,61 @@ router.get('/:id/sprec-profiles', authenticate, requireOrganizationScope, async 
 // referenciada por specimenIds (não duplicada em Sample). Histórico
 // versionado, mais recente primeiro — mirrors #383's RcsAssessment/
 // GET /:id/rcs-assessments pattern.
+// RF019 AC5/AC6 (#1315): an authorized actor (Coordenador or Administrador)
+// releases a quarantined specimen with evidence, once the rule behind each
+// open quarantine is satisfied (quarantine-release.service.js).
+router.post('/:id/quarantine/release', authenticate, requireRole(3, 4), requireOrganizationScope, async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
+    }
+    const sample = await sampleService.getSample(db, req.params.id);
+    if (!sample) {
+      return res.status(404).json({ success: false, error: 'Amostra não encontrada' });
+    }
+    if (!isRecordInOrganizationScope(sample, req.organizationScope, 'collectionSite')) {
+      return res.status(403).json({ success: false, error: 'Acesso negado', message: 'Esta amostra pertence a outra organização' });
+    }
+    const released = await quarantineReleaseService.releaseQuarantine(db, sample, {
+      actorId: req.user?.userID || req.user?.id || null,
+      evidenceIds: req.body?.evidenceIds,
+      reason: req.body?.reason || null,
+      req,
+    });
+    // RF019 AC6: the release itself is audited on the specimen, with its
+    // evidence, whether or not it closed a QuarantineAction.
+    const auditLogger = require('../../utils/auditLogger');
+    auditLogger.init(db);
+    await auditLogger.log({
+      action: 'sample_release',
+      resourceType: 'Sample',
+      resourceId: req.params.id,
+      status: 'success',
+      severity: 'warning',
+      message: 'Quarentena liberada com evidência',
+      payload: {
+        evidenceIds: released.evidenceIds,
+        reason: req.body?.reason || null,
+        releasedActionIds: released.releasedActions.map((action) => action.quarantineActionId),
+      },
+      req,
+    });
+    return res.status(200).json({ success: true, data: released });
+  } catch (error) {
+    if (error instanceof quarantineReleaseService.QuarantineReleaseError) {
+      return res.status(error.statusCode).json({
+        success: false,
+        error: error.code,
+        message: error.message,
+        ...(error.unsatisfied ? { unsatisfied: error.unsatisfied } : {}),
+      });
+    }
+    logger.error('Erro ao liberar quarentena:', error.message);
+    return res.status(500).json({ success: false, error: 'Erro ao liberar quarentena' });
+  }
+});
+
 router.get('/:id/quarantine-actions', authenticate, requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;

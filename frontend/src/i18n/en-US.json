@@ -1245,6 +1245,7 @@
       "consentResentError": "Failed to send/resend consent.",
       "consentResentSuccess": "Consent sent/resend successfully.",
       "externalDocumentAttachedSuccess": "External document attached and sample released.",
+      "externalDocumentReleaseReason": "External consent document attached",
       "externalDocumentAttachedWithNote": "External document attached. {note}",
       "externalDocumentAttachError": "Failed to attach external document.",
       "externalDocumentPrompt": "Describe the attached external document (optional):",

@@ -1245,6 +1245,7 @@
       "consentResentError": "Falha ao enviar/reenviar TCLE.",
       "consentResentSuccess": "TCLE enviado/reenviado com sucesso.",
       "externalDocumentAttachedSuccess": "Documento externo anexado e amostra liberada.",
+      "externalDocumentReleaseReason": "Documento externo de consentimento anexado",
       "externalDocumentAttachedWithNote": "Documento externo anexado. {note}",
       "externalDocumentAttachError": "Falha ao anexar documento externo.",
       "externalDocumentPrompt": "Descreva o documento externo anexado (opcional):",

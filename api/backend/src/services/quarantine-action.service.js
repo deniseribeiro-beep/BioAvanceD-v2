@@ -108,7 +108,7 @@ async function markPendingReview(db, specimenId, session) {
  * nothing. auditLogger never throws; a failed write raises its own
  * AUDIT_TRAIL_WRITE_FAILURE alert.
  */
-async function auditDecision(db, { decision, action, req = null } = {}) {
+async function auditDecision(db, { decision, action, req = null, details = null } = {}) {
   if (!db || !action) return;
   const released = decision === 'released';
   const auditLogger = require('../utils/auditLogger');
@@ -127,6 +127,8 @@ async function auditDecision(db, { decision, action, req = null } = {}) {
       reasonCodes: action.reasonCodes,
       actionStatus: action.actionStatus,
       authorizedBy: action.authorizedBy ?? null,
+      // RF019 AC5: a release's evidence and reason, when it carries them.
+      ...(details || {}),
     },
     req,
     module: 'Quarentena',

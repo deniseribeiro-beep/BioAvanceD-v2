@@ -74,6 +74,9 @@ const rbacModule = require(rbacPath);
 rbacModule.requirePermission = (...args) => (req, res, next) =>
   currentRequirePermission(...args)(req, res, next);
 rbacModule.requireOrganizationScope = (req, res, next) => currentRequireOrganizationScope(req, res, next);
+// #1315: the quarantine release route gates on requireRole(3, 4); its
+// arguments are pinned in tests/rbac-pins/sample.pins.js. A passthrough here.
+rbacModule.requireRole = () => (req, res, next) => next();
 
 const consentEnforcementModule = require(consentEnforcementPath);
 consentEnforcementModule.enforceCommercialConsent = (...args) => currentEnforceCommercialConsent(...args);
@@ -118,6 +121,7 @@ consentValidatorModule.init = vi.fn();
 consentValidatorModule.validateAccess = (...args) => currentConsentValidatorValidateAccess(...args);
 
 const auditLoggerModule = require(auditLoggerPath);
+const quarantineReleaseService = require('../../src/services/quarantine-release.service');
 
 const sampleFileControllerModule = require(sampleFileControllerPath);
 sampleFileControllerModule.uploadMiddleware = () => (req, res, next) => next();
@@ -2310,6 +2314,66 @@ describe('sample.routes', () => {
           payload: expect.objectContaining({ consentStatus: null, quarantineReason: null }),
         })
       );
+    });
+
+    it('#1315: refuses to move a quarantined sample to available (409), pointing at the release route', async () => {
+      const updateSample = vi.fn();
+      const getSample = vi.fn().mockResolvedValue({ _id: '1', specimenId: 'SPC-1', specimenStatus: 'quarantined' });
+      const { router } = loadRoute({ sampleServiceOverrides: { updateSample, getSample } });
+      const app = buildApp(router, {});
+
+      const res = await request(app).put('/api/samples/SPC-1').send({ specimenStatus: 'available' });
+
+      expect(res.status).toBe(409);
+      expect(res.body.error).toBe('QUARANTINE_RELEASE_REQUIRED');
+      expect(updateSample).not.toHaveBeenCalled();
+    });
+
+    it('#1315: POST /:id/quarantine/release releases with the caller as actor and the body\'s evidence', async () => {
+      const sample = { _id: '1', specimenId: 'SPC-1', specimenStatus: 'quarantined' };
+      const getSample = vi.fn().mockResolvedValue(sample);
+      const releaseSpy = vi.spyOn(quarantineReleaseService, 'releaseQuarantine').mockResolvedValue({
+        specimenId: 'SPC-1', specimenStatus: 'available', evidenceIds: ['file-1'], releasedActions: [{ quarantineActionId: 'qa-1' }],
+      });
+      const { router, auditLoggerModule } = loadRoute({
+        sampleServiceOverrides: { getSample },
+        authImpl: (req, res, next) => { req.user = { userID: 'coord-1' }; next(); },
+      });
+      const app = buildApp(router, {});
+
+      const res = await request(app).post('/api/samples/SPC-1/quarantine/release').send({ evidenceIds: ['file-1'], reason: 'revisado' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.specimenStatus).toBe('available');
+      expect(releaseSpy).toHaveBeenCalledWith({}, sample, expect.objectContaining({ actorId: 'coord-1', evidenceIds: ['file-1'], reason: 'revisado' }));
+      // RF019 AC6: the release is audited on the specimen with its evidence.
+      expect(auditLoggerModule.log).toHaveBeenCalledWith(expect.objectContaining({
+        action: 'sample_release',
+        resourceId: 'SPC-1',
+        payload: { evidenceIds: ['file-1'], reason: 'revisado', releasedActionIds: ['qa-1'] },
+      }));
+      releaseSpy.mockRestore();
+    });
+
+    it('#1315: POST /:id/quarantine/release maps a refused release to its status, code and unsatisfied rules', async () => {
+      const getSample = vi.fn().mockResolvedValue({ _id: '1', specimenId: 'SPC-1', specimenStatus: 'quarantined' });
+      const releaseSpy = vi.spyOn(quarantineReleaseService, 'releaseQuarantine').mockRejectedValue(
+        new quarantineReleaseService.QuarantineReleaseError('regra', 409, 'QUARANTINE_RULE_UNSATISFIED', { unsatisfied: [{ quarantineActionId: 'qa-1', rule: 'cold_chain_incident_open' }] })
+      );
+      const { router } = loadRoute({ sampleServiceOverrides: { getSample } });
+      const app = buildApp(router, {});
+
+      const res = await request(app).post('/api/samples/SPC-1/quarantine/release').send({ evidenceIds: ['file-1'] });
+
+      expect(res.status).toBe(409);
+      expect(res.body).toMatchObject({ error: 'QUARANTINE_RULE_UNSATISFIED', unsatisfied: [{ quarantineActionId: 'qa-1', rule: 'cold_chain_incident_open' }] });
+      releaseSpy.mockRestore();
+    });
+
+    it('#1315: POST /:id/quarantine/release returns 404 for an unknown sample', async () => {
+      const { router } = loadRoute({ sampleServiceOverrides: { getSample: vi.fn().mockResolvedValue(null) } });
+      const res = await request(buildApp(router, {})).post('/api/samples/nope/quarantine/release').send({ evidenceIds: ['file-1'] });
+      expect(res.status).toBe(404);
     });
 
     // #623: mirrors #340/#619's out-of-scope 403 pattern for this mutation route.

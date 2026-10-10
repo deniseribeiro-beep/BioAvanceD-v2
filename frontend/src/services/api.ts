@@ -331,6 +331,9 @@ export const sampleService = {
   getMovements: (id: string) => api.get<{ success: boolean; data: any[] }>(`/samples/${id}/movements`), // Histórico de movimentações
   create: (data: Partial<Sample>) => api.post<Sample>('/samples', data),
   update: (id: number | string, data: Partial<Sample>) => api.put<Sample>(`/samples/${id}`, data),
+  // RF019 AC5: leaving quarantine is an evidenced release, not an update.
+  releaseQuarantine: (id: number | string, data: { evidenceIds: string[]; reason?: string | null }) =>
+    api.post(`/samples/${id}/quarantine/release`, data),
   delete: (id: number | string) => api.delete(`/samples/${id}`),
   withdraw: (sampleID: number | string, data: Partial<Withdrawal>) => 
     api.post(`/samples/${sampleID}/withdraw`, data),
