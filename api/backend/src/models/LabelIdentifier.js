@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const { validateCPF } = require('../utils/security');
 
 // Canonical Data Model v2.0.0 LabelIdentifier (V2E-0168..0179, V2E-0642..0645),
 // RF016 AC4/AC5: the physical identifier a label or a tube carries, an
@@ -24,10 +25,21 @@ const INSTITUTIONAL_ISSUANCE_FIELDS = ['issuedAt', 'issuedBy', 'templateVersionI
 
 // RULE-012, RF016 AC8: the encoded value is opaque. A CPF, an e-mail or
 // free text (a space, as in a name) is refused before it can be printed.
+// A CPF is the formatted 000.000.000-00 anywhere, or a bare 11-digit token
+// (bounded by non-digits) whose check digits hold. A digit run inside a
+// longer number, such as a timestamp or a manufacturer serial, is not one.
+const FORMATTED_CPF = /(?<!\d)\d{3}\.\d{3}\.\d{3}-\d{2}(?!\d)/;
+const BARE_CPF_CANDIDATES = /(?<!\d)\d{11}(?!\d)/g;
+
+function containsCpf(value) {
+  if (FORMATTED_CPF.test(value)) return true;
+  return (value.match(BARE_CPF_CANDIDATES) || []).some((candidate) => validateCPF(candidate));
+}
+
 const PII_PATTERNS = [
-  { pattern: /\d{3}\.?\d{3}\.?\d{3}-?\d{2}/, what: 'um CPF' },
-  { pattern: /[^\s@]+@[^\s@]+\.[^\s@]+/, what: 'um e-mail' },
-  { pattern: /\s/, what: 'texto livre' },
+  { test: containsCpf, what: 'um CPF' },
+  { test: (value) => /[^\s@]+@[^\s@]+\.[^\s@]+/.test(value), what: 'um e-mail' },
+  { test: (value) => /\s/.test(value), what: 'texto livre' },
 ];
 
 function lower(value) {
@@ -94,7 +106,7 @@ class LabelIdentifierModel {
 
   static assertNoPersonalData(encodedValue) {
     const value = String(encodedValue);
-    const hit = PII_PATTERNS.find(({ pattern }) => pattern.test(value));
+    const hit = PII_PATTERNS.find(({ test }) => test(value));
     if (hit) {
       throw new Error(`encodedValue não pode conter ${hit.what} (RULE-012)`);
     }

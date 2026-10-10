@@ -66,4 +66,10 @@ describe('LabelIdentifier model (RF016 AC4/AC5)', () => {
       expect(() => LabelIdentifierModel.create({ ...manufacturer, encodedValue })).toThrow(/RULE-012/);
     }
   });
+
+  it('accepts a digit run that is not a CPF: inside a longer number, or 11 digits whose check digits fail (#1359)', () => {
+    for (const encodedValue of ['BVA2:synthetic:1760108400000-ab12', 'TUBE-12345678900', 'BVA2:1234567890912']) {
+      expect(LabelIdentifierModel.create({ ...manufacturer, encodedValue }).encodedValue).toBe(encodedValue);
+    }
+  });
 });
