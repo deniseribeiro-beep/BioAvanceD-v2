@@ -51,6 +51,7 @@ let client: MongoClient | null = null;
 let db: Db;
 let adminToken: string;
 const seededParticipantIds: string[] = [];
+const seededSpecimenIds: string[] = [];
 
 async function seedParticipant(): Promise<{ participantId: string; email: string }> {
   // Exactly 8 digits: validateParticipantId (utils/patientAnonymization.js:26)
@@ -119,6 +120,9 @@ test.describe('RF010 participant e-consent page (/patient/e-consent/:token) -- r
     await db.collection('patients').deleteMany({ participantId: { $in: seededParticipantIds } });
     await db.collection('participantIdentities').deleteMany({ participantId: { $in: seededParticipantIds } });
     await db.collection('consent_templates').deleteMany({ version: 'e2e-822' });
+    await db.collection('samples').deleteMany({ specimenId: { $in: seededSpecimenIds } });
+    await db.collection('quarantineActions').deleteMany({ specimenIds: { $in: seededSpecimenIds } });
+    await db.collection('operationalStateDecisions').deleteMany({ specimenId: { $in: seededSpecimenIds } });
     await client.close();
     client = null;
   });
@@ -299,5 +303,55 @@ test.describe('RF010 participant e-consent page (/patient/e-consent/:token) -- r
     const link = (await response.json())?.link;
     expect(link).toBeTruthy();
     expect(new URL(link).pathname).toMatch(/^\/patient\/e-consent\//);
+  });
+
+  // RF019 AC1/AC5, RF006 AC7 (#1315): a revocation through the link
+  // quarantines the participant's specimens, each with its state decision; a
+  // restored consent lifts only the quarantine consent opened.
+  test('a revocation quarantines the participant\'s specimens and a restored consent releases only consent\'s own (RF019)', async ({
+    request,
+  }) => {
+    const { participantId } = await seedParticipant();
+    const token = consentLinkPath(participantId).split('/').pop() as string;
+    const auth = { Authorization: `Bearer ${adminToken}` };
+    const byConsent = `e2e-1315-consent-${participantId}`;
+    const byColdChain = `e2e-1315-cold-${participantId}`;
+    seededSpecimenIds.push(byConsent, byColdChain);
+    await db.collection('samples').insertMany([
+      { specimenId: byConsent, participantId, specimenStatus: 'available', createdAt: new Date() },
+      { specimenId: byColdChain, participantId, specimenStatus: 'quarantined', createdAt: new Date() },
+    ]);
+    await db.collection('quarantineActions').insertOne({
+      quarantineActionId: `qa-${byColdChain}`,
+      specimenIds: [byColdChain],
+      reasonCodes: ['COLD_CHAIN_INCIDENT'],
+      startedAt: new Date(),
+      releasedAt: null,
+      actionStatus: 'active',
+      authorizedBy: 'SYSTEM',
+    });
+    const statusOf = async (specimenId: string) =>
+      (await (await request.get(`${apiBaseURL}/api/samples/${specimenId}`, { headers: auth })).json()).data.specimenStatus;
+    const decisionsOf = async (specimenId: string) =>
+      (await (await request.get(`${apiBaseURL}/api/samples/${specimenId}/state-decisions`, { headers: auth })).json()).data;
+
+    const revoked = await request.post(`${apiBaseURL}/api/e-consent/update`, {
+      data: { token, consents: [{ key: 'research-822', status: 'ACCEPTED' }, { key: 'recontact-822', status: 'REVOKED' }] },
+    });
+    expect(revoked.status(), await revoked.text()).toBe(200);
+    expect(await statusOf(byConsent)).toBe('quarantined');
+    expect(await decisionsOf(byConsent)).toEqual([
+      expect.objectContaining({ previousStatus: 'available', newStatus: 'quarantined', rulesApplied: ['consent_revocation_quarantine'] }),
+    ]);
+
+    const restored = await request.post(`${apiBaseURL}/api/e-consent/update`, {
+      data: { token, consents: [{ key: 'research-822', status: 'ACTIVE' }, { key: 'recontact-822', status: 'ACTIVE' }] },
+    });
+    expect(restored.status(), await restored.text()).toBe(200);
+    expect(await statusOf(byConsent)).toBe('available');
+    expect((await decisionsOf(byConsent)).map((d: { newStatus: string }) => d.newStatus)).toEqual(['quarantined', 'available']);
+    // The cold-chain quarantine is not consent's to lift.
+    expect(await statusOf(byColdChain)).toBe('quarantined');
+    expect(await decisionsOf(byColdChain)).toEqual([]);
   });
 });
