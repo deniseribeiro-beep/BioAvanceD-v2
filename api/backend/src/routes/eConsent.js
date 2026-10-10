@@ -11,6 +11,7 @@ const consentController = require('../controllers/consent.controller');
 const participantIdentityService = require('../services/participantIdentity.service');
 const logger = require('../utils/logger');
 const { effectivePermissionsOf } = require('../services/consentHistory.service');
+const consentQuarantineService = require('../services/consentQuarantine.service');
 const CONSENT_EXPIRATION = 60 * 60 * 2; // 2h
 // RF010 AC4: a manifestation through the signed consent link is the
 // participant's own, authenticated by the link's token.
@@ -235,27 +236,7 @@ router.post('/update', async (req, res) => {
     // Se algum consentimento foi revogado, coloca amostras em quarentena
     if (consents.some(c => c.status === 'REVOKED')) {
       if (db) {
-        const { SampleModel } = require('../models/Sample');
-        const { getCollection } = require('../utils/collectionResolver');
-        const quarantineActionService = require('../services/quarantine-action.service');
-        const samplesCollection = await getCollection(db, 'samples');
-        const specimenStatus = 'quarantined';
-        const samples = await samplesCollection.find({ participantId }).toArray();
-
-        for (const sample of samples) {
-          const wasQuarantined = SampleModel.resolveSpecimenStatus(sample) === 'quarantined';
-          await samplesCollection.updateOne(
-            { _id: sample._id },
-            { $set: { specimenStatus, updatedAt: new Date() } }
-          );
-          if (!wasQuarantined) {
-            const action = await quarantineActionService.recordAction(db, {
-              specimenIds: [quarantineActionService.canonicalSpecimenId(sample)],
-              reasonCodes: ['CONSENT_REVOKED'],
-            });
-            await quarantineActionService.auditDecision(db, { decision: 'applied', action, req });
-          }
-        }
+        await consentQuarantineService.quarantineForRevocation(db, participantId, { req });
       }
       // Emite evento BullMQ/Socket.IO (mock)
       const io = req.app.get('io');
@@ -264,27 +245,8 @@ router.post('/update', async (req, res) => {
     // Se todos os consentimentos necessários foram aceitos, libera amostras de quarentena
     else if (consents.every(c => c.status === 'ACTIVE' || c.status === 'GRANTED')) {
       if (db) {
-        const { SampleModel } = require('../models/Sample');
-        const { getCollection } = require('../utils/collectionResolver');
-        const quarantineActionService = require('../services/quarantine-action.service');
-        const samplesCollection = await getCollection(db, 'samples');
-        const specimenStatus = 'available';
-        // #540: filters on the canonical specimenStatus field, not the
-        // legacy status field (no longer written above either — a
-        // stale-status filter would silently stop matching anything).
-        const samples = await samplesCollection.find({ participantId, specimenStatus: 'quarantined' }).toArray();
-
-        for (const sample of samples) {
-          const wasQuarantined = SampleModel.resolveSpecimenStatus(sample) === 'quarantined';
-          await samplesCollection.updateOne(
-            { _id: sample._id },
-            { $set: { specimenStatus, updatedAt: new Date() } }
-          );
-          if (wasQuarantined) {
-            const action = await quarantineActionService.releaseActiveAction(db, sample, 'SYSTEM');
-            await quarantineActionService.auditDecision(db, { decision: 'released', action, req });
-          }
-        }
+        // Only the quarantines consent opened are lifted (RF019 AC5).
+        await consentQuarantineService.releaseForConsent(db, participantId, { req });
       }
       // Emite evento de liberação
       const io = req.app.get('io');
