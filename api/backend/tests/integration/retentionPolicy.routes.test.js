@@ -116,6 +116,10 @@ const VALID_PAYLOAD = {
   postRetentionAction: 'archive',
   retentionPeriod: 'P365D',
   effectivePeriod: { start: '2026-01-01T00:00:00.000Z' },
+  jurisdiction: 'BR',
+  retentionBasis: ['Resolução CNS nº 441/2011, item 11, I'],
+  legalHoldRules: [{ when: 'legalHold=true', block: 'destroy' }],
+  reviewRequired: true,
 };
 
 describe('POST /api/retention-policies', () => {

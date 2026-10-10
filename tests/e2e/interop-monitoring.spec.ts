@@ -1178,6 +1178,10 @@ test.describe('Alertas e notificações (RF015) — real backend', () => {
         triggerEvent: 'creation',
         postRetentionAction: 'destroy',
         retentionPeriod: 'P365D',
+        jurisdiction: 'BR',
+        retentionBasis: ['RF015 e2e fixture basis'],
+        legalHoldRules: [{ when: 'legalHold=true', block: 'destroy' }],
+        reviewRequired: false,
       },
     });
     expect(policyRes.ok(), await policyRes.text()).toBeTruthy();

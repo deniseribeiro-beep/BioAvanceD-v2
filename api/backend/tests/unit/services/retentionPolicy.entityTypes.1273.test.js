@@ -24,6 +24,10 @@ const payload = (applicableEntityTypes) => ({
   triggerEvent: 'record-created',
   postRetentionAction: 'archive',
   retentionPeriod: 'P365D',
+  jurisdiction: 'BR',
+  retentionBasis: ['Resolução CNS nº 441/2011, item 11, I'],
+  legalHoldRules: [{ when: 'legalHold=true', block: 'destroy' }],
+  reviewRequired: true,
 });
 
 beforeEach(() => { vi.spyOn(logger, 'error').mockImplementation(() => {}); });

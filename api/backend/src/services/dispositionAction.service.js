@@ -37,9 +37,14 @@ class DispositionActionService {
       throw new Error('retentionPolicyId não corresponde a uma política de retenção existente');
     }
 
-    // AC#2/#6: bloqueia a destruição enquanto houver bloqueio legal/ético ativo.
+    // AC#2/#6: bloqueia a destruição enquanto houver bloqueio legal/ético ativo,
+    // e cada ação que a legalHoldRules da própria política bloqueia (#1315,
+    // RF026 AC2). A policy stored before those rules were required has none.
     const activeHold = await legalHoldService.hasActiveHold(db, payload.entityType, payload.affectedRecordIds);
-    if (activeHold && BLOCKED_WHEN_HELD.includes(payload.dispositionAction)) {
+    const blockedByPolicy = (Array.isArray(policy.legalHoldRules) ? policy.legalHoldRules : [])
+      .filter((rule) => rule?.when === 'legalHold=true')
+      .map((rule) => rule.block);
+    if (activeHold && [...BLOCKED_WHEN_HELD, ...blockedByPolicy].includes(payload.dispositionAction)) {
       throw new Error('Destinação bloqueada: bloqueio legal ou ético ativo sobre um ou mais itens afetados');
     }
 

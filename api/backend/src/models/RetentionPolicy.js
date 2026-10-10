@@ -50,12 +50,56 @@
  *   checked: it binds a patient record, and this audit trail is not one.
  */
 const { isValidISO8601Duration, iso8601DurationToMs } = require('../utils/iso8601Duration');
+const { DISPOSITION_ACTIONS } = require('./DispositionAction');
 
 const POST_RETENTION_ACTIONS = ['review', 'destroy', 'archive', 'anonymize'];
+
+// #1315 (RF026 AC1/AC2): v2.0.0's jurisdiction (V2E-0486), retentionBasis
+// (ELM-0409), legalHoldRules (V2E-0487) and reviewRequired (V2E-0488), each
+// required. A legal-hold rule names the condition and the disposition it
+// blocks, as the catalog's example {"when":"legalHold=true","block":"destroy"}.
+// The one condition the system evaluates is an active legal hold, so `when`
+// accepts that value only: a rule on a condition nothing checks would read
+// as enforced and never be.
+const LEGAL_HOLD_RULE_CONDITIONS = ['legalHold=true'];
+
+function isRetentionBasisEntry(entry) {
+  if (typeof entry === 'string') return entry.trim().length > 0;
+  if (!entry || typeof entry !== 'object') return false;
+  return (typeof entry.text === 'string' && entry.text.trim().length > 0)
+    || (Array.isArray(entry.coding) && entry.coding.length > 0);
+}
 
 class RetentionPolicyModel {
   static validate(data) {
     const errors = [];
+
+    if (typeof data.jurisdiction !== 'string' || data.jurisdiction.trim().length === 0) {
+      errors.push('jurisdiction é obrigatório e deve ser um código de texto válido (ex.: "BR")');
+    }
+
+    if (!Array.isArray(data.retentionBasis) || data.retentionBasis.length === 0) {
+      errors.push('retentionBasis é obrigatório e deve ser um array não vazio');
+    } else if (!data.retentionBasis.every(isRetentionBasisEntry)) {
+      errors.push('retentionBasis deve conter um texto ou um conceito codificado ({ text } ou { coding }) por item');
+    }
+
+    if (!Array.isArray(data.legalHoldRules) || data.legalHoldRules.length === 0) {
+      errors.push('legalHoldRules é obrigatório e deve ser um array não vazio');
+    } else {
+      data.legalHoldRules.forEach((rule, index) => {
+        if (!rule || typeof rule !== 'object' || !LEGAL_HOLD_RULE_CONDITIONS.includes(rule.when)) {
+          errors.push(`legalHoldRules[${index}].when deve ser um de: ${LEGAL_HOLD_RULE_CONDITIONS.join(', ')}`);
+        }
+        if (!rule || !DISPOSITION_ACTIONS.includes(rule.block)) {
+          errors.push(`legalHoldRules[${index}].block deve ser um de: ${DISPOSITION_ACTIONS.join(', ')}`);
+        }
+      });
+    }
+
+    if (typeof data.reviewRequired !== 'boolean') {
+      errors.push('reviewRequired é obrigatório e deve ser booleano');
+    }
 
     if (!Array.isArray(data.applicableEntityTypes) || data.applicableEntityTypes.length === 0) {
       errors.push('applicableEntityTypes é obrigatório e deve ser um array não vazio');
@@ -150,6 +194,10 @@ class RetentionPolicyModel {
       active: data.active === undefined ? true : data.active,
       archiveRetentionPeriod: data.archiveRetentionPeriod || null,
       archiveRetentionBasis: typeof data.archiveRetentionBasis === 'string' ? data.archiveRetentionBasis.trim() : null,
+      jurisdiction: data.jurisdiction.trim(),
+      retentionBasis: data.retentionBasis.map((entry) => (typeof entry === 'string' ? entry.trim() : entry)),
+      legalHoldRules: data.legalHoldRules.map(({ when, block }) => ({ when, block })),
+      reviewRequired: data.reviewRequired,
       createdAt: new Date(),
       updatedAt: new Date()
     };
@@ -157,5 +205,6 @@ class RetentionPolicyModel {
 }
 
 RetentionPolicyModel.POST_RETENTION_ACTIONS = POST_RETENTION_ACTIONS;
+RetentionPolicyModel.LEGAL_HOLD_RULE_CONDITIONS = LEGAL_HOLD_RULE_CONDITIONS;
 
 module.exports = RetentionPolicyModel;

@@ -1820,6 +1820,11 @@ test.describe('Retention and disposition (RF026) — real backend', () => {
         triggerEvent: 'creation',
         postRetentionAction: 'destroy',
         retentionPeriod: 'P365D',
+        // RF026 AC1/AC2 (#1315): jurisdiction, basis, legal-hold rules and review are required.
+        jurisdiction: 'BR',
+        retentionBasis: ['RF026 e2e fixture basis'],
+        legalHoldRules: [{ when: 'legalHold=true', block: 'destroy' }],
+        reviewRequired: false,
         ...overrides,
       },
     });
@@ -1927,6 +1932,52 @@ test.describe('Retention and disposition (RF026) — real backend', () => {
     });
     expect(allowedRes.status(), await allowedRes.text()).toBe(201);
     expect((await allowedRes.json()).data.legalHold).toBe(false);
+  });
+
+  test('stores the policy\'s jurisdiction, basis, legal-hold rules and review, refuses a policy without them, and blocks what its own rules name under a hold (criteria 1, 2; #1315)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const missing = await request.post(`${apiBaseURL}/api/retention-policies`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { applicableEntityTypes: ['Log'], triggerEvent: 'creation', postRetentionAction: 'destroy', retentionPeriod: 'P365D' },
+    });
+    expect(missing.status(), await missing.text()).toBe(422);
+    expect(await missing.text()).toMatch(/jurisdiction é obrigatório/);
+
+    const retentionPolicyId = await createRetentionPolicy(request, admin, {
+      legalHoldRules: [{ when: 'legalHold=true', block: 'destroy' }, { when: 'legalHold=true', block: 'transfer' }],
+      reviewRequired: true,
+    });
+    const stored = await request.get(`${apiBaseURL}/api/retention-policies/${retentionPolicyId}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(stored.status(), await stored.text()).toBe(200);
+    expect((await stored.json()).data).toMatchObject({
+      jurisdiction: 'BR',
+      retentionBasis: ['RF026 e2e fixture basis'],
+      reviewRequired: true,
+      legalHoldRules: [{ when: 'legalHold=true', block: 'destroy' }, { when: 'legalHold=true', block: 'transfer' }],
+    });
+
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const affectedRecordIds = [`log-rf026-rule-${suffix}`];
+    const holdRes = await request.post(`${apiBaseURL}/api/legal-holds`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { targetEntityType: 'Log', targetEntityIds: affectedRecordIds, reason: 'Ordem judicial — RF026 e2e fixture' },
+    });
+    expect(holdRes.status(), await holdRes.text()).toBe(201);
+
+    const transferRes = await request.post(`${apiBaseURL}/api/disposition-actions`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { retentionPolicyId, entityType: 'Log', affectedRecordIds, dispositionAction: 'transfer' },
+    });
+    expect(transferRes.status(), await transferRes.text()).toBe(409);
+
+    const hold = (await holdRes.json()).data;
+    const releaseRes = await request.post(`${apiBaseURL}/api/legal-holds/${hold.legalHoldId}/release`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { releaseReason: 'Encerrado — RF026 e2e fixture' },
+    });
+    expect(releaseRes.status(), await releaseRes.text()).toBe(200);
   });
 
   test('refuses to release an already-released legal hold', async ({ request }) => {

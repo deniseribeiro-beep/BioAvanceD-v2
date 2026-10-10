@@ -138,6 +138,25 @@ describe('dispositionAction.service', () => {
       expect(action.legalHold).toBe(true);
     });
 
+    it('blocks each action the policy\'s own legalHoldRules name while a hold is active, and only then (#1315, RF026 AC2)', async () => {
+      const db = createFakeDb();
+      const policyId = new ObjectId();
+      db.collection('retentionPolicies').docs.push({
+        _id: policyId, version: 'v1', active: true,
+        legalHoldRules: [{ when: 'legalHold=true', block: 'transfer' }],
+      });
+      const transfer = basePayload(policyId.toString(), { dispositionAction: 'transfer' });
+      expect((await dispositionActionService.recordDisposition(db, transfer)).legalHold).toBe(false);
+
+      await legalHoldService.imposeHold(db, {
+        targetEntityType: 'Log',
+        targetEntityIds: ['log-1'],
+        reason: 'Investigação em andamento',
+        imposedBy: 'user-2',
+      });
+      await expect(dispositionActionService.recordDisposition(db, transfer)).rejects.toThrow(/bloqueio legal ou ético ativo/);
+    });
+
     it('allows destroy again once the hold has been released', async () => {
       const db = createFakeDb();
       const policyId = await seedPolicyId(db);

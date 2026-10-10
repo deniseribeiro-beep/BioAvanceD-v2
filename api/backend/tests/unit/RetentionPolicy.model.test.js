@@ -9,9 +9,39 @@ const VALID_PAYLOAD = {
   retentionPeriod: 'P365D',
   version: 'v1',
   effectivePeriod: { start: '2026-01-01T00:00:00.000Z' },
+  jurisdiction: 'BR',
+  retentionBasis: ['Resolução CNS nº 441/2011, item 11, I'],
+  legalHoldRules: [{ when: 'legalHold=true', block: 'destroy' }],
+  reviewRequired: true,
 };
 
 describe('RetentionPolicyModel', () => {
+  // #1315 (RF026 AC1/AC2): jurisdiction, basis, legal-hold rules and review are each required.
+  it('requires jurisdiction, retentionBasis, legalHoldRules and reviewRequired, and stores them', () => {
+    const { jurisdiction, retentionBasis, legalHoldRules, reviewRequired, ...without } = VALID_PAYLOAD;
+    expect(RetentionPolicyModel.validate(without).errors).toEqual(expect.arrayContaining([
+      expect.stringContaining('jurisdiction é obrigatório'),
+      'retentionBasis é obrigatório e deve ser um array não vazio',
+      'legalHoldRules é obrigatório e deve ser um array não vazio',
+      'reviewRequired é obrigatório e deve ser booleano',
+    ]));
+    expect(RetentionPolicyModel.create({ ...VALID_PAYLOAD, jurisdiction: ' BR ' })).toMatchObject({
+      jurisdiction: 'BR',
+      retentionBasis: ['Resolução CNS nº 441/2011, item 11, I'],
+      legalHoldRules: [{ when: 'legalHold=true', block: 'destroy' }],
+      reviewRequired: true,
+    });
+  });
+
+  it('refuses a legal-hold rule on a condition nothing evaluates, or blocking an unknown action, and a basis entry with no text or coding (#1315)', () => {
+    const errorsOf = (overrides) => RetentionPolicyModel.validate({ ...VALID_PAYLOAD, ...overrides }).errors;
+    expect(errorsOf({ legalHoldRules: [{ when: 'always', block: 'destroy' }] })).toEqual([expect.stringContaining('legalHoldRules[0].when')]);
+    expect(errorsOf({ legalHoldRules: [{ when: 'legalHold=true', block: 'shred' }] })).toEqual([expect.stringContaining('legalHoldRules[0].block')]);
+    expect(errorsOf({ retentionBasis: [{}] })).toEqual([expect.stringContaining('retentionBasis deve conter')]);
+    expect(errorsOf({ retentionBasis: [{ text: 'Contrato de depósito' }, { coding: [{ code: 'legal' }] }] })).toEqual([]);
+    expect(errorsOf({ reviewRequired: 'yes' })).toEqual(['reviewRequired é obrigatório e deve ser booleano']);
+  });
+
   it('valida um payload completo', () => {
     const result = RetentionPolicyModel.validate(VALID_PAYLOAD);
     expect(result.isValid).toBe(true);
