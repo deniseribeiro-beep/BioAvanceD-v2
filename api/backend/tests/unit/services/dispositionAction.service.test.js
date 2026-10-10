@@ -238,12 +238,82 @@ describe('dispositionAction.service', () => {
       db.collection('retentionPolicies').docs.push({ _id: policyId, version: 'v1', active: true });
       const action = await dispositionActionService.recordDisposition(db, basePayload(policyId.toString(), { dispositionMethod: 'shredding' }));
 
+      // #1315: no certificate before execution.
+      await expect(dispositionActionService.getCertificate(db, action.dispositionActionId)).rejects.toMatchObject({ statusCode: 409 });
+      await dispositionActionService.approve(db, action.dispositionActionId, { authorizedBy: 'admin-1' });
+      await dispositionActionService.execute(db, action.dispositionActionId, { executedBy: 'user-1', evidenceIds: ['file-1'] });
+
       const certificate = await dispositionActionService.getCertificate(db, action.dispositionActionId);
 
       expect(certificate.dispositionActionId).toBe(action.dispositionActionId);
       expect(certificate.dispositionMethod).toBe('shredding');
       expect(certificate.performedBy).toBe('user-1');
+      expect(certificate).toMatchObject({ actionStatus: 'executed', authorizedBy: 'admin-1', executedBy: 'user-1', evidenceIds: ['file-1'] });
       expect(certificate.generatedAt).toBeInstanceOf(Date);
+    });
+  });
+
+  describe('lifecycle (#1315, RF026 AC4/AC5)', () => {
+    async function recorded(policyFields = {}, payload = {}) {
+      const db = createFakeDb();
+      const policyId = new ObjectId();
+      db.collection('retentionPolicies').docs.push({ _id: policyId, version: 'v1', active: true, ...policyFields });
+      const action = await dispositionActionService.recordDisposition(db, basePayload(policyId.toString(), payload));
+      return { db, id: action.dispositionActionId };
+    }
+
+    it('records planned, approves with an authorizationId, and executes with executor, instant and evidence', async () => {
+      const { db, id } = await recorded();
+      expect((await dispositionActionService.getById(db, id)).actionStatus).toBe('planned');
+
+      const approved = await dispositionActionService.approve(db, id, { authorizedBy: 'admin-1' });
+      expect(approved).toMatchObject({ actionStatus: 'approved', authorizedBy: 'admin-1' });
+      expect(approved.authorizationId).toBeTruthy();
+      expect(approved.authorizedAt).toBeInstanceOf(Date);
+
+      const executed = await dispositionActionService.execute(db, id, { executedBy: 'user-1', evidenceIds: ['file-1'] });
+      expect(executed).toMatchObject({ actionStatus: 'executed', executedBy: 'user-1', evidenceIds: ['file-1'] });
+      expect(executed.executedAt).toBeInstanceOf(Date);
+      expect(executed.dispositionDateTime).toEqual(executed.executedAt);
+    });
+
+    it('refuses execution without approval, without evidence, or twice', async () => {
+      const { db, id } = await recorded();
+      await expect(dispositionActionService.execute(db, id, { executedBy: 'user-1', evidenceIds: ['file-1'] })).rejects.toMatchObject({ statusCode: 409 });
+      await dispositionActionService.approve(db, id, { authorizedBy: 'admin-1' });
+      await expect(dispositionActionService.execute(db, id, { executedBy: 'user-1', evidenceIds: [] })).rejects.toMatchObject({ statusCode: 422 });
+      await dispositionActionService.execute(db, id, { executedBy: 'user-1', evidenceIds: ['file-1'] });
+      await expect(dispositionActionService.execute(db, id, { executedBy: 'user-1', evidenceIds: ['file-1'] })).rejects.toMatchObject({ statusCode: 409 });
+      await expect(dispositionActionService.cancel(db, id, { cancelledBy: 'user-1', reason: 'late' })).rejects.toMatchObject({ statusCode: 409 });
+    });
+
+    it('lets a policy with reviewRequired false execute a planned action directly (RF026 AC2)', async () => {
+      const { db, id } = await recorded({ reviewRequired: false });
+      const executed = await dispositionActionService.execute(db, id, { executedBy: 'user-1', evidenceIds: ['file-1'] });
+      expect(executed.actionStatus).toBe('executed');
+      expect(executed.authorizationId).toBeNull();
+    });
+
+    it('blocks an approved execution a hold now covers, and lets it be re-approved and executed once released', async () => {
+      const { db, id } = await recorded();
+      await dispositionActionService.approve(db, id, { authorizedBy: 'admin-1' });
+      const hold = await legalHoldService.imposeHold(db, {
+        targetEntityType: 'Log', targetEntityIds: ['log-1'], reason: 'Ordem judicial', imposedBy: 'user-2',
+      });
+      await expect(dispositionActionService.execute(db, id, { executedBy: 'user-1', evidenceIds: ['file-1'] })).rejects.toThrow(/bloqueio legal ou ético ativo/);
+      expect((await dispositionActionService.getById(db, id)).actionStatus).toBe('blocked');
+
+      await legalHoldService.releaseHold(db, hold.legalHoldId, 'user-2', 'Encerrado');
+      await dispositionActionService.approve(db, id, { authorizedBy: 'admin-1' });
+      expect((await dispositionActionService.execute(db, id, { executedBy: 'user-1', evidenceIds: ['file-1'] })).actionStatus).toBe('executed');
+    });
+
+    it('cancels with a reason, and refuses a missing reason or an unknown action', async () => {
+      const { db, id } = await recorded();
+      await expect(dispositionActionService.cancel(db, id, { cancelledBy: 'user-1' })).rejects.toMatchObject({ statusCode: 422 });
+      expect(await dispositionActionService.cancel(db, id, { cancelledBy: 'user-1', reason: 'Política revista' })).toMatchObject({ actionStatus: 'cancelled', cancellationReason: 'Política revista' });
+      await expect(dispositionActionService.approve(db, id, { authorizedBy: 'admin-1' })).rejects.toMatchObject({ statusCode: 409 });
+      await expect(dispositionActionService.approve(db, 'missing', { authorizedBy: 'admin-1' })).rejects.toMatchObject({ statusCode: 404 });
     });
   });
 });

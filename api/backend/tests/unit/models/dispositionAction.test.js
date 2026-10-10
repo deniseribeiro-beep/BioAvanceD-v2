@@ -54,7 +54,8 @@ describe('DispositionActionModel (RF026 AC#3/#4/#5, dict-02 ELM-0411..0415)', ()
 
       expect(result.dispositionActionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
       expect(result.dispositionCertificateUri).toBe(`/api/disposition-actions/${result.dispositionActionId}/certificate`);
-      expect(result.dispositionDateTime).toBeInstanceOf(Date);
+      // #1315 (RF026 AC4/AC5): recorded planned; the instant is the execution's.
+      expect(result).toMatchObject({ actionStatus: 'planned', dispositionDateTime: null, executedAt: null, authorizationId: null, evidenceIds: [] });
       expect(result.legalHold).toBe(false);
     });
 

@@ -51,8 +51,62 @@ class DispositionActionController {
       return res.status(200).json({ success: true, data: certificate });
     } catch (error) {
       logger.error('Erro ao gerar certificado de destinação:', error.message);
-      return res.status(400).json({ success: false, error: 'Erro ao gerar certificado de destinação', message: error.message });
+      return res.status(error.statusCode === 409 ? 409 : 400).json({ success: false, error: 'Erro ao gerar certificado de destinação', message: error.message });
     }
+  }
+
+  // #1315 (RF026 AC4/AC5): approve, execute and cancel, each audited as a
+  // critical UPDATE naming the status it reached.
+  async runTransition(req, res, label, run) {
+    try {
+      const db = req.app.locals.db;
+      if (!db) {
+        return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
+      }
+      const actor = req.user ? String(req.user.userID) : null;
+      const action = await run(db, actor);
+
+      if (req.user) {
+        const auditLogger = require('../utils/auditLogger');
+        auditLogger.init(db);
+        await auditLogger.log({
+          action: 'UPDATE',
+          resourceType: 'DispositionAction',
+          resourceId: action.dispositionActionId,
+          status: 'success',
+          severity: 'critical',
+          message: `Ação de destinação ${action.actionStatus} (${action.dispositionAction})`,
+          payload: { actionStatus: action.actionStatus, authorizationId: action.authorizationId, evidenceIds: action.evidenceIds },
+          req,
+          module: 'Retenção e destinação',
+        });
+      }
+
+      return res.status(200).json({ success: true, data: action });
+    } catch (error) {
+      logger.error(`Erro ao ${label} ação de destinação:`, error.message);
+      const blocked = /bloqueio legal ou ético ativo/.test(error.message);
+      const status = blocked ? 409 : [404, 409, 422].includes(error.statusCode) ? error.statusCode : 400;
+      return res.status(status).json({ success: false, error: `Erro ao ${label} ação de destinação`, message: error.message });
+    }
+  }
+
+  approve(req, res) {
+    return this.runTransition(req, res, 'aprovar', (db, actor) => dispositionActionService.approve(db, req.params.id, { authorizedBy: actor }));
+  }
+
+  execute(req, res) {
+    return this.runTransition(req, res, 'executar', (db, actor) => dispositionActionService.execute(db, req.params.id, {
+      executedBy: actor,
+      evidenceIds: req.body?.evidenceIds,
+    }));
+  }
+
+  cancel(req, res) {
+    return this.runTransition(req, res, 'cancelar', (db, actor) => dispositionActionService.cancel(db, req.params.id, {
+      cancelledBy: actor,
+      reason: req.body?.reason,
+    }));
   }
 
   async getById(req, res) {

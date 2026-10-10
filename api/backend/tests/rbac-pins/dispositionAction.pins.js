@@ -5,5 +5,8 @@ module.exports = {
   mount: '/api/disposition-actions',
   pins: [
     { method: 'POST', path: '/', roles: [3, 4] },
+    { method: 'POST', path: '/:id/approve', roles: [4] },
+    { method: 'POST', path: '/:id/execute', roles: [3, 4] },
+    { method: 'POST', path: '/:id/cancel', roles: [3, 4] },
   ],
 };

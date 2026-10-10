@@ -1854,8 +1854,28 @@ test.describe('Retention and disposition (RF026) — real backend', () => {
     expect(disposition.affectedRecordIds).toEqual(['log-rf026-1', 'log-rf026-2']);
     expect(disposition.dispositionMethod).toBe('secure-wipe');
     expect(disposition.performedBy).toBeTruthy();
-    expect(disposition.dispositionDateTime).toBeTruthy();
     expect(disposition.legalHold).toBe(false);
+
+    // AC#4/#5 (#1315): recorded planned, with no certificate until it is
+    // authorized and executed with its evidence.
+    expect(disposition.actionStatus).toBe('planned');
+    expect(disposition.dispositionDateTime).toBeNull();
+    const base = `${apiBaseURL}/api/disposition-actions/${disposition.dispositionActionId}`;
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    expect((await request.get(`${base}/certificate`, { headers: auth })).status()).toBe(409);
+    expect((await request.post(`${base}/execute`, { headers: auth, data: { evidenceIds: ['file-rf026-1'] } })).status()).toBe(409);
+
+    const approved = await request.post(`${base}/approve`, { headers: auth });
+    expect(approved.status(), await approved.text()).toBe(200);
+    expect((await approved.json()).data).toMatchObject({ actionStatus: 'approved', authorizationId: expect.any(String) });
+
+    expect((await request.post(`${base}/execute`, { headers: auth, data: { evidenceIds: [] } })).status()).toBe(422);
+    const executed = await request.post(`${base}/execute`, { headers: auth, data: { evidenceIds: ['file-rf026-1'] } });
+    expect(executed.status(), await executed.text()).toBe(200);
+    const executedBody = (await executed.json()).data;
+    expect(executedBody).toMatchObject({ actionStatus: 'executed', evidenceIds: ['file-rf026-1'] });
+    expect(executedBody.executedBy).toBeTruthy();
+    expect(executedBody.dispositionDateTime).toBeTruthy();
 
     // AC#5: gera evidência/certificado.
     const certRes = await request.get(`${apiBaseURL}/api/disposition-actions/${disposition.dispositionActionId}/certificate`, {
