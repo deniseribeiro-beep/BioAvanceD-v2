@@ -125,6 +125,7 @@ describe('equipment-sensor-quarantine.service', () => {
       };
       const movementsCollection = { insertOne: vi.fn(async () => ({ insertedId: 'M1' })) };
       const quarantineActionsCollection = { insertOne: vi.fn(async () => ({ insertedId: 'QA1' })) };
+      const decisionsCollection = { insertOne: vi.fn(async () => ({ insertedId: 'D1' })) };
 
       collectionResolverModule.getCollection.mockImplementation(async (_db, key) => {
         if (key === 'samples') return samplesCollection;
@@ -137,6 +138,8 @@ describe('equipment-sensor-quarantine.service', () => {
         collection: vi.fn((name) => {
           if (name === 'storageContainers') return storageContainersCollection;
           if (name === 'storageBoxes') return storageBoxesCollection;
+          // RF006 AC7 (#1315): the decision service resolves its own collection.
+          if (name === 'operationalStateDecisions') return decisionsCollection;
           throw new Error(`unexpected collection ${name}`);
         })
       };
@@ -186,6 +189,10 @@ describe('equipment-sensor-quarantine.service', () => {
           reasonCodes: ['equipment'],
           actionStatus: 'active'
         }),
+        undefined
+      );
+      expect(decisionsCollection.insertOne).toHaveBeenCalledWith(
+        expect.objectContaining({ specimenId: 'S1', newStatus: 'quarantined', rulesApplied: ['sensor_equipment_quarantine'], reasonCodes: ['equipment'] }),
         undefined
       );
 
@@ -359,6 +366,7 @@ describe('equipment-sensor-quarantine.service', () => {
       };
       const movementsCollection = { insertOne: vi.fn(async () => ({ insertedId: 'M2' })) };
       const quarantineActionsCollection = { insertOne: vi.fn(async () => ({ insertedId: 'QA2' })) };
+      const decisionsCollection = { insertOne: vi.fn(async () => ({ insertedId: 'D2' })) };
 
       collectionResolverModule.getCollection.mockImplementation(async (_db, key) => {
         if (key === 'samples') return samplesCollection;
@@ -371,6 +379,8 @@ describe('equipment-sensor-quarantine.service', () => {
         collection: vi.fn((name) => {
           if (name === 'storageContainers') return storageContainersCollection;
           if (name === 'storageBoxes') return storageBoxesCollection;
+          // RF006 AC7 (#1315): the decision service resolves its own collection.
+          if (name === 'operationalStateDecisions') return decisionsCollection;
           throw new Error(`unexpected collection ${name}`);
         })
       };

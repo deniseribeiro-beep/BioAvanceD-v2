@@ -1256,6 +1256,22 @@ describe('sample.service', () => {
       expect(result.currentQuantity).toBe(4);
     });
 
+    it('appends an OperationalStateDecision when an edit changes specimenStatus, and none when it stays (RF006 AC7, #1315)', async () => {
+      const db = makeDb();
+      const existing = { _id: 'sample-1', specimenId: 'SPC-U', initialQuantity: 10, currentQuantity: 10, specimenStatus: 'available' };
+      db.collections.samples.findOne.mockResolvedValue(existing);
+
+      await sampleService.updateSample(db, 'SPC-U', { currentQuantity: 4 });
+      const decisions = db.collections.operationalStateDecisions;
+      expect(decisions.insertOne).toHaveBeenCalledTimes(1);
+      const [decision] = decisions.insertOne.mock.calls[0];
+      expect(decision).toMatchObject({ specimenId: 'SPC-U', previousStatus: 'available', newStatus: 'partial', rulesApplied: ['quantity_derived_status'], reasonCodes: ['update'] });
+      expect(decision.triggerEventId).toMatch(/^sample-update:/);
+
+      await sampleService.updateSample(db, 'SPC-U', { notes: 'no status change' });
+      expect(decisions.insertOne).toHaveBeenCalledTimes(1);
+    });
+
     // #540: sample.service.js#updateSample used the raw MongoDB driver and
     // only stripped the three already-retired fields above — a caller
     // sending currentStatus/status in the PUT body (SampleDetailsPage.tsx's
@@ -1405,6 +1421,25 @@ describe('sample.service', () => {
       const result = await sampleService.getQuarantineActions(db, '3116768');
 
       expect(result.map((a) => a.quarantineActionId).sort()).toEqual(['canonical', 'legacy']);
+    });
+  });
+
+  describe('getStateDecisions', () => {
+    it('returns the decisions keyed by specimenId and by stored _id, oldest first, and null for an unknown sample (RF006 AC7, #1315)', async () => {
+      const _id = new ObjectId();
+      const rows = [
+        { operationalStateDecisionId: 'canonical', specimenId: 'SPC-D', occurredAt: new Date('2026-10-02') },
+        { operationalStateDecisionId: 'legacy', specimenId: String(_id), occurredAt: new Date('2026-10-01') },
+        { operationalStateDecisionId: 'other', specimenId: 'someone-else', occurredAt: new Date('2026-09-30') },
+      ];
+      const operationalStateDecisions = makeCollection('operationalStateDecisions');
+      operationalStateDecisions.find.mockImplementation((filter) => makeCursor(rows.filter((doc) => doc.specimenId === filter.specimenId)));
+      const db = makeDb({ operationalStateDecisions });
+      db.collections.samples.findOne.mockImplementation(async (filter) => (filter.specimenId === 'SPC-D' ? { _id, specimenId: 'SPC-D' } : null));
+
+      const result = await sampleService.getStateDecisions(db, 'SPC-D');
+      expect(result.map((d) => d.operationalStateDecisionId)).toEqual(['legacy', 'canonical']);
+      expect(await sampleService.getStateDecisions(db, 'missing')).toBeNull();
     });
   });
 

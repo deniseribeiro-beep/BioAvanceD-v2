@@ -9,6 +9,7 @@ const ParticipantIdentityModel = require('../models/ParticipantIdentity');
 const PatientModel = require('../models/Patient');
 const participantIdentityService = require('./participantIdentity.service');
 const quarantineActionService = require('./quarantine-action.service');
+const operationalStateDecisionService = require('./operationalStateDecision.service');
 const { withMongoTransaction, isTransactionCapable } = require('../utils/mongoTransaction');
 const rcsAssessmentService = require('./rcs-assessment.service');
 const specimenPreanalyticsService = require('./specimen-preanalytics.service');
@@ -1053,7 +1054,8 @@ async function commitBatch(db, batchIdRaw) {
 
     const specimenStatus = workflow.quarantineStatus === 'RELEASED' ? 'available' : 'quarantined';
     const existingSample = await samples.findOne({ specimenId: normalized.specimenId });
-    const wasQuarantined = existingSample ? SampleModel.resolveSpecimenStatus(existingSample) === 'quarantined' : false;
+    const previousStatus = existingSample ? SampleModel.resolveSpecimenStatus(existingSample) : null;
+    const wasQuarantined = previousStatus === 'quarantined';
 
     const upsertResult = await samples.updateOne(
       { specimenId: normalized.specimenId },
@@ -1135,6 +1137,19 @@ async function commitBatch(db, batchIdRaw) {
       } else if (specimenStatus === 'available' && wasQuarantined) {
         await quarantineActionService.releaseActiveAction(db, committedSample, importedBy || 'SYSTEM');
       }
+    }
+    // RF006 AC7: a re-commit that changes an existing specimen's status
+    // records the change, append-only. A new specimen's first status is its
+    // creation, not a change.
+    if (existingSample) {
+      await operationalStateDecisionService.recordStatusChange(db, {
+        specimenId: normalized.specimenId,
+        previousStatus,
+        newStatus: specimenStatus,
+        triggerEventId: String(record._id),
+        rulesApplied: ['fhir_import_commit'],
+        reasonCodes: [specimenStatus === 'quarantined' ? (workflow.quarantineReason || 'FHIR_IMPORT_REVIEW_REQUIRED') : 'FHIR_IMPORT_RELEASED'],
+      });
     }
 
     await staging.updateOne(
@@ -1230,7 +1245,8 @@ async function attachExternalDocument(db, batchIdRaw, recordIdRaw, options = {})
     const dbOptions = session ? { session } : undefined;
 
     const existingSample = await samples.findOne({ specimenId: normalized.specimenId }, dbOptions);
-    const wasQuarantined = existingSample ? SampleModel.resolveSpecimenStatus(existingSample) === 'quarantined' : false;
+    const previousStatus = existingSample ? SampleModel.resolveSpecimenStatus(existingSample) : null;
+    const wasQuarantined = previousStatus === 'quarantined';
 
     const sampleUpdateResult = await samples.updateOne(
       { specimenId: normalized.specimenId },
@@ -1255,6 +1271,17 @@ async function attachExternalDocument(db, batchIdRaw, recordIdRaw, options = {})
 
     if (existingSample && wasQuarantined) {
       await quarantineActionService.releaseActiveAction(db, existingSample, options.userID || 'SYSTEM', undefined, session);
+    }
+    // RF006 AC7: the status change, append-only, with the release.
+    if (existingSample) {
+      await operationalStateDecisionService.recordStatusChange(db, {
+        specimenId: normalized.specimenId,
+        previousStatus,
+        newStatus: 'available',
+        triggerEventId: String(recordId),
+        rulesApplied: ['fhir_external_document_release'],
+        reasonCodes: ['EXTERNAL_ATTACHED'],
+      }, { session });
     }
   };
 

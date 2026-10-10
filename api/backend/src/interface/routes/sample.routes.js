@@ -1731,6 +1731,49 @@ router.get('/:id/quarantine-actions', authenticate, requireOrganizationScope, as
   }
 });
 
+// RF006 AC7: the append-only OperationalStateDecisions of a specimen, one
+// per specimenStatus change, oldest first.
+router.get('/:id/state-decisions', authenticate, requireOrganizationScope, async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({
+        success: false,
+        error: 'Banco de dados não disponível'
+      });
+    }
+
+    const sampleForScope = await sampleService.getSample(db, req.params.id);
+    if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+      return res.status(403).json({
+        success: false,
+        error: 'Acesso negado',
+        message: 'Esta amostra pertence a outra organização'
+      });
+    }
+
+    const decisions = await sampleService.getStateDecisions(db, req.params.id);
+    if (!decisions) {
+      return res.status(404).json({
+        success: false,
+        error: 'Amostra não encontrada'
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: decisions
+    });
+  } catch (error) {
+    logger.error('Erro ao buscar decisões de estado:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: 'Erro ao buscar decisões de estado',
+      message: error.message
+    });
+  }
+});
+
 // RF007 - Upload de Arquivos de Análise
 const sampleFileController = require('../../controllers/sample-file.controller');
 

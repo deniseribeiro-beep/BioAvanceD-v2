@@ -1377,6 +1377,42 @@ describe('sample.routes', () => {
     });
   });
 
+  describe('GET /:id/state-decisions (RF006 AC7, #1315)', () => {
+    it('returns the decisions on success, 404 for an unknown sample and 500 when the service throws', async () => {
+      const getStateDecisions = vi.fn()
+        .mockResolvedValueOnce([{ operationalStateDecisionId: 'd1', newStatus: 'partial' }])
+        .mockResolvedValueOnce(null)
+        .mockRejectedValueOnce(new Error('db down'));
+      const getSample = vi.fn().mockResolvedValue(null);
+      const { router } = loadRoute({ sampleServiceOverrides: { getStateDecisions, getSample } });
+      const app = buildApp(router, {});
+
+      const ok = await request(app).get('/api/samples/s1/state-decisions');
+      expect(ok.status).toBe(200);
+      expect(ok.body.data).toEqual([{ operationalStateDecisionId: 'd1', newStatus: 'partial' }]);
+      expect(getStateDecisions).toHaveBeenCalledWith({}, 's1');
+      expect((await request(app).get('/api/samples/s1/state-decisions')).status).toBe(404);
+      expect((await request(app).get('/api/samples/s1/state-decisions')).status).toBe(500);
+    });
+
+    it('returns 503 without a db, and 403 when the sample is outside the caller\'s organization scope', async () => {
+      expect((await request(buildApp(loadRoute().router, null)).get('/api/samples/s1/state-decisions')).status).toBe(503);
+
+      const getStateDecisions = vi.fn();
+      const getSample = vi.fn().mockResolvedValue({ _id: 's1', collectionSite: 'org-other' });
+      const { router } = loadRoute({
+        sampleServiceOverrides: { getStateDecisions, getSample },
+        requireOrganizationScopeImpl: (req, res, next) => {
+          req.organizationScope = { scope: 'organization', organizationIds: ['org-mine'] };
+          next();
+        },
+      });
+      const res = await request(buildApp(router, {})).get('/api/samples/s1/state-decisions');
+      expect(res.status).toBe(403);
+      expect(getStateDecisions).not.toHaveBeenCalled();
+    });
+  });
+
   describe('GET /:id/sprec-profiles', () => {
     it('returns 503 when db is unavailable', async () => {
       const { router } = loadRoute();

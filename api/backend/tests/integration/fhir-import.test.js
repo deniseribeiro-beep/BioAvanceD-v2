@@ -724,6 +724,31 @@ describe('FHIR import staging', () => {
     expect(db.collections.specimenPreanalytics.docs).toHaveLength(1);
   });
 
+  it('RF006 AC7 (#1315): a re-commit that changes an existing specimen\'s status appends an OperationalStateDecision; a first commit and an unchanged re-commit append none', async () => {
+    const staged = await fhirImportStagingService.stageBundle(db, signedBundle, { fileName: 'bundle.json' });
+    await fhirImportStagingService.commitBatch(db, staged.batch._id);
+    const decisions = () => db.collections.operationalStateDecisions?.docs ?? [];
+    expect(decisions()).toHaveLength(0);
+
+    const sample = db.collections.samples.docs.find((doc) => doc.specimenId === 'S-001');
+    const committedStatus = sample.specimenStatus;
+    const restaged = await fhirImportStagingService.stageBundle(db, signedBundle, { fileName: 'bundle-2.json' });
+    await fhirImportStagingService.commitBatch(db, restaged.batch._id);
+    expect(decisions()).toHaveLength(0);
+
+    const flippedStatus = committedStatus === 'available' ? 'quarantined' : 'available';
+    sample.specimenStatus = flippedStatus;
+    const third = await fhirImportStagingService.stageBundle(db, signedBundle, { fileName: 'bundle-3.json' });
+    await fhirImportStagingService.commitBatch(db, third.batch._id);
+    expect(decisions()).toHaveLength(1);
+    expect(decisions()[0]).toMatchObject({
+      specimenId: 'S-001',
+      previousStatus: flippedStatus,
+      newStatus: committedStatus,
+      rulesApplied: ['fhir_import_commit'],
+    });
+  });
+
   it('#527: registra campos de eixo não nulos no snapshot SpecimenPreanalytics de amostra sólida (tecido)', async () => {
     const solidSignedBundle = {
       resourceType: 'Bundle',

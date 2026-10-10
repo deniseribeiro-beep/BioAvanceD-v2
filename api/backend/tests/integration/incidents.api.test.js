@@ -210,6 +210,11 @@ function buildMongoCollections(seedIncidents = []) {
     }),
   };
 
+  // RF006 AC7 (#1315): a quarantine appends an OperationalStateDecision.
+  const operationalStateDecisionsCollection = {
+    insertOne: vi.fn().mockResolvedValue({ insertedId: 'decision-1' }),
+  };
+
   const devicesCollection = {
     findOne: vi.fn().mockResolvedValue(null),
   };
@@ -246,13 +251,14 @@ function buildMongoCollections(seedIncidents = []) {
       if (name === 'sample_movements') return sampleMovementsCollection;
       if (name === 'counters') return countersCollection;
       if (name === 'quarantineActions') return quarantineActionsCollection;
+      if (name === 'operationalStateDecisions') return operationalStateDecisionsCollection;
       if (name === 'devices') return devicesCollection;
       if (name === 'environmentalExcursions') return environmentalExcursionsCollection;
       return { find: () => ({ toArray: async () => [] }) };
     },
   };
 
-  return { db, incidents, incidentsCollection, samples, samplesCollection, sampleMovementsCollection, quarantineActionsCollection };
+  return { db, incidents, incidentsCollection, samples, samplesCollection, sampleMovementsCollection, quarantineActionsCollection, operationalStateDecisionsCollection };
 }
 
 describe('Incidents API integration', () => {
@@ -347,6 +353,10 @@ describe('Incidents API integration', () => {
     // #540: status/currentStatus retired, specimenStatus is the sole signal.
     expect(update.status).toBeUndefined();
     expect(update.currentStatus).toBeUndefined();
+    expect(incidentsState.operationalStateDecisionsCollection.insertOne).toHaveBeenCalledWith(
+      expect.objectContaining({ newStatus: 'quarantined', reasonCodes: ['COLD_CHAIN_INCIDENT'] }),
+      undefined
+    );
   });
 
   it('PUT /api/incidents/:incidentId/resolve mantém amostra em revisão pós-incidente', async () => {

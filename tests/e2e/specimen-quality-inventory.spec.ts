@@ -837,6 +837,18 @@ test.describe('Chain of custody (RF006) — real backend', () => {
       headers: { Authorization: `Bearer ${admin.token}` },
     });
     expect((await afterTotal.json()).data.specimenStatus).toBe('depleted');
+
+    // RF006 AC7 (#1315): each status change is an append-only OperationalStateDecision, oldest first.
+    const decisions = await request.get(`${apiBaseURL}/api/samples/${sampleID}/state-decisions`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(decisions.status()).toBe(200);
+    const rows = (await decisions.json()).data;
+    expect(rows.map((row: { previousStatus: string; newStatus: string }) => [row.previousStatus, row.newStatus])).toEqual([
+      ['available', 'partial'],
+      ['partial', 'depleted'],
+    ]);
+    expect(rows.every((row: { reasonCodes: string[]; triggerEventId: string }) => row.reasonCodes.includes('withdraw') && row.triggerEventId)).toBe(true);
   });
 
   test('blocks a withdrawal against a specimen in a blocked lifecycle status (criterion 4)', async ({ request }) => {
@@ -865,6 +877,15 @@ test.describe('Chain of custody (RF006) — real backend', () => {
     // specimenStatus (#408/#540) is lowercase-canonical ('destroyed'), not
     // the uppercase legacy enum this assertion was written against.
     expect(body.message).toMatch(/destroyed/);
+
+    // RF006 AC7 (#1315): the edit's status change is recorded; the refused withdrawal records none.
+    const decisions = await request.get(`${apiBaseURL}/api/samples/${sampleID}/state-decisions`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(decisions.status()).toBe(200);
+    expect((await decisions.json()).data).toEqual([
+      expect.objectContaining({ previousStatus: 'available', newStatus: 'destroyed', rulesApplied: ['manual_status_update'] }),
+    ]);
   });
 
   test('custody events cannot be altered or deleted — no route accepts a mutation (criterion 5)', async ({ request }) => {

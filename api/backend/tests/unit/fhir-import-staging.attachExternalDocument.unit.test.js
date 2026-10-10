@@ -195,6 +195,27 @@ describe('fhir-import-staging.service#attachExternalDocument -- transactional re
 
     // #1219: handed the sample document, not its _id string.
     expect(releaseSpy).toHaveBeenCalledWith(db, expect.objectContaining({ _id: expect.anything() }), 'op-1', undefined, mockSession);
+
+    // RF006 AC7 (#1315): the release is an append-only decision, in the same transaction.
+    const [decision, decisionOptions] = db.collections.operationalStateDecisions.insertOne.mock.calls[0];
+    expect(decision).toMatchObject({
+      specimenId: 'SPEC-801',
+      previousStatus: 'quarantined',
+      newStatus: 'available',
+      triggerEventId: String(recordId),
+      rulesApplied: ['fhir_external_document_release'],
+      reasonCodes: ['EXTERNAL_ATTACHED'],
+    });
+    expect(decisionOptions).toEqual({ session: mockSession });
+  });
+
+  it('records no decision when the released specimen was already available (RF006 AC7, #1315)', async () => {
+    const { batchId, recordId } = await seedFhirBatch(db);
+    await db.collection('samples').insertOne({ specimenId: 'SPEC-801', specimenStatus: 'available' });
+
+    await fhirImportStagingService.attachExternalDocument(db, batchId, recordId, { userID: 'op-1' });
+
+    expect(db.collections.operationalStateDecisions?.insertOne ?? vi.fn()).not.toHaveBeenCalled();
   });
 
   it('aborts the transaction when samples.updateOne matches nothing, and never runs the staging write', async () => {

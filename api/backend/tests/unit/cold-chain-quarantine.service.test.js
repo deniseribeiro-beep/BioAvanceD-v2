@@ -180,6 +180,18 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
       destination: 'Quarentena',
       responsible: 'SYSTEM',
     });
+
+    // RF006 AC7 (#1315): the status change is an append-only decision whose
+    // trigger is the ledger movement.
+    expect(collections.operationalStateDecisions.insertOne).toHaveBeenCalledTimes(1);
+    const decision = collections.operationalStateDecisions.insertOne.mock.calls[0][0];
+    expect(decision).toMatchObject({
+      previousStatus: 'available',
+      newStatus: 'quarantined',
+      triggerEventId: String(movement.movementId),
+      rulesApplied: ['cold_chain_incident_quarantine'],
+      reasonCodes: ['COLD_CHAIN_INCIDENT'],
+    });
   });
 
   it('encontra amostra por sensorMetadata -> equipment -> freezer -> box -> samples', async () => {

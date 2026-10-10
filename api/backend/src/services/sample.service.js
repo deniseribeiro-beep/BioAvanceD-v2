@@ -12,7 +12,8 @@ const {
 const { generateUniqueSpecimenId } = require('../utils/sampleIDGenerator');
 const { appendMovementWithHashChain } = require('../utils/sampleMovementLedger');
 const { getCollection } = require('../utils/collectionResolver');
-const { withMongoTransaction } = require('../utils/mongoTransaction');
+const crypto = require('crypto');
+const { withMongoTransaction, withTransactionWhereSupported } = require('../utils/mongoTransaction');
 const rcsAssessmentService = require('./rcs-assessment.service');
 const qualityDomain = require('./quality-domain.service');
 const specimenPreanalyticsService = require('./specimen-preanalytics.service');
@@ -764,10 +765,32 @@ class SampleService {
         updatedAt: new Date()
       };
       
-      const result = await samplesCollection.updateOne(
-        { specimenId: existing.specimenId },
-        { $set: payload }
-      );
+      const previousStatus = SampleModel.resolveSpecimenStatus(existing);
+      const statusChanges = String(previousStatus || '').toLowerCase() !== String(specimenStatus || '').toLowerCase();
+      const writeUpdate = async (session) => {
+        const result = await samplesCollection.updateOne(
+          { specimenId: existing.specimenId },
+          { $set: payload },
+          session ? { session } : undefined
+        );
+        // RF006 AC7: an edit that changes specimenStatus records the change,
+        // append-only, with the write. The edit has no event of its own, so
+        // the decision's trigger is an id minted for this update.
+        if (result.matchedCount > 0 && statusChanges) {
+          await operationalStateDecisionService.recordStatusChange(db, {
+            specimenId: existing.specimenId || String(existing._id),
+            previousStatus,
+            newStatus: specimenStatus,
+            triggerEventId: `sample-update:${crypto.randomUUID()}`,
+            rulesApplied: [updateData.specimenStatus ? 'manual_status_update' : 'quantity_derived_status'],
+            reasonCodes: ['update'],
+          }, { session });
+        }
+        return result;
+      };
+      const result = statusChanges
+        ? await withTransactionWhereSupported(db, writeUpdate)
+        : await writeUpdate(null);
 
       if (result.matchedCount === 0) {
         return null;
@@ -1170,6 +1193,17 @@ class SampleService {
       logger.error('Erro ao buscar ações de quarentena:', error.message);
       throw error;
     }
+  }
+
+  // RF006 AC7: a specimen's OperationalStateDecisions, oldest first. A legacy
+  // sample with no specimenId has its decisions keyed by its stored _id.
+  async getStateDecisions(db, specimenId) {
+    const samplesCollection = await getCollection(db, 'samples');
+    const sample = await findSampleByAnyId(samplesCollection, specimenId);
+    if (!sample) return null;
+    const keys = [...new Set([sample.specimenId, String(sample._id)].filter(Boolean))];
+    const rows = (await Promise.all(keys.map((key) => operationalStateDecisionService.historyOf(db, key)))).flat();
+    return rows.sort((a, b) => new Date(a.occurredAt) - new Date(b.occurredAt));
   }
 
   /**

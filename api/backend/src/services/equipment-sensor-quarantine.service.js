@@ -1,8 +1,10 @@
 const SampleMovementModel = require('../models/SampleMovement');
+const { SampleModel } = require('../models/Sample');
 const { appendMovementWithHashChain } = require('../utils/sampleMovementLedger');
 const { getCollection } = require('../utils/collectionResolver');
 const { ensureStorageContainerIndexes, ensureStorageBoxIndexes } = require('../utils/storageIndexes');
 const quarantineActionService = require('./quarantine-action.service');
+const operationalStateDecisionService = require('./operationalStateDecision.service');
 const logger = require('../utils/logger');
 
 // #883: routine "Maintenance"/"Inactive" states are deliberately excluded
@@ -384,6 +386,7 @@ async function quarantineSamplesByFilter(db, filter, context = {}) {
 
   for (const sample of samples) {
     const sampleId = String(sample._id);
+    const previousStatus = SampleModel.resolveSpecimenStatus(sample);
     const specimenStatus = 'quarantined';
     const updatePayload = {
       specimenStatus,
@@ -463,6 +466,16 @@ async function quarantineSamplesByFilter(db, filter, context = {}) {
       }),
       context.session ? { session: context.session } : {}
     );
+
+    // RF006 AC7: the status change, append-only, beside its ledger movement.
+    await operationalStateDecisionService.recordStatusChange(db, {
+      specimenId: quarantineActionService.canonicalSpecimenId(sample),
+      previousStatus,
+      newStatus: specimenStatus,
+      triggerEventId: movementID,
+      rulesApplied: [context.coldChainIncidentId ? 'cold_chain_incident_quarantine' : 'sensor_equipment_quarantine'],
+      reasonCodes: [context.coldChainIncidentId ? 'COLD_CHAIN_INCIDENT' : (context.source || 'AUTOMATIC')],
+    }, { session: context.session });
 
     movements += 1;
   }
