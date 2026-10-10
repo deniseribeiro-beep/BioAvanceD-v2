@@ -453,7 +453,13 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
     );
     expect(refused.status()).toBe(400);
     expect((await refused.json()).message).toMatch(/quarentena/);
-    expect((await setStatus('available')).status()).toBe(200);
+    // RF019 AC5: a quarantined specimen leaves quarantine only through the
+    // evidenced release, never a PUT of its status.
+    const release = await request.post(`${apiBaseURL}/api/samples/${specimenId}/quarantine/release`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { evidenceIds: ['file-rf024-review'], reason: 'RF024 e2e: cleared before distribution' },
+    });
+    expect(release.status(), await release.text()).toBe(200);
 
     // AC#4 - approval linked to real distribution/availability.
     const distribute = await request.post(
