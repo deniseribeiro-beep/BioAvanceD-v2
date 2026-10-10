@@ -1859,7 +1859,9 @@ test.describe('Retention and disposition (RF026) — real backend', () => {
 
   test('records a disposition action linked to a real retention policy, with method/date/responsible/affected items preserved (criteria 1, 3, 4)', async ({ request }) => {
     const admin = await realLogin(request);
-    const retentionPolicyId = await createRetentionPolicy(request, admin);
+    // Review required, so executing before approval is refused below; a
+    // policy with reviewRequired false lets a planned action execute (AC2).
+    const retentionPolicyId = await createRetentionPolicy(request, admin, { reviewRequired: true });
 
     const res = await request.post(`${apiBaseURL}/api/disposition-actions`, {
       headers: { Authorization: `Bearer ${admin.token}` },
