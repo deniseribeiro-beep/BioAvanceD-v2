@@ -893,7 +893,7 @@ describe('iot.controller', () => {
 
   // #1317 (RF009 AC1, RNF016 C3): this case asserted the reverse, a reading
   // accepted although InfluxDB never held it. InfluxDB is the authority now.
-  it('answers 503 and evaluates no policy when InfluxDB does not persist the reading', async () => {
+  it('answers 503 when InfluxDB does not persist the reading, but still evaluates the policy', async () => {
     const loggerModule = require('../../src/utils/logger');
     const errorSpy = vi.spyOn(loggerModule, 'error').mockImplementation(() => undefined);
     saveTelemetryPointMock.mockRejectedValue(new Error('influx boom'));
@@ -905,7 +905,7 @@ describe('iot.controller', () => {
 
     expect(res.statusCode).toBe(503);
     expect(res.body).toMatchObject({ success: false, code: 'TELEMETRY_NOT_PERSISTED' });
-    expect(sensorMetadataLeanMock).not.toHaveBeenCalled();
+    expect(sensorMetadataLeanMock).toHaveBeenCalled();
     expect(errorSpy).toHaveBeenCalledWith('[ISO20387][IOT] Falha ao persistir telemetria no InfluxDB:', 'influx boom');
     errorSpy.mockRestore();
   }, 15000);

@@ -114,7 +114,7 @@ describe('temperatureService.createTemperatureReading', () => {
     expect(result.persistedAt).toBe(persisted);
   });
 
-  it('a failed InfluxDB write stores nothing, raises no alert, and answers 503', async () => {
+  it('a failed InfluxDB write stores nothing and answers 503, but still checks the alert policy', async () => {
     const insertOne = vi.fn();
     const db = makeDb({ temperatures: { insertOne } });
     vi.spyOn(logger, 'error').mockImplementation(() => {});
@@ -129,7 +129,7 @@ describe('temperatureService.createTemperatureReading', () => {
 
     expect(err).toMatchObject({ statusCode: 503, code: 'TELEMETRY_NOT_PERSISTED' });
     expect(insertOne).not.toHaveBeenCalled();
-    expect(checkSpy).not.toHaveBeenCalled();
+    expect(checkSpy).toHaveBeenCalledTimes(1);
   });
 
   // #636: organizationId, when provided, must resolve to a real

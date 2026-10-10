@@ -87,12 +87,15 @@ class TemperatureService {
 
       // RF009 AC1, RNF016 C3 (#1317): InfluxDB is the authority, so the point
       // is written first and its confirmation is persistedAt (V2E-0550). A
-      // failed write stores nothing, raises no alert and answers 503; the
-      // Mongo document below is the queryable copy.
+      // failed write stores nothing and answers 503; the Mongo document below
+      // is the queryable copy. The alert check runs either way: cold-chain
+      // availability wins over refusing a reading (the ingest audit's Axis E
+      // decision), so an InfluxDB outage never silences an excursion.
+      let notPersisted = null;
       try {
         temperature.persistedAt = await influxTelemetryWriteRepository.writeTemperatureReadingNow(temperature);
       } catch (error) {
-        throw Object.assign(new Error(`Leitura não persistida no InfluxDB: ${error.message || error}`), {
+        notPersisted = Object.assign(new Error(`Leitura não persistida no InfluxDB: ${error.message || error}`), {
           statusCode: 503,
           code: 'TELEMETRY_NOT_PERSISTED',
           auditReason: 'telemetry_not_persisted'
@@ -103,6 +106,7 @@ class TemperatureService {
       if (temperatureData.policyId || temperatureData.policyID) {
         await this.checkPolicyAndAlert(db, temperature);
       }
+      if (notPersisted) throw notPersisted;
 
       let result;
       try {

@@ -248,8 +248,11 @@ async function ingestTelemetry(req, res) {
 
     // #1317 (RF009 AC1-AC3): the reading contract the other ingestion paths
     // use. InfluxDB is the reading's authority, so the point is written and
-    // confirmed before the reading is accepted; a failed write answers 503
-    // and nothing downstream runs. A timestamp that is not a date is a 422.
+    // confirmed before the reading is accepted; a failed write answers 503.
+    // The policy below is still evaluated: cold-chain availability wins over
+    // refusing a reading (the Axis E decision on the audit below), so an
+    // InfluxDB outage never silences an excursion. A timestamp that is not a
+    // date is a 422.
     let identity;
     try {
       identity = readingIdentityOf(req.body || {}, new Date(), { ingestionService: 'iot-api' });
@@ -258,14 +261,12 @@ async function ingestTelemetry(req, res) {
       return res.status(error.statusCode || 422).json({ success: false, error: error.message });
     }
     const normalizedTimestamp = identity.observedAt;
-    let persistedAt;
+    let persistedAt = null;
     try {
       await saveTelemetryPoint(normalizedSensorId, normalizedTemperature, normalizedTimestamp, identity);
       persistedAt = new Date();
     } catch (error) {
       logger.error('[ISO20387][IOT] Falha ao persistir telemetria no InfluxDB:', error.message || error);
-      res.locals.auditReason = 'telemetry_not_persisted';
-      return res.status(503).json({ success: false, code: 'TELEMETRY_NOT_PERSISTED', error: 'Leitura não persistida no InfluxDB' });
     }
 
     let policyData = null;
@@ -314,6 +315,14 @@ async function ingestTelemetry(req, res) {
           });
         }
       }
+    }
+
+    // #1317: not persisted, so not accepted; the policy above still ran.
+    // The rejection's row is the global audit.middleware.js one, with this
+    // reason.
+    if (!persistedAt) {
+      res.locals.auditReason = 'telemetry_not_persisted';
+      return res.status(503).json({ success: false, code: 'TELEMETRY_NOT_PERSISTED', error: 'Leitura não persistida no InfluxDB' });
     }
 
     // #1093: this route wrote no audit row at all. Its HTTP machine-ingest
