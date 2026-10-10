@@ -206,6 +206,43 @@ describe('InfluxTelemetryWriteRepository', () => {
       expect(millis).toBeGreaterThanOrEqual(before);
       expect(millis).toBeLessThanOrEqual(after);
     });
+
+    // #1317: the point's time is observedAt, and it carries the reading's id.
+    it('uses observedAt over timestamp, and carries telemetryReadingId and clockStatus', () => {
+      const observedAt = new Date('2026-02-02T00:00:00.000Z');
+      const point = repository.toPoint({
+        temperatureValue: 1,
+        timestamp: '2026-01-01T00:00:00.000Z',
+        observedAt,
+        telemetryReadingId: 'tr-1',
+        clockStatus: 'drift',
+      });
+      const line = point.toLineProtocol();
+      expect(line.trim().endsWith(String(observedAt.getTime() * 1e6))).toBe(true);
+      expect(line).toContain('telemetryReadingId="tr-1"');
+      expect(line).toContain('clockStatus=drift');
+    });
+  });
+
+  // #1317 (RF009 AC1): the authoritative write is awaited, not buffered.
+  describe('writeTemperatureReadingNow', () => {
+    it('writes and flushes the one point, then returns the confirmation time', async () => {
+      const writeApi = { writePoint: vi.fn(), flush: vi.fn().mockResolvedValue(undefined) };
+      repository.writeApi = writeApi;
+      const before = Date.now();
+
+      const persistedAt = await repository.writeTemperatureReadingNow({ temperatureValue: 4, sensorId: 's1' });
+
+      expect(writeApi.writePoint).toHaveBeenCalledTimes(1);
+      expect(writeApi.flush).toHaveBeenCalledTimes(1);
+      expect(persistedAt.getTime()).toBeGreaterThanOrEqual(before);
+      expect(repository.buffer).toEqual([]);
+    });
+
+    it('rejects when the flush fails, so the caller stores nothing', async () => {
+      repository.writeApi = { writePoint: vi.fn(), flush: vi.fn().mockRejectedValue(new Error('influx down')) };
+      await expect(repository.writeTemperatureReadingNow({ temperatureValue: 4 })).rejects.toThrow('influx down');
+    });
   });
 
   describe('flush', () => {

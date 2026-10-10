@@ -10,7 +10,7 @@ import {
   removeSeededFreezerSample,
   findFreezerSample,
 } from './helpers/seedSensor';
-import { queryTemperaturePoints } from './helpers/queryInflux';
+import { queryTemperaturePoints, queryFreezerReadingIds } from './helpers/queryInflux';
 import { realLogin } from './helpers/realAuth';
 import { computeTotp } from './helpers/totp';
 import { clearLoginAttempts, closeLoginAttemptsDb } from './helpers/queryLoginAttempts';
@@ -1308,6 +1308,11 @@ test.describe('Telemetry reading identity and replay (#1317, RF009) — real bac
     expect(stored.telemetryReadingId).toMatch(/^[0-9a-f-]{36}$/);
     expect(stored.receivedAt).toBeTruthy();
     expect(stored.payloadHash).toMatch(/^[0-9a-f]{64}$/);
+    // RF009 AC1: acknowledged only after InfluxDB holds the point, at observedAt.
+    expect(stored.persistedAt).toBeTruthy();
+    const points = await queryFreezerReadingIds(sensorId);
+    expect(points.map((p) => ({ time: new Date(p.time).toISOString(), id: p.telemetryReadingId })))
+      .toEqual([{ time: timestamp, id: stored.telemetryReadingId }]);
 
     const replay = await send({ timestamp, idempotencyKey: `${sensorId}-k1`, temperatureValue: 9 });
     expect(replay.status(), await replay.text()).toBe(200);

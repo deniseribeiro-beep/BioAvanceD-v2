@@ -58,6 +58,19 @@ describe('temperature.controller.createReading', () => {
     expect(logSpy).not.toHaveBeenCalled();
   });
 
+  // #1317 (RF009 AC1): InfluxDB did not confirm the write, nothing was stored.
+  it('answers 503 with the code when InfluxDB did not persist the reading', async () => {
+    vi.spyOn(temperatureService, 'createTemperatureReading')
+      .mockRejectedValue(Object.assign(new Error('Leitura não persistida no InfluxDB: down'), { statusCode: 503, code: 'TELEMETRY_NOT_PERSISTED' }));
+    const req = { app: { locals: { db: {} } }, body: {}, organizationScope: { scope: 'global' } };
+    const res = buildRes();
+
+    await temperatureController.createReading(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(503);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: false, code: 'TELEMETRY_NOT_PERSISTED' }));
+  });
+
   it('returns 400 with the error message when the service throws', async () => {
     vi.spyOn(temperatureService, 'createTemperatureReading').mockRejectedValue(new Error('invalid payload'));
     const req = { app: { locals: { db: {} } }, body: {} };

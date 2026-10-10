@@ -133,6 +133,15 @@ class TemperatureController {
           message: error.message
         });
       }
+      // #1317: InfluxDB did not confirm the write, so nothing was stored.
+      if (error.statusCode === 503) {
+        return res.status(503).json({
+          success: false,
+          code: error.code,
+          error: error.message,
+          message: error.message
+        });
+      }
       return res.status(error.statusCode === 422 ? 422 : 400).json({
         success: false,
         error: 'Erro ao registrar temperatura',

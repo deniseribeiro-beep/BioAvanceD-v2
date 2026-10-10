@@ -52,3 +52,22 @@ export async function queryTemperaturePoints(
   const rows = await queryApi.collectRows<{ _time: string; _value: number }>(flux);
   return rows.map((row) => ({ time: row._time, value: row._value }));
 }
+
+/**
+ * #1317: the telemetryReadingId of every `freezer_temperature` point the
+ * temperature reading route wrote for `sensorId`, with each point's time.
+ */
+export async function queryFreezerReadingIds(
+  sensorId: string,
+  lookbackMinutes = 10
+): Promise<{ time: string; telemetryReadingId: string }[]> {
+  const queryApi = getClient().getQueryApi(org);
+  const flux = `from(bucket: "${bucket}")
+    |> range(start: -${lookbackMinutes}m)
+    |> filter(fn: (r) => r._measurement == "freezer_temperature")
+    |> filter(fn: (r) => r._field == "telemetryReadingId")
+    |> filter(fn: (r) => r.sensorId == "${sensorId}")`;
+
+  const rows = await queryApi.collectRows<{ _time: string; _value: string }>(flux);
+  return rows.map((row) => ({ time: row._time, telemetryReadingId: row._value }));
+}

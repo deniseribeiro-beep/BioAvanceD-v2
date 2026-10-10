@@ -21,7 +21,7 @@ const { createHash, randomUUID } = require('crypto');
  *   receipt, `drift` beyond it (either side), `unknown` with no device time.
  *
  * persistedAt (V2E-0550) is the confirmation of the authoritative InfluxDB
- * write, so it waits for the slice that makes InfluxDB the authority.
+ * write, so the write path stamps it once that write returns.
  */
 const CLOCK_SKEW_TOLERANCE_MS = 5 * 60 * 1000;
 const MAX_IDEMPOTENCY_KEY_LENGTH = 200;

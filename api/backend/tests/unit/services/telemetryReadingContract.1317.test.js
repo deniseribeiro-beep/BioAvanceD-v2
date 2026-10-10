@@ -76,13 +76,13 @@ function temperaturesCollection(stored = null) {
 
 describe('createTemperatureReading stores the identity and replays a client key', () => {
   it('stores the v4 identity fields with the reading', async () => {
-    vi.spyOn(influxTelemetryWriteRepository, 'enqueueTemperatureReading').mockImplementation(() => {});
+    vi.spyOn(influxTelemetryWriteRepository, 'writeTemperatureReadingNow').mockResolvedValue(new Date('2026-10-10T12:00:01.000Z'));
     const temperatures = temperaturesCollection();
     const db = { collection: vi.fn(() => temperatures) };
     const result = await temperatureService.createTemperatureReading(db, { sensorId: 's1', temperatureValue: 4 });
     const written = temperatures.insertOne.mock.calls[0][0];
     expect(written).toMatchObject({ clockStatus: 'unknown', idempotencyKeySource: 'derived' });
-    for (const field of ['telemetryReadingId', 'observedAt', 'receivedAt', 'payloadHash', 'idempotencyKey']) {
+    for (const field of ['telemetryReadingId', 'observedAt', 'receivedAt', 'persistedAt', 'payloadHash', 'idempotencyKey']) {
       expect(written[field], field).toBeTruthy();
     }
     expect(result.replayed).toBeUndefined();
@@ -90,19 +90,18 @@ describe('createTemperatureReading stores the identity and replays a client key'
   });
 
   it('a stored client key for the sensor replays the stored reading and writes nothing', async () => {
-    const enqueue = vi.spyOn(influxTelemetryWriteRepository, 'enqueueTemperatureReading').mockImplementation(() => {});
+    const write = vi.spyOn(influxTelemetryWriteRepository, 'writeTemperatureReadingNow').mockResolvedValue(new Date('2026-10-10T12:00:01.000Z'));
     const temperatures = temperaturesCollection({ _id: 'old-id', sensorId: 's1', idempotencyKey: 'k-1', temperatureValue: 4 });
     const db = { collection: vi.fn(() => temperatures) };
     const result = await temperatureService.createTemperatureReading(db, { sensorId: 's1', temperatureValue: 4, idempotencyKey: 'k-1' });
     expect(result).toMatchObject({ _id: 'old-id', replayed: true });
     expect(temperatures.findOne).toHaveBeenCalledWith({ sensorId: 's1', idempotencyKey: 'k-1', idempotencyKeySource: 'client' });
     expect(temperatures.insertOne).not.toHaveBeenCalled();
-    await Promise.resolve();
-    expect(enqueue).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
   });
 
   it('control: a new client key is stored once', async () => {
-    vi.spyOn(influxTelemetryWriteRepository, 'enqueueTemperatureReading').mockImplementation(() => {});
+    vi.spyOn(influxTelemetryWriteRepository, 'writeTemperatureReadingNow').mockResolvedValue(new Date('2026-10-10T12:00:01.000Z'));
     const temperatures = temperaturesCollection(null);
     const db = { collection: vi.fn(() => temperatures) };
     const result = await temperatureService.createTemperatureReading(db, { sensorId: 's1', temperatureValue: 4, idempotencyKey: 'k-2' });
@@ -112,7 +111,7 @@ describe('createTemperatureReading stores the identity and replays a client key'
   });
 
   it('a concurrent send that loses the unique index race replays the winner', async () => {
-    vi.spyOn(influxTelemetryWriteRepository, 'enqueueTemperatureReading').mockImplementation(() => {});
+    vi.spyOn(influxTelemetryWriteRepository, 'writeTemperatureReadingNow').mockResolvedValue(new Date('2026-10-10T12:00:01.000Z'));
     vi.spyOn(logger, 'error').mockImplementation(() => {});
     const temperatures = temperaturesCollection(null);
     temperatures.findOne.mockResolvedValueOnce(null).mockResolvedValueOnce({ _id: 'winner', idempotencyKey: 'k-3' });
@@ -123,6 +122,7 @@ describe('createTemperatureReading stores the identity and replays a client key'
   });
 
   it('control: a duplicate-key error without a client key still fails', async () => {
+    vi.spyOn(influxTelemetryWriteRepository, 'writeTemperatureReadingNow').mockResolvedValue(new Date('2026-10-10T12:00:01.000Z'));
     vi.spyOn(logger, 'error').mockImplementation(() => {});
     const temperatures = temperaturesCollection(null);
     temperatures.insertOne.mockRejectedValue(Object.assign(new Error('E11000 duplicate key'), { code: 11000 }));
@@ -131,7 +131,7 @@ describe('createTemperatureReading stores the identity and replays a client key'
   });
 
   it('builds the per-sensor unique client-key index before the replay lookup', async () => {
-    vi.spyOn(influxTelemetryWriteRepository, 'enqueueTemperatureReading').mockImplementation(() => {});
+    vi.spyOn(influxTelemetryWriteRepository, 'writeTemperatureReadingNow').mockResolvedValue(new Date('2026-10-10T12:00:01.000Z'));
     const temperatures = { ...temperaturesCollection(null), collectionName: 'temperatures_index_case' };
     const db = { collection: vi.fn(() => temperatures) };
     await temperatureService.createTemperatureReading(db, { sensorId: 's1', temperatureValue: 4, idempotencyKey: 'k-4' });

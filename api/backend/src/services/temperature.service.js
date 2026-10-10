@@ -85,6 +85,20 @@ class TemperatureService {
 
       const temperature = { ...TemperatureModel.create(temperatureData), ...identity };
 
+      // RF009 AC1, RNF016 C3 (#1317): InfluxDB is the authority, so the point
+      // is written first and its confirmation is persistedAt (V2E-0550). A
+      // failed write stores nothing, raises no alert and answers 503; the
+      // Mongo document below is the queryable copy.
+      try {
+        temperature.persistedAt = await influxTelemetryWriteRepository.writeTemperatureReadingNow(temperature);
+      } catch (error) {
+        throw Object.assign(new Error(`Leitura não persistida no InfluxDB: ${error.message || error}`), {
+          statusCode: 503,
+          code: 'TELEMETRY_NOT_PERSISTED',
+          auditReason: 'telemetry_not_persisted'
+        });
+      }
+
       // Verifica política e gera alerta se necessário
       if (temperatureData.policyId || temperatureData.policyID) {
         await this.checkPolicyAndAlert(db, temperature);
@@ -99,13 +113,6 @@ class TemperatureService {
         if (stored) return { ...stored, replayed: true };
         throw error;
       }
-
-      void Promise.resolve().then(() => {
-        influxTelemetryWriteRepository.enqueueTemperatureReading({
-          _id: result.insertedId,
-          ...temperature
-        });
-      });
 
       logger.info('Leitura de temperatura registrada:', { logID: result.insertedId });
 

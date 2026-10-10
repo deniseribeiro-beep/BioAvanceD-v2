@@ -30,6 +30,16 @@ class InfluxTelemetryWriteRepository {
     this.scheduleFlush();
   }
 
+  // RF009 AC1, RNF016 C3 (#1317): InfluxDB is the reading's authority, so a
+  // reading is acknowledged only after its point is written. This awaits the
+  // write and throws on failure; the caller stores nothing and answers 503.
+  async writeTemperatureReadingNow(reading) {
+    const writeApi = await this.ensureWriteApi();
+    writeApi.writePoint(this.toPoint(reading));
+    await writeApi.flush();
+    return new Date();
+  }
+
   scheduleFlush() {
     if (this.flushTimer) {
       return;
@@ -83,7 +93,17 @@ class InfluxTelemetryWriteRepository {
       point.intField('batteryLevel', Number(reading.batteryLevel));
     }
 
-    point.timestamp(reading.timestamp ? new Date(reading.timestamp) : new Date());
+    // #1317: a reading's time is its observedAt (V2E-0548), the validated
+    // timestamp; a reading from before the contract has only `timestamp`.
+    if (reading.telemetryReadingId) {
+      point.stringField('telemetryReadingId', String(reading.telemetryReadingId));
+    }
+    if (reading.clockStatus) {
+      point.tag('clockStatus', String(reading.clockStatus));
+    }
+
+    const observedAt = reading.observedAt || reading.timestamp;
+    point.timestamp(observedAt ? new Date(observedAt) : new Date());
     return point;
   }
 
