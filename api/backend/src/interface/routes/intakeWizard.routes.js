@@ -1,4 +1,5 @@
 // backend/src/interface/routes/intakeWizard.routes.js
+const crypto = require('crypto');
 const express = require('express');
 const { ObjectId } = require('mongodb');
 const intakeWizardRouter = require('../../../src/routes/intakeWizard');
@@ -7,6 +8,7 @@ const { requirePermission, requireOrganizationScope } = require('../../infrastru
 const { getCollection } = require('../../utils/collectionResolver');
 const { SampleModel } = require('../../models/Sample');
 const quarantineActionService = require('../../services/quarantine-action.service');
+const operationalStateDecisionService = require('../../services/operationalStateDecision.service');
 const MongoStorageRepository = require('../../infrastructure/persistence/mongo/MongoStorageRepository');
 const GetSampleStorageLocationUseCase = require('../../core/use-cases/GetSampleStorageLocationUseCase');
 
@@ -147,16 +149,27 @@ async function enforcePersistedGovernanceStatus(req, body) {
   });
 
   if (existingSample?._id) {
+    let action = null;
     if (specimenStatus === 'quarantined' && !wasQuarantined) {
-      const action = await quarantineActionService.recordAction(db, {
+      action = await quarantineActionService.recordAction(db, {
         specimenIds: [quarantineActionService.canonicalSpecimenId(existingSample)],
         reasonCodes: [governanceStatus.quarantineReason || 'INTAKE_GOVERNANCE'],
       });
       await quarantineActionService.auditDecision(db, { decision: 'applied', action, req });
     } else if (specimenStatus !== 'quarantined' && wasQuarantined) {
-      const action = await quarantineActionService.releaseActiveAction(db, existingSample, req.user?.userID || 'SYSTEM');
+      action = await quarantineActionService.releaseActiveAction(db, existingSample, req.user?.userID || 'SYSTEM');
       await quarantineActionService.auditDecision(db, { decision: 'released', action, req });
     }
+    // RF006 AC7 (#1315): a change of the stored status is a decision,
+    // triggered by the action it applied or released, else by this write.
+    await operationalStateDecisionService.recordStatusChange(db, {
+      specimenId: quarantineActionService.canonicalSpecimenId(existingSample),
+      previousStatus: SampleModel.resolveSpecimenStatus(existingSample),
+      newStatus: specimenStatus,
+      triggerEventId: action?.quarantineActionId || crypto.randomUUID(),
+      rulesApplied: ['intake_governance'],
+      reasonCodes: [governanceStatus.quarantineReason || 'INTAKE_GOVERNANCE_CLEARED'],
+    });
   }
 
   return governanceStatus;

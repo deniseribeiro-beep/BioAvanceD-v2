@@ -11,6 +11,7 @@ const rbacPath = require.resolve('../../src/infrastructure/middleware/rbac.js');
 const innerRoutePath = require.resolve('../../src/routes/intakeWizard.js');
 const collectionResolverPath = require.resolve('../../src/utils/collectionResolver.js');
 const quarantineActionServicePath = require.resolve('../../src/services/quarantine-action.service.js');
+const decisionServicePath = require.resolve('../../src/services/operationalStateDecision.service.js');
 // RF019 AC#6: the decision is audited through this singleton, kept out of
 // clearCache so a spy on it reaches the freshly required service.
 const auditLogger = require('../../src/utils/auditLogger.js');
@@ -21,7 +22,7 @@ const auditLogger = require('../../src/utils/auditLogger.js');
 // its binding stays pointed at the real getCollection forever. Bust it
 // alongside the route/auth/rbac paths so each loadRouter() re-requires
 // it fresh, picking up the currently-installed mock.
-const allPaths = [routePath, authPath, rbacPath, innerRoutePath, collectionResolverPath, quarantineActionServicePath];
+const allPaths = [routePath, authPath, rbacPath, innerRoutePath, collectionResolverPath, quarantineActionServicePath, decisionServicePath];
 
 function clearCache() {
   for (const p of allPaths) delete require.cache[p];
@@ -44,10 +45,19 @@ function buildQuarantineActionsCollection({ activeAction = null } = {}) {
   };
 }
 
-function buildGetCollectionImpl({ samplesCollection, quarantineActionsCollection } = {}) {
+function buildDecisionsCollection() {
+  return { insertOne: vi.fn().mockResolvedValue({ insertedId: 'osd-1' }) };
+}
+
+function buildGetCollectionImpl({ samplesCollection, quarantineActionsCollection, decisionsCollection } = {}) {
   const samples = samplesCollection || buildSamplesCollection();
   const quarantineActions = quarantineActionsCollection || buildQuarantineActionsCollection();
-  return vi.fn((db, name) => Promise.resolve(name === 'quarantineActions' ? quarantineActions : samples));
+  const decisions = decisionsCollection || buildDecisionsCollection();
+  return vi.fn((db, name) => {
+    if (name === 'quarantineActions') return Promise.resolve(quarantineActions);
+    if (name === 'operationalStateDecisions') return Promise.resolve(decisions);
+    return Promise.resolve(samples);
+  });
 }
 
 function loadRouter({ getCollectionImpl, innerRouterBuilder } = {}) {
@@ -152,7 +162,8 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
     const existingSample = { _id: 'sample-1', specimenId: 'spec-1', specimenStatus: 'available' };
     const samplesCollection = buildSamplesCollection({ existingSample });
     const quarantineActionsCollection = buildQuarantineActionsCollection();
-    const getCollectionImpl = buildGetCollectionImpl({ samplesCollection, quarantineActionsCollection });
+    const decisionsCollection = buildDecisionsCollection();
+    const getCollectionImpl = buildGetCollectionImpl({ samplesCollection, quarantineActionsCollection, decisionsCollection });
     const router = loadRouter({ getCollectionImpl });
     const app = buildApp(router, {});
 
@@ -160,6 +171,17 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
       success: true,
       sample: { specimenId: 'spec-1' },
       consent: { active: false, reason: 'PENDING_SIGNATURE' },
+    });
+
+    // RF006 AC7 (#1315): the change is a decision triggered by its action.
+    expect(decisionsCollection.insertOne).toHaveBeenCalledTimes(1);
+    expect(decisionsCollection.insertOne.mock.calls[0][0]).toMatchObject({
+      specimenId: 'spec-1',
+      previousStatus: 'available',
+      newStatus: 'quarantined',
+      triggerEventId: quarantineActionsCollection.insertOne.mock.calls[0][0].quarantineActionId,
+      rulesApplied: ['intake_governance'],
+      reasonCodes: ['PENDING_SIGNATURE'],
     });
 
     expect(res.status).toBe(200);
@@ -197,7 +219,8 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
   it('persists BLOCKED status when the persisted specimenStatus itself is unavailable (consent active)', async () => {
     const existingSample = { _id: 'sample-2', specimenId: 'spec-2', specimenStatus: 'available' };
     const samplesCollection = buildSamplesCollection({ existingSample });
-    const getCollectionImpl = buildGetCollectionImpl({ samplesCollection });
+    const decisionsCollection = buildDecisionsCollection();
+    const getCollectionImpl = buildGetCollectionImpl({ samplesCollection, decisionsCollection });
     const router = loadRouter({ getCollectionImpl });
     const app = buildApp(router, {});
 
@@ -210,6 +233,12 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
     expect(res.status).toBe(200);
     expect(res.body.sample.status).toBe('BLOCKED');
     expect(res.body.sample.quarantineReason).toBe('CONSENT_PENDING');
+    // #1315: a change with no QuarantineAction is still a decision.
+    expect(decisionsCollection.insertOne.mock.calls[0][0]).toMatchObject({
+      previousStatus: 'available',
+      newStatus: 'unavailable',
+      triggerEventId: expect.any(String),
+    });
   });
 
   it('persists QUARANTINE status from the persisted specimenStatus and records a QuarantineAction', async () => {
@@ -239,7 +268,8 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
     const existingSample = { _id: 'sample-4', specimenId: 'spec-4', specimenStatus: 'quarantined' };
     const samplesCollection = buildSamplesCollection({ existingSample });
     const quarantineActionsCollection = buildQuarantineActionsCollection();
-    const getCollectionImpl = buildGetCollectionImpl({ samplesCollection, quarantineActionsCollection });
+    const decisionsCollection = buildDecisionsCollection();
+    const getCollectionImpl = buildGetCollectionImpl({ samplesCollection, quarantineActionsCollection, decisionsCollection });
     const router = loadRouter({ getCollectionImpl });
     const app = buildApp(router, {});
 
@@ -253,6 +283,8 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
     expect(res.body.sample.status).toBe('QUARANTINE');
     expect(res.body.sample.quarantineReason).toBe('CUSTOM_REASON');
     expect(quarantineActionsCollection.insertOne).not.toHaveBeenCalled();
+    // #1315: no change, no decision.
+    expect(decisionsCollection.insertOne).not.toHaveBeenCalled();
   });
 
   it('releases and audits the active QuarantineAction, attributed to the authenticated user, when a previously quarantined sample resolves to AVAILABLE', async () => {
