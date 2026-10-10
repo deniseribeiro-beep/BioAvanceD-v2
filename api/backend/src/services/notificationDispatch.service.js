@@ -101,20 +101,54 @@ async function dispatchNotification(db, { eventType, sourceEventType, sourceEven
   const subject = `[BioAvanceD] Alerta: ${eventType}`;
   const message = `Evento ${eventType} detectado. Detalhes: ${JSON.stringify(sanitizedPayload)}`;
 
+  // #903 (RF015 AC3 "tentativas", AC1): the notification is stored before
+  // any send, naming its rule and the ConfigurationRelease in force, and each
+  // attempt is written as `attempted` before its channel is called, then
+  // given its result. A process that dies mid-send leaves the attempt.
+  const notificationsCollection = await getCollection(db, 'notifications');
   const attempts = [];
+  const document = {
+    ruleId: rule._id,
+    ruleVersion: rule.version,
+    configurationReleaseId: await activeConfigurationReleaseId(db),
+    eventType,
+    sourceEventType: sourceEventType || eventType,
+    sourceEventId: sourceEventId ? String(sourceEventId) : null,
+    payload: sanitizedPayload,
+    recipients,
+    attempts: [],
+    status: 'dispatching',
+    escalated: false,
+    deliveredChannel: null,
+    createdAt,
+    deliveredAt: null,
+    confirmedAt: null,
+    deliveryDurationMs: null,
+    maxDeliveryMinutes: rule.maxDeliveryMinutes,
+    withinSla: null
+  };
+  const { insertedId } = await notificationsCollection.insertOne(document);
+  // Each write carries copies of the attempts, never the array this loop edits.
+  const record = (set) => notificationsCollection.updateOne(
+    { _id: insertedId },
+    { $set: { ...set, attempts: attempts.map((entry) => ({ ...entry })) } }
+  );
+  const attempt = async (channel, escalation, send) => {
+    const entry = { channel, timestamp: new Date(), result: 'attempted', reason: null, escalation };
+    attempts.push(entry);
+    await record({ attempts });
+    const result = await send();
+    entry.result = result.success ? 'success' : 'failure';
+    entry.reason = result.reason || null;
+    await record({ attempts });
+    return result;
+  };
+
   let delivered = false;
   let deliveredChannel = null;
 
   for (const channel of rule.channels) {
-    const attemptTime = new Date();
-    const result = await sendViaChannel(channel, { recipients, subject, message });
-    attempts.push({
-      channel,
-      timestamp: attemptTime,
-      result: result.success ? 'success' : 'failure',
-      reason: result.reason || null,
-      escalation: false
-    });
+    const result = await attempt(channel, false, () => sendViaChannel(channel, { recipients, subject, message }));
     if (result.success) {
       delivered = true;
       deliveredChannel = channel;
@@ -127,19 +161,11 @@ async function dispatchNotification(db, { eventType, sourceEventType, sourceEven
     const failedAttempts = attempts.filter((attempt) => attempt.result === 'failure').length;
     if (failedAttempts >= rule.escalation.afterFailures) {
       escalated = true;
-      const escalationTime = new Date();
-      const escalationResult = await sendViaChannel(rule.escalation.channel, {
+      const escalationResult = await attempt(rule.escalation.channel, true, () => sendViaChannel(rule.escalation.channel, {
         recipients,
         subject: `[ESCALADO] ${subject}`,
         message
-      });
-      attempts.push({
-        channel: rule.escalation.channel,
-        timestamp: escalationTime,
-        result: escalationResult.success ? 'success' : 'failure',
-        reason: escalationResult.reason || null,
-        escalation: true
-      });
+      }));
       if (escalationResult.success) {
         delivered = true;
         deliveredChannel = rule.escalation.channel;
@@ -150,32 +176,27 @@ async function dispatchNotification(db, { eventType, sourceEventType, sourceEven
   const deliveredAt = delivered ? new Date() : null;
   const deliveryDurationMs = deliveredAt ? deliveredAt.getTime() - createdAt.getTime() : null;
 
-  const notificationsCollection = await getCollection(db, 'notifications');
-  const document = {
-    ruleId: rule._id,
-    ruleVersion: rule.version,
-    eventType,
-    sourceEventType: sourceEventType || eventType,
-    sourceEventId: sourceEventId ? String(sourceEventId) : null,
-    payload: sanitizedPayload,
-    recipients,
+  const outcome = {
     attempts,
     status: delivered ? 'delivered' : (escalated ? 'escalated_failed' : 'failed'),
     escalated,
     deliveredChannel,
-    createdAt,
     deliveredAt,
-    confirmedAt: null,
     deliveryDurationMs,
-    maxDeliveryMinutes: rule.maxDeliveryMinutes,
     // RNF026 AC#1 - measurable against the rule's own SLA; null while
     // undelivered rather than false, since "not yet delivered" and
     // "delivered late" are different states.
     withinSla: deliveredAt ? deliveryDurationMs <= rule.maxDeliveryMinutes * 60000 : null
   };
+  await record(outcome);
+  return { _id: insertedId, ...document, ...outcome };
+}
 
-  const result = await notificationsCollection.insertOne(document);
-  return { _id: result.insertedId, ...document };
+// CFG-004 ("Toda execução ou decisão registra configurationReleaseId"): the
+// ConfigurationRelease the stored configuration names, or null before any.
+async function activeConfigurationReleaseId(db) {
+  const config = await db.collection('security_config').findOne({ _id: 'main' });
+  return config?.configurationReleaseId || null;
 }
 
 // AC#3 "confirmação" - an explicit read receipt, distinct from delivered

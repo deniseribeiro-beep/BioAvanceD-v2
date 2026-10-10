@@ -195,6 +195,37 @@ describe('notificationDispatch.service', () => {
       ]);
     });
 
+    it('#903 (RF015 AC3/AC1): stores the notification and its attempt before the channel is called, naming the ConfigurationRelease in force', async () => {
+      const notificationRules = statefulCollection();
+      const notifications = statefulCollection();
+      const securityConfig = createCollectionMock({
+        findOne: vi.fn(async (query) => (query?._id === 'main' ? { _id: 'main', configurationReleaseId: 'rel-7' } : null)),
+      });
+      const db = buildDb({ notificationRules: notificationRules.mock, notifications: notifications.mock, security_config: securityConfig });
+      await notificationRuleService.createRule(db, {
+        eventType: 'environmental_excursion',
+        channels: ['email'],
+        recipientRoleCodes: ['administrator'],
+        sensitiveFieldsAllowlist: [],
+        maxDeliveryMinutes: 2,
+      });
+      let atSend = null;
+      vi.spyOn(notificationServiceV2, 'sendEmail').mockImplementation(async () => {
+        atSend = JSON.parse(JSON.stringify(notifications.docs));
+        throw new Error('transport down');
+      });
+
+      const result = await notificationDispatchService.dispatchNotification(db, { eventType: 'environmental_excursion', payload: {} });
+
+      expect(atSend).toHaveLength(1);
+      expect(atSend[0]).toMatchObject({ status: 'dispatching', configurationReleaseId: 'rel-7' });
+      expect(atSend[0].attempts).toEqual([expect.objectContaining({ channel: 'email', result: 'attempted' })]);
+      expect(notifications.docs).toHaveLength(1);
+      expect(notifications.docs[0]).toMatchObject({ status: 'failed', configurationReleaseId: 'rel-7' });
+      expect(notifications.docs[0].attempts).toEqual([expect.objectContaining({ channel: 'email', result: 'failure', reason: 'transport down' })]);
+      expect(result).toMatchObject({ status: 'failed', configurationReleaseId: 'rel-7', ruleVersion: 'v1' });
+    });
+
     it('does not escalate when escalation is disabled and every channel fails', async () => {
       const notificationRules = statefulCollection();
       const notifications = statefulCollection();
