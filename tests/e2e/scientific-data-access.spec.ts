@@ -440,6 +440,21 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
     );
     expect((await allowedCheck.json()).data).toMatchObject({ allowed: true, reason: 'approved' });
 
+    // RF019 AC3 (#1315): a specimen quarantined after the approval is not sent.
+    const specimenId = accessRequest.requestedItems[0].itemId;
+    const setStatus = (specimenStatus: string) => request.put(`${apiBaseURL}/api/samples/${specimenId}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { specimenStatus },
+    });
+    expect((await setStatus('quarantined')).status()).toBe(200);
+    const refused = await request.post(
+      `${apiBaseURL}/api/access-requests/${accessRequest.accessRequestId}/distribute`,
+      { headers: { Authorization: `Bearer ${admin.token}` } }
+    );
+    expect(refused.status()).toBe(400);
+    expect((await refused.json()).message).toMatch(/quarentena/);
+    expect((await setStatus('available')).status()).toBe(200);
+
     // AC#4 - approval linked to real distribution/availability.
     const distribute = await request.post(
       `${apiBaseURL}/api/access-requests/${accessRequest.accessRequestId}/distribute`,

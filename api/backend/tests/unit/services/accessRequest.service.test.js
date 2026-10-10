@@ -756,6 +756,17 @@ describe('accessRequest.service', () => {
       await expect(accessRequestService.markDistributed(db, accessRequestId)).rejects.toThrow(/expired/);
     });
 
+    it('refuses to link distribution while a requested specimen is quarantined, and links it once released (RF019 AC3, #1315)', async () => {
+      const { db, accessRequestId } = await seedApproved();
+      const sample = db.collection('samples').docs.find((doc) => doc.specimenId === 'SPEC-1');
+      sample.specimenStatus = 'quarantined';
+
+      await expect(accessRequestService.markDistributed(db, accessRequestId)).rejects.toThrow(/quarentena \(SPEC-1\)/);
+
+      sample.specimenStatus = 'available';
+      expect((await accessRequestService.markDistributed(db, accessRequestId)).distributionStatus).toBe('released');
+    });
+
     it('refuses to revoke a request that was never approved/conditioned', async () => {
       const db = createFakeDb({ studies: [{ studyId: 'study-1', studyStatus: 'active' }] });
       const created = await accessRequestService.createRequest(db, baseRequestPayload());

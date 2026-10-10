@@ -3,6 +3,7 @@ const { ObjectId } = require('mongodb');
 const AccessRequestModel = require('../models/AccessRequest');
 const { evaluatePolicies } = require('../models/AccessPolicy');
 const ConsentAuthorizationDecisionModel = require('../models/ConsentAuthorizationDecision');
+const { SampleModel } = require('../models/Sample');
 const { getCollection } = require('../utils/collectionResolver');
 
 // sources/duo.js's own fixed systemUri for every DUO-imported TerminologyConcept.
@@ -364,6 +365,23 @@ class AccessRequestService {
     const access = evaluateAccessState(accessRequest);
     if (!access.allowed) {
       throw new Error(`Não é possível vincular a remessa/disponibilização: acesso ${access.reason}`);
+    }
+
+    // RF019 AC3 (#1315): a specimen quarantined since the approval is not
+    // sent. The compatibility decision read its state then; this reads it now.
+    const specimenIds = (accessRequest.requestedItems || [])
+      .filter((item) => item.itemType === 'specimen')
+      .map((item) => String(item.itemId));
+    if (specimenIds.length) {
+      const samples = await getCollection(db, 'samples');
+      const quarantined = [];
+      for (const specimenId of specimenIds) {
+        const sample = await samples.findOne({ specimenId });
+        if (sample && SampleModel.resolveSpecimenStatus(sample) === 'quarantined') quarantined.push(specimenId);
+      }
+      if (quarantined.length) {
+        throw new Error(`Não é possível vincular a remessa/disponibilização: espécime em quarentena (${quarantined.join(', ')}) (RF019)`);
+      }
     }
 
     await collection.updateOne(
