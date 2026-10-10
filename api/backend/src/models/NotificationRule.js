@@ -53,6 +53,12 @@ class NotificationRuleModel {
       }
     }
 
+    // RF015 AC5 (#903): the purpose a rule's notifications serve, a code.
+    if (data.purpose !== undefined && data.purpose !== null
+      && (typeof data.purpose !== 'string' || data.purpose.trim().length === 0)) {
+      errors.push('purpose deve ser um código de texto quando informado');
+    }
+
     // RNF026 AC2 (#903): "Falhas de envio utilizam retry e escalonamento
     // configuráveis". Each channel is tried up to maxAttempts times, waiting
     // backoffSeconds between tries, inside the rule's delivery window.
@@ -101,6 +107,7 @@ class NotificationRuleModel {
       escalation: data.escalation && data.escalation.enabled
         ? { enabled: true, afterFailures: data.escalation.afterFailures, channel: data.escalation.channel }
         : { enabled: false, afterFailures: null, channel: null },
+      purpose: typeof data.purpose === 'string' ? data.purpose.trim() : null,
       // One attempt per channel unless the rule configures more (#903).
       retry: {
         maxAttempts: data.retry?.maxAttempts ?? 1,

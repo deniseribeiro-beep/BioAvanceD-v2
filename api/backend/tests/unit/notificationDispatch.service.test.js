@@ -277,6 +277,27 @@ describe('notificationDispatch.service', () => {
       expect(result.attempts.at(-1)).toMatchObject({ channel: 'in_app', escalation: true, result: 'success' });
     });
 
+    it('#903 (RF015 AC5): records the purpose (the caller\'s, else the rule\'s) and the consent concerned, outside the message payload', async () => {
+      const notificationRules = statefulCollection();
+      const notifications = statefulCollection();
+      const db = buildDb({ notificationRules: notificationRules.mock, notifications: notifications.mock });
+      await notificationRuleService.createRule(db, {
+        eventType: 'consent_revoked',
+        channels: ['in_app'],
+        recipientRoleCodes: ['administrator'],
+        sensitiveFieldsAllowlist: [],
+        maxDeliveryMinutes: 2,
+        purpose: 'consent_governance',
+      });
+
+      const linked = await notificationDispatchService.dispatchNotification(db, {
+        eventType: 'consent_revoked', payload: { consentId: 'C-1' }, purpose: 'consent_revocation', consentId: 'C-1',
+      });
+      expect(linked).toMatchObject({ purpose: 'consent_revocation', consentId: 'C-1', payload: {} });
+      const byRule = await notificationDispatchService.dispatchNotification(db, { eventType: 'consent_revoked', payload: {} });
+      expect(byRule).toMatchObject({ purpose: 'consent_governance', consentId: null });
+    });
+
     it('does not escalate when escalation is disabled and every channel fails', async () => {
       const notificationRules = statefulCollection();
       const notifications = statefulCollection();

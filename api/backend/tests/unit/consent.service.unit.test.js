@@ -2184,6 +2184,9 @@ describe('ConsentService.revokeConsent', () => {
       eventType: 'consent_revoked',
       sourceEventType: 'PatientConsent',
       sourceEventId: consentId,
+      // #903 (RF015 AC5): linked to its purpose and the consent revoked.
+      purpose: 'consent_revocation',
+      consentId: consentId.toString(),
       payload: {
         participantId: 'PART-1',
         consentId: consentId.toString()

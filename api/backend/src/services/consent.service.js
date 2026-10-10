@@ -1189,6 +1189,9 @@ class ConsentService {
       eventType: 'consent_revoked',
       sourceEventType: 'PatientConsent',
       sourceEventId: objectId,
+      // RF015 AC5 (#903): linked to its purpose and to the consent revoked.
+      purpose: 'consent_revocation',
+      consentId: objectId.toString(),
       payload: {
         participantId: consent.participantId || null,
         consentId: objectId.toString()

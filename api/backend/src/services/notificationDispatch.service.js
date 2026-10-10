@@ -88,7 +88,7 @@ async function sendViaChannel(channel, { recipients, subject, message }) {
   return { channel, success: false, reason: `unsupported_channel:${channel}` };
 }
 
-async function dispatchNotification(db, { eventType, sourceEventType, sourceEventId, payload = {} }) {
+async function dispatchNotification(db, { eventType, sourceEventType, sourceEventId, payload = {}, purpose = null, consentId = null }) {
   const rule = await notificationRuleService.getActiveRuleForEventType(db, eventType);
   if (!rule) {
     logger.info(`[NOTIFICATION_DISPATCH] Nenhuma regra ativa para eventType=${eventType} -- notificação não gerada.`);
@@ -114,6 +114,11 @@ async function dispatchNotification(db, { eventType, sourceEventType, sourceEven
     eventType,
     sourceEventType: sourceEventType || eventType,
     sourceEventId: sourceEventId ? String(sourceEventId) : null,
+    // RF015 AC5 (#903): the communication's purpose (the caller's, else the
+    // rule's) and the consent it concerns, when it concerns one. Recorded on
+    // the row only: the payload allowlist still decides what the message says.
+    purpose: purpose || rule.purpose || null,
+    consentId: consentId ? String(consentId) : null,
     payload: sanitizedPayload,
     recipients,
     attempts: [],

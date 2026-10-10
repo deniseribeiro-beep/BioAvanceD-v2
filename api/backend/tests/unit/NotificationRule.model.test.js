@@ -102,6 +102,14 @@ describe('NotificationRuleModel', () => {
     });
   });
 
+  describe('purpose (#903, RF015 AC5)', () => {
+    it('keeps a purpose code, defaults it to null, and refuses an empty one', () => {
+      expect(NotificationRuleModel.create({ ...VALID_PAYLOAD, purpose: ' consent_governance ' }).purpose).toBe('consent_governance');
+      expect(NotificationRuleModel.create(VALID_PAYLOAD).purpose).toBeNull();
+      expect(NotificationRuleModel.validate({ ...VALID_PAYLOAD, purpose: '  ' }).errors.join()).toContain('purpose');
+    });
+  });
+
   describe('retry (#903, RNF026 AC2)', () => {
     it('accepts a bounded retry and refuses one out of bounds', () => {
       expect(NotificationRuleModel.validate({ ...VALID_PAYLOAD, retry: { maxAttempts: 3, backoffSeconds: 0 } }).isValid).toBe(true);
