@@ -450,6 +450,7 @@ app.use("/api/e-consent", require("./src/routes/eConsent.js"));
 app.use("/api/retention-policies", require("./src/routes/retentionPolicy.js"));
 app.use("/api/legal-holds", require("./src/routes/legalHold.js"));
 app.use("/api/disposition-actions", require("./src/routes/dispositionAction.js"));
+app.use("/api/shipments", require("./src/routes/shipment.js"));
 app.use("/api/access-requests", require("./src/routes/accessRequest.js"));
 app.use("/api/access-policies", require("./src/routes/accessPolicy.js"));
 app.use("/api/notification-rules", require("./src/routes/notificationRule.js"));

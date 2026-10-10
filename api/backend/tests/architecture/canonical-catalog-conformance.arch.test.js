@@ -93,6 +93,7 @@ const ENTITY_TARGETS = {
   IdentificationPolicy: () => require('../../src/models/IdentificationPolicy').fieldsOf(),
   ScanEvent: () => require('../../src/models/ScanEvent').fieldsOf(),
   CustodianshipAssignment: () => require('../../src/models/CustodianshipAssignment').fieldsOf(),
+  Shipment: () => require('../../src/models/Shipment').fieldsOf(),
   TelemetryDatastream: () => require('../../src/models/TelemetryDatastream').fieldsOf(),
   DeviceRegistration: () => require('../../src/models/DeviceRegistration').fieldsOf(),
   PhysicalIdentificationValidationProtocol: () => require('../../src/models/PhysicalIdentificationValidationProtocol').fieldsOf(),

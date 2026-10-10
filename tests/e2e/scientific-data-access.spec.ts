@@ -472,6 +472,42 @@ test.describe('Access and distribution requests (RF024) — real backend', () =>
     expect(distributeBody.distributedAt).toBeTruthy();
     // AC#7 - the distribution names the decision that authorized it.
     expect(distributeBody.distributionDecisionId).toBe(decisionBody.committeeDecision.decisionId);
+
+    // #660 (RF024 AC5): the released distribution is carried out by a
+    // Shipment of the specimens it names, received by the recipient.
+    const sender = await request.post(`${apiBaseURL}/api/organizations`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { officialName: `RF024 sender ${Date.now()}`, countryCode: 'BR' },
+    });
+    expect(sender.ok(), await sender.text()).toBeTruthy();
+    const senderOrganization = (await sender.json()).data.organizationId as string;
+    organizationIds.push(senderOrganization);
+    const recipientOrganization = accessRequest.organizationId as string;
+    const shipmentBody = {
+      specimenIds: [specimenId],
+      senderOrganization,
+      recipientOrganization,
+      mtaId: 'MTA-RF024-e2e',
+      packagingType: { code: 'UN3373', display: 'Biological substance, category B' },
+      carrier: 'synthetic courier',
+      dispatchDateTime: new Date().toISOString(),
+      accessRequestId: accessRequest.accessRequestId,
+    };
+    const unlisted = await request.post(`${apiBaseURL}/api/shipments`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { ...shipmentBody, specimenIds: [specimenId, 'SPC-NOT-REQUESTED'] },
+    });
+    expect(unlisted.status(), await unlisted.text()).toBe(422);
+    const shipped = await request.post(`${apiBaseURL}/api/shipments`, { headers: { Authorization: `Bearer ${admin.token}` }, data: shipmentBody });
+    expect(shipped.status(), await shipped.text()).toBe(201);
+    const shipment = (await shipped.json()).data;
+    expect(shipment).toMatchObject({ specimenIds: [specimenId], shipmentStatus: 'dispatched', accessRequestId: accessRequest.accessRequestId, mtaId: 'MTA-RF024-e2e' });
+    const received = await request.post(`${apiBaseURL}/api/shipments/${shipment.shipmentId}/receive`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { receiptDateTime: new Date(Date.now() + 1000).toISOString(), conditionOnReceipt: { integrity: 'intact', temperature: 'ambient' } },
+    });
+    expect(received.status(), await received.text()).toBe(200);
+    expect((await received.json()).data).toMatchObject({ shipmentStatus: 'received', conditionOnReceipt: { integrity: 'intact', temperature: 'ambient' } });
   });
 
   test('an AccessPolicy permits, a newer deny version refuses the approval, and the decision names each version (AC#3, RNF008 AC4)', async ({

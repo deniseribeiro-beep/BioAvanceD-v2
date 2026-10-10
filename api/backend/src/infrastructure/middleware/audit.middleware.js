@@ -212,6 +212,7 @@ const ENTITY_MAP = {
   'sample-origins': 'SampleOrigin',
   'sample-types': 'SampleType',
   'security': 'SecurityConfiguration',
+  'shipments': 'Shipment',
   'storage': 'StorageContainer',
   // #1314/#1316: the v2 physical chain and custody; each route also writes
   // its own audit row naming the assignment it created or closed.
