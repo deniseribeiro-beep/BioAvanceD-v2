@@ -58,14 +58,17 @@ const METHOD_TO_ACTION = {
 // rather than registering routes itself. Static analysis stops at the file
 // boundary, so these are named explicitly instead of being silently
 // attributed to whatever verbs happen to follow them (there are none) and
-// passing vacuously. Keyed by `file:line` so a moved gate re-surfaces here
-// rather than inheriting the exemption.
+// passing vacuously. Keyed by file and the gate call's text (#1361), never by
+// line: a `file:line` key broke on every line added above an unchanged gate,
+// while a gate moved to another file or given another permission still
+// re-surfaces here rather than inheriting the exemption.
+const mountGateKey = (site) => `${site.file} router.use ${site.kind}(${String(site.rawArgs).replace(/\s+/g, ' ').trim()})`;
 const SUBROUTER_MOUNT_GATES = new Set([
   // `router.use(authenticate, requirePermission('createSample'),
   //  requireOrganizationScope, intakeGovernanceResponseGuard,
   //  intakeWizardRouter)` — the verbs are on intakeWizardRouter, in
   //  src/routes/intakeWizard.js.
-  'interface/routes/intakeWizard.routes.js:219',
+  "interface/routes/intakeWizard.routes.js router.use requirePermission('createSample')",
 ]);
 
 function sweep() {
@@ -91,7 +94,7 @@ test('#921/#630: the derivation actually reads route files and finds call sites'
   // one is a parse failure, not a pass. The sub-router mounts are the one
   // named exception, and naming them is the point.
   const unattributed = sites.filter((site) => {
-    if (SUBROUTER_MOUNT_GATES.has(`${site.file}:${site.line}`)) return false;
+    if (site.routerLevel && SUBROUTER_MOUNT_GATES.has(mountGateKey(site))) return false;
     if (site.routerLevel) return (site.coveredMethods || []).length === 0;
     return !site.method;
   });
@@ -104,7 +107,7 @@ test('#921/#630: the derivation actually reads route files and finds call sites'
   // The allowlist must not rot: an entry that no longer names a real
   // router-level gate is stale, and silently keeps something exempt.
   const routerLevelKeys = new Set(
-    sites.filter((s) => s.routerLevel).map((s) => `${s.file}:${s.line}`)
+    sites.filter((s) => s.routerLevel).map(mountGateKey)
   );
   assert.deepEqual(
     [...SUBROUTER_MOUNT_GATES].filter((key) => !routerLevelKeys.has(key)),
@@ -139,7 +142,7 @@ test('#630 audit, for real: every gate action is inside its code allowedActions'
     // code's allowedActions must cover all of them — one uncovered verb is
     // a route that always 403s.
     if (site.routerLevel) {
-      if (SUBROUTER_MOUNT_GATES.has(`${site.file}:${site.line}`)) continue;
+      if (SUBROUTER_MOUNT_GATES.has(mountGateKey(site))) continue;
       const methods = site.coveredMethods || [];
       const missing = methods
         .map((method) => site.explicitAction || METHOD_TO_ACTION[method])
