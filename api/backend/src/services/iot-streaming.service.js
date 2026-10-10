@@ -182,7 +182,7 @@ class IoTStreamingService {
       // payload's hash; InfluxDB is written and confirmed before the Mongo
       // copy, and a failed write throws with nothing stored.
       const { source: _source, createdAt: _createdAt, updatedAt: _updatedAt, ...received } = temperatureData;
-      const identity = readingIdentityOf(received);
+      const identity = readingIdentityOf(received, new Date(), { ingestionService: temperatureData.source === 'mqtt' ? 'mqtt' : 'iot-queue' });
       const reading = { ...temperatureData, ...identity, timestamp: identity.observedAt };
       reading.persistedAt = await influxTelemetryWriteRepository.writeTemperatureReadingNow(reading);
 

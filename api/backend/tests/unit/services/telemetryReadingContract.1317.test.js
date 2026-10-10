@@ -60,6 +60,34 @@ describe('readingIdentityOf', () => {
     expect(() => readingIdentityOf({ sensorId: 's1', temperatureValue: 4, timestamp }, RECEIVED)).toThrow(expect.objectContaining({ statusCode: 422 }));
   });
 
+  // RF009 AC2: the provenance a reading carries (V2E-0551..0560).
+  it('stamps schemaVersion, the canonical release, the ingestion service and a trace', () => {
+    const identity = readingIdentityOf({ sensorId: 's1', temperatureValue: 4 }, RECEIVED, { ingestionService: 'mqtt' });
+    expect(identity).toMatchObject({
+      schemaVersion: 'telemetry.reading.v1',
+      canonicalModelReleaseId: expect.stringMatching(/^release-\d+\.\d+\.\d+$/),
+      ingestionService: 'mqtt',
+      deviceMessageId: null,
+      sequenceNumber: null,
+    });
+    expect(identity.traceId).toMatch(UUID);
+    expect(readingIdentityOf({ sensorId: 's1', temperatureValue: 4 }, RECEIVED).ingestionService).toBe('temperature-api');
+  });
+
+  it('sourceEventId is the client\'s, else its deviceMessageId, else the reading id', () => {
+    expect(readingIdentityOf({ sensorId: 's1', temperatureValue: 4, sourceEventId: 'ev-1', deviceMessageId: 'm-1' }, RECEIVED).sourceEventId).toBe('ev-1');
+    const byMessage = readingIdentityOf({ sensorId: 's1', temperatureValue: 4, deviceMessageId: 'm-1', sequenceNumber: 7, traceId: 't-1' }, RECEIVED);
+    expect(byMessage).toMatchObject({ sourceEventId: 'm-1', deviceMessageId: 'm-1', sequenceNumber: 7, traceId: 't-1' });
+    const bare = readingIdentityOf({ sensorId: 's1', temperatureValue: 4 }, RECEIVED);
+    expect(bare.sourceEventId).toBe(bare.telemetryReadingId);
+  });
+
+  it.each([
+    [{ sourceEventId: '' }], [{ deviceMessageId: 5 }], [{ traceId: ' ' }], [{ sequenceNumber: -1 }], [{ sequenceNumber: 1.5 }], [{ sequenceNumber: '3' }],
+  ])('refuses provenance %j with 422', (extra) => {
+    expect(() => readingIdentityOf({ sensorId: 's1', temperatureValue: 4, ...extra }, RECEIVED)).toThrow(expect.objectContaining({ statusCode: 422 }));
+  });
+
   it.each([[''], ['   '], [42], ['x'.repeat(201)]])('refuses an idempotencyKey %j with 422', (idempotencyKey) => {
     expect(() => readingIdentityOf({ sensorId: 's1', temperatureValue: 4, idempotencyKey }, RECEIVED)).toThrow(expect.objectContaining({ statusCode: 422 }));
   });

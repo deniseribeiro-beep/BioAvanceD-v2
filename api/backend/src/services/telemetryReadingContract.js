@@ -22,9 +22,24 @@ const { createHash, randomUUID } = require('crypto');
  *
  * persistedAt (V2E-0550) is the confirmation of the authoritative InfluxDB
  * write, so the write path stamps it once that write returns.
+ *
+ * RF009 AC2's provenance (V2E-0551..0560):
+ * - sourceEventId: the client's, else its deviceMessageId, else
+ *   `[inference]` the telemetryReadingId, since the boundary is then the
+ *   event's origin;
+ * - deviceMessageId and sequenceNumber: kept when the device sends them;
+ * - schemaVersion: this contract's, named like the audit trail's
+ *   `audit.event.v2`;
+ * - canonicalModelReleaseId: the release this build runs;
+ * - ingestionService: the path that received the reading;
+ * - traceId: the client's, else a new one; `[inference]` no request id
+ *   reaches the services yet.
  */
+const { CANONICAL_MODEL_RELEASE_ID } = require('../foundation/readiness');
+
 const CLOCK_SKEW_TOLERANCE_MS = 5 * 60 * 1000;
 const MAX_IDEMPOTENCY_KEY_LENGTH = 200;
+const TELEMETRY_READING_SCHEMA_VERSION = 'telemetry.reading.v1';
 
 function canonicalJson(value) {
   if (value instanceof Date) return JSON.stringify(value.toISOString());
@@ -55,7 +70,16 @@ function clockStatusOf(deviceTime, receivedAt) {
  * The reading's v4 identity and time. Throws a 422 for a timestamp that is
  * not a date, or an idempotencyKey that is not a non-empty string.
  */
-function readingIdentityOf(payload, receivedAt = new Date()) {
+function optionalText(received, field) {
+  const value = received[field];
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string' || !value.trim() || value.length > MAX_IDEMPOTENCY_KEY_LENGTH) {
+    throw validationError(`${field} deve ser um texto não vazio de até ${MAX_IDEMPOTENCY_KEY_LENGTH} caracteres`);
+  }
+  return value.trim();
+}
+
+function readingIdentityOf(payload, receivedAt = new Date(), { ingestionService = 'temperature-api' } = {}) {
   const { organizationId: _stamped, ...received } = payload || {};
 
   let deviceTime = null;
@@ -69,11 +93,27 @@ function readingIdentityOf(payload, receivedAt = new Date()) {
     throw validationError(`idempotencyKey deve ser um texto não vazio de até ${MAX_IDEMPOTENCY_KEY_LENGTH} caracteres`);
   }
 
+  const sourceEventId = optionalText(received, 'sourceEventId');
+  const deviceMessageId = optionalText(received, 'deviceMessageId');
+  const traceId = optionalText(received, 'traceId');
+  const { sequenceNumber } = received;
+  if (sequenceNumber !== undefined && sequenceNumber !== null && !(Number.isInteger(sequenceNumber) && sequenceNumber >= 0)) {
+    throw validationError('sequenceNumber deve ser um inteiro não negativo');
+  }
+
   const observedAt = deviceTime || receivedAt;
   const payloadHash = sha256(canonicalJson(received));
   const sensorId = String(received.sensorId || received.sensorID || '');
+  const telemetryReadingId = randomUUID();
   return {
-    telemetryReadingId: randomUUID(),
+    telemetryReadingId,
+    sourceEventId: sourceEventId || deviceMessageId || telemetryReadingId,
+    deviceMessageId,
+    sequenceNumber: sequenceNumber ?? null,
+    schemaVersion: TELEMETRY_READING_SCHEMA_VERSION,
+    canonicalModelReleaseId: CANONICAL_MODEL_RELEASE_ID,
+    ingestionService,
+    traceId: traceId || randomUUID(),
     observedAt,
     receivedAt,
     clockStatus: clockStatusOf(deviceTime, receivedAt),
@@ -83,4 +123,4 @@ function readingIdentityOf(payload, receivedAt = new Date()) {
   };
 }
 
-module.exports = { readingIdentityOf, canonicalJson, CLOCK_SKEW_TOLERANCE_MS, MAX_IDEMPOTENCY_KEY_LENGTH };
+module.exports = { readingIdentityOf, canonicalJson, CLOCK_SKEW_TOLERANCE_MS, MAX_IDEMPOTENCY_KEY_LENGTH, TELEMETRY_READING_SCHEMA_VERSION };

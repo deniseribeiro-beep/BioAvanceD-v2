@@ -200,6 +200,13 @@ describe('iot-streaming.service', () => {
       const stored = temperaturesCollection.insertOne.mock.calls[0][0];
       expect(stored.clockStatus).toBe('unknown');
       expect(stored.timestamp).toBe(stored.receivedAt);
+      expect(stored.ingestionService).toBe('mqtt');
+    });
+
+    it('control: a queued reading names the queue as its ingestion service', async () => {
+      const { db, temperaturesCollection } = makeDb();
+      await service.processTemperatureData(db, baseTemperatureData);
+      expect(temperaturesCollection.insertOne.mock.calls[0][0].ingestionService).toBe('iot-queue');
     });
 
     it('the server-added fields are not part of the payload hash', async () => {

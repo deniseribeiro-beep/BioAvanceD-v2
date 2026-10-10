@@ -1308,6 +1308,10 @@ test.describe('Telemetry reading identity and replay (#1317, RF009) — real bac
     expect(stored.telemetryReadingId).toMatch(/^[0-9a-f-]{36}$/);
     expect(stored.receivedAt).toBeTruthy();
     expect(stored.payloadHash).toMatch(/^[0-9a-f]{64}$/);
+    // RF009 AC2: provenance.
+    expect(stored).toMatchObject({ schemaVersion: 'telemetry.reading.v1', ingestionService: 'temperature-api', sourceEventId: stored.telemetryReadingId });
+    expect(stored.canonicalModelReleaseId).toMatch(/^release-/);
+    expect(stored.traceId).toBeTruthy();
     // RF009 AC1: acknowledged only after InfluxDB holds the point, at observedAt.
     expect(stored.persistedAt).toBeTruthy();
     const points = await queryFreezerReadingIds(sensorId);
