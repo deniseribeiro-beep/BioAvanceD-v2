@@ -36,7 +36,12 @@ function normalizeScannedValue(raw) {
 
 async function registerLabel(db, data) {
   await ensureLabelIndexes(db);
-  const label = LabelIdentifierModel.create(data);
+  let label;
+  try {
+    label = LabelIdentifierModel.create(data);
+  } catch (error) {
+    throw Object.assign(error, { code: 'VALIDATION_ERROR', statusCode: 422 });
+  }
   try {
     await (await getCollection(db, 'labelIdentifiers')).insertOne(label);
   } catch (error) {

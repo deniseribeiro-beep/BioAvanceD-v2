@@ -64,21 +64,13 @@ export async function setApprovalStatus(approvalId: string, status: string): Pro
   await db.collection('collectionGovernanceApprovals').updateOne({ approvalId }, { $set: { status } });
 }
 
-/** There is no label-issuing route yet; a manufacturer's tube code, as the resolver reads it. */
-export async function seedTubeLabel(encodedValue: string, containerId: string): Promise<void> {
-  const db = await getDb();
-  await db.collection('labelIdentifiers').insertOne({
-    encodedValue, status: 'active', targetType: 'container', targetId: containerId, createdAt: new Date(),
-  });
-}
-
 export async function countScanEvents(specimenId: string): Promise<number> {
   const db = await getDb();
   return db.collection('scanEvents').countDocuments({ targetId: specimenId });
 }
 
 /** Removes every row the spec wrote, the assignments its routes created included. */
-export async function cleanupCustodyFixture(fixture: CustodyFixture, containerIds: string[], rackIds: string[], labelValues: string[], deviceIds: string[]): Promise<void> {
+export async function cleanupCustodyFixture(fixture: CustodyFixture, containerIds: string[], rackIds: string[], labelValues: string[], deviceIds: string[], locationIds: string[] = []): Promise<void> {
   const db = await getDb();
   await Promise.all([
     db.collection('samples').deleteMany({ specimenId: fixture.specimenId }),
@@ -93,5 +85,6 @@ export async function cleanupCustodyFixture(fixture: CustodyFixture, containerId
     db.collection('labelIdentifiers').deleteMany({ encodedValue: { $in: labelValues } }),
     db.collection('devices').deleteMany({ deviceId: { $in: deviceIds } }),
     db.collection('deviceLifecycleEvents').deleteMany({ deviceId: { $in: deviceIds } }),
+    db.collection('storageLocations').deleteMany({ storageLocationId: { $in: locationIds } }),
   ]);
 }

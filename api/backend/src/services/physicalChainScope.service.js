@@ -3,8 +3,9 @@ const { findSampleByAnyId } = require('../utils/sampleLookup');
 const { currentCustody } = require('./custodianship.service');
 
 // #1314, #1316: organization bounds for the physical-chain and custody
-// routes. Containers, positions and racks carry no organization, so a
-// specimen's tenancy is its custodian at the instant (RF021 AC4), never the
+// routes. Containers and positions carry no organization, and a rack's is
+// its StorageLocation's, so a specimen's tenancy is its custodian at the
+// instant (RF021 AC4), never the
 // recorded collection site. A specimen with no custody is in no
 // organization's scope but a global caller's, with one exception: the first
 // custody of a specimen is assigned by its collection site's organization,
@@ -85,13 +86,27 @@ async function assertContainerInScope(db, containerId, organizationScope) {
   await assertSpecimenInScope(db, open.specimenId, organizationScope);
 }
 
-// No StorageLocation record carries an organization yet, so a rack's
-// location is moved by a global caller only.
-function assertGlobalScope(organizationScope) {
+// A StorageLocation is created under one of the caller's organizations.
+function assertOrganizationInScope(organizationScope, organizationId) {
   assertScopePresent(organizationScope);
-  if (organizationScope.scope !== 'global') {
-    throw new ScopeError('Localização de rack sem organização registrada: apenas escopo global', 'GLOBAL_SCOPE_REQUIRED');
+  if (!inScope(organizationScope, organizationId)) {
+    throw new ScopeError(`Organização ${organizationId} fora do escopo do solicitante`, 'LOCATION_OUT_OF_SCOPE');
   }
+}
+
+// A rack is in scope through the StorageLocation it is placed at, whose
+// organization is 1..1 (P1X-0103). An unknown location is the service's
+// 404, answered here for a global caller too.
+async function assertLocationInScope(db, storageLocationId, organizationScope) {
+  assertScopePresent(organizationScope);
+  const location = await (await getCollection(db, 'storageLocations')).findOne({ storageLocationId: String(storageLocationId) });
+  if (!location) {
+    throw new ScopeError(`Local ${storageLocationId} não encontrado`, 'LOCATION_NOT_FOUND', 404);
+  }
+  if (!inScope(organizationScope, location.organizationId)) {
+    throw new ScopeError(`Local ${storageLocationId} pertence a outra organização`, 'LOCATION_OUT_OF_SCOPE');
+  }
+  return location;
 }
 
 module.exports = {
@@ -101,5 +116,6 @@ module.exports = {
   assertCustodyAssignable,
   assertCustodianInScope,
   assertContainerInScope,
-  assertGlobalScope,
+  assertOrganizationInScope,
+  assertLocationInScope,
 };

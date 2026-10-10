@@ -9,6 +9,7 @@ const physicalChain = require('../../services/physicalChain.service');
 const custodianship = require('../../services/custodianship.service');
 const labelResolver = require('../../services/labelResolver.service');
 const scope = require('../../services/physicalChainScope.service');
+const storageLocations = require('../../services/storageLocation.service');
 const { deviceUsabilityRefusal } = require('../../services/deviceLifecycle.service');
 
 /**
@@ -22,11 +23,13 @@ const { deviceUsabilityRefusal } = require('../../services/deviceLifecycle.servi
  *
  * Gates: custody is the Coordenador's (RF021), manageCustody; loading,
  * unloading, placing a container and scanning are the Tecnico's,
- * manageStorageAllocation; creating containers and locating racks shape
- * the topology, manageStorageTopology; the reads take viewStorageTopology.
+ * manageStorageAllocation; creating containers, locations and labels and
+ * locating racks shape the topology, manageStorageTopology; the reads take
+ * viewStorageTopology.
  *
  * Tenancy is the specimen's custodian at the instant, never its collection
- * site (physicalChainScope.service.js).
+ * site, and a rack's is its StorageLocation's organization
+ * (physicalChainScope.service.js).
  */
 
 router.use(authenticate);
@@ -137,6 +140,59 @@ router.get('/specimens/:specimenId/custody', requirePermission('viewStorageTopol
   }
 });
 
+// ==================== LOCATIONS (RF017 AC1/AC3/AC8) ====================
+
+/**
+ * POST /api/physical-chain/locations
+ * Body: StorageLocation fields (P1X-0098..0104): { locationType, name, code,
+ *       organizationId, parentLocationId?, locationStatus? }
+ * 201; 403 LOCATION_OUT_OF_SCOPE; 404 ORGANIZATION_NOT_FOUND |
+ * LOCATION_NOT_FOUND (the parent); 409 LOCATION_EXISTS; 422 VALIDATION_ERROR,
+ * a parent of another organization included.
+ */
+router.post('/locations', requirePermission('manageStorageTopology'), requireOrganizationScope, async (req, res) => {
+  try {
+    const body = req.body || {};
+    scope.assertOrganizationInScope(req.organizationScope, body.organizationId);
+    const location = await storageLocations.createLocation(req.app.locals.db, body);
+    await audit(req, 'StorageLocation', location.storageLocationId, {
+      organizationId: location.organizationId, parentLocationId: location.parentLocationId, locationStatus: location.locationStatus,
+    });
+    return res.status(201).json({ success: true, data: location });
+  } catch (error) {
+    return sendError(res, error);
+  }
+});
+
+/** GET /api/physical-chain/locations  200 { data: [location] }, the caller's organizations' only. */
+router.get('/locations', requirePermission('viewStorageTopology'), requireOrganizationScope, async (req, res) => {
+  try {
+    return res.json({ success: true, data: await storageLocations.listLocations(req.app.locals.db, req.organizationScope) });
+  } catch (error) {
+    return sendError(res, error);
+  }
+});
+
+/**
+ * POST /api/physical-chain/locations/:storageLocationId/status
+ * Body: { locationStatus (active | unavailable | interdicted), reason? }
+ * RF017 AC8: the record stays; each change is audited with the status it
+ * left. A rack is located only at an active location under active ancestors.
+ */
+router.post('/locations/:storageLocationId/status', requirePermission('manageStorageTopology'), requireOrganizationScope, async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    await scope.assertLocationInScope(db, req.params.storageLocationId, req.organizationScope);
+    const updated = await storageLocations.setLocationStatus(db, req.params.storageLocationId, req.body?.locationStatus);
+    await audit(req, 'StorageLocation', updated.storageLocationId, {
+      locationStatus: updated.locationStatus, previousStatus: updated.previousStatus, reason: req.body?.reason ? String(req.body.reason) : null,
+    });
+    return res.json({ success: true, data: updated });
+  } catch (error) {
+    return sendError(res, error);
+  }
+});
+
 // ==================== CHAIN (RF016 AC3, RF017 AC3/AC4) ====================
 
 /** GET /api/physical-chain/specimens/:specimenId/location?at=  200 { data: { containerId, storagePositionId, storageRackId, storageLocationId } } */
@@ -235,12 +291,26 @@ router.post('/position-assignments/:containerPositionAssignmentId/remove', requi
   }
 });
 
-/** POST /api/physical-chain/racks/:storageRackId/location  Body: { storageLocationId, placedAt?, removedAt?, sourceEventId? }  Global scope only (RULE-035). */
+/**
+ * POST /api/physical-chain/racks/:storageRackId/location
+ * Body: { storageLocationId, placedAt?, removedAt?, sourceEventId? }
+ * The rack is in scope through the location (RULE-035): 403
+ * LOCATION_OUT_OF_SCOPE, 404 LOCATION_NOT_FOUND, and 422 LOCATION_UNUSABLE
+ * when the location or an ancestor is not active (RF017 AC8).
+ */
 router.post('/racks/:storageRackId/location', requirePermission('manageStorageTopology'), requireOrganizationScope, async (req, res) => {
   try {
-    scope.assertGlobalScope(req.organizationScope);
+    const db = req.app.locals.db;
+    const body = req.body || {};
+    if (body.storageLocationId) {
+      await scope.assertLocationInScope(db, body.storageLocationId, req.organizationScope);
+      const refusal = await storageLocations.locationUsabilityRefusal(db, body.storageLocationId);
+      if (refusal) {
+        return res.status(422).json({ success: false, error: 'LOCATION_UNUSABLE', message: refusal, details: [refusal] });
+      }
+    }
     const sourceEventId = sourceEventIdOf(req);
-    const assignment = await physicalChain.locateRack(req.app.locals.db, { ...(req.body || {}), storageRackId: req.params.storageRackId, sourceEventId });
+    const assignment = await physicalChain.locateRack(db, { ...body, storageRackId: req.params.storageRackId, sourceEventId });
     await audit(req, 'RackLocationAssignment', assignment.rackLocationAssignmentId, { sourceEventId, storageRackId: assignment.storageRackId, storageLocationId: assignment.storageLocationId });
     return res.status(201).json({ success: true, data: assignment });
   } catch (error) {
@@ -248,14 +318,59 @@ router.post('/racks/:storageRackId/location', requirePermission('manageStorageTo
   }
 });
 
-/** POST /api/physical-chain/rack-assignments/:id/remove  Body: { removedAt? }  Global scope only. */
+/**
+ * POST /api/physical-chain/rack-assignments/:id/remove  Body: { removedAt? }
+ * For the holder of the rack's location. A global caller may also close an
+ * assignment whose location no record names.
+ */
 router.post('/rack-assignments/:rackLocationAssignmentId/remove', requirePermission('manageStorageTopology'), requireOrganizationScope, async (req, res) => {
   try {
-    scope.assertGlobalScope(req.organizationScope);
+    const db = req.app.locals.db;
     const id = String(req.params.rackLocationAssignmentId);
-    const closed = await physicalChain.removeRack(req.app.locals.db, id, req.body?.removedAt);
+    const current = await findOr404(db, 'rackLocationAssignments', { rackLocationAssignmentId: id }, `Atribuição ${id}`);
+    if (req.organizationScope?.scope !== 'global') {
+      await scope.assertLocationInScope(db, current.storageLocationId, req.organizationScope);
+    }
+    const closed = await physicalChain.removeRack(db, id, req.body?.removedAt);
     await audit(req, 'RackLocationAssignment', id, { removedAt: closed.removedAt });
     return res.json({ success: true, data: closed });
+  } catch (error) {
+    return sendError(res, error);
+  }
+});
+
+// ==================== LABELS (RF016 AC4/AC5) ====================
+
+/**
+ * POST /api/physical-chain/containers/:containerId/labels
+ * Body: { encodedValue, symbology, identifierOrigin, namespaceRegistryId,
+ *         carrierPlacement, immutableAtSource, templateVersionId?, printBatchId? }
+ * Issues the container's identifier. The target is the container, and an
+ * institutional one is issued now by the caller (RF016 AC4). The container
+ * is in scope through the specimen it holds, as for placing it.
+ * 201; 403 CONTAINER_OUT_OF_SCOPE; 404 CONTAINER_NOT_FOUND; 409 LABEL_EXISTS;
+ * 422 VALIDATION_ERROR (a CPF, an e-mail or free text in the value, RULE-012).
+ */
+router.post('/containers/:containerId/labels', requirePermission('manageStorageTopology'), requireOrganizationScope, async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    const containerId = String(req.params.containerId);
+    if (!(await (await getCollection(db, 'containers')).findOne({ containerId }))) {
+      return res.status(404).json({ success: false, error: 'CONTAINER_NOT_FOUND', message: `Recipiente ${containerId} não encontrado` });
+    }
+    await scope.assertContainerInScope(db, containerId, req.organizationScope);
+    const body = req.body || {};
+    const actor = actorId(req);
+    const label = await labelResolver.registerLabel(db, {
+      ...body,
+      targetType: 'container',
+      targetId: containerId,
+      status: 'active',
+      issuedAt: new Date(),
+      issuedBy: actor ? String(actor) : null,
+    });
+    await audit(req, 'LabelIdentifier', label.labelIdentifierId, { containerId, symbology: label.symbology, identifierOrigin: label.identifierOrigin });
+    return res.status(201).json({ success: true, data: label });
   } catch (error) {
     return sendError(res, error);
   }

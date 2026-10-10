@@ -5,7 +5,6 @@ import { completeFirstLoginMfa } from './helpers/completeFirstLoginMfa';
 import {
   seedCustodyFixture,
   setApprovalStatus,
-  seedTubeLabel,
   countScanEvents,
   cleanupCustodyFixture,
   closeCustodyDb,
@@ -14,8 +13,9 @@ import {
 
 // Real-backend proof for #1314 and #1316: custody as its own assignment
 // (RF021 AC4-AC6), the specimen -> container -> position and rack ->
-// location chain (RF016 AC3, RF017 AC3/AC4) and the scan resolver (RF016
-// AC6), all scoped by the specimen's custodian, and a scanner's lifecycle
+// location chain (RF016 AC3, RF017 AC3/AC4) over StorageLocation records
+// (RF017 AC1/AC8), the label route and the scan resolver (RF016 AC4/AC6),
+// all scoped by the specimen's custodian, and a scanner's lifecycle
 // (RF017 AC6/AC8). Two organizations, a
 // Coordenador and a Tecnico in the first, a Tecnico in the second.
 const apiBaseURL = process.env.PLAYWRIGHT_API_BASE_URL;
@@ -30,9 +30,11 @@ test.describe('Physical chain and custody (#1314, #1316) — real backend', () =
   const rackId = `rack-chain-${suffix}`;
   const tubeCode = `BVA2:synthetic:${suffix}`;
   const scannerId = `scanner-chain-${suffix}`;
+  const roomId = `room-chain-${suffix}`;
+  const freezerId = `freezer-chain-${suffix}`;
 
   test.afterAll(async ({ request }) => {
-    if (fixture) await cleanupCustodyFixture(fixture, [containerId], [rackId], [tubeCode], [scannerId]).catch(() => {});
+    if (fixture) await cleanupCustodyFixture(fixture, [containerId], [rackId], [tubeCode], [scannerId], [roomId, freezerId, `${freezerId}-x`]).catch(() => {});
     await deleteOrganizations(request, apiBaseURL!, organizationIds);
     await closeCustodyDb();
   });
@@ -100,23 +102,52 @@ test.describe('Physical chain and custody (#1314, #1316) — real backend', () =
     expect(loaded.status(), await loaded.text()).toBe(201);
     const load = (await loaded.json()).data;
 
-    // RF017 AC2/AC3 and RULE-035: the container takes a position; a rack's
-    // location takes a global caller.
+    // RF017 AC2/AC3 and RULE-035: the container takes a position, and the
+    // rack a StorageLocation of the custodian's organization (RF017 AC1:
+    // a freezer inside a room). Another organization does not see it.
     const placed = await post(`/containers/${containerId}/position`, techA, { storagePositionId: `${rackId}:A01` });
     expect(placed.status(), await placed.text()).toBe(201);
-    expect((await post(`/racks/${rackId}/location`, coordA, { storageLocationId: 'loc-chain' })).status()).toBe(403);
-    const located = await post(`/racks/${rackId}/location`, adminAuth, { storageLocationId: 'loc-chain' });
+    const room = await post('/locations', coordA, { storageLocationId: roomId, locationType: 'room', name: 'Sala criogenica', code: `R-${suffix}`, organizationId: orgA });
+    expect(room.status(), await room.text()).toBe(201);
+    const foreignLocation = await post('/locations', coordA, { storageLocationId: `${freezerId}-x`, locationType: 'freezer', name: 'Freezer B', code: `FZB-${suffix}`, organizationId: orgB });
+    expect((await foreignLocation.json()).error).toBe('LOCATION_OUT_OF_SCOPE');
+    const freezer = await post('/locations', coordA, { storageLocationId: freezerId, locationType: 'freezer', name: 'Freezer -80', code: `FZ-${suffix}`, organizationId: orgA, parentLocationId: roomId });
+    expect(freezer.status(), await freezer.text()).toBe(201);
+    const listedB = await get('/locations', techB);
+    expect(listedB.status(), await listedB.text()).toBe(200);
+    expect(((await listedB.json()).data as Array<{ storageLocationId: string }>).map((l) => l.storageLocationId)).not.toContain(freezerId);
+
+    // RF017 AC8: an interdicted room blocks the freezer in it; restored, the
+    // rack is located.
+    const interdicted = await post(`/locations/${roomId}/status`, coordA, { locationStatus: 'interdicted', reason: 'synthetic e2e' });
+    expect(interdicted.status(), await interdicted.text()).toBe(200);
+    const blocked = await post(`/racks/${rackId}/location`, coordA, { storageLocationId: freezerId });
+    expect(blocked.status(), await blocked.text()).toBe(422);
+    expect((await blocked.json()).error).toBe('LOCATION_UNUSABLE');
+    expect((await post(`/locations/${roomId}/status`, coordA, { locationStatus: 'active' })).status()).toBe(200);
+    const located = await post(`/racks/${rackId}/location`, coordA, { storageLocationId: freezerId });
     expect(located.status(), await located.text()).toBe(201);
 
     // RF016 AC3: the chain resolves link by link, for the custodian only.
     const location = await get(`/specimens/${specimenId}/location`, techA);
     expect(location.status(), await location.text()).toBe(200);
-    expect((await location.json()).data).toMatchObject({ containerId, storagePositionId: `${rackId}:A01`, storageRackId: rackId, storageLocationId: 'loc-chain' });
+    expect((await location.json()).data).toMatchObject({ containerId, storagePositionId: `${rackId}:A01`, storageRackId: rackId, storageLocationId: freezerId });
     expect((await get(`/specimens/${specimenId}/location`, techB)).status()).toBe(403);
+
+    // RF016 AC4: the custodian's Coordenador issues the tube's institutional
+    // label, which carries no personal data (RULE-012).
+    const labelBody = {
+      encodedValue: tubeCode, symbology: 'data_matrix', identifierOrigin: 'institution_applied', namespaceRegistryId: 'ns-chain',
+      carrierPlacement: 'side', immutableAtSource: true, templateVersionId: 'tpl-chain', printBatchId: `batch-${suffix}`,
+    };
+    const personal = await post(`/containers/${containerId}/labels`, coordA, { ...labelBody, encodedValue: '123.456.789-09' });
+    expect(personal.status(), await personal.text()).toBe(422);
+    const issued = await post(`/containers/${containerId}/labels`, coordA, labelBody);
+    expect(issued.status(), await issued.text()).toBe(201);
+    expect((await issued.json()).data).toMatchObject({ targetType: 'container', targetId: containerId, status: 'active' });
 
     // RF016 AC6: the tube code resolves to the specimen; another
     // organization's scan is refused and leaves no ScanEvent.
-    await seedTubeLabel(tubeCode, containerId);
     const scan = { rawValue: `]d2${tubeCode}`, symbology: 'data_matrix', deviceId: scannerId };
 
     // RF017 AC6/AC8: the scanner is registered not homologated, so it is
@@ -127,7 +158,7 @@ test.describe('Physical chain and custody (#1314, #1316) — real backend', () =
     const unqualified = await post('/scan', techA, scan);
     expect(unqualified.status(), await unqualified.text()).toBe(422);
     expect((await unqualified.json()).error).toBe('DEVICE_UNUSABLE');
-    expect((await device(`/${scannerId}/events`, { eventType: 'installed', locationId: 'loc-chain' })).status()).toBe(201);
+    expect((await device(`/${scannerId}/events`, { eventType: 'installed', locationId: freezerId })).status()).toBe(201);
     const qualified = await device(`/${scannerId}/events`, { eventType: 'qualified', evidenceUri: 'object://synthetic/scanner-pq.pdf' });
     expect(qualified.status(), await qualified.text()).toBe(201);
     const history = await request.get(`${apiBaseURL}/api/devices/${scannerId}`, { headers: techA });
