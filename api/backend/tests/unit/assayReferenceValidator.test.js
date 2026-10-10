@@ -40,6 +40,15 @@ describe('assayReferenceValidator.validateAssayReferences (#664)', () => {
     await expect(validateAssayReferences(db, VALID_PAYLOAD)).rejects.toThrow(/specimenIds/);
   });
 
+  it('refuses a quarantined specimen with 409, and accepts it once available (RF019 AC3, #1315)', async () => {
+    const others = { protocols: { protocolId: 'protocol-1' }, users: { _id: 'user-doc' }, organizations: { organizationId: 'org-1' }, reagentLots: { reagentId: 'reagent-1' }, equipment: { equipmentID: 42 } };
+    const quarantined = makeDb({ samples: { _id: 'sample-doc', specimenStatus: 'quarantined' }, ...others });
+    await expect(validateAssayReferences(quarantined, { ...VALID_PAYLOAD })).rejects.toMatchObject({ statusCode: 409, message: expect.stringMatching(/quarentena/) });
+
+    const available = makeDb({ samples: { _id: 'sample-doc', specimenStatus: 'available' }, ...others });
+    await expect(validateAssayReferences(available, { ...VALID_PAYLOAD })).resolves.toBeUndefined();
+  });
+
   it('rejects when protocolId does not resolve to a real Protocol', async () => {
     const db = makeDb({ samples: { _id: 'sample-doc' }, users: {}, organizations: {}, reagentLots: {}, equipment: {} });
 

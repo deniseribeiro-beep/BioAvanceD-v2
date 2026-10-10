@@ -1,5 +1,6 @@
 const { ObjectId } = require('mongodb');
 const { findSampleByAnyId } = require('../utils/sampleLookup');
+const { SampleModel } = require('../models/Sample');
 
 function toObjectId(value) {
   if (value instanceof ObjectId) return value;
@@ -25,7 +26,9 @@ function createReferenceError(message) {
  * well-formed strings, never that they resolve to a real record. Mirrors
  * sample.service.js's own studyId/protocolId/collectionId checks
  * (existence only, no status gate -- #664 doesn't ask for one) and
- * equipment.routes.js's assertOrganizationIdResolves.
+ * equipment.routes.js's assertOrganizationIdResolves. The one status gate
+ * is a specimen's quarantine: RF019 AC3 (#1315) blocks processing and use
+ * of a quarantined specimen, so an assay naming one answers 409.
  * @param {import('mongodb').Db} db
  * @param {object} payload
  */
@@ -40,6 +43,11 @@ async function validateAssayReferences(db, payload) {
       const sample = await findSampleByAnyId(samplesCollection, specimenId);
       if (!sample) {
         throw createReferenceError(`specimenIds: ${specimenId} não encontrado`);
+      }
+      if (SampleModel.resolveSpecimenStatus(sample) === 'quarantined') {
+        const error = new Error(`specimenIds: ${specimenId} está em quarentena e não pode ser processado (RF019)`);
+        error.statusCode = 409;
+        throw error;
       }
       canonical.push(String(sample.specimenId || sample._id));
     }
