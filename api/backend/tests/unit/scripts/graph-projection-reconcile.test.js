@@ -13,10 +13,20 @@ function makeOutbox(unprojected) {
 }
 
 // samples: the Mongo samples. openAssignments: the open StorageAssignment
-// records the drift check reads for Mongo's position.
-function makeDb(samples, openAssignments = []) {
+// records the drift check reads for Mongo's position. chain: the normalized
+// chain's SpecimenContainerAssignment and ContainerPositionAssignment rows.
+function makeDb(samples, openAssignments = [], chain = {}) {
+  const readChain = (rows, key, filter) => ({
+    toArray: async () => rows.filter((row) => filter[key].$in.includes(row[key]) && row.assignmentStatus === filter.assignmentStatus),
+  });
   return {
     collection: (name) => {
+      if (name === 'specimenContainerAssignments') {
+        return { find: (filter) => readChain(chain.loads || [], 'specimenId', filter) };
+      }
+      if (name === 'containerPositionAssignments') {
+        return { find: (filter) => readChain(chain.placements || [], 'containerId', filter) };
+      }
       if (name === 'storageAssignments') {
         return {
           find: (filter) => ({
@@ -201,6 +211,34 @@ describe('graph-projection-reconcile', () => {
       );
 
       expect(drifted).toEqual([]);
+    });
+
+    // #1314: the normalized chain is read first; a legacy row is the fallback.
+    const chain = {
+      loads: [{ specimenId: 'SPC-1', containerId: 'CTN-1', assignmentStatus: 'active' }],
+      placements: [
+        { containerId: 'CTN-1', storagePositionId: 'box-1:A03', assignmentStatus: 'removed' },
+        { containerId: 'CTN-1', storagePositionId: 'box-1:A01', assignmentStatus: 'active' },
+      ],
+    };
+
+    it('matches a chain-placed sample to its node, the position read in its legacy form', async () => {
+      const { drifted } = await findSamplesDriftedFromGraph(
+        makeDb(placed, [], chain), makeNeo4jSession({ 'smp-canon': { openPositions: ['box-1/A1'] } }), { pseudonymizeDonorId },
+      );
+
+      expect(drifted).toEqual([]);
+    });
+
+    it('takes the chain placement over a stale open legacy row for the same sample', async () => {
+      const { drifted } = await findSamplesDriftedFromGraph(
+        makeDb(placed, [{ specimenId: 'smp-canon', boxId: 'box-2', positionCode: 'B02' }], chain),
+        makeNeo4jSession({ 'smp-canon': { openPositions: ['box-2/B02'] } }), { pseudonymizeDonorId },
+      );
+
+      expect(drifted).toEqual([
+        { specimenId: 'smp-canon', participantId: null, position: { expected: 'box-1/A1', actual: ['box-2/B02'] } },
+      ]);
     });
 
     it('plans a repair only where an event can make it, and a rebuild for what no event removes', () => {

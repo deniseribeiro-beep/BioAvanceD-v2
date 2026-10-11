@@ -24,6 +24,7 @@ const { Neo4jOutboxService } = require('../src/services/neo4jOutbox.service');
 const { GraphProjectionService } = require('../src/services/graphProjection.service');
 const { Neo4jCanonicalProjectionService } = require('../src/services/neo4jCanonicalProjection.service');
 const { PROJECTOR_NAME } = require('../src/workers/neo4jProjection.worker');
+const { legacyPositionCode, splitPositionId } = require('../src/services/legacyPlacementChain.service');
 
 const SAMPLE_BATCH_SIZE = 500;
 
@@ -65,8 +66,11 @@ const DRIFT_CYPHER = `
 // aggregate. The projection writes two facts about a sample: its donor
 // (Donor-[:DONATED]->Sample, the participant pseudonymized) and its current
 // position (the open STORED_AT edge). Mongo's truth for the position is the
-// open StorageAssignment, which every placement path keeps. A sample with no
-// node is findSamplesMissingFromGraph's, not this check's.
+// normalized chain first (#1314): the specimen's open
+// SpecimenContainerAssignment, then its container's open
+// ContainerPositionAssignment, read as `<storageRackId>/<legacy code>`. A
+// specimen the chain does not place falls back to its open StorageAssignment.
+// A sample with no node is findSamplesMissingFromGraph's, not this check's.
 async function findSamplesDriftedFromGraph(db, neo4jSession, options = {}) {
   const pseudonymize = options.pseudonymizeDonorId
     || ((participantId) => new Neo4jCanonicalProjectionService().pseudonymizeDonorId(participantId));
@@ -108,6 +112,27 @@ async function findSamplesDriftedFromGraph(db, neo4jSession, options = {}) {
       const id = sampleIdByKey.get(key);
       if (!id || (expectedPosition.has(id) && !canonicalKeys.has(key))) continue;
       expectedPosition.set(id, `${a.boxId}/${a.positionCode}`);
+    }
+    // #1314: the chain, keyed by the business specimenId, wins over any
+    // legacy row for the same sample.
+    const specimenIds = batch.map((sample) => sample.specimenId).filter(Boolean).map(String);
+    const loads = specimenIds.length
+      ? await db.collection(CANONICAL_COLLECTIONS.specimenContainerAssignments)
+        .find({ specimenId: { $in: specimenIds }, assignmentStatus: 'active' }, { projection: { specimenId: 1, containerId: 1 } })
+        .toArray()
+      : [];
+    const placements = loads.length
+      ? await db.collection(CANONICAL_COLLECTIONS.containerPositionAssignments)
+        .find({ containerId: { $in: loads.map((load) => String(load.containerId)) }, assignmentStatus: 'active' }, { projection: { containerId: 1, storagePositionId: 1 } })
+        .toArray()
+      : [];
+    const positionIdByContainer = new Map(placements.map((p) => [String(p.containerId), p.storagePositionId]));
+    for (const load of loads) {
+      const id = sampleIdByKey.get(String(load.specimenId));
+      const storagePositionId = positionIdByContainer.get(String(load.containerId));
+      if (!id || !storagePositionId) continue;
+      const { storageRackId, code } = splitPositionId(storagePositionId);
+      if (storageRackId) expectedPosition.set(id, `${storageRackId}/${legacyPositionCode(code)}`);
     }
     const result = await neo4jSession.run(DRIFT_CYPHER, { ids });
     const nodes = new Map(result.records.map((record) => [record.get('id'), {

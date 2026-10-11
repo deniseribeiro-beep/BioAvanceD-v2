@@ -272,6 +272,7 @@ module.exports = {
   chainPositionCode,
   legacyPositionCode,
   storagePositionIdFor,
+  splitPositionId,
   ensureRackLocated,
   placeSpecimen,
   moveSpecimen,
