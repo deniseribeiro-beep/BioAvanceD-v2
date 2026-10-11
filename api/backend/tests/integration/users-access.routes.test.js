@@ -1774,6 +1774,20 @@ describe('Users and Access routes', () => {
     expect(res.payload.data).not.toHaveProperty('accessGrantId');
   });
 
+  // #1372: a report grant's permissionCodes is the server's.
+  it('#1372: POST /api/access com permissionCodes [manageUsers] responde 422 e não grava nada', async () => {
+    const handler = getHandler(accessRoutes, 'post', '/');
+
+    const req = createRequest({ body: { reportID: 9, reportType: 'equipment', permissionCodes: ['manageUsers'] } });
+    req.app.locals.db = db;
+    const res = createResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(422);
+    expect(accessCollection.insertOne).not.toHaveBeenCalled();
+  });
+
   it('#1201: PUT /api/access/:id grava userId sob userAccountId e remove o nome antigo', async () => {
     const handler = getHandler(accessRoutes, 'put', '/:id');
     accessCollection.updateOne.mockResolvedValue({ matchedCount: 1 });

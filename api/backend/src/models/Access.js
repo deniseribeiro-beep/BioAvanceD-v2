@@ -19,12 +19,8 @@ const RENAMED = Object.freeze({
 
 // #1201: P1X-0243 permissionCodes is 1..* Core. A report grant authorizes
 // reading the report, which is what viewReports names in the RBAC catalog.
+// #1372: the server sets it; a report grant must never carry a privilege.
 const DEFAULT_PERMISSION_CODES = Object.freeze(['viewReports']);
-
-function knownPermissionCodes() {
-  const { PERMISSION_CATALOG } = require('../services/rbac-catalog-seed.service');
-  return PERMISSION_CATALOG;
-}
 
 class AccessModel {
   static validate(data) {
@@ -42,8 +38,8 @@ class AccessModel {
       errors.push('accessType inválido');
     }
 
-    if (data.permissionCodes !== undefined && !this.isValidPermissionCodes(data.permissionCodes)) {
-      errors.push('permissionCodes deve ser uma lista não vazia de códigos de permissão conhecidos');
+    if (data.permissionCodes !== undefined && !this.isDefaultPermissionCodes(data.permissionCodes)) {
+      errors.push('permissionCodes de um acesso a relatório é definido pelo servidor (viewReports)');
     }
 
     return {
@@ -70,9 +66,7 @@ class AccessModel {
       userAccountId: (data.userAccountId ?? data.userId) || null,
       resourceType: 'report',
       resourceId: data.reportID,
-      permissionCodes: this.isValidPermissionCodes(data.permissionCodes)
-        ? [...data.permissionCodes]
-        : [...DEFAULT_PERMISSION_CODES],
+      permissionCodes: [...DEFAULT_PERMISSION_CODES],
       grantedBy,
       grantStatus: 'active',
       grantedAt: data.grantedAt || null,
@@ -123,10 +117,10 @@ class AccessModel {
     return view;
   }
 
-  static isValidPermissionCodes(codes) {
-    if (!Array.isArray(codes) || codes.length === 0) return false;
-    const catalog = knownPermissionCodes();
-    return codes.every((code) => typeof code === 'string' && Object.prototype.hasOwnProperty.call(catalog, code));
+  static isDefaultPermissionCodes(codes) {
+    return Array.isArray(codes)
+      && codes.length === DEFAULT_PERMISSION_CODES.length
+      && codes.every((code, i) => code === DEFAULT_PERMISSION_CODES[i]);
   }
 
   static isValidAccessType(accessType) {

@@ -74,23 +74,34 @@ describe('AccessModel', () => {
       expect(created).not.toHaveProperty('accessID');
     });
 
-    it('create() takes userAccountId over userId and a known permissionCodes list', () => {
-      const created = AccessModel.create({
-        reportID: 3, reportType: 'equipment', userAccountId: 'user-2', userId: 'user-1', permissionCodes: ['viewReports', 'uploadFiles'],
-      });
+    it('create() takes userAccountId over userId', () => {
+      const created = AccessModel.create({ reportID: 3, reportType: 'equipment', userAccountId: 'user-2', userId: 'user-1' });
 
       expect(created.userAccountId).toBe('user-2');
-      expect(created.permissionCodes).toEqual(['viewReports', 'uploadFiles']);
     });
 
-    it('validate() refuses an empty or unknown permissionCodes list', () => {
-      const base = { reportID: 1, reportType: 'equipment' };
-      const message = 'permissionCodes deve ser uma lista não vazia de códigos de permissão conhecidos';
+    // #1372: a report grant must never carry a privilege.
+    it('#1372: create() stores viewReports whatever permissionCodes the body holds', () => {
+      const created = AccessModel.create({ reportID: 3, reportType: 'equipment', permissionCodes: ['manageUsers'] });
 
+      expect(created.permissionCodes).toEqual(['viewReports']);
+    });
+
+    it('#1372: validate() refuses any permissionCodes other than [viewReports]', () => {
+      const base = { reportID: 1, reportType: 'equipment' };
+      const message = 'permissionCodes de um acesso a relatório é definido pelo servidor (viewReports)';
+
+      expect(AccessModel.validate({ ...base, permissionCodes: ['manageUsers'] }).errors).toContain(message);
+      expect(AccessModel.validate({ ...base, permissionCodes: ['viewReports', 'assignRole'] }).errors).toContain(message);
       expect(AccessModel.validate({ ...base, permissionCodes: [] }).errors).toContain(message);
-      expect(AccessModel.validate({ ...base, permissionCodes: ['noSuchCode'] }).errors).toContain(message);
       expect(AccessModel.validate({ ...base, permissionCodes: 'viewReports' }).errors).toContain(message);
+    });
+
+    it('#1372: validate() accepts [viewReports] or an absent permissionCodes', () => {
+      const base = { reportID: 1, reportType: 'equipment' };
+
       expect(AccessModel.validate({ ...base, permissionCodes: ['viewReports'] }).isValid).toBe(true);
+      expect(AccessModel.validate(base).isValid).toBe(true);
     });
 
     it('the accessors read the canonical name first, then the legacy one', () => {
