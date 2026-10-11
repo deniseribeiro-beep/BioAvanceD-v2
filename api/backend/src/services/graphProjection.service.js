@@ -54,18 +54,29 @@ class GraphProjectionService {
   }
 
   async appendLineageEvent(db, payload, options = {}) {
+    const specimenId = payload.specimenId || payload.childSpecimenId;
     return this.outbox.appendEvent(db, {
       eventType: 'LINEAGE_REGISTERED',
       aggregateType: 'Sample',
-      aggregateId: String(payload.specimenId || payload.childSpecimenId || payload.aggregateId || ''),
+      aggregateId: String(specimenId || payload.aggregateId || ''),
       payload: {
-        specimenId: payload.specimenId || payload.childSpecimenId || null,
-        parentSpecimenId: payload.parentSpecimenId || null,
+        specimenId: specimenId ? String(specimenId) : null,
+        parentSpecimenId: payload.parentSpecimenId ? String(payload.parentSpecimenId) : null,
       },
       sourceService: payload.sourceService || 'graph-projection-service',
       traceId: payload.traceId || null,
       schemaVersion: 1,
     }, options);
+  }
+
+  // #1368: a derived sample's DERIVED_FROM edges, one LINEAGE_REGISTERED per
+  // parent (the parents' Mongo _id), in order and inside the caller's session.
+  async appendLineageEvents(db, { specimenId, parentSpecimenIds, sourceService }, options = {}) {
+    const results = [];
+    for (const parentSpecimenId of parentSpecimenIds || []) {
+      results.push(await this.appendLineageEvent(db, { specimenId, parentSpecimenId, sourceService }, options));
+    }
+    return results;
   }
 
   async appendQualityEvent(db, payload, options = {}) {
@@ -231,6 +242,20 @@ async function recordSpecimenProjection(db, { specimenId, participantId, sourceS
   }
 }
 
+// #1368: the lineage twin of recordSpecimenProjection, for a write without a
+// transaction. Each parent is appended on its own and a failure is logged,
+// so one lost edge neither fails the committed sample nor drops the others.
+async function recordLineageProjection(db, { specimenId, parentSpecimenIds, sourceService }, service = new GraphProjectionService()) {
+  if (!db || !specimenId) return;
+  for (const parentSpecimenId of parentSpecimenIds || []) {
+    try {
+      await service.appendLineageEvent(db, { specimenId, parentSpecimenId, sourceService });
+    } catch (error) {
+      logger.error(`[NEO4J_OUTBOX] LINEAGE_REGISTERED nao registrado para ${specimenId} <- ${parentSpecimenId}: ${error.message || error}`);
+    }
+  }
+}
+
 // #1313 (RF023 AC3): inserts a sample and appends its SPECIMEN_UPSERTED in one
 // transaction where the deployment runs one, so neither lands without the
 // other and a failed append fails the insert. Without a transaction it is
@@ -259,6 +284,7 @@ async function insertSampleWithProjection(db, samplesCollection, sample, { sourc
 module.exports = {
   GraphProjectionService,
   insertSampleWithProjection,
+  recordLineageProjection,
   recordSpecimenProjection,
   stableHash,
 };

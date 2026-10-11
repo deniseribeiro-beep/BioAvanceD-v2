@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
-const { GraphProjectionService, insertSampleWithProjection, recordSpecimenProjection, stableHash } = require('../../src/services/graphProjection.service');
+const { GraphProjectionService, insertSampleWithProjection, recordLineageProjection, recordSpecimenProjection, stableHash } = require('../../src/services/graphProjection.service');
+const logger = require('../../src/utils/logger');
 
 function createFakeOutbox() {
   return { appendEvent: vi.fn().mockResolvedValue({ ok: true }) };
@@ -237,6 +238,88 @@ describe('graphProjection.service', () => {
       call = outbox.appendEvent.mock.calls[2][1];
       expect(call.aggregateId).toBe('');
       expect(call.payload.parentSpecimenId).toBeNull();
+    });
+
+    it('stringifies the child and parent ids, as appendSpecimenEvent does', async () => {
+      const outbox = createFakeOutbox();
+      const service = new GraphProjectionService({ outbox });
+      const objectId = (hex) => ({ toString: () => hex });
+
+      await service.appendLineageEvent({}, { specimenId: objectId('c-1'), parentSpecimenId: objectId('p-1') });
+
+      expect(outbox.appendEvent.mock.calls[0][1].payload).toEqual({ specimenId: 'c-1', parentSpecimenId: 'p-1' });
+    });
+  });
+
+  // #1368: a derived sample's edges, one LINEAGE_REGISTERED per parent.
+  describe('appendLineageEvents and recordLineageProjection (#1368)', () => {
+    it('appends one LINEAGE_REGISTERED per parent, in order, inside the caller session', async () => {
+      const outbox = createFakeOutbox();
+      const service = new GraphProjectionService({ outbox });
+      const session = { id: 'session-1' };
+
+      const results = await service.appendLineageEvents({}, { specimenId: 'c-1', parentSpecimenIds: ['p-1', 'p-2', 'p-3'], sourceService: 'sample.service' }, { session });
+
+      expect(results).toHaveLength(3);
+      expect(outbox.appendEvent).toHaveBeenCalledTimes(3);
+      outbox.appendEvent.mock.calls.forEach(([, event, options], index) => {
+        expect(event.eventType).toBe('LINEAGE_REGISTERED');
+        expect(event.aggregateId).toBe('c-1');
+        expect(event.payload).toEqual({ specimenId: 'c-1', parentSpecimenId: `p-${index + 1}` });
+        expect(event.sourceService).toBe('sample.service');
+        expect(options).toEqual({ session });
+      });
+    });
+
+    it.each([
+      ['an empty array', []],
+      ['no array', undefined],
+    ])('appendLineageEvents appends nothing for %s', async (_label, parentSpecimenIds) => {
+      const outbox = createFakeOutbox();
+      const service = new GraphProjectionService({ outbox });
+
+      await expect(service.appendLineageEvents({}, { specimenId: 'c-1', parentSpecimenIds })).resolves.toEqual([]);
+      expect(outbox.appendEvent).not.toHaveBeenCalled();
+    });
+
+    it('appendLineageEvents rejects when an append fails, so the caller transaction aborts', async () => {
+      const outbox = { appendEvent: vi.fn().mockRejectedValue(new Error('outbox down')) };
+      const service = new GraphProjectionService({ outbox });
+
+      await expect(service.appendLineageEvents({}, { specimenId: 'c-1', parentSpecimenIds: ['p-1'] }, { session: {} }))
+        .rejects.toThrow('outbox down');
+    });
+
+    it.each([
+      ['an empty array', {}, []],
+      ['no array', {}, undefined],
+      ['no db', null, ['p-1']],
+    ])('recordLineageProjection appends nothing for %s', async (_label, db, parentSpecimenIds) => {
+      const service = { appendLineageEvent: vi.fn() };
+      await recordLineageProjection(db, { specimenId: 'c-1', parentSpecimenIds }, service);
+      expect(service.appendLineageEvent).not.toHaveBeenCalled();
+    });
+
+    it('recordLineageProjection logs a failed parent and still appends the others, without a session', async () => {
+      const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
+      const service = {
+        appendLineageEvent: vi.fn()
+          .mockResolvedValueOnce({ ok: true })
+          .mockRejectedValueOnce(new Error('outbox down'))
+          .mockResolvedValueOnce({ ok: true }),
+      };
+
+      await expect(recordLineageProjection({}, { specimenId: 'c-1', parentSpecimenIds: ['p-1', 'p-2', 'p-3'], sourceService: 'sample.service' }, service))
+        .resolves.toBeUndefined();
+
+      expect(service.appendLineageEvent.mock.calls).toEqual([
+        [{}, { specimenId: 'c-1', parentSpecimenId: 'p-1', sourceService: 'sample.service' }],
+        [{}, { specimenId: 'c-1', parentSpecimenId: 'p-2', sourceService: 'sample.service' }],
+        [{}, { specimenId: 'c-1', parentSpecimenId: 'p-3', sourceService: 'sample.service' }],
+      ]);
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy.mock.calls[0][0]).toContain('[NEO4J_OUTBOX] LINEAGE_REGISTERED nao registrado para c-1 <- p-2: outbox down');
+      errorSpy.mockRestore();
     });
   });
 
