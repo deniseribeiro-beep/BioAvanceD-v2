@@ -231,18 +231,24 @@ router.post('/containers/:containerId/specimens', requirePermission('manageStora
     const db = req.app.locals.db;
     const body = req.body || {};
     const at = body.loadedAt ? new Date(body.loadedAt) : new Date();
-    await scope.assertSpecimenInScope(db, body.specimenId, req.organizationScope, at);
-    const refusal = await custodianship.operabilityRefusal(db, body.specimenId, at);
+    // The chain is keyed by the business specimenId, whichever id the caller holds.
+    const sample = await findSampleByAnyId(await getCollection(db, 'samples'), body.specimenId);
+    if (!sample) {
+      return res.status(404).json({ success: false, error: 'SPECIMEN_NOT_FOUND', message: `Espécime ${body.specimenId} não encontrado` });
+    }
+    const specimenId = String(sample.specimenId);
+    await scope.assertSpecimenInScope(db, specimenId, req.organizationScope, at);
+    const refusal = await custodianship.operabilityRefusal(db, specimenId, at);
     if (refusal) {
       return res.status(422).json({ success: false, error: 'CUSTODY_INACTIVE', message: refusal, details: [refusal] });
     }
     // RF006 AC6: a specimen under an active legal hold is not loaded.
-    const holdRefusal = await legalHolds.specimenHoldRefusal(db, await findSampleByAnyId(await getCollection(db, 'samples'), body.specimenId));
+    const holdRefusal = await legalHolds.specimenHoldRefusal(db, sample);
     if (holdRefusal) {
       return res.status(409).json({ success: false, error: 'LEGAL_HOLD_ACTIVE', message: holdRefusal });
     }
     const sourceEventId = sourceEventIdOf(req);
-    const assignment = await physicalChain.loadSpecimen(db, { ...body, containerId: req.params.containerId, sourceEventId });
+    const assignment = await physicalChain.loadSpecimen(db, { ...body, specimenId, containerId: req.params.containerId, sourceEventId });
     await audit(req, 'SpecimenContainerAssignment', assignment.specimenContainerAssignmentId, { sourceEventId, specimenId: assignment.specimenId, containerId: assignment.containerId });
     return res.status(201).json({ success: true, data: assignment });
   } catch (error) {
@@ -268,12 +274,20 @@ router.post('/specimen-assignments/:specimenContainerAssignmentId/unload', requi
 /**
  * POST /api/physical-chain/containers/:containerId/position
  * Body: { storagePositionId, placedAt?, removedAt?, sourceEventId? }
- * The container is in scope through the specimen it holds (RULE-030).
+ * The container is in scope through the specimen it holds (RULE-030). An
+ * empty, unplaced one is placed by the holder of the target position's rack
+ * location.
  */
 router.post('/containers/:containerId/position', requirePermission('manageStorageAllocation'), requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
-    await scope.assertContainerInScope(db, req.params.containerId, req.organizationScope);
+    const containerId = String(req.params.containerId);
+    const open = { containerId, assignmentStatus: 'active' };
+    const emptyAndUnplaced = !(await (await getCollection(db, 'specimenContainerAssignments')).findOne(open))
+      && !(await (await getCollection(db, 'containerPositionAssignments')).findOne(open));
+    if (!emptyAndUnplaced || !(await scope.positionInScope(db, req.body?.storagePositionId, req.organizationScope))) {
+      await scope.assertContainerInScope(db, containerId, req.organizationScope);
+    }
     const sourceEventId = sourceEventIdOf(req);
     const assignment = await physicalChain.placeContainer(db, { ...(req.body || {}), containerId: req.params.containerId, sourceEventId });
     await audit(req, 'ContainerPositionAssignment', assignment.containerPositionAssignmentId, { sourceEventId, containerId: assignment.containerId, storagePositionId: assignment.storagePositionId });
@@ -354,7 +368,8 @@ router.post('/rack-assignments/:rackLocationAssignmentId/remove', requirePermiss
  *         carrierPlacement, immutableAtSource, templateVersionId?, printBatchId? }
  * Issues the container's identifier. The target is the container, and an
  * institutional one is issued now by the caller (RF016 AC4). The container
- * is in scope through the specimen it holds, as for placing it.
+ * is in scope through the specimen it holds or, empty, through its rack's
+ * location, as for placing it.
  * 201; 403 CONTAINER_OUT_OF_SCOPE; 404 CONTAINER_NOT_FOUND; 409 LABEL_EXISTS;
  * 422 VALIDATION_ERROR (a CPF, an e-mail or free text in the value, RULE-012).
  */

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 const request = require('supertest');
 const jwt = require('jsonwebtoken');
+const { ObjectId } = require('mongodb');
 
 process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
@@ -18,6 +19,7 @@ const { buildRbacCollections } = require('../factories/rbac.factory');
 function matches(doc, filter) {
   return Object.entries(filter).every(([key, value]) => {
     if (key === '$or') return value.some((branch) => matches(doc, branch));
+    if (value instanceof ObjectId) return String(doc[key]) === String(value);
     return doc[key] === value;
   });
 }
@@ -320,5 +322,68 @@ describe('label issuing (#1314, RF016 AC4/AC5)', () => {
     expect(cpf.body).toMatchObject({ error: 'VALIDATION_ERROR', details: [expect.stringContaining('CPF')] });
     expect((await post('/containers/CT-1/labels', 'coord-a', { ...institutional, printBatchId: undefined })).body.details).toEqual([expect.stringContaining('printBatchId')]);
     expect(domain.labelIdentifiers.docs).toHaveLength(0);
+  });
+});
+
+describe('an empty container and a load by any id (#1314)', () => {
+  const institutional = {
+    encodedValue: 'BVA2:synthetic:7E4P', symbology: 'data_matrix', identifierOrigin: 'institution_applied', namespaceRegistryId: 'ns-1',
+    carrierPlacement: 'side', immutableAtSource: true, templateVersionId: 'tpl-1', printBatchId: 'batch-1',
+  };
+
+  // An empty tube placed by a global caller in a rack at org-A's location.
+  async function emptyTubeInRackAt(organizationId) {
+    expect((await post('/locations', 'admin', locationBody({ storageLocationId: `loc-${organizationId}`, code: `FZ-${organizationId}`, organizationId }))).status).toBe(201);
+    expect((await post('/racks/rack-7/location', 'admin', { storageLocationId: `loc-${organizationId}` })).status).toBe(201);
+    expect((await post('/containers', 'admin', { containerId: 'CT-E', containerType: 'cryovial' })).status).toBe(201);
+  }
+
+  it("labels and places an empty tube for the holder of its rack's location, and refuses another organization", async () => {
+    await emptyTubeInRackAt('org-A');
+    expect((await post('/containers/CT-E/position', 'tech-b', { storagePositionId: 'rack-7:A01' })).body.error).toBe('CONTAINER_OUT_OF_SCOPE');
+    expect((await post('/containers/CT-E/position', 'tech-a', { storagePositionId: 'rack-7:A01' })).status).toBe(201);
+    expect((await post('/containers/CT-E/labels', 'coord-b', institutional)).body.error).toBe('CONTAINER_OUT_OF_SCOPE');
+    const issued = await post('/containers/CT-E/labels', 'coord-a', institutional);
+    expect(issued.status).toBe(201);
+    expect(issued.body.data).toMatchObject({ targetType: 'container', targetId: 'CT-E' });
+    const placed = domain.containerPositionAssignments.docs[0];
+    expect((await post(`/position-assignments/${placed.containerPositionAssignmentId}/remove`, 'tech-b')).status).toBe(403);
+    expect((await post(`/position-assignments/${placed.containerPositionAssignmentId}/remove`, 'tech-a')).status).toBe(200);
+  });
+
+  it("refuses an empty tube in a rack at another organization's location", async () => {
+    await emptyTubeInRackAt('org-B');
+    expect((await post('/containers/CT-E/position', 'admin', { storagePositionId: 'rack-7:A01' })).status).toBe(201);
+    const refused = await post('/containers/CT-E/labels', 'coord-a', institutional);
+    expect(refused.status).toBe(403);
+    expect(refused.body.error).toBe('CONTAINER_OUT_OF_SCOPE');
+    expect((await post('/containers/CT-E/labels', 'coord-b', institutional)).status).toBe(201);
+  });
+
+  it('keeps an empty, unplaced tube global-only', async () => {
+    expect((await post('/containers', 'admin', { containerId: 'CT-E', containerType: 'cryovial' })).status).toBe(201);
+    expect((await post('/containers/CT-E/labels', 'coord-a', institutional)).body.error).toBe('CONTAINER_OUT_OF_SCOPE');
+    // A rack located nowhere names no organization either.
+    expect((await post('/containers/CT-E/position', 'tech-a', { storagePositionId: 'rack-nowhere:A01' })).body.error).toBe('CONTAINER_OUT_OF_SCOPE');
+    expect((await post('/containers/CT-E/labels', 'admin', institutional)).status).toBe(201);
+  });
+
+  it('keys the chain by the business specimenId when the caller loads by Mongo _id', async () => {
+    const _id = new ObjectId();
+    domain.samples.docs.push({ _id, specimenId: 'SPC-OID', collectionId: 'COL-1', collectionSite: 'org-A' });
+    expect((await post('/custody', 'coord-a', custody({ specimenId: 'SPC-OID' }))).status).toBe(201);
+    expect((await post('/containers', 'coord-a', { containerId: 'CT-1', containerType: 'cryovial' })).status).toBe(201);
+    const res = await post('/containers/CT-1/specimens', 'tech-a', { specimenId: String(_id) });
+    expect(res.status).toBe(201);
+    expect(res.body.data.specimenId).toBe('SPC-OID');
+    expect(domain.specimenContainerAssignments.docs).toEqual([expect.objectContaining({ specimenId: 'SPC-OID', containerId: 'CT-1' })]);
+  });
+
+  it('answers an unknown specimen with 404', async () => {
+    expect((await post('/containers', 'admin', { containerId: 'CT-1', containerType: 'cryovial' })).status).toBe(201);
+    const res = await post('/containers/CT-1/specimens', 'admin', { specimenId: 'SPC-NOPE' });
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe('SPECIMEN_NOT_FOUND');
+    expect(domain.specimenContainerAssignments.docs).toHaveLength(0);
   });
 });

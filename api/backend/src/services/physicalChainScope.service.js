@@ -1,6 +1,7 @@
 const { getCollection } = require('../utils/collectionResolver');
 const { findSampleByAnyId } = require('../utils/sampleLookup');
 const { currentCustody } = require('./custodianship.service');
+const { splitPositionId } = require('./legacyPlacementChain.service');
 
 // #1314, #1316: organization bounds for the physical-chain and custody
 // routes. Containers and positions carry no organization, and a rack's is
@@ -74,16 +75,43 @@ function assertCustodianInScope(assignment, organizationScope) {
   }
 }
 
+const OPEN = { assignmentStatus: 'active' };
+
+// The organization of the location a position's rack is open at: the rack
+// is the position id before its last ':', and the location's organization
+// is 1..1 (P1X-0103). Null when the rack is located nowhere.
+async function positionOrganizationId(db, storagePositionId) {
+  const { storageRackId } = splitPositionId(storagePositionId ?? '');
+  if (!storageRackId) return null;
+  const rack = await (await getCollection(db, 'rackLocationAssignments')).findOne({ storageRackId, ...OPEN });
+  if (!rack) return null;
+  const location = await (await getCollection(db, 'storageLocations')).findOne({ storageLocationId: String(rack.storageLocationId) });
+  return location?.organizationId ?? null;
+}
+
+// Whether the caller holds the location the position's rack is at.
+async function positionInScope(db, storagePositionId, organizationScope) {
+  assertScopePresent(organizationScope);
+  if (organizationScope.scope === 'global') return true;
+  return inScope(organizationScope, await positionOrganizationId(db, storagePositionId));
+}
+
 // A container is in scope through the specimen it holds. An empty one
-// belongs to no organization, so only a global caller may move it.
+// carries no organization (V2E-0646..0654), so it is in scope through the
+// location its position's rack is at; an empty, unplaced one is a global
+// caller's only.
 async function assertContainerInScope(db, containerId, organizationScope) {
   assertScopePresent(organizationScope);
   if (organizationScope.scope === 'global') return;
-  const open = await (await getCollection(db, 'specimenContainerAssignments')).findOne({ containerId: String(containerId), assignmentStatus: 'active' });
-  if (!open) {
-    throw new ScopeError(`Recipiente ${containerId} vazio: sem organização que o delimite`, 'CONTAINER_OUT_OF_SCOPE');
+  const open = await (await getCollection(db, 'specimenContainerAssignments')).findOne({ containerId: String(containerId), ...OPEN });
+  if (open) {
+    await assertSpecimenInScope(db, open.specimenId, organizationScope);
+    return;
   }
-  await assertSpecimenInScope(db, open.specimenId, organizationScope);
+  const placed = await (await getCollection(db, 'containerPositionAssignments')).findOne({ containerId: String(containerId), ...OPEN });
+  if (!placed || !(await positionInScope(db, placed.storagePositionId, organizationScope))) {
+    throw new ScopeError(`Recipiente ${containerId} vazio e fora de local da organização do solicitante`, 'CONTAINER_OUT_OF_SCOPE');
+  }
 }
 
 // A StorageLocation is created under one of the caller's organizations.
@@ -116,6 +144,7 @@ module.exports = {
   assertCustodyAssignable,
   assertCustodianInScope,
   assertContainerInScope,
+  positionInScope,
   assertOrganizationInScope,
   assertLocationInScope,
 };

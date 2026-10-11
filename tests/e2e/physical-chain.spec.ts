@@ -32,9 +32,18 @@ test.describe('Physical chain and custody (#1314, #1316) — real backend', () =
   const scannerId = `scanner-chain-${suffix}`;
   const roomId = `room-chain-${suffix}`;
   const freezerId = `freezer-chain-${suffix}`;
+  const emptyContainerId = `CT-EMPTY-${suffix}`;
+  const emptyRackId = `rack-empty-${suffix}`;
+  const emptyLocationId = `freezer-empty-${suffix}`;
+  const emptyTubeCode = `BVA2:synthetic:empty-${suffix}`;
 
   test.afterAll(async ({ request }) => {
-    if (fixture) await cleanupCustodyFixture(fixture, [containerId], [rackId], [tubeCode], [scannerId], [roomId, freezerId, `${freezerId}-x`]).catch(() => {});
+    // The empty-tube case seeds no specimen; its rows go with the same sweep.
+    const swept = fixture ?? { specimenId: `none-${suffix}`, collectionId: `none-${suffix}`, approvalId: `none-${suffix}` };
+    await cleanupCustodyFixture(
+      swept, [containerId, emptyContainerId], [rackId, emptyRackId], [tubeCode, emptyTubeCode], [scannerId],
+      [roomId, freezerId, `${freezerId}-x`, emptyLocationId],
+    ).catch(() => {});
     await deleteOrganizations(request, apiBaseURL!, organizationIds);
     await closeCustodyDb();
   });
@@ -198,6 +207,56 @@ test.describe('Physical chain and custody (#1314, #1316) — real backend', () =
 
     const reloaded = await post(`/containers/${containerId}/specimens`, techA, { specimenId });
     expect(reloaded.status(), await reloaded.text()).toBe(201);
+  });
+
+  // #1314: an empty tube holds no specimen, so it is in scope through the
+  // location its rack is at (P1X-0103). The Tecnico places it and the
+  // Coordenador labels it; another organization's are refused.
+  test("an empty tube is placed and labelled by the holder of its rack's location only", async ({ request }) => {
+    const admin = await realLogin(request);
+    const adminAuth = { Authorization: `Bearer ${admin.token}` };
+    const makeOrg = async (label: string) => {
+      const res = await request.post(`${apiBaseURL}/api/organizations`, {
+        headers: adminAuth,
+        data: { officialName: `#1314 empty ${label} ${suffix}`, countryCode: 'BR' },
+      });
+      expect(res.ok(), await res.text()).toBeTruthy();
+      const organizationId = (await res.json()).data.organizationId as string;
+      organizationIds.push(organizationId);
+      return organizationId;
+    };
+    const orgA = await makeOrg('A');
+    const orgB = await makeOrg('B');
+    const coordA = await registerUser(request, adminAuth, 'emptyCoordA', 3, 'Coordenador', orgA);
+    const coordB = await registerUser(request, adminAuth, 'emptyCoordB', 3, 'Coordenador', orgB);
+    const techA = await registerUser(request, adminAuth, 'emptyTechA', 2, 'Técnico', orgA);
+    const techB = await registerUser(request, adminAuth, 'emptyTechB', 2, 'Técnico', orgB);
+    const post = (path: string, headers: Record<string, string>, data: Record<string, unknown> = {}) =>
+      request.post(`${apiBaseURL}/api/physical-chain${path}`, { headers, data });
+
+    const location = await post('/locations', coordA, { storageLocationId: emptyLocationId, locationType: 'freezer', name: 'Freezer vazio', code: `FZE-${suffix}`, organizationId: orgA });
+    expect(location.status(), await location.text()).toBe(201);
+    const located = await post(`/racks/${emptyRackId}/location`, coordA, { storageLocationId: emptyLocationId });
+    expect(located.status(), await located.text()).toBe(201);
+    const created = await post('/containers', coordA, { containerId: emptyContainerId, containerType: 'cryovial' });
+    expect(created.status(), await created.text()).toBe(201);
+
+    const foreignPlace = await post(`/containers/${emptyContainerId}/position`, techB, { storagePositionId: `${emptyRackId}:A01` });
+    expect(foreignPlace.status(), await foreignPlace.text()).toBe(403);
+    expect((await foreignPlace.json()).error).toBe('CONTAINER_OUT_OF_SCOPE');
+    const placed = await post(`/containers/${emptyContainerId}/position`, techA, { storagePositionId: `${emptyRackId}:A01` });
+    expect(placed.status(), await placed.text()).toBe(201);
+
+    const labelBody = {
+      encodedValue: emptyTubeCode, symbology: 'data_matrix', identifierOrigin: 'institution_applied', namespaceRegistryId: 'ns-chain',
+      carrierPlacement: 'side', immutableAtSource: true, templateVersionId: 'tpl-chain', printBatchId: `batch-empty-${suffix}`,
+    };
+    const foreignLabel = await post(`/containers/${emptyContainerId}/labels`, coordB, labelBody);
+    expect(foreignLabel.status(), await foreignLabel.text()).toBe(403);
+    expect((await foreignLabel.json()).error).toBe('CONTAINER_OUT_OF_SCOPE');
+    const issued = await post(`/containers/${emptyContainerId}/labels`, coordA, labelBody);
+    expect(issued.status(), await issued.text()).toBe(201);
+    expect((await issued.json()).data).toMatchObject({ targetType: 'container', targetId: emptyContainerId, status: 'active' });
   });
 });
 
