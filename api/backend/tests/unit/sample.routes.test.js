@@ -295,6 +295,63 @@ describe('sample.routes', () => {
       expect(res.body.fields).toContain(field);
     });
 
+    it.each([
+      ['parentSampleId', 'SP-0'],
+      ['parentSpecimenId', 'SP-0'],
+    ])('#1368: rejects %s, the singular of parentSpecimenIds, as a non-canonical alias field', async (field, value) => {
+      const executeMock = vi.fn();
+      const { router } = loadRoute({ registerSampleUseCaseExecute: executeMock });
+      const app = buildApp(router, {});
+
+      const res = await request(app)
+        .post('/api/samples')
+        .send({ ...VALID_PAYLOAD, [field]: value });
+
+      expect(res.status).toBe(422);
+      expect(res.body.error).toBe('NON_CANONICAL_FIELD');
+      expect(res.body.fields).toContain(field);
+      expect(executeMock).not.toHaveBeenCalled();
+    });
+
+    describe('#1368: parentSpecimenIds (ELM-0120)', () => {
+      const callValidator = (body) => {
+        const { router } = loadRoute();
+        const res = {
+          status: vi.fn().mockReturnThis(),
+          json: vi.fn().mockReturnThis(),
+        };
+        const next = vi.fn();
+        router._test.validateCreateSamplePayload({ body }, res, next);
+        return { res, next };
+      };
+
+      it('passes a list of distinct specimenIds on to the handler', () => {
+        const { res, next } = callValidator({ ...VALID_PAYLOAD, parentSpecimenIds: ['SP-0', 'SP-9'] });
+
+        expect(next).toHaveBeenCalledTimes(1);
+        expect(res.status).not.toHaveBeenCalled();
+      });
+
+      it.each([
+        ['a non-array', 'SP-0', 'parentSpecimenIds deve ser uma lista de specimenIds'],
+        ['an empty string', ['SP-0', ''], 'parentSpecimenIds deve conter apenas specimenIds não vazios'],
+        ['a duplicate', ['SP-0', ' SP-0'], 'parentSpecimenIds não pode repetir um specimenId'],
+      ])('refuses %s with 422', async (_label, parentSpecimenIds, message) => {
+        const executeMock = vi.fn();
+        const { router } = loadRoute({ registerSampleUseCaseExecute: executeMock });
+        const app = buildApp(router, {});
+
+        const res = await request(app)
+          .post('/api/samples')
+          .send({ ...VALID_PAYLOAD, parentSpecimenIds });
+
+        expect(res.status).toBe(422);
+        expect(res.body.error).toBe('Payload inválido');
+        expect(res.body.details).toContain(message);
+        expect(executeMock).not.toHaveBeenCalled();
+      });
+    });
+
     it('rejects a sampleType that is a valid string but not a recognized MIABIS id', async () => {
       const { router } = loadRoute({ registerSampleUseCaseExecute: vi.fn() });
       const app = buildApp(router, {});

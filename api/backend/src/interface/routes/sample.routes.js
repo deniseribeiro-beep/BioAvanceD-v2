@@ -113,6 +113,9 @@ const NON_CANONICAL_SAMPLE_ALIASES = Object.freeze([
   'registrationDate',
   'currentStatus',
   'merkle_root',
+  // dict-02 ELM-0120 names the plural parentSpecimenIds (#1368).
+  'parentSampleId',
+  'parentSpecimenId',
 ]);
 
 // #789: the query keys `GET /` actually applies. listSamples reads exactly
@@ -204,6 +207,17 @@ function validateCreateSamplePayload(req, res, next) {
 
   if (!payload.registeredAt) {
     errors.push('registeredAt é obrigatório');
+  }
+
+  // dict-02 ELM-0120 (#1368): a derivative names its parents by specimenId.
+  if (payload.parentSpecimenIds !== undefined) {
+    if (!Array.isArray(payload.parentSpecimenIds)) {
+      errors.push('parentSpecimenIds deve ser uma lista de specimenIds');
+    } else if (payload.parentSpecimenIds.some((parentId) => typeof parentId !== 'string' || parentId.trim() === '')) {
+      errors.push('parentSpecimenIds deve conter apenas specimenIds não vazios');
+    } else if (new Set(payload.parentSpecimenIds.map((parentId) => parentId.trim())).size !== payload.parentSpecimenIds.length) {
+      errors.push('parentSpecimenIds não pode repetir um specimenId');
+    }
   }
 
   if (errors.length > 0) {

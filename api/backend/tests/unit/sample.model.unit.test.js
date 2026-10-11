@@ -166,6 +166,33 @@ describe('Sample.create and Sample.validate (RF006 AC2/AC3, RF026 AC7)', () => {
   });
 });
 
+describe('Sample parentSpecimenIds (ELM-0120, #1368)', () => {
+  const base = {
+    specimenId: 'SP-1', participantId: '12345678', sampleType: 'PLASMA', sampleOrigin: 'VENOUS_BLOOD',
+    extractionProtocol: 'TUBE_EDTA', registeredAt: new Date('2024-01-01'), quantity: 10, linkedProject: 'ProjectX',
+  };
+
+  it('create carries the parents trimmed, without duplicates', () => {
+    expect(Sample.create({ ...base, parentSpecimenIds: [' SP-0 ', 'SP-0', 'SP-9'] }).parentSpecimenIds)
+      .toStrictEqual(['SP-0', 'SP-9']);
+  });
+
+  it('create defaults the parents to an empty list', () => {
+    expect(Sample.create({ ...base }).parentSpecimenIds).toStrictEqual([]);
+  });
+
+  it('validate accepts a list of specimenIds and an absent field', () => {
+    expect(Sample.validate({ ...base, parentSpecimenIds: ['SP-0'] }).isValid).toBe(true);
+    expect(Sample.validate({ ...base }).isValid).toBe(true);
+  });
+
+  it('validate refuses a non-array, an empty entry and the sample itself', () => {
+    expect(Sample.validate({ ...base, parentSpecimenIds: 'SP-0' }).errors).toContain('parentSpecimenIds deve ser uma lista');
+    expect(Sample.validate({ ...base, parentSpecimenIds: ['SP-0', '  '] }).errors).toContain('parentSpecimenIds deve conter apenas specimenIds não vazios');
+    expect(Sample.validate({ ...base, parentSpecimenIds: ['SP-1'] }).errors).toContain('parentSpecimenIds não pode conter a própria amostra');
+  });
+});
+
 describe('Sample.validateWithdrawalType', () => {
   it('returns true for Parcial', () => {
     expect(Sample.validateWithdrawalType('Parcial')).toBe(true);

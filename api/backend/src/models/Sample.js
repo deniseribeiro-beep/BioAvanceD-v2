@@ -266,6 +266,20 @@ class SampleModel {
       // RF006 AC3: quantityStatus is derived; a manual write is refused.
       errors.push('quantityStatus é derivado das quantidades e não pode ser informado');
     }
+    // dict-02 ELM-0120: the specimens this one derives from, by specimenId.
+    if (data.parentSpecimenIds !== undefined) {
+      if (!Array.isArray(data.parentSpecimenIds)) {
+        errors.push('parentSpecimenIds deve ser uma lista');
+      } else {
+        for (const parentId of data.parentSpecimenIds) {
+          if (typeof parentId !== 'string' || parentId.trim() === '') {
+            errors.push('parentSpecimenIds deve conter apenas specimenIds não vazios');
+          } else if (data.specimenId && parentId.trim() === String(data.specimenId)) {
+            errors.push('parentSpecimenIds não pode conter a própria amostra');
+          }
+        }
+      }
+    }
     return { isValid: errors.length === 0, errors };
   }
 
@@ -343,6 +357,11 @@ class SampleModel {
       studyId: data.studyId || null,
       protocolId: data.protocolId || null,
       collectionId: data.collectionId || null,
+      parentSpecimenIds: Array.isArray(data.parentSpecimenIds)
+        ? [...new Set(data.parentSpecimenIds
+          .filter((parentId) => typeof parentId === 'string' && parentId.trim() !== '')
+          .map((parentId) => parentId.trim()))]
+        : [],
       linkedFiles: Array.isArray(data.linkedFiles) ? data.linkedFiles : [],
       qrCode: data.qrCode || null,
       storageLocation: data.storageLocation || null,
