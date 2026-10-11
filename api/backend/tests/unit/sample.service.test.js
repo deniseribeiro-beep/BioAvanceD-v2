@@ -627,6 +627,133 @@ describe('sample.service', () => {
         expect(outside).toEqual([]);
       });
 
+      it('#1368: no document write made while a derivative\'s create transaction runs goes outside its session', async () => {
+        const { db, transaction } = makeTransactionalDb();
+        seedParents(db, [parentSample()]);
+        const outboxUpdate = db.collections[OUTBOX].updateOne;
+        const WRITES =['insertOne', 'insertMany', 'updateOne', 'updateMany', 'findOneAndUpdate', 'replaceOne', 'deleteOne', 'bulkWrite'];
+        const outside = [];
+        const watched = new WeakSet();
+        const watch = (name, collection) => {
+          if (!collection || watched.has(collection)) return collection;
+          watched.add(collection);
+          for (const method of WRITES) {
+            const original = collection[method];
+            if (typeof original !== 'function') continue;
+            collection[method] = (...args) => {
+              const options = method.startsWith('insert') || method === 'bulkWrite' ? args[1] : args[2];
+              if (transaction.inBody && options?.session !== db.session) outside.push([name, method]);
+              return original.apply(collection, args);
+            };
+          }
+          return collection;
+        };
+        for (const [name, collection] of Object.entries(db.collections)) watch(name, collection);
+        const resolve = db.collection.getMockImplementation();
+        db.collection.mockImplementation((name) => watch(name, resolve(name)));
+
+        await expect(sampleService.createSample(db, validSampleData({ parentSpecimenIds: ['SP-PARENT'] })))
+          .resolves.toMatchObject({ _id: 'generated-id' });
+
+        expect(outboxUpdate.mock.calls.map(([, update]) => update?.$setOnInsert?.eventType)).toContain('LINEAGE_REGISTERED');
+        expect(outside).toEqual([]);
+      });
+
+      // #1368: a derivative's parents, found by the create's
+      // samples.find({ specimenId: { $in } }) read.
+      const PARENT_ID = new ObjectId();
+      const seedParents = (db, parents) => {
+        db.collections.samples.find = vi.fn((query) => {
+          const wanted = query?.specimenId?.$in;
+          return makeCursor(Array.isArray(wanted) ? parents.filter((parent) => wanted.includes(parent.specimenId)) : []);
+        });
+      };
+      const parentSample = (overrides = {}) => ({
+        _id: PARENT_ID, specimenId: 'SP-PARENT', participantId: '12345678', specimenStatus: 'available', ...overrides
+      });
+
+      it('#1368: a derivative appends one LINEAGE_REGISTERED per parent, keyed by the parent _id, in the create\'s session', async () => {
+        const { db, committed } = makeTransactionalDb();
+        seedParents(db, [parentSample()]);
+
+        await sampleService.createSample(db, validSampleData({ parentSpecimenIds: ['SP-PARENT'] }));
+
+        const lineage = outboxCall(db, 'LINEAGE_REGISTERED');
+        expect(lineage).toBeDefined();
+        expect(lineage[1].$setOnInsert.payload).toStrictEqual({ specimenId: 'generated-id', parentSpecimenId: String(PARENT_ID) });
+        expect(lineage[2]).toEqual({ upsert: true, session: db.session });
+        expect(committed.samples).toHaveLength(1);
+        expect(committed.samples[0].parentSpecimenIds).toStrictEqual(['SP-PARENT']);
+      });
+
+      it('#1368: a failed LINEAGE_REGISTERED append aborts the create: nothing committed, no compensating delete', async () => {
+        const { db, committed } = makeTransactionalDb();
+        seedParents(db, [parentSample()]);
+        db.collections[OUTBOX].updateOne.mockImplementation(async (_filter, update) => {
+          if (update?.$setOnInsert?.eventType === 'LINEAGE_REGISTERED') throw new Error('outbox down');
+          return { acknowledged: true };
+        });
+        const onCreatedInTransaction = vi.fn();
+
+        await expect(sampleService.createSample(db, validSampleData({ parentSpecimenIds: ['SP-PARENT'] }), { onCreatedInTransaction }))
+          .rejects.toThrow('outbox down');
+
+        expect(committed.samples).toEqual([]);
+        expect(committed.sample_movements).toEqual([]);
+        expect(db.collections.samples.deleteOne).not.toHaveBeenCalled();
+        expect(onCreatedInTransaction).not.toHaveBeenCalled();
+      });
+
+      it('#1368: a sample without parentSpecimenIds appends no LINEAGE_REGISTERED', async () => {
+        const { db, committed } = makeTransactionalDb();
+
+        await sampleService.createSample(db, validSampleData());
+
+        expect(outboxCall(db, 'LINEAGE_REGISTERED')).toBeUndefined();
+        expect(committed.samples[0].parentSpecimenIds).toStrictEqual([]);
+      });
+
+      it('#1368: an unknown parent is refused with 404 before any insert', async () => {
+        const { db } = makeTransactionalDb();
+        seedParents(db, []);
+
+        await expect(sampleService.createSample(db, validSampleData({ parentSpecimenIds: ['SP-NOPE'] })))
+          .rejects.toMatchObject({ statusCode: 404, message: 'parentSpecimenIds SP-NOPE não encontrado' });
+
+        expect(db.collections.samples.insertOne).not.toHaveBeenCalled();
+        expect(db.session.withTransaction).not.toHaveBeenCalled();
+      });
+
+      it('#1368: a parent of another participant is refused with 422', async () => {
+        const { db } = makeTransactionalDb();
+        seedParents(db, [parentSample({ participantId: '87654321' })]);
+
+        await expect(sampleService.createSample(db, validSampleData({ parentSpecimenIds: ['SP-PARENT'] })))
+          .rejects.toMatchObject({ statusCode: 422, message: expect.stringContaining('outro participante') });
+
+        expect(db.collections.samples.insertOne).not.toHaveBeenCalled();
+      });
+
+      it('#1368: a closed parent is refused with 422', async () => {
+        const { db } = makeTransactionalDb();
+        seedParents(db, [parentSample({ specimenStatus: 'closed' })]);
+
+        await expect(sampleService.createSample(db, validSampleData({ parentSpecimenIds: ['SP-PARENT'] })))
+          .rejects.toMatchObject({ statusCode: 422, message: expect.stringContaining('encerrada') });
+
+        expect(db.collections.samples.insertOne).not.toHaveBeenCalled();
+      });
+
+      it('#1368: the sample named as its own parent is refused with 422', async () => {
+        const { db } = makeTransactionalDb();
+        seedParents(db, []);
+
+        await expect(sampleService.createSample(db, validSampleData({ specimenId: 'SP-SELF', parentSpecimenIds: ['SP-SELF'] })))
+          .rejects.toMatchObject({ statusCode: 422 });
+
+        expect(db.collections.samples.insertOne).not.toHaveBeenCalled();
+      });
+
       it('builds the movement indexes before the transaction opens (#1369)', async () => {
         const { db } = makeTransactionalDb();
 
@@ -692,6 +819,29 @@ describe('sample.service', () => {
         const result = await sampleService.createSample(db, validSampleData());
 
         expect(result._id).toBe('generated-id');
+        expect(db.collections.samples.deleteOne).not.toHaveBeenCalled();
+      });
+
+      it('#1368: without a transaction the lineage is appended after the insert, and a failed append is logged while the sample stands', async () => {
+        const db = makeDb({ [OUTBOX]: makeCollection(OUTBOX) });
+        mockOperationalStorage(db);
+        seedParents(db, [parentSample()]);
+        db.collections[OUTBOX].updateOne.mockImplementation(async (_filter, update) => {
+          if (update?.$setOnInsert?.eventType === 'LINEAGE_REGISTERED') throw new Error('outbox down');
+          return { acknowledged: true };
+        });
+        const errorSpy = vi.spyOn(require('../../src/utils/logger'), 'error').mockImplementation(() => {});
+
+        const result = await sampleService.createSample(db, validSampleData({ parentSpecimenIds: ['SP-PARENT'] }));
+
+        expect(result._id).toBe('generated-id');
+        const outboxUpdate = db.collections[OUTBOX].updateOne.mock;
+        const lineage = outboxCall(db, 'LINEAGE_REGISTERED');
+        expect(lineage[1].$setOnInsert.payload).toStrictEqual({ specimenId: 'generated-id', parentSpecimenId: String(PARENT_ID) });
+        expect(lineage[2]).toEqual({ upsert: true });
+        expect(outboxUpdate.invocationCallOrder[outboxUpdate.calls.indexOf(lineage)])
+          .toBeGreaterThan(db.collections.samples.insertOne.mock.invocationCallOrder[0]);
+        expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('LINEAGE_REGISTERED nao registrado'));
         expect(db.collections.samples.deleteOne).not.toHaveBeenCalled();
       });
 

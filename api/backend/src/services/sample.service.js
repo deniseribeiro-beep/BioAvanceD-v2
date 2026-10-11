@@ -26,7 +26,7 @@ const AllocateSampleUseCase = require('../core/use-cases/AllocateSampleUseCase')
 const MongoStorageRepository = require('../infrastructure/persistence/mongo/MongoStorageRepository');
 const MongoAuditRepository = require('../infrastructure/persistence/mongo/MongoAuditRepository');
 const LineageRepository = require('../infrastructure/database/neo4j/LineageRepository');
-const { recordSpecimenProjection, GraphProjectionService } = require('./graphProjection.service');
+const { recordLineageProjection, recordSpecimenProjection, GraphProjectionService } = require('./graphProjection.service');
 const { ObjectId } = require('mongodb');
 
 const { CRITICAL_SENSOR_STATUSES, isEquipmentBlocked } = require('../models/equipmentStatus');
@@ -253,6 +253,36 @@ class SampleService {
         }
       }
 
+      // dict-02 ELM-0120 (#1368): a derivative names its parents by
+      // specimenId. Each must exist, belong to the same participant (consent
+      // governance flows through the donor) and not be closed. The sample
+      // stores the specimenIds; the lineage event carries each parent's
+      // _id, the key the graph holds a Sample under.
+      const parentSpecimenIds = [...new Set((Array.isArray(sampleData.parentSpecimenIds) ? sampleData.parentSpecimenIds : [])
+        .map((parentId) => String(parentId).trim())
+        .filter(Boolean))];
+      let parentMongoIds = [];
+      if (parentSpecimenIds.length > 0) {
+        const parents = await samplesCollection.find({ specimenId: { $in: parentSpecimenIds } }).toArray();
+        const byId = new Map(parents.map((parent) => [String(parent.specimenId), parent]));
+        for (const parentId of parentSpecimenIds) {
+          const parent = byId.get(parentId);
+          if (parentId === String(sampleData.specimenId)) {
+            throw createSampleValidationError(`parentSpecimenIds ${parentId} é a própria amostra`, 422);
+          }
+          if (!parent) {
+            throw createSampleValidationError(`parentSpecimenIds ${parentId} não encontrado`, 404);
+          }
+          if (String(parent.participantId) !== String(sampleData.participantId)) {
+            throw createSampleValidationError(`parentSpecimenIds ${parentId} pertence a outro participante`, 422);
+          }
+          if (SampleModel.isTerminalSpecimen(parent)) {
+            throw createSampleValidationError(`parentSpecimenIds ${parentId} está encerrada (status: ${parent.specimenStatus})`, 422);
+          }
+        }
+        parentMongoIds = parentSpecimenIds.map((parentId) => String(byId.get(parentId)._id));
+      }
+
       const storageBoxesCollection = db.collection('storageBoxes');
       const box = await storageBoxesCollection.findOne({ _id: boxId });
       if (!box) {
@@ -401,12 +431,13 @@ class SampleService {
 
       // RF023 AC3, RNF019 C1: on a deployment that runs transactions, the
       // sample insert, its birth movement, the allocation's writes with its
-      // custody event, SPECIMEN_UPSERTED and the caller's own in-transaction
-      // step (options.onCreatedInTransaction, the register custody event)
-      // commit or abort together: a failed append leaves no sample and no
-      // movement. Without a transaction the writes run in sequence, each
-      // failure deleting the inserted sample, and SPECIMEN_UPSERTED is logged
-      // rather than thrown.
+      // custody event, SPECIMEN_UPSERTED, a derivative's LINEAGE_REGISTERED
+      // (#1368) and the caller's own in-transaction step
+      // (options.onCreatedInTransaction, the register custody event) commit
+      // or abort together: a failed append leaves no sample and no movement.
+      // Without a transaction the writes run in sequence, each failure
+      // deleting the inserted sample, and SPECIMEN_UPSERTED and
+      // LINEAGE_REGISTERED are logged rather than thrown.
       const result = await withTransactionWhereSupported(db, async (session) => {
         if (!session) {
           const insertResult = await samplesCollection.insertOne(sample);
@@ -431,6 +462,11 @@ class SampleService {
             participantId: sample.participantId,
             sourceService: 'sample.service'
           });
+          await recordLineageProjection(db, {
+            specimenId: String(insertResult.insertedId),
+            parentSpecimenIds: parentMongoIds,
+            sourceService: 'sample.service'
+          });
           return insertResult;
         }
 
@@ -452,6 +488,11 @@ class SampleService {
         await new GraphProjectionService().appendSpecimenEvent(db, {
           specimenId: String(insertResult.insertedId),
           participantId: sample.participantId,
+          sourceService: 'sample.service'
+        }, { session });
+        await new GraphProjectionService().appendLineageEvents(db, {
+          specimenId: String(insertResult.insertedId),
+          parentSpecimenIds: parentMongoIds,
           sourceService: 'sample.service'
         }, { session });
 
@@ -815,6 +856,8 @@ class SampleService {
       // 'notes' is not in Sample.js's field list but is pinned writable by
       // #540's test; whether it belongs in the model is #875's dict-02
       // flag, not this change's call.
+      // parentSpecimenIds (ELM-0120, #1368) is set at creation, where its
+      // LINEAGE_REGISTERED is appended, and is deliberately not updatable.
       const ALLOWED_UPDATE_FIELDS = [
         'sampleType', 'sampleOrigin', 'extractionProtocol', 'barcode',
         'barcodeSymbologies', 'barcodeIndustrial', 'registeredAt',
