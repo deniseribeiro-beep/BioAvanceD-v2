@@ -47,6 +47,9 @@ const BLOCKED_SPECIMEN_STATUSES = ['unavailable', 'quarantined', 'closed'];
 // RF026 AC7: closed is final; no re-evaluation, consent change or edit
 // rewrites it.
 const TERMINAL_SPECIMEN_STATUSES = ['closed'];
+// The stored values isTerminalSpecimen treats as final, for a query filter:
+// closed, plus a not-yet-migrated destroyed/disposed document.
+const TERMINAL_STORED_SPECIMEN_STATUSES = Object.freeze([...TERMINAL_SPECIMEN_STATUSES, 'destroyed', 'disposed']);
 
 const SampleSchema = new Schema({
   // #941: `index: true` on specimenId/participantId is INERT on its own --
@@ -177,7 +180,7 @@ class SampleModel {
   // automatic rewrite touches it before the migration has decided.
   static isTerminalSpecimen(sample) {
     const raw = String(sample?.specimenStatus || '').trim().toLowerCase();
-    return TERMINAL_SPECIMEN_STATUSES.includes(raw) || raw === 'destroyed' || raw === 'disposed';
+    return TERMINAL_STORED_SPECIMEN_STATUSES.includes(raw);
   }
 
   // RF006 AC3, dictionary RULE-003..005: cur=0 -> depleted,
@@ -358,6 +361,7 @@ module.exports.SampleModel = SampleModel;
 module.exports.SPECIMEN_STATUS_VALUES = SPECIMEN_STATUS_VALUES;
 module.exports.BLOCKED_SPECIMEN_STATUSES = BLOCKED_SPECIMEN_STATUSES;
 module.exports.TERMINAL_SPECIMEN_STATUSES = TERMINAL_SPECIMEN_STATUSES;
+module.exports.TERMINAL_STORED_SPECIMEN_STATUSES = TERMINAL_STORED_SPECIMEN_STATUSES;
 module.exports.LEGACY_SPECIMEN_STATUS_VALUES = LEGACY_SPECIMEN_STATUS_VALUES;
 module.exports.LEGACY_SPECIMEN_STATUS_MAP = LEGACY_SPECIMEN_STATUS_MAP;
 module.exports.QUANTITY_STATUS_VALUES = QUANTITY_STATUS_VALUES;

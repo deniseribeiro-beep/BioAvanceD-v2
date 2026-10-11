@@ -1,15 +1,11 @@
 const SampleMovementModel = require('../models/SampleMovement');
-const { SampleModel, TERMINAL_SPECIMEN_STATUSES } = require('../models/Sample');
+const { SampleModel, TERMINAL_STORED_SPECIMEN_STATUSES } = require('../models/Sample');
 const { appendMovementWithHashChain } = require('../utils/sampleMovementLedger');
 const { getCollection } = require('../utils/collectionResolver');
 const { ensureStorageContainerIndexes, ensureStorageBoxIndexes } = require('../utils/storageIndexes');
 const quarantineActionService = require('./quarantine-action.service');
 const operationalStateDecisionService = require('./operationalStateDecision.service');
 const logger = require('../utils/logger');
-
-// RF026 AC7: the stored values SampleModel.isTerminalSpecimen treats as final
-// -- closed, plus the not-yet-migrated destroyed/disposed -- for a query filter.
-const TERMINAL_SPECIMEN_STATUS_VALUES = [...TERMINAL_SPECIMEN_STATUSES, 'destroyed', 'disposed'];
 
 // #883: routine "Maintenance"/"Inactive" states are deliberately excluded
 // here. A sample-bearing freezer taken out of service for routine
@@ -385,7 +381,7 @@ async function quarantineSamplesByFilter(db, filter, context = {}) {
         $and: [
           filter,
           { specimenStatus: { $ne: 'quarantined' } },
-          { specimenStatus: { $nin: TERMINAL_SPECIMEN_STATUS_VALUES } }
+          { specimenStatus: { $nin: [...TERMINAL_STORED_SPECIMEN_STATUSES] } }
         ]
       },
       queryOptions

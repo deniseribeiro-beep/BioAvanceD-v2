@@ -748,7 +748,7 @@ describe('reports.routes.js gaps', () => {
       // The status options must be the vocabulary normalizeReleaseStatus
       // actually accepts (#531), not the old 'Ativo'/'Inativo' pair.
       const status = response.body.filters.find((entry) => entry.name === 'status');
-      expect(status.options).toEqual(['AVAILABLE', 'QUARANTINE', 'BLOCKED']);
+      expect(status.options).toEqual(['AVAILABLE', 'QUARANTINE', 'BLOCKED', 'PARTIAL', 'DEPLETED']);
 
       // Selects must carry the real MIABIS id vocabularies.
       const sampleType = response.body.filters.find((entry) => entry.name === 'sampleType');

@@ -928,7 +928,7 @@ const SAMPLE_QUERY_FILTERS = [
   { name: 'sampleOrigin', label: 'Origem', type: 'select', options: [...SAMPLE_ORIGIN_IDS] },
   // #531: the public vocabulary normalizeReleaseStatus accepts, which it
   // then maps onto canonical specimenStatus values.
-  { name: 'status', label: 'Estado', type: 'select', options: ['AVAILABLE', 'QUARANTINE', 'BLOCKED'] },
+  { name: 'status', label: 'Estado', type: 'select', options: ['AVAILABLE', 'QUARANTINE', 'BLOCKED', 'PARTIAL', 'DEPLETED'] },
   // #1215: `storageBox`, so the page offers a freezer-then-box picker
   // instead of a free-text field for a 24-hex id.
   { name: 'storageBoxId', label: 'Caixa de armazenamento', type: 'storageBox' },
