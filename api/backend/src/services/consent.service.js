@@ -1195,6 +1195,8 @@ class ConsentService {
       return consent;
     }
     if (recorded.consent.status !== 'REVOKED') {
+      // A partial revocation leaves the consent in force: neither the staff
+      // alert nor the holder's revocation confirmation below is sent for it.
       return recorded.consent;
     }
 
@@ -1217,6 +1219,15 @@ class ConsentService {
       }
     }).catch((dispatchError) => {
       logger.error('[NOTIFICATION_DISPATCH] Falha ao disparar notificação de revogação de consentimento:', dispatchError.message || dispatchError);
+    });
+
+    // RF010 AC8 (LGPD art. 8 §5, art. 18 IX): the holder is told the consent
+    // was revoked, from when, and its prospective effect, recorded as a
+    // ConsentCommunicationEvent. The revocation is already committed; this
+    // never throws, and a failed send is recorded `failed` without undoing it.
+    await consentCommunication.confirmRevocationToHolder(db, {
+      consent: recorded.consent,
+      revocation: recorded.revocation,
     });
 
     return recorded.consent;

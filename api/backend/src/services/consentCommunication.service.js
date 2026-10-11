@@ -3,13 +3,16 @@
  * §2): what the biobank tells the holder of a Consent, each communication
  * recorded as a ConsentCommunicationEvent linked to that consent.
  *
- * The one communication written today is the policy change notice: when a
- * new version of a consent term is published, every consent still in force
- * under an earlier version of that term gets a plain notice of what changed
- * and how to revoke. Each event is recorded `queued` before its send and
- * given its outcome after it, so a process that dies mid-send leaves the
- * attempt. A failed send is recorded `failed` and never undoes the
- * publication.
+ * Two communications are written:
+ * - the policy change notice: when a new version of a consent term is
+ *   published, every consent still in force under an earlier version of that
+ *   term gets a plain notice of what changed and how to revoke;
+ * - the revocation confirmation (LGPD art. 8 §5, art. 18 IX): when a consent
+ *   is revoked as a whole, its holder is told it was revoked, from when, and
+ *   that the revocation acts from then on (Requisitos RF010 AC6).
+ * Each event is recorded `queued` before its send and given its outcome
+ * after it, so a process that dies mid-send leaves the attempt. A failed
+ * send is recorded `failed` and never undoes the act that caused it.
  */
 const ConsentCommunicationEventModel = require('../models/ConsentCommunicationEvent');
 const consentHistory = require('./consentHistory.service');
@@ -23,6 +26,11 @@ const POLICY_CHANGE_NOTICE = 'policy_change_notice';
 const POLICY_CHANGE_NOTICE_TEMPLATE_ID = 'consent.policy_change_notice.v1';
 const POLICY_CHANGE_PURPOSE = 'consent_policy_change';
 const NOTIFICATION_TYPE = 'RF_CONSENT_POLICY_CHANGE_NOTICE';
+
+const REVOCATION_CONFIRMATION = 'notice';
+const REVOCATION_CONFIRMATION_TEMPLATE_ID = 'consent.revocation_confirmation.v1';
+const REVOCATION_PURPOSE = 'consent_revocation';
+const REVOCATION_NOTIFICATION_TYPE = 'RF_CONSENT_REVOCATION_CONFIRMATION';
 
 function permissionLabelsByKey(template) {
   const labels = new Map();
@@ -76,6 +84,124 @@ async function resolveHolderEmail(db, notificationService, participantId) {
   return notificationService.resolvePatientEmail(contact);
 }
 
+const htmlOf = (message) => message.split('\n').map((line) => `<p>${escapeHtml(line)}</p>`).join('');
+
+/**
+ * The revocation confirmation text, in plain pt-BR: that the consent was
+ * revoked, from when, and that the revocation acts from then on without
+ * undoing past uses or the records the law requires to be kept (RF010 AC6).
+ * RF015 AC4: it carries no personal data, not even a name.
+ */
+function formatRevocationConfirmation({ effectiveAt }) {
+  const when = effectiveAt instanceof Date && !Number.isNaN(effectiveAt.getTime()) ? effectiveAt : new Date();
+  const formatted = when.toLocaleString('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+    dateStyle: 'short',
+    timeStyle: 'short',
+  });
+  return [
+    `BioAvanceD: confirmamos a revogação do seu consentimento, válida a partir de ${formatted} (horário de Brasília).`,
+    'A partir dessa data, nada mais será feito com base nesse consentimento.',
+    'A revogação não desfaz o que foi feito antes dela, e os registros que a lei obriga a guardar continuam guardados pelo prazo legal.',
+  ].join('\n');
+}
+
+/**
+ * One recorded communication to one consent's holder: the event is written
+ * `queued`, the holder's email is resolved, the message is sent, and the
+ * event is set `delivered` or `failed`. Never throws; returns the outcome.
+ */
+async function sendRecordedEmail(db, {
+  eventsCollection,
+  notificationService,
+  consent,
+  communicationType,
+  contentTemplateId,
+  purpose,
+  sourceEventType,
+  sourceEventId,
+  subject,
+  notificationType,
+  composeMessage,
+  label,
+}) {
+  const consentId = consentHistory.consentKeyOf(consent);
+  let event = null;
+  try {
+    event = ConsentCommunicationEventModel.create({
+      consentId,
+      participantId: consent.participantId || null,
+      communicationType,
+      channel: 'email',
+      deliveryStatus: 'queued',
+      contentTemplateId,
+      purpose,
+      sourceEventType,
+      sourceEventId: sourceEventId == null ? null : String(sourceEventId),
+    });
+    const validation = ConsentCommunicationEventModel.validate(event);
+    if (!validation.isValid) {
+      throw new Error(validation.errors.join(', '));
+    }
+    // Recorded before the send: a send with no record is never made.
+    await eventsCollection.insertOne(event);
+
+    const email = await resolveHolderEmail(db, notificationService, consent.participantId);
+    if (!email) {
+      const missing = new Error(`E-mail do participante ausente para ${label}`);
+      missing.code = 'CONSENT_RECIPIENT_REQUIRED';
+      throw missing;
+    }
+
+    const message = composeMessage();
+    const result = await notificationService.sendEmail({
+      to: email,
+      subject,
+      text: message,
+      html: htmlOf(message),
+      notificationType,
+      metadata: {
+        participantId: consent.participantId || null,
+        consentId,
+        consentCommunicationEventId: event.consentCommunicationEventId,
+      },
+    });
+
+    await eventsCollection.updateOne(
+      { consentCommunicationEventId: event.consentCommunicationEventId },
+      {
+        $set: {
+          deliveryStatus: 'delivered',
+          sentAt: new Date(),
+          evidenceUri: result?.messageId
+            ? `urn:bioavanced:email:${result.provider || 'email'}:${result.messageId}`
+            : null,
+        },
+      }
+    );
+    return 'delivered';
+  } catch (sendError) {
+    logger.error(`Falha ao enviar ${label} para o consentimento ${consentId}:`, sendError.message);
+    if (event) {
+      try {
+        await eventsCollection.updateOne(
+          { consentCommunicationEventId: event.consentCommunicationEventId },
+          {
+            $set: {
+              deliveryStatus: 'failed',
+              sentAt: new Date(),
+              failureReason: sendError.code || sendError.message || 'send_failed',
+            },
+          }
+        );
+      } catch (recordError) {
+        logger.error(`Falha ao registrar a falha no envio (${label}):`, recordError.message);
+      }
+    }
+    return 'failed';
+  }
+}
+
 /**
  * Notify the holders of every consent still in force under an earlier
  * version of the term `newTemplate` supersedes. Earlier versions are the
@@ -122,86 +248,25 @@ async function notifyHoldersOfSupersededTerm(db, { newTemplateId, newTemplate, p
     const newTemplateDoc = { _id: newTemplateId, ...newTemplate };
 
     for (const consent of holders) {
-      const consentId = consentHistory.consentKeyOf(consent);
-      let event = null;
-      try {
-        event = ConsentCommunicationEventModel.create({
-          consentId,
-          participantId: consent.participantId || null,
-          communicationType: POLICY_CHANGE_NOTICE,
-          channel: 'email',
-          deliveryStatus: 'queued',
-          contentTemplateId: POLICY_CHANGE_NOTICE_TEMPLATE_ID,
-          purpose: POLICY_CHANGE_PURPOSE,
-          sourceEventType: 'ConsentTemplate',
-          sourceEventId: String(newTemplateId),
-        });
-        const validation = ConsentCommunicationEventModel.validate(event);
-        if (!validation.isValid) {
-          throw new Error(validation.errors.join(', '));
-        }
-        // Recorded before the send: a send with no record is never made.
-        await eventsCollection.insertOne(event);
-
-        const email = await resolveHolderEmail(db, notificationService, consent.participantId);
-        if (!email) {
-          const missing = new Error('E-mail do participante ausente para o aviso de mudança do termo');
-          missing.code = 'CONSENT_RECIPIENT_REQUIRED';
-          throw missing;
-        }
-
-        const previousTemplate = lineage.get(String(consent.consentTemplateId))
-          || { version: consent.consentVersion || null };
-        const message = formatPolicyChangeNotice({ previousTemplate, newTemplate: newTemplateDoc });
-        const result = await notificationService.sendEmail({
-          to: email,
-          subject: 'BioAvanceD - Atualização do Termo de Consentimento',
-          text: message,
-          html: message.split('\n').map((line) => `<p>${escapeHtml(line)}</p>`).join(''),
-          notificationType: NOTIFICATION_TYPE,
-          metadata: {
-            participantId: consent.participantId || null,
-            consentId,
-            consentCommunicationEventId: event.consentCommunicationEventId,
-          },
-        });
-
-        await eventsCollection.updateOne(
-          { consentCommunicationEventId: event.consentCommunicationEventId },
-          {
-            $set: {
-              deliveryStatus: 'delivered',
-              sentAt: new Date(),
-              evidenceUri: result?.messageId
-                ? `urn:bioavanced:email:${result.provider || 'email'}:${result.messageId}`
-                : null,
-            },
-          }
-        );
-        notices.delivered += 1;
-      } catch (sendError) {
-        notices.failed += 1;
-        logger.error(
-          `Falha ao enviar o aviso de mudança do termo para o consentimento ${consentId}:`,
-          sendError.message
-        );
-        if (event) {
-          try {
-            await eventsCollection.updateOne(
-              { consentCommunicationEventId: event.consentCommunicationEventId },
-              {
-                $set: {
-                  deliveryStatus: 'failed',
-                  sentAt: new Date(),
-                  failureReason: sendError.code || sendError.message || 'send_failed',
-                },
-              }
-            );
-          } catch (recordError) {
-            logger.error('Falha ao registrar a falha do aviso de mudança do termo:', recordError.message);
-          }
-        }
-      }
+      const outcome = await sendRecordedEmail(db, {
+        eventsCollection,
+        notificationService,
+        consent,
+        communicationType: POLICY_CHANGE_NOTICE,
+        contentTemplateId: POLICY_CHANGE_NOTICE_TEMPLATE_ID,
+        purpose: POLICY_CHANGE_PURPOSE,
+        sourceEventType: 'ConsentTemplate',
+        sourceEventId: newTemplateId,
+        subject: 'BioAvanceD - Atualização do Termo de Consentimento',
+        notificationType: NOTIFICATION_TYPE,
+        composeMessage: () => formatPolicyChangeNotice({
+          previousTemplate: lineage.get(String(consent.consentTemplateId))
+            || { version: consent.consentVersion || null },
+          newTemplate: newTemplateDoc,
+        }),
+        label: 'o aviso de mudança do termo',
+      });
+      notices[outcome] += 1;
     }
 
     if (notices.failed > 0) {
@@ -216,10 +281,46 @@ async function notifyHoldersOfSupersededTerm(db, { newTemplateId, newTemplate, p
   return notices;
 }
 
+/**
+ * Confirm to the holder of `consent` that it was revoked as a whole by
+ * `revocation` (its ConsentRevocation). Only a revocation that ends the
+ * consent is confirmed here; one that narrows a consent left in force is
+ * not. Never throws; returns the event's outcome (`delivered` or
+ * `failed`), or null when not even the event could be written.
+ */
+async function confirmRevocationToHolder(db, { consent, revocation }) {
+  try {
+    const eventsCollection = await getCollection(db, 'consentCommunicationEvents');
+    const notificationService = require('./notification.service');
+    return await sendRecordedEmail(db, {
+      eventsCollection,
+      notificationService,
+      consent,
+      communicationType: REVOCATION_CONFIRMATION,
+      contentTemplateId: REVOCATION_CONFIRMATION_TEMPLATE_ID,
+      purpose: REVOCATION_PURPOSE,
+      sourceEventType: 'ConsentRevocation',
+      sourceEventId: revocation?.consentRevocationId ?? null,
+      subject: 'BioAvanceD - Confirmação de revogação do consentimento',
+      notificationType: REVOCATION_NOTIFICATION_TYPE,
+      composeMessage: () => formatRevocationConfirmation({ effectiveAt: revocation?.effectiveAt }),
+      label: 'a confirmação de revogação',
+    });
+  } catch (error) {
+    logger.error('Erro ao confirmar a revogação ao titular:', error.message);
+    return null;
+  }
+}
+
 module.exports = {
   notifyHoldersOfSupersededTerm,
+  confirmRevocationToHolder,
   formatPolicyChangeNotice,
+  formatRevocationConfirmation,
   POLICY_CHANGE_NOTICE,
   POLICY_CHANGE_NOTICE_TEMPLATE_ID,
   POLICY_CHANGE_PURPOSE,
+  REVOCATION_CONFIRMATION,
+  REVOCATION_CONFIRMATION_TEMPLATE_ID,
+  REVOCATION_PURPOSE,
 };

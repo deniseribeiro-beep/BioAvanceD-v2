@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { MongoClient, Db, ObjectId } from 'mongodb';
 import crypto from 'crypto';
-import { realAuthLogin } from './helpers/realAuth';
+import { realAuthLogin, realLogin } from './helpers/realAuth';
 
 // RF010 AC8 (LGPD art. 8 §6, art. 9 §2): publishing a new version of a
 // consent term through the operator's builder sends each holder of a consent
@@ -145,5 +145,136 @@ test.describe('RF010 AC8 policy change notice on a superseding TCLE version -- r
       deliveryStatus: 'failed',
       failureReason: 'CONSENT_RECIPIENT_REQUIRED',
     });
+  });
+});
+
+// RF010 AC8 (LGPD art. 8 §5, art. 18 IX): revoking a consent as a whole sends
+// its holder a revocation confirmation, recorded as a ConsentCommunicationEvent
+// of type `notice` linked to the consent and to its ConsentRevocation. A
+// partial revocation leaves the consent in force and sends nothing.
+const R_RUN = `${Date.now()}-r`;
+const rVersionGroupId = `e2e-1351-revocation-${R_RUN}`;
+const fullHolder = String(crypto.randomInt(83_000_000, 84_000_000));
+const partialHolder = String(crypto.randomInt(84_000_000, 85_000_000));
+const rParticipantIds = [fullHolder, partialHolder];
+const rConsentIds = {
+  full: `e2e-1351-full-${R_RUN}`,
+  partial: `e2e-1351-partial-${R_RUN}`,
+};
+
+let rClient: MongoClient | null = null;
+let rDb: Db;
+let rTemplateId: ObjectId;
+const rConsentObjectIds: Record<keyof typeof rConsentIds, ObjectId> = {} as Record<keyof typeof rConsentIds, ObjectId>;
+
+test.describe('RF010 AC8 revocation confirmation to the holder -- real backend', () => {
+  test.skip(!apiBaseURL, 'PLAYWRIGHT_API_BASE_URL not set -- run via npm run test:e2e:docker');
+
+  test.beforeAll(async () => {
+    rClient = new MongoClient(mongoUri);
+    await rClient.connect();
+    rDb = rClient.db(mongoDbName);
+
+    const inserted = await rDb.collection('consent_templates').insertOne({
+      title: `TCLE e2e 1351 revogação ${R_RUN}`,
+      content: '<p>Termo e2e 1351, revogação.</p>',
+      htmlContent: '<p>Termo e2e 1351, revogação.</p>',
+      version: 'v1',
+      versionGroupId: rVersionGroupId,
+      caae: '',
+      active: true,
+      permissions: [
+        { key: 'research-1351r', label: 'Uso das amostras em pesquisa', required: true },
+        { key: 'contact-1351r', label: 'Contato futuro', required: false },
+      ],
+      validFrom: new Date('2026-01-01T00:00:00.000Z'),
+      validTo: new Date('2027-12-31T23:59:59.000Z'),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    rTemplateId = inserted.insertedId;
+
+    for (const participantId of rParticipantIds) {
+      await rDb.collection('patients').insertOne({
+        participantId,
+        status: 'ACTIVE',
+        consentTemplateId: rTemplateId.toString(),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+      await rDb.collection('participantIdentities').insertOne({
+        participantId,
+        email: `e2e-1351-${participantId}@example.test`,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+    }
+
+    for (const [key, participantId] of [['full', fullHolder], ['partial', partialHolder]] as const) {
+      const row = await rDb.collection('patientConsents').insertOne({
+        consentId: rConsentIds[key],
+        participantId,
+        consentTemplateId: rTemplateId.toString(),
+        consentVersion: 'v1',
+        responses: { 'research-1351r': true, 'contact-1351r': true },
+        status: 'ACTIVE',
+        signedAt: new Date(),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+      rConsentObjectIds[key] = row.insertedId;
+    }
+  });
+
+  test.afterAll(async () => {
+    if (!rClient) return;
+    const ids = Object.values(rConsentIds);
+    await rDb.collection('consentCommunicationEvents').deleteMany({ consentId: { $in: ids } });
+    await rDb.collection('consentRevocations').deleteMany({ consentId: { $in: ids } });
+    await rDb.collection('consentDecisionEvents').deleteMany({ consentId: { $in: ids } });
+    await rDb.collection('patientConsents').deleteMany({ participantId: { $in: rParticipantIds } });
+    await rDb.collection('participantIdentities').deleteMany({ participantId: { $in: rParticipantIds } });
+    await rDb.collection('patients').deleteMany({ participantId: { $in: rParticipantIds } });
+    await rDb.collection('consent_templates').deleteMany({ versionGroupId: rVersionGroupId });
+    await rClient.close();
+    rClient = null;
+  });
+
+  test('a full revocation confirms to the holder and records it; a partial one sends nothing', async ({ request }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const revoke = (id: ObjectId, data: Record<string, unknown>) =>
+      request.post(`${apiBaseURL}/api/e-consent/consents/${id.toString()}/revoke`, { headers: auth, data });
+
+    // Partial: the consent stays in force, and its holder is sent nothing.
+    const partial = await revoke(rConsentObjectIds.partial, { scope: ['contact-1351r'], reason: 'Não deseja contato futuro' });
+    expect(partial.status(), await partial.text()).toBe(200);
+    expect((await partial.json()).data).toMatchObject({ status: 'ACTIVE', currentStateDerived: 'partially_revoked' });
+
+    // Full: the consent is revoked, and its holder gets the confirmation.
+    const full = await revoke(rConsentObjectIds.full, {});
+    expect(full.status(), await full.text()).toBe(200);
+    expect((await full.json()).data).toMatchObject({ status: 'REVOKED', currentStateDerived: 'revoked' });
+
+    const revocation = await rDb.collection('consentRevocations').findOne({ consentId: rConsentIds.full });
+    expect(revocation?.consentRevocationId).toBeTruthy();
+
+    const events = await rDb.collection('consentCommunicationEvents')
+      .find({ consentId: { $in: Object.values(rConsentIds) } })
+      .toArray();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      consentId: rConsentIds.full,
+      participantId: fullHolder,
+      communicationType: 'notice',
+      channel: 'email',
+      contentTemplateId: 'consent.revocation_confirmation.v1',
+      purpose: 'consent_revocation',
+      sourceEventType: 'ConsentRevocation',
+      sourceEventId: revocation?.consentRevocationId,
+      // The test stack's SMTP catcher accepts the send.
+      deliveryStatus: 'delivered',
+    });
+    expect(events[0].sentAt).toBeInstanceOf(Date);
   });
 });
