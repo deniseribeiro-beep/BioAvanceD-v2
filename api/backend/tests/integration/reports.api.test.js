@@ -605,7 +605,7 @@ describe('Reports API integration', () => {
     // #539: this used to read the legacy currentStatus/status fields
     // (`sample.currentStatus || sample.status || null`), which
     // canonical-data-contract-v1.md's "Legacy Fields Prohibited" list bans —
-    // derives from the canonical specimenStatus (dict-02 ELM-0123) instead.
+    // derives from the canonical specimenStatus (V2E-0544) instead.
     it('sampleanalysis: deriva status de specimenStatus, ignorando currentStatus/status legados', async () => {
       const { db } = buildCollectionDb({
         samples: [

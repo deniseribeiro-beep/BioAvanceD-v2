@@ -162,7 +162,7 @@ function normalizeSprecCode(value) {
  * for what "current" means here.
  *
  * #531: the release/quarantine filter now queries the canonical
- * `specimenStatus` (dict-02 ELM-0123) instead of the legacy embedded
+ * `specimenStatus` (V2E-0544) instead of the legacy embedded
  * `release_status` — which was never `releaseStatus`-cased SampleModel
  * writes, and was never folded into the #389/#398/#399/#405/#406/#408
  * specimenStatus/QuarantineAction consolidation despite representing the
@@ -628,8 +628,8 @@ async function handleSampleAnalysis(db, filters) {
       barcode: sample.barcode || null,
       sampleType: sample.sampleType || null,
       patientID: sample.participantId || null,
-      // #539: derives from the canonical specimenStatus (dict-02
-      // ELM-0123) instead of the legacy currentStatus/status fields
+      // #539: derives from the canonical specimenStatus (V2E-0544)
+      // instead of the legacy currentStatus/status fields
       // canonical-data-contract-v1.md bans.
       status: SampleModel.resolveSpecimenStatus(sample),
       quantityStatus: SampleModel.resolveQuantityStatus(sample),

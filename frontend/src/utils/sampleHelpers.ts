@@ -3,7 +3,7 @@
 // #539 (Phase B of #538's currentStatus/status migration): shared
 // specimenStatus derivation, extracted from SampleWithdrawalReturnPage.tsx's
 // #538 Phase A fix so every reader (not just the withdrawal page) derives
-// display state from the canonical `specimenStatus` (dict-02 ELM-0123)
+// display state from the canonical `specimenStatus` (V2E-0544)
 // instead of the legacy `currentStatus`/`status` fields
 // canonical-data-contract-v1.md bans.
 //

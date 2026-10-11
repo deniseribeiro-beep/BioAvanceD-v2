@@ -11,7 +11,7 @@ import {
 
 // #539: shared specimenStatus derivation extracted from
 // SampleWithdrawalReturnPage.tsx's #538 Phase A fix so every reader derives
-// display state from the canonical `specimenStatus` (dict-02 ELM-0123)
+// display state from the canonical `specimenStatus` (V2E-0544)
 // instead of the legacy `currentStatus`/`status` fields
 // canonical-data-contract-v1.md bans. RF006 AC2/AC3 split the quantity out
 // into quantityStatus.
