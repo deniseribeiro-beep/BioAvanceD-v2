@@ -209,8 +209,10 @@ async function dispatchNotification(db, { eventType, sourceEventType, sourceEven
     deliveryDurationMs,
     // RNF026 AC#1 - measurable against the rule's own SLA; null while
     // undelivered rather than false, since "not yet delivered" and
-    // "delivered late" are different states.
-    withinSla: deliveredAt ? deliveryDurationMs <= rule.maxDeliveryMinutes * 60000 : null,
+    // "delivered late" are different states. The window closes at the
+    // deadline itself (windowClosed is >=), so within means strictly before
+    // it, and a lapsed window is never within: the two fields cannot disagree.
+    withinSla: deliveredAt ? !windowLapsed && deliveryDurationMs < rule.maxDeliveryMinutes * 60000 : null,
     // RF015 AC6: the window closed before delivery, so retrying stopped.
     slaBreached: windowLapsed
   };

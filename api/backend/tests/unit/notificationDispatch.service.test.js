@@ -277,6 +277,54 @@ describe('notificationDispatch.service', () => {
       expect(result.attempts.at(-1)).toMatchObject({ channel: 'in_app', escalation: true, result: 'success' });
     });
 
+    describe('#1366: the SLA boundary is one comparison, on a fixed clock', () => {
+      const START = new Date('2026-10-11T12:00:00.000Z').getTime();
+      const MAX_MS = 60000;
+
+      beforeEach(() => {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(START);
+      });
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+
+      async function dispatchWith(rule, sendEmail) {
+        const notificationRules = statefulCollection();
+        const notifications = statefulCollection();
+        const db = buildDb({ notificationRules: notificationRules.mock, notifications: notifications.mock });
+        await notificationRuleService.createRule(db, {
+          eventType: 'environmental_excursion',
+          channels: ['email'],
+          recipientRoleCodes: ['administrator'],
+          sensitiveFieldsAllowlist: [],
+          maxDeliveryMinutes: MAX_MS / 60000,
+          ...rule,
+        });
+        vi.spyOn(notificationServiceV2, 'sendEmail').mockImplementation(sendEmail);
+        return notificationDispatchService.dispatchNotification(db, { eventType: 'environmental_excursion', payload: {} });
+      }
+
+      it('a delivery one millisecond before the deadline is within the SLA', async () => {
+        const result = await dispatchWith({}, async () => { vi.setSystemTime(START + MAX_MS - 1); });
+        expect(result).toMatchObject({ status: 'delivered', slaBreached: false, withinSla: true, deliveryDurationMs: MAX_MS - 1 });
+      });
+
+      it('a delivery in the deadline\'s own millisecond is not within the SLA', async () => {
+        const result = await dispatchWith({}, async () => { vi.setSystemTime(START + MAX_MS); });
+        expect(result).toMatchObject({ status: 'delivered', withinSla: false, deliveryDurationMs: MAX_MS });
+      });
+
+      it('an escalation delivered in the deadline\'s own millisecond after the window lapsed reads breached and not within', async () => {
+        const result = await dispatchWith(
+          { retry: { maxAttempts: 10, backoffSeconds: 0 }, escalation: { enabled: true, afterFailures: 10, channel: 'in_app' } },
+          async () => { vi.setSystemTime(START + MAX_MS); throw new Error('transport down'); }
+        );
+        expect(result.attempts.filter((a) => a.channel === 'email')).toHaveLength(1);
+        expect(result).toMatchObject({ slaBreached: true, escalated: true, deliveredChannel: 'in_app', deliveryDurationMs: MAX_MS, withinSla: false });
+      });
+    });
+
     it('#903 (RF015 AC5): records the purpose (the caller\'s, else the rule\'s) and the consent concerned, outside the message payload', async () => {
       const notificationRules = statefulCollection();
       const notifications = statefulCollection();
