@@ -5,6 +5,12 @@ const ContainerModel = require('../models/Container');
 const SpecimenContainerAssignmentModel = require('../models/SpecimenContainerAssignment');
 const ContainerPositionAssignmentModel = require('../models/ContainerPositionAssignment');
 const RackLocationAssignmentModel = require('../models/RackLocationAssignment');
+const {
+  ensureContainerIndexes,
+  ensureSpecimenContainerAssignmentIndexes,
+  ensureContainerPositionAssignmentIndexes,
+  ensureRackLocationAssignmentIndexes,
+} = require('../utils/physicalChainIndexes');
 
 // #1314 (RF016 AC1/AC3, RF017 AC3/AC4): the normalized physical chain,
 // specimen -> container -> storage position, and rack -> location. Each link
@@ -12,8 +18,13 @@ const RackLocationAssignmentModel = require('../models/RackLocationAssignment');
 // checked against every stored assignment sharing its key, the history
 // included, so a back-dated load cannot overlap a closed interval either.
 // The check and the write share a transaction wherever one runs; the
-// partial unique indexes below refuse two OPEN assignments on one key even
-// where none runs.
+// partial unique indexes (utils/physicalChainIndexes.js) refuse two OPEN
+// assignments on one key even where none runs.
+//
+// Each write takes an optional `{ session }` last. Given one, the body runs
+// in the caller's transaction: it opens none of its own and builds no index,
+// since an index build or a session-less write next to an open transaction
+// is a write conflict. That caller builds the indexes before it opens one.
 
 class PhysicalChainError extends Error {
   constructor(message, code, statusCode) {
@@ -25,13 +36,6 @@ class PhysicalChainError extends Error {
 }
 
 const OPEN = { assignmentStatus: 'active' };
-const INDEXES = [
-  ['specimenContainerAssignments', { specimenId: 1 }, 'uniq_open_specimen'],
-  ['specimenContainerAssignments', { containerId: 1 }, null],
-  ['containerPositionAssignments', { containerId: 1 }, 'uniq_open_container'],
-  ['containerPositionAssignments', { storagePositionId: 1 }, 'uniq_open_position'],
-  ['rackLocationAssignments', { storageRackId: 1 }, 'uniq_open_rack'],
-];
 const ensuredDbs = new WeakSet();
 
 // Latched before the await, like the outbox's index build: a persistent
@@ -40,15 +44,10 @@ async function ensurePhysicalChainIndexes(db) {
   if (!db || ensuredDbs.has(db)) return;
   ensuredDbs.add(db);
   try {
-    await (await getCollection(db, 'containers')).createIndex({ containerId: 1 }, { unique: true, name: 'uniq_containerId' });
-    for (const [name, keys, uniqueName] of INDEXES) {
-      const collection = await getCollection(db, name);
-      if (uniqueName) {
-        await collection.createIndex(keys, { unique: true, name: uniqueName, partialFilterExpression: OPEN });
-      } else {
-        await collection.createIndex(keys);
-      }
-    }
+    await ensureContainerIndexes(await getCollection(db, 'containers'));
+    await ensureSpecimenContainerAssignmentIndexes(await getCollection(db, 'specimenContainerAssignments'));
+    await ensureContainerPositionAssignmentIndexes(await getCollection(db, 'containerPositionAssignments'));
+    await ensureRackLocationAssignmentIndexes(await getCollection(db, 'rackLocationAssignments'));
   } catch (error) {
     logger.warn(`[PHYSICAL_CHAIN] Falha ao criar índices: ${error.message}`);
   }
@@ -63,6 +62,11 @@ function closedIfEnded(assignment, endField) {
 
 function sessionOptions(session) {
   return session ? { session } : undefined;
+}
+
+// The caller's session, or a transaction of our own wherever one runs.
+function inSession(db, session, body) {
+  return session ? body(session) : withTransactionWhereSupported(db, body);
 }
 
 // A model's assertNoOverlap throws a plain Error; the caller sees a 409.
@@ -102,8 +106,8 @@ async function setContainerContent(db, containerId, session) {
   await (await getCollection(db, 'containers')).updateOne({ containerId }, { $set: { emptyStatus } }, sessionOptions(session));
 }
 
-async function createContainer(db, data) {
-  await ensurePhysicalChainIndexes(db);
+async function createContainer(db, data, { session } = {}) {
+  if (!session) await ensurePhysicalChainIndexes(db);
   let container;
   try {
     container = ContainerModel.create({ ...data, emptyStatus: 'empty' });
@@ -111,7 +115,7 @@ async function createContainer(db, data) {
     throw toValidationError(error);
   }
   try {
-    await (await getCollection(db, 'containers')).insertOne(container);
+    await (await getCollection(db, 'containers')).insertOne(container, sessionOptions(session));
   } catch (error) {
     if (error?.code === 11000) throw new PhysicalChainError(`Recipiente ${container.containerId} já existe`, 'CONTAINER_EXISTS', 409);
     throw error;
@@ -121,15 +125,15 @@ async function createContainer(db, data) {
 
 // RF017 AC3/AC4: a specimen enters a container. The container becomes
 // occupied (RULE-031/RULE-032).
-async function loadSpecimen(db, data) {
-  await ensurePhysicalChainIndexes(db);
+async function loadSpecimen(db, data, { session: callerSession } = {}) {
+  if (!callerSession) await ensurePhysicalChainIndexes(db);
   let candidate;
   try {
     candidate = closedIfEnded(SpecimenContainerAssignmentModel.create(data), 'unloadedAt');
   } catch (error) {
     throw toValidationError(error);
   }
-  return withTransactionWhereSupported(db, async (session) => {
+  return inSession(db, callerSession, async (session) => {
     await findContainer(db, candidate.containerId, session);
     const assignments = await getCollection(db, 'specimenContainerAssignments');
     const existing = await assignments.find({ specimenId: candidate.specimenId }, sessionOptions(session)).toArray();
@@ -145,8 +149,8 @@ async function loadSpecimen(db, data) {
 }
 
 // `filter` names the assignment by its own id field, a literal key.
-async function closeAssignment(db, { collectionName, filter, id, Model, close, endField, end }) {
-  return withTransactionWhereSupported(db, async (session) => {
+async function closeAssignment(db, { collectionName, filter, id, Model, close, endField, end }, { session: callerSession } = {}) {
+  return inSession(db, callerSession, async (session) => {
     const collection = await getCollection(db, collectionName);
     const current = await collection.findOne(filter, sessionOptions(session));
     if (!current) {
@@ -173,24 +177,24 @@ async function closeAssignment(db, { collectionName, filter, id, Model, close, e
   });
 }
 
-async function unloadSpecimen(db, specimenContainerAssignmentId, unloadedAt) {
+async function unloadSpecimen(db, specimenContainerAssignmentId, unloadedAt, { session } = {}) {
   return closeAssignment(db, {
     collectionName: 'specimenContainerAssignments', filter: { specimenContainerAssignmentId: String(specimenContainerAssignmentId) }, id: specimenContainerAssignmentId,
     Model: SpecimenContainerAssignmentModel, close: 'unload', endField: 'unloadedAt', end: unloadedAt,
-  });
+  }, { session });
 }
 
 // RF017 AC2, RULE-030: a container takes a position; neither may hold
 // another over the same interval.
-async function placeContainer(db, data) {
-  await ensurePhysicalChainIndexes(db);
+async function placeContainer(db, data, { session: callerSession } = {}) {
+  if (!callerSession) await ensurePhysicalChainIndexes(db);
   let candidate;
   try {
     candidate = closedIfEnded(ContainerPositionAssignmentModel.create(data), 'removedAt');
   } catch (error) {
     throw toValidationError(error);
   }
-  return withTransactionWhereSupported(db, async (session) => {
+  return inSession(db, callerSession, async (session) => {
     await findContainer(db, candidate.containerId, session);
     const assignments = await getCollection(db, 'containerPositionAssignments');
     const existing = await assignments.find({
@@ -206,23 +210,23 @@ async function placeContainer(db, data) {
   });
 }
 
-async function removeContainer(db, containerPositionAssignmentId, removedAt) {
+async function removeContainer(db, containerPositionAssignmentId, removedAt, { session } = {}) {
   return closeAssignment(db, {
     collectionName: 'containerPositionAssignments', filter: { containerPositionAssignmentId: String(containerPositionAssignmentId) }, id: containerPositionAssignmentId,
     Model: ContainerPositionAssignmentModel, close: 'remove', endField: 'removedAt', end: removedAt,
-  });
+  }, { session });
 }
 
 // RULE-035: a rack is in one location at a time.
-async function locateRack(db, data) {
-  await ensurePhysicalChainIndexes(db);
+async function locateRack(db, data, { session: callerSession } = {}) {
+  if (!callerSession) await ensurePhysicalChainIndexes(db);
   let candidate;
   try {
     candidate = closedIfEnded(RackLocationAssignmentModel.create(data), 'removedAt');
   } catch (error) {
     throw toValidationError(error);
   }
-  return withTransactionWhereSupported(db, async (session) => {
+  return inSession(db, callerSession, async (session) => {
     const assignments = await getCollection(db, 'rackLocationAssignments');
     const existing = await assignments.find({ storageRackId: candidate.storageRackId }, sessionOptions(session)).toArray();
     assertNoOverlap(RackLocationAssignmentModel, candidate, existing);
@@ -235,11 +239,21 @@ async function locateRack(db, data) {
   });
 }
 
-async function removeRack(db, rackLocationAssignmentId, removedAt) {
+async function removeRack(db, rackLocationAssignmentId, removedAt, { session } = {}) {
   return closeAssignment(db, {
     collectionName: 'rackLocationAssignments', filter: { rackLocationAssignmentId: String(rackLocationAssignmentId) }, id: rackLocationAssignmentId,
     Model: RackLocationAssignmentModel, close: 'remove', endField: 'removedAt', end: removedAt,
-  });
+  }, { session });
+}
+
+// The specimen's open container assignment, or null.
+async function openSpecimenAssignment(db, specimenId, session) {
+  return (await getCollection(db, 'specimenContainerAssignments')).findOne({ specimenId: String(specimenId), ...OPEN }, sessionOptions(session));
+}
+
+// The container's open position assignment, or null.
+async function openPositionAssignment(db, containerId, session) {
+  return (await getCollection(db, 'containerPositionAssignments')).findOne({ containerId: String(containerId), ...OPEN }, sessionOptions(session));
 }
 
 function heldAt(assignment, from, to, at) {
@@ -284,5 +298,7 @@ module.exports = {
   removeContainer,
   locateRack,
   removeRack,
+  openSpecimenAssignment,
+  openPositionAssignment,
   resolveSpecimenLocation,
 };

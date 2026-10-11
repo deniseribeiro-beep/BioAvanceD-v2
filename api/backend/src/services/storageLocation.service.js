@@ -1,6 +1,7 @@
 const { getCollection } = require('../utils/collectionResolver');
 const logger = require('../utils/logger');
 const StorageLocationModel = require('../models/StorageLocation');
+const { ensureStorageLocationIndexes } = require('../utils/physicalChainIndexes');
 
 // #1314 (RF017 AC1/AC3/AC8): the StorageLocation records a rack is located
 // at. A location belongs to one organization, and so does every location
@@ -25,36 +26,40 @@ async function ensureLocationIndexes(db) {
   if (!db || ensuredDbs.has(db)) return;
   ensuredDbs.add(db);
   try {
-    const locations = await getCollection(db, 'storageLocations');
-    await locations.createIndex({ storageLocationId: 1 }, { unique: true, name: 'uniq_storageLocationId' });
-    await locations.createIndex({ organizationId: 1 });
+    await ensureStorageLocationIndexes(await getCollection(db, 'storageLocations'));
   } catch (error) {
     logger.warn(`[STORAGE_LOCATION] Falha ao criar índices: ${error.message}`);
   }
 }
 
-async function findLocation(db, storageLocationId) {
-  const location = await (await getCollection(db, 'storageLocations')).findOne({ storageLocationId: String(storageLocationId) });
+function sessionOptions(session) {
+  return session ? { session } : undefined;
+}
+
+async function findLocation(db, storageLocationId, session) {
+  const location = await (await getCollection(db, 'storageLocations')).findOne({ storageLocationId: String(storageLocationId) }, sessionOptions(session));
   if (!location) {
     throw new StorageLocationError(`Local ${storageLocationId} não encontrado`, 'LOCATION_NOT_FOUND', 404);
   }
   return location;
 }
 
-async function createLocation(db, data) {
-  await ensureLocationIndexes(db);
+// Given a session, every read and the write run in the caller's
+// transaction, and no index is built beside it (physicalChain.service.js).
+async function createLocation(db, data, { session } = {}) {
+  if (!session) await ensureLocationIndexes(db);
   let location;
   try {
     location = StorageLocationModel.create(data);
   } catch (error) {
     throw new StorageLocationError(error.message, 'VALIDATION_ERROR', 422);
   }
-  const organization = await (await getCollection(db, 'organizations')).findOne({ organizationId: location.organizationId });
+  const organization = await (await getCollection(db, 'organizations')).findOne({ organizationId: location.organizationId }, sessionOptions(session));
   if (!organization) {
     throw new StorageLocationError(`Organização ${location.organizationId} não encontrada`, 'ORGANIZATION_NOT_FOUND', 404);
   }
   if (location.parentLocationId) {
-    const parent = await findLocation(db, location.parentLocationId);
+    const parent = await findLocation(db, location.parentLocationId, session);
     try {
       StorageLocationModel.assertParentCompatible(location, parent);
     } catch (error) {
@@ -64,16 +69,28 @@ async function createLocation(db, data) {
   // The unique index refuses a concurrent duplicate; this check answers the
   // plain one where the index could not be built.
   const locations = await getCollection(db, 'storageLocations');
-  if (await locations.findOne({ storageLocationId: location.storageLocationId })) {
+  if (await locations.findOne({ storageLocationId: location.storageLocationId }, sessionOptions(session))) {
     throw new StorageLocationError(`Local ${location.storageLocationId} já existe`, 'LOCATION_EXISTS', 409);
   }
   try {
-    await locations.insertOne(location);
+    await locations.insertOne(location, sessionOptions(session));
   } catch (error) {
     if (error?.code === 11000) throw new StorageLocationError(`Local ${location.storageLocationId} já existe`, 'LOCATION_EXISTS', 409);
     throw error;
   }
   return location;
+}
+
+// P1X-0101: a code is unique under its parent, so the location carrying
+// this code under this parent is the one, if any; else it is created.
+async function findOrCreateLocationByCode(db, data, session) {
+  const code = data?.code ? String(data.code).trim() : null;
+  const parentLocationId = data?.parentLocationId ? String(data.parentLocationId) : null;
+  if (code) {
+    const existing = await (await getCollection(db, 'storageLocations')).findOne({ code, parentLocationId }, sessionOptions(session));
+    if (existing) return existing;
+  }
+  return createLocation(db, data, { session });
 }
 
 // RF017 AC8: the status moves; the record and its hierarchy stay. The route
@@ -128,6 +145,7 @@ module.exports = {
   ensureLocationIndexes,
   findLocation,
   createLocation,
+  findOrCreateLocationByCode,
   setLocationStatus,
   locationUsabilityRefusal,
   listLocations,

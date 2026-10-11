@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
@@ -17,11 +17,15 @@ function matches(doc, filter) {
 function createFakeCollection() {
   const docs = [];
   const indexes = [];
+  // Each write's options, so a case can read the session it carried.
+  const writes = [];
   return {
     docs,
     indexes,
+    writes,
     async createIndex(keys, options = {}) { indexes.push({ keys, options }); },
-    async insertOne(doc) {
+    async insertOne(doc, options) {
+      writes.push({ op: 'insertOne', options });
       // The partial unique indexes: two open rows on one key are refused.
       for (const { keys, options } of indexes) {
         if (!options.unique) continue;
@@ -36,7 +40,8 @@ function createFakeCollection() {
     },
     async findOne(filter) { return docs.find((doc) => matches(doc, filter)) || null; },
     find(filter = {}) { return { toArray: async () => docs.filter((doc) => matches(doc, filter)) }; },
-    async updateOne(filter, update) {
+    async updateOne(filter, update, options) {
+      writes.push({ op: 'updateOne', options });
       const doc = docs.find((row) => matches(row, filter));
       if (doc) Object.assign(doc, update.$set);
       return { matchedCount: doc ? 1 : 0 };
@@ -202,5 +207,76 @@ describe('physicalChain.service (#1314, RF016 AC1/AC3, RF017 AC2-AC4)', () => {
     expect(await service.resolveSpecimenLocation(db, 'SPC-1', T(1))).toMatchObject({
       containerId: null, storagePositionId: null, storageRackId: null, storageLocationId: null,
     });
+  });
+});
+
+// A replica-set client: the probe answers with a set name, and the session
+// the service opens itself is recorded.
+function withTransactionalClient(db) {
+  const opened = [];
+  db.client = {
+    db: () => ({ command: async () => ({ setName: 'rs0' }) }),
+    startSession() {
+      const session = { id: `own-${opened.length + 1}`, async withTransaction(fn) { await fn(); }, async endSession() {} };
+      opened.push(session);
+      return session;
+    },
+  };
+  return opened;
+}
+
+function allWrites(db) {
+  return Object.values(db.collections).flatMap((collection) => collection.writes);
+}
+
+describe('physicalChain.service: a caller\'s session (#1314)', () => {
+  it('runs every write in the given session, and neither builds an index nor opens a transaction of its own', async () => {
+    const db = createFakeDb();
+    const opened = withTransactionalClient(db);
+    const session = { id: 'caller' };
+
+    await service.createContainer(db, { containerId: 'CT-1', containerType: 'cryovial' }, { session });
+    const loaded = await service.loadSpecimen(db, { specimenId: 'SPC-1', containerId: 'CT-1', sourceEventId: 'evt-1', loadedAt: T(1) }, { session });
+    const placed = await service.placeContainer(db, { containerId: 'CT-1', storagePositionId: 'rack-1:A01', placedAt: T(1) }, { session });
+    const located = await service.locateRack(db, { storageRackId: 'rack-1', storageLocationId: 'freezer-1', sourceEventId: 'evt-2', placedAt: T(1) }, { session });
+    await service.removeContainer(db, placed.containerPositionAssignmentId, T(2), { session });
+    await service.removeRack(db, located.rackLocationAssignmentId, T(2), { session });
+    await service.unloadSpecimen(db, loaded.specimenContainerAssignmentId, T(2), { session });
+
+    const writes = allWrites(db);
+    expect(writes).toHaveLength(9);
+    expect(writes.filter((write) => write.options?.session !== session)).toEqual([]);
+    expect(opened).toEqual([]);
+    expect(Object.values(db.collections).flatMap((collection) => collection.indexes)).toEqual([]);
+  });
+
+  it('without a session still builds the indexes and opens its own transaction for each write', async () => {
+    const db = createFakeDb();
+    const opened = withTransactionalClient(db);
+
+    await service.createContainer(db, { containerId: 'CT-1', containerType: 'cryovial' });
+    const loaded = await service.loadSpecimen(db, { specimenId: 'SPC-1', containerId: 'CT-1', sourceEventId: 'evt-1', loadedAt: T(1) });
+    await service.placeContainer(db, { containerId: 'CT-1', storagePositionId: 'rack-1:A01', placedAt: T(1) });
+    await service.unloadSpecimen(db, loaded.specimenContainerAssignmentId, T(2));
+
+    expect(opened.map((session) => session.id)).toEqual(['own-1', 'own-2', 'own-3']);
+    expect(db.collections.containers.writes[0].options).toBeUndefined();
+    expect(db.collections.specimenContainerAssignments.writes.map((write) => write.options.session.id)).toEqual(['own-1', 'own-3']);
+    expect(db.collections.containerPositionAssignments.writes[0].options.session.id).toBe('own-2');
+    expect(db.collections.specimenContainerAssignments.indexes.map((index) => index.options.name)).toEqual(['uniq_open_specimen', undefined]);
+  });
+
+  it('reads the open specimen and position assignments in the given session', async () => {
+    const db = createFakeDb();
+    await service.createContainer(db, { containerId: 'CT-1', containerType: 'cryovial' });
+    await service.loadSpecimen(db, { specimenId: 'SPC-1', containerId: 'CT-1', sourceEventId: 'evt-1', loadedAt: T(1) });
+    await service.placeContainer(db, { containerId: 'CT-1', storagePositionId: 'rack-1:A01', placedAt: T(1) });
+    const session = { id: 'caller' };
+    const findOne = vi.spyOn(db.collections.specimenContainerAssignments, 'findOne');
+
+    expect(await service.openSpecimenAssignment(db, 'SPC-1', session)).toMatchObject({ containerId: 'CT-1' });
+    expect(findOne).toHaveBeenCalledWith({ specimenId: 'SPC-1', assignmentStatus: 'active' }, { session });
+    expect(await service.openPositionAssignment(db, 'CT-1', session)).toMatchObject({ storagePositionId: 'rack-1:A01' });
+    expect(await service.openSpecimenAssignment(db, 'SPC-404', session)).toBeNull();
   });
 });
