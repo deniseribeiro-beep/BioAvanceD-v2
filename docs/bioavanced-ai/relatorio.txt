@@ -1,0 +1,54 @@
+Tecnologias utilizadas: Ollama e Python precisam ser inseridos no novo documento do sistema
+
+
+Registro de mudanças — 11/10/2026
+
+Protótipo do simulador (backend Python)
+
+- Foi criado o pacote backend/app/simulator para organizar os contratos e a
+  lógica do simulador educacional.
+- Foram definidos contratos Pydantic estritos para requisições e respostas.
+  A API aceita somente identificadores de cenário e pergunta previamente
+  permitidos; campos extras e texto livre são rejeitados.
+- Foi criado um catálogo fixo com dois cenários sintéticos
+  (synthetic-baseline e synthetic-unknowns) e perguntas predefinidas sobre
+  o escopo do protótipo e o estado do RCS.
+- Foi implementada uma prévia determinística do contrato. A resposta
+  identifica o modo como contract_preview, a governança como not_evaluated
+  e o resultado RCS como not_calculated. Score, classificação, matriz e
+  eixos não são calculados nem inferidos.
+- Foram adicionadas as rotas:
+  GET /api/v1/simulator/scenarios — lista o catálogo permitido.
+  POST /api/v1/simulator/evaluate — retorna a prévia para uma combinação
+  permitida de cenário e pergunta; combinações inválidas retornam HTTP 422.
+- As rotas do simulador foram separadas em
+  backend/app/api/simulator_routes.py e disponibilizadas por um entrypoint
+  FastAPI independente em backend/app/simulator_main.py. O serviço do
+  simulador não importa nem substitui as rotas do assistente/RAG.
+- Foi adicionado backend/requirements-simulator.txt com as dependências
+  diretas e versões fixadas para executar o protótipo isoladamente.
+- O protótipo usa Python/FastAPI e não chama Ollama, outro LLM, RAG, APIs
+  do BioAvanceD Core ou bancos de dados. A explicação atual é texto estático
+  de demonstração; Ollama permanece tecnologia prevista, não integrada
+  nesta implementação.
+- O módulo não persiste cenários selecionados, requisições, perguntas ou
+  respostas. A resposta inclui avisos de uso educacional sintético e de
+  que não constitui diagnóstico, decisão clínica, avaliação laboratorial
+  ou certificação.
+- Foi criado backend/tests/test_simulator.py com seis testes para o
+  catálogo, validação de entradas, rejeição de combinações inválidas e
+  garantia de que não é apresentado um resultado RCS calculado.
+- Foi criado docs/bioavanced-ai/PROTOTIPO-BACKEND.md com os endpoints,
+  exemplo de requisição, execução local, comando de testes e limites do
+  protótipo.
+- Validação realizada: seis testes unitários passaram; smoke test HTTP
+  confirmou HTTP 200 para consulta do catálogo e avaliação permitida, e
+  HTTP 422 para combinação inválida; verificação de sintaxe e diagnósticos
+  nos arquivos alterados não encontrou erros.
+- O entrypoint principal do backend/RAG não foi validado, pois a dependência
+  sentence-transformers do serviço existente não está instalada neste
+  ambiente. O entrypoint independente do simulador e suas rotas foram
+  validados sem essa dependência.
+- O cálculo RCS permanece pendente de aprovação das regras, matriz e
+  vetores de referência; este protótipo não substitui essa etapa nem
+  representa validação clínica.
