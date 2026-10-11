@@ -8,6 +8,7 @@ const auditLogger = require('../../utils/auditLogger');
 const jwt = require('jsonwebtoken');
 const env = require('../../config/env');
 const SessionModel = require('../../models/Session');
+const UserModel = require('../../models/User');
 
 const REFRESH_COOKIE_NAME = 'refresh_token';
 
@@ -299,7 +300,7 @@ router.get('/verify', authenticate, async (req, res) => {
           accessType,
           roleName,
           isAuditReader: auditReader,
-          name: user.name,
+          name: UserModel.displayNameOf(user),
           mfaEnabled: user.mfaEnabled || false
         },
         valid: true
@@ -472,8 +473,7 @@ router.post('/refresh', async (req, res) => {
 
     // #1306 (RNF021 C2): refresh used to check only that the user exists, so
     // an inactivated account kept renewing its access token.
-    const UserModel = require('../../models/User');
-    if (UserModel.normalizeStatus(user.status) !== 'active') {
+    if (UserModel.normalizeStatus(UserModel.accountStatusOf(user)) !== 'active') {
       await sessionService.invalidateSession(db, sessionId, 'admin_action', 'system');
       clearRefreshCookie(res);
       return res.status(401).json({

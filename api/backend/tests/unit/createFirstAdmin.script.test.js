@@ -100,9 +100,17 @@ describe('createFirstAdmin', () => {
     expect(users.insertOne).toHaveBeenCalledTimes(1);
     const inserted = users.insertOne.mock.calls[0][0];
     expect(inserted.email).toBe('admin.seguro@bioavanced.test');
-    expect(inserted.forceReset).toBe(true);
-    expect(inserted.password).not.toBe(validEnv.BOOTSTRAP_ADMIN_TEMP_PASSWORD);
-    await expect(bcrypt.compare(validEnv.BOOTSTRAP_ADMIN_TEMP_PASSWORD, inserted.password)).resolves.toBe(true);
+    // #1330: the admin document is written under the dict-02 names only.
+    expect(inserted.forcePasswordReset).toBe(true);
+    expect(inserted.displayName).toBe(validEnv.BOOTSTRAP_ADMIN_NAME.trim());
+    expect(inserted.accountStatus).toBe('active');
+    expect(inserted.lastLoginAt).toBeNull();
+    expect(inserted.passwordHistoryHashes).toEqual([]);
+    for (const legacy of ['name', 'password', 'status', 'forceReset', 'passwordHistory', 'lastLogin']) {
+      expect(inserted).not.toHaveProperty(legacy);
+    }
+    expect(inserted.passwordHash).not.toBe(validEnv.BOOTSTRAP_ADMIN_TEMP_PASSWORD);
+    await expect(bcrypt.compare(validEnv.BOOTSTRAP_ADMIN_TEMP_PASSWORD, inserted.passwordHash)).resolves.toBe(true);
     expect(systemBootstrap.updateOne).toHaveBeenCalledWith(
       { _id: 'first_admin_bootstrap_v1' },
       expect.objectContaining({
@@ -126,7 +134,7 @@ describe('createFirstAdmin', () => {
 
     expect(result.forceReset).toBe(false);
     const inserted = users.insertOne.mock.calls[0][0];
-    expect(inserted.forceReset).toBe(false);
+    expect(inserted.forcePasswordReset).toBe(false);
     expect(systemBootstrap.updateOne).toHaveBeenCalledWith(
       { _id: 'first_admin_bootstrap_v1' },
       expect.objectContaining({ $set: expect.objectContaining({ forceReset: false }) }),
@@ -140,7 +148,7 @@ describe('createFirstAdmin', () => {
 
     await createFirstAdmin({ db, env, logger: { info: vi.fn() } });
 
-    expect(users.insertOne.mock.calls[0][0].forceReset).toBe(true);
+    expect(users.insertOne.mock.calls[0][0].forcePasswordReset).toBe(true);
   });
 
   // #427: accessType/roleName are no longer written to the User document —

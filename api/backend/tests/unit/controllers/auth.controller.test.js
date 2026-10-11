@@ -743,7 +743,7 @@ describe('AuthController.changePassword', () => {
     await authController.changePassword(req, res);
 
     expect(passwordService.validateReuse).toHaveBeenCalledWith('NewStr0ng!', user, expect.objectContaining({ preventReuse: true, maxReuseHistory: 2 }));
-    expect(usersCollection.updateOne.mock.calls[0][1].$set.passwordHistory).toEqual(['hashed-old', 'h1']);
+    expect(usersCollection.updateOne.mock.calls[0][1].$set.passwordHistoryHashes).toEqual(['hashed-old', 'h1']);
   });
 
   it('updates the password and returns 200 on success', async () => {
@@ -777,13 +777,16 @@ describe('AuthController.changePassword', () => {
     expect(passwordService.validateStrength).toHaveBeenCalledWith('NewStr0ng!', policy, user);
     expect(passwordService.validateReuse).toHaveBeenCalledWith('NewStr0ng!', user, policy);
     expect(bcrypt.hash).toHaveBeenCalledWith('NewStr0ng!', 10);
+    // #1330: `user` is legacy-named; the change is stored under the canonical
+    // names and the legacy ones are removed.
     expect(usersCollection.updateOne).toHaveBeenCalledWith(
       { _id: 'u1' },
       {
+        $unset: { password: '', passwordHistory: '', forceReset: '' },
         $set: expect.objectContaining({
-          password: 'hashed-new',
-          passwordHistory: ['hashed-old', 'hashed-oldest'],
-          forceReset: false,
+          passwordHash: 'hashed-new',
+          passwordHistoryHashes: ['hashed-old', 'hashed-oldest'],
+          forcePasswordReset: false,
           // #995: failedLoginAttempts: 0 was here alone. The lockout gate reads
           // accountLockedUntil and never the counter, so zeroing one without
           // nulling the other left the document internally inconsistent -- zero

@@ -4,6 +4,7 @@ const auditLogger = require('../utils/auditLogger');
 const bcrypt = require('bcryptjs');
 const passwordService = require('../services/password.service');
 const sessionService = require('../services/session.service');
+const UserModel = require('../models/User');
 
 const REFRESH_COOKIE_NAME = 'refresh_token';
 
@@ -352,7 +353,7 @@ class AuthController {
         });
       }
 
-      const oldMatches = await bcrypt.compare(oldPassword, user.password);
+      const oldMatches = await bcrypt.compare(oldPassword, UserModel.passwordHashOf(user));
       if (!oldMatches) {
         // #995: count it. Without this, a caller holding a hijacked session
         // could guess the victim's current password here indefinitely -- useful
@@ -374,24 +375,23 @@ class AuthController {
 
       await usersCollection.updateOne(
         { _id: user._id },
-        {
-          $set: {
-            password: newHash,
-            passwordHistory: updatedHistory,
-            passwordChangedAt: new Date(),
-            forceReset: false,
-            // #995: this was the literal `failedLoginAttempts: 0` alone. The
-            // lockout gate (auth.service.js) reads accountLockedUntil and never
-            // the counter, so zeroing one and leaving the other in the future
-            // accomplished nothing for a locked user -- and left the document
-            // internally inconsistent: zero recorded failures, an active lock.
-            // clearedLockoutFields() is the same helper processLogin's own
-            // success path uses, so the clearing has one definition.
-            ...authService.clearedLockoutFields(),
-            updatedAt: new Date()
-          }
-        }
+        UserModel.storedUpdateOf({
+          passwordHash: newHash,
+          passwordHistoryHashes: updatedHistory,
+          passwordChangedAt: new Date(),
+          forcePasswordReset: false,
+          // #995: this was the literal `failedLoginAttempts: 0` alone. The
+          // lockout gate (auth.service.js) reads accountLockedUntil and never
+          // the counter, so zeroing one and leaving the other in the future
+          // accomplished nothing for a locked user -- and left the document
+          // internally inconsistent: zero recorded failures, an active lock.
+          // clearedLockoutFields() is the same helper processLogin's own
+          // success path uses, so the clearing has one definition.
+          ...authService.clearedLockoutFields(),
+          updatedAt: new Date()
+        })
       );
+      await authService.moveToCanonicalNames(usersCollection, user, authService.PASSWORD_WRITE_FIELDS);
 
       // #958 / RNF021 AC#2: "Logout, inativação, troca de senha ou alteração
       // crítica de papel revogam as sessões afetadas." All-but-current, because

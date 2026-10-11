@@ -6,6 +6,7 @@ const { randomUUID, randomInt } = require('crypto');
 const { hashToken } = require('../utils/tokenHash');
 const RecoveryCodeSetModel = require('../models/RecoveryCodeSet');
 const SessionModel = require('../models/Session');
+const UserModel = require('../models/User');
 
 /**
  * Service de Segurança do Usuário
@@ -112,9 +113,9 @@ class UserSecurityService {
 
       return {
         primaryEnabled: user.mfaEnabled || false,
-        // dict-02 P1X-0198 mfaSetupAt; the writers still store it as
-        // mfaActivationDate (#1330). Nothing writes mfaSetupDate.
-        primarySetupDate: user.mfaSetupAt || user.mfaActivationDate || null,
+        // dict-02 P1X-0198 mfaSetupAt, or the legacy mfaActivationDate of a
+        // document written before the rename (#1330).
+        primarySetupDate: UserModel.mfaSetupAtOf(user) || null,
         recoveryCodes: {
           remaining: RecoveryCodeSetModel.remainingOf(recoveryCodes),
           codes: null // Nunca retorna códigos em listagem
@@ -157,7 +158,7 @@ class UserSecurityService {
       }
 
       // Calcula força da senha (baseado em políticas)
-      const strength = this.calculatePasswordStrength(user.password);
+      const strength = this.calculatePasswordStrength(UserModel.passwordHashOf(user));
       const strengthScore = strength === 'strong' ? 5 : strength === 'medium' ? 3 : 1;
       
       // #1251: the policy's expirationDays and the same anchor login uses
@@ -468,7 +469,7 @@ class UserSecurityService {
       }
 
       // Valida senha atual
-      const isCurrentPasswordValid = await bcrypt.compare(currentPassword, user.password);
+      const isCurrentPasswordValid = await bcrypt.compare(currentPassword, UserModel.passwordHashOf(user));
       if (!isCurrentPasswordValid) {
         await authService.recordFailedPasswordAttempt(db, usersCollection, user);
         throw new Error('Senha atual incorreta');
@@ -498,22 +499,21 @@ class UserSecurityService {
       
       await usersCollection.updateOne(
         { _id: new ObjectId(userID) },
-        {
-          $set: {
-            password: newPasswordHash,
-            passwordHistory: newPasswordHistory,
-            passwordChangedAt: new Date(),
-            // #1250: the owner replaced it, which is what forceReset asks
-            // for; auth.controller's changePassword clears it the same way.
-            forceReset: false,
-            // #995: a successful change clears the counter AND the lock, the
-            // same pairing processLogin's success path uses. This site cleared
-            // neither, so it could only ever count up.
-            ...authService.clearedLockoutFields(),
-            updatedAt: new Date()
-          }
-        }
+        UserModel.storedUpdateOf({
+          passwordHash: newPasswordHash,
+          passwordHistoryHashes: newPasswordHistory,
+          passwordChangedAt: new Date(),
+          // #1250: the owner replaced it, which is what forceReset asks
+          // for; auth.controller's changePassword clears it the same way.
+          forcePasswordReset: false,
+          // #995: a successful change clears the counter AND the lock, the
+          // same pairing processLogin's success path uses. This site cleared
+          // neither, so it could only ever count up.
+          ...authService.clearedLockoutFields(),
+          updatedAt: new Date()
+        })
       );
+      await authService.moveToCanonicalNames(usersCollection, user, authService.PASSWORD_WRITE_FIELDS);
     } catch (error) {
       logger.error('Erro ao atualizar senha:', error.message);
       throw error;
@@ -701,17 +701,15 @@ class UserSecurityService {
       // Salva token no banco
       await usersCollection.updateOne(
         { _id: new ObjectId(userID) },
-        {
-          $set: {
-            // #1078: same hash-at-rest rule as auth.service's writer. Note
-            // this path mints a token valid for up to 24h, so the window in
-            // which a raw stored value would have been readable was the
-            // longer of the two.
-            passwordResetTokenHash: hashToken(resetToken),
-            passwordResetExpires: expiresAt,
-            updatedAt: new Date()
-          }
-        }
+        UserModel.storedUpdateOf({
+          // #1078: same hash-at-rest rule as auth.service's writer. Note
+          // this path mints a token valid for up to 24h, so the window in
+          // which a raw stored value would have been readable was the
+          // longer of the two.
+          passwordResetTokenHash: hashToken(resetToken),
+          passwordResetExpiresAt: expiresAt,
+          updatedAt: new Date()
+        })
       );
 
       // #1203: the second instance of that issue's bug. The route answers

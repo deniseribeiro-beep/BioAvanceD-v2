@@ -270,85 +270,208 @@ describe('UserModel - Unit Tests', () => {
   describe('create()', () => {
     it('deve criar usuário com todos os campos fornecidos', () => {
       const data = {
-        name: 'João Silva',
+        displayName: 'João Silva',
         email: 'joao@example.com',
         phone: '11987654321',
         organizationId: 'org-uuid-1',
         username: 'joaosilva',
-        password: 'Senha@123456789',
-        status: 'Ativo',
+        passwordHash: '$2a$10$hash-computed-by-the-service',
+        accountStatus: 'Ativo',
         mfaEnabled: true,
         mfaSecretCiphertext: 'secret123',
-        mfaActivationDate: '2026-01-01',
+        mfaSetupAt: '2026-01-01',
         mfaFailedAttempts: 2,
         mfaLocked: true,
         anonId: 'anon-1',
-        passwordHistory: ['h1'],
+        passwordHistoryHashes: ['h1'],
         passwordChangedAt: '2026-01-01',
-        forceReset: true,
+        forcePasswordReset: true,
         failedLoginAttempts: 5
       };
 
       const user = UserModel.create(data);
 
-      expect(user.name).toBe('João Silva');
+      expect(user.displayName).toBe('João Silva');
       expect(user.email).toBe('joao@example.com');
       expect(user.phone).toBe('11987654321');
       expect(user.organizationId).toBe('org-uuid-1');
-      expect(user.status).toBe('active'); // normalizado
+      expect(user.passwordHash).toBe('$2a$10$hash-computed-by-the-service');
+      expect(user.accountStatus).toBe('active'); // normalizado
       expect(user.mfaEnabled).toBe(true);
       expect(user.mfaSecretCiphertext).toBe('secret123');
-      expect(user.mfaActivationDate).toBe('2026-01-01');
+      expect(user.mfaSetupAt).toBe('2026-01-01');
       expect(user.mfaFailedAttempts).toBe(2);
       expect(user.mfaLocked).toBe(true);
       // #1275 follow-up: never taken from input; generateAnonId writes it.
       expect(user.anonId).toBeNull();
-      expect(user.passwordHistory).toEqual(['h1']);
+      expect(user.passwordHistoryHashes).toEqual(['h1']);
       expect(user.passwordChangedAt).toBe('2026-01-01');
-      expect(user.forceReset).toBe(true);
+      expect(user.forcePasswordReset).toBe(true);
       expect(user.failedLoginAttempts).toBe(5);
       expect(user.createdAt).toBeInstanceOf(Date);
       expect(user.updatedAt).toBeInstanceOf(Date);
-      expect(user.lastLogin).toBeNull();
+      expect(user.lastLoginAt).toBeNull();
+    });
+
+    it('#1330: a new document carries no legacy name, and never a plaintext password', () => {
+      const user = UserModel.create({
+        displayName: 'Maria',
+        email: 'maria@example.com',
+        username: 'maria',
+        passwordHash: '$2a$10$hash',
+        password: 'Senha@123456789'
+      });
+
+      for (const legacy of UserModel.LEGACY_FIELDS) {
+        expect(user).not.toHaveProperty(legacy);
+      }
+      expect(JSON.stringify(user)).not.toContain('Senha@123456789');
     });
 
     it('deve aplicar defaults quando campos opcionais ausentes', () => {
       const data = {
-        name: 'Maria',
+        displayName: 'Maria',
         email: 'maria@example.com',
         username: 'maria',
-        password: 'Senha@123456789'
+        passwordHash: '$2a$10$hash'
       };
 
       const user = UserModel.create(data);
 
       expect(user.phone).toBeNull();
       expect(user.organizationId).toBeNull();
-      expect(user.status).toBe('active');
+      expect(user.accountStatus).toBe('active');
       expect(user.mfaEnabled).toBe(false);
       expect(user.mfaSecretCiphertext).toBeNull();
-      expect(user.mfaActivationDate).toBeNull();
+      expect(user.mfaSetupAt).toBeNull();
       expect(user.mfaFailedAttempts).toBe(0);
       expect(user.mfaLocked).toBe(false);
       expect(user.anonId).toBeNull();
-      expect(user.passwordHistory).toEqual([]);
+      expect(user.passwordHistoryHashes).toEqual([]);
       expect(user.passwordChangedAt).toBeInstanceOf(Date);
-      expect(user.forceReset).toBe(false);
+      expect(user.forcePasswordReset).toBe(false);
       expect(user.failedLoginAttempts).toBe(0);
+      expect(user.passwordResetTokenHash).toBeNull();
+      expect(user.passwordResetExpiresAt).toBeNull();
     });
 
-    it('deve manter passwordHistory vazio quando fornecido valor não-array', () => {
+    it('deve manter passwordHistoryHashes vazio quando fornecido valor não-array', () => {
       const data = {
-        name: 'Maria',
+        displayName: 'Maria',
         email: 'maria@example.com',
         username: 'maria',
-        password: 'Senha@123456789',
-        passwordHistory: 'not-an-array'
+        passwordHash: '$2a$10$hash',
+        passwordHistoryHashes: 'not-an-array'
       };
 
       const user = UserModel.create(data);
 
-      expect(user.passwordHistory).toEqual([]);
+      expect(user.passwordHistoryHashes).toEqual([]);
+    });
+  });
+
+  // #1330: stored documents use the dict-02 names; documents written before
+  // them carry the legacy ones until a write moves them.
+  describe('#1330 stored names', () => {
+    const legacyUser = () => ({
+      _id: 'u1',
+      name: 'Legado',
+      password: '$2a$10$legacyhash',
+      status: 'blocked',
+      mfaActivationDate: new Date('2026-01-01T00:00:00Z'),
+      lastLogin: null,
+      passwordHistory: ['$2a$10$older'],
+      forceReset: true,
+      passwordResetExpires: new Date('2026-02-01T00:00:00Z')
+    });
+
+    it('the accessors read a legacy document through its old names', () => {
+      const user = legacyUser();
+      expect(UserModel.displayNameOf(user)).toBe('Legado');
+      expect(UserModel.passwordHashOf(user)).toBe('$2a$10$legacyhash');
+      expect(UserModel.accountStatusOf(user)).toBe('blocked');
+      expect(UserModel.mfaSetupAtOf(user)).toEqual(new Date('2026-01-01T00:00:00Z'));
+      expect(UserModel.lastLoginAtOf(user)).toBeNull();
+      expect(UserModel.passwordHistoryOf(user)).toEqual(['$2a$10$older']);
+      expect(UserModel.forcePasswordResetOf(user)).toBe(true);
+      expect(UserModel.passwordResetExpiresAtOf(user)).toEqual(new Date('2026-02-01T00:00:00Z'));
+    });
+
+    it('a canonical value wins, and a canonical null is not read through to the legacy name', () => {
+      const user = { ...legacyUser(), accountStatus: 'active', lastLoginAt: null, lastLogin: new Date() };
+      expect(UserModel.accountStatusOf(user)).toBe('active');
+      expect(UserModel.lastLoginAtOf(user)).toBeNull();
+      expect(UserModel.accountStatusOf({})).toBeUndefined();
+    });
+
+    it('accountStatusFilter reads the legacy status only on a document without accountStatus', () => {
+      expect(UserModel.accountStatusFilter('active')).toEqual({
+        $or: [{ accountStatus: 'active' }, { accountStatus: { $exists: false }, status: 'active' }]
+      });
+    });
+
+    it('storedUpdateOf writes canonical names and unsets the legacy name of each field it touches', () => {
+      expect(UserModel.storedUpdateOf(
+        { passwordHash: 'h', forceReset: false, updatedAt: 1 },
+        { unset: ['passwordResetTokenHash', 'passwordResetExpiresAt'] }
+      )).toEqual({
+        $set: { passwordHash: 'h', forcePasswordReset: false, updatedAt: 1 },
+        $unset: { password: '', forceReset: '', passwordResetTokenHash: '', passwordResetExpiresAt: '', passwordResetExpires: '' }
+      });
+      expect(UserModel.storedUpdateOf({ mfaLocked: false })).toEqual({ $set: { mfaLocked: false } });
+    });
+
+    it('canonicalMoveOf moves every remaining legacy name, guarded on each name still being legacy', () => {
+      const move = UserModel.canonicalMoveOf(legacyUser(), { except: ['lastLoginAt'] });
+      expect(move.update.$set).toEqual({
+        displayName: 'Legado',
+        passwordHash: '$2a$10$legacyhash',
+        accountStatus: 'blocked',
+        mfaSetupAt: new Date('2026-01-01T00:00:00Z'),
+        passwordHistoryHashes: ['$2a$10$older'],
+        forcePasswordReset: true,
+        passwordResetExpiresAt: new Date('2026-02-01T00:00:00Z')
+      });
+      expect(move.update.$unset).toEqual({
+        name: '', password: '', status: '', mfaActivationDate: '', passwordHistory: '', forceReset: '', passwordResetExpires: ''
+      });
+      expect(move.filter).toMatchObject({
+        _id: 'u1',
+        accountStatus: { $exists: false },
+        status: { $exists: true },
+        passwordHash: { $exists: false },
+        password: { $exists: true }
+      });
+      expect(move.filter).not.toHaveProperty('lastLoginAt');
+    });
+
+    it('canonicalMoveOf is null for a document already under the canonical names', () => {
+      const user = UserModel.create({ displayName: 'Nova', email: 'n@example.com', username: 'n', passwordHash: 'h' });
+      expect(UserModel.canonicalMoveOf({ _id: 'u2', ...user })).toBeNull();
+    });
+
+    it('storedNamesOf renames a request body and drops its plaintext password', () => {
+      expect(UserModel.storedNamesOf({ name: 'N', status: 'Ativo', forceReset: true, password: 'Plain@123', email: 'e' }))
+        .toEqual({ displayName: 'N', accountStatus: 'Ativo', forcePasswordReset: true, email: 'e' });
+    });
+
+    it('apiViewOf returns a canonical document under the API names', () => {
+      const view = UserModel.apiViewOf({ _id: 'u3', displayName: 'C', accountStatus: 'active', lastLoginAt: null, mfaSetupAt: null, forcePasswordReset: false });
+      expect(view).toEqual({ _id: 'u3', name: 'C', status: 'active', lastLogin: null, mfaActivationDate: null, forceReset: false });
+    });
+
+    it('stripSecrets returns neither hash name nor either history name, from a document under either names', () => {
+      const canonical = UserModel.stripSecrets({
+        _id: 'u4', displayName: 'C', passwordHash: 'h1', passwordHistoryHashes: ['h0'], passwordResetTokenHash: 't', mfaSecretCiphertext: 's'
+      });
+      const legacy = UserModel.stripSecrets(legacyUser());
+      for (const out of [canonical, legacy]) {
+        for (const key of ['password', 'passwordHash', 'passwordHistory', 'passwordHistoryHashes', 'passwordResetTokenHash', 'mfaSecretCiphertext']) {
+          expect(out).not.toHaveProperty(key);
+        }
+      }
+      expect(canonical.name).toBe('C');
+      expect(legacy.name).toBe('Legado');
     });
   });
 

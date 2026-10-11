@@ -1,5 +1,6 @@
 const bcrypt = require('bcryptjs');
 const logger = require('../utils/logger');
+const UserModel = require('../models/User');
 
 // #1246: strength is policy too. dict-02 P1X-0284..0288 (passwordRules.
 // minLength and the four require* flags), RF014 AC#2 "Configurar ... regras de
@@ -216,9 +217,20 @@ function publicStrengthRules(policy) {
 // The history holds the passwords BEFORE the current one, newest first, to the
 // policy's depth. It is kept to that depth even while preventReuse is off, so
 // switching the check back on finds a history to check.
+//
+// The hash and history are read under either stored name (#1330), so a
+// document written before the rename keeps its history across the change.
+function storedPasswordOf(user) {
+  const history = UserModel.passwordHistoryOf(user);
+  return {
+    hash: UserModel.passwordHashOf(user),
+    history: Array.isArray(history) ? history : []
+  };
+}
+
 function nextPasswordHistory(user = {}, policy = DEFAULT_REUSE_POLICY) {
-  const history = Array.isArray(user.passwordHistory) ? user.passwordHistory : [];
-  const previous = user.password ? [user.password, ...history] : history;
+  const { hash, history } = storedPasswordOf(user);
+  const previous = hash ? [hash, ...history] : history;
   return previous.slice(0, reuseDepth(policy.maxReuseHistory));
 }
 
@@ -228,11 +240,11 @@ function nextPasswordHistory(user = {}, policy = DEFAULT_REUSE_POLICY) {
 // a change, and it used to clear forceReset and restart the expiry clock with
 // the same secret in place.
 async function validateReuse(newPassword, user = {}, policy = DEFAULT_REUSE_POLICY) {
-  const history = Array.isArray(user.passwordHistory) ? user.passwordHistory : [];
+  const { hash, history } = storedPasswordOf(user);
   const hashesToCheck = [];
 
-  if (user.password) {
-    hashesToCheck.push(user.password);
+  if (hash) {
+    hashesToCheck.push(hash);
   }
 
   if (policy.preventReuse !== false) {

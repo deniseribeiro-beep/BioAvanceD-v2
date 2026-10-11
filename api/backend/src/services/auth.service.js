@@ -224,6 +224,28 @@ function clearedLockoutFields() {
   return { failedLoginAttempts: 0, accountLockedUntil: null };
 }
 
+// #1330: the canonical fields every password write sets, so a caller can
+// leave them out of the name move that follows it.
+const PASSWORD_WRITE_FIELDS = Object.freeze(['passwordHash', 'passwordHistoryHashes', 'forcePasswordReset']);
+
+/**
+ * #1330: after a sign-in or a password change, moves the legacy names the
+ * user's document still carries to the canonical names (UserModel
+ * .canonicalMoveOf). `written` lists the canonical fields this request has
+ * already set or cleared. A document already canonical costs no write. Never
+ * throws: a failed move leaves the document readable under its old names,
+ * and must not change the outcome of the request that triggered it.
+ */
+async function moveToCanonicalNames(usersCollection, user, written = []) {
+  const move = UserModel.canonicalMoveOf(user, { except: written });
+  if (!move) return;
+  try {
+    await usersCollection.updateOne(move.filter, move.update);
+  } catch (error) {
+    logger.warn('#1330: falha ao mover o usuário para os nomes canônicos:', error.message);
+  }
+}
+
 /**
  * #1258 item 5: the account-status gate, lifted from processLogin so the two
  * unauthenticated first-login endpoints apply the same one. They had none:
@@ -237,7 +259,7 @@ function clearedLockoutFields() {
  * did: whoever does not know the password must not learn the status.
  */
 function assertAccountActive(user) {
-  const normalizedStatus = UserModel.normalizeStatus(user.status);
+  const normalizedStatus = UserModel.normalizeStatus(UserModel.accountStatusOf(user));
   if (normalizedStatus !== 'active') {
     const statusMessages = {
       'inactive': 'Usuário inativo',
@@ -306,7 +328,7 @@ class AuthService {
         email: user.email,
         username: user.username,
         accessType,
-        name: user.name,
+        name: UserModel.displayNameOf(user),
         mfaVerified: true,
         jti: crypto.randomUUID()
       },
@@ -431,10 +453,11 @@ class AuthService {
         userData.accessType = this.getAccessTypeForRole(userData.roleName);
       }
       
-      // Cria usuário
+      // Cria usuário, under the stored names (#1330): the body's name,
+      // status, ... are renamed, and its plaintext password is dropped.
       const user = UserModel.create({
-        ...userData,
-        password: hashedPassword
+        ...UserModel.storedNamesOf(userData),
+        passwordHash: hashedPassword
       });
 
       // #427/#432: accessType/roleName resolved only to grant the matching
@@ -478,7 +501,7 @@ class AuthService {
         if (userData.mfaEnabled === undefined || userData.mfaEnabled === false) {
           user.mfaEnabled = false;
           user.mfaSecretCiphertext = null;
-          user.mfaActivationDate = null;
+          user.mfaSetupAt = null;
         }
         // Se mfaEnabled foi setado como true, mantém (será configurado no primeiro login se necessário)
       }
@@ -532,12 +555,14 @@ class AuthService {
       // response, since it's no longer a field on the User document.
       const roleName = await resolveRoleDisplayName(db, result.insertedId.toString());
 
+      // #1330: under the API's names, and through the same secret strip as
+      // every user response, so neither the hash nor the history leaves under
+      // either name.
       return {
         _id: result.insertedId,
-        ...user,
+        ...UserModel.stripSecrets(user),
         anonId,
         roleName,
-        password: undefined, // Remove senha do retorno
         id: result.insertedId.toString() // Adiciona id para compatibilidade com frontend
       };
     } catch (error) {
@@ -656,7 +681,8 @@ class AuthService {
       }
 
       // Validação extra: senha precisa existir e ser string
-      if (!user.password || typeof user.password !== 'string' || user.password.length < 20) {
+      const storedHash = UserModel.passwordHashOf(user);
+      if (!storedHash || typeof storedHash !== 'string' || storedHash.length < 20) {
         // #1052: same class -- this carried the user's email and username
         // too. The audit row this path writes already identifies the account.
         logger.error('Usuário encontrado, mas campo de senha ausente ou inválido');
@@ -688,7 +714,7 @@ class AuthService {
 
       let passwordMatch = false;
       try {
-        passwordMatch = await bcrypt.compare(password, user.password);
+        passwordMatch = await bcrypt.compare(password, storedHash);
       } catch (bcryptErr) {
         logger.error(`Erro ao comparar senha com bcrypt: ${bcryptErr.message}`);
         throw new Error('Credenciais inválidas');
@@ -750,7 +776,8 @@ class AuthService {
       
       // Para admin, MFA é opcional - se estiver habilitado, verifica; se não, pula
       // Para não-admin, MFA é obrigatório no primeiro login
-      const isFirstLogin = user.lastLogin === null || user.lastLogin === undefined;
+      const lastLoginAt = UserModel.lastLoginAtOf(user);
+      const isFirstLogin = lastLoginAt === null || lastLoginAt === undefined;
       // #1072: ciphertext presence, not a decrypted value -- see readMfaSecret.
       const mfaNotConfigured = !user.mfaEnabled || !user.mfaSecretCiphertext;
 
@@ -773,7 +800,7 @@ class AuthService {
             email: user.email,
             username: user.username,
             accessType: await resolveUserHierarchyLevel(db, user._id.toString()),
-            name: user.name,
+            name: UserModel.displayNameOf(user),
             mfaSetupRequired: true // Flag para indicar que MFA é obrigatório
           },
           env.JWT_SECRET,
@@ -786,7 +813,7 @@ class AuthService {
           tempToken: tempToken, // Token temporário apenas para configurar MFA
           user: {
             _id: user._id,
-            name: user.name,
+            name: UserModel.displayNameOf(user),
             email: user.email,
             username: user.username,
             // #434: resolved from the live RBAC assignment, not the stale
@@ -900,7 +927,8 @@ class AuthService {
       const passwordPolicy = await passwordService.resolvePasswordPolicy(db);
       const passwordExpired = passwordService.isPasswordExpired(user, passwordPolicy);
       const belowFloor = passwordService.belowSingleFactorFloor(password, passwordPolicy, user);
-      const passwordChangeDue = user.forceReset || passwordExpired || belowFloor;
+      const forcePasswordReset = UserModel.forcePasswordResetOf(user);
+      const passwordChangeDue = forcePasswordReset || passwordExpired || belowFloor;
 
       // #1331: a recovery code is spent only by the submission that completes
       // the sign-in. With a password change due, that is the one carrying a
@@ -912,7 +940,7 @@ class AuthService {
 
       if (passwordChangeDue) {
         if (!newPassword) {
-          const reason = user.forceReset ? null : (passwordExpired ? 'expired' : 'below_policy');
+          const reason = forcePasswordReset ? null : (passwordExpired ? 'expired' : 'below_policy');
           return {
             requiresPasswordChange: true,
             ...(reason ? { reason } : {}),
@@ -936,18 +964,17 @@ class AuthService {
 
         await usersCollection.updateOne(
           { _id: user._id },
-          {
-            $set: {
-              password: newHash,
-              passwordHistory: updatedHistory,
-              passwordChangedAt: new Date(),
-              forceReset: false,
-              updatedAt: new Date()
-            }
-          }
+          UserModel.storedUpdateOf({
+            passwordHash: newHash,
+            passwordHistoryHashes: updatedHistory,
+            passwordChangedAt: new Date(),
+            forcePasswordReset: false,
+            updatedAt: new Date()
+          })
         );
 
-        user.password = newHash;
+        user.passwordHash = newHash;
+        delete user.password;
 
         // #958 / RNF021 AC#2. Ordering is load-bearing: issueSessionTokens has
         // NOT run yet, so every session this matches is a pre-reset one. Moving
@@ -964,8 +991,12 @@ class AuthService {
         // existing lastLogin write rather than a second round-trip.
         // #986: the literal became clearedLockoutFields() so the clearing has
         // one definition. Same three keys, same values.
-        { $set: { lastLogin: new Date(), ...clearedLockoutFields() } }
+        UserModel.storedUpdateOf({ lastLoginAt: new Date(), ...clearedLockoutFields() })
       );
+      await moveToCanonicalNames(usersCollection, user, [
+        'lastLoginAt',
+        ...(passwordChangeDue ? PASSWORD_WRITE_FIELDS : [])
+      ]);
 
       const tokenBundle = await this.issueSessionTokens(db, user, req);
 
@@ -980,7 +1011,7 @@ class AuthService {
         sessionID: tokenBundle.sessionID,
         user: {
           _id: user._id,
-          name: user.name,
+          name: UserModel.displayNameOf(user),
           email: user.email,
           username: user.username,
           // #434: resolved from the live RBAC assignment, not the stale
@@ -1066,7 +1097,8 @@ class AuthService {
       // null on a rotated or missing key, which would make this guard skip
       // and let the unconditional write below replace an enrolled user's
       // secret, from an unauthenticated request.
-      const isFirstLogin = user.lastLogin === null || user.lastLogin === undefined;
+      const lastLoginAt = UserModel.lastLoginAtOf(user);
+      const isFirstLogin = lastLoginAt === null || lastLoginAt === undefined;
       if (!isFirstLogin && user.mfaEnabled && user.mfaSecretCiphertext) {
         // #1032: the generic message, NOT a distinct one. The guard order
         // above is deliberate (#986) and unchanged; what changes here is
@@ -1093,7 +1125,7 @@ class AuthService {
       }
 
       // Verifica senha
-      const passwordMatch = await bcrypt.compare(password, user.password);
+      const passwordMatch = await bcrypt.compare(password, UserModel.passwordHashOf(user));
       if (!passwordMatch) {
         // #986: count it, exactly as processLogin does. Without this an
         // attacker who knows a username could guess passwords here forever
@@ -1146,7 +1178,7 @@ class AuthService {
       // Salva secret temporariamente (usuário precisa confirmar)
       await usersCollection.updateOne(
         { _id: user._id },
-        { $set: { mfaSecretCiphertext: encryptValue(secret.base32), mfaActivationDate: null } }
+        UserModel.storedUpdateOf({ mfaSecretCiphertext: encryptValue(secret.base32), mfaSetupAt: null })
       );
 
       logger.info('MFA secret gerado e salvo para primeiro login:', { 
@@ -1223,7 +1255,8 @@ class AuthService {
       //
       // #1072: ciphertext presence, never a decrypted value. Same argument as
       // the sibling guard in setupMFAFirstLogin; readMfaSecret has it in full.
-      const isFirstLogin = user.lastLogin === null || user.lastLogin === undefined;
+      const lastLoginAt = UserModel.lastLoginAtOf(user);
+      const isFirstLogin = lastLoginAt === null || lastLoginAt === undefined;
       if (!isFirstLogin && user.mfaEnabled && user.mfaSecretCiphertext) {
         // #1032: the generic message, NOT a distinct one. The guard order
         // above is deliberate (#986) and unchanged; what changes here is
@@ -1248,7 +1281,7 @@ class AuthService {
       }
 
       // Verifica senha
-      const passwordMatch = await bcrypt.compare(password, user.password);
+      const passwordMatch = await bcrypt.compare(password, UserModel.passwordHashOf(user));
       if (!passwordMatch) {
         await recordFailedPasswordAttempt(db, usersCollection, user);
         await ipAttemptService.recordFailedSourceAttempt(db, req, `id:${user._id}`);
@@ -1281,20 +1314,19 @@ class AuthService {
       // Ativa MFA e atualiza último login
       await usersCollection.updateOne(
         { _id: user._id },
-        {
-          $set: {
-            mfaEnabled: true,
-            mfaActivationDate: new Date(),
-            lastLogin: new Date(),
-            // #986: this is a token-issuing success -- a completed login -- so
-            // it must clear the counter AND the lock, exactly as processLogin's
-            // own success path does. Without it the path counts up and never
-            // down, and a user who enrols through here stays locked.
-            ...clearedLockoutFields(),
-            updatedAt: new Date()
-          }
-        }
+        UserModel.storedUpdateOf({
+          mfaEnabled: true,
+          mfaSetupAt: new Date(),
+          lastLoginAt: new Date(),
+          // #986: this is a token-issuing success -- a completed login -- so
+          // it must clear the counter AND the lock, exactly as processLogin's
+          // own success path does. Without it the path counts up and never
+          // down, and a user who enrols through here stays locked.
+          ...clearedLockoutFields(),
+          updatedAt: new Date()
+        })
       );
+      await moveToCanonicalNames(usersCollection, user, ['mfaSetupAt', 'lastLoginAt']);
 
       // Registra log (anonimizado via auditLogger)
       const auditLogger = require('../utils/auditLogger');
@@ -1329,11 +1361,12 @@ class AuthService {
       // same way. Under requireMFAForAll every returning unenrolled account
       // comes through here, and its password may have expired long ago.
       const passwordExpired = passwordService.isPasswordExpired(user, await passwordService.resolvePasswordPolicy(db));
-      if (user.forceReset || passwordExpired) {
+      const forcePasswordReset = UserModel.forcePasswordResetOf(user);
+      if (forcePasswordReset || passwordExpired) {
         return {
           requiresPasswordChange: true,
-          ...(passwordExpired && !user.forceReset ? { reason: 'expired' } : {}),
-          message: passwordExpired && !user.forceReset
+          ...(passwordExpired && !forcePasswordReset ? { reason: 'expired' } : {}),
+          message: passwordExpired && !forcePasswordReset
             ? 'Senha expirada: defina uma nova senha para continuar'
             : 'Alteração de senha obrigatória antes de continuar'
         };
@@ -1348,7 +1381,7 @@ class AuthService {
         sessionID: tokenBundle.sessionID,
         user: {
           _id: user._id,
-          name: user.name,
+          name: UserModel.displayNameOf(user),
           email: user.email,
           username: user.username,
           // #434: resolved from the live RBAC assignment, not the stale
@@ -1401,7 +1434,7 @@ class AuthService {
       // Salva secret temporariamente (usuário precisa confirmar)
       await usersCollection.updateOne(
         { _id: new ObjectId(userID) },
-        { $set: { mfaSecretCiphertext: encryptValue(secret.base32), mfaActivationDate: null } }
+        UserModel.storedUpdateOf({ mfaSecretCiphertext: encryptValue(secret.base32), mfaSetupAt: null })
       );
 
       return {
@@ -1446,7 +1479,7 @@ class AuthService {
       // It applies enable-first-login's gates: the status before any write
       // (#1258), and forceReset or an expired password (#1250, #1251) below,
       // where the enrolment stands but no session is issued.
-      const isFirstLogin = user.lastLogin === null;
+      const isFirstLogin = UserModel.lastLoginAtOf(user) === null;
       if (isFirstLogin) {
         assertAccountActive(user);
       }
@@ -1454,28 +1487,31 @@ class AuthService {
       // Ativa MFA e atualiza último login (primeiro acesso completo)
       const updateData = {
         mfaEnabled: true,
-        mfaActivationDate: new Date(),
+        mfaSetupAt: new Date(),
         updatedAt: new Date()
       };
 
       // Se for primeiro login, atualiza também
-      if (user.lastLogin === null) {
-        updateData.lastLogin = new Date();
+      if (isFirstLogin) {
+        updateData.lastLoginAt = new Date();
       }
 
       await usersCollection.updateOne(
         { _id: new ObjectId(userID) },
-        { $set: updateData }
+        UserModel.storedUpdateOf(updateData)
       );
+      // The legacy lastLogin is renamed only when this write set lastLoginAt.
+      await moveToCanonicalNames(usersCollection, user, isFirstLogin ? ['mfaSetupAt', 'lastLoginAt'] : ['mfaSetupAt']);
 
         // Se for primeiro login, gera tokens de sessão completos
       if (isFirstLogin) {
         const passwordExpired = passwordService.isPasswordExpired(user, await passwordService.resolvePasswordPolicy(db));
-        if (user.forceReset || passwordExpired) {
+        const forcePasswordReset = UserModel.forcePasswordResetOf(user);
+        if (forcePasswordReset || passwordExpired) {
           return {
             requiresPasswordChange: true,
-            ...(passwordExpired && !user.forceReset ? { reason: 'expired' } : {}),
-            message: passwordExpired && !user.forceReset
+            ...(passwordExpired && !forcePasswordReset ? { reason: 'expired' } : {}),
+            message: passwordExpired && !forcePasswordReset
               ? 'Senha expirada: defina uma nova senha para continuar'
               : 'Alteração de senha obrigatória antes de continuar'
           };
@@ -1490,7 +1526,7 @@ class AuthService {
           sessionID: tokenBundle.sessionID,
           user: {
             _id: user._id,
-            name: user.name,
+            name: UserModel.displayNameOf(user),
             email: user.email,
             username: user.username,
             // #434: resolved from the live RBAC assignment, not the stale
@@ -1555,7 +1591,7 @@ class AuthService {
       }
 
       // Verifica se usuário está ativo
-      if (user.status !== 'active') {
+      if (UserModel.accountStatusOf(user) !== 'active') {
         logger.warn('Tentativa de recuperação de senha para usuário inativo:', email);
         return {
           success: true,
@@ -1577,20 +1613,18 @@ class AuthService {
       // Salva token no banco para controle (opcional, mas útil para invalidar tokens)
       await usersCollection.updateOne(
         { _id: user._id },
-        {
-          $set: {
-            // #1078: the HASH, never the token. dict-02 P1X-0207 is
-            // passwordResetTokenHash (secret/hash) and its description reads
-            // "O token bruto não deve ser armazenado"; RNF020 AC#3's first
-            // clause says the same. The raw token still goes out in the
-            // emailed link -- it just stops being recoverable from the
-            // database, so a reset window no longer leaves an
-            // account-takeover credential at rest.
-            passwordResetTokenHash: hashToken(resetToken),
-            passwordResetExpires: new Date(Date.now() + 3600000), // 1 hora
-            updatedAt: new Date()
-          }
-        }
+        UserModel.storedUpdateOf({
+          // #1078: the HASH, never the token. dict-02 P1X-0207 is
+          // passwordResetTokenHash (secret/hash) and its description reads
+          // "O token bruto não deve ser armazenado"; RNF020 AC#3's first
+          // clause says the same. The raw token still goes out in the
+          // emailed link -- it just stops being recoverable from the
+          // database, so a reset window no longer leaves an
+          // account-takeover credential at rest.
+          passwordResetTokenHash: hashToken(resetToken),
+          passwordResetExpiresAt: new Date(Date.now() + 3600000), // 1 hora
+          updatedAt: new Date()
+        })
       );
 
       // Registra log (anonimizado via auditLogger)
@@ -1712,7 +1746,8 @@ class AuthService {
       // Verifica se token não expirou no banco. Also unconditional: a missing
       // expiry alongside a present token is an inconsistent record, and the
       // safe reading of "no expiry" is expired, not "never expires".
-      if (!user.passwordResetExpires || new Date(user.passwordResetExpires) < new Date()) {
+      const passwordResetExpiresAt = UserModel.passwordResetExpiresAtOf(user);
+      if (!passwordResetExpiresAt || new Date(passwordResetExpiresAt) < new Date()) {
         throw new Error('Token de recuperação expirado. Solicite um novo link.');
       }
 
@@ -1740,23 +1775,18 @@ class AuthService {
       // protect.
       await usersCollection.updateOne(
         { _id: user._id },
-        {
-          $set: {
-            password: hashedPassword,
-            passwordHistory: passwordService.nextPasswordHistory(user, passwordPolicy),
-            passwordChangedAt: new Date(),
-            // #1250: the owner just replaced the password through their own
-            // mailbox, which is what a forced reset asks for.
-            forceReset: false,
-            ...clearedLockoutFields(),
-            updatedAt: new Date()
-          },
-          $unset: {
-            passwordResetTokenHash: '',
-            passwordResetExpires: ''
-          }
-        }
+        UserModel.storedUpdateOf({
+          passwordHash: hashedPassword,
+          passwordHistoryHashes: passwordService.nextPasswordHistory(user, passwordPolicy),
+          passwordChangedAt: new Date(),
+          // #1250: the owner just replaced the password through their own
+          // mailbox, which is what a forced reset asks for.
+          forcePasswordReset: false,
+          ...clearedLockoutFields(),
+          updatedAt: new Date()
+        }, { unset: ['passwordResetTokenHash', 'passwordResetExpiresAt'] })
       );
+      await moveToCanonicalNames(usersCollection, user, [...PASSWORD_WRITE_FIELDS, 'passwordResetExpiresAt']);
 
       // #958 / RNF021 AC#2. No fork here: this route is unauthenticated, so
       // there is no current session to preserve and every live session was
@@ -1807,4 +1837,8 @@ module.exports = new AuthService();
 module.exports.isAccountLocked = isAccountLocked;
 module.exports.recordFailedPasswordAttempt = recordFailedPasswordAttempt;
 module.exports.clearedLockoutFields = clearedLockoutFields;
+// #1330: the two authenticated password-change routes move the document's
+// remaining legacy names the same way the sign-in and the reset do.
+module.exports.moveToCanonicalNames = moveToCanonicalNames;
+module.exports.PASSWORD_WRITE_FIELDS = PASSWORD_WRITE_FIELDS;
 

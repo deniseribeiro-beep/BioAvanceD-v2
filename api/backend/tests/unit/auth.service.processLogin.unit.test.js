@@ -495,10 +495,13 @@ describe('AuthService.processLogin', () => {
     const result = await authService.processLogin(db, user, 'pw-of-at-least-15', null, db.collection(), {}, 'NewStrongPass1!');
     expect(result.token).toBeTruthy();
     expect(result.requiresPasswordChange).toBeUndefined();
+    // #1330: BASE_USER is a legacy-named document. The change is written
+    // under the canonical names and removes the legacy ones.
     expect(collectionApi.updateOne).toHaveBeenCalledWith(
       { _id: user._id },
       expect.objectContaining({
-        $set: expect.objectContaining({ forceReset: false, password: expect.any(String) })
+        $set: expect.objectContaining({ forcePasswordReset: false, passwordHash: expect.any(String), passwordHistoryHashes: [HASHED] }),
+        $unset: expect.objectContaining({ forceReset: '', password: '', passwordHistory: '' })
       })
     );
   });
@@ -549,13 +552,13 @@ describe('AuthService.processLogin', () => {
     vi.spyOn(bcrypt, 'compare').mockImplementation(async (candidate) => candidate === UNDER_FLOOR);
     const collectionApi = { findOne: vi.fn(), updateOne: vi.fn().mockResolvedValue({}), find: vi.fn(), insertOne: vi.fn().mockResolvedValue({ insertedId: { toString: () => 'sess-1' } }) };
     const db = makeDb(collectionApi);
-    // A copy: the branch assigns the new hash to user.password.
+    // A copy: the branch assigns the new hash to user.passwordHash.
     const user = { ...BASE_USER };
     const result = await authService.processLogin(db, user, UNDER_FLOOR, null, db.collection(), {}, 'a-new-single-factor-pass');
     expect(result.token).toBeTruthy();
     expect(collectionApi.updateOne).toHaveBeenCalledWith(
       { _id: user._id },
-      expect.objectContaining({ $set: expect.objectContaining({ password: expect.any(String) }) })
+      expect.objectContaining({ $set: expect.objectContaining({ passwordHash: expect.any(String) }) })
     );
   });
 
@@ -607,7 +610,7 @@ describe('AuthService.processLogin', () => {
     const before = Date.now();
     const result = await authService.processLogin(db, user, 'pw-of-at-least-15', null, db.collection(), {}, 'NewStrongPass1!');
     expect(result.token).toBeTruthy();
-    const set = collectionApi.updateOne.mock.calls.find(([, update]) => update.$set && update.$set.password)[1].$set;
+    const set = collectionApi.updateOne.mock.calls.find(([, update]) => update.$set && update.$set.passwordHash)[1].$set;
     expect(set.passwordChangedAt.getTime()).toBeGreaterThanOrEqual(before);
   });
 });
@@ -1359,10 +1362,11 @@ describe('AuthService.resetPassword', () => {
     const result = await authService.resetPassword(db, 'tok', 'NewPass123!@#long', {});
 
     expect(result.success).toBe(true);
+    // #1330: the expiry is cleared under both of its names.
     expect(collectionApi.updateOne).toHaveBeenCalledWith(
       { _id: BASE_USER._id },
       expect.objectContaining({
-        $unset: { passwordResetTokenHash: '', passwordResetExpires: '' },
+        $unset: expect.objectContaining({ passwordResetTokenHash: '', passwordResetExpiresAt: '', passwordResetExpires: '' }),
       })
     );
   });
@@ -1419,11 +1423,16 @@ describe('AuthService.resetPassword', () => {
     const db = makeDb(collectionApi);
     const result = await authService.resetPassword(db, 'tok', 'NewPass123!@#long', {});
     expect(result.success).toBe(true);
+    // #1330: BASE_USER is legacy-named; the reset writes the canonical names
+    // and removes the legacy ones with the reset fields.
     expect(collectionApi.updateOne).toHaveBeenCalledWith(
       { _id: BASE_USER._id },
       expect.objectContaining({
-        $set: expect.objectContaining({ password: expect.any(String) }),
-        $unset: { passwordResetTokenHash: '', passwordResetExpires: '' },
+        $set: expect.objectContaining({ passwordHash: expect.any(String) }),
+        $unset: expect.objectContaining({
+          passwordResetTokenHash: '', passwordResetExpiresAt: '', passwordResetExpires: '',
+          password: '', passwordHistory: '', forceReset: ''
+        }),
       })
     );
   });
@@ -1463,10 +1472,10 @@ describe('AuthService.resetPassword', () => {
     );
     await authService.resetPassword(db, 'tok', 'NewPass123!@#long', {});
     const update = usersApi.updateOne.mock.calls[0][1];
-    expect(update.$set.passwordHistory).toEqual([HASHED, 'h1']);
+    expect(update.$set.passwordHistoryHashes).toEqual([HASHED, 'h1']);
     expect(update.$set.passwordChangedAt).toBeInstanceOf(Date);
     // #1250: the owner replaced it, which is what a forced reset asks for.
-    expect(update.$set.forceReset).toBe(false);
+    expect(update.$set.forcePasswordReset).toBe(false);
   });
 
   // #1253: preventReuse false skips the history, never the current password.

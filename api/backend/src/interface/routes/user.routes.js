@@ -379,7 +379,9 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
 
     // Prepara dados para validação (mescla dados existentes com novos)
     // Remove campos que não devem ser validados na atualização
-    const { password: __unusedPassword, ...targetUserWithoutPassword } = targetUser;
+    // #1330: the stored document under the API's names, so it validates
+    // against the same keys the body uses whichever names it is stored under.
+    const { password: __unusedPassword, ...targetUserWithoutPassword } = UserModel.apiViewOf(targetUser);
     const dataToValidate = {
       ...targetUserWithoutPassword,
       ...req.body,
@@ -650,9 +652,11 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
       }
     }
 
+    // #1330: the allowlist is in the API's names; the write stores each field
+    // under its canonical name and removes the legacy one.
     const result = await usersCollection.updateOne(
       userFilter,
-      { $set: updateFields }
+      UserModel.storedUpdateOf(updateFields)
     );
 
     if (result.matchedCount === 0) {
@@ -760,8 +764,9 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
       });
       changes.organizationId = { from: targetUser.organizationId ?? null, to: req.body.organizationId ?? null };
     }
-    if (req.body.status && req.body.status !== targetUser.status) {
-      changes.status = { from: targetUser.status, to: req.body.status };
+    const previousStatus = UserModel.accountStatusOf(targetUser);
+    if (req.body.status && req.body.status !== previousStatus) {
+      changes.status = { from: previousStatus, to: req.body.status };
     }
 
     // #1306 (RF001 AC4, RNF021 C2, RNF008 C7): inactivation and a role change
@@ -987,9 +992,10 @@ router.delete('/:id', authenticate, requirePermission('createUser'), async (req,
     // inactivated and its sessions revoked; the document, its audit trail and
     // its role history stay. A hard deleteOne left audit rows naming an
     // account that no longer existed.
+    const UserModel = require('../../models/User');
     await usersCollection.updateOne(
       { _id: targetUser._id },
-      { $set: { status: 'inactive', updatedAt: new Date() } }
+      UserModel.storedUpdateOf({ accountStatus: 'inactive', updatedAt: new Date() })
     );
     const sessionService = require('../../services/session.service');
     await sessionService.invalidateUserSessions(db, targetUser._id.toString(), 'admin_action', req.user?.userID, { req });
@@ -1036,10 +1042,11 @@ router.get('/:id/validate-status', authenticate, requirePermission('createUser')
       });
     }
 
+    const UserModel = require('../../models/User');
     return res.status(200).json({
       success: true,
       data: {
-        status: user.status || 'inactive'
+        status: UserModel.accountStatusOf(user) || 'inactive'
       }
     });
   } catch (error) {
@@ -1365,19 +1372,18 @@ router.post('/:id/reset-mfa', authenticate, requirePermission('resetMFA', 'UPDAT
     }
 
     // Reseta MFA
+    const UserModel = require('../../models/User');
     await usersCollection.updateOne(
       userFilter,
-      {
-        $set: {
-          mfaEnabled: false,
-          mfaSecretCiphertext: null,
-          mfaActivationDate: null,
-          mfaFailedAttempts: 0,
-          mfaLocked: false,
-          lastLogin: null, // Força novo setup de MFA no próximo login
-          updatedAt: new Date()
-        }
-      }
+      UserModel.storedUpdateOf({
+        mfaEnabled: false,
+        mfaSecretCiphertext: null,
+        mfaSetupAt: null,
+        mfaFailedAttempts: 0,
+        mfaLocked: false,
+        lastLoginAt: null, // Força novo setup de MFA no próximo login
+        updatedAt: new Date()
+      })
     );
 
     // #963 (RF003 AC#5, "Revogar sessões"): o reset acima só afeta logins
@@ -1494,14 +1500,13 @@ router.post('/:id/force-password-reset', authenticate, requirePermission('forceP
       });
     }
 
+    const UserModel = require('../../models/User');
     await usersCollection.updateOne(
       userFilter,
-      {
-        $set: {
-          forceReset: true,
-          updatedAt: new Date()
-        }
-      }
+      UserModel.storedUpdateOf({
+        forcePasswordReset: true,
+        updatedAt: new Date()
+      })
     );
 
     // #1033: linha de auditoria EXPLÍCITA. A linha genérica do
@@ -1584,17 +1589,16 @@ router.post('/:id/set-password', authenticate, requirePermission('setUserPasswor
     }
 
     const bcrypt = require('bcryptjs');
+    const UserModel = require('../../models/User');
     const now = new Date();
-    await usersCollection.updateOne(userFilter, {
-      $set: {
-        password: await bcrypt.hash(newPassword, 10),
-        // #1244: the same policy depth validateReuse checks.
-        passwordHistory: passwordService.nextPasswordHistory(targetUser, passwordPolicy),
-        passwordChangedAt: now,
-        forceReset: true,
-        updatedAt: now,
-      },
-    });
+    await usersCollection.updateOne(userFilter, UserModel.storedUpdateOf({
+      passwordHash: await bcrypt.hash(newPassword, 10),
+      // #1244: the same policy depth validateReuse checks.
+      passwordHistoryHashes: passwordService.nextPasswordHistory(targetUser, passwordPolicy),
+      passwordChangedAt: now,
+      forcePasswordReset: true,
+      updatedAt: now,
+    }));
 
     // targetUser._id.toString(), not req.params.id: sessions key their owner
     // as the stored id string (see PUT /:id's #982 note).

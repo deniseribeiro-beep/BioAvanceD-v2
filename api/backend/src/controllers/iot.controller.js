@@ -17,6 +17,7 @@ const { readingIdentityOf, screenReading } = require('../services/telemetryReadi
 const { sendCriticalAlertEmail } = require('../services/sendCriticalAlertEmail');
 const TemperatureIncidentModel = require('../models/TemperatureIncident');
 const EnvironmentalExcursionModel = require('../models/EnvironmentalExcursion');
+const UserModel = require('../models/User');
 const coldChainQuarantineService = require('../services/equipment-sensor-quarantine.service');
 const notificationDispatchService = require('../services/notificationDispatch.service');
 
@@ -147,7 +148,7 @@ async function upsertTemperatureIncidentAndQuarantine(policyData, normalizedSens
   const userAccountIds = await findUserAccountIdsByRoleCodes(db, ['technician', 'coordinator', 'administrator']);
   const objectIds = userAccountIds.filter((id) => ObjectId.isValid(id)).map((id) => new ObjectId(id));
   const UserCollection = db.collection('users');
-  const recipientsCursor = UserCollection.find({ _id: { $in: objectIds }, status: 'active' });
+  const recipientsCursor = UserCollection.find({ _id: { $in: objectIds }, ...UserModel.accountStatusFilter('active') });
   const recipients = objectIds.length === 0
     ? []
     : typeof recipientsCursor.project === 'function'

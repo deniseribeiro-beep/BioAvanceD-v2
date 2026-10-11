@@ -147,7 +147,7 @@ const authenticate = async (req, res, next) => {
           // account is refused here too, not only at login. Inactivation also
           // revokes the sessions; this covers a session the revoke missed.
           const UserModel = require('../../models/User');
-          if (currentUser && UserModel.normalizeStatus(currentUser.status) !== 'active') {
+          if (currentUser && UserModel.normalizeStatus(UserModel.accountStatusOf(currentUser)) !== 'active') {
             return res.status(401).json({
               success: false,
               error: 'Conta inativa',

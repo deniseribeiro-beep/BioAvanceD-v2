@@ -1,10 +1,42 @@
 /**
  * Modelo de validação e estrutura para User
  * Inclui suporte a MFA (RF001) e RBAC (RNF008)
+ *
+ * Stored `users` documents use the dict-02 UserAccount names (P1X-0182..0208).
+ * RENAMED maps each canonical name to the name documents carried before it.
+ * New documents and every write use the canonical names only. A reader goes
+ * through the accessors below, which fall back to the legacy name; a writer
+ * builds its update with storedUpdateOf, which $unsets the legacy name of each
+ * field it sets; canonicalMoveOf moves the remaining legacy names of a document
+ * in one guarded update.
+ *
+ * The API keeps the old names: request bodies arrive under them (validate()
+ * reads them, storedNamesOf renames them for storage) and responses leave
+ * under them (apiViewOf, applied by stripSecrets).
  */
+const RENAMED = Object.freeze({
+  displayName: 'name',
+  passwordHash: 'password',
+  accountStatus: 'status',
+  mfaSetupAt: 'mfaActivationDate',
+  lastLoginAt: 'lastLogin',
+  passwordHistoryHashes: 'passwordHistory',
+  forcePasswordReset: 'forceReset',
+  passwordResetExpiresAt: 'passwordResetExpires'
+});
+
+const LEGACY_FIELDS = Object.freeze(Object.values(RENAMED));
+const CANONICAL_BY_LEGACY = Object.freeze(
+  Object.fromEntries(Object.entries(RENAMED).map(([canonical, legacy]) => [legacy, canonical]))
+);
+
 class UserModel {
   // passwordPolicy: the caller's resolvePasswordPolicy(db) result; without
   // one the strength check uses the default policy.
+  //
+  // `data` is a request body, keyed by the API's names (name, status,
+  // password, passwordHistory, forceReset), not a stored document. To
+  // validate a stored document, pass apiViewOf(document).
   static validate(data, { passwordPolicy } = {}) {
     const errors = [];
 
@@ -116,20 +148,24 @@ class UserModel {
   // The stored user document's shape, pure: timestamps come from `data` or
   // stay null, and create() fills them. The catalog conformance guard reads
   // this to compare the document with dict-02 UserAccount (P1X-0182..0208).
+  //
+  // `data` uses the stored (canonical) names; storedNamesOf renames a request
+  // body. passwordHash is the bcrypt hash the service computed, never the
+  // plaintext: a plaintext `password` key in `data` is not read.
   static fieldsOf(data = {}) {
     return {
-      name: data.name,
+      displayName: data.displayName,
       email: data.email,
       phone: data.phone || null,
       organizationId: data.organizationId || null,
       username: data.username,
-      password: data.password, // Será hashado no service
-      status: this.normalizeStatus(data.status || 'active'), // Normaliza status para formato inglês
+      passwordHash: data.passwordHash,
+      accountStatus: this.normalizeStatus(data.accountStatus || 'active'), // Normaliza status para formato inglês
       mfaEnabled: data.mfaEnabled || false,
       // #1072: dict-02 P1X-0197, type secret/encrypted. Holds the
       // encryptValue envelope, never the raw base32 TOTP seed.
       mfaSecretCiphertext: data.mfaSecretCiphertext || null,
-      mfaActivationDate: data.mfaActivationDate || null,
+      mfaSetupAt: data.mfaSetupAt || null,
       mfaFailedAttempts: data.mfaFailedAttempts || 0,
       mfaLocked: data.mfaLocked || false,
       // Identificador anonimizado para LGPD (gerado após inserção). #1275
@@ -139,11 +175,15 @@ class UserModel {
       anonId: null,
       createdAt: null,
       updatedAt: null,
-      lastLogin: null,
-      passwordHistory: Array.isArray(data.passwordHistory) ? data.passwordHistory : [],
+      lastLoginAt: null,
+      passwordHistoryHashes: Array.isArray(data.passwordHistoryHashes) ? data.passwordHistoryHashes : [],
       passwordChangedAt: data.passwordChangedAt || null,
-      forceReset: data.forceReset || false,
+      forcePasswordReset: data.forcePasswordReset || false,
       failedLoginAttempts: data.failedLoginAttempts || 0,
+      // dict-02 P1X-0207/0208: set together by the reset request, cleared
+      // together by the reset. Never taken from input.
+      passwordResetTokenHash: null,
+      passwordResetExpiresAt: null,
       // #952 / #985: a LOCAL EXTENSION of UserAccount, not a dictionary
       // element. The v2.0.0 dictionary (approved 2026-09-12) still declares
       // no password-side lock expiry, while P1X-0282
@@ -167,6 +207,141 @@ class UserModel {
       updatedAt: new Date(),
       passwordChangedAt: fields.passwordChangedAt || new Date()
     };
+  }
+
+  // A renamed field of a stored or cached user, canonical name first, then
+  // the legacy one. A canonical null is returned as null: only an absent
+  // canonical name (undefined) falls back. Undefined when neither is present.
+  static storedValueOf(user, field) {
+    if (!user) return undefined;
+    return user[field] !== undefined ? user[field] : user[RENAMED[field]];
+  }
+
+  static displayNameOf(user) {
+    return UserModel.storedValueOf(user, 'displayName');
+  }
+
+  static passwordHashOf(user) {
+    return UserModel.storedValueOf(user, 'passwordHash');
+  }
+
+  static accountStatusOf(user) {
+    return UserModel.storedValueOf(user, 'accountStatus');
+  }
+
+  static mfaSetupAtOf(user) {
+    return UserModel.storedValueOf(user, 'mfaSetupAt');
+  }
+
+  static lastLoginAtOf(user) {
+    return UserModel.storedValueOf(user, 'lastLoginAt');
+  }
+
+  static passwordHistoryOf(user) {
+    return UserModel.storedValueOf(user, 'passwordHistoryHashes');
+  }
+
+  static forcePasswordResetOf(user) {
+    return UserModel.storedValueOf(user, 'forcePasswordReset');
+  }
+
+  static passwordResetExpiresAtOf(user) {
+    return UserModel.storedValueOf(user, 'passwordResetExpiresAt');
+  }
+
+  // Matches users whose account status is `value` (a value or an operator
+  // object) under either name. The legacy branch applies only to a document
+  // without accountStatus, so a stale legacy value can never outvote the
+  // canonical one.
+  static accountStatusFilter(value) {
+    return { $or: [{ accountStatus: value }, { accountStatus: { $exists: false }, status: value }] };
+  }
+
+  /**
+   * The update that writes `set` (and clears `unset`, a list of field names)
+   * under the canonical names and removes the legacy name of every field it
+   * touches. Keys may be given under either name; a legacy key is written
+   * under its canonical name.
+   */
+  static storedUpdateOf(set = {}, { unset = [] } = {}) {
+    const $set = {};
+    const $unset = {};
+    for (const [key, value] of Object.entries(set)) {
+      const canonical = CANONICAL_BY_LEGACY[key] || key;
+      $set[canonical] = value;
+      if (RENAMED[canonical]) $unset[RENAMED[canonical]] = '';
+    }
+    for (const key of unset) {
+      const canonical = CANONICAL_BY_LEGACY[key] || key;
+      $unset[canonical] = '';
+      if (RENAMED[canonical]) $unset[RENAMED[canonical]] = '';
+    }
+    const update = {};
+    if (Object.keys($set).length > 0) update.$set = $set;
+    if (Object.keys($unset).length > 0) update.$unset = $unset;
+    return update;
+  }
+
+  /**
+   * Moves the legacy names a user document still carries to the canonical
+   * names, as a { filter, update } pair, or null when it carries none.
+   * `except` lists canonical fields the caller's own write already set or
+   * cleared in this request; they are left alone.
+   *
+   * The values come from `user`, a copy read earlier, so the filter makes the
+   * move conditional: each moved field must still be absent under its
+   * canonical name and present under its legacy one. Every writer stores the
+   * canonical name and removes the legacy one, so a field written since the
+   * read fails the filter, and the whole move is skipped rather than
+   * overwriting a newer value (an account blocked meanwhile stays blocked).
+   */
+  static canonicalMoveOf(user, { except = [] } = {}) {
+    if (!user || user._id === undefined) return null;
+    const filter = { _id: user._id };
+    const $set = {};
+    const $unset = {};
+    for (const [canonical, legacy] of Object.entries(RENAMED)) {
+      if (except.includes(canonical)) continue;
+      if (user[canonical] !== undefined || user[legacy] === undefined) continue;
+      $set[canonical] = user[legacy];
+      $unset[legacy] = '';
+      filter[canonical] = { $exists: false };
+      filter[legacy] = { $exists: true };
+    }
+    if (Object.keys($set).length === 0) return null;
+    return { filter, update: { $set, $unset } };
+  }
+
+  // Renames a request body's API keys (name, status, forceReset,
+  // passwordHistory, mfaActivationDate, ...) to the stored names. `password`
+  // is dropped, not renamed: on input it is plaintext, and only the hash the
+  // service computes is stored, as passwordHash.
+  static storedNamesOf(data = {}) {
+    const stored = { ...data };
+    delete stored.password;
+    for (const [canonical, legacy] of Object.entries(RENAMED)) {
+      if (legacy === 'password') continue;
+      if (stored[legacy] !== undefined && stored[canonical] === undefined) {
+        stored[canonical] = stored[legacy];
+      }
+      delete stored[legacy];
+    }
+    return stored;
+  }
+
+  // A stored user under the API's names: each canonical field is returned
+  // under its legacy name (the canonical value wins when a document carries
+  // both), and the canonical name is removed. Response shapes and the
+  // frontend keep the names they had. Secrets are NOT removed here; a
+  // response goes through stripSecrets, which applies this first.
+  static apiViewOf(user) {
+    if (!user || typeof user !== 'object') return user;
+    const view = { ...user };
+    for (const [canonical, legacy] of Object.entries(RENAMED)) {
+      if (view[canonical] !== undefined) view[legacy] = view[canonical];
+      delete view[canonical];
+    }
+    return view;
   }
 
   static isValidEmail(email) {
@@ -272,16 +447,26 @@ UserModel.stripSecrets = function stripSecrets(user) {
   // hand-written row, a stale export -- cannot leak a raw TOTP seed through a
   // response. It costs one destructured key and removes a whole class of
   // regression; the reverse (dropping it and being wrong) re-opens #1068.
+  //
+  // #1330: the document is first put under the API's names (apiViewOf), so a
+  // response keeps its keys whichever names the document is stored under, and
+  // passwordHash and passwordHistoryHashes arrive here as password and
+  // passwordHistory. The canonical names are destructured too, so neither
+  // hash name can leave by any route.
   const {
     password,
+    passwordHash,
     mfaSecret,
     mfaSecretCiphertext,
     passwordHistory,
+    passwordHistoryHashes,
     passwordResetTokenHash,
     ...rest
-  } = user;
+  } = UserModel.apiViewOf(user);
   return rest;
 };
 
 module.exports = UserModel;
+module.exports.RENAMED = RENAMED;
+module.exports.LEGACY_FIELDS = LEGACY_FIELDS;
 

@@ -145,7 +145,12 @@ describe('incident.controller.getAlertRecipients', () => {
     // default beforeEach setup grants NOTIFIABLE_USER_ID an active
     // `technician` assignment) rather than an accessType $in query.
     const [userQuery] = userCollection.find.mock.calls[0];
-    expect(userQuery.status).toBe('active');
+    // #1330: active under accountStatus, or under the legacy status on a
+    // document that has no accountStatus yet.
+    expect(userQuery.$or).toEqual([
+      { accountStatus: 'active' },
+      { accountStatus: { $exists: false }, status: 'active' }
+    ]);
     expect(userQuery._id.$in.map((id) => id.toString())).toEqual([NOTIFIABLE_USER_ID]);
     expect(result).toEqual(['a@x.com', 'b@x.com']);
   });

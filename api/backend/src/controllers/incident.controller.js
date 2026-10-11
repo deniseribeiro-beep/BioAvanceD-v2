@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const logger = require('../utils/logger');
 const { connectMongoDB } = require('../infrastructure/database/mongodb/connection');
 const TemperatureIncidentModel = require('../models/TemperatureIncident');
+const UserModel = require('../models/User');
 const { sendIncidentAlertEmail } = require('../services/sendIncidentAlertEmail');
 const coldChainQuarantineService = require('../services/equipment-sensor-quarantine.service');
 const { findUserAccountIdsByRoleCodes } = require('../services/rbac-assignment.service');
@@ -35,7 +36,7 @@ async function getAlertRecipients() {
     const { ObjectId } = mongoose.Types;
     const objectIds = userAccountIds.filter((id) => ObjectId.isValid(id)).map((id) => new ObjectId(id));
     const recipients = await UserCollection
-      .find({ _id: { $in: objectIds }, status: 'active' })
+      .find({ _id: { $in: objectIds }, ...UserModel.accountStatusFilter('active') })
       .project({ email: 1, username: 1 })
       .toArray();
     return recipients.map(u => u.email).filter(e => e);

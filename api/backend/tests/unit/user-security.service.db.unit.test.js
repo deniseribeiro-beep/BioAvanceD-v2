@@ -322,7 +322,7 @@ describe('UserSecurityService DB-backed methods', () => {
       await userSecurityService.updatePassword(db, USER_ID, 'correct-pass', 'NewPassw0rd!123');
 
       const [, update] = users.updateOne.mock.calls[0];
-      expect(update.$set.passwordHistory).toEqual([currentHash]);
+      expect(update.$set.passwordHistoryHashes).toEqual([currentHash]);
     });
 
     // #1246: this route had its own 12-character validator with no digit
@@ -379,10 +379,13 @@ describe('UserSecurityService DB-backed methods', () => {
 
       expect(users.updateOne).toHaveBeenCalledTimes(1);
       const [, update] = users.updateOne.mock.calls[0];
-      expect(update.$set.passwordHistory).toEqual([currentHash]);
-      expect(await bcrypt.compare('NewPassw0rd!123', update.$set.password)).toBe(true);
+      // #1330: the legacy-named document's change is stored under the
+      // canonical names, and the legacy ones are removed.
+      expect(update.$set.passwordHistoryHashes).toEqual([currentHash]);
+      expect(await bcrypt.compare('NewPassw0rd!123', update.$set.passwordHash)).toBe(true);
+      expect(update.$unset).toEqual({ password: '', passwordHistory: '', forceReset: '' });
       // #1250: the owner's own change satisfies a forced reset.
-      expect(update.$set.forceReset).toBe(false);
+      expect(update.$set.forcePasswordReset).toBe(false);
       // #995: this route is the fifth site verifying a user-supplied password.
       // It wrote neither lockout field, so it could only ever count up. A
       // successful change clears the counter AND the lock, the same pairing

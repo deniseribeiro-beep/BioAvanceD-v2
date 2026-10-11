@@ -300,6 +300,99 @@ describe('Users and Access routes', () => {
     });
   });
 
+  // #1330: user documents are stored under the dict-02 UserAccount names; the
+  // API keeps its keys, and neither name of the hash or the history leaves.
+  describe('#1330: user responses keep their keys whichever names the document is stored under', () => {
+    const HASH = '$2a$10$' + 'h'.repeat(53);
+    const OLD_HASH = '$2a$10$' + 'o'.repeat(53);
+    const canonicalUser = () => ({
+      _id: 'user-canonical',
+      displayName: 'Conta Canônica',
+      email: 'canonica@bioavanced.com.br',
+      username: 'canonica',
+      passwordHash: HASH,
+      passwordHistoryHashes: [OLD_HASH],
+      accountStatus: 'active',
+      mfaEnabled: true,
+      mfaSetupAt: '2026-01-01T00:00:00.000Z',
+      lastLoginAt: '2026-02-01T00:00:00.000Z',
+      forcePasswordReset: false,
+      passwordResetTokenHash: 'digest',
+      passwordResetExpiresAt: '2026-03-01T00:00:00.000Z',
+    });
+
+    function expectNoHashOrHistory(body) {
+      for (const key of ['password', 'passwordHash', 'passwordHistory', 'passwordHistoryHashes', 'passwordResetTokenHash']) {
+        expect(body).not.toHaveProperty(key);
+      }
+    }
+
+    it('GET /api/users returns a canonical document under the API keys, with no hash or history', async () => {
+      const handler = getHandler(userRoutes, 'get', '/');
+      usersCollection.find.mockReturnValue({ toArray: vi.fn().mockResolvedValue([canonicalUser()]) });
+      const req = createRequest();
+      req.app.locals.db = db;
+      const res = createResponse();
+
+      await handler(req, res);
+
+      expect(res.statusCode).toBe(200);
+      const row = res.payload.data[0];
+      expectNoHashOrHistory(row);
+      expect(JSON.stringify(res.payload)).not.toContain(HASH);
+      expect(JSON.stringify(res.payload)).not.toContain(OLD_HASH);
+      expect(row).toMatchObject({
+        name: 'Conta Canônica',
+        status: 'Ativo',
+        mfaActivationDate: '2026-01-01T00:00:00.000Z',
+        lastLogin: '2026-02-01T00:00:00.000Z',
+        forceReset: false,
+        passwordResetExpires: '2026-03-01T00:00:00.000Z',
+      });
+      for (const canonical of ['displayName', 'accountStatus', 'mfaSetupAt', 'lastLoginAt', 'forcePasswordReset', 'passwordResetExpiresAt']) {
+        expect(row).not.toHaveProperty(canonical);
+      }
+    });
+
+    it('GET /api/users/:id and /:id/validate-status read a canonical document', async () => {
+      usersCollection.findOne.mockResolvedValue({ ...canonicalUser(), accountStatus: 'blocked' });
+      const byId = createResponse();
+      const req = createRequest({ params: { id: 'user-canonical' } });
+      req.app.locals.db = db;
+      await getHandler(userRoutes, 'get', '/:id')(req, byId);
+      expect(byId.statusCode).toBe(200);
+      expectNoHashOrHistory(byId.payload.data);
+      expect(byId.payload.data).toMatchObject({ name: 'Conta Canônica', status: 'Bloqueado' });
+
+      const status = createResponse();
+      await getHandler(userRoutes, 'get', '/:id/validate-status')(req, status);
+      expect(status.payload.data).toEqual({ status: 'blocked' });
+    });
+
+    it('POST /api/users/register stores the canonical names only and answers with neither hash name', async () => {
+      const handler = getHandler(userRoutes, 'post', '/register');
+      const req = createRequest({
+        body: { name: 'Nova Conta', email: 'nova-1330@example.com', username: 'nova1330', password: 'Senha@123-forte!', accessType: 2, status: 'Ativo' },
+      });
+      req.app.locals.db = db;
+      const res = createResponse();
+
+      await handler(req, res);
+
+      expect(res.statusCode).toBe(201);
+      const stored = usersCollection.insertOne.mock.calls[0][0];
+      expect(stored).toMatchObject({ displayName: 'Nova Conta', accountStatus: 'active', forcePasswordReset: false, lastLoginAt: null, passwordHistoryHashes: [] });
+      expect(stored.passwordHash).toMatch(/^\$2[aby]\$/);
+      for (const legacy of ['name', 'password', 'status', 'forceReset', 'lastLogin', 'passwordHistory', 'mfaActivationDate', 'passwordResetExpires']) {
+        expect(stored).not.toHaveProperty(legacy);
+      }
+      expectNoHashOrHistory(res.payload.data);
+      expect(JSON.stringify(res.payload)).not.toContain(stored.passwordHash);
+      expect(JSON.stringify(res.payload)).not.toContain('Senha@123-forte!');
+      expect(res.payload.data).toMatchObject({ name: 'Nova Conta', status: 'active', forceReset: false, lastLogin: null });
+    });
+  });
+
   it('POST /api/users/register deve normalizar status, telefone e organizationId', async () => {
     const handler = getHandler(userRoutes, 'post', '/register');
     const req = createRequest({
@@ -529,9 +622,13 @@ describe('Users and Access routes', () => {
     await handler(req, res);
 
     expect(res.statusCode).toBe(200);
+    // #1330: stored as forcePasswordReset; the legacy forceReset is removed.
     expect(usersCollection.updateOne).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ $set: expect.objectContaining({ forceReset: true }) })
+      expect.objectContaining({
+        $set: expect.objectContaining({ forcePasswordReset: true }),
+        $unset: { forceReset: '' }
+      })
     );
   });
 
@@ -924,7 +1021,11 @@ describe('Users and Access routes', () => {
 
     expect(res.statusCode).toBe(200);
     const setPayload = usersCollection.updateOne.mock.calls[0][1].$set;
-    expect(setPayload.name).toBe('Alvo Renomeado');
+    // #1330: the body's name is stored as displayName, and the legacy name
+    // is removed.
+    expect(setPayload.displayName).toBe('Alvo Renomeado');
+    expect(usersCollection.updateOne.mock.calls[0][1].$unset).toEqual({ name: '' });
+    expect(res.payload.data.name).toBe('Alvo Renomeado');
     expect(setPayload).not.toHaveProperty('injected');
     expect(setPayload).not.toHaveProperty('mfaLocked');
     expect(setPayload).not.toHaveProperty('userID');
@@ -938,7 +1039,7 @@ describe('Users and Access routes', () => {
     // #1275 follow-up: log reads now honour a stored anonId, so a caller who
     // could set it could make one user's audit rows read as another's.
     expect(setPayload).not.toHaveProperty('anonId');
-    expect(Object.keys(setPayload).sort()).toEqual(['name', 'updatedAt']);
+    expect(Object.keys(setPayload).sort()).toEqual(['displayName', 'updatedAt']);
   });
 
   // #1013: PUT /api/users/:id used to hash and $set an inbound password under
@@ -1027,12 +1128,16 @@ describe('Users and Access routes', () => {
 
       expect(res.statusCode).toBe(200);
       expect(usersCollection.updateOne).toHaveBeenCalledTimes(1);
+      // #1330: the legacy-named target is written under the canonical names,
+      // its legacy history carried over, and the legacy names removed.
       const setPayload = usersCollection.updateOne.mock.calls[0][1].$set;
-      expect(bcrypt.compareSync('NovaSenh@2026-forte', setPayload.password)).toBe(true);
-      expect(setPayload.passwordHistory).toEqual([target.password]);
+      expect(bcrypt.compareSync('NovaSenh@2026-forte', setPayload.passwordHash)).toBe(true);
+      expect(setPayload.passwordHistoryHashes).toEqual([target.password]);
       expect(setPayload.passwordChangedAt).toBeInstanceOf(Date);
+      expect(usersCollection.updateOne.mock.calls[0][1].$unset).toEqual({ password: '', passwordHistory: '', forceReset: '' });
       // The administrator knows this password; the owner must replace it.
-      expect(setPayload.forceReset).toBe(true);
+      expect(setPayload.forcePasswordReset).toBe(true);
+      expect(res.payload.data).toEqual({ forceReset: true });
       expect(sessionsCollection.updateMany).toHaveBeenCalledWith(
         { $or: [{ userAccountId: 'user-target-1013' }, { userID: 'user-target-1013' }], isActive: true },
         expect.objectContaining({
@@ -1242,6 +1347,7 @@ describe('Users and Access routes', () => {
     expect(setPayload).not.toHaveProperty('mfaSecretCiphertext');
     expect(setPayload).not.toHaveProperty('mfaSecret');
     expect(setPayload).not.toHaveProperty('mfaActivationDate');
+    expect(setPayload).not.toHaveProperty('mfaSetupAt');
     expect(JSON.stringify(setPayload)).not.toContain('SEGREDO-DO-ATACANTE');
   });
 
@@ -1300,7 +1406,8 @@ describe('Users and Access routes', () => {
     const setPayload = usersCollection.updateOne.mock.calls[0][1].$set;
     expect(setPayload.mfaEnabled).toBe(false);
     expect(setPayload.mfaSecretCiphertext).toBeNull();
-    expect(setPayload.mfaActivationDate).toBeNull();
+    // #1330: stored as mfaSetupAt.
+    expect(setPayload.mfaSetupAt).toBeNull();
     // #993's own point: the caller's value must not survive anywhere in the
     // write, not merely differ from it.
     expect(JSON.stringify(setPayload)).not.toContain('SEGREDO-DO-ATACANTE');
@@ -1363,6 +1470,7 @@ describe('Users and Access routes', () => {
     expect(setPayload).not.toHaveProperty('mfaEnabled');
     expect(setPayload).not.toHaveProperty('mfaSecretCiphertext');
     expect(setPayload).not.toHaveProperty('mfaActivationDate');
+    expect(setPayload).not.toHaveProperty('mfaSetupAt');
     const mfaRows = auditSpies.log.mock.calls.filter(([entry]) => entry && entry.action === 'MFA');
     expect(mfaRows).toHaveLength(0);
   });
@@ -1518,9 +1626,11 @@ describe('Users and Access routes', () => {
     expect(setPayload).not.toHaveProperty('mfaSecretCiphertext');
     expect(setPayload).not.toHaveProperty('mfaSecret');
     expect(setPayload).not.toHaveProperty('mfaActivationDate');
+    expect(setPayload).not.toHaveProperty('mfaSetupAt');
     // CONTROL within the case: the rename it actually asked for still happens,
-    // so this is not passing because the whole update was refused.
-    expect(setPayload.name).toBe('Nome Novo');
+    // so this is not passing because the whole update was refused. Stored as
+    // displayName (#1330).
+    expect(setPayload.displayName).toBe('Nome Novo');
   });
 
   // #1021: an explicit `false` is no longer a disable either. The route stops
@@ -1995,9 +2105,10 @@ describe('Users and Access routes', () => {
       // #1306 (RF003 AC4, RNF022 C5): the delete is logical -- the account is
       // inactivated, never removed, and its sessions are revoked.
       expect(usersCollection.deleteOne).not.toHaveBeenCalled();
+      // #1330: stored as accountStatus; the legacy status is removed.
       expect(usersCollection.updateOne).toHaveBeenCalledWith(
         { _id: 'tec-target-1008' },
-        { $set: expect.objectContaining({ status: 'inactive' }) }
+        { $set: expect.objectContaining({ accountStatus: 'inactive' }), $unset: { status: '' } }
       );
       expect(sessionsCollection.updateMany).toHaveBeenCalledWith(
         { $or: [{ userAccountId: 'tec-target-1008' }, { userID: 'tec-target-1008' }], isActive: true },

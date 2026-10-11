@@ -72,18 +72,20 @@ async function createFirstAdmin(options = {}) {
     // secure behavior -- a real production or dev-stack bootstrap keeps
     // forceReset:true unless it explicitly opts out too.
     const forceReset = String(env.BOOTSTRAP_ADMIN_FORCE_RESET ?? 'true').toLowerCase() !== 'false';
+    // #1330: under the dict-02 UserAccount names, like every new user
+    // document (models/User.js).
     const adminUser = {
-      name: config.name,
+      displayName: config.name,
       email: config.email,
       username: config.username,
-      password: passwordHash,
-      status: 'active',
+      passwordHash,
+      accountStatus: 'active',
       mfaEnabled: false,
       mfaSecretCiphertext: null, // #1072: dict-02 P1X-0197
-      forceReset,
-      passwordHistory: [],
+      forcePasswordReset: forceReset,
+      passwordHistoryHashes: [],
       failedLoginAttempts: 0,
-      lastLogin: null,
+      lastLoginAt: null,
       createdAt: now,
       updatedAt: now,
       passwordChangedAt: now,
