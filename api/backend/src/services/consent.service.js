@@ -9,6 +9,7 @@ const ConsentPermissionModel = require('../models/ConsentPermission');
 const { DUO_SYSTEM_URI } = ConsentPermissionModel;
 const consentEvidence = require('./consentEvidence.service');
 const consentHistory = require('./consentHistory.service');
+const consentCommunication = require('./consentCommunication.service');
 const { validateParticipantId } = require('../utils/patientAnonymization');
 const logger = require('../utils/logger');
 const { getCollection } = require('../utils/collectionResolver');
@@ -391,6 +392,14 @@ class ConsentService {
         previousPolicyId: null,
         versionGroupId: template.versionGroupId
       });
+      // RF010 AC8: an active version published into an existing lineage
+      // supersedes its earlier versions; their consents' holders are told.
+      await consentCommunication.notifyHoldersOfSupersededTerm(db, {
+        newTemplateId: result.insertedId,
+        newTemplate: template,
+        previousPolicyId: null,
+        versionGroupId: template.versionGroupId
+      });
       return {
         _id: result.insertedId,
         ...template,
@@ -506,6 +515,16 @@ class ConsentService {
       // reaches.
       const consentNotifications = await this.notifyPendingConsentCohort(db, {
         newTemplateId: result.insertedId,
+        previousPolicyId: String(objectId),
+        versionGroupId
+      });
+      // RF010 AC8 (LGPD art. 8 §6, art. 9 §2): the holders of consents in
+      // force under the superseded versions get a policy change notice, each
+      // recorded as a ConsentCommunicationEvent. Never throws, so a failed
+      // send cannot undo this publication.
+      await consentCommunication.notifyHoldersOfSupersededTerm(db, {
+        newTemplateId: result.insertedId,
+        newTemplate: template,
         previousPolicyId: String(objectId),
         versionGroupId
       });
