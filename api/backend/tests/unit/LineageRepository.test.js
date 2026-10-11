@@ -1,270 +1,117 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createRequire } from 'module';
 
 const require2 = createRequire(import.meta.url);
 const LineageRepository = require2('../../src/infrastructure/database/neo4j/LineageRepository.js');
 
-function makeSession({ records = [], runImpl } = {}) {
+// #1312 (RF023 AC8): the repository appends custody events to the graph
+// outbox in MongoDB. It holds no Neo4j driver and runs no Cypher.
+function makeGraphProjection(impl) {
   return {
-    run: runImpl || vi.fn().mockResolvedValue({ records }),
-    close: vi.fn().mockResolvedValue(undefined)
-  };
-}
-
-function makeDriver(session) {
-  return {
-    session: vi.fn().mockReturnValue(session)
-  };
-}
-
-function makeRecord(map) {
-  return {
-    get: (key) => map[key],
-    toObject: () => map
+    appendCustodyEvent: vi.fn(impl || (async () => ({ eventId: 'evt-outbox-1' })))
   };
 }
 
 describe('LineageRepository', () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  describe('constructor / ensureDriver', () => {
-    it('throws if driver missing session method', async () => {
-      const repo = new LineageRepository({});
-      await expect(repo.validateBeforePersistence({ specimenId: '1', eventType: 'X' })).rejects.toThrow(
-        'Driver não inicializado'
-      );
-    });
-
-    it('uses default database name when option not provided', () => {
-      const repo = new LineageRepository({ session: vi.fn() });
-      expect(repo.database).toBe('neo4j');
-    });
-
-    it('uses provided database option', () => {
-      const repo = new LineageRepository({ session: vi.fn() }, { database: 'customdb' });
-      expect(repo.database).toBe('customdb');
-    });
-  });
-
-  describe('normalizePointerId', () => {
-    it('trims and stringifies a valid pointer', () => {
-      const repo = new LineageRepository({ session: vi.fn() });
-      expect(repo.normalizePointerId('  abc  ', 'specimenId')).toBe('abc');
-    });
-
-    it('throws for null/undefined/empty pointer', () => {
-      const repo = new LineageRepository({ session: vi.fn() });
-      expect(() => repo.normalizePointerId(null, 'specimenId')).toThrow('specimenId obrigatório');
-      expect(() => repo.normalizePointerId(undefined, 'parentSampleId')).toThrow('parentSampleId obrigatório');
-      expect(() => repo.normalizePointerId('   ', 'eventId')).toThrow('eventId obrigatório');
-    });
-  });
-
   describe('validateBeforePersistence', () => {
-    it('resolves true when an active consent status is present', async () => {
-      const record = makeRecord({ sampleConsentStatus: 'UNKNOWN', consentStatuses: ['ACTIVE'] });
-      const session = makeSession({ records: [record] });
-      const driver = makeDriver(session);
-      const repo = new LineageRepository(driver);
+    it('resolves true for a payload with specimenId and eventType, appending nothing', async () => {
+      const graphProjection = makeGraphProjection();
+      const repo = new LineageRepository({ fake: 'db' }, { graphProjection });
 
-      const result = await repo.validateBeforePersistence({ specimenId: 's1', eventType: 'CREATE' });
-
-      expect(result).toBe(true);
-      expect(session.close).toHaveBeenCalled();
+      await expect(repo.validateBeforePersistence({ specimenId: 's-1', eventType: 'move' })).resolves.toBe(true);
+      expect(graphProjection.appendCustodyEvent).not.toHaveBeenCalled();
     });
 
-    it('rejects when eventType is missing', async () => {
-      const session = makeSession();
-      const driver = makeDriver(session);
-      const repo = new LineageRepository(driver);
-
-      await expect(repo.validateBeforePersistence({ specimenId: 's1' })).rejects.toThrow('eventType obrigatório');
+    it('rejects a payload without specimenId', async () => {
+      const repo = new LineageRepository({}, { graphProjection: makeGraphProjection() });
+      await expect(repo.validateBeforePersistence({ specimenId: '  ', eventType: 'move' })).rejects.toThrow('specimenId obrigatório');
     });
 
-    it('rejects when consent is required but no active status found', async () => {
-      const record = makeRecord({ sampleConsentStatus: 'UNKNOWN', consentStatuses: ['REVOKED'] });
-      const session = makeSession({ records: [record] });
-      const driver = makeDriver(session);
-      const repo = new LineageRepository(driver);
-
-      await expect(
-        repo.validateBeforePersistence({ specimenId: 's1', eventType: 'CREATE' })
-      ).rejects.toThrow('Consentimento ético ativo não encontrado');
-      expect(session.close).toHaveBeenCalled();
+    it('rejects a payload without eventType', async () => {
+      const repo = new LineageRepository({}, { graphProjection: makeGraphProjection() });
+      await expect(repo.validateBeforePersistence({ specimenId: 's-1' })).rejects.toThrow('eventType obrigatório');
     });
 
-    it('skips consent check when requireEthicalConsent is false', async () => {
-      const record = makeRecord({ sampleConsentStatus: 'UNKNOWN', consentStatuses: [] });
-      const session = makeSession({ records: [record] });
-      const driver = makeDriver(session);
-      const repo = new LineageRepository(driver);
-
-      const result = await repo.validateBeforePersistence({
-        specimenId: 's1',
-        eventType: 'CREATE',
-        requireEthicalConsent: false
-      });
-
-      expect(result).toBe(true);
-    });
-
-    it('closes session even when session.run throws', async () => {
-      const session = makeSession({ runImpl: vi.fn().mockRejectedValue(new Error('db down')) });
-      const driver = makeDriver(session);
-      const repo = new LineageRepository(driver);
-
-      await expect(repo.validateBeforePersistence({ specimenId: 's1', eventType: 'CREATE' })).rejects.toThrow(
-        'db down'
-      );
-      expect(session.close).toHaveBeenCalled();
-    });
-  });
-
-  describe('createSampleNodeWithParent', () => {
-    it('returns the created relationship data on success', async () => {
-      const record = makeRecord({ specimenId: 'child1', parentId: 'parent1', relationshipType: 'ALIQUOT' });
-      const session = makeSession({ records: [record] });
-      const driver = makeDriver(session);
-      const repo = new LineageRepository(driver);
-
-      const result = await repo.createSampleNodeWithParent({
-        specimenId: 'child1',
-        parentSampleId: 'parent1',
-        relationshipType: 'ALIQUOT'
-      });
-
-      expect(result).toEqual({ specimenId: 'child1', parentId: 'parent1', relationshipType: 'ALIQUOT' });
-    });
-
-    it('throws when parent has no active consent (no records returned)', async () => {
-      const session = makeSession({ records: [] });
-      const driver = makeDriver(session);
-      const repo = new LineageRepository(driver);
-
-      await expect(
-        repo.createSampleNodeWithParent({ specimenId: 'child1', parentSampleId: 'parent1' })
-      ).rejects.toThrow('Amostra pai sem consentimento ativo');
-    });
-
-    it('throws when specimenId is missing', async () => {
-      const session = makeSession();
-      const driver = makeDriver(session);
-      const repo = new LineageRepository(driver);
-
-      await expect(
-        repo.createSampleNodeWithParent({ parentSampleId: 'parent1' })
-      ).rejects.toThrow('specimenId obrigatório');
-    });
-
-    it('propagates and logs errors from session.run', async () => {
-      const session = makeSession({ runImpl: vi.fn().mockRejectedValue(new Error('cypher error')) });
-      const driver = makeDriver(session);
-      const repo = new LineageRepository(driver);
-
-      await expect(
-        repo.createSampleNodeWithParent({ specimenId: 'child1', parentSampleId: 'parent1' })
-      ).rejects.toThrow('cypher error');
-      expect(session.close).toHaveBeenCalled();
+    it('needs no database: it reads nothing', async () => {
+      const repo = new LineageRepository(null, { graphProjection: makeGraphProjection() });
+      await expect(repo.validateBeforePersistence({ specimenId: 's-1', eventType: 'register' })).resolves.toBe(true);
     });
   });
 
   describe('recordCustodyEvent', () => {
-    it('resolves with the generated eventId on success', async () => {
-      const session = makeSession({ records: [] });
-      const driver = makeDriver(session);
-      const repo = new LineageRepository(driver);
+    it('appends the custody step to the outbox with the caller session and returns the outbox eventId', async () => {
+      const db = { fake: 'db' };
+      const session = { id: 'mongo-session' };
+      const graphProjection = makeGraphProjection();
+      const repo = new LineageRepository(db, { graphProjection });
+      const happenedAt = new Date('2026-01-02T03:04:05.000Z');
 
-      const result = await repo.recordCustodyEvent({ specimenId: 's1', eventType: 'MOVE' });
+      const result = await repo.recordCustodyEvent({
+        specimenId: 's-1',
+        barcode: 'BC-1',
+        eventType: 'move',
+        actorId: 'u-1',
+        reason: 'reorg',
+        happenedAt,
+        from: { boxId: 'b1', position: 'a1' },
+        to: { boxId: 'b2', position: 'B2' }
+      }, { session });
 
-      expect(result.eventId).toMatch(/^MOVE-s1-\d+$/);
-      expect(session.run).toHaveBeenCalled();
+      expect(result).toEqual({ eventId: 'evt-outbox-1' });
+      expect(graphProjection.appendCustodyEvent).toHaveBeenCalledWith(db, {
+        specimenId: 's-1',
+        barcode: 'BC-1',
+        eventType: 'move',
+        happenedAt,
+        actorId: 'u-1',
+        reason: 'reorg',
+        from: { boxId: 'b1', position: 'a1' },
+        to: { boxId: 'b2', position: 'B2' },
+        sourceService: 'lineage-repository'
+      }, { session });
     });
 
-    it('passes normalized from/to storage positions to the query', async () => {
-      const session = makeSession({ records: [] });
-      const driver = makeDriver(session);
-      const repo = new LineageRepository(driver);
+    it('appends outside any transaction when no session is passed', async () => {
+      const graphProjection = makeGraphProjection();
+      const repo = new LineageRepository({}, { graphProjection });
 
-      await repo.recordCustodyEvent({
-        specimenId: 's1',
-        eventType: 'MOVE',
-        from: { boxId: 'boxA', position: 'a1' },
-        to: { boxId: 'boxB', position: 'b2' }
-      });
+      await repo.recordCustodyEvent({ specimenId: 's-1', eventType: 'register' });
 
-      const params = session.run.mock.calls[0][1];
-      expect(params.fromBoxId).toBe('boxA');
-      expect(params.fromPosition).toBe('A1');
-      expect(params.toBoxId).toBe('boxB');
-      expect(params.toPosition).toBe('B2');
+      expect(graphProjection.appendCustodyEvent.mock.calls[0][2]).toEqual({});
     });
 
-    it('throws when specimenId is missing', async () => {
-      const session = makeSession();
-      const driver = makeDriver(session);
-      const repo = new LineageRepository(driver);
+    it('propagates an append failure', async () => {
+      const graphProjection = makeGraphProjection(async () => { throw new Error('outbox down'); });
+      const repo = new LineageRepository({}, { graphProjection });
 
-      await expect(repo.recordCustodyEvent({ eventType: 'MOVE' })).rejects.toThrow('specimenId obrigatório');
+      await expect(repo.recordCustodyEvent({ specimenId: 's-1', eventType: 'allocate' })).rejects.toThrow('outbox down');
     });
 
-    it('throws when eventType is missing instead of writing a malformed eventId', async () => {
-      const session = makeSession();
-      const driver = makeDriver(session);
-      const repo = new LineageRepository(driver);
+    it('refuses without a database, appending nothing', async () => {
+      const graphProjection = makeGraphProjection();
+      const repo = new LineageRepository(null, { graphProjection });
 
-      await expect(repo.recordCustodyEvent({ specimenId: 's1' })).rejects.toThrow('eventType obrigatório');
-      expect(session.run).not.toHaveBeenCalled();
+      await expect(repo.recordCustodyEvent({ specimenId: 's-1', eventType: 'allocate' })).rejects.toThrow('MongoDB indisponível');
+      expect(graphProjection.appendCustodyEvent).not.toHaveBeenCalled();
     });
 
-    it('propagates errors from session.run and still closes session', async () => {
-      const session = makeSession({ runImpl: vi.fn().mockRejectedValue(new Error('write failed')) });
-      const driver = makeDriver(session);
-      const repo = new LineageRepository(driver);
+    it('refuses an invalid payload before appending', async () => {
+      const graphProjection = makeGraphProjection();
+      const repo = new LineageRepository({}, { graphProjection });
 
-      await expect(repo.recordCustodyEvent({ specimenId: 's1', eventType: 'MOVE' })).rejects.toThrow('write failed');
-      expect(session.close).toHaveBeenCalled();
+      await expect(repo.recordCustodyEvent({ specimenId: 's-1' })).rejects.toThrow('eventType obrigatório');
+      expect(graphProjection.appendCustodyEvent).not.toHaveBeenCalled();
+    });
+
+    it('returns a null eventId when the append resolves without one', async () => {
+      const repo = new LineageRepository({}, { graphProjection: makeGraphProjection(async () => ({})) });
+      await expect(repo.recordCustodyEvent({ specimenId: 's-1', eventType: 'release' })).resolves.toEqual({ eventId: null });
     });
   });
 
-  describe('compensateCustodyEvent', () => {
-    it('returns compensation summary on success', async () => {
-      const record = makeRecord({ cleanedPositions: 2 });
-      const session = makeSession({ records: [record] });
-      const driver = makeDriver(session);
-      const repo = new LineageRepository(driver);
-
-      const result = await repo.compensateCustodyEvent({ eventId: 'evt1' });
-
-      expect(result).toEqual({ compensated: true, eventId: 'evt1', cleanedPositions: 2 });
-    });
-
-    it('defaults cleanedPositions to 0 when no records returned', async () => {
-      const session = makeSession({ records: [] });
-      const driver = makeDriver(session);
-      const repo = new LineageRepository(driver);
-
-      const result = await repo.compensateCustodyEvent({ eventId: 'evt1' });
-
-      expect(result.cleanedPositions).toBe(0);
-    });
-
-    it('throws when eventId is missing', async () => {
-      const session = makeSession();
-      const driver = makeDriver(session);
-      const repo = new LineageRepository(driver);
-
-      await expect(repo.compensateCustodyEvent({})).rejects.toThrow('eventId obrigatório');
-    });
-
-    it('propagates errors from session.run and still closes session', async () => {
-      const session = makeSession({ runImpl: vi.fn().mockRejectedValue(new Error('compensation failed')) });
-      const driver = makeDriver(session);
-      const repo = new LineageRepository(driver);
-
-      await expect(repo.compensateCustodyEvent({ eventId: 'evt1' })).rejects.toThrow('compensation failed');
-      expect(session.close).toHaveBeenCalled();
-    });
+  it('exposes no compensation or derivation writer', () => {
+    const repo = new LineageRepository({});
+    expect(repo.compensateCustodyEvent).toBeUndefined();
+    expect(repo.createSampleNodeWithParent).toBeUndefined();
   });
 });

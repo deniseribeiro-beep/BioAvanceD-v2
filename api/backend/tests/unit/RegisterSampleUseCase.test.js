@@ -303,23 +303,23 @@ describe('RegisterSampleUseCase', () => {
       await expect(useCase.persistTopology({})).rejects.toThrow('LineageRepository não injetado');
     });
 
-    it('prefers createSampleNodeWithParent when parentSampleId is present', async () => {
+    // #1312: the graph-side derivation writer is gone; a register step is
+    // the custody event, whatever the payload carries.
+    it('records the custody event even when the payload names a parent, calling no derivation writer', async () => {
       const lineageRepository = {
-        createSampleNodeWithParent: vi.fn().mockResolvedValue(undefined),
-        recordCustodyEvent: vi.fn(),
-        createSampleNode: vi.fn()
+        createSampleNodeWithParent: vi.fn(),
+        recordCustodyEvent: vi.fn().mockResolvedValue(undefined)
       };
       const useCase = new RegisterSampleUseCase({ sampleRepository, lineageRepository });
-      const payload = { parentSampleId: 'P1' };
+      const payload = { specimenId: 'S1', eventType: 'register', parentSampleId: 'P1' };
 
       await useCase.persistTopology(payload);
 
-      expect(lineageRepository.createSampleNodeWithParent).toHaveBeenCalledWith(payload);
-      expect(lineageRepository.recordCustodyEvent).not.toHaveBeenCalled();
-      expect(lineageRepository.createSampleNode).not.toHaveBeenCalled();
+      expect(lineageRepository.recordCustodyEvent).toHaveBeenCalledWith(payload);
+      expect(lineageRepository.createSampleNodeWithParent).not.toHaveBeenCalled();
     });
 
-    it('falls back to recordCustodyEvent when there is no parentSampleId', async () => {
+    it('uses recordCustodyEvent when the repository has it', async () => {
       const lineageRepository = {
         recordCustodyEvent: vi.fn().mockResolvedValue(undefined),
         createSampleNode: vi.fn()

@@ -1,10 +1,14 @@
 /**
- * Contrato para persistência de linhagem e cadeia de custódia.
+ * Contrato para a trilha de cadeia de custódia (ISO 20387).
+ *
+ * #1312 (RF023 AC8): a trilha chega ao grafo somente pelo outbox. Nenhuma
+ * implementação escreve no Neo4j nem lê consentimento da projeção.
  */
 class ILineageRepository {
   /**
-   * Valida pré-condições de linhagem/ética antes de persistir no MongoDB.
-   * @param {{ specimenId: string, barcode?: string|null, eventType: string, requireEthicalConsent?: boolean }} input
+   * Valida, em processo e sem leitura, os campos do evento de custódia antes
+   * de qualquer escrita no MongoDB.
+   * @param {{ specimenId: string, barcode?: string|null, eventType: string }} input
    * @returns {Promise<boolean>}
    */
   async validateBeforePersistence(input) {
@@ -12,20 +16,13 @@ class ILineageRepository {
   }
 
   /**
-   * Registra evento de cadeia de custódia no Neo4j.
-   * @param {{ specimenId: string, barcode?: string|null, eventType: string, from?: { boxId?: string, position?: string }|null, to?: { boxId?: string, position?: string }|null, happenedAt?: Date, actorId?: string|null, reason?: string|null }} input
-   * @returns {Promise<{ eventId: string }>}
+   * Registra o evento de custódia no outbox do grafo. `options.session` é a
+   * transação Mongo do agregado: o evento confirma ou aborta com ela.
+   * @param {{ specimenId: string, barcode?: string|null, eventType: string, from?: { boxId?: string, position?: string }|null, to?: { boxId?: string, position?: string }|null, happenedAt?: Date|string, actorId?: string|null, reason?: string|null }} input
+   * @param {{ session?: import('mongodb').ClientSession }} [options]
+   * @returns {Promise<{ eventId: string|null }>}
    */
-  async recordCustodyEvent(input) {
-    throw new Error('Not implemented');
-  }
-
-  /**
-   * Compensa evento de cadeia de custódia quando a transação principal falha.
-   * @param {{ eventId: string, specimenId?: string, reason?: string }} input
-   * @returns {Promise<{ compensated: boolean, eventId: string, cleanedPositions?: number }>}
-   */
-  async compensateCustodyEvent(input) {
+  async recordCustodyEvent(input, options) {
     throw new Error('Not implemented');
   }
 }

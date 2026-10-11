@@ -27,7 +27,6 @@ const CYPHER_RUN = /\.run\(|executeWrite|writeTransaction/;
 const CYPHER_WRITE = /\b(MERGE|CREATE)\s*\(|\bDETACH\s+DELETE\b|\bDELETE\s+[a-z]|\bSET\s+[a-z]\w*\.\w+\s*=|\bREMOVE\s+[a-z]\w*\./;
 const GRAPH_WRITERS = new Map([
     ['src/services/neo4jCanonicalProjection.service.js', 'the projector: applies outbox events, the one sanctioned writer'],
-    ['src/infrastructure/database/neo4j/LineageRepository.js', 'known: lineage, allocate and move still MERGE directly, #1312\'s remaining item'],
 ]);
 
 function sourceFiles(dir) {

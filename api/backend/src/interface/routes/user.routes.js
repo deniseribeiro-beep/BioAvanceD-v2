@@ -1111,7 +1111,7 @@ router.post('/register-sample', authenticate, requirePermission('createSample'),
 
     const registerSampleUseCase = new RegisterSampleUseCase({
       sampleRepository,
-      lineageRepository: new LineageRepository(req.app.locals.neo4jDriver || null),
+      lineageRepository: new LineageRepository(db),
       quarantineService: req.app.locals.neo4jQuarantineService || req.app.locals.topologicalQuarantine || null
     });
 

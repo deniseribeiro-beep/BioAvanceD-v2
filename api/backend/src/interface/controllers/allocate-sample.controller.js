@@ -40,7 +40,7 @@ function createAllocateSampleController() {
       const useCase = new AllocateSampleUseCase({
         storageRepository: new MongoStorageRepository(db),
         auditRepository: new MongoAuditRepository(db),
-        lineageRepository: new LineageRepository(req.app.locals.neo4jDriver || null)
+        lineageRepository: new LineageRepository(db)
       });
 
       const result = await useCase.execute({

@@ -35,7 +35,7 @@ class AllocateSampleUseCase {
         }
       : null;
 
-    const lineageResult = await this.ensureLineageBeforeMongo({
+    const lineagePayload = {
       specimenId: String(sample._id),
       barcode: sample.barcode || null,
       eventType: 'allocate',
@@ -46,60 +46,63 @@ class AllocateSampleUseCase {
       },
       actorId: command?.actor?.userId || null,
       reason: 'allocate'
-    });
+    };
+    const lineageResult = await this.validateLineageBeforeMongo(lineagePayload);
+    let lineageEventId = null;
 
-    try {
-      await this.storageRepository.withTransaction(async (session) => {
-        const sample = await this.storageRepository.findSampleById(command.specimenId, session);
-        if (!sample) {
-          throw new Error('Amostra não encontrada');
-        }
+    await this.storageRepository.withTransaction(async (session) => {
+      const sample = await this.storageRepository.findSampleById(command.specimenId, session);
+      if (!sample) {
+        throw new Error('Amostra não encontrada');
+      }
 
-        const beforeLocation = sample.storageAssignment
-          ? {
-              boxId: sample.storageAssignment.boxId ? String(sample.storageAssignment.boxId) : null,
-              position: sample.storageAssignment.positionCode
-                ? String(sample.storageAssignment.positionCode).toUpperCase()
-                : null
+      const beforeLocation = sample.storageAssignment
+        ? {
+            boxId: sample.storageAssignment.boxId ? String(sample.storageAssignment.boxId) : null,
+            position: sample.storageAssignment.positionCode
+              ? String(sample.storageAssignment.positionCode).toUpperCase()
+              : null
+          }
+        : null;
+
+      await this.storageRepository.allocateSamplePosition(
+        {
+          specimenId: command.specimenId,
+          boxId: command.boxId,
+          position: normalizedPosition
+        },
+        session
+      );
+
+      await this.auditRepository.appendImmutableAudit(
+        {
+          specimenId: String(sample._id),
+          barcode: sample.barcode || null,
+          eventType: 'allocate',
+          before: {
+            storageLocation: beforeLocation
+          },
+          after: {
+            storageLocation: {
+              boxId: String(command.boxId),
+              position: normalizedPosition
             }
-          : null;
-
-        await this.storageRepository.allocateSamplePosition(
-          {
-            specimenId: command.specimenId,
-            boxId: command.boxId,
-            position: normalizedPosition
           },
-          session
-        );
-
-        await this.auditRepository.appendImmutableAudit(
-          {
-            specimenId: String(sample._id),
-            barcode: sample.barcode || null,
-            eventType: 'allocate',
-            before: {
-              storageLocation: beforeLocation
-            },
-            after: {
-              storageLocation: {
-                boxId: String(command.boxId),
-                position: normalizedPosition
-              }
-            },
-            context: {
-              actor: command.actor,
-              reason: 'allocate'
-            },
-            timestamp: new Date()
+          context: {
+            actor: command.actor,
+            reason: 'allocate'
           },
-          session
-        );
-      });
-    } catch (mongoError) {
-      await this.compensateLineageIfNeeded(lineageResult, String(sample._id));
-      throw mongoError;
-    }
+          timestamp: new Date()
+        },
+        session
+      );
+
+      lineageEventId = await this.recordLineageInTransaction(
+        lineageResult,
+        { ...lineagePayload, from: beforeLocation },
+        session
+      );
+    });
 
     return {
       success: true,
@@ -109,8 +112,8 @@ class AllocateSampleUseCase {
         position: normalizedPosition
       },
       lineageValidated: lineageResult.lineageValidated,
-      lineagePersisted: lineageResult.lineagePersisted,
-      lineageEventId: lineageResult.eventId || null
+      lineagePersisted: lineageResult.lineageValidated,
+      lineageEventId
     };
   }
 
@@ -123,49 +126,45 @@ class AllocateSampleUseCase {
     }
   }
 
-  async ensureLineageBeforeMongo(payload) {
+  // LINEAGE_MODE governs this pre-MongoDB step only: a missing lineage
+  // repository or a custody payload missing its fields refuses the operation
+  // under fail-closed, and under fail-open the operation runs without a
+  // custody event. It reads nothing; custody reads no consent (MongoDB is the
+  // consent authority, and revocation is prospective, RF010 AC6).
+  async validateLineageBeforeMongo(payload) {
     const shouldFailHard = String(env.LINEAGE_MODE || 'fail-open').toLowerCase() === 'fail-closed';
 
     if (!this.lineageRepository) {
-      const error = new Error('[ISO20387][LINEAGE] Repositório Neo4j ausente para operação de custódia');
+      const error = new Error('[ISO20387][LINEAGE] Repositório de linhagem ausente para operação de custódia');
       if (shouldFailHard) {
         throw error;
       }
       logger.warn(error.message);
-      return { lineageValidated: false, lineagePersisted: false };
+      return { lineageValidated: false };
     }
 
     try {
-      // Custody reads no consent from the Neo4j projection: MongoDB is the
-      // consent authority and the projection is eventually consistent, and
-      // revocation is prospective (RF010 AC6), so it never blocks custody.
-      await this.lineageRepository.validateBeforePersistence({ ...payload, requireEthicalConsent: false });
-      const persisted = await this.lineageRepository.recordCustodyEvent(payload);
-      return { lineageValidated: true, lineagePersisted: true, eventId: persisted?.eventId || null };
+      await this.lineageRepository.validateBeforePersistence(payload);
+      return { lineageValidated: true };
     } catch (error) {
-      logger.error('[ISO20387][LINEAGE] Falha na validação/persistência pré-Mongo (allocate):', error.message || error);
+      logger.error('[ISO20387][LINEAGE] Falha na validação pré-Mongo (allocate):', error.message || error);
       if (shouldFailHard) {
         throw new Error('ISO20387_LINEAGE_VALIDATION_FAILED: operação bloqueada antes do MongoDB');
       }
-      return { lineageValidated: false, lineagePersisted: false, eventId: null };
+      return { lineageValidated: false };
     }
   }
 
-  async compensateLineageIfNeeded(lineageResult, specimenId) {
-    if (!lineageResult?.lineagePersisted || !lineageResult?.eventId || !this.lineageRepository) {
-      return;
+  // #1312 (RF023 AC3/AC8): the custody event is an outbox append inside the
+  // allocation's own transaction, never a Neo4j write. A failed append
+  // aborts the transaction, so the allocation is refused in either
+  // LINEAGE_MODE and MongoDB never keeps a step the graph was not told about.
+  async recordLineageInTransaction(lineageResult, payload, session) {
+    if (!lineageResult?.lineageValidated) {
+      return null;
     }
-
-    try {
-      await this.lineageRepository.compensateCustodyEvent({
-        eventId: lineageResult.eventId,
-        specimenId,
-        reason: 'mongo_transaction_failed'
-      });
-      logger.warn('[ISO20387][SAGA] Compensação Neo4j concluída após falha Mongo (allocate)');
-    } catch (compensationError) {
-      logger.error('[ISO20387][SAGA] Falha ao compensar evento de linhagem (allocate):', compensationError.message || compensationError);
-    }
+    const persisted = await this.lineageRepository.recordCustodyEvent(payload, { session });
+    return persisted?.eventId || null;
   }
 }
 

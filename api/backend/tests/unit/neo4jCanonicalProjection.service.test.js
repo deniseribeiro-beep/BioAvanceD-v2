@@ -323,6 +323,82 @@ describe('neo4jCanonicalProjection.service', () => {
     });
   });
 
+  // #1312: the custody step the custody use cases used to write directly,
+  // now projected from CUSTODY_EVENT_RECORDED with the same graph shape.
+  describe('#1312 custody event projection', () => {
+    const custodyEvent = (payload = {}) => ({
+      eventType: 'CUSTODY_EVENT_RECORDED',
+      eventId: 'evt-cust-1',
+      sourceService: 'lineage-repository',
+      schemaVersion: 1,
+      payload: {
+        specimenId: 'sample-1',
+        barcode: 'BC-1',
+        custodyEventType: 'move',
+        happenedAt: '2026-01-02T03:04:05.000Z',
+        actorId: 'user-1',
+        reason: 'reorg',
+        from: { boxId: 'box-1', position: 'a1' },
+        to: { boxId: 'box-2', position: 'B2' },
+        ...payload,
+      },
+    });
+
+    it('writes Sample-[:HAS_CUSTODY_EVENT]->CustodyEvent with FROM and TO StoragePositions, keyed by the outbox eventId', async () => {
+      const service = new Neo4jCanonicalProjectionService();
+      const session = makeSession();
+
+      const result = await service.applyEvent(session, custodyEvent());
+
+      expect(result).toMatchObject({ projected: true, specimenId: 'sample-1', custodyEventId: 'evt-cust-1' });
+      expect(session.run).toHaveBeenCalledTimes(1);
+      const [cypher, params] = session.run.mock.calls[0];
+      expect(cypher).toContain('MERGE (sample:Sample {id: $specimenId})');
+      expect(cypher).toContain('MERGE (custody:CustodyEvent {id: $eventId})');
+      expect(cypher).toContain('MERGE (sample)-[:HAS_CUSTODY_EVENT]->(custody)');
+      expect(cypher).toContain('MERGE (fromPos:StoragePosition {boxId: $fromBoxId, position: $fromPosition})');
+      expect(cypher).toContain('MERGE (custody)-[:FROM]->(fromPos)');
+      expect(cypher).toContain('MERGE (toPos:StoragePosition {boxId: $toBoxId, position: $toPosition})');
+      expect(cypher).toContain('MERGE (custody)-[:TO]->(toPos)');
+      expect(cypher).toContain("custody.source = 'ISO20387'");
+      expect(params).toMatchObject({
+        specimenId: 'sample-1',
+        barcode: 'BC-1',
+        eventId: 'evt-cust-1',
+        custodyEventType: 'move',
+        happenedAt: '2026-01-02T03:04:05.000Z',
+        actorId: 'user-1',
+        reason: 'reorg',
+        fromBoxId: 'box-1',
+        fromPosition: 'A1',
+        toBoxId: 'box-2',
+        toPosition: 'B2',
+      });
+    });
+
+    it('passes null positions for a step without a destination (release), so no TO edge is written', async () => {
+      const service = new Neo4jCanonicalProjectionService();
+      const session = makeSession();
+
+      await service.applyEvent(session, custodyEvent({ custodyEventType: 'release', to: null }));
+
+      const [, params] = session.run.mock.calls[0];
+      expect(params).toMatchObject({ fromBoxId: 'box-1', fromPosition: 'A1', toBoxId: null, toPosition: null });
+    });
+
+    it('skips a custody event with no sample or custody type, writing nothing', async () => {
+      const service = new Neo4jCanonicalProjectionService();
+      const session = makeSession();
+
+      const noType = await service.applyEvent(session, custodyEvent({ custodyEventType: null }));
+      const noSample = await service.applyEvent(session, { ...custodyEvent({ specimenId: null }), aggregateId: '' });
+
+      expect(noType.skipped).toBe(true);
+      expect(noSample.skipped).toBe(true);
+      expect(session.run).not.toHaveBeenCalled();
+    });
+  });
+
   describe('applyQualityProjection', () => {
     it('projects score and evaluatedAt from payload', async () => {
       const service = new Neo4jCanonicalProjectionService();

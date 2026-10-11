@@ -1419,7 +1419,7 @@ class ImportLGPDService {
   }
 
   async importSamples(db, file, options = {}) {
-    const { startBoxId = null, autoIncrement = false, groupFields = {}, neo4jDriver = null, actor = {}, organizationId = null, organizationScope = null } = options;
+    const { startBoxId = null, autoIncrement = false, groupFields = {}, actor = {}, organizationId = null, organizationScope = null } = options;
     const results = {
       total: 0,
       success: 0,
@@ -1435,7 +1435,7 @@ class ImportLGPDService {
       // drop blank rows before this array exists. #1012: the unreachable
       // per-row backstop below is gone for that same reason.
       results.skipped = rows.skippedCount || 0;
-      const collaborators = await this.buildSampleRowCollaborators(db, { neo4jDriver });
+      const collaborators = await this.buildSampleRowCollaborators(db);
 
       // Valida headers
       if (rows.length > 0) {
@@ -1567,7 +1567,7 @@ class ImportLGPDService {
    * (non-auto-increment) target box silently double-booked its first
    * free position across every row.
    */
-  async buildSampleRowCollaborators(db, { neo4jDriver = null } = {}) {
+  async buildSampleRowCollaborators(db) {
     return {
       samplesCollection: await getCollection(db, 'samples'),
       patientsCollection: await getCollection(db, 'patients'),
@@ -1576,7 +1576,7 @@ class ImportLGPDService {
       allocateUseCase: new AllocateSampleUseCase({
         storageRepository: new MongoStorageRepository(db),
         auditRepository: new MongoAuditRepository(db),
-        lineageRepository: new LineageRepository(neo4jDriver)
+        lineageRepository: new LineageRepository(db)
       }),
     };
   }
@@ -1600,7 +1600,7 @@ class ImportLGPDService {
    * Only sample batches are resubmittable; a patient batch (#814) is a 404
    * here, like any batch of another type.
    */
-  async resubmitQuarantinedSampleRow(db, batchIdRaw, recordIdRaw, correctedRow, { neo4jDriver = null, actor = {}, organizationScope = null } = {}) {
+  async resubmitQuarantinedSampleRow(db, batchIdRaw, recordIdRaw, correctedRow, { actor = {}, organizationScope = null } = {}) {
     const { ObjectId } = require('mongodb');
     const fail = (statusCode, message, extra = {}) => {
       const error = new Error(message);
@@ -1659,7 +1659,7 @@ class ImportLGPDService {
         const { resolveOrganizationIdForCreate } = require('./rbac-assignment.service');
         options.organizationId = resolveOrganizationIdForCreate(organizationScope, options.organizationId);
       }
-      const collaborators = await this.buildSampleRowCollaborators(db, { neo4jDriver });
+      const collaborators = await this.buildSampleRowCollaborators(db);
       outcome = await this.processSampleRow(db, row, {
         ...collaborators,
         ...options,

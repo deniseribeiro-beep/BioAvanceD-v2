@@ -165,7 +165,9 @@ describe('TopologicalQuarantine - reprocessItem factory failures', () => {
     expect(ok).toBe(false);
   });
 
-  it('propaga requireEthicalConsent=false quando explicitamente definido no payload', async () => {
+  // #1312: the retry validates and records the queued step as queued; the
+  // validation reads no consent, so no consent flag is added to it.
+  it('reprocessa o payload enfileirado sem acrescentar nada a ele', async () => {
     const lineageRepository = {
       validateBeforePersistence: vi.fn().mockResolvedValue(true),
       recordCustodyEvent: vi.fn().mockResolvedValue({}),
@@ -174,15 +176,13 @@ describe('TopologicalQuarantine - reprocessItem factory failures', () => {
       redisClient: {},
       getLineageRepository: vi.fn().mockResolvedValue(lineageRepository),
     });
+    const payload = { specimenId: 's1', eventType: 'register', happenedAt: '2026-01-01T00:00:00.000Z' };
 
-    const ok = await quarantine.reprocessItem({
-      payload: { specimenId: 's1', eventType: 'register', requireEthicalConsent: false },
-    });
+    const ok = await quarantine.reprocessItem({ payload });
 
     expect(ok).toBe(true);
-    expect(lineageRepository.validateBeforePersistence).toHaveBeenCalledWith(
-      expect.objectContaining({ requireEthicalConsent: false })
-    );
+    expect(lineageRepository.validateBeforePersistence).toHaveBeenCalledWith(payload);
+    expect(lineageRepository.recordCustodyEvent).toHaveBeenCalledWith(payload);
   });
 });
 

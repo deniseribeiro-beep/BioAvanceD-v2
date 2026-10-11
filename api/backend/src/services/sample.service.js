@@ -376,7 +376,7 @@ class SampleService {
       const allocateUseCase = new AllocateSampleUseCase({
         storageRepository: new MongoStorageRepository(db),
         auditRepository: new MongoAuditRepository(db),
-        lineageRepository: new LineageRepository(options?.neo4jDriver || null)
+        lineageRepository: new LineageRepository(db)
       });
 
       try {

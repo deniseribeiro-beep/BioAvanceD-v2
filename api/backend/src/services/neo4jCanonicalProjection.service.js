@@ -67,6 +67,9 @@ class Neo4jCanonicalProjectionService {
     if (type === 'SPECIMEN_COMPROMISED') {
       return this.applySpecimenCompromiseProjection(session, event);
     }
+    if (type === 'CUSTODY_EVENT_RECORDED') {
+      return this.applyCustodyEventProjection(session, event);
+    }
     if (type === 'TERMINOLOGY_CONCEPT_PROMOTED') {
       return this.applyTerminologyConceptProjection(session, event);
     }
@@ -153,8 +156,8 @@ class Neo4jCanonicalProjectionService {
     return { projected: true, eventType: event.eventType, donorId, consentId };
   }
 
-  // #1225: a sample joins the graph under the key LineageRepository's consent
-  // gate MERGEs it by, linked to its donor and governed by every consent that
+  // #1225: a sample joins the graph under its Mongo _id, the key the custody
+  // events (CUSTODY_EVENT_RECORDED) MERGE it by too, linked to its donor and governed by every consent that
   // donor already has. Consents projected later reach it through
   // applyConsentProjection's DONATED traversal, so either order converges.
   async applySpecimenProjection(session, event) {
@@ -378,6 +381,81 @@ class Neo4jCanonicalProjectionService {
       eventId: normalizeText(event.eventId),
     });
     return { projected: true, eventType: event.eventType, specimenId };
+  }
+
+  // #1312: one chain-of-custody step, the shape the custody use cases used to
+  // write directly: Sample-[:HAS_CUSTODY_EVENT]->CustodyEvent, and
+  // CustodyEvent-[:FROM]->/-[:TO]->StoragePosition {boxId, position} where the
+  // step has them. Keyed by the outbox eventId, so a re-applied event merges
+  // into the same node.
+  async applyCustodyEventProjection(session, event) {
+    const payload = event.payload || {};
+    const specimenId = normalizeText(payload.specimenId || event.aggregateId);
+    const custodyEventType = normalizeText(payload.custodyEventType);
+    const eventId = normalizeText(event.eventId);
+    if (!specimenId || !custodyEventType || !eventId) {
+      return { skipped: true, eventType: event.eventType, specimenId, reason: 'missing specimenId, custodyEventType or eventId' };
+    }
+    const location = (value) => {
+      const boxId = normalizeText(value?.boxId);
+      const position = normalizeText(value?.position).toUpperCase();
+      return boxId && position ? { boxId, position } : { boxId: null, position: null };
+    };
+    const from = location(payload.from);
+    const to = location(payload.to);
+
+    const cypher = `
+      MERGE (sample:Sample {id: $specimenId})
+      ON CREATE SET sample.createdAt = datetime(), sample.source = $sourceService
+      SET sample.updatedAt = datetime(),
+          sample.barcode = coalesce($barcode, sample.barcode),
+          sample.lastProjectionEventId = $eventId,
+          sample.lastProjectionAt = datetime()
+
+      MERGE (custody:CustodyEvent {id: $eventId})
+      ON CREATE SET custody.createdAt = datetime()
+      SET custody.eventType = $custodyEventType,
+          custody.happenedAt = datetime($happenedAt),
+          custody.actorId = $actorId,
+          custody.reason = $reason,
+          custody.source = 'ISO20387',
+          custody.schemaVersion = $schemaVersion
+
+      MERGE (sample)-[:HAS_CUSTODY_EVENT]->(custody)
+
+      FOREACH (_ IN CASE WHEN $fromBoxId IS NULL THEN [] ELSE [1] END |
+        MERGE (fromPos:StoragePosition {boxId: $fromBoxId, position: $fromPosition})
+        ON CREATE SET fromPos.createdAt = datetime()
+        SET fromPos.updatedAt = datetime()
+        MERGE (custody)-[:FROM]->(fromPos)
+      )
+
+      FOREACH (_ IN CASE WHEN $toBoxId IS NULL THEN [] ELSE [1] END |
+        MERGE (toPos:StoragePosition {boxId: $toBoxId, position: $toPosition})
+        ON CREATE SET toPos.createdAt = datetime()
+        SET toPos.updatedAt = datetime()
+        MERGE (custody)-[:TO]->(toPos)
+      )
+
+      RETURN custody.id AS custodyEventId
+    `;
+
+    await session.run(cypher, {
+      specimenId,
+      barcode: normalizeText(payload.barcode) || null,
+      eventId,
+      custodyEventType,
+      happenedAt: normalizeIso(payload.happenedAt || event.occurredAt) || new Date().toISOString(),
+      actorId: normalizeText(payload.actorId) || null,
+      reason: normalizeText(payload.reason) || null,
+      fromBoxId: from.boxId,
+      fromPosition: from.position,
+      toBoxId: to.boxId,
+      toPosition: to.position,
+      schemaVersion: Number(event.schemaVersion || 1),
+      sourceService: normalizeText(event.sourceService) || 'unknown',
+    });
+    return { projected: true, eventType: event.eventType, specimenId, custodyEventId: eventId };
   }
 
   // #1312: the root sample and every descendant reachable through

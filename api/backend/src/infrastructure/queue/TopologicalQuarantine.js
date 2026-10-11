@@ -3,8 +3,11 @@ const logger = require('../../utils/logger');
 
 /**
  * Fila de Quarentena Topológica (Self-Healing com Redis)
- * - Enfileira eventos de linhagem quando Neo4j falha em modo permissivo.
- * - Reprocessa periodicamente até o Neo4j voltar a responder.
+ * - Enfileira eventos de custódia cujo registro falhou em modo permissivo.
+ * - Reprocessa periodicamente até o registro ser aceito.
+ *
+ * #1312: o reprocessamento registra o evento no outbox do grafo
+ * (LineageRepository.recordCustodyEvent), nunca escreve no Neo4j.
  */
 class TopologicalQuarantine {
   constructor(options = {}) {
@@ -135,10 +138,7 @@ class TopologicalQuarantine {
         throw new Error('LineageRepository indisponível para retry');
       }
 
-      await lineageRepository.validateBeforePersistence({
-        ...item.payload,
-        requireEthicalConsent: item?.payload?.requireEthicalConsent !== false
-      });
+      await lineageRepository.validateBeforePersistence(item.payload);
 
       await lineageRepository.recordCustodyEvent(item.payload);
 

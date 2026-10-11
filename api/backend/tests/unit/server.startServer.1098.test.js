@@ -151,8 +151,8 @@ function stubHappyPathCollaborators() {
     return fakeTelemetryStart();
   };
 
-  function FakeLineageRepository(driver) {
-    this.driver = driver;
+  function FakeLineageRepository(db) {
+    this.db = db;
   }
 
   stub(appPath, fakeApp);

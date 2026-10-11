@@ -232,19 +232,9 @@ async function startServer() {
     // Fila de quarentena topológica (Redis + self-healing)
     try {
       const topologicalQuarantine = new TopologicalQuarantine({
-        getLineageRepository: async () => {
-          if (!app.locals.neo4jDriver) {
-            try {
-              app.locals.neo4jDriver = await connectNeo4j();
-              logger.info('[ISO20387][NEO4J] Driver recuperado para reprocessamento da quarentena');
-            } catch (error) {
-              logger.warn('[ISO20387][NEO4J] Ainda indisponível para worker de quarentena');
-              return null;
-            }
-          }
-
-          return new LineageRepository(app.locals.neo4jDriver);
-        }
+        // #1312: the retry appends to the graph outbox in MongoDB; it needs
+        // no Neo4j driver.
+        getLineageRepository: async () => new LineageRepository(db)
       });
 
       await topologicalQuarantine.startWorker();

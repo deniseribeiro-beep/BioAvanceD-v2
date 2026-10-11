@@ -346,10 +346,7 @@ router.post('/',
       }
 
       const sampleRepository = {
-        create: async (sampleData, options = {}) => sampleService.createSample(db, sampleData, {
-          ...options,
-          neo4jDriver: req.app.locals.neo4jDriver || null
-        }),
+        create: async (sampleData, options = {}) => sampleService.createSample(db, sampleData, options),
         deleteById: async (sampleId) => {
           const samplesCollection = await getCollection(db, 'samples');
           const filter = ObjectId.isValid(sampleId)
@@ -361,7 +358,7 @@ router.post('/',
 
       const registerSampleUseCase = new RegisterSampleUseCase({
         sampleRepository,
-        lineageRepository: new LineageRepository(req.app.locals.neo4jDriver || null),
+        lineageRepository: new LineageRepository(db),
         quarantineService: req.app.locals.neo4jQuarantineService || req.app.locals.topologicalQuarantine || null
       });
 

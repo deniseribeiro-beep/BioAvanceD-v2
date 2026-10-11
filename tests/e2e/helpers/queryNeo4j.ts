@@ -308,8 +308,8 @@ async function readGovernedByConsentIds(sampleId: string): Promise<string[]> {
 /**
  * #1225 fixture: polls Neo4j until `(:Sample {id: sampleId})-[:GOVERNED_BY]->
  * (:EthicalConsent {id: consentId})` exists, or throws once `timeoutMs`
- * elapses. `sampleId` is the key LineageRepository's consent gate MERGEs the
- * sample under (the Mongo _id). Both events are projected asynchronously by
+ * elapses. `sampleId` is the key the sample and custody projections MERGE
+ * the sample under (the Mongo _id). Both events are projected asynchronously by
  * the outbox worker, and either may land first.
  */
 export async function waitForSampleGovernedBy(

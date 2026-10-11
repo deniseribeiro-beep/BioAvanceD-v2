@@ -107,11 +107,10 @@ class RegisterSampleUseCase {
       throw new Error('LineageRepository não injetado');
     }
 
-    if (typeof this.lineageRepository.createSampleNodeWithParent === 'function' && lineagePayload.parentSampleId) {
-      await this.lineageRepository.createSampleNodeWithParent(lineagePayload);
-      return;
-    }
-
+    // #1312: the register step is an outbox append (CUSTODY_EVENT_RECORDED),
+    // never a Neo4j write. The sample create runs no Mongo transaction of
+    // its own here, so the append follows it: a strict-mode failure rolls the
+    // sample back, a permissive one queues the step for retry.
     if (typeof this.lineageRepository.recordCustodyEvent === 'function') {
       await this.lineageRepository.recordCustodyEvent(lineagePayload);
       return;

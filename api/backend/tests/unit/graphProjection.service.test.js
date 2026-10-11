@@ -307,6 +307,53 @@ describe('graphProjection.service', () => {
     });
   });
 
+  describe('appendCustodyEvent', () => {
+    it('emits CUSTODY_EVENT_RECORDED keyed by the sample, inside the caller session', async () => {
+      const outbox = createFakeOutbox();
+      const service = new GraphProjectionService({ outbox });
+      const session = { id: 'mongo-session' };
+
+      await service.appendCustodyEvent({}, {
+        specimenId: { toString: () => 's-1' },
+        barcode: 'BC-1',
+        eventType: 'move',
+        happenedAt: new Date('2026-01-02T03:04:05.000Z'),
+        actorId: 'u-1',
+        reason: 'reorg',
+        from: { boxId: 'b1', position: 'a1' },
+        to: { boxId: 'b2', position: 'B2' },
+        sourceService: 'lineage-repository',
+      }, { session });
+
+      const [, call, options] = outbox.appendEvent.mock.calls[0];
+      expect(options).toEqual({ session });
+      expect(call.eventType).toBe('CUSTODY_EVENT_RECORDED');
+      expect(call.aggregateType).toBe('Sample');
+      expect(call.aggregateId).toBe('s-1');
+      expect(call.sourceService).toBe('lineage-repository');
+      expect(call.payload).toEqual({
+        specimenId: 's-1',
+        barcode: 'BC-1',
+        custodyEventType: 'move',
+        happenedAt: '2026-01-02T03:04:05.000Z',
+        actorId: 'u-1',
+        reason: 'reorg',
+        from: { boxId: 'b1', position: 'A1' },
+        to: { boxId: 'b2', position: 'B2' },
+      });
+    });
+
+    it('accepts a happenedAt string (a step replayed from the retry queue) and nulls a missing location', async () => {
+      const outbox = createFakeOutbox();
+      const service = new GraphProjectionService({ outbox });
+
+      await service.appendCustodyEvent({}, { specimenId: 's-1', eventType: 'register', happenedAt: '2026-01-02T03:04:05.000Z' });
+
+      const call = outbox.appendEvent.mock.calls[0][1];
+      expect(call.payload).toMatchObject({ happenedAt: '2026-01-02T03:04:05.000Z', from: null, to: null, actorId: null, reason: null });
+    });
+  });
+
   describe('appendSpecimenCompromiseEvent', () => {
     it('emits SPECIMEN_COMPROMISED with the excursion and drops any temperature field', async () => {
       const outbox = createFakeOutbox();

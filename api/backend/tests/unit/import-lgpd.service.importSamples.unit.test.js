@@ -175,7 +175,20 @@ function makeDb({ sampleTypeFound = true, sampleOriginFound = true, protocolFoun
     insertMany: vi.fn().mockResolvedValue({ insertedCount: 1 }),
   };
 
+  // #1312: the allocation appends its custody event to the graph outbox (the
+  // event collection and its per-aggregate version counter) in its own
+  // transaction, so a row only imports when that append lands.
+  const graphOutboxCollection = {
+    createIndex: vi.fn().mockResolvedValue(true),
+    updateOne: vi.fn().mockResolvedValue({ acknowledged: true }),
+  };
+  const graphOutboxVersionsCollection = {
+    findOneAndUpdate: vi.fn().mockResolvedValue({ version: 1 }),
+  };
+
   const collections = {
+    graph_projection_outbox: graphOutboxCollection,
+    graph_projection_outbox_aggregate_versions: graphOutboxVersionsCollection,
     import_batches: importBatchesCollection,
     import_staging_records: importStagingRecordsCollection,
     samples: samplesCollection,

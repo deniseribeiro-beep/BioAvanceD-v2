@@ -123,6 +123,37 @@ class GraphProjectionService {
     }, options);
   }
 
+  // #1312 (RF023 AC8): a chain-of-custody step (register, allocate, move,
+  // release), appended by the custody use cases inside their own Mongo
+  // transaction where they run one. Projected as
+  // Sample-[:HAS_CUSTODY_EVENT]->CustodyEvent, with -[:FROM]-> and -[:TO]->
+  // StoragePosition where the step has them. The outbox eventId is the
+  // CustodyEvent id.
+  async appendCustodyEvent(db, payload, options = {}) {
+    const location = (value) => (value?.boxId && value?.position
+      ? { boxId: String(value.boxId), position: String(value.position).toUpperCase() }
+      : null);
+    const happenedAt = payload.happenedAt ? new Date(payload.happenedAt) : new Date();
+    return this.outbox.appendEvent(db, {
+      eventType: 'CUSTODY_EVENT_RECORDED',
+      aggregateType: 'Sample',
+      aggregateId: String(payload.specimenId || ''),
+      payload: {
+        specimenId: payload.specimenId ? String(payload.specimenId) : null,
+        barcode: payload.barcode ? String(payload.barcode) : null,
+        custodyEventType: payload.eventType ? String(payload.eventType) : null,
+        happenedAt: Number.isNaN(happenedAt.getTime()) ? new Date().toISOString() : happenedAt.toISOString(),
+        actorId: payload.actorId ? String(payload.actorId) : null,
+        reason: payload.reason ? String(payload.reason) : null,
+        from: location(payload.from),
+        to: location(payload.to),
+      },
+      sourceService: payload.sourceService || 'graph-projection-service',
+      traceId: payload.traceId || null,
+      schemaVersion: 1,
+    }, options);
+  }
+
   // #1312 (RF023 AC8/AC9, RNF019 C8): a sustained freezer excursion marks the
   // root sample and its descendants COMPROMISED. The event carries the
   // excursion (freezer and start), never a temperature reading.
