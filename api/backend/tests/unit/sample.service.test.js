@@ -5,7 +5,7 @@ const require = createRequire(import.meta.url);
 
 const sampleService = require('../../src/services/sample.service');
 const qualityDomain = require('../../src/services/quality-domain.service');
-const { ObjectId } = require('mongodb');
+const { ObjectId, MongoServerError } = require('mongodb');
 
 const BOX_ID = new ObjectId();
 const RACK_ID = new ObjectId();
@@ -494,22 +494,49 @@ describe('sample.service', () => {
       // A replica-set `hello`, and a session that applies the writes made
       // with it only when the transaction body returns: a throw discards
       // them, as the server's abort does.
+      //
+      // #1369: the counters collection keeps the server's rule too. A counter
+      // document written outside the session while the transaction runs
+      // commits after its snapshot, so the transaction's own later write to
+      // that document raises WriteConflict.
       function makeTransactionalDb() {
         const db = makeDb({ [OUTBOX]: makeCollection(OUTBOX) });
         mockOperationalStorage(db);
         db.client.db = vi.fn(() => ({ command: vi.fn().mockResolvedValue({ setName: 'rs0' }) }));
 
         const committed = { samples: [], sample_movements: [] };
+        const transaction = { inBody: false };
+        const writtenOutside = new Set();
         let staged = [];
         db.session.withTransaction = vi.fn(async (body) => {
           staged = [];
+          writtenOutside.clear();
+          transaction.inBody = true;
           try {
             await body();
           } catch (error) {
             staged = [];
             throw error;
+          } finally {
+            transaction.inBody = false;
           }
           for (const [name, doc] of staged) committed[name].push(doc);
+        });
+        const counterUpdate = db.collections.counters.findOneAndUpdate;
+        db.collections.counters.findOneAndUpdate = vi.fn(async (query, update, options) => {
+          if (transaction.inBody) {
+            if (options?.session !== db.session) {
+              writtenOutside.add(query._id);
+            } else if (writtenOutside.has(query._id)) {
+              throw new MongoServerError({
+                message: 'Caused by :: Write conflict during plan execution and yielding is disabled. :: Please retry your operation or multi-document transaction.',
+                code: 112,
+                codeName: 'WriteConflict',
+                errorLabels: ['TransientTransactionError']
+              });
+            }
+          }
+          return counterUpdate(query, update, options);
         });
         const stagedInsert = (name) => vi.fn(async (doc, options) => {
           if (options?.session === db.session) staged.push([name, doc]);
@@ -518,7 +545,7 @@ describe('sample.service', () => {
         });
         db.collections.samples.insertOne = stagedInsert('samples');
         db.collections.sample_movements.insertOne = stagedInsert('sample_movements');
-        return { db, committed };
+        return { db, committed, transaction };
       }
 
       const outboxCall = (db, eventType) => db.collections[OUTBOX].updateOne.mock.calls
@@ -555,6 +582,58 @@ describe('sample.service', () => {
         );
         expect(committed.samples).toHaveLength(1);
         expect(committed.sample_movements).toHaveLength(2);
+      });
+
+      it('takes the birth movement id in the create\'s session, so the allocation\'s audit id does not conflict with it (#1369)', async () => {
+        const { db, committed } = makeTransactionalDb();
+
+        await expect(sampleService.createSample(db, validSampleData(), { onCreatedInTransaction: vi.fn() }))
+          .resolves.toMatchObject({ _id: 'generated-id' });
+
+        expect(committed.samples).toHaveLength(1);
+        expect(committed.sample_movements).toHaveLength(2);
+        const movementCounterCalls = db.collections.counters.findOneAndUpdate.mock.calls
+          .filter(([query]) => query._id === 'sample_movements');
+        expect(movementCounterCalls).toHaveLength(2);
+        for (const [, , options] of movementCounterCalls) expect(options.session).toBe(db.session);
+        expect(db.collections.counters.__store.sample_movements.seq).toBe(2);
+      });
+
+      it('no document write made while the create\'s transaction runs goes outside its session (#1369)', async () => {
+        const { db, transaction } = makeTransactionalDb();
+        const WRITES = ['insertOne', 'insertMany', 'updateOne', 'updateMany', 'findOneAndUpdate', 'replaceOne', 'deleteOne', 'bulkWrite'];
+        const outside = [];
+        const watched = new WeakSet();
+        const watch = (name, collection) => {
+          if (!collection || watched.has(collection)) return collection;
+          watched.add(collection);
+          for (const method of WRITES) {
+            const original = collection[method];
+            if (typeof original !== 'function') continue;
+            collection[method] = (...args) => {
+              const options = method.startsWith('insert') || method === 'bulkWrite' ? args[1] : args[2];
+              if (transaction.inBody && options?.session !== db.session) outside.push([name, method]);
+              return original.apply(collection, args);
+            };
+          }
+          return collection;
+        };
+        for (const [name, collection] of Object.entries(db.collections)) watch(name, collection);
+        const resolve = db.collection.getMockImplementation();
+        db.collection.mockImplementation((name) => watch(name, resolve(name)));
+
+        await sampleService.createSample(db, validSampleData()).catch(() => {});
+
+        expect(outside).toEqual([]);
+      });
+
+      it('builds the movement indexes before the transaction opens (#1369)', async () => {
+        const { db } = makeTransactionalDb();
+
+        await sampleService.createSample(db, validSampleData());
+
+        expect(db.collections.sample_movements.createIndex.mock.invocationCallOrder[0])
+          .toBeLessThan(db.session.withTransaction.mock.invocationCallOrder[0]);
       });
 
       it('a failed SPECIMEN_UPSERTED append aborts the create: no sample, no movement, no compensating delete', async () => {

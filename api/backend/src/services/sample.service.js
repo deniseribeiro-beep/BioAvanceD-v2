@@ -397,6 +397,7 @@ class SampleService {
         wrapped.statusCode = message.includes('STORAGE_COLLISION') || message.includes('já está alocada') ? 409 : 422;
         return wrapped;
       };
+      const movementsCollection = await getCollection(db, 'sampleMovements');
 
       // RF023 AC3, RNF019 C1: on a deployment that runs transactions, the
       // sample insert, its birth movement, the allocation's writes with its
@@ -410,7 +411,6 @@ class SampleService {
         if (!session) {
           const insertResult = await samplesCollection.insertOne(sample);
 
-          const movementsCollection = await getCollection(db, 'sampleMovements');
           const createMovementID = await SampleMovementModel.generateMovementID(db);
           try {
             await appendMovementWithHashChain(movementsCollection, buildBirthMovement(createMovementID));
@@ -436,8 +436,7 @@ class SampleService {
 
         const insertResult = await samplesCollection.insertOne(sample, { session });
 
-        const movementsCollection = await getCollection(db, 'sampleMovements');
-        const createMovementID = await SampleMovementModel.generateMovementID(db);
+        const createMovementID = await SampleMovementModel.generateMovementID(db, session);
         try {
           await appendMovementWithHashChain(movementsCollection, buildBirthMovement(createMovementID), { session });
         } catch (ledgerError) {

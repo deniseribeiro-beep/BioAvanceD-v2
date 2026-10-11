@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 const Sample = require('../../src/models/Sample');
 const SampleModel = Sample.SampleModel;
@@ -80,6 +80,33 @@ describe('SampleModel', () => {
 });
 
 describe('SampleMovementModel', () => {
+  // #1369: inside a transaction the movement id is taken in the caller's
+  // session; without one the options stay as they were.
+  describe('generateMovementID', () => {
+    const makeCountersDb = () => {
+      const counters = { findOneAndUpdate: vi.fn().mockResolvedValue({ seq: 7 }) };
+      return { db: { collection: vi.fn(() => counters) }, counters };
+    };
+
+    it('bumps the counter in the given session', async () => {
+      const { db, counters } = makeCountersDb();
+      const session = { id: 'session-1' };
+
+      await expect(SampleMovementModel.generateMovementID(db, session)).resolves.toBe(7);
+
+      expect(db.collection).toHaveBeenCalledWith('counters');
+      expect(counters.findOneAndUpdate.mock.calls[0][2]).toStrictEqual({ upsert: true, returnDocument: 'after', session });
+    });
+
+    it('sends no session option when called without one', async () => {
+      const { db, counters } = makeCountersDb();
+
+      await expect(SampleMovementModel.generateMovementID(db)).resolves.toBe(7);
+
+      expect(counters.findOneAndUpdate.mock.calls[0][2]).toStrictEqual({ upsert: true, returnDocument: 'after' });
+    });
+  });
+
   it('valida retirada com destino e propósito', () => {
     const result = SampleMovementModel.validate({
       specimenId: 'SPEC-001',
