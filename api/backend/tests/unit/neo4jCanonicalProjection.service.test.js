@@ -66,7 +66,7 @@ describe('neo4jCanonicalProjection.service', () => {
     it('routes LINEAGE_REGISTERED to applyLineageProjection', async () => {
       const service = new Neo4jCanonicalProjectionService();
       const session = makeSession();
-      const result = await service.applyEvent(session, { eventType: 'LINEAGE_REGISTERED', payload: {} });
+      const result = await service.applyEvent(session, { eventType: 'LINEAGE_REGISTERED', payload: { specimenId: 'c-1', parentSpecimenId: 'p-1' } });
       expect(result.projected).toBe(true);
     });
 
@@ -247,8 +247,44 @@ describe('neo4jCanonicalProjection.service', () => {
     it('falls back to aggregateId for specimenId when payload omits it', async () => {
       const service = new Neo4jCanonicalProjectionService();
       const session = makeSession();
-      const result = await service.applyLineageProjection(session, { aggregateId: 'agg-4', payload: {} });
+      const result = await service.applyLineageProjection(session, { aggregateId: 'agg-4', payload: { parentSpecimenId: 'p-1' } });
       expect(result.specimenId).toBe('agg-4');
+    });
+
+    // #1368: an event without both ends, or with the child as its own parent,
+    // writes no edge.
+    it.each([
+      ['no parent', { specimenId: 'c-1' }],
+      ['no child', { parentSpecimenId: 'p-1' }],
+      ['the child as its own parent', { specimenId: 'c-1', parentSpecimenId: 'c-1' }],
+    ])('skips an event with %s', async (_label, payload) => {
+      const service = new Neo4jCanonicalProjectionService();
+      const session = makeSession();
+      const result = await service.applyLineageProjection(session, { eventType: 'LINEAGE_REGISTERED', payload });
+      expect(result).toMatchObject({ skipped: true, eventType: 'LINEAGE_REGISTERED', reason: 'missing specimenId or parentSpecimenId' });
+      expect(session.run).not.toHaveBeenCalled();
+    });
+
+    // #1368: the edge points child -> parent, the direction the compromise
+    // projection walks backwards from its root to reach the descendants.
+    it('writes DERIVED_FROM from child to parent, the direction the compromise projection walks', async () => {
+      const service = new Neo4jCanonicalProjectionService();
+      const session = makeSession();
+      await service.applyLineageProjection(session, {
+        eventType: 'LINEAGE_REGISTERED',
+        eventId: 'evt-9',
+        payload: { specimenId: 'c-1', parentSpecimenId: 'p-1' },
+      });
+      const [lineageCypher, params] = session.run.mock.calls[0];
+      const lineage = lineageCypher.replace(/\s+/g, ' ');
+      expect(lineage).toContain('MERGE (child:Sample {id: $specimenId})');
+      expect(lineage).toContain('MERGE (parent:Sample {id: $parentSpecimenId})');
+      expect(lineage).toContain('MERGE (child)-[r:DERIVED_FROM]->(parent)');
+      expect(params).toMatchObject({ specimenId: 'c-1', parentSpecimenId: 'p-1', eventId: 'evt-9' });
+
+      await service.applySpecimenCompromiseProjection(session, { eventType: 'SPECIMEN_COMPROMISED', payload: { specimenId: 'p-1' } });
+      const compromise = session.run.mock.calls[1][0].replace(/\s+/g, ' ');
+      expect(compromise).toContain('(root)<-[:DERIVED_FROM*0..]-(descendant:Sample)');
     });
   });
 

@@ -214,6 +214,10 @@ class Neo4jCanonicalProjectionService {
     const payload = event.payload || {};
     const parentSpecimenId = normalizeText(payload.parentSpecimenId);
     const specimenId = normalizeText(payload.specimenId || event.aggregateId);
+    // #1368: an edge needs both ends, and a sample never derives from itself.
+    if (!specimenId || !parentSpecimenId || specimenId === parentSpecimenId) {
+      return { skipped: true, eventType: event.eventType, specimenId, reason: 'missing specimenId or parentSpecimenId' };
+    }
     const cypher = `
         MERGE (child:Sample {id: $specimenId})
       ON CREATE SET child.createdAt = datetime(), child.source = $sourceService
