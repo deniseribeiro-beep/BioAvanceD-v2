@@ -1,8 +1,8 @@
 /**
  * RF002 AC4 (Requisitos v4.0.0): "O Usuário Externo visualiza somente dados e
  * relatórios previamente autorizados." The authorization is a per-report
- * grant in the `access` collection (models/Access.js, the pre-canonical form
- * of dict v2.0.0 AccessGrant, #1202).
+ * grant in the `access` collection (models/Access.js, dict v2.0.0
+ * AccessGrant, #1202, #1201).
  *
  * A caller whose highest active role is hierarchy level 1 (UsuarioExterno)
  * reads a stored report only when an active, unexpired grant names its
@@ -39,8 +39,11 @@ async function resolveReportGrantScope(db, userAccountId, now = new Date()) {
   const level = await resolveUserHierarchyLevel(db, userAccountId);
   if (level !== EXTERNAL_LEVEL) return null;
 
+  // #1201: a grant names its beneficiary under userAccountId (P1X-0239), or
+  // under userId when it was written before the rename.
+  const id = String(userAccountId);
   const grants = await db.collection('access')
-    .find({ userId: String(userAccountId), resourceType: 'report' })
+    .find({ resourceType: 'report', $or: [{ userAccountId: id }, { userId: id }] })
     .toArray();
   const active = grants.filter((grant) => isActive(grant, now));
   return {

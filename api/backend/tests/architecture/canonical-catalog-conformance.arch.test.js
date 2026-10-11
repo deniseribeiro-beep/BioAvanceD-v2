@@ -102,6 +102,7 @@ const ENTITY_TARGETS = {
   PhysicalIdentificationValidationProtocol: () => require('../../src/models/PhysicalIdentificationValidationProtocol').fieldsOf(),
   UserRoleAssignment: () => require('../../src/models/UserRoleAssignment').fieldsOf(),
   UserAccount: () => require('../../src/models/User').fieldsOf(),
+  AccessGrant: () => require('../../src/models/Access').fieldsOf(),
   Session: () => require('../../src/models/Session').fieldsOf(),
   RecoveryCodeSet: () => require('../../src/models/RecoveryCodeSet').fieldsOf(),
 };
@@ -241,6 +242,19 @@ const KNOWN_DRIFT = {
       { key: 'organizationIds', note: 'Deliberate local extension: RF003 AC3 role scope on the user document, set by PUT /api/users/:id and read by the organization reference check; no UserAccount row (UserRoleAssignment.scopeId is the assignment-level field).' },
       { key: 'createdAt', note: 'TODO(#1330): record timestamp with no UserAccount row.' },
       { key: 'updatedAt', note: 'TODO(#1330): record timestamp with no UserAccount row.' }
+    ]
+  },
+  AccessGrant: {
+    absent: [
+      { elementId: 'P1X-0242', field: 'reportTypeLegacy', note: "TODO(#1201): 0..1 Extensão local -- dict-02 names it the alias of the Access model's reportType, which the grant still stores under that name (extra below); the API, the frontend's Access type and the report grant check read it." },
+      { elementId: 'P1X-0244', field: 'accessTypeLegacy', note: "TODO(#1201): 0..1 Extensão local -- dict-02 names it the Access model's 1-4 level, which the grant still stores as accessType (extra below)." }
+    ],
+    extra: [
+      { key: 'reportID', note: 'Deliberate: the API key a grant is created and updated by, and the report id the RF002 AC4 grant check reads first; resourceId (P1X-0241) carries the same value under its canonical name.' },
+      { key: 'reportType', note: 'TODO(#1201): stored name of P1X-0242 reportTypeLegacy (absent above).' },
+      { key: 'accessType', note: 'TODO(#1201): stored name of P1X-0244 accessTypeLegacy (absent above).' },
+      { key: 'createdAt', note: 'TODO(#1201): record timestamp with no AccessGrant row.' },
+      { key: 'updatedAt', note: 'TODO(#1201): record timestamp with no AccessGrant row; the update and the revocation stamp it.' }
     ]
   },
   Session: {

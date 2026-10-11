@@ -28,12 +28,20 @@ const TEMPLATES = [
   { code: 'sensor', handlerKey: 'sensor', templateStatus: 'active' },
 ];
 
+// #1201: a grant names its beneficiary under userAccountId (dict-02
+// P1X-0239); legacyGrant is one written before the rename, under userId.
 function grant(overrides = {}) {
-  return { userId: 'ext-1', resourceType: 'report', reportID: 1, reportType: 'equipment', grantStatus: 'active', expiresAt: null, revokedAt: null, ...overrides };
+  return { userAccountId: 'ext-1', resourceType: 'report', reportID: 1, reportType: 'equipment', grantStatus: 'active', expiresAt: null, revokedAt: null, ...overrides };
+}
+
+function legacyGrant(overrides = {}) {
+  const { userAccountId, ...rest } = grant(overrides);
+  return { ...rest, userId: userAccountId };
 }
 
 function matches(doc, query = {}) {
   return Object.entries(query).every(([key, cond]) => {
+    if (key === '$or') return cond.some((branch) => matches(doc, branch));
     if (cond && typeof cond === 'object' && '$in' in cond) {
       const values = Array.isArray(doc[key]) ? doc[key] : [doc[key]];
       return values.some((value) => cond.$in.includes(value));
@@ -84,6 +92,20 @@ describe('RF002 AC4: GET /api/reports for an external user', () => {
     const res = await request(app).get('/api/reports').set('Authorization', as('ext-1', 1));
     expect(res.status).toBe(200);
     expect(res.body).toEqual([]);
+  });
+
+  it('#1201: lists the report a grant stored under userAccountId names', async () => {
+    app.locals.db = dbFor('ext-1', 1, [grant({ reportID: 2, userAccountId: 'other' }), grant()]);
+    const res = await request(app).get('/api/reports').set('Authorization', as('ext-1', 1));
+    expect(res.status).toBe(200);
+    expect(res.body.map((r) => r.reportID)).toEqual([1]);
+  });
+
+  it('#1201: lists the report a grant written before the rename, under userId, names', async () => {
+    app.locals.db = dbFor('ext-1', 1, [legacyGrant({ reportID: 2, userAccountId: 'other' }), legacyGrant()]);
+    const res = await request(app).get('/api/reports').set('Authorization', as('ext-1', 1));
+    expect(res.status).toBe(200);
+    expect(res.body.map((r) => r.reportID)).toEqual([1]);
   });
 
   it('leaves a Técnico in the same organization unrestricted', async () => {

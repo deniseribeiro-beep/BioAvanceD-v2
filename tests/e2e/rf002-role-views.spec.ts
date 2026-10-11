@@ -1,4 +1,5 @@
 import { test, expect, APIRequestContext } from '@playwright/test';
+import { MongoClient, ObjectId } from 'mongodb';
 import { realLogin, seedRealAuth, RealAuthSession } from './helpers/realAuth';
 import { completeFirstLoginMfa } from './helpers/completeFirstLoginMfa';
 import { deleteOrganizations } from './helpers/listOrganizations';
@@ -12,6 +13,8 @@ import { deleteOrganizations } from './helpers/listOrganizations';
 //        only the authorized-reports card, counting it.
 
 const apiBaseURL = process.env.PLAYWRIGHT_API_BASE_URL;
+const mongoUri = process.env.E2E_MONGO_URI || 'mongodb://localhost:27017?directConnection=true';
+const mongoDbName = process.env.E2E_MONGO_DB || 'bioavanced_test';
 
 test.skip(!apiBaseURL, 'PLAYWRIGHT_API_BASE_URL not set — run via npm run test:e2e:docker');
 
@@ -79,6 +82,25 @@ test.describe('RF002: role views on the real backend', () => {
       data: { reportID: granted, reportType: 'equipment', userId: String(external.user._id) },
     });
     expect(grantRes.ok(), await grantRes.text()).toBeTruthy();
+
+    // #1201: the grant is stored under its dict-02 AccessGrant names
+    // (P1X-0238, P1X-0239, P1X-0243), while the response keeps userId.
+    const grantBody = (await grantRes.json()).data;
+    expect(grantBody.userId).toBe(String(external.user._id));
+    const client = new MongoClient(mongoUri, { serverSelectionTimeoutMS: 10_000 });
+    try {
+      await client.connect();
+      const stored = await client.db(mongoDbName).collection('access').findOne({ _id: new ObjectId(String(grantBody._id)) });
+      expect(stored).not.toBeNull();
+      expect(stored!.userAccountId).toBe(String(external.user._id));
+      expect(stored!.accessGrantId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+      expect(stored!.accessGrantId).toBe(grantBody.accessID);
+      expect(stored!.permissionCodes).toEqual(['viewReports']);
+      expect(stored).not.toHaveProperty('userId');
+      expect(stored).not.toHaveProperty('accessID');
+    } finally {
+      await client.close();
+    }
 
     const list = await request.get(`${apiBaseURL}/api/reports`, { headers: extAuth });
     expect(list.status(), await list.text()).toBe(200);

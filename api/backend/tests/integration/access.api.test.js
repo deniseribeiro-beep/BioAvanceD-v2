@@ -61,6 +61,17 @@ describe('GET /api/access', () => {
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
   });
+
+  // #1201: a grant stored under its dict-02 names is listed under the API's.
+  it('lists a canonical grant under accessID and userId', async () => {
+    const stored = { ...FAKE_ACCESS, accessGrantId: 'g-1', userAccountId: 'u-1', permissionCodes: ['viewReports'] };
+    const coll = createCollectionMock({ find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([stored]) }) });
+    app.locals.db = createDbMock({ access: coll, ...rbacCollections });
+
+    const res = await request(app).get('/api/access').set('Authorization', `Bearer ${makeToken(4)}`);
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual([{ ...FAKE_ACCESS, accessID: 'g-1', userId: 'u-1', permissionCodes: ['viewReports'] }]);
+  });
 });
 
 describe('GET /api/access/:id', () => {
@@ -88,6 +99,18 @@ describe('GET /api/access/:id', () => {
       .set('Authorization', `Bearer ${makeToken(4)}`);
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
+    expect(res.body.data).toEqual(FAKE_ACCESS);
+  });
+
+  it('#1201: returns a canonical grant under accessID and userId', async () => {
+    const coll = createCollectionMock({ findOne: vi.fn().mockResolvedValue({ ...FAKE_ACCESS, accessGrantId: 'g-1', userAccountId: 'u-1' }) });
+    app.locals.db = createDbMock({ access: coll, ...rbacCollections });
+
+    const res = await request(app)
+      .get('/api/access/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(4)}`);
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual({ ...FAKE_ACCESS, accessID: 'g-1', userId: 'u-1' });
   });
 });
 
@@ -124,9 +147,14 @@ describe('POST /api/access', () => {
     const res = await request(app)
       .post('/api/access')
       .set('Authorization', `Bearer ${makeToken(4)}`)
-      .send(VALID_PAYLOAD);
+      .send({ ...VALID_PAYLOAD, userId: 'u-1' });
     expect([200, 201]).toContain(res.status);
     expect(res.body.success).toBe(true);
+    // #1201: the response keeps the API's keys.
+    expect(res.body.data).toMatchObject({ userId: 'u-1', reportID: 42, reportType: 'SampleReport', accessType: 1 });
+    expect(typeof res.body.data.accessID).toBe('string');
+    expect(res.body.data).not.toHaveProperty('userAccountId');
+    expect(res.body.data).not.toHaveProperty('accessGrantId');
   });
 });
 

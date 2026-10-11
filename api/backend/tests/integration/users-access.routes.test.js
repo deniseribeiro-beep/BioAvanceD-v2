@@ -1750,6 +1750,69 @@ describe('Users and Access routes', () => {
     });
   });
 
+  // #1201: dict-02 AccessGrant names (P1X-0238, P1X-0239, P1X-0243) in
+  // storage, the API's accessID/userId in the response.
+  it('#1201: POST /api/access grava userAccountId, accessGrantId e permissionCodes e responde com userId e accessID', async () => {
+    const handler = getHandler(accessRoutes, 'post', '/');
+    accessCollection.insertOne.mockResolvedValue({ insertedId: 'access-4' });
+
+    const req = createRequest({ body: { reportID: 8, reportType: 'equipment', userId: 'user-ext-1' } });
+    req.app.locals.db = db;
+    const res = createResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(201);
+    const written = accessCollection.insertOne.mock.calls[0][0];
+    expect(written).toMatchObject({ userAccountId: 'user-ext-1', permissionCodes: ['viewReports'] });
+    expect(written.accessGrantId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(written).not.toHaveProperty('userId');
+    expect(written).not.toHaveProperty('accessID');
+
+    expect(res.payload.data).toMatchObject({ _id: 'access-4', userId: 'user-ext-1', accessID: written.accessGrantId, permissionCodes: ['viewReports'] });
+    expect(res.payload.data).not.toHaveProperty('userAccountId');
+    expect(res.payload.data).not.toHaveProperty('accessGrantId');
+  });
+
+  it('#1201: PUT /api/access/:id grava userId sob userAccountId e remove o nome antigo', async () => {
+    const handler = getHandler(accessRoutes, 'put', '/:id');
+    accessCollection.updateOne.mockResolvedValue({ matchedCount: 1 });
+
+    const req = createRequest({ params: { id: '507f1f77bcf86cd799439099' }, body: { userId: 'user-ext-2' } });
+    req.app.locals.db = db;
+    const res = createResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    const [, update] = accessCollection.updateOne.mock.calls[0];
+    expect(update.$set.userAccountId).toBe('user-ext-2');
+    expect(update.$set).not.toHaveProperty('userId');
+    expect(update.$unset).toEqual({ userId: '' });
+  });
+
+  it('#1201: GET /api/access responde concessões canônicas e antigas com userId e accessID', async () => {
+    const handler = getHandler(accessRoutes, 'get', '/');
+    accessCollection.find.mockReturnValue({
+      toArray: vi.fn().mockResolvedValue([
+        { _id: 'a-1', accessGrantId: 'g-1', userAccountId: 'u-1', reportID: 1, reportType: 'equipment' },
+        { _id: 'a-2', accessID: 5, userId: 'u-2', reportID: 2, reportType: 'equipment' },
+      ]),
+    });
+
+    const req = createRequest();
+    req.app.locals.db = db;
+    const res = createResponse();
+
+    await handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.payload.data).toEqual([
+      { _id: 'a-1', accessID: 'g-1', userId: 'u-1', reportID: 1, reportType: 'equipment' },
+      { _id: 'a-2', accessID: 5, userId: 'u-2', reportID: 2, reportType: 'equipment' },
+    ]);
+  });
+
   it('#1202: DELETE /api/access/:id revoga a concessão em vez de apagá-la', async () => {
     const handler = getHandler(accessRoutes, 'delete', '/:id');
     accessCollection.updateOne.mockResolvedValue({ matchedCount: 1 });

@@ -23,7 +23,7 @@ router.get('/', authenticate, requirePermission('createUser'), async (req, res) 
 
     return res.status(200).json({
       success: true,
-      data: access
+      data: access.map((grant) => AccessModel.apiViewOf(grant))
     });
   } catch (error) {
     logger.error('Erro ao listar acessos:', error.message);
@@ -58,7 +58,7 @@ router.get('/:id', authenticate, requirePermission('createUser'), async (req, re
 
     return res.status(200).json({
       success: true,
-      data: access
+      data: AccessModel.apiViewOf(access)
     });
   } catch (error) {
     logger.error('Erro ao buscar acesso:', error.message);
@@ -103,7 +103,7 @@ router.post('/', authenticate, requirePermission('createUser'), async (req, res)
     return res.status(201).json({
       success: true,
       message: 'Acesso criado com sucesso',
-      data: { _id: result.insertedId, ...access }
+      data: AccessModel.apiViewOf({ _id: result.insertedId, ...access })
     });
   } catch (error) {
     logger.error('Erro ao criar acesso:', error.message);
@@ -130,9 +130,10 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
 
     // #875: $set used to be built straight from req.body, letting a caller
     // inject arbitrary keys or overwrite fields like accessID. Allowlist to
-    // AccessModel.create()'s own fields; accessID is business identity and
-    // is excluded, updatedAt is server-set here (never caller-supplied).
-    const ALLOWED_ACCESS_UPDATE_FIELDS = ['reportID', 'reportType', 'accessType', 'userId', 'grantedAt', 'expiresAt'];
+    // AccessModel.create()'s own fields; accessID/accessGrantId is business
+    // identity and is excluded, updatedAt is server-set here (never
+    // caller-supplied).
+    const ALLOWED_ACCESS_UPDATE_FIELDS = ['reportID', 'reportType', 'accessType', 'grantedAt', 'expiresAt'];
     const updateFields = {};
     for (const field of ALLOWED_ACCESS_UPDATE_FIELDS) {
       if (Object.prototype.hasOwnProperty.call(req.body, field)) {
@@ -142,11 +143,20 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
     if (Object.prototype.hasOwnProperty.call(updateFields, 'reportID')) {
       updateFields.resourceId = updateFields.reportID;
     }
+    // #1201: the beneficiary arrives as userAccountId or the API's userId and
+    // is stored under userAccountId only (P1X-0239).
+    const update = {};
+    const hasBody = (field) => Object.prototype.hasOwnProperty.call(req.body, field);
+    if (hasBody('userAccountId') || hasBody('userId')) {
+      updateFields.userAccountId = hasBody('userAccountId') ? req.body.userAccountId : req.body.userId;
+      update.$unset = { userId: '' };
+    }
     updateFields.updatedAt = new Date();
+    update.$set = updateFields;
 
     const result = await accessCollection.updateOne(
       { _id: new ObjectId(req.params.id) },
-      { $set: updateFields }
+      update
     );
 
     if (result.matchedCount === 0) {
