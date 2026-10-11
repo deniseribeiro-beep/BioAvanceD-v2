@@ -456,7 +456,10 @@ async function quarantineSamplesByFilter(db, filter, context = {}) {
     }, context.session);
 
     const quantitySnapshot = Number(sample.currentQuantity ?? sample.quantity ?? 0);
-    const movementID = await SampleMovementModel.generateMovementID(db);
+    // #1369: inside the caller's transaction the movement id is taken in its
+    // session, like the append below, so the counter bump is not a
+    // write outside the transaction that conflicts with an in-session one.
+    const movementID = await SampleMovementModel.generateMovementID(db, context.session);
 
     await appendMovementWithHashChain(
       movementsCollection,

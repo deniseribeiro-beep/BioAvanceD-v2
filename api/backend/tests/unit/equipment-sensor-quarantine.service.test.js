@@ -196,7 +196,12 @@ describe('equipment-sensor-quarantine.service', () => {
         undefined
       );
 
-      expect(SampleMovementModel.generateMovementID).toHaveBeenCalledWith(db);
+      // #1369: without a session the counter is bumped with no session, as
+      // before; the model sends the same options for an undefined one.
+      expect(SampleMovementModel.generateMovementID).toHaveBeenCalledTimes(1);
+      const [counterDb, counterSession] = SampleMovementModel.generateMovementID.mock.calls[0];
+      expect(counterDb).toBe(db);
+      expect(counterSession).toBeUndefined();
       expect(sampleMovementLedgerModule.appendMovementWithHashChain).toHaveBeenCalledWith(
         movementsCollection,
         expect.objectContaining({
@@ -482,6 +487,53 @@ describe('equipment-sensor-quarantine.service', () => {
         expect.objectContaining({ specimenId: 'SP-CLOSED' }),
         expect.anything()
       );
+    });
+  });
+
+  // #1369: the automatic quarantine runs inside its caller's transaction when
+  // given a session; its movement id is then drawn in that session, beside
+  // the in-session append, so the counter bump does not write-conflict.
+  describe('inside a session', () => {
+    it("takes the movement id and makes every write in the session it is given", async () => {
+      const session = { id: 'sess-1369' };
+      const sample = { _id: 'S-SESS', specimenId: 'SP-SESS', specimenStatus: 'available', quantity: 3 };
+      const samplesCollection = {
+        find: vi.fn(() => ({ toArray: vi.fn(async () => [sample]) })),
+        updateOne: vi.fn(async () => ({ matchedCount: 1, modifiedCount: 1 }))
+      };
+      const movementsCollection = { insertOne: vi.fn(async () => ({ insertedId: 'M-SESS' })) };
+      const quarantineActionsCollection = { insertOne: vi.fn(async () => ({ insertedId: 'QA-SESS' })) };
+      const decisionsCollection = { insertOne: vi.fn(async () => ({ insertedId: 'D-SESS' })) };
+
+      collectionResolverModule.getCollection.mockImplementation(async (_db, key) => {
+        if (key === 'samples') return samplesCollection;
+        if (key === 'sampleMovements') return movementsCollection;
+        if (key === 'quarantineActions') return quarantineActionsCollection;
+        throw new Error(`unexpected key ${key}`);
+      });
+      const db = {
+        collection: vi.fn((name) => {
+          if (name === 'operationalStateDecisions') return decisionsCollection;
+          throw new Error(`unexpected collection ${name}`);
+        })
+      };
+
+      const result = await service.quarantineByNonconformance(db, {
+        nonconformanceId: 'NC-1369',
+        nonconformanceType: 'process',
+        affectedEntityIds: ['SP-SESS']
+      }, { session });
+
+      expect(result.movements).toBe(1);
+      expect(SampleMovementModel.generateMovementID.mock.calls).toStrictEqual([[db, session]]);
+      expect(sampleMovementLedgerModule.appendMovementWithHashChain).toHaveBeenCalledWith(
+        movementsCollection,
+        expect.objectContaining({ sampleID: 'S-SESS', movementID: 'MOV-1' }),
+        { session }
+      );
+      expect(samplesCollection.updateOne.mock.calls[0][2]).toStrictEqual({ session });
+      expect(quarantineActionsCollection.insertOne.mock.calls[0][1]).toStrictEqual({ session });
+      expect(decisionsCollection.insertOne.mock.calls[0][1]).toStrictEqual({ session });
     });
   });
 });
