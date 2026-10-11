@@ -637,7 +637,7 @@ describe('NotificationService', () => {
   describe('sendConsentSmsFallback', () => {
     it('returns missing_phone failure when phone cannot be resolved', async () => {
       vi.spyOn(logger, 'warn').mockImplementation(() => {});
-      const result = await notificationService.sendConsentSmsFallback({ patientID: 'P-1' }, 'http://link');
+      const result = await notificationService.sendConsentSmsFallback({ participantId: '12345678' }, 'http://link');
       expect(result).toEqual({ channel: 'sms', success: false, reason: 'missing_phone' });
     });
 
@@ -646,7 +646,7 @@ describe('NotificationService', () => {
       delete process.env.ALERT_EMAIL_TO;
       vi.spyOn(logger, 'warn').mockImplementation(() => {});
       const result = await notificationService.sendConsentSmsFallback(
-        { patientID: 'P-1', phone: '11912345678' },
+        { participantId: '12345678', phone: '11912345678' },
         'http://link'
       );
       expect(result).toEqual({ channel: 'sms', success: false, reason: 'missing_sms_fallback_email' });
@@ -656,11 +656,11 @@ describe('NotificationService', () => {
       notificationService.adminEmail = 'admin@example.com';
       const sendEmailSpy = vi.spyOn(notificationService, 'sendEmail').mockResolvedValue({ success: true });
       const result = await notificationService.sendConsentSmsFallback(
-        { patientID: 'P-1', phone: '11912345678' },
+        { participantId: '12345678', phone: '11912345678' },
         'http://link'
       );
       expect(sendEmailSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ to: 'admin@example.com', notificationType: 'RF_CONSENT_SMS_FALLBACK' })
+        expect.objectContaining({ to: 'admin@example.com', notificationType: 'RF_CONSENT_SMS_FALLBACK', metadata: { participantId: '12345678', phone: '+5511912345678' } })
       );
       expect(result).toEqual({ channel: 'sms', success: true, mocked: true, provider: 'resend-email-fallback' });
     });
@@ -669,13 +669,13 @@ describe('NotificationService', () => {
   describe('sendConsentWhatsappFallback', () => {
     it('returns missing_phone failure when phone cannot be resolved', async () => {
       vi.spyOn(logger, 'warn').mockImplementation(() => {});
-      const result = await notificationService.sendConsentWhatsappFallback({ patientID: 'P-1' }, 'http://link');
+      const result = await notificationService.sendConsentWhatsappFallback({ participantId: '12345678' }, 'http://link');
       expect(result).toEqual({ channel: 'whatsapp', success: false, reason: 'missing_phone' });
     });
 
     it('reports a consolidated mocked success when a phone is resolvable (no real WhatsApp send)', async () => {
       const result = await notificationService.sendConsentWhatsappFallback(
-        { patientID: 'P-1', phone: '11912345678' },
+        { participantId: '12345678', phone: '11912345678' },
         'http://link'
       );
       expect(result).toEqual({
