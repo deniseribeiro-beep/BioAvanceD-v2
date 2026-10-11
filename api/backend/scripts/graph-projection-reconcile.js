@@ -83,15 +83,32 @@ async function findSamplesDriftedFromGraph(db, neo4jSession, options = {}) {
     }
   };
 
-  const cursor = db.collection(CANONICAL_COLLECTIONS.samples).find({}, { projection: { _id: 1, participantId: 1 } });
+  const cursor = db.collection(CANONICAL_COLLECTIONS.samples).find({}, { projection: { _id: 1, participantId: 1, specimenId: 1 } });
   let batch = [];
   const flush = async () => {
     if (!batch.length) return;
     const ids = batch.map((sample) => String(sample._id));
+    // #1220: an open StorageAssignment is keyed by the canonical specimenId
+    // or, on legacy rows, by the sample's _id. Both map back to the _id the
+    // graph is keyed on; where a sample has both, the canonical row wins.
+    const keys = batch.flatMap((sample) => [String(sample._id), sample.specimenId].filter(Boolean));
+    const sampleIdByKey = new Map();
+    const canonicalKeys = new Set();
+    for (const sample of batch) {
+      const id = String(sample._id);
+      for (const key of [id, sample.specimenId].filter(Boolean)) sampleIdByKey.set(String(key), id);
+      if (sample.specimenId) canonicalKeys.add(String(sample.specimenId));
+    }
     const openAssignments = await db.collection('storageAssignments')
-      .find({ specimenId: { $in: ids }, removedAt: null }, { projection: { specimenId: 1, boxId: 1, positionCode: 1 } })
+      .find({ specimenId: { $in: keys }, removedAt: null }, { projection: { specimenId: 1, boxId: 1, positionCode: 1 } })
       .toArray();
-    const expectedPosition = new Map(openAssignments.map((a) => [String(a.specimenId), `${a.boxId}/${a.positionCode}`]));
+    const expectedPosition = new Map();
+    for (const a of openAssignments) {
+      const key = String(a.specimenId);
+      const id = sampleIdByKey.get(key);
+      if (!id || (expectedPosition.has(id) && !canonicalKeys.has(key))) continue;
+      expectedPosition.set(id, `${a.boxId}/${a.positionCode}`);
+    }
     const result = await neo4jSession.run(DRIFT_CYPHER, { ids });
     const nodes = new Map(result.records.map((record) => [record.get('id'), {
       donorIds: record.get('donorIds'),

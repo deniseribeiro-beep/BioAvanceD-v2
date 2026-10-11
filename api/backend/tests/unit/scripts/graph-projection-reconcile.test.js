@@ -180,6 +180,29 @@ describe('graph-projection-reconcile', () => {
       expect(drifted.map((entry) => entry.specimenId)).toEqual(['smp-moved', 'smp-released']);
     });
 
+    // #1220: the open assignment may be keyed by the canonical specimenId or,
+    // on a legacy row, by the sample's _id; the graph node is keyed by the _id.
+    const placed = [{ _id: 'smp-canon', specimenId: 'SPC-1' }];
+    const placedNode = { 'smp-canon': { openPositions: ['box-1/A01'] } };
+
+    it('matches a node to the open assignment keyed by the canonical specimenId', async () => {
+      const { drifted } = await findSamplesDriftedFromGraph(
+        makeDb(placed, [{ specimenId: 'SPC-1', boxId: 'box-1', positionCode: 'A01' }]),
+        makeNeo4jSession(placedNode), { pseudonymizeDonorId },
+      );
+
+      expect(drifted).toEqual([]);
+    });
+
+    it('still matches a node to a legacy open assignment keyed by the sample _id', async () => {
+      const { drifted } = await findSamplesDriftedFromGraph(
+        makeDb(placed, [{ specimenId: 'smp-canon', boxId: 'box-1', positionCode: 'A01' }]),
+        makeNeo4jSession(placedNode), { pseudonymizeDonorId },
+      );
+
+      expect(drifted).toEqual([]);
+    });
+
     it('plans a repair only where an event can make it, and a rebuild for what no event removes', () => {
       expect(planDriftRepair({ donor: { expected: 'D1', actual: [] } })).toEqual({ actions: ['specimen'], needsRebuild: false });
       expect(planDriftRepair({ donor: { expected: 'D1', actual: ['D9'] } })).toEqual({ actions: ['specimen'], needsRebuild: true });
