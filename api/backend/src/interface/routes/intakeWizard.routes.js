@@ -134,6 +134,12 @@ async function enforcePersistedGovernanceStatus(req, body) {
 
   const samplesCollection = await getCollection(db, 'samples');
   const existingSample = await samplesCollection.findOne(query);
+  // RF026 AC7: closed is final. A closed specimen keeps its status: nothing
+  // is written, applied, released or recorded, and the response is built
+  // from the intake body alone, as when persistence is unavailable.
+  if (existingSample && SampleModel.isTerminalSpecimen(existingSample)) {
+    return null;
+  }
   const wasQuarantined = existingSample ? SampleModel.resolveSpecimenStatus(existingSample) === 'quarantined' : false;
 
   // #540: status/currentStatus are legacy fields canonical-data-contract-v1.md

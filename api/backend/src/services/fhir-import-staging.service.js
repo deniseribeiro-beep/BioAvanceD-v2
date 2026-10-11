@@ -1056,6 +1056,13 @@ async function commitBatch(db, batchIdRaw) {
     const existingSample = await samples.findOne({ specimenId: normalized.specimenId });
     const previousStatus = existingSample ? SampleModel.resolveSpecimenStatus(existingSample) : null;
     const wasQuarantined = previousStatus === 'quarantined';
+    // RF026 AC7: closed is final; a re-commit leaves an existing closed
+    // specimen's status and quarantine reason as they are, and applies,
+    // releases and records nothing for it.
+    const keepsTerminalStatus = Boolean(existingSample) && SampleModel.isTerminalSpecimen(existingSample);
+    const statusFields = keepsTerminalStatus
+      ? {}
+      : { quarantineReason: workflow.quarantineReason, specimenStatus };
 
     const upsertResult = await samples.updateOne(
       { specimenId: normalized.specimenId },
@@ -1079,8 +1086,7 @@ async function commitBatch(db, batchIdRaw) {
         },
         $set: {
           consentStatus: workflow.consentStatus,
-          quarantineReason: workflow.quarantineReason,
-          specimenStatus,
+          ...statusFields,
           importBatchId: String(batchId),
           importedAt,
           importedBy,
@@ -1127,7 +1133,7 @@ async function commitBatch(db, batchIdRaw) {
         }
       }
     }
-    if (committedSample) {
+    if (committedSample && !keepsTerminalStatus) {
       if (specimenStatus === 'quarantined' && !wasQuarantined) {
         await quarantineActionService.recordAction(db, {
           specimenIds: [quarantineActionService.canonicalSpecimenId(committedSample)],
@@ -1141,7 +1147,7 @@ async function commitBatch(db, batchIdRaw) {
     // RF006 AC7: a re-commit that changes an existing specimen's status
     // records the change, append-only. A new specimen's first status is its
     // creation, not a change.
-    if (existingSample) {
+    if (existingSample && !keepsTerminalStatus) {
       await operationalStateDecisionService.recordStatusChange(db, {
         specimenId: normalized.specimenId,
         previousStatus,
@@ -1247,6 +1253,13 @@ async function attachExternalDocument(db, batchIdRaw, recordIdRaw, options = {})
     const existingSample = await samples.findOne({ specimenId: normalized.specimenId }, dbOptions);
     const previousStatus = existingSample ? SampleModel.resolveSpecimenStatus(existingSample) : null;
     const wasQuarantined = previousStatus === 'quarantined';
+
+    // RF026 AC7: closed is final; attaching a document does not reopen it.
+    if (existingSample && SampleModel.isTerminalSpecimen(existingSample)) {
+      const error = new Error(`Amostra em ${previousStatus} não admite mudança de specimenStatus; documentação externa não anexada.`);
+      error.statusCode = 422;
+      throw error;
+    }
 
     const sampleUpdateResult = await samples.updateOne(
       { specimenId: normalized.specimenId },

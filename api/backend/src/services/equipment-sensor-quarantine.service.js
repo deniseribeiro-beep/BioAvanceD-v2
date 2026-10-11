@@ -1,11 +1,15 @@
 const SampleMovementModel = require('../models/SampleMovement');
-const { SampleModel } = require('../models/Sample');
+const { SampleModel, TERMINAL_SPECIMEN_STATUSES } = require('../models/Sample');
 const { appendMovementWithHashChain } = require('../utils/sampleMovementLedger');
 const { getCollection } = require('../utils/collectionResolver');
 const { ensureStorageContainerIndexes, ensureStorageBoxIndexes } = require('../utils/storageIndexes');
 const quarantineActionService = require('./quarantine-action.service');
 const operationalStateDecisionService = require('./operationalStateDecision.service');
 const logger = require('../utils/logger');
+
+// RF026 AC7: the stored values SampleModel.isTerminalSpecimen treats as final
+// -- closed, plus the not-yet-migrated destroyed/disposed -- for a query filter.
+const TERMINAL_SPECIMEN_STATUS_VALUES = [...TERMINAL_SPECIMEN_STATUSES, 'destroyed', 'disposed'];
 
 // #883: routine "Maintenance"/"Inactive" states are deliberately excluded
 // here. A sample-bearing freezer taken out of service for routine
@@ -373,12 +377,15 @@ async function quarantineSamplesByFilter(db, filter, context = {}) {
   // #540: the "not already quarantined" guard reads the canonical
   // specimenStatus field, not the legacy status/currentStatus pair (no
   // longer written below either).
+  // RF026 AC7: a closed specimen (or a not-yet-migrated destroyed/disposed
+  // one) is final, so a quarantine never selects it.
   const samples = await samplesCollection
     .find(
       {
         $and: [
           filter,
-          { specimenStatus: { $ne: 'quarantined' } }
+          { specimenStatus: { $ne: 'quarantined' } },
+          { specimenStatus: { $nin: TERMINAL_SPECIMEN_STATUS_VALUES } }
         ]
       },
       queryOptions
@@ -393,6 +400,11 @@ async function quarantineSamplesByFilter(db, filter, context = {}) {
   let movements = 0;
 
   for (const sample of samples) {
+    // RF026 AC7: the query excludes terminal specimens; this also skips one
+    // whose stored value differs only in case or spacing.
+    if (SampleModel.isTerminalSpecimen(sample)) {
+      continue;
+    }
     const sampleId = String(sample._id);
     const previousStatus = SampleModel.resolveSpecimenStatus(sample);
     const specimenStatus = 'quarantined';

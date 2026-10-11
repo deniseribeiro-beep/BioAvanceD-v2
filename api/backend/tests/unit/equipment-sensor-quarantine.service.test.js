@@ -426,4 +426,62 @@ describe('equipment-sensor-quarantine.service', () => {
       expect(collectionResolverModule.getCollection).not.toHaveBeenCalled();
     });
   });
+
+  // RF026 AC7: closed is final. A bulk quarantine never selects a closed
+  // specimen and, should one still reach it, moves it nowhere and records no
+  // OperationalStateDecision for it; an open specimen beside it is still
+  // quarantined.
+  describe('a closed specimen', () => {
+    it('is excluded from the quarantine query and is neither moved nor given a decision, while an open one is quarantined', async () => {
+      const closedSample = { _id: 'S-CLOSED', specimenId: 'SP-CLOSED', specimenStatus: 'closed', quantity: 0 };
+      const openSample = { _id: 'S-OPEN', specimenId: 'SP-OPEN', specimenStatus: 'available', quantity: 2 };
+      const samplesCollection = {
+        // Returns both, as a read racing a close could: the loop must still skip it.
+        find: vi.fn(() => ({ toArray: vi.fn(async () => [closedSample, openSample]) })),
+        updateOne: vi.fn(async () => ({ matchedCount: 1, modifiedCount: 1 }))
+      };
+      const movementsCollection = { insertOne: vi.fn(async () => ({ insertedId: 'M-NC' })) };
+      const quarantineActionsCollection = { insertOne: vi.fn(async () => ({ insertedId: 'QA-NC' })) };
+      const decisionsCollection = { insertOne: vi.fn(async () => ({ insertedId: 'D-NC' })) };
+
+      collectionResolverModule.getCollection.mockImplementation(async (_db, key) => {
+        if (key === 'samples') return samplesCollection;
+        if (key === 'sampleMovements') return movementsCollection;
+        if (key === 'quarantineActions') return quarantineActionsCollection;
+        throw new Error(`unexpected key ${key}`);
+      });
+      const db = {
+        collection: vi.fn((name) => {
+          if (name === 'operationalStateDecisions') return decisionsCollection;
+          throw new Error(`unexpected collection ${name}`);
+        })
+      };
+
+      const result = await service.quarantineByNonconformance(db, {
+        nonconformanceId: 'NC-1',
+        nonconformanceType: 'process',
+        affectedEntityIds: ['SP-CLOSED', 'SP-OPEN']
+      });
+
+      const query = samplesCollection.find.mock.calls[0][0];
+      expect(query.$and).toContainEqual({ specimenStatus: { $nin: expect.arrayContaining(['closed', 'destroyed', 'disposed']) } });
+
+      expect(result.quarantined).toBe(1);
+      expect(samplesCollection.updateOne).toHaveBeenCalledTimes(1);
+      expect(samplesCollection.updateOne).toHaveBeenCalledWith(
+        { _id: 'S-OPEN' },
+        { $set: expect.objectContaining({ specimenStatus: 'quarantined' }) },
+        undefined
+      );
+      expect(decisionsCollection.insertOne).toHaveBeenCalledTimes(1);
+      expect(decisionsCollection.insertOne).toHaveBeenCalledWith(
+        expect.objectContaining({ specimenId: 'SP-OPEN', newStatus: 'quarantined' }),
+        undefined
+      );
+      expect(decisionsCollection.insertOne).not.toHaveBeenCalledWith(
+        expect.objectContaining({ specimenId: 'SP-CLOSED' }),
+        expect.anything()
+      );
+    });
+  });
 });

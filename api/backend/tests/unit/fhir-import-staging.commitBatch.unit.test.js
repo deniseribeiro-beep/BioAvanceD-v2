@@ -185,4 +185,30 @@ describe('fhir-import-staging.service#commitBatch — ParticipantIdentity dual-w
     const identities = db.collections.participantIdentities.docs.filter((doc) => doc.participantId === 'PART-563');
     expect(identities).toHaveLength(1);
   });
+
+  // RF026 AC7: closed is final. A re-commit over an existing closed specimen
+  // leaves its status alone and records no OperationalStateDecision; over an
+  // open one it still moves the status and records the change.
+  it('leaves an existing closed specimen closed and records no decision for it', async () => {
+    await db.collection('samples').insertOne({ specimenId: 'SPEC-563', participantId: 'PART-563', specimenStatus: 'closed' });
+
+    const result = await fhirImportStagingService.commitBatch(db, batchId);
+
+    expect(result.committed).toBe(1);
+    const sample = db.collections.samples.docs.find((doc) => doc.specimenId === 'SPEC-563');
+    expect(sample.specimenStatus).toBe('closed');
+    expect(db.collections.operationalStateDecisions?.insertOne ?? vi.fn()).not.toHaveBeenCalled();
+    expect(db.collections.quarantineActions?.insertOne ?? vi.fn()).not.toHaveBeenCalled();
+  });
+
+  it('still moves an existing open specimen and records the decision', async () => {
+    await db.collection('samples').insertOne({ specimenId: 'SPEC-563', participantId: 'PART-563', specimenStatus: 'reserved' });
+
+    await fhirImportStagingService.commitBatch(db, batchId);
+
+    const sample = db.collections.samples.docs.find((doc) => doc.specimenId === 'SPEC-563');
+    expect(['available', 'quarantined']).toContain(sample.specimenStatus);
+    const [decision] = db.collections.operationalStateDecisions.insertOne.mock.calls[0];
+    expect(decision).toMatchObject({ specimenId: 'SPEC-563', previousStatus: 'reserved', newStatus: sample.specimenStatus });
+  });
 });

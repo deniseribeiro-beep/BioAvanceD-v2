@@ -124,6 +124,35 @@ describe('fhir-import-staging.service#attachExternalDocument -- validation gate 
     expect(sample.specimenStatus).toBe('available');
   });
 
+  // RF026 AC7: closed is final; attaching a document does not reopen it.
+  it('refuses a closed specimen with 422, leaves it closed and the record uncommitted, and records no decision', async () => {
+    const { batchId, recordId } = await seedFhirBatch(db);
+    await db.collection('samples').insertOne({ specimenId: 'SPEC-801', specimenStatus: 'closed' });
+
+    await expect(
+      fhirImportStagingService.attachExternalDocument(db, batchId, recordId, { userID: 'op-1' })
+    ).rejects.toMatchObject({ statusCode: 422 });
+
+    const sample = db.collections.samples.docs.find((doc) => doc.specimenId === 'SPEC-801');
+    expect(sample.specimenStatus).toBe('closed');
+    expect(sample.consentStatus).toBeUndefined();
+    expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
+    expect(db.collections.import_staging_records.docs[0].status).toBe(fhirImportStagingService.STATUS.NEEDS_REVIEW);
+    expect(db.collections.operationalStateDecisions?.insertOne ?? vi.fn()).not.toHaveBeenCalled();
+  });
+
+  it('still releases an open quarantined specimen and records the decision', async () => {
+    const { batchId, recordId } = await seedFhirBatch(db);
+    await db.collection('samples').insertOne({ specimenId: 'SPEC-801', specimenStatus: 'quarantined' });
+
+    await fhirImportStagingService.attachExternalDocument(db, batchId, recordId, { userID: 'op-1' });
+
+    const sample = db.collections.samples.docs.find((doc) => doc.specimenId === 'SPEC-801');
+    expect(sample.specimenStatus).toBe('available');
+    const [decision] = db.collections.operationalStateDecisions.insertOne.mock.calls[0];
+    expect(decision).toMatchObject({ specimenId: 'SPEC-801', previousStatus: 'quarantined', newStatus: 'available' });
+  });
+
   it('refuses when the samples.updateOne write matches nothing, and does not leave the record COMMITTED', async () => {
     const { batchId, recordId } = await seedFhirBatch(db);
     // Deliberately no matching `samples` document for SPEC-801.

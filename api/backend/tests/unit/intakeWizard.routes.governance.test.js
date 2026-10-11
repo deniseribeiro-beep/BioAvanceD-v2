@@ -407,6 +407,54 @@ describe('intakeWizard.routes.js (interface wrapper / governance guard)', () => 
     expect(res.body.sample.quarantineReason).toBe('LEFTOVER_NOTE');
   });
 
+  // RF026 AC7: closed is final. The governance write leaves a closed specimen
+  // as it is and records no decision; an open one is still moved.
+  it('does not move a closed specimen and records no decision or QuarantineAction for it', async () => {
+    const existingSample = { _id: 'sample-c', specimenId: 'spec-c', specimenStatus: 'closed' };
+    const samplesCollection = buildSamplesCollection({ existingSample });
+    const quarantineActionsCollection = buildQuarantineActionsCollection();
+    const decisionsCollection = buildDecisionsCollection();
+    const getCollectionImpl = buildGetCollectionImpl({ samplesCollection, quarantineActionsCollection, decisionsCollection });
+    const router = loadRouter({ getCollectionImpl });
+    const app = buildApp(router, {});
+
+    const res = await request(app).post('/api/intake-wizard').send({
+      success: true,
+      sample: { specimenId: 'spec-c' },
+      consent: { active: false, reason: 'PENDING_SIGNATURE' },
+    });
+
+    expect(res.status).toBe(200);
+    expect(samplesCollection.updateOne).not.toHaveBeenCalled();
+    expect(quarantineActionsCollection.insertOne).not.toHaveBeenCalled();
+    expect(decisionsCollection.insertOne).not.toHaveBeenCalled();
+  });
+
+  it('still moves an open specimen under the same request and records the decision', async () => {
+    const existingSample = { _id: 'sample-o', specimenId: 'spec-o', specimenStatus: 'available' };
+    const samplesCollection = buildSamplesCollection({ existingSample });
+    const decisionsCollection = buildDecisionsCollection();
+    const getCollectionImpl = buildGetCollectionImpl({ samplesCollection, decisionsCollection });
+    const router = loadRouter({ getCollectionImpl });
+    const app = buildApp(router, {});
+
+    await request(app).post('/api/intake-wizard').send({
+      success: true,
+      sample: { specimenId: 'spec-o' },
+      consent: { active: false, reason: 'PENDING_SIGNATURE' },
+    });
+
+    expect(samplesCollection.updateOne).toHaveBeenCalledWith(
+      { $or: [{ specimenId: 'spec-o' }] },
+      expect.objectContaining({ $set: expect.objectContaining({ specimenStatus: 'quarantined' }) })
+    );
+    expect(decisionsCollection.insertOne.mock.calls[0][0]).toMatchObject({
+      specimenId: 'spec-o',
+      previousStatus: 'available',
+      newStatus: 'quarantined',
+    });
+  });
+
   it('builds a safe sample summary that strips fields not on the allow-list and preserves numeric/zero rcs_score', async () => {
     const router = loadRouter();
     const app = buildApp(router, {});
