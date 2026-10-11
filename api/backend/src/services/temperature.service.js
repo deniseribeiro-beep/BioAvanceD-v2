@@ -9,7 +9,7 @@ const { applyOrganizationScopeFilter } = require('./rbac-assignment.service');
 // scheduler owns missing/stale readings; this module owns the threshold
 // breach.
 const { ALERT_TYPES, resolveActiveAlert, ensureActiveAlert } = require('./alertLifecycle.service');
-const { readingIdentityOf } = require('./telemetryReadingContract');
+const { readingIdentityOf, screenReading } = require('./telemetryReadingContract');
 
 // #1317: a client idempotencyKey is unique per sensor. Latched per collection
 // name before the await, like the custody indexes: a persistent failure is
@@ -82,6 +82,11 @@ class TemperatureService {
         const stored = await temperaturesCollection.findOne(replayFilter);
         if (stored) return { ...stored, replayed: true };
       }
+
+      // RF009 AC7 (#1317): a clock drift or an implausible value is recorded
+      // as a TelemetryValidationIssue; an implausible value is a 422 with
+      // nothing stored.
+      await screenReading(db, identity, temperatureData);
 
       const temperature = { ...TemperatureModel.create(temperatureData), ...identity };
 

@@ -13,7 +13,7 @@ require('../models/TemperaturePolicy.schema');
 // throws "Schema hasn't been registered for model \"Device\"" otherwise.
 require('../models/Device.schema');
 const { saveTelemetryPoint } = require('../services/saveTelemetryPoint');
-const { readingIdentityOf } = require('../services/telemetryReadingContract');
+const { readingIdentityOf, screenReading } = require('../services/telemetryReadingContract');
 const { sendCriticalAlertEmail } = require('../services/sendCriticalAlertEmail');
 const TemperatureIncidentModel = require('../models/TemperatureIncident');
 const EnvironmentalExcursionModel = require('../models/EnvironmentalExcursion');
@@ -256,6 +256,9 @@ async function ingestTelemetry(req, res) {
     let identity;
     try {
       identity = readingIdentityOf(req.body || {}, new Date(), { ingestionService: 'iot-api' });
+      // RF009 AC7: a drift or an implausible value is recorded as a
+      // TelemetryValidationIssue; an implausible value is a 422 here.
+      await screenReading(connectMongoDB, identity, req.body || {});
     } catch (error) {
       res.locals.auditReason = error.auditReason || 'invalid_payload';
       return res.status(error.statusCode || 422).json({ success: false, error: error.message });

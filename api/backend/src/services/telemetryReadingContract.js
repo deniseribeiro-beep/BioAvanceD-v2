@@ -36,8 +36,24 @@ const { createHash, randomUUID } = require('crypto');
  *   reaches the services yet.
  */
 const { CANONICAL_MODEL_RELEASE_ID } = require('../foundation/readiness');
+const TemperatureModel = require('../models/Temperature');
+const TelemetryIngestionEventModel = require('../models/TelemetryIngestionEvent');
+const TelemetryValidationIssueModel = require('../models/TelemetryValidationIssue');
+const logger = require('../utils/logger');
 
 const CLOCK_SKEW_TOLERANCE_MS = 5 * 60 * 1000;
+// RF009 AC7: a temperature outside this range, in Celsius, is not a
+// physically possible reading of a storage environment. The floor is
+// absolute zero. The ceiling is `[inference]`: no repo constant or profile
+// names one, and 150 °C is far above any storage, transport or incubation
+// set point (the coldest is liquid nitrogen, -196 °C), so a value past it is
+// a sensor fault, not an excursion. Policy limits, not this range, decide
+// what an excursion is.
+const ABSOLUTE_ZERO_CELSIUS = -273.15;
+const MAX_PLAUSIBLE_CELSIUS = 150;
+// RF009 AC9's protocols, by the ingestion path that received the reading.
+// `[inference]` the queued stream path (`iot-queue`) is the approved adapter.
+const PROTOCOL_BY_SERVICE = { mqtt: 'mqtt', 'iot-api': 'https', 'temperature-api': 'https', 'iot-queue': 'adapter' };
 const MAX_IDEMPOTENCY_KEY_LENGTH = 200;
 const TELEMETRY_READING_SCHEMA_VERSION = 'telemetry.reading.v1';
 
@@ -123,4 +139,109 @@ function readingIdentityOf(payload, receivedAt = new Date(), { ingestionService 
   };
 }
 
-module.exports = { readingIdentityOf, canonicalJson, CLOCK_SKEW_TOLERANCE_MS, MAX_IDEMPOTENCY_KEY_LENGTH, TELEMETRY_READING_SCHEMA_VERSION };
+/**
+ * RF009 AC7 (#1317): the TelemetryValidationIssues a reading carries, as
+ * drafts without their ingestion event.
+ *
+ * - A clock drift is quarantined: the reading is still stored and its
+ *   excursion check still runs, since cold-chain availability wins over
+ *   refusing a reading and an excursion is never silenced. The issue, and
+ *   the point's clockStatus tag, flag it.
+ * - A value that is not a finite number, or a temperature outside the
+ *   plausible range, is rejected: it is a sensor fault, not a measurement,
+ *   and storing it would feed a false number into excursion checks and
+ *   exposure statistics. It is never stored as a zero, so the reading is
+ *   a gap the missing-reading monitoring sees.
+ * A payload without a value is left to the path's own required-field check.
+ */
+function validationIssuesOf(identity, payload = {}) {
+  const issues = [];
+  if (identity?.clockStatus === 'drift') {
+    issues.push({
+      issueCode: 'clock_drift',
+      severity: 'error',
+      fieldPath: 'observedAt',
+      details: `observedAt ${identity.observedAt.toISOString()} difere de receivedAt ${identity.receivedAt.toISOString()} além da tolerância de ${CLOCK_SKEW_TOLERANCE_MS / 60000} minutos`,
+      disposition: 'quarantined',
+    });
+  }
+
+  const fieldPath = payload.temperatureValue !== undefined ? 'temperatureValue' : 'temperature';
+  const raw = payload[fieldPath];
+  if (raw !== undefined && raw !== null) {
+    const value = typeof raw === 'number' ? raw : Number(raw);
+    const unit = payload.temperatureUnit || '°C';
+    const celsius = TemperatureModel.toCelsius(value, unit);
+    if (!Number.isFinite(value)) {
+      issues.push({
+        issueCode: 'invalid_value', severity: 'error', fieldPath, details: `${fieldPath} não é um número finito`, disposition: 'rejected',
+      });
+    } else if (celsius < ABSOLUTE_ZERO_CELSIUS || celsius > MAX_PLAUSIBLE_CELSIUS) {
+      issues.push({
+        issueCode: 'invalid_value',
+        severity: 'error',
+        fieldPath,
+        details: `${fieldPath} ${value} ${unit} está fora da faixa fisicamente plausível (${ABSOLUTE_ZERO_CELSIUS} a ${MAX_PLAUSIBLE_CELSIUS} °C)`,
+        disposition: 'rejected',
+      });
+    }
+  }
+  return issues;
+}
+
+/**
+ * Records a reading's validation issues and decides its fate. A reading
+ * with no issue writes nothing. Otherwise one TelemetryIngestionEvent and
+ * its TelemetryValidationIssues are written to MongoDB; a rejected reading
+ * then throws a 422 with nothing stored, and a quarantined one returns its
+ * issues and goes on to be stored. A failed issue write is logged and does
+ * not change the reading's fate.
+ */
+async function screenReading(db, identity, payload = {}) {
+  const drafts = validationIssuesOf(identity, payload);
+  if (!drafts.length) return [];
+
+  const rejected = drafts.filter((draft) => draft.disposition === 'rejected');
+  const ingestionEventId = randomUUID();
+  const issues = drafts.map((draft) => TelemetryValidationIssueModel.create({ ...draft, ingestionEventId }));
+  const event = TelemetryIngestionEventModel.create({
+    telemetryIngestionEventId: ingestionEventId,
+    sourceEventId: identity.sourceEventId,
+    protocol: PROTOCOL_BY_SERVICE[identity.ingestionService] || 'https',
+    receivedAt: identity.receivedAt,
+    validationStatus: rejected.length ? 'rejected' : 'quarantined',
+    telemetryReadingId: rejected.length ? null : identity.telemetryReadingId,
+    issueIds: issues.map((issue) => issue.telemetryValidationIssueId),
+    payloadHash: identity.payloadHash,
+  });
+
+  try {
+    // `db` may be a function resolving it, so a path that opens its
+    // connection lazily opens it only for a reading with an issue.
+    const store = typeof db === 'function' ? await db() : db;
+    await store.collection('telemetryIngestionEvents').insertOne(event);
+    await store.collection('telemetryValidationIssues').insertMany(issues);
+  } catch (error) {
+    logger.error(`[ISO20387][TELEMETRY] Falha ao registrar TelemetryValidationIssue: ${error.message || error}`);
+  }
+
+  if (rejected.length) {
+    const error = validationError(rejected.map((issue) => issue.details).join('; '));
+    error.auditReason = 'invalid_value';
+    error.details = rejected.map((issue) => issue.details);
+    throw error;
+  }
+  return issues;
+}
+
+module.exports = {
+  readingIdentityOf,
+  validationIssuesOf,
+  screenReading,
+  canonicalJson,
+  CLOCK_SKEW_TOLERANCE_MS,
+  MAX_IDEMPOTENCY_KEY_LENGTH,
+  TELEMETRY_READING_SCHEMA_VERSION,
+  ABSOLUTE_ZERO_CELSIUS,
+  MAX_PLAUSIBLE_CELSIUS,
+};

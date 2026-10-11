@@ -1,7 +1,7 @@
 const logger = require('../utils/logger');
 const { getQueue } = require('../config/queue');
 const influxTelemetryWriteRepository = require('../infrastructure/persistence/influxdb/InfluxTelemetryWriteRepository');
-const { readingIdentityOf } = require('./telemetryReadingContract');
+const { readingIdentityOf, screenReading } = require('./telemetryReadingContract');
 
 /**
  * Serviço de IoT Streaming para Temperature Control
@@ -183,6 +183,9 @@ class IoTStreamingService {
       // copy, and a failed write throws with nothing stored.
       const { source: _source, createdAt: _createdAt, updatedAt: _updatedAt, ...received } = temperatureData;
       const identity = readingIdentityOf(received, new Date(), { ingestionService: temperatureData.source === 'mqtt' ? 'mqtt' : 'iot-queue' });
+      // RF009 AC7: a drift or an implausible value is recorded as a
+      // TelemetryValidationIssue; an implausible value throws a 422 here.
+      await screenReading(db, identity, received);
       const reading = { ...temperatureData, ...identity, timestamp: identity.observedAt };
       reading.persistedAt = await influxTelemetryWriteRepository.writeTemperatureReadingNow(reading);
 
