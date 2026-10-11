@@ -828,39 +828,47 @@ describe('sample.service', () => {
       expect(db.collections.samples.updateOne).toHaveBeenCalledTimes(1);
       const [, updateArg] = db.collections.samples.updateOne.mock.calls[0];
       expect(updateArg.$set.currentQuantity).toBe(0);
-      // #405: specimenStatus is the source of truth; the legacy
-      // lifecycleStatus/availabilityStatus dual-write was removed in #408.
-      expect(updateArg.$set.specimenStatus).toBe('depleted');
+      // RF006 AC2/AC3: a withdrawal moves quantityStatus; specimenStatus is
+      // not written. The legacy lifecycleStatus/availabilityStatus
+      // dual-write was removed in #408.
+      expect(updateArg.$set.quantityStatus).toBe('depleted');
+      expect(updateArg.$set.specimenStatus).toBeUndefined();
       expect(updateArg.$set.lifecycleStatus).toBeUndefined();
       expect(updateArg.$set.availabilityStatus).toBeUndefined();
+      expect(result).toMatchObject({ newStatus: 'available', quantityStatus: 'depleted' });
     });
 
-    it('appends an OperationalStateDecision for the status change, in the transaction, and none when the status stays (RF006 AC7, #1315)', async () => {
+    it('moves quantityStatus, not specimenStatus, and appends no OperationalStateDecision (RF006 AC2/AC3/AC7)', async () => {
       const db = makeDb();
-      db.collections.samples.findOne.mockResolvedValue(existingSample({ specimenId: 'SPC-1' }));
-      const result = await sampleService.withdrawSample(db, 'sample-1', {
+      db.collections.samples.findOne.mockResolvedValue(existingSample({ specimenId: 'SPC-1', specimenStatus: 'available' }));
+      await sampleService.withdrawSample(db, 'sample-1', {
         withdrawalType: 'Total',
         withdrawalResponsible: 'Jane Doe',
         linkedProject: 'ProjectX'
       });
-      const decisions = db.collections.operationalStateDecisions;
-      expect(decisions.insertOne).toHaveBeenCalledTimes(1);
-      const [decision, options] = decisions.insertOne.mock.calls[0];
-      expect(decision).toMatchObject({
-        specimenId: 'SPC-1', previousStatus: 'available', newStatus: 'depleted', triggerEventId: String(result.movementID),
-        rulesApplied: ['quantity_derived_status'], reasonCodes: ['withdraw'], decisionResult: 'permit',
-      });
-      expect(options).toEqual({ session: db.session });
+      expect(db.collections.operationalStateDecisions?.insertOne ?? vi.fn()).not.toHaveBeenCalled();
 
       const again = makeDb();
-      again.collections.samples.findOne.mockResolvedValue(existingSample({ specimenId: 'SPC-2', specimenStatus: 'partial', currentQuantity: 6 }));
-      await sampleService.withdrawSample(again, 'sample-1', {
+      again.collections.samples.findOne.mockResolvedValue(existingSample({ specimenId: 'SPC-2', specimenStatus: 'available', currentQuantity: 6 }));
+      const partial = await sampleService.withdrawSample(again, 'sample-1', {
         withdrawalType: 'Parcial',
         withdrawalQuantity: 2,
         withdrawalResponsible: 'Jane Doe',
         linkedProject: 'ProjectX'
       });
+      expect(partial.quantityStatus).toBe('partial');
+      expect(again.collections.samples.updateOne.mock.calls[0][1].$set.quantityStatus).toBe('partial');
       expect(again.collections.operationalStateDecisions?.insertOne ?? vi.fn()).not.toHaveBeenCalled();
+    });
+
+    it('refuses a withdrawal from a closed specimen (RF026 AC7)', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(existingSample({ specimenStatus: 'closed' }));
+      await expect(sampleService.withdrawSample(db, 'sample-1', {
+        withdrawalType: 'Total',
+        withdrawalResponsible: 'Jane Doe',
+        linkedProject: 'ProjectX'
+      })).rejects.toThrow(/Status: closed/);
     });
 
     it('performs a partial withdrawal within available quantity', async () => {
@@ -1128,7 +1136,21 @@ describe('sample.service', () => {
       expect(cursor.skip).toHaveBeenCalledWith(1);
       // specimenStatus is normalized onto every returned document (#415) —
       // this one has none, so it falls back to the 'available' default.
-      expect(result).toEqual({ samples: [{ specimenId: 1, specimenStatus: 'available' }], total: 1, limit: 5, skip: 1 });
+      // quantityStatus is derived the same way (RF006 AC3); no quantities
+      // here, so it reads depleted.
+      expect(result).toEqual({ samples: [{ specimenId: 1, specimenStatus: 'available', quantityStatus: 'depleted' }], total: 1, limit: 5, skip: 1 });
+    });
+
+    it('maps a v1.3.0 partial/depleted status filter onto quantityStatus (RF006 AC2/AC3)', async () => {
+      const db = makeDb();
+      db.collections.samples.find.mockReturnValue(makeCursor([]));
+      db.collections.samples.countDocuments.mockResolvedValue(0);
+
+      await sampleService.listSamples(db, { specimenStatus: 'DEPLETED' });
+      expect(db.collections.samples.find).toHaveBeenLastCalledWith({ quantityStatus: 'depleted' });
+
+      await sampleService.listSamples(db, { quantityStatus: 'partial' });
+      expect(db.collections.samples.find).toHaveBeenLastCalledWith({ quantityStatus: 'partial' });
     });
 
     it('applies default limit/skip when not specified', async () => {
@@ -1231,7 +1253,7 @@ describe('sample.service', () => {
       expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
     });
 
-    it('recomputes lifecycle status and persists the update', async () => {
+    it('recomputes quantityStatus and persists the update, leaving specimenStatus alone (RF006 AC2/AC3)', async () => {
       const db = makeDb();
       const existing = {
         _id: 'sample-1',
@@ -1248,28 +1270,49 @@ describe('sample.service', () => {
 
       expect(db.collections.samples.updateOne).toHaveBeenCalledTimes(1);
       const [, updateArg] = db.collections.samples.updateOne.mock.calls[0];
-      // #405: specimenStatus is the source of truth; the legacy
-      // lifecycleStatus/availabilityStatus dual-write was removed in #408.
-      expect(updateArg.$set.specimenStatus).toBe('partial');
+      // The legacy lifecycleStatus/availabilityStatus dual-write was removed
+      // in #408; quantity moves quantityStatus, never specimenStatus.
+      expect(updateArg.$set.quantityStatus).toBe('partial');
+      expect(updateArg.$set.specimenStatus).toBeUndefined();
       expect(updateArg.$set.lifecycleStatus).toBeUndefined();
       expect(updateArg.$set.availabilityStatus).toBeUndefined();
       expect(result.currentQuantity).toBe(4);
     });
 
-    it('appends an OperationalStateDecision when an edit changes specimenStatus, and none when it stays (RF006 AC7, #1315)', async () => {
+    it('appends an OperationalStateDecision when an edit changes specimenStatus, and none for a quantity edit or no change (RF006 AC7, #1315)', async () => {
       const db = makeDb();
       const existing = { _id: 'sample-1', specimenId: 'SPC-U', initialQuantity: 10, currentQuantity: 10, specimenStatus: 'available' };
       db.collections.samples.findOne.mockResolvedValue(existing);
 
       await sampleService.updateSample(db, 'SPC-U', { currentQuantity: 4 });
+      expect(db.collections.operationalStateDecisions?.insertOne ?? vi.fn()).not.toHaveBeenCalled();
+
+      await sampleService.updateSample(db, 'SPC-U', { specimenStatus: 'reserved' });
       const decisions = db.collections.operationalStateDecisions;
       expect(decisions.insertOne).toHaveBeenCalledTimes(1);
       const [decision] = decisions.insertOne.mock.calls[0];
-      expect(decision).toMatchObject({ specimenId: 'SPC-U', previousStatus: 'available', newStatus: 'partial', rulesApplied: ['quantity_derived_status'], reasonCodes: ['update'] });
+      expect(decision).toMatchObject({ specimenId: 'SPC-U', previousStatus: 'available', newStatus: 'reserved', rulesApplied: ['manual_status_update'], reasonCodes: ['update'] });
       expect(decision.triggerEventId).toMatch(/^sample-update:/);
 
       await sampleService.updateSample(db, 'SPC-U', { notes: 'no status change' });
       expect(decisions.insertOne).toHaveBeenCalledTimes(1);
+    });
+
+    // RF006 AC3 / RF026 AC7 (decision 4): the generic update refuses a
+    // client quantityStatus, `closed`, a v1.3.0 value and a change out of
+    // closed, with a 422-coded error, and writes nothing.
+    it.each([
+      ['a client quantityStatus', { specimenStatus: 'available' }, { quantityStatus: 'full' }, /quantityStatus é derivado/],
+      ['closed through the generic update', { specimenStatus: 'available' }, { specimenStatus: 'closed' }, /POST \/api\/samples\/:id\/close/],
+      ['a v1.3.0 value', { specimenStatus: 'available' }, { specimenStatus: 'depleted' }, /specimenStatus inválido: depleted/],
+      ['a change out of closed', { specimenStatus: 'closed' }, { specimenStatus: 'available' }, /closed não admite mudança/],
+    ])('refuses %s (422)', async (_label, stored, body, message) => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue({ _id: 'sample-1', specimenId: 'SPC-R', initialQuantity: 10, currentQuantity: 10, ...stored });
+      await expect(sampleService.updateSample(db, 'SPC-R', body)).rejects.toMatchObject({
+        statusCode: 422, code: 'SPECIMEN_STATUS_WRITE_REFUSED', message: expect.stringMatching(message),
+      });
+      expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
     });
 
     // #540: sample.service.js#updateSample used the raw MongoDB driver and
@@ -1637,18 +1680,31 @@ describe('sample.service', () => {
       ).rejects.toThrow('Amostra não encontrada');
     });
 
-    it('appends an OperationalStateDecision when a total return makes the specimen available again (RF006 AC7, #1315)', async () => {
+    it('un-depletes a depleted specimen through quantityStatus, with no OperationalStateDecision (RF006 AC2/AC3/AC7)', async () => {
       const db = makeDb();
-      db.collections.samples.findOne.mockResolvedValue(withdrawnSample({ specimenId: 'SPC-R', specimenStatus: 'partial' }));
+      db.collections.samples.findOne.mockResolvedValue(withdrawnSample({
+        specimenId: 'SPC-R', specimenStatus: 'available', quantityStatus: 'depleted', currentQuantity: 0, totalWithdrawn: 10,
+      }));
       const result = await sampleService.returnSample(db, 'sample-1', {
         returnResponsible: 'Jane Doe',
         condition: 'intact',
-        returnType: 'Total'
+        returnType: 'Parcial',
+        returnQuantity: 3
       });
-      const [decision, options] = db.collections.operationalStateDecisions.insertOne.mock.calls[0];
-      expect(decision).toMatchObject({ specimenId: 'SPC-R', previousStatus: 'partial', newStatus: 'available', reasonCodes: ['return', 'intact'] });
-      expect(decision.triggerEventId).toBe(String(result.movementID));
-      expect(options).toEqual({ session: db.session });
+      expect(result).toMatchObject({ newStatus: 'available', quantityStatus: 'partial', newAvailableQuantity: 3 });
+      expect(db.collections.samples.updateOne.mock.calls[0][1].$set).toMatchObject({ quantityStatus: 'partial' });
+      expect(db.collections.samples.updateOne.mock.calls[0][1].$set.specimenStatus).toBeUndefined();
+      expect(db.collections.operationalStateDecisions?.insertOne ?? vi.fn()).not.toHaveBeenCalled();
+    });
+
+    it('refuses a return to a closed specimen (RF026 AC7)', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(withdrawnSample({ specimenStatus: 'closed' }));
+      await expect(sampleService.returnSample(db, 'sample-1', {
+        returnResponsible: 'Jane Doe',
+        condition: 'intact',
+        returnType: 'Total'
+      })).rejects.toThrow(/Status: closed/);
     });
 
     it('rejects when there is nothing pending to return', async () => {
@@ -1721,10 +1777,13 @@ describe('sample.service', () => {
       expect(result.returnedQuantity).toBe(6);
       expect(result.newAvailableQuantity).toBe(10);
 
-      // #405: specimenStatus is the source of truth; the legacy
+      // RF006 AC3: a full return restores quantityStatus to full and closes
+      // the withdrawal fields; specimenStatus is not written. The legacy
       // lifecycleStatus/availabilityStatus dual-write was removed in #408.
       const [, updateArg] = db.collections.samples.updateOne.mock.calls[0];
-      expect(updateArg.$set.specimenStatus).toBe('available');
+      expect(updateArg.$set.quantityStatus).toBe('full');
+      expect(updateArg.$set.withdrawnAt).toBeNull();
+      expect(updateArg.$set.specimenStatus).toBeUndefined();
       expect(updateArg.$set.lifecycleStatus).toBeUndefined();
       expect(updateArg.$set.availabilityStatus).toBeUndefined();
     });
@@ -1976,11 +2035,68 @@ describe('sample.service', () => {
         sampleType: 'PLASMA'
       });
 
+      // RF006 AC3: a depleted specimen is available in state but unusable.
       expect(db.collections.samples.find).toHaveBeenCalledWith({
         sampleType: 'PLASMA',
-        specimenStatus: 'available'
+        specimenStatus: 'available',
+        quantityStatus: { $ne: 'depleted' }
       });
       expect(result).toEqual([{ specimenStatus: 'available' }]);
+    });
+  });
+
+  // -------------------------------------------------------------------
+  // RF026 AC7 (dictionary RULE-006): closing a fully consumed specimen.
+  describe('closeSpecimen', () => {
+    function consumedSample(overrides = {}) {
+      return {
+        _id: 'sample-1', specimenId: 'SPC-C', specimenStatus: 'available',
+        quantity: 10, initialQuantity: 10, currentQuantity: 0, ...overrides,
+      };
+    }
+
+    it('closes a depleted specimen and appends an OperationalStateDecision with the write', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(consumedSample());
+
+      const result = await sampleService.closeSpecimen(db, 'SPC-C', { actorId: 'user-1' });
+
+      expect(result).toMatchObject({ specimenId: 'SPC-C', previousStatus: 'available', specimenStatus: 'closed', quantityStatus: 'depleted' });
+      const [filter, update] = db.collections.samples.updateOne.mock.calls[0];
+      expect(filter).toEqual({ _id: 'sample-1', specimenStatus: 'available' });
+      expect(update.$set).toMatchObject({ specimenStatus: 'closed', quantityStatus: 'depleted' });
+      const [decision] = db.collections.operationalStateDecisions.insertOne.mock.calls[0];
+      expect(decision).toMatchObject({
+        specimenId: 'SPC-C', previousStatus: 'available', newStatus: 'closed',
+        rulesApplied: ['rf026_ac7_validated_consumption'], reasonCodes: ['total_consumption'],
+      });
+      expect(decision.triggerEventId).toMatch(/^sample-close:/);
+      expect(result.operationalStateDecisionId).toBe(decision.operationalStateDecisionId);
+    });
+
+    it('closes a not-yet-migrated v1.3.0 depleted specimen, recording it from available', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(consumedSample({ specimenStatus: 'depleted' }));
+      await sampleService.closeSpecimen(db, 'SPC-C');
+      expect(db.collections.samples.updateOne.mock.calls[0][0]).toEqual({ _id: 'sample-1', specimenStatus: 'depleted' });
+      expect(db.collections.operationalStateDecisions.insertOne.mock.calls[0][0]).toMatchObject({ previousStatus: 'available', newStatus: 'closed' });
+    });
+
+    it.each([
+      ['material remains (partial)', { currentQuantity: 4 }, /consumo total validado: quantityStatus é partial/],
+      ['material remains (full), whatever a stale stored quantityStatus says', { currentQuantity: 10, quantityStatus: 'depleted' }, /quantityStatus é full/],
+      ['it is already closed', { specimenStatus: 'closed' }, /já está encerrada/],
+    ])('refuses (409) when %s, and writes nothing', async (_label, overrides, message) => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(consumedSample(overrides));
+      await expect(sampleService.closeSpecimen(db, 'SPC-C')).rejects.toMatchObject({ statusCode: 409, message: expect.stringMatching(message) });
+      expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
+    });
+
+    it('returns null for an unknown specimen', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue(null);
+      expect(await sampleService.closeSpecimen(db, 'missing')).toBeNull();
     });
   });
 });

@@ -6,9 +6,12 @@ const crypto = require('crypto');
 // decided it. Nothing updates or deletes one (operationalStateDecision.service.js).
 //
 // - previousStatus and newStatus are codes; the catalog's one example is
-//   `available`. The values are whatever specimenStatus held and became,
-//   so a decision records the v1.3.0 quantity values (`partial`,
-//   `depleted`) until the specimenStatus set itself moves to v4 (#1201).
+//   `available`. The values are the v2 specimenStatus set (RF006 AC2:
+//   available, reserved, checked_out, quarantined, unavailable, closed).
+//   Quantity changes move quantityStatus and record no decision. A decision
+//   written by the v1.3.0 -> v2 migration (rulesApplied
+//   `v1_3_to_v2_migration`) carries the v1.3.0 value as previousStatus, and
+//   decisions recorded before it may carry `partial` or `depleted`.
 // - decisionResult accepts the catalog's one value, `permit`: a refused
 //   change leaves the status as it was, and the refusal is the caller's
 //   error, not a decision.

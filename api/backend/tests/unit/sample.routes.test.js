@@ -2375,6 +2375,75 @@ describe('sample.routes', () => {
       expect(res.status).toBe(404);
     });
 
+    // RF006 AC3 / RF026 AC7: a refused status write answers 422 with its code.
+    it('answers 422 SPECIMEN_STATUS_WRITE_REFUSED when the service refuses a status write', async () => {
+      const refusal = Object.assign(new Error('quantityStatus é derivado'), { statusCode: 422, code: 'SPECIMEN_STATUS_WRITE_REFUSED' });
+      const updateSample = vi.fn().mockRejectedValue(refusal);
+      const getSample = vi.fn().mockResolvedValue(null);
+      const { router } = loadRoute({ sampleServiceOverrides: { updateSample, getSample } });
+
+      const res = await request(buildApp(router, {})).put('/api/samples/SPC-1').send({ quantityStatus: 'full' });
+
+      expect(res.status).toBe(422);
+      expect(res.body).toMatchObject({ success: false, error: 'SPECIMEN_STATUS_WRITE_REFUSED', message: 'quantityStatus é derivado' });
+    });
+
+    // RF026 AC7 (dictionary RULE-006): POST /:id/close.
+    describe('POST /:id/close', () => {
+      it('closes through the service and audits it with the decision', async () => {
+        const getSample = vi.fn().mockResolvedValue({ _id: '1', specimenId: 'SPC-1', specimenStatus: 'available' });
+        const closeSpecimen = vi.fn().mockResolvedValue({
+          specimenId: 'SPC-1', previousStatus: 'available', specimenStatus: 'closed', quantityStatus: 'depleted',
+          operationalStateDecisionId: 'osd-1', triggerEventId: 'sample-close:x',
+        });
+        const { router, auditLoggerModule } = loadRoute({
+          sampleServiceOverrides: { getSample, closeSpecimen },
+          authImpl: (req, res, next) => { req.user = { userID: 'tech-1' }; next(); },
+        });
+
+        const res = await request(buildApp(router, {})).post('/api/samples/SPC-1/close').send({});
+
+        expect(res.status).toBe(200);
+        expect(res.body.data).toMatchObject({ specimenStatus: 'closed', quantityStatus: 'depleted' });
+        expect(closeSpecimen).toHaveBeenCalledWith({}, 'SPC-1', { actorId: 'tech-1' });
+        expect(auditLoggerModule.log).toHaveBeenCalledWith(expect.objectContaining({
+          action: 'UPDATE',
+          resourceType: 'Sample',
+          resourceId: 'SPC-1',
+          severity: 'critical',
+          payload: expect.objectContaining({ operationalStateDecisionId: 'osd-1', rulesApplied: ['rf026_ac7_validated_consumption'] }),
+        }));
+      });
+
+      it('maps a refused close to 409 SPECIMEN_CLOSE_REFUSED and audits nothing', async () => {
+        const getSample = vi.fn().mockResolvedValue({ _id: '1', specimenId: 'SPC-1', specimenStatus: 'available' });
+        const closeSpecimen = vi.fn().mockRejectedValue(Object.assign(new Error('Encerramento exige consumo total validado'), { statusCode: 409 }));
+        const { router, auditLoggerModule } = loadRoute({ sampleServiceOverrides: { getSample, closeSpecimen } });
+
+        const res = await request(buildApp(router, {})).post('/api/samples/SPC-1/close').send({});
+
+        expect(res.status).toBe(409);
+        expect(res.body).toMatchObject({ error: 'SPECIMEN_CLOSE_REFUSED', message: 'Encerramento exige consumo total validado' });
+        expect(auditLoggerModule.log).not.toHaveBeenCalled();
+      });
+
+      it('answers 404 for an unknown sample and 403 outside the caller\'s scope', async () => {
+        const closeSpecimen = vi.fn();
+        const missing = loadRoute({ sampleServiceOverrides: { getSample: vi.fn().mockResolvedValue(null), closeSpecimen } });
+        expect((await request(buildApp(missing.router, {})).post('/api/samples/nope/close').send({})).status).toBe(404);
+
+        const outside = loadRoute({
+          sampleServiceOverrides: { getSample: vi.fn().mockResolvedValue({ _id: '1', collectionSite: 'org-other' }), closeSpecimen },
+          requireOrganizationScopeImpl: (req, res, next) => {
+            req.organizationScope = { scope: 'organization', organizationIds: ['org-mine'] };
+            next();
+          },
+        });
+        expect((await request(buildApp(outside.router, {})).post('/api/samples/SPC-1/close').send({})).status).toBe(403);
+        expect(closeSpecimen).not.toHaveBeenCalled();
+      });
+    });
+
     // #623: mirrors #340/#619's out-of-scope 403 pattern for this mutation route.
     it('returns 403 when the sample exists but is outside the caller\'s organization scope', async () => {
       const updateSample = vi.fn();
@@ -3046,6 +3115,8 @@ describe('sample.routes authorization gates (issue #921)', () => {
       { label: 'PUT /:id (editSample)', method: 'put', path: '/s1', expectedArgs: ['editSample'] },
       { label: 'DELETE /:id (deleteSample)', method: 'delete', path: '/s1', expectedArgs: ['deleteSample'] },
       { label: 'POST /:id/return (withdrawSample, UPDATE)', method: 'post', path: '/s1/return', expectedArgs: ['withdrawSample', 'UPDATE'] },
+      // RF026 AC7: the close route takes the edit route's permission.
+      { label: 'POST /:id/close (editSample, UPDATE)', method: 'post', path: '/s1/close', expectedArgs: ['editSample', 'UPDATE'] },
       { label: 'POST /:specimenId/files/upload (uploadSampleFiles)', method: 'post', path: '/sp1/files/upload', expectedArgs: ['uploadSampleFiles'] },
       { label: 'DELETE /:specimenId/files/:fileID (deleteSampleFiles)', method: 'delete', path: '/sp1/files/f1', expectedArgs: ['deleteSampleFiles'] },
       // #631: the only two-argument requirePermission call in the file --
@@ -3098,6 +3169,7 @@ describe('sample.routes authorization gates (issue #921)', () => {
       { label: 'GET /:id/rcs-assessments', method: 'get', path: '/s1/rcs-assessments' },
       { label: 'GET /:id/sprec-profiles', method: 'get', path: '/s1/sprec-profiles' },
       { label: 'GET /:id/quarantine-actions', method: 'get', path: '/s1/quarantine-actions' },
+      { label: 'POST /:id/close', method: 'post', path: '/s1/close' },
       { label: 'POST /:specimenId/files/upload', method: 'post', path: '/sp1/files/upload' },
       { label: 'GET /:specimenId/files', method: 'get', path: '/sp1/files' },
       { label: 'GET /:specimenId/files/:fileID/download', method: 'get', path: '/sp1/files/f1/download' },

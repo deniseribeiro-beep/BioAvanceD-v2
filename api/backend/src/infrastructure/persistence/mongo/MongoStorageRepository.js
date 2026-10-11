@@ -985,6 +985,8 @@ class MongoStorageRepository {
           ]
         },
         { specimenStatus: { $in: ['available', 'reserved'] } },
+        // RF006 AC3: a depleted specimen has no material to place.
+        { quantityStatus: { $ne: 'depleted' } },
         {
           $or: [
             { 'storageLocation.boxId': { $exists: false } },

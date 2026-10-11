@@ -4,6 +4,7 @@ const logger = require('../utils/logger');
 const { getCollection } = require('../utils/collectionResolver');
 const { generateSampleHashFromSample } = require('./MerkleService');
 const SampleMovementModel = require('../models/SampleMovement');
+const { SampleModel } = require('../models/Sample');
 const { appendMovementWithHashChain } = require('../utils/sampleMovementLedger');
 const qualityDomain = require('./quality-domain.service');
 const quarantineActionService = require('./quarantine-action.service');
@@ -123,11 +124,9 @@ const SUGGESTED_STATUS_TO_SPECIMEN_STATUS = {
   BLOCKED: 'unavailable',
 };
 
-// specimenStatus values a compliance-graph re-evaluation must never touch —
-// destroyed/disposed are final per Sample.js's BLOCKED_SPECIMEN_STATUSES
-// comment ("write sites treat them as non-movable"); this write site is no
-// exception.
-const TERMINAL_SPECIMEN_STATUSES = ['destroyed', 'disposed'];
+// A compliance-graph re-evaluation never touches a terminal specimen:
+// `closed` (RF026 AC7), or a not-yet-migrated destroyed/disposed document
+// (SampleModel.isTerminalSpecimen).
 
 // Ordering for the escalate-vs-downgrade decision below — only these three
 // values are ever compliance-graph targets (SUGGESTED_STATUS_TO_SPECIMEN_STATUS's
@@ -456,9 +455,9 @@ class SampleGraphValidator {
     // re-evaluation can only escalate a *stronger* block or release one it
     // opened itself, never silently clear a block from an unrelated source
     // (a cold-chain incident, equipment fault, manual action) or a terminal
-    // state (destroyed/disposed).
+    // state (closed). A v1.3.0 value reads folded onto the v2 set.
     const targetSpecimenStatus = SUGGESTED_STATUS_TO_SPECIMEN_STATUS[suggestedStatus];
-    const currentSpecimenStatus = String(sample.specimenStatus || 'available').toLowerCase();
+    const currentSpecimenStatus = SampleModel.resolveSpecimenStatus(sample);
     const setPayload = {
       complianceGraph: {
         ...report,
@@ -471,7 +470,7 @@ class SampleGraphValidator {
     let downgraded = false;
     let latestActiveAction = null;
 
-    if (!TERMINAL_SPECIMEN_STATUSES.includes(currentSpecimenStatus)) {
+    if (!SampleModel.isTerminalSpecimen(sample)) {
       const targetOrder = SPECIMEN_STATUS_ORDER[targetSpecimenStatus];
       const currentOrder = SPECIMEN_STATUS_ORDER[currentSpecimenStatus] ?? SPECIMEN_STATUS_ORDER.available;
 

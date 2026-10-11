@@ -45,11 +45,11 @@ describe('SampleModel', () => {
     ]));
   });
 
-  it('computeStatus reflete o ciclo de vida esperado (specimenStatus, case-folded per #405)', () => {
-    expect(SampleModel.computeStatus(10, 10, 'available')).toBe('available');
-    expect(SampleModel.computeStatus(10, 4, 'available')).toBe('partial');
-    expect(SampleModel.computeStatus(10, 0, 'available')).toBe('depleted');
-    expect(SampleModel.computeStatus(10, 4, 'quarantined')).toBe('quarantined');
+  // RF006 AC3: the quantity drives quantityStatus, never specimenStatus.
+  it('computeQuantityStatus deriva full/partial/depleted das quantidades', () => {
+    expect(SampleModel.computeQuantityStatus(10, 10)).toBe('full');
+    expect(SampleModel.computeQuantityStatus(10, 4)).toBe('partial');
+    expect(SampleModel.computeQuantityStatus(10, 0)).toBe('depleted');
   });
 
   it('create normaliza dados e aplica defaults de status e quantidade', () => {

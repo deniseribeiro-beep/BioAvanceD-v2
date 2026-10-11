@@ -1671,7 +1671,7 @@ describe('MongoStorageRepository', () => {
       expect(result).toEqual([{ barcode: 'BC-9' }]);
       expect(find).toHaveBeenCalledTimes(1);
       const filter = find.mock.calls[0][0];
-      expect(filter.$and).toHaveLength(3);
+      expect(filter.$and).toHaveLength(4);
       expect(filter.$and[0].$or).toEqual([
         { barcode: expect.any(RegExp) },
         { participantId: expect.any(RegExp) },
@@ -1680,7 +1680,9 @@ describe('MongoStorageRepository', () => {
       expect(filter.$and[1]).toEqual({
         specimenStatus: { $in: ['available', 'reserved'] }
       });
-      expect(filter.$and[2].$or).toEqual([
+      // RF006 AC3: a depleted specimen has no material to place.
+      expect(filter.$and[2]).toEqual({ quantityStatus: { $ne: 'depleted' } });
+      expect(filter.$and[3].$or).toEqual([
         { 'storageLocation.boxId': { $exists: false } },
         { 'storageLocation.boxId': null }
       ]);

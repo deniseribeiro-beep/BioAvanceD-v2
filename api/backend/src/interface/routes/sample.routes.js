@@ -1191,6 +1191,16 @@ router.put('/:id', authenticate, requirePermission('editSample'), requireOrganiz
         message: error.message
       });
     }
+    // RF006 AC3 / RF026 AC7: a refused status write (quantityStatus,
+    // `closed`, a v1.3.0 value, a change out of closed) answers 422.
+    if (error.code === 'SPECIMEN_STATUS_WRITE_REFUSED') {
+      return res.status(422).json({
+        success: false,
+        error: 'SPECIMEN_STATUS_WRITE_REFUSED',
+        message: error.message,
+        details: [error.message]
+      });
+    }
     return res.status(400).json({
       success: false,
       error: 'Erro ao atualizar amostra',
@@ -1756,6 +1766,63 @@ router.post('/:id/quarantine/release', authenticate, requireRole(3, 4), requireO
     }
     logger.error('Erro ao liberar quarentena:', error.message);
     return res.status(500).json({ success: false, error: 'Erro ao liberar quarentena' });
+  }
+});
+
+// RF026 AC7 (dictionary RULE-006): closes a fully consumed specimen
+// (quantityStatus depleted), recorded as an OperationalStateDecision and
+// audited. A specimen still holding material is refused (409), as is one
+// already closed. The other closing path is an executed destroy or transfer
+// DispositionAction. Same permission as the edit route: no narrower one
+// exists for this change. editSample allows only UPDATE, and a POST maps to
+// CREATE, so the action is passed explicitly, as on POST /:id/return.
+router.post('/:id/close', authenticate, requirePermission('editSample', 'UPDATE'), requireOrganizationScope, async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    if (!db) {
+      return res.status(503).json({ success: false, error: 'Banco de dados não disponível' });
+    }
+    const sampleForScope = await sampleService.getSample(db, req.params.id);
+    if (!sampleForScope) {
+      return res.status(404).json({ success: false, error: 'Amostra não encontrada' });
+    }
+    if (!isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+      return res.status(403).json({ success: false, error: 'Acesso negado', message: 'Esta amostra pertence a outra organização' });
+    }
+
+    const closed = await sampleService.closeSpecimen(db, req.params.id, {
+      actorId: req.user?.userID || req.user?.id || null,
+    });
+    if (!closed) {
+      return res.status(404).json({ success: false, error: 'Amostra não encontrada' });
+    }
+
+    const auditLogger = require('../../utils/auditLogger');
+    auditLogger.init(db);
+    await auditLogger.log({
+      action: 'UPDATE',
+      resourceType: 'Sample',
+      resourceId: req.params.id,
+      status: 'success',
+      severity: 'critical',
+      message: 'Amostra encerrada (closed) após consumo total validado',
+      payload: {
+        previousStatus: closed.previousStatus,
+        specimenStatus: closed.specimenStatus,
+        quantityStatus: closed.quantityStatus,
+        operationalStateDecisionId: closed.operationalStateDecisionId,
+        rulesApplied: ['rf026_ac7_validated_consumption'],
+      },
+      req,
+    });
+
+    return res.status(200).json({ success: true, data: closed });
+  } catch (error) {
+    if (error.statusCode === 409) {
+      return res.status(409).json({ success: false, error: 'SPECIMEN_CLOSE_REFUSED', message: error.message });
+    }
+    logger.error('Erro ao encerrar amostra:', error.message);
+    return res.status(500).json({ success: false, error: 'Erro ao encerrar amostra' });
   }
 });
 

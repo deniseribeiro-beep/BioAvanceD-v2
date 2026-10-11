@@ -336,8 +336,13 @@ describe('ImportService.parseSampleCSV', () => {
   });
 
   it('reads a specimenStatus column directly when present', () => {
-    const { data } = importService.parseSampleCSV({ specimenStatus: 'partial' });
-    expect(data.specimenStatus).toBe('partial');
+    const { data } = importService.parseSampleCSV({ specimenStatus: 'reserved' });
+    expect(data.specimenStatus).toBe('reserved');
+  });
+
+  it('folds a v1.3.0 specimenStatus column onto the v2 set (RF006 AC2)', () => {
+    expect(importService.parseSampleCSV({ specimenStatus: 'partial' }).data.specimenStatus).toBe('available');
+    expect(importService.parseSampleCSV({ specimenStatus: 'disposed' }).data.specimenStatus).toBe('unavailable');
   });
 
   it('defaults specimenStatus to available when no status column is present', () => {

@@ -6,7 +6,19 @@ const legalHoldService = require('./legalHold.service');
 const dispositionCompatibility = require('./dispositionCompatibility.service');
 const { getCollection } = require('../utils/collectionResolver');
 const notificationDispatchService = require('./notificationDispatch.service');
+const operationalStateDecisionService = require('./operationalStateDecision.service');
+const { SampleModel } = require('../models/Sample');
+const { findSampleByAnyId } = require('../utils/sampleLookup');
+const { withTransactionWhereSupported } = require('../utils/mongoTransaction');
 const logger = require('../utils/logger');
+
+// RF026 AC7 (dictionary RULE-006): an executed disposition that ends the
+// biobank's custody of a specimen closes it. Of the action vocabulary
+// (transfer, return, destroy, anonymize, preserve) destroy and transfer end
+// custody; return, anonymize and preserve do not close. The entity types are
+// the ones dispositionCompatibility.service.js treats as a specimen.
+const CLOSING_ACTIONS = ['destroy', 'transfer'];
+const SPECIMEN_ENTITY_TYPES = ['Specimen', 'Sample'];
 
 // AC#6 ("Impedir destruição quando houver bloqueio ético ou legal") only
 // names destruição -- transfer/return/anonymize/preserve aren't framed as
@@ -96,17 +108,56 @@ class DispositionActionService {
     return status;
   }
 
-  async writeTransition(collection, action, fromStatus, set) {
+  async writeTransition(collection, action, fromStatus, set, session = null) {
+    const options = session ? { session } : undefined;
     const result = await collection.updateOne(
       { dispositionActionId: action.dispositionActionId, actionStatus: fromStatus },
-      { $set: { ...set, updatedAt: new Date() } }
+      { $set: { ...set, updatedAt: new Date() } },
+      options
     );
     if (!result || result.matchedCount === 0) {
       const error = new Error('Ação de destinação alterada concorrentemente; leia-a de novo');
       error.statusCode = 409;
       throw error;
     }
-    return collection.findOne({ dispositionActionId: action.dispositionActionId });
+    return collection.findOne({ dispositionActionId: action.dispositionActionId }, options);
+  }
+
+  closesSpecimens(action) {
+    return SPECIMEN_ENTITY_TYPES.includes(action?.entityType) && CLOSING_ACTIONS.includes(action?.dispositionAction);
+  }
+
+  // RF026 AC7: each specimen an executed destroy/transfer names becomes
+  // closed, with an OperationalStateDecision triggered by the action. The
+  // action's own execution is audited by its route. Returns the specimen ids
+  // closed now; one already closed is left as it is.
+  async closeDisposedSpecimens(db, action, session = null) {
+    if (!this.closesSpecimens(action)) return [];
+    const samples = await getCollection(db, 'samples');
+    const options = session ? { session } : undefined;
+    const closed = [];
+    for (const recordId of action.affectedRecordIds || []) {
+      const sample = await findSampleByAnyId(samples, recordId);
+      if (!sample) continue;
+      const previousStatus = SampleModel.resolveSpecimenStatus(sample);
+      if (previousStatus === 'closed') continue;
+      await samples.updateOne(
+        { _id: sample._id },
+        { $set: { specimenStatus: 'closed', updatedAt: new Date() } },
+        options
+      );
+      const specimenId = sample.specimenId || String(sample._id);
+      await operationalStateDecisionService.recordStatusChange(db, {
+        specimenId,
+        previousStatus,
+        newStatus: 'closed',
+        triggerEventId: action.dispositionActionId,
+        rulesApplied: ['rf026_ac7_disposition_executed'],
+        reasonCodes: [action.dispositionAction],
+      }, { session });
+      closed.push(specimenId);
+    }
+    return closed;
   }
 
   /** AC#5: a autorização, registrada com quem autorizou e quando. */
@@ -158,13 +209,19 @@ class DispositionActionService {
     }
 
     const now = new Date();
-    return this.writeTransition(collection, action, from, {
-      actionStatus: 'executed',
-      executedBy: String(executedBy),
-      executedAt: now,
-      dispositionDateTime: now,
-      evidenceIds: evidenceIds.map((value) => value.trim()),
-      legalHold: activeHold,
+    // The execution and the specimens it closes land together wherever the
+    // deployment runs transactions.
+    return withTransactionWhereSupported(db, async (session) => {
+      const executed = await this.writeTransition(collection, action, from, {
+        actionStatus: 'executed',
+        executedBy: String(executedBy),
+        executedAt: now,
+        dispositionDateTime: now,
+        evidenceIds: evidenceIds.map((value) => value.trim()),
+        legalHold: activeHold,
+      }, session);
+      await this.closeDisposedSpecimens(db, executed, session);
+      return executed;
     });
   }
 
@@ -242,3 +299,4 @@ class DispositionActionService {
 const dispositionActionService = new DispositionActionService();
 module.exports = dispositionActionService;
 module.exports.BLOCKED_WHEN_HELD = BLOCKED_WHEN_HELD;
+module.exports.CLOSING_ACTIONS = CLOSING_ACTIONS;

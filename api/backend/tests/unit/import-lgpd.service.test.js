@@ -360,9 +360,16 @@ describe('ImportLGPDService', () => {
     });
 
     it('maps the legacy lifecycleStatus column onto specimenStatus, not the trio', () => {
+      // RF006 AC2 (V2E-0544): the v1.3.0 `depleted` folds to available; the
+      // depletion is quantityStatus, derived from the quantities.
       const result = importLgpdService.parseSampleRow({ lifecycleStatus: 'DEPLETED' });
-      expect(result.specimenStatus).toBe('depleted');
+      expect(result.specimenStatus).toBe('available');
       expect(result.lifecycleStatus).toBeUndefined();
+    });
+
+    it('maps v1.3.0 destroyed to unavailable and never imports closed (RF026 AC7)', () => {
+      expect(importLgpdService.parseSampleRow({ specimenStatus: 'destroyed' }).specimenStatus).toBe('unavailable');
+      expect(importLgpdService.parseSampleRow({ specimenStatus: 'closed' }).specimenStatus).toBe('unavailable');
     });
 
     it('defaults specimenStatus to available when no status column is supplied', () => {

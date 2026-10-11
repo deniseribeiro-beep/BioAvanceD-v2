@@ -16,6 +16,14 @@ function toFhirPatient(participant, identity) {
   };
 }
 
+// V2E-0544: closed has no FHIR Specimen.status code, so it is sent as
+// `unavailable`. This is a lossy mapping: the dictionary asks for a governed
+// mapping with a loss report, which this transform does not produce yet.
+function toFhirSpecimenStatus(specimenStatus) {
+  const status = String(specimenStatus || '').toLowerCase() || 'available';
+  return status === 'closed' ? 'unavailable' : status;
+}
+
 function toFhirSpecimen(specimen) {
   return {
     resourceType: 'Specimen',
@@ -23,7 +31,7 @@ function toFhirSpecimen(specimen) {
     identifier: specimen.specimenId ? [{ value: specimen.specimenId }] : [],
     subject: specimen.participantId ? { reference: `Patient/${specimen.participantId}` } : undefined,
     receivedTime: specimen.registeredAt || undefined,
-    status: specimen.specimenStatus || 'available'
+    status: toFhirSpecimenStatus(specimen.specimenStatus)
   };
 }
 

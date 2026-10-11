@@ -71,7 +71,9 @@ describe('Sample.validate - specimenStatus branch', () => {
 describe('Sample.validate - specimenStatus branch (#405)', () => {
   it('accepts a valid specimenStatus, case-insensitively', () => {
     expect(Sample.validate({ ...validData, specimenStatus: 'available' }).isValid).toBe(true);
-    expect(Sample.validate({ ...validData, specimenStatus: 'DISPOSED' }).isValid).toBe(true);
+    expect(Sample.validate({ ...validData, specimenStatus: 'QUARANTINED' }).isValid).toBe(true);
+    // RF006 AC2: a v1.3.0 value is not an operational state.
+    expect(Sample.validate({ ...validData, specimenStatus: 'DISPOSED' }).isValid).toBe(false);
   });
 
   it('rejects an invalid specimenStatus', () => {

@@ -13,8 +13,9 @@ const RULE = 'consent_revocation_quarantine';
 // The reasons a consent decision quarantines under: a revocation here, a
 // pending consent at intake (intakeWizard.routes.js).
 const CONSENT_REASON_CODES = ['CONSENT_REVOKED', 'CONSENT_PENDING'];
-// Final states a consent change never rewrites.
-const TERMINAL_STATUSES = ['destroyed', 'disposed'];
+// A consent change never rewrites a terminal specimen: `closed` (RF026
+// AC7), or a not-yet-migrated destroyed/disposed document
+// (SampleModel.isTerminalSpecimen).
 
 function isConsentOwned(action) {
   return Array.isArray(action?.reasonCodes)
@@ -29,7 +30,7 @@ async function quarantineForRevocation(db, participantId, { req = null } = {}) {
 
   for (const sample of samples) {
     const previousStatus = SampleModel.resolveSpecimenStatus(sample);
-    if (TERMINAL_STATUSES.includes(previousStatus)) continue;
+    if (SampleModel.isTerminalSpecimen(sample)) continue;
     await samplesCollection.updateOne(
       { _id: sample._id },
       { $set: { specimenStatus: 'quarantined', updatedAt: new Date() } }

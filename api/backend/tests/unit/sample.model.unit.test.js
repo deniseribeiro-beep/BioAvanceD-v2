@@ -29,9 +29,16 @@ describe('Sample.validateSpecimenStatus', () => {
     expect(Sample.validateSpecimenStatus('available')).toBe(true);
   });
 
+  // RF006 AC2: the operational states only.
   it('returns true for all valid statuses', () => {
-    ['available', 'quarantined', 'partial', 'depleted', 'unavailable', 'destroyed', 'disposed'].forEach(s => {
+    ['available', 'reserved', 'checked_out', 'quarantined', 'unavailable', 'closed'].forEach(s => {
       expect(Sample.validateSpecimenStatus(s)).toBe(true);
+    });
+  });
+
+  it('returns false for the v1.3.0 quantity and disposition values (RF006 AC2)', () => {
+    ['partial', 'depleted', 'destroyed', 'disposed'].forEach(s => {
+      expect(Sample.validateSpecimenStatus(s)).toBe(false);
     });
   });
 
@@ -48,7 +55,17 @@ describe('Sample.mapLegacyLifecycleStatusToSpecimenStatus', () => {
   it('case-folds a directly-mapping legacy value', () => {
     expect(Sample.mapLegacyLifecycleStatusToSpecimenStatus('AVAILABLE')).toBe('available');
     expect(Sample.mapLegacyLifecycleStatusToSpecimenStatus('QUARANTINED')).toBe('quarantined');
-    expect(Sample.mapLegacyLifecycleStatusToSpecimenStatus('destroyed')).toBe('destroyed');
+    expect(Sample.mapLegacyLifecycleStatusToSpecimenStatus('checked_out')).toBe('checked_out');
+  });
+
+  // V2E-0544: v1.3.0 values fold onto the v2 set; an imported row never
+  // lands closed (RF026 AC7).
+  it('folds v1.3.0 values per the migration mapping, and closed to unavailable', () => {
+    expect(Sample.mapLegacyLifecycleStatusToSpecimenStatus('partial')).toBe('available');
+    expect(Sample.mapLegacyLifecycleStatusToSpecimenStatus('DEPLETED')).toBe('available');
+    expect(Sample.mapLegacyLifecycleStatusToSpecimenStatus('destroyed')).toBe('unavailable');
+    expect(Sample.mapLegacyLifecycleStatusToSpecimenStatus('disposed')).toBe('unavailable');
+    expect(Sample.mapLegacyLifecycleStatusToSpecimenStatus('closed')).toBe('unavailable');
   });
 
   it('folds REGISTERED into available (no dict-02 equivalent)', () => {
@@ -63,30 +80,89 @@ describe('Sample.mapLegacyLifecycleStatusToSpecimenStatus', () => {
   });
 });
 
-// #405: computeStatus now computes specimenStatus (case-folded per
-// canonical-data-contract-v1.md) instead of the legacy lifecycleStatus —
-// same algorithm shape, lowercase value vocabulary.
-describe('Sample.computeStatus', () => {
-  it('returns depleted when currentVolume <= 0', () => {
-    expect(Sample.computeStatus(10, 0, 'available')).toBe('depleted');
-    expect(Sample.computeStatus(10, -1, 'available')).toBe('depleted');
+// RF006 AC3, dictionary RULE-003..005: quantityStatus is derived from the
+// quantities; specimenStatus no longer moves with them.
+describe('Sample.computeQuantityStatus', () => {
+  it('returns depleted when currentQuantity <= 0 (RULE-005)', () => {
+    expect(Sample.computeQuantityStatus(10, 0)).toBe('depleted');
+    expect(Sample.computeQuantityStatus(10, -1)).toBe('depleted');
+    expect(Sample.computeQuantityStatus(10, null)).toBe('depleted');
   });
 
-  it('returns unavailable when currentStatus is unavailable', () => {
-    expect(Sample.computeStatus(10, 5, 'unavailable')).toBe('unavailable');
+  it('returns partial when 0 < current < initial (RULE-004)', () => {
+    expect(Sample.computeQuantityStatus(10, 5)).toBe('partial');
   });
 
-  it('returns partial when current < initial', () => {
-    expect(Sample.computeStatus(10, 5, 'available')).toBe('partial');
+  it('returns full when current equals initial (RULE-003)', () => {
+    expect(Sample.computeQuantityStatus(10, 10)).toBe('full');
   });
 
-  it('returns available when volume is full', () => {
-    expect(Sample.computeStatus(10, 10, 'available')).toBe('available');
+  it('returns full when initialQuantity is 0 or current exceeds it', () => {
+    expect(Sample.computeQuantityStatus(0, 5)).toBe('full');
+    expect(Sample.computeQuantityStatus(10, 12)).toBe('full');
   });
 
-  it('returns available when initialVolume is 0', () => {
-    // init = 0 means condition "init > 0 && curr < init" is false
-    expect(Sample.computeStatus(0, 5, 'available')).toBe('available');
+  it('is gone as a specimenStatus derivation: computeStatus no longer exists', () => {
+    expect(Sample.computeStatus).toBeUndefined();
+  });
+});
+
+describe('Sample.resolveQuantityStatus', () => {
+  it('returns a stored value', () => {
+    expect(Sample.resolveQuantityStatus({ quantityStatus: 'partial', initialQuantity: 10, currentQuantity: 10 })).toBe('partial');
+  });
+
+  it('derives from the quantities when absent, falling back to quantity', () => {
+    expect(Sample.resolveQuantityStatus({ initialQuantity: 10, currentQuantity: 0 })).toBe('depleted');
+    expect(Sample.resolveQuantityStatus({ initialQuantity: 10, currentQuantity: 4 })).toBe('partial');
+    expect(Sample.resolveQuantityStatus({ quantity: 7 })).toBe('full');
+  });
+});
+
+// Legacy-read fallback: a document the migration has not reached reads in
+// the v2 set.
+describe('Sample.resolveSpecimenStatus (legacy folding)', () => {
+  it('folds partial and depleted to available, destroyed and disposed to unavailable', () => {
+    expect(Sample.resolveSpecimenStatus({ specimenStatus: 'partial' })).toBe('available');
+    expect(Sample.resolveSpecimenStatus({ specimenStatus: 'depleted' })).toBe('available');
+    expect(Sample.resolveSpecimenStatus({ specimenStatus: 'destroyed' })).toBe('unavailable');
+    expect(Sample.resolveSpecimenStatus({ specimenStatus: 'DISPOSED' })).toBe('unavailable');
+  });
+
+  it('keeps v2 values and defaults a missing one to available', () => {
+    expect(Sample.resolveSpecimenStatus({ specimenStatus: 'closed' })).toBe('closed');
+    expect(Sample.resolveSpecimenStatus({ specimenStatus: 'Reserved' })).toBe('reserved');
+    expect(Sample.resolveSpecimenStatus({})).toBe('available');
+  });
+
+  it('treats closed and not-yet-migrated destroyed/disposed as terminal', () => {
+    expect(Sample.isTerminalSpecimen({ specimenStatus: 'closed' })).toBe(true);
+    expect(Sample.isTerminalSpecimen({ specimenStatus: 'destroyed' })).toBe(true);
+    expect(Sample.isTerminalSpecimen({ specimenStatus: 'disposed' })).toBe(true);
+    expect(Sample.isTerminalSpecimen({ specimenStatus: 'unavailable' })).toBe(false);
+  });
+});
+
+describe('Sample.create and Sample.validate (RF006 AC2/AC3, RF026 AC7)', () => {
+  const base = {
+    specimenId: 'SP-1', participantId: '12345678', sampleType: 'PLASMA', sampleOrigin: 'VENOUS_BLOOD',
+    extractionProtocol: 'TUBE_EDTA', registeredAt: new Date('2024-01-01'), quantity: 10, linkedProject: 'ProjectX',
+  };
+
+  it('derives quantityStatus at creation, ignoring a value the caller sent', () => {
+    expect(Sample.create({ ...base }).quantityStatus).toBe('full');
+    expect(Sample.create({ ...base, currentQuantity: 4, quantityStatus: 'full' }).quantityStatus).toBe('partial');
+  });
+
+  it('folds a v1.3.0 status at creation', () => {
+    expect(Sample.create({ ...base, specimenStatus: 'depleted' }).specimenStatus).toBe('available');
+  });
+
+  it('refuses a registered closed, a v1.3.0 value and a client quantityStatus', () => {
+    expect(Sample.validate({ ...base, specimenStatus: 'closed' }).errors).toContain('specimenStatus closed não pode ser atribuído no cadastro');
+    expect(Sample.validate({ ...base, specimenStatus: 'partial' }).errors).toContain('specimenStatus inválido');
+    expect(Sample.validate({ ...base, quantityStatus: 'full' }).errors).toContain('quantityStatus é derivado das quantidades e não pode ser informado');
+    expect(Sample.validate({ ...base, specimenStatus: 'reserved' }).isValid).toBe(true);
   });
 });
 

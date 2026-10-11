@@ -609,8 +609,11 @@ describe('Reports API integration', () => {
     it('sampleanalysis: deriva status de specimenStatus, ignorando currentStatus/status legados', async () => {
       const { db } = buildCollectionDb({
         samples: [
-          { specimenId: 'S1', specimenStatus: 'depleted', currentStatus: 'Available', status: 'AVAILABLE' },
+          { specimenId: 'S1', specimenStatus: 'quarantined', currentStatus: 'Available', status: 'AVAILABLE' },
           { specimenId: 'S2', currentStatus: 'Available', status: 'AVAILABLE' },
+          // RF006 AC2/AC3: a not-yet-migrated v1.3.0 `depleted` reads as
+          // available, with the depletion in quantityStatus.
+          { specimenId: 'S3', specimenStatus: 'depleted', initialQuantity: 10, currentQuantity: 0 },
         ],
       });
       const testApp = appWithDb(db);
@@ -618,7 +621,8 @@ describe('Reports API integration', () => {
       const response = await request(testApp).post('/api/reports/sample_analysis/preview').send({ filters: {} });
 
       expect(response.status).toBe(200);
-      expect(response.body.data.analysis.find((item) => item.sampleID === 'S1').status).toBe('depleted');
+      expect(response.body.data.analysis.find((item) => item.sampleID === 'S1').status).toBe('quarantined');
+      expect(response.body.data.analysis.find((item) => item.sampleID === 'S3')).toMatchObject({ status: 'available', quantityStatus: 'depleted' });
       // No specimenStatus recorded: falls back to the schema default
       // ('available'), not the stale legacy fields.
       expect(response.body.data.analysis.find((item) => item.sampleID === 'S2').status).toBe('available');

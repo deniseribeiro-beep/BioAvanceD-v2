@@ -46,6 +46,16 @@ function createSampleValidationError(message, statusCode = 422) {
   return error;
 }
 
+// RF006 AC3 / RF026 AC7: a status write the generic update refuses (a
+// quantityStatus, `closed`, a v1.3.0 value, a change out of closed). The
+// code lets the route answer 422 for exactly these.
+const STATUS_WRITE_REFUSED = 'SPECIMEN_STATUS_WRITE_REFUSED';
+function createStatusWriteRefusal(message) {
+  const error = createSampleValidationError(message, 422);
+  error.code = STATUS_WRITE_REFUSED;
+  return error;
+}
+
 /**
  * #462: legacy `locationID` input is replaced by a `boxId` (StorageBox
  * ObjectId) + `positionCode` pair — the canonical way a specimen's physical
@@ -516,13 +526,11 @@ class SampleService {
         ? sample.currentQuantity
         : sample.quantity;
 
-      // #541: 'depleted' isn't in BLOCKED_SPECIMEN_STATUSES (it can't be —
-      // that would also make it sticky in computeStatus and block
-      // returnSample's un-deplete-on-return flow), so a Total withdrawal
-      // on an already-exhausted sample isn't caught by the status gate
-      // above. Without this, withdrawQty floors at 0 and the write
-      // "succeeds" with nothing actually withdrawn.
-      if (availableQty <= 0) {
+      // #541, RF006 AC3: depletion is quantityStatus, not a specimenStatus,
+      // so the status gate above does not see it. A depleted specimen has
+      // nothing to withdraw; without this, withdrawQty floors at 0 and the
+      // write "succeeds" with nothing actually withdrawn.
+      if (availableQty <= 0 || SampleModel.resolveQuantityStatus(sample) === 'depleted') {
         throw new Error(`Quantidade indisponível. Disponível: ${availableQty} ${sample.unit || 'µL'}`);
       }
 
@@ -545,7 +553,9 @@ class SampleService {
       const newAvailableQty = availableQty - withdrawQty;
       const totalWithdrawn = (sample.totalWithdrawn || 0) + withdrawQty;
 
-      const specimenStatus = SampleModel.computeStatus(sample.initialQuantity || sample.quantity, newAvailableQty, currentSpecimenStatus);
+      // RF006 AC2/AC3: a withdrawal moves quantityStatus only; specimenStatus
+      // is an operational state no quantity change moves.
+      const quantityStatus = SampleModel.computeQuantityStatus(sample.initialQuantity || sample.quantity, newAvailableQty);
 
       // Registrar movimentação no ledger (imutável)
       const movementID = await SampleMovementModel.generateMovementID(db);
@@ -585,7 +595,7 @@ class SampleService {
           sampleDestination: withdrawalData.sampleDestination || withdrawalData.withdrawalDestination,
           linkedProject: withdrawalData.linkedProject || sample.linkedProject,
           lastWithdrawalID: movementID,
-          specimenStatus,
+          quantityStatus,
           updatedAt: new Date()
         };
 
@@ -594,15 +604,6 @@ class SampleService {
           { $set: update },
           { session }
         );
-        // RF006 AC7: the status change, append-only, in the same transaction.
-        await operationalStateDecisionService.recordStatusChange(db, {
-          specimenId: sample.specimenId || String(sample._id),
-          previousStatus: currentSpecimenStatus,
-          newStatus: specimenStatus,
-          triggerEventId: movementID,
-          rulesApplied: ['quantity_derived_status'],
-          reasonCodes: ['withdraw'],
-        }, { session });
       });
 
       logger.info(`Retirada registrada: Sample ${sample.barcode || sample._id}, Qtd: ${withdrawQty}, Novo saldo: ${newAvailableQty}`);
@@ -612,7 +613,8 @@ class SampleService {
         movementID,
         withdrawnQuantity: withdrawQty,
         remainingQuantity: newAvailableQty,
-        newStatus: specimenStatus
+        newStatus: currentSpecimenStatus,
+        quantityStatus
       };
     } catch (error) {
       logger.error('Erro ao retirar amostra:', error.message);
@@ -627,8 +629,10 @@ class SampleService {
       if (!sample) return null;
       // Guarantee specimenStatus is populated even for legacy documents
       // written before the field existed (#415 — frontend readers can then
-      // drop their lifecycleStatus fallback).
+      // drop their lifecycleStatus fallback). A v1.3.0 value reads folded
+      // onto the v2 set, and quantityStatus is derived when absent.
       sample.specimenStatus = SampleModel.resolveSpecimenStatus(sample);
+      sample.quantityStatus = SampleModel.resolveQuantityStatus(sample);
       return sample;
     } catch (error) {
       logger.error('Erro ao buscar amostra:', error.message);
@@ -645,8 +649,19 @@ class SampleService {
         query.participantId = filters.participantId;
       }
 
+      // RF006 AC2/AC3: a v1.3.0 quantity value (partial, depleted) asked of
+      // specimenStatus is a quantityStatus filter now.
       if (filters.specimenStatus) {
-        query.specimenStatus = filters.specimenStatus;
+        const requested = String(filters.specimenStatus).trim().toLowerCase();
+        if (requested === 'partial' || requested === 'depleted') {
+          query.quantityStatus = requested;
+        } else {
+          query.specimenStatus = requested;
+        }
+      }
+
+      if (filters.quantityStatus) {
+        query.quantityStatus = String(filters.quantityStatus).trim().toLowerCase();
       }
 
       if (filters.sampleType) {
@@ -681,6 +696,7 @@ class SampleService {
       // See getSample's comment — same specimenStatus guarantee for the list view.
       samples.forEach((sample) => {
         sample.specimenStatus = SampleModel.resolveSpecimenStatus(sample);
+        sample.quantityStatus = SampleModel.resolveQuantityStatus(sample);
       });
 
       const total = await samplesCollection.countDocuments(query);
@@ -707,12 +723,33 @@ class SampleService {
         ? updateData.initialQuantity
         : existing.initialQuantity ?? existing.quantity;
 
-      const currentSpecimenStatus = updateData.specimenStatus || SampleModel.resolveSpecimenStatus(existing);
-      const specimenStatus = SampleModel.computeStatus(
-        nextOriginal,
-        nextAvailable,
-        currentSpecimenStatus
-      );
+      const previousStatus = SampleModel.resolveSpecimenStatus(existing);
+      const requestedStatus = updateData.specimenStatus
+        ? String(updateData.specimenStatus).trim().toLowerCase()
+        : null;
+      // RF006 AC3: quantityStatus is derived, never written by a client.
+      if (Object.prototype.hasOwnProperty.call(updateData, 'quantityStatus')) {
+        throw createStatusWriteRefusal('quantityStatus é derivado de initialQuantity e currentQuantity e não pode ser editado');
+      }
+      if (requestedStatus) {
+        // RF026 AC7: closed only by POST /api/samples/:id/close (validated
+        // total consumption) or an executed disposition, never by an edit.
+        if (requestedStatus === 'closed') {
+          throw createStatusWriteRefusal('specimenStatus closed só é atribuído por POST /api/samples/:id/close (consumo total validado) ou por uma destinação executada');
+        }
+        // RF006 AC2 (V2E-0544): the v1.3.0 values are not operational states.
+        if (!SampleModel.validateSpecimenStatus(requestedStatus)) {
+          throw createStatusWriteRefusal(`specimenStatus inválido: ${requestedStatus}. Aceitos: available, reserved, checked_out, quarantined, unavailable`);
+        }
+      }
+      // RF026 AC7: closed is final; an edit does not reopen it.
+      if (requestedStatus && SampleModel.isTerminalSpecimen(existing) && requestedStatus !== previousStatus) {
+        throw createStatusWriteRefusal(`Amostra em ${previousStatus} não admite mudança de specimenStatus`);
+      }
+      // RF006 AC2: only an explicit request moves specimenStatus; quantity
+      // moves quantityStatus alone.
+      const specimenStatus = requestedStatus || previousStatus;
+      const quantityStatus = SampleModel.computeQuantityStatus(nextOriginal, nextAvailable);
 
       // lifecycleStatus/availabilityStatus/quarantineStatus are retired
       // (#408), and status/currentStatus alongside them (#540) —
@@ -759,13 +796,16 @@ class SampleService {
         }
       }
 
+      // A document not yet migrated keeps its stored value unless the caller
+      // asked for a status: the migration, not an unrelated edit, replaces
+      // it and records its provenance.
       const payload = {
         ...restUpdateData,
-        specimenStatus,
+        ...(requestedStatus ? { specimenStatus } : {}),
+        quantityStatus,
         updatedAt: new Date()
       };
-      
-      const previousStatus = SampleModel.resolveSpecimenStatus(existing);
+
       const statusChanges = String(previousStatus || '').toLowerCase() !== String(specimenStatus || '').toLowerCase();
       const writeUpdate = async (session) => {
         const result = await samplesCollection.updateOne(
@@ -782,7 +822,7 @@ class SampleService {
             previousStatus,
             newStatus: specimenStatus,
             triggerEventId: `sample-update:${crypto.randomUUID()}`,
-            rulesApplied: [updateData.specimenStatus ? 'manual_status_update' : 'quantity_derived_status'],
+            rulesApplied: ['manual_status_update'],
             reasonCodes: ['update'],
           }, { session });
         }
@@ -911,6 +951,7 @@ class SampleService {
 
       // See getSample's comment — same specimenStatus guarantee for barcode lookups.
       sample.specimenStatus = SampleModel.resolveSpecimenStatus(sample);
+      sample.quantityStatus = SampleModel.resolveQuantityStatus(sample);
 
       return { sample, participant };
     } catch (error) {
@@ -1023,7 +1064,9 @@ class SampleService {
         newAvailableQty += returnQty;
       }
 
-      const specimenStatus = SampleModel.computeStatus(sample.initialQuantity || sample.quantity, newAvailableQty, currentSpecimenStatus);
+      // RF006 AC2/AC3: a return moves quantityStatus only (a depleted
+      // specimen becomes partial or full again); specimenStatus stays.
+      const quantityStatus = SampleModel.computeQuantityStatus(sample.initialQuantity || sample.quantity, newAvailableQty);
 
       // Registrar movimentação no ledger (imutável)
       const movementID = await SampleMovementModel.generateMovementID(db);
@@ -1056,11 +1099,12 @@ class SampleService {
         const update = {
           currentQuantity: newAvailableQty,
           totalReturned: newTotalReturned,
-          specimenStatus,
+          quantityStatus,
           updatedAt: new Date()
         };
 
-        if (specimenStatus === 'available') {
+        // Fully restored: the withdrawal it answered is over.
+        if (quantityStatus === 'full') {
           update.withdrawnAt = null;
           update.withdrawalType = null;
           update.withdrawalResponsible = null;
@@ -1072,15 +1116,6 @@ class SampleService {
           { $set: update },
           { session }
         );
-        // RF006 AC7: the status change, append-only, in the same transaction.
-        await operationalStateDecisionService.recordStatusChange(db, {
-          specimenId: sample.specimenId || String(sample._id),
-          previousStatus: currentSpecimenStatus,
-          newStatus: specimenStatus,
-          triggerEventId: movementID,
-          rulesApplied: ['quantity_derived_status'],
-          reasonCodes: ['return', returnData.condition],
-        }, { session });
       });
 
       logger.info(`Devolução registrada: Sample ${sample.barcode || sample._id}, Qtd: ${returnQty}, Condição: ${returnData.condition}, Novo saldo: ${newAvailableQty}`);
@@ -1091,7 +1126,8 @@ class SampleService {
         returnedQuantity: returnQty,
         condition: returnData.condition,
         newAvailableQuantity: newAvailableQty,
-        newStatus: specimenStatus
+        newStatus: currentSpecimenStatus,
+        quantityStatus
       };
     } catch (error) {
       logger.error('Erro ao retornar amostra:', error.message);
@@ -1211,9 +1247,70 @@ class SampleService {
    */
   async findAvailableSamplesForResearch(db, query = {}) {
     const samplesCollection = await getCollection(db, 'samples');
-    // Garante que só retorna amostras AVAILABLE
-    const finalQuery = { ...query, specimenStatus: 'available' };
+    // Garante que só retorna amostras AVAILABLE. RF006 AC3: a depleted
+    // specimen is available in state but has nothing to use.
+    const finalQuery = { ...query, specimenStatus: 'available', quantityStatus: { $ne: 'depleted' } };
     return samplesCollection.find(finalQuery).toArray();
+  }
+
+  /**
+   * RF026 AC7 (dictionary RULE-006): closes a specimen whose total
+   * consumption is validated, i.e. its quantities derive quantityStatus
+   * depleted. Refused (409) when it is not depleted or already closed.
+   * The change appends an OperationalStateDecision with the write; the route
+   * audits it. Returns null when the specimen does not exist.
+   */
+  async closeSpecimen(db, specimenId, { actorId = null } = {}) {
+    const samplesCollection = await getCollection(db, 'samples');
+    const sample = await findSampleByAnyId(samplesCollection, specimenId);
+    if (!sample) return null;
+
+    const previousStatus = SampleModel.resolveSpecimenStatus(sample);
+    if (previousStatus === 'closed') {
+      throw createSampleValidationError('Amostra já está encerrada (closed)', 409);
+    }
+    // Derived from the quantities themselves, not a stored quantityStatus a
+    // stale document might carry.
+    const { initial, current } = SampleModel.quantitiesOf(sample);
+    const quantityStatus = SampleModel.computeQuantityStatus(initial, current);
+    if (quantityStatus !== 'depleted') {
+      throw createSampleValidationError(
+        `Encerramento exige consumo total validado: quantityStatus é ${quantityStatus} (currentQuantity ${current ?? 0})`,
+        409
+      );
+    }
+
+    const canonicalId = sample.specimenId || String(sample._id);
+    const triggerEventId = `sample-close:${crypto.randomUUID()}`;
+    const now = new Date();
+    const decision = await withTransactionWhereSupported(db, async (session) => {
+      const result = await samplesCollection.updateOne(
+        { _id: sample._id, specimenStatus: sample.specimenStatus ?? null },
+        { $set: { specimenStatus: 'closed', quantityStatus, updatedAt: now } },
+        session ? { session } : undefined
+      );
+      if (!result || result.matchedCount === 0) {
+        throw createSampleValidationError('Amostra alterada concorrentemente; leia-a de novo', 409);
+      }
+      return operationalStateDecisionService.recordStatusChange(db, {
+        specimenId: canonicalId,
+        previousStatus,
+        newStatus: 'closed',
+        triggerEventId,
+        rulesApplied: ['rf026_ac7_validated_consumption'],
+        reasonCodes: ['total_consumption'],
+      }, { session });
+    });
+
+    logger.info(`Amostra encerrada por consumo total: ${canonicalId}${actorId ? ` (por ${actorId})` : ''}`);
+    return {
+      specimenId: canonicalId,
+      previousStatus,
+      specimenStatus: 'closed',
+      quantityStatus,
+      operationalStateDecisionId: decision?.operationalStateDecisionId || null,
+      triggerEventId,
+    };
   }
 }
 

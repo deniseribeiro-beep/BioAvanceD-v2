@@ -342,6 +342,20 @@ describe('reports.routes.js gaps', () => {
         expect.arrayContaining([{ specimenStatus: 'unavailable' }])
       );
     });
+
+    // RF006 AC2/AC3: exhausted and partly used are quantity, so ESGOTADA/
+    // DEPLETED and PARCIAL filter quantityStatus, never specimenStatus.
+    it.each([
+      ['esgotada', { quantityStatus: 'depleted' }],
+      ['DEPLETED', { quantityStatus: 'depleted' }],
+      ['parcial', { quantityStatus: 'partial' }],
+    ])('maps status %s onto quantityStatus', async (status, condition) => {
+      const { db, capturedQueries } = buildCollectionDb({ samples: [{ sampleID: 'S1' }] });
+      const response = await request(appWithDb(db)).post('/api/reports/samples/preview').send({ filters: { status } });
+      expect(response.status).toBe(200);
+      expect(capturedQueries.samples.$and).toEqual(expect.arrayContaining([condition]));
+      expect(JSON.stringify(capturedQueries.samples)).not.toContain('specimenStatus');
+    });
   });
 
   it('paciente: retorna lista paginada de pacientes sem o agrupamento samplesbypatient', async () => {

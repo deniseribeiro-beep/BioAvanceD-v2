@@ -109,8 +109,19 @@ function normalizeReleaseStatus(value) {
   if (!normalized) return '';
   if (['ATIVA', 'AVAILABLE', 'DISPONIVEL', 'DISPONÍVEL'].includes(normalized)) return 'AVAILABLE';
   if (['QUARENTINE', 'QUARANTINE', 'EM_QUARENTENA', 'QUARENTENA'].includes(normalized)) return 'QUARANTINE';
-  if (['ESGOTADA', 'DEPLETED', 'BLOCKED', 'BLOQUEADA'].includes(normalized)) return 'BLOCKED';
+  // RF006 AC3: exhausted and partly used are quantity, not state.
+  if (['ESGOTADA', 'DEPLETED'].includes(normalized)) return 'DEPLETED';
+  if (['PARCIAL', 'PARTIAL'].includes(normalized)) return 'PARTIAL';
+  if (['BLOCKED', 'BLOQUEADA'].includes(normalized)) return 'BLOCKED';
   return normalized;
+}
+
+// RF006 AC2/AC3: DEPLETED and PARTIAL filter quantityStatus; every other
+// value filters specimenStatus.
+function releaseStatusCondition(releaseStatus) {
+  if (releaseStatus === 'DEPLETED') return { quantityStatus: 'depleted' };
+  if (releaseStatus === 'PARTIAL') return { quantityStatus: 'partial' };
+  return { specimenStatus: releaseStatusToSpecimenStatus(releaseStatus) };
 }
 
 function normalizeTreatmentStatus(value) {
@@ -123,8 +134,8 @@ function normalizeTreatmentStatus(value) {
 }
 
 // #531: maps the filter's public AVAILABLE/QUARANTINE/BLOCKED vocabulary
-// onto specimenStatus's canonical lowercase values (dict-02 ELM-0123 +
-// the documented `disposed` extension, see Sample.js). BLOCKED collapses
+// onto specimenStatus's canonical lowercase values (RF006 AC2, see
+// Sample.js). BLOCKED collapses
 // into `unavailable` — the same coarsening canonical-data-contract-v1.md
 // already applied when it retired the old `availabilityStatus` field. An
 // unrecognized raw value case-folds through as-is (matches no real
@@ -228,7 +239,7 @@ async function buildSampleQuery(db, filters = {}) {
 
   const releaseStatus = normalizeReleaseStatus(filters.status || filters.releaseStatus || filters.graphStatus);
   if (releaseStatus) {
-    conditions.push({ specimenStatus: releaseStatusToSpecimenStatus(releaseStatus) });
+    conditions.push(releaseStatusCondition(releaseStatus));
   }
 
   // #739 (RF008 AC#1): "Aplicar filtros por periodo, colecao, tipo, origem,
@@ -621,6 +632,7 @@ async function handleSampleAnalysis(db, filters) {
       // ELM-0123) instead of the legacy currentStatus/status fields
       // canonical-data-contract-v1.md bans.
       status: SampleModel.resolveSpecimenStatus(sample),
+      quantityStatus: SampleModel.resolveQuantityStatus(sample),
       resultCount: sampleResults.length,
       hasResults: sampleResults.length > 0,
     };
@@ -1008,7 +1020,7 @@ const FILTER_CATALOG = {
 // `sealedRcsAssessmentId` / `sealedSpecimenPreanalyticsId`.
 const SAMPLE_EXPORT_COLUMNS = [
   'specimenId', 'participantId', 'sampleType', 'sampleOrigin', 'barcode',
-  'specimenStatus', 'registeredAt', 'receivedAt', 'withdrawnAt',
+  'specimenStatus', 'quantityStatus', 'registeredAt', 'receivedAt', 'withdrawnAt',
   'collectionSite', 'locationId', 'matrixType', 'quantity', 'unit',
   'currentQuantity', 'initialQuantity', 'linkedProject', 'studyId',
   'collectionId', 'consentStatus', 'governanceStatus', 'rcsScore',
@@ -1055,11 +1067,11 @@ const EXPORT_CATALOG = {
   sample: { rowKey: 'samples', columns: SAMPLE_EXPORT_COLUMNS },
   tissueOriginHistory: { rowKey: 'samples', columns: SAMPLE_EXPORT_COLUMNS },
   extracellularNetwork: { rowKey: 'samples', columns: SAMPLE_EXPORT_COLUMNS },
-  // The one handler that already projects. Its seven fields ARE the
+  // The one handler that already projects. Its eight fields ARE the
   // allow-list; restated here so the catalog is the single place to read.
   sampleAnalysis: {
     rowKey: 'analysis',
-    columns: ['sampleID', 'barcode', 'sampleType', 'patientID', 'status', 'resultCount', 'hasResults'],
+    columns: ['sampleID', 'barcode', 'sampleType', 'patientID', 'status', 'quantityStatus', 'resultCount', 'hasResults'],
   },
   // Excluded: `operatorId` -- who took a reading is operator identity, and
   // nothing in a temperature report needs it.
