@@ -125,6 +125,19 @@ describe('POST /api/users/register-sample - paridade de contrato com /api/sample
     expect(patientsCollectionMock.updateOne).not.toHaveBeenCalled();
   });
 
+  it('#1367: forwards the use case options to createSample, as POST /api/samples does', async () => {
+    const response = await whenRegisterSample(
+      buildSamplePayload({ linkedProject: 'Projeto QA Rota Usuário', isRareDisease: false, riskScore: 1 })
+    );
+
+    expect([201, 202]).toContain(response.status);
+    expect(sampleService.createSample).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(Object),
+      expect.objectContaining({ onCreatedInTransaction: expect.any(Function) })
+    );
+  });
+
   it('deve bloquear em STRICT_MODE_BLOCKED na rota alternativa (403)', async () => {
     // Given
     const enqueueTopologicalTransaction = vi.fn().mockResolvedValue(undefined);

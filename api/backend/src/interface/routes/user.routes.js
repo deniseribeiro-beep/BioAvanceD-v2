@@ -1095,11 +1095,9 @@ router.post('/register-sample', authenticate, requirePermission('createSample'),
     const sampleService = require('../../services/sample.service');
 
     const sampleRepository = {
-      create: async (sampleData) => {
-        const savedSample = await sampleService.createSample(db, { ...sampleData });
-
-        return savedSample;
-      },
+      // Same contract as POST /api/samples: the use case's options (audit
+      // actor, the in-transaction register custody append) reach the create.
+      create: async (sampleData, options = {}) => sampleService.createSample(db, { ...sampleData }, options),
       deleteById: async (sampleId) => {
         const samplesCollection = await getCollection(db, 'samples');
         const filter = ObjectId.isValid(sampleId)
