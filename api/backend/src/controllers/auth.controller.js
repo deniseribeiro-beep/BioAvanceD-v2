@@ -400,7 +400,7 @@ class AuthController {
       // session was authenticated with a password that no longer exists.
       //
       // A missing Authorization header fails CLOSED for free: hashToken(undefined)
-      // hashes '' and matches no stored tokenHash, so nothing is excluded and all
+      // hashes '' and matches no stored accessTokenHash, so nothing is excluded and all
       // sessions die.
       const currentToken = (req.headers && req.headers.authorization || '').replace('Bearer ', '');
       await sessionService.revokeAllOtherSessions(

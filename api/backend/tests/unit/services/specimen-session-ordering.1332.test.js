@@ -91,9 +91,12 @@ describe('biomarker-observation.service ordering', () => {
 describe('active session lists', () => {
   async function storeSessions(db) {
     const sessions = db.collection('sessions');
-    await sessions.insertOne({ sessionID: 'mid', userID: 'u1', isActive: true, lastActivity: day(2) });
-    await sessions.insertOne({ sessionID: 'newest', userID: 'u1', isActive: true, lastActivity: day(3) });
+    await sessions.insertOne({ sessionId: 'mid', userAccountId: 'u1', isActive: true, lastActivityAt: day(2) });
+    await sessions.insertOne({ sessionId: 'newest', userAccountId: 'u1', isActive: true, lastActivityAt: day(3) });
+    // #1330: stored before the canonical names. Any activity since writes
+    // lastActivityAt, so a legacy-only document is the least recent.
     await sessions.insertOne({ sessionID: 'oldest', userID: 'u1', isActive: true, lastActivity: day(1) });
+    await sessions.insertOne({ sessionId: 'other-user', userAccountId: 'u2', isActive: true, lastActivityAt: day(4) });
   }
 
   it('session.service.listUserSessions lists the most recently active session first', async () => {

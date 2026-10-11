@@ -798,7 +798,10 @@ describe('AuthController.changePassword', () => {
     // All-but-current: the session making this request just proved knowledge of
     // BOTH the old and the new password, so it is not an affected session.
     expect(sessionsCollection.updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({ userID: '507f1f77bcf86cd799439011', isActive: true }),
+      expect.objectContaining({
+        $or: [{ userAccountId: '507f1f77bcf86cd799439011' }, { userID: '507f1f77bcf86cd799439011' }],
+        isActive: true
+      }),
       expect.objectContaining({
         $set: expect.objectContaining({
           isRevoked: true,

@@ -1,7 +1,7 @@
 // An in-memory stand-in for the native driver's db/collection, with real
 // filter semantics for what the Foundation pipeline issues: exact-key and
 // dotted-path equality, array membership, `$in`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$exists`,
-// upsert with `$setOnInsert` returning the upserted id, multi-key
+// top-level `$or`/`$and`, upsert with `$setOnInsert` returning the upserted id, multi-key
 // sort/skip/limit cursors, a sorted findOne, counts, deletes and index
 // listing. A
 // stub returning canned data would let the pipeline's own queries go
@@ -44,8 +44,13 @@ function isOperatorObject(expected) {
   return keys.length > 0 && keys.every((key) => key in OPERATORS);
 }
 
+// Top-level `$or` and `$and` take a list of filters, as the driver's do.
+// Any other `$`-prefixed top-level key throws, like an unknown operator.
 function matches(doc, filter = {}) {
   return Object.entries(filter).every(([path, expected]) => {
+    if (path === '$or') return expected.some((clause) => matches(doc, clause));
+    if (path === '$and') return expected.every((clause) => matches(doc, clause));
+    if (path.startsWith('$')) throw new Error(`fake-db: unsupported top-level operator ${path}`);
     const actual = valueAt(doc, path);
     if (isOperatorObject(expected)) {
       return Object.entries(expected).every(([op, operand]) => OPERATORS[op](actual, operand));

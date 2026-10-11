@@ -260,22 +260,9 @@ const KNOWN_DRIFT = {
     ]
   },
   Session: {
-    absent: [
-      { elementId: 'P1X-0251', field: 'sessionId', note: 'TODO(#1330): 1..1 Core -- stored as sessionID (extra below).' },
-      { elementId: 'P1X-0252', field: 'userAccountId', note: 'TODO(#1330): 1..1 Core -- stored as userID (extra below).' },
-      { elementId: 'P1X-0253', field: 'accessTokenHash', note: 'TODO(#1330): 1..1 Core -- stored as tokenHash (extra below).' },
-      { elementId: 'P1X-0258', field: 'lastActivityAt', note: 'TODO(#1330): 1..1 Core -- stored as lastActivity (extra below).' },
-      { elementId: 'P1X-0259', field: 'sessionStartedAt', note: 'TODO(#1330): 1..1 Core -- stored as createdAt (extra below), as the dictionary row itself notes.' },
-      { elementId: 'P1X-0262', field: 'inactivityTimeoutMs', note: 'TODO(#1330): 1..1 Core -- stored as inactiveTimeout (extra below).' }
-    ],
+    absent: [],
     extra: [
-      { key: 'sessionID', note: 'TODO(#1330): pre-dictionary name of sessionId (P1X-0251).' },
-      { key: 'userID', note: 'TODO(#1330): pre-dictionary name of userAccountId (P1X-0252).' },
-      { key: 'tokenHash', note: 'TODO(#1330): pre-dictionary name of accessTokenHash (P1X-0253).' },
-      { key: 'lastActivity', note: 'TODO(#1330): pre-dictionary name of lastActivityAt (P1X-0258).' },
-      { key: 'createdAt', note: 'TODO(#1330): pre-dictionary name of sessionStartedAt (P1X-0259).' },
-      { key: 'inactiveTimeout', note: 'TODO(#1330): pre-dictionary name of inactivityTimeoutMs (P1X-0262).' },
-      { key: 'updatedAt', note: 'TODO(#1330): record timestamp with no Session row.' }
+      { key: 'updatedAt', note: 'Deliberate local extension: every session write stamps it, the revocation audit reads it (#974); no canonical row.' }
     ]
   }
 };

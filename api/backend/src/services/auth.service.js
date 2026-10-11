@@ -348,7 +348,8 @@ class AuthService {
     return {
       token: accessToken,
       refreshToken,
-      sessionID: session.sessionID
+      // The bundle's key stays sessionID; the stored name is sessionId.
+      sessionID: session.sessionId
     };
   }
 

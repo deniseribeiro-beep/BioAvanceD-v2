@@ -1525,7 +1525,7 @@ describe('#958: password changes revoke sessions', () => {
     await authService.resetPassword(db, 'tok', 'NewPass123!@#long', {});
 
     expect(sessionsCollection.updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({ userID: 'user-1', isActive: true }),
+      expect.objectContaining({ $or: [{ userAccountId: 'user-1' }, { userID: 'user-1' }], isActive: true }),
       expect.objectContaining({
         $set: expect.objectContaining({
           isRevoked: true, revocationReason: 'password_change', revokedBy: 'system',

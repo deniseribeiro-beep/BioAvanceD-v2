@@ -106,9 +106,9 @@ vi.mock('../src/infrastructure/database/neo4j/connection', () => ({
 }));
 
 vi.mock('../src/services/session.service', () => ({
-  verifySession: vi.fn(async () => ({ valid: true, session: { sessionID: 'test-session', userID: 'test-user' } })),
-  updateActivity: vi.fn(async () => ({ sessionID: 'test-session' })),
-  revokeSessionById: vi.fn(async () => ({ sessionID: 'test-session', isRevoked: true, revokedAt: new Date() })),
+  verifySession: vi.fn(async () => ({ valid: true, session: { sessionId: 'test-session', userAccountId: 'test-user' } })),
+  updateActivity: vi.fn(async () => ({ sessionId: 'test-session' })),
+  revokeSessionById: vi.fn(async () => ({ sessionId: 'test-session', isRevoked: true, revokedAt: new Date() })),
   revokeAllOtherSessions: vi.fn(async () => ({ revokedCount: 0 })),
   listUserSessions: vi.fn(async () => []),
   invalidateSession: vi.fn(async () => true),

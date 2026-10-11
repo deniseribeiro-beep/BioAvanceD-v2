@@ -35,10 +35,18 @@ export async function listSessionIndexNames(): Promise<string[]> {
   return indexes.map((index) => String(index.name));
 }
 
-/** The user's most recently created session, or null. */
+/**
+ * The user's most recently created session, or null. #1330: sessions are
+ * stored under userAccountId and sessionStartedAt (dict-02 Session); a
+ * document written before that carries userID and createdAt instead.
+ */
 export async function findLatestSession(userID: string) {
   const db = await getDb();
-  return db.collection('sessions').findOne({ userID: String(userID) }, { sort: { createdAt: -1 } });
+  const owner = String(userID);
+  return db.collection('sessions').findOne(
+    { $or: [{ userAccountId: owner }, { userID: owner }] },
+    { sort: { sessionStartedAt: -1, createdAt: -1 } }
+  );
 }
 
 /**

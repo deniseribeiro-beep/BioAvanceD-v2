@@ -496,11 +496,12 @@ describe('Users and Access routes', () => {
     expect(res.statusCode).toBe(200);
     // Assert the FILTER's id value, not merely that updateMany ran. The
     // sessions collection keys its owner as a string (`Session.js` coerces
-    // with String(data.userID), fed from auth.service.js's
+    // with String(data.userAccountId), fed from auth.service.js's
     // user._id.toString()), so revoking with a non-string id matches
     // nothing, throws nothing and still returns 200 -- a silent no-op.
+    // #1330: the owner matches under userAccountId or the legacy userID.
     expect(sessionsCollection.updateMany).toHaveBeenCalledWith(
-      { userID: 'user-target-1', isActive: true },
+      { $or: [{ userAccountId: 'user-target-1' }, { userID: 'user-target-1' }], isActive: true },
       expect.objectContaining({
         $set: expect.objectContaining({ isActive: false, isRevoked: true }),
       })
@@ -1033,7 +1034,7 @@ describe('Users and Access routes', () => {
       // The administrator knows this password; the owner must replace it.
       expect(setPayload.forceReset).toBe(true);
       expect(sessionsCollection.updateMany).toHaveBeenCalledWith(
-        { userID: 'user-target-1013', isActive: true },
+        { $or: [{ userAccountId: 'user-target-1013' }, { userID: 'user-target-1013' }], isActive: true },
         expect.objectContaining({
           $set: expect.objectContaining({
             isRevoked: true,
@@ -1157,7 +1158,7 @@ describe('Users and Access routes', () => {
     }
 
     const revokedAsAdminAction = () => expect(sessionsCollection.updateMany).toHaveBeenCalledWith(
-      { userID: 'user-target-1306', isActive: true },
+      { $or: [{ userAccountId: 'user-target-1306' }, { userID: 'user-target-1306' }], isActive: true },
       expect.objectContaining({
         $set: expect.objectContaining({ isRevoked: true, revocationReason: 'admin_action', revokedBy: '507f1f77bcf86cd799439011' }),
       })
@@ -1999,7 +2000,7 @@ describe('Users and Access routes', () => {
         { $set: expect.objectContaining({ status: 'inactive' }) }
       );
       expect(sessionsCollection.updateMany).toHaveBeenCalledWith(
-        { userID: 'tec-target-1008', isActive: true },
+        { $or: [{ userAccountId: 'tec-target-1008' }, { userID: 'tec-target-1008' }], isActive: true },
         expect.objectContaining({ $set: expect.objectContaining({ revocationReason: 'admin_action', revokedBy: COORD.userID }) })
       );
     });

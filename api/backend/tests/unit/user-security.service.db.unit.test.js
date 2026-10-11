@@ -13,12 +13,15 @@ function hashToken(token) {
 }
 
 // Minimal Mongo-query matcher covering the shapes revokeAllOtherSessions
-// builds (top-level equality, $and, $ne), so the mocked updateMany can
+// builds (top-level equality, $or, $and, $ne), so the mocked updateMany can
 // actually filter/mutate fake documents instead of just recording calls.
 function matchesMongoQuery(doc, query) {
   return Object.entries(query).every(([key, condition]) => {
     if (key === '$and') {
       return condition.every((clause) => matchesMongoQuery(doc, clause));
+    }
+    if (key === '$or') {
+      return condition.some((clause) => matchesMongoQuery(doc, clause));
     }
     if (condition && typeof condition === 'object' && '$ne' in condition) {
       return doc[key] !== condition.$ne;
@@ -512,7 +515,7 @@ describe('UserSecurityService DB-backed methods', () => {
     it('revokes a matching session and clears it from the in-memory cache', async () => {
       const sessions = buildCollection({ updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) });
       const db = buildDb({ sessions });
-      sessionService.sessions.set('sess-1', { sessionID: 'sess-1', userID: USER_ID });
+      sessionService.sessions.set('sess-1', { sessionId: 'sess-1', userAccountId: USER_ID });
 
       await userSecurityService.revokeSession(db, USER_ID, 'sess-1');
 
@@ -557,13 +560,35 @@ describe('UserSecurityService DB-backed methods', () => {
       await userSecurityService.revokeSession(db, USER_ID, validObjectId);
 
       const [query] = sessions.updateOne.mock.calls[0];
-      expect(query.$or).toHaveLength(2);
+      // #1330: the owner under either name, and the id as sessionId, the
+      // legacy sessionID or the document _id.
+      expect(query.$or).toEqual([{ userAccountId: USER_ID }, { userID: USER_ID }]);
+      expect(query.$and[0].$or).toHaveLength(3);
+      expect(query.$and[0].$or.slice(0, 2)).toEqual([{ sessionId: validObjectId }, { sessionID: validObjectId }]);
+    });
+
+    it('#1330: revokes a session stored under the legacy names', async () => {
+      const docs = [
+        { _id: 'a', sessionID: 'sess-legacy', userID: 'someone-else', isActive: true },
+        { _id: 'b', sessionID: 'sess-legacy', userID: USER_ID, isActive: true }
+      ];
+      const sessions = buildCollection({
+        updateOne: vi.fn(async (query, update) => {
+          const doc = docs.find((entry) => matchesMongoQuery(entry, query));
+          if (doc) Object.assign(doc, update.$set);
+          return { matchedCount: doc ? 1 : 0 };
+        })
+      });
+
+      await userSecurityService.revokeSession(buildDb({ sessions }), USER_ID, 'sess-legacy');
+
+      expect(docs.map((doc) => doc.isRevoked === true)).toEqual([false, true]);
     });
 
     it('falls back to matching by sessionID/_id fields when the cache key differs from sessionId', async () => {
       const sessions = buildCollection({ updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) });
       const db = buildDb({ sessions });
-      sessionService.sessions.set('cache-key', { sessionID: 'sess-1', userID: USER_ID });
+      sessionService.sessions.set('cache-key', { sessionId: 'sess-1', userAccountId: USER_ID });
 
       await userSecurityService.revokeSession(db, USER_ID, 'sess-1');
 
@@ -575,7 +600,7 @@ describe('UserSecurityService DB-backed methods', () => {
       const sessions = buildCollection({ updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) });
       const db = buildDb({ sessions });
       sessionService.sessions.set('cache-key', {
-        userID: USER_ID,
+        userAccountId: USER_ID,
         _id: { toString: () => validObjectId }
       });
 
@@ -589,8 +614,8 @@ describe('UserSecurityService DB-backed methods', () => {
     it('revokes all other sessions and clears them from the cache, keeping the current one', async () => {
       const sessions = buildCollection();
       const db = buildDb({ sessions });
-      sessionService.sessions.set('other', { userID: USER_ID, token: 'old-token' });
-      sessionService.sessions.set('current', { userID: USER_ID, token: 'current-token' });
+      sessionService.sessions.set('other', { userAccountId: USER_ID, token: 'old-token' });
+      sessionService.sessions.set('current', { userAccountId: USER_ID, token: 'current-token' });
 
       await userSecurityService.revokeAllSessions(db, USER_ID, 'current-token');
 
@@ -606,9 +631,13 @@ describe('UserSecurityService DB-backed methods', () => {
       // doc1 is the caller's own session -- stored (like real sessions) by
       // tokenHash only, no plaintext token field. doc2 is another session,
       // still on legacy plaintext token.
+      // #1330: doc3 is the caller's own session stored under the legacy
+      // names; doc4 another legacy one. The exclusion holds under either name.
       const docs = [
-        { _id: '1', userID: USER_ID, tokenHash: currentHash, isActive: true },
-        { _id: '2', userID: USER_ID, token: 'other-token', isActive: true }
+        { _id: '1', userAccountId: USER_ID, accessTokenHash: currentHash, isActive: true },
+        { _id: '2', userAccountId: USER_ID, token: 'other-token', isActive: true },
+        { _id: '3', userID: USER_ID, tokenHash: currentHash, isActive: true },
+        { _id: '4', userID: USER_ID, tokenHash: 'other-hash', isActive: true }
       ];
 
       const sessions = buildCollection({
@@ -634,6 +663,8 @@ describe('UserSecurityService DB-backed methods', () => {
       expect(docs[1].isActive).toBe(false);
       expect(docs[1].revokedAt).toBeInstanceOf(Date);
       expect(docs[1].updatedAt).toBeInstanceOf(Date);
+      expect(docs[2].isRevoked).toBeUndefined();
+      expect(docs[3].isRevoked).toBe(true);
     });
   });
 
@@ -760,10 +791,10 @@ describe('UserSecurityService DB-backed methods', () => {
     it('returns sessions from the database with parsed device details', async () => {
       const dbSessions = [
         {
-          sessionID: 'sess-1',
+          sessionId: 'sess-1',
           token: 'current-token',
           sessionData: { userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', ip: '10.0.0.5' },
-          lastActivity: new Date()
+          lastActivityAt: new Date()
         }
       ];
       const sessions = buildCollection({
@@ -777,9 +808,30 @@ describe('UserSecurityService DB-backed methods', () => {
       const result = await userSecurityService.getSessions(db, USER_ID, 'current-token');
 
       expect(result).toHaveLength(1);
+      expect(result[0].id).toBe('sess-1');
       expect(result[0].isCurrent).toBe(true);
       expect(result[0].os).toBe('Windows 10/11');
       expect(result[0].location).toBe('10.0.xxx.xxx');
+      // #1330: the owner matches under either name, newest activity first.
+      expect(sessions.find).toHaveBeenCalledWith({
+        $or: [{ userAccountId: USER_ID }, { userID: USER_ID }],
+        isActive: true
+      });
+    });
+
+    it('#1330: presents a legacy-named session with the same keys', async () => {
+      const lastActivity = new Date('2026-02-01T00:00:00.000Z');
+      const dbSessions = [{ sessionID: 'sess-legacy', userID: USER_ID, token: 'other-token', lastActivity, createdAt: new Date('2026-01-01T00:00:00.000Z') }];
+      const sessions = buildCollection({
+        find: vi.fn().mockReturnValue({
+          sort: vi.fn().mockReturnThis(),
+          toArray: vi.fn().mockResolvedValue(dbSessions)
+        })
+      });
+
+      const result = await userSecurityService.getSessions(buildDb({ sessions }), USER_ID, 'current-token');
+
+      expect(result[0]).toMatchObject({ id: 'sess-legacy', lastAccess: lastActivity });
     });
 
     it('falls back to a synthetic current session when nothing is stored', async () => {

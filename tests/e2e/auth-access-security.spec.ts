@@ -608,6 +608,7 @@ test.describe('User management (RF003) — real backend', () => {
     const raw = JSON.stringify(audit);
     expect(raw).not.toContain(String(userID));
     expect(raw).not.toContain('tokenHash');
+    expect(raw).not.toContain('TokenHash');
     for (const s of audit.sessions) {
       if (s.ipAddress !== null) expect(s.ipAddress).toMatch(/(\.x|::x|^x)$/);
       expect(s.isRevoked).toBe(true);
@@ -668,10 +669,16 @@ test.describe('User management (RF003) — real backend', () => {
     expect(riskAudit!.message).toContain('sessões afetadas 1');
 
     // The lookup indexes are built on the live collection, the per-request
-    // tokenHash lookup's included (ensured un-awaited, so polled).
+    // token-hash lookup's included under both its canonical and its legacy
+    // name (ensured un-awaited, so polled).
     await expect
       .poll(async () => listSessionIndexNames(), { timeout: 10_000 })
-      .toEqual(expect.arrayContaining(['sessions_tokenHash_v1', 'sessions_revocationReason_createdAt_v1']));
+      .toEqual(expect.arrayContaining([
+        'sessions_accessTokenHash_v1',
+        'sessions_tokenHash_v1',
+        'sessions_revocationReason_sessionStartedAt_v1',
+        'sessions_revocationReason_createdAt_v1',
+      ]));
     await closeSessionsDb();
   });
 });
@@ -909,7 +916,7 @@ test.describe('Security policy management (RF014) — real backend', () => {
       const session = await findLatestSession(userID);
       expect(session).toBeTruthy();
       const capMs = 2 * 60 * 60 * 1000;
-      expect(new Date(session!.refreshExpiresAt).getTime() - new Date(session!.createdAt).getTime()).toBe(capMs);
+      expect(new Date(session!.refreshExpiresAt).getTime() - new Date(session!.sessionStartedAt).getTime()).toBe(capMs);
 
       // A real refresh rotates the tokens but keeps the ceiling. Before #914 it
       // reset refreshExpiresAt to now + 7 days on every call.
@@ -919,8 +926,8 @@ test.describe('Security policy management (RF014) — real backend', () => {
       const refreshed = await request.post(`${apiBaseURL}/api/auth/refresh`, { headers: { Cookie: refreshCookie! } });
       expect(refreshed.ok(), await refreshed.text()).toBeTruthy();
       const rotated = await findLatestSession(userID);
-      expect(rotated!.sessionID).toBe(session!.sessionID);
-      expect(rotated!.tokenHash).not.toBe(session!.tokenHash);
+      expect(rotated!.sessionId).toBe(session!.sessionId);
+      expect(rotated!.accessTokenHash).not.toBe(session!.accessTokenHash);
       expect(new Date(rotated!.refreshExpiresAt).getTime()).toBe(new Date(session!.refreshExpiresAt).getTime());
 
       // Control: requireMFA=true, and the same first login is sent to enrolment.
@@ -1861,7 +1868,7 @@ test.describe('Security policy management (RF014) — real backend', () => {
       const enrolled = await completeFirstLoginMfa(request, apiBaseURL!, username, password);
       expect(enrolled.token).toBeTruthy();
       const session = await findLatestSession(userID);
-      expect(session!.inactiveTimeout).toBe(15 * 60 * 1000);
+      expect(session!.inactivityTimeoutMs).toBe(15 * 60 * 1000);
 
       const weak = await request.post(`${apiBaseURL}/api/users/register`, {
         headers: auth,

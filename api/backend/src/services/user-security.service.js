@@ -5,6 +5,7 @@ const { ObjectId } = require('mongodb');
 const { randomUUID, randomInt } = require('crypto');
 const { hashToken } = require('../utils/tokenHash');
 const RecoveryCodeSetModel = require('../models/RecoveryCodeSet');
+const SessionModel = require('../models/Session');
 
 /**
  * Service de Segurança do Usuário
@@ -205,18 +206,21 @@ class UserSecurityService {
       const sessionsCollection = db.collection('sessions');
       
       // Busca sessões no banco
+      // A session matches under its canonical owner name or the legacy one;
+      // a legacy document has no lastActivityAt and sorts after the canonical
+      // ones, by lastActivity.
       const dbSessions = await sessionsCollection.find({
-        userID: userID.toString(),
+        ...SessionModel.ownerFilter(userID.toString()),
         isActive: true
-      }).sort({ lastActivity: -1 }).toArray();
-      
+      }).sort({ lastActivityAt: -1, lastActivity: -1 }).toArray();
+
       // Se não houver sessões no banco, tenta buscar do cache do sessionService
       let sessions = dbSessions;
       if (sessions.length === 0) {
         // Busca do cache do sessionService
         const sessionService = require('./session.service');
         const cacheSessions = Array.from(sessionService.sessions.values())
-          .filter(s => s.userID === userID.toString() && s.isActive);
+          .filter(s => SessionModel.ownerOf(s) === userID.toString() && s.isActive);
         sessions = cacheSessions;
       }
       
@@ -237,12 +241,12 @@ class UserSecurityService {
         const isCurrent = session.token === currentToken;
         
         return {
-          id: session.sessionID || session._id?.toString() || `session_${Date.now()}`,
+          id: SessionModel.sessionIdOf(session) || session._id?.toString() || `session_${Date.now()}`,
           deviceName: this.extractDeviceName(userAgent),
           browser: this.extractBrowser(userAgent),
           os: this.extractOS(userAgent),
           location: this.getLocationFromIP(ip),
-          lastAccess: session.lastActivity || session.createdAt || new Date(),
+          lastAccess: SessionModel.lastActivityOf(session) || SessionModel.startedAtOf(session) || new Date(),
           isCurrent: isCurrent
         };
       });
@@ -587,16 +591,16 @@ class UserSecurityService {
       const sessionsCollection = db.collection('sessions');
       const { ObjectId } = require('mongodb');
 
-      // Suporta documentos que usam sessionID ou apenas _id
-      const query = {
-        userID: userID.toString(),
-        $or: [
-          { sessionID: sessionId }
-        ]
-      };
+      // Suporta documentos que usam sessionId, o nome legado sessionID, ou
+      // apenas _id; o dono casa sob userAccountId ou o legado userID.
+      const idClauses = [...SessionModel.idFilter(sessionId).$or];
       if (ObjectId.isValid(sessionId)) {
-        query.$or.push({ _id: new ObjectId(sessionId) });
+        idClauses.push({ _id: new ObjectId(sessionId) });
       }
+      const query = {
+        ...SessionModel.ownerFilter(userID.toString()),
+        $and: [{ $or: idClauses }]
+      };
 
       const result = await sessionsCollection.updateOne(
         query,
@@ -623,10 +627,10 @@ class UserSecurityService {
       // Limpa cache em memória do sessionService
       const sessionService = require('./session.service');
       if (sessionService.sessions) {
-        // Tenta remover pelo sessionID; se não existir, remove pela correspondência de _id
+        // Tenta remover pelo sessionId; se não existir, remove pela correspondência de _id
         if (!sessionService.sessions.delete(sessionId)) {
           for (const [sid, s] of sessionService.sessions.entries()) {
-            if (sid === sessionId || s.sessionID === sessionId || (s._id && s._id.toString && s._id.toString() === sessionId)) {
+            if (sid === sessionId || SessionModel.sessionIdOf(s) === sessionId || (s._id && s._id.toString && s._id.toString() === sessionId)) {
               sessionService.sessions.delete(sid);
             }
           }

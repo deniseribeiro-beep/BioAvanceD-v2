@@ -422,10 +422,12 @@ describe('auth.routes.js (integration, real router mounted)', () => {
       expect(res.body.sessionExpired).toBe(true);
     });
 
+    // #1330: the session carries lastActivityAt; the response key stays
+    // lastActivity.
     it('returns 200 with lastActivity/expiresAt on success', async () => {
       const expiresAt = new Date().toISOString();
       const lastActivity = new Date().toISOString();
-      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ lastActivity, expiresAt });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ lastActivityAt: lastActivity, expiresAt });
       const authRoutes = loadAuthRoutes();
       const app = buildApp(authRoutes, makeDb({}));
       const token = signAccessToken();
@@ -455,8 +457,8 @@ describe('auth.routes.js (integration, real router mounted)', () => {
 
   describe('POST /logout', () => {
     it('invalidates the session, clears the refresh cookie and returns 200', async () => {
-      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1', userID: 'u1' } });
-      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 's1', userAccountId: 'u1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's1' });
       const invalidateSpy = vi.spyOn(sessionService, 'invalidateSession').mockResolvedValue(true);
       const logLogoutSpy = vi.spyOn(auditLogger, 'logLogout').mockResolvedValue(undefined);
       const authRoutes = loadAuthRoutes();
@@ -475,6 +477,23 @@ describe('auth.routes.js (integration, real router mounted)', () => {
       expect(invalidateSpy).toHaveBeenCalledWith(expect.anything(), 's1', 'user_request', 'u1', { req: expect.anything() });
       expect(logLogoutSpy).toHaveBeenCalledTimes(1);
       expect(res.headers['set-cookie']?.some((c) => c.startsWith('refresh_token=;'))).toBe(true);
+    });
+
+    // #1330: a session stored before the canonical names is ended by its
+    // legacy sessionID, attributed to its legacy userID.
+    it('invalidates a session stored under the legacy names', async () => {
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's-legacy', userID: 'u-legacy' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's-legacy' });
+      const invalidateSpy = vi.spyOn(sessionService, 'invalidateSession').mockResolvedValue(true);
+      vi.spyOn(auditLogger, 'logLogout').mockResolvedValue(undefined);
+      const app = buildApp(loadAuthRoutes(), makeDb({}));
+
+      const res = await request(app)
+        .post('/api/auth/logout')
+        .set('Authorization', `Bearer ${signAccessToken()}`);
+
+      expect(res.status).toBe(200);
+      expect(invalidateSpy).toHaveBeenCalledWith(expect.anything(), 's-legacy', 'user_request', 'u-legacy', { req: expect.anything() });
     });
 
     it('still returns 200 and still logs the logout when sessionService.verifySession throws', async () => {
@@ -679,7 +698,7 @@ describe('auth.routes.js (integration, real router mounted)', () => {
     });
 
     it('returns 401 when the session userID does not match the token userID', async () => {
-      vi.spyOn(sessionService, 'getSessionByRefreshToken').mockResolvedValue({ userID: 'someone-else', sessionID: 's9' });
+      vi.spyOn(sessionService, 'getSessionByRefreshToken').mockResolvedValue({ userAccountId: 'someone-else', sessionId: 's9' });
       const app = appWithDb(makeDb({}));
       const userID = makeUserId();
       const refreshToken = jwt.sign({ userID, type: 'refresh' }, JWT_REFRESH_SECRET, { expiresIn: '7d' });
@@ -692,7 +711,7 @@ describe('auth.routes.js (integration, real router mounted)', () => {
 
     it('returns 401 when the user behind a valid session is no longer in the db', async () => {
       const userID = makeUserId();
-      vi.spyOn(sessionService, 'getSessionByRefreshToken').mockResolvedValue({ userID: String(userID), sessionID: 's9' });
+      vi.spyOn(sessionService, 'getSessionByRefreshToken').mockResolvedValue({ userAccountId: String(userID), sessionId: 's9' });
       const app = appWithDb(makeDb(null));
       const refreshToken = jwt.sign({ userID, type: 'refresh' }, JWT_REFRESH_SECRET, { expiresIn: '7d' });
 
@@ -705,7 +724,7 @@ describe('auth.routes.js (integration, real router mounted)', () => {
     // #1249: session.autoRenewal off -- no renewal; the session ends as an expiry.
     it('refuses to renew, ends the session and clears the cookie while session.autoRenewal is off', async () => {
       const userId = new ObjectId();
-      vi.spyOn(sessionService, 'getSessionByRefreshToken').mockResolvedValue({ userID: userId.toString(), sessionID: 's9' });
+      vi.spyOn(sessionService, 'getSessionByRefreshToken').mockResolvedValue({ userAccountId: userId.toString(), sessionId: 's9' });
       const rotateSpy = vi.spyOn(sessionService, 'rotateSessionTokens').mockResolvedValue(true);
       const invalidateSpy = vi.spyOn(sessionService, 'invalidateSession').mockResolvedValue(undefined);
       const app = appWithDb(makeDb({ _id: 'main', session: { autoRenewal: false } }));
@@ -722,9 +741,30 @@ describe('auth.routes.js (integration, real router mounted)', () => {
       expect(res.headers['set-cookie']?.some((c) => c.startsWith('refresh_token=;'))).toBe(true);
     });
 
+    // #1330: a session stored before the canonical names still refreshes,
+    // its owner read from userID and its id from sessionID.
+    it('rotates a session stored under the legacy names', async () => {
+      const userId = new ObjectId();
+      const stored = { userID: userId.toString(), sessionID: 's-legacy' };
+      vi.spyOn(sessionService, 'getSessionByRefreshToken').mockResolvedValue(stored);
+      const rotateSpy = vi.spyOn(sessionService, 'rotateSessionTokens').mockResolvedValue(true);
+      const db = makeDbWithRbac(
+        { _id: userId, email: 'a@b.com', username: 'u', accessType: 2, name: 'A' },
+        [{ userAccountId: userId.toString(), accessType: 3 }]
+      );
+      const refreshToken = jwt.sign({ userID: userId.toString(), type: 'refresh' }, JWT_REFRESH_SECRET, { expiresIn: '7d' });
+
+      const res = await request(appWithDb(db))
+        .post('/api/auth/refresh')
+        .set('Cookie', `refresh_token=${refreshToken}`);
+
+      expect(res.status).toBe(200);
+      expect(rotateSpy).toHaveBeenCalledWith(expect.anything(), 's-legacy', expect.any(String), expect.any(String), stored);
+    });
+
     it('rotates tokens and returns a new access token on the happy path', async () => {
       const userId = new ObjectId();
-      vi.spyOn(sessionService, 'getSessionByRefreshToken').mockResolvedValue({ userID: userId.toString(), sessionID: 's9' });
+      vi.spyOn(sessionService, 'getSessionByRefreshToken').mockResolvedValue({ userAccountId: userId.toString(), sessionId: 's9' });
       const rotateSpy = vi.spyOn(sessionService, 'rotateSessionTokens').mockResolvedValue(true);
       // #431: the new access token's accessType is resolved from the RBAC
       // assignment, not the User document's (no-longer-populated) field.
@@ -753,7 +793,7 @@ describe('auth.routes.js (integration, real router mounted)', () => {
       'refuses to renew for an account whose status is %s, ending the session',
       async (status) => {
         const userId = new ObjectId();
-        vi.spyOn(sessionService, 'getSessionByRefreshToken').mockResolvedValue({ userID: userId.toString(), sessionID: 's9' });
+        vi.spyOn(sessionService, 'getSessionByRefreshToken').mockResolvedValue({ userAccountId: userId.toString(), sessionId: 's9' });
         const rotateSpy = vi.spyOn(sessionService, 'rotateSessionTokens').mockResolvedValue(true);
         const invalidateSpy = vi.spyOn(sessionService, 'invalidateSession').mockResolvedValue(undefined);
         const db = makeDbWithRbac(

@@ -7,6 +7,7 @@ const logger = require('../../utils/logger');
 const auditLogger = require('../../utils/auditLogger');
 const jwt = require('jsonwebtoken');
 const env = require('../../config/env');
+const SessionModel = require('../../models/Session');
 
 const REFRESH_COOKIE_NAME = 'refresh_token';
 
@@ -180,7 +181,8 @@ router.post('/keepalive', authenticate, async (req, res) => {
       success: true,
       message: (req.t && req.t('auth.sessionRenewed')) || 'Sessão renovada',
       data: {
-        lastActivity: session.lastActivity,
+        // The response key stays lastActivity; the stored name is lastActivityAt.
+        lastActivity: SessionModel.lastActivityOf(session),
         expiresAt: session.expiresAt
       }
     });
@@ -204,16 +206,17 @@ router.post('/logout', authenticate, async (req, res) => {
       const sessionService = require('../../services/session.service');
       const sessionCheck = await sessionService.verifySession(db, token);
       
-      if (sessionCheck.valid && sessionCheck.session?.sessionID) {
+      const loggedOutSessionId = sessionCheck.valid ? SessionModel.sessionIdOf(sessionCheck.session) : null;
+      if (loggedOutSessionId) {
         // #974: an explicit logout is 'user_request' by the session's own
         // owner. req.user is not relied on here because this route reaches
         // the revoke through verifySession rather than the authenticate
         // middleware, so the session document is the authoritative actor.
         await sessionService.invalidateSession(
           db,
-          sessionCheck.session.sessionID,
+          loggedOutSessionId,
           'user_request',
-          sessionCheck.session.userID,
+          SessionModel.ownerOf(sessionCheck.session),
           { req }
         );
       }
@@ -368,7 +371,7 @@ router.delete('/sessions/:sessionId', authenticate, async (req, res) => {
     const token = req.headers.authorization?.substring(7);
     const sessionCheck = await sessionService.verifySession(db, token);
 
-    if (sessionCheck.valid && sessionCheck.session?.sessionID === sessionId) {
+    if (sessionCheck.valid && SessionModel.sessionIdOf(sessionCheck.session) === sessionId) {
       clearRefreshCookie(res);
     }
 
@@ -435,18 +438,19 @@ router.post('/refresh', async (req, res) => {
 
     const sessionService = require('../../services/session.service');
     const session = await sessionService.getSessionByRefreshToken(db, refreshToken);
-    if (!session || session.userID !== String(decoded.userID)) {
+    if (!session || SessionModel.ownerOf(session) !== String(decoded.userID)) {
       clearRefreshCookie(res);
       return res.status(401).json({
         success: false,
         error: 'Sessão de refresh inválida ou revogada'
       });
     }
+    const sessionId = SessionModel.sessionIdOf(session);
 
     // #1249: session.autoRenewal off -- the session is not renewed, so it ends
     // with its access token, recorded as an expiry.
     if (!(await sessionService.resolveSessionPolicy(db)).autoRenewal) {
-      await sessionService.invalidateSession(db, session.sessionID, 'expiration', 'system');
+      await sessionService.invalidateSession(db, sessionId, 'expiration', 'system');
       clearRefreshCookie(res);
       return res.status(401).json({
         success: false,
@@ -470,7 +474,7 @@ router.post('/refresh', async (req, res) => {
     // an inactivated account kept renewing its access token.
     const UserModel = require('../../models/User');
     if (UserModel.normalizeStatus(user.status) !== 'active') {
-      await sessionService.invalidateSession(db, session.sessionID, 'admin_action', 'system');
+      await sessionService.invalidateSession(db, sessionId, 'admin_action', 'system');
       clearRefreshCookie(res);
       return res.status(401).json({
         success: false,
@@ -487,14 +491,14 @@ router.post('/refresh', async (req, res) => {
     const newRefreshToken = jwt.sign(
       {
         userID: user._id.toString(),
-        sessionID: session.sessionID,
+        sessionID: sessionId,
         type: 'refresh'
       },
       env.JWT_REFRESH_SECRET || env.JWT_SECRET,
       { expiresIn: '7d' }
     );
 
-    await sessionService.rotateSessionTokens(db, session.sessionID, accessToken, newRefreshToken, session);
+    await sessionService.rotateSessionTokens(db, sessionId, accessToken, newRefreshToken, session);
     setRefreshCookie(res, newRefreshToken);
 
     return res.status(200).json({

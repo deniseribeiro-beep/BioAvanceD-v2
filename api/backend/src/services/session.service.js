@@ -14,7 +14,10 @@ const REVOCATION_REASONS = ['user_request', 'admin_action', 'password_change', '
 // #1005: the audit list's sort allow-list, same reasoning as log.service's
 // SORTABLE_LOG_FIELDS (#780): an unknown key sorts every row equal and returns
 // the wrong page with a 200. createdAt is the default and the one every audit
-// filter is index-served under (utils/sessionIndexes.js).
+// filter is index-served under (utils/sessionIndexes.js). These are the API's
+// sortBy values, which keep their names: 'createdAt' orders on
+// sessionStartedAt and 'lastActivity' on lastActivityAt, each with the legacy
+// stored name as the second key.
 const AUDIT_SORTABLE_SESSION_FIELDS = new Set(['createdAt', 'revokedAt', 'lastActivity']);
 const AUDIT_SESSION_MAX_LIMIT = 200;
 
@@ -26,7 +29,7 @@ const REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 // 30-minute literals decided the actual behaviour.
 //
 // SNAPSHOT, not a live per-request read. dict-02 P1X-0262 defines
-// Session.inactiveTimeout as the EFFECTIVE limit and says it "deve derivar de
+// Session.inactivityTimeoutMs as the EFFECTIVE limit and says it "deve derivar de
 // SecurityConfiguration" -- a materialised value. It is also what keeps RF014
 // AC#8 ("revogar sessões quando a alteração exigir") meaningful: under a live
 // read a tightened timeout would apply on the next request and AC#8 would have
@@ -43,8 +46,8 @@ const REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_INACTIVE_TIMEOUT_MS = 30 * 60 * 1000;
 
 // #914 / RF014 AC#1, RNF021 AC#3. session.maxSessionDurationHours is dict-02
-// P1X-0293, "Duração máxima absoluta", anchored on sessionStartedAt (P1X-0259,
-// our createdAt). Before this nothing capped a session at all:
+// P1X-0293, "Duração máxima absoluta", anchored on sessionStartedAt
+// (P1X-0259). Before this nothing capped a session at all:
 // rotateSessionTokens reset refreshExpiresAt to now + 7 days on every refresh,
 // so a client that kept refreshing held one session indefinitely.
 //
@@ -197,26 +200,26 @@ class SessionService {
       const refreshTokenHash = hashToken(refreshToken);
 
       const sessionData = {
-        sessionID,
-        userID,
-        tokenHash: accessTokenHash,
+        sessionId: sessionID,
+        userAccountId: userID,
+        accessTokenHash,
         refreshTokenHash,
         ipAddress: clientInfo.ipAddress,
         userAgent: clientInfo.userAgent,
         deviceInfo: clientInfo.deviceInfo,
         expiresAt,
         refreshExpiresAt,
-        inactiveTimeout: policy.inactiveTimeoutMs // #914: from session.timeoutMinutes
+        inactivityTimeoutMs: policy.inactiveTimeoutMs // #914: from session.timeoutMinutes
       };
 
       const session = SessionModel.create(sessionData);
-      // #914: createdAt is sessionStartedAt, the cap's anchor; pin it to the
-      // same instant the cap was computed from.
-      session.createdAt = now;
-      
+      // #914: sessionStartedAt is the cap's anchor; pin it to the same instant
+      // the cap was computed from.
+      session.sessionStartedAt = now;
+
       // Salva no cache
       this.sessions.set(sessionID, session);
-      
+
       // Salva no banco (opcional, para persistência)
       const sessionsCollection = db.collection('sessions');
       await sessionsCollection.insertOne(session);
@@ -229,9 +232,9 @@ class SessionService {
       // revocation row.
       if (policy.allowMultipleSessions === false) {
         const others = await sessionsCollection.countDocuments({
-          userID: String(userID),
+          ...SessionModel.ownerFilter(String(userID)),
           isActive: true,
-          tokenHash: { $ne: accessTokenHash }
+          $and: SessionModel.notAccessTokenHash(accessTokenHash)
         });
         if (others > 0) {
           await this.revokeAllOtherSessions(db, userID, accessToken, 'admin_action', 'system', { req });
@@ -255,7 +258,7 @@ class SessionService {
       // Busca sessão no cache
       let session = null;
       for (const [sessionID, sess] of this.sessions.entries()) {
-        if (sess.tokenHash === accessTokenHash) {
+        if (SessionModel.accessTokenHashOf(sess) === accessTokenHash) {
           session = sess;
           break;
         }
@@ -264,21 +267,23 @@ class SessionService {
       // Se não encontrou no cache, busca no banco
       if (!session) {
         const sessionsCollection = db.collection('sessions');
-        session = await sessionsCollection.findOne({ tokenHash: accessTokenHash });
+        session = await sessionsCollection.findOne(SessionModel.accessTokenHashFilter(accessTokenHash));
         if (!session) {
           // Compatibilidade com sessões antigas que armazenavam token em texto plano
           session = await sessionsCollection.findOne({ token: accessToken });
         }
-        
+
         if (session) {
           // Adiciona ao cache
-          this.sessions.set(session.sessionID, session);
+          this.sessions.set(SessionModel.sessionIdOf(session), session);
         }
       }
 
       if (!session) {
         return null;
       }
+
+      const sessionId = SessionModel.sessionIdOf(session);
 
       // Verifica se a sessão ainda está ativa
       if (!SessionModel.isSessionActive(session)) {
@@ -287,23 +292,34 @@ class SessionService {
         // 'expiration'/'system' pair. Without it, a session the clock killed
         // was byte-identical to one an administrator killed, which is the
         // whole subject of #974.
-        await this.invalidateSession(db, session.sessionID, 'expiration', 'system');
+        await this.invalidateSession(db, sessionId, 'expiration', 'system');
         return null;
       }
 
-      // Atualiza última atividade
-      session.lastActivity = new Date();
-      session.isActive = true;
+      // Atualiza última atividade. The same write moves a document stored
+      // under the legacy names to the canonical ones; tokenHash moves at the
+      // next token rotation, which computes the new hash itself.
+      const lastActivityAt = new Date();
+      const { set: identity, unset } = SessionModel.canonicalIdentity(session);
+      Object.assign(session, identity, { lastActivityAt, isActive: true });
+      delete session.sessionID;
+      delete session.userID;
+      delete session.createdAt;
+      delete session.inactiveTimeout;
+      delete session.lastActivity;
 
       // Atualiza no cache
-      this.sessions.set(session.sessionID, session);
+      this.sessions.set(sessionId, session);
 
       // Atualiza no banco
       try {
         const sessionsCollection = db.collection('sessions');
         await sessionsCollection.updateOne(
-          { sessionID: session.sessionID },
-          { $set: { lastActivity: session.lastActivity, isActive: true, updatedAt: new Date() } }
+          SessionModel.idFilter(sessionId),
+          {
+            $set: { ...identity, lastActivityAt, isActive: true, updatedAt: new Date() },
+            $unset: { ...unset, lastActivity: '' }
+          }
         );
       } catch (dbError) {
         logger.warn('Erro ao atualizar sessão no banco:', dbError.message);
@@ -326,7 +342,7 @@ class SessionService {
       // Busca no cache primeiro
       let session = null;
       for (const [sessionID, sess] of this.sessions.entries()) {
-        if (sess.tokenHash === accessTokenHash) {
+        if (SessionModel.accessTokenHashOf(sess) === accessTokenHash) {
           session = sess;
           break;
         }
@@ -338,14 +354,14 @@ class SessionService {
         // #1005: the per-request lookup; ensured here so a process builds the
         // index on its first cache miss, not only once someone opens the audit list.
         ensureSessionIndexes(sessionsCollection);
-        session = await sessionsCollection.findOne({ tokenHash: accessTokenHash });
+        session = await sessionsCollection.findOne(SessionModel.accessTokenHashFilter(accessTokenHash));
         if (!session) {
           // Compatibilidade com sessões antigas
           session = await sessionsCollection.findOne({ token: accessToken });
         }
-        
+
         if (session) {
-          this.sessions.set(session.sessionID, session);
+          this.sessions.set(SessionModel.sessionIdOf(session), session);
         }
       }
 
@@ -360,7 +376,7 @@ class SessionService {
       // Verifica se está ativa
       if (!SessionModel.isSessionActive(session)) {
         // #974: same expiry eviction as updateActivity above.
-        await this.invalidateSession(db, session.sessionID, 'expiration', 'system');
+        await this.invalidateSession(db, SessionModel.sessionIdOf(session), 'expiration', 'system');
         return { valid: false, reason: 'session_expired' };
       }
 
@@ -422,19 +438,22 @@ class SessionService {
   async invalidateSession(db, sessionID, reason = null, revokedBy = null, { req = null } = {}) {
     try {
       // Remove do cache
-      const cachedOwner = this.sessions.get(sessionID)?.userID;
+      const cachedOwner = SessionModel.ownerOf(this.sessions.get(sessionID));
       this.sessions.delete(sessionID);
 
       // Marca como inativa no banco
       try {
         const sessionsCollection = db.collection('sessions');
         const result = await sessionsCollection.updateOne(
-          { sessionID },
+          SessionModel.idFilter(sessionID),
           { $set: { isActive: false, isRevoked: true, revokedAt: new Date(), revocationReason: reason, revokedBy: revokedBy == null ? revokedBy : String(revokedBy), updatedAt: new Date() } }
         );
         if (result?.modifiedCount) {
           const ownerID = cachedOwner
-            ?? (await sessionsCollection.findOne({ sessionID }, { projection: { userID: 1 } }))?.userID;
+            ?? SessionModel.ownerOf(await sessionsCollection.findOne(
+              SessionModel.idFilter(sessionID),
+              { projection: { userAccountId: 1, userID: 1 } }
+            ));
           await this.recordRevocationAudit(db, { reason, revokedBy, ownerID, count: 1, req });
         }
       } catch (dbError) {
@@ -453,7 +472,7 @@ class SessionService {
     try {
       // #963: coage como os irmãos (listUserSessions, revokeSessionById,
       // revokeAllOtherSessions) já fazem. O campo gravado é sempre string
-      // -- Session.js faz String(data.userID), alimentado pelo
+      // -- Session.js faz String(data.userAccountId), alimentado pelo
       // user._id.toString() de auth.service.js -- então receber um ObjectId
       // aqui não casava nada, não lançava nada, e deixava o chamador
       // devolver 200 sobre uma revogação que não aconteceu.
@@ -461,7 +480,7 @@ class SessionService {
 
       // Remove do cache
       for (const [sessionID, session] of this.sessions.entries()) {
-        if (String(session.userID) === ownerID) {
+        if (String(SessionModel.ownerOf(session)) === ownerID) {
           this.sessions.delete(sessionID);
         }
       }
@@ -470,7 +489,7 @@ class SessionService {
       try {
         const sessionsCollection = db.collection('sessions');
         const result = await sessionsCollection.updateMany(
-          { userID: ownerID, isActive: true },
+          { ...SessionModel.ownerFilter(ownerID), isActive: true },
           { $set: { isActive: false, isRevoked: true, revokedAt: new Date(), revocationReason: reason, revokedBy: revokedBy == null ? revokedBy : String(revokedBy), updatedAt: new Date() } }
         );
         const count = (result && result.modifiedCount) || 0;
@@ -510,18 +529,20 @@ class SessionService {
           {
             $or: [
               { expiresAt: { $lt: now } },
-              // #914: compare against each session's OWN inactiveTimeout. This was a
+              // #914: compare against each session's OWN inactivityTimeoutMs. This was a
               // global 30-minute literal, so the maintenance sweep contradicted any
               // configured timeout -- a 45-minute policy still had its sessions evicted
-              // at 30. $ifNull covers documents written before the field existed.
+              // at 30. Each value is read under its canonical name, then its legacy
+              // one; the innermost $ifNull covers documents written before the
+              // timeout field existed under either name.
               {
                 $expr: {
                   $lt: [
-                    '$lastActivity',
+                    { $ifNull: ['$lastActivityAt', '$lastActivity'] },
                     {
                       $subtract: [
                         now,
-                        { $ifNull: ['$inactiveTimeout', DEFAULT_INACTIVE_TIMEOUT_MS] }
+                        { $ifNull: ['$inactivityTimeoutMs', { $ifNull: ['$inactiveTimeout', DEFAULT_INACTIVE_TIMEOUT_MS] }] }
                       ]
                     }
                   ]
@@ -548,26 +569,32 @@ class SessionService {
     const sessionsCollection = db.collection('sessions');
     const currentHash = currentAccessToken ? hashToken(currentAccessToken) : null;
 
+    // A legacy document has no lastActivityAt, so it sorts after every
+    // canonical one, by lastActivity. Any activity since the rename wrote
+    // lastActivityAt, so a legacy-only document's last activity is older than
+    // every canonical one and the order is exact.
     const sessions = await sessionsCollection
       .find({
-        userID: String(userID),
+        ...SessionModel.ownerFilter(String(userID)),
         isActive: true,
         isRevoked: { $ne: true }
       })
-      .sort({ lastActivity: -1 })
+      .sort({ lastActivityAt: -1, lastActivity: -1 })
       .toArray();
 
+    // The response keeps its keys (id, lastAccess, createdAt); only the
+    // stored names they are read from changed.
     return sessions.map((session) => ({
-      id: session.sessionID,
+      id: SessionModel.sessionIdOf(session),
       browser: session.deviceInfo?.browser || this.extractBrowser(session.userAgent),
       os: session.deviceInfo?.os || this.extractOS(session.userAgent),
       deviceName: session.deviceInfo?.deviceName || this.extractDeviceName(session.userAgent),
       ipAddress: session.ipAddress || 'N/A',
       location: session.ipAddress || 'N/A',
-      lastAccess: session.lastActivity || session.createdAt,
-      createdAt: session.createdAt,
+      lastAccess: SessionModel.lastActivityOf(session) || SessionModel.startedAtOf(session),
+      createdAt: SessionModel.startedAtOf(session),
       isCurrent: currentHash
-        ? session.tokenHash === currentHash || (currentAccessToken && session.token === currentAccessToken)
+        ? SessionModel.accessTokenHashOf(session) === currentHash || (currentAccessToken && session.token === currentAccessToken)
         : false
     }));
   }
@@ -576,7 +603,10 @@ class SessionService {
     const sessionsCollection = db.collection('sessions');
 
     const result = await sessionsCollection.updateOne(
-      { userID: String(userID), sessionID, isActive: true },
+      {
+        $and: [SessionModel.ownerFilter(String(userID)), SessionModel.idFilter(sessionID)],
+        isActive: true
+      },
       {
         $set: {
           isActive: false,
@@ -614,7 +644,7 @@ class SessionService {
       {
         isActive: true,
         $and: [
-          { tokenHash: { $ne: exceptHash } },
+          ...SessionModel.notAccessTokenHash(exceptHash),
           { token: { $ne: exceptAccessToken } }
         ]
       },
@@ -635,7 +665,7 @@ class SessionService {
     );
 
     for (const [sid, session] of this.sessions.entries()) {
-      if (session.tokenHash !== exceptHash && session.token !== exceptAccessToken) {
+      if (SessionModel.accessTokenHashOf(session) !== exceptHash && session.token !== exceptAccessToken) {
         this.sessions.delete(sid);
       }
     }
@@ -659,10 +689,10 @@ class SessionService {
 
     const result = await sessionsCollection.updateMany(
       {
-        userID: String(userID),
+        ...SessionModel.ownerFilter(String(userID)),
         isActive: true,
         $and: [
-          { tokenHash: { $ne: currentHash } },
+          ...SessionModel.notAccessTokenHash(currentHash),
           { token: { $ne: currentAccessToken } }
         ]
       },
@@ -680,8 +710,8 @@ class SessionService {
 
     for (const [sid, session] of this.sessions.entries()) {
       if (
-        String(session.userID) === String(userID) &&
-        session.tokenHash !== currentHash &&
+        String(SessionModel.ownerOf(session)) === String(userID) &&
+        SessionModel.accessTokenHashOf(session) !== currentHash &&
         session.token !== currentAccessToken
       ) {
         this.sessions.delete(sid);
@@ -709,7 +739,8 @@ class SessionService {
    * stays literal, as it names a process, not a person.
    *
    * Filters: userId, revocationReason, isRevoked, isActive, from/to on
-   * createdAt. Throws a 422-shaped error on an invalid one.
+   * sessionStartedAt (createdAt on a legacy document). Throws a 422-shaped
+   * error on an invalid one.
    */
   async listSessionsForAudit(db, filters = {}) {
     const sessionsCollection = db.collection('sessions');
@@ -725,8 +756,11 @@ class SessionService {
     // the controller keeps "em ambiente controlado e seguro". Pulling one
     // named account's sessions is what an audit of that account is.
     // log.service#getLogs takes the same raw filter for GET /api/logs.
+    // Owner and date range each match the canonical or the legacy stored
+    // name, so each is an $or; they are ANDed here.
+    const clauses = [];
     const userId = filters.userId || filters.userID;
-    if (userId) query.userID = String(userId);
+    if (userId) clauses.push(SessionModel.ownerFilter(String(userId)));
 
     if (filters.revocationReason) {
       if (!REVOCATION_REASONS.includes(filters.revocationReason)) {
@@ -753,7 +787,10 @@ class SessionService {
       if (Number.isNaN(date.getTime())) throw invalid(`${key} não é uma data válida`);
       range[op] = date;
     }
-    if (Object.keys(range).length) query.createdAt = range;
+    if (Object.keys(range).length) {
+      clauses.push({ $or: [{ sessionStartedAt: range }, { createdAt: range }] });
+    }
+    if (clauses.length) query.$and = clauses;
 
     const requestedSort = typeof filters.sortBy === 'string' ? filters.sortBy.trim() : '';
     if (requestedSort && !AUDIT_SORTABLE_SESSION_FIELDS.has(requestedSort)) {
@@ -768,13 +805,18 @@ class SessionService {
 
     const [rows, total] = await Promise.all([
       sessionsCollection
-        .find(query, { projection: { tokenHash: 0, refreshTokenHash: 0, token: 0, refreshToken: 0, sessionID: 0 } })
+        .find(query, { projection: { accessTokenHash: 0, tokenHash: 0, refreshTokenHash: 0, token: 0, refreshToken: 0, sessionId: 0, sessionID: 0 } })
         // One literal per allow-listed key, so the sort-keys guard can follow
-        // every branch. No _id tiebreak: {createdAt:-1} serves a createdAt
-        // sort only as the sole key.
+        // every branch. No _id tiebreak: the default spec is served by an
+        // index with exactly its keys. The canonical name leads and the legacy one
+        // follows: a document carries one of the two, and a legacy-only
+        // document sorts as missing on the first key, which puts it below
+        // every canonical one. Every legacy-only document predates the rename,
+        // so the order holds across it, except that a session open at the
+        // rename keeps its pre-rename start in sessionStartedAt.
         .sort(sortField === 'revokedAt' ? { revokedAt: sortOrder }
-          : sortField === 'lastActivity' ? { lastActivity: sortOrder }
-            : { createdAt: sortOrder })
+          : sortField === 'lastActivity' ? { lastActivityAt: sortOrder, lastActivity: sortOrder }
+            : { sessionStartedAt: sortOrder, createdAt: sortOrder })
         .skip(skip)
         .limit(limit)
         .toArray(),
@@ -793,17 +835,20 @@ class SessionService {
       const revokedBy = session.revokedBy == null
         ? null
         : session.revokedBy === 'system' ? 'system' : await anon(session.revokedBy);
+      const owner = SessionModel.ownerOf(session);
+      // The row keeps its response keys (createdAt, lastActivity); only the
+      // stored names they are read from changed.
       sessions.push({
-        // Not sessionID: that is `session_<userID>_<ms>` and would carry the
-        // raw owner id straight past the pseudonym. The document _id is opaque.
+        // Not sessionId: that is `session_<userAccountId>_<ms>` and would carry
+        // the raw owner id straight past the pseudonym. The document _id is opaque.
         id: session._id != null ? String(session._id) : null,
-        user: session.userID ? await anon(session.userID) : 'USR-SYSTEM',
+        user: owner ? await anon(owner) : 'USR-SYSTEM',
         ipAddress: maskIpAddress(session.ipAddress),
         browser: session.deviceInfo?.browser || this.extractBrowser(session.userAgent),
         os: session.deviceInfo?.os || this.extractOS(session.userAgent),
         deviceType: session.deviceInfo?.type || null,
-        createdAt: session.createdAt || null,
-        lastActivity: session.lastActivity || null,
+        createdAt: SessionModel.startedAtOf(session) || null,
+        lastActivity: SessionModel.lastActivityOf(session) || null,
         expiresAt: session.expiresAt || null,
         isActive: session.isActive === true,
         isRevoked: session.isRevoked === true,
@@ -845,15 +890,23 @@ class SessionService {
     // the document getSessionByRefreshToken already read; the findOne covers
     // any other caller. A document with no ceiling keeps the old sliding window
     // rather than failing a refresh on a missing field.
-    const current = session || await sessionsCollection.findOne({ sessionID });
+    const current = session || await sessionsCollection.findOne(SessionModel.idFilter(sessionID));
     const slidingRefreshMs = now.getTime() + REFRESH_TOKEN_TTL_MS;
     const ceilingMs = current && current.refreshExpiresAt ? new Date(current.refreshExpiresAt).getTime() : NaN;
     const refreshExpiresAtMs = Number.isFinite(ceilingMs) ? Math.min(slidingRefreshMs, ceilingMs) : slidingRefreshMs;
 
+    // A rotation rewrites the document under the canonical names alone: the
+    // identity fields are carried from the stored (or cached) copy, the token
+    // hash and activity are the values computed here, and every legacy name
+    // is removed.
+    const cached = this.sessions.get(sessionID) || {};
+    const { set: identity, unset } = SessionModel.canonicalIdentity({ ...cached, ...(current || {}) });
+
     const update = {
-      tokenHash: hashToken(nextAccessToken),
+      ...identity,
+      accessTokenHash: hashToken(nextAccessToken),
       refreshTokenHash: hashToken(nextRefreshToken),
-      lastActivity: now,
+      lastActivityAt: now,
       updatedAt: now,
       expiresAt: new Date(Math.min(now.getTime() + ACCESS_TOKEN_TTL_MS, refreshExpiresAtMs)),
       refreshExpiresAt: new Date(refreshExpiresAtMs),
@@ -869,10 +922,12 @@ class SessionService {
       revokedBy: null
     };
 
-    await sessionsCollection.updateOne({ sessionID }, { $set: update });
+    await sessionsCollection.updateOne(
+      SessionModel.idFilter(sessionID),
+      { $set: update, $unset: { ...unset, tokenHash: '', lastActivity: '' } }
+    );
 
-    const cached = this.sessions.get(sessionID) || {};
-    this.sessions.set(sessionID, { ...cached, sessionID, ...update });
+    this.sessions.set(sessionID, SessionModel.withoutLegacyNames({ ...cached, sessionId: sessionID, ...update }));
   }
 }
 
