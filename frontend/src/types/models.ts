@@ -271,8 +271,12 @@ export interface Sample {
   merkle_root?: string | null;
   consentStatus?: 'PENDING' | 'SIGNED' | 'EXTERNAL_ATTACHED' | 'WAIVED_TRANSFER' | 'NOT_REQUIRED' | string;
   // Canonical status (storage/custody split, #389/#409) — derive quarantine/availability
-  // UI state from this.
-  specimenStatus?: 'available' | 'reserved' | 'checked_out' | 'partial' | 'depleted' | 'quarantined' | 'destroyed' | 'unavailable' | 'disposed' | string;
+  // UI state from this. RF006 AC2: the operational state only; `closed` is
+  // set by the close route or an executed destroy/transfer disposition.
+  specimenStatus?: 'available' | 'reserved' | 'checked_out' | 'quarantined' | 'unavailable' | 'closed' | string;
+  // RF006 AC3: derived by the API from initialQuantity/currentQuantity; never
+  // sent on a write.
+  quantityStatus?: 'full' | 'partial' | 'depleted' | null;
   // quarantineReason still carries the human-readable reason text — no
   // specimenStatus equivalent exists for that, so it stays legacy-sourced (#407/#415).
   quarantineReason?: 'CONSENT_PENDING' | 'EXTERNAL_DOCUMENT_REQUIRED' | 'TRANSFER_REVIEW_REQUIRED' | null | string;
@@ -317,7 +321,7 @@ export interface Sample {
   checked?: boolean; // Flag opcional para seleção em UI (fallback a arrays de IDs)
   // Status de disponibilidade
   currentStatus?: 'Available' | 'PartiallyWithdrawn' | 'TotallyWithdrawn' | 'Withdrawn' | 'Destroyed' | 'Unusable';
-  status?: 'AVAILABLE' | 'QUARANTINED' | 'PARTIAL' | 'DEPLETED' | 'UNAVAILABLE';
+  status?: 'AVAILABLE' | 'QUARANTINED' | 'PARTIAL' | 'DEPLETED' | 'UNAVAILABLE' | 'CLOSED';
   // Campos de retirada
   withdrawalDate?: Date | string;
   withdrawalType?: 'Parcial' | 'Total';

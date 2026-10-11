@@ -8,7 +8,15 @@ import Input from '../components/UI/Input';
 import Select from '../components/UI/Select';
 import Card from '../components/UI/Card';
 import { MIABIS_QUALITY } from '../config/constants/specimen.constants';
-import { resolveSpecimenStatus, getSpecimenStatusColor, translateSpecimenStatus } from '../utils/sampleHelpers';
+import {
+  resolveSpecimenStatus,
+  getSpecimenStatusColor,
+  translateSpecimenStatus,
+  getQuantityStatusColor,
+  translateQuantityStatus,
+  isSpecimenBlocked,
+  resolveQuantityStatus,
+} from '../utils/sampleHelpers';
 import './SampleWithdrawalReturnPage.css';
 
 // #539: shared with every other specimenStatus reader (SampleDetailsPage,
@@ -37,39 +45,42 @@ interface ReturnFormData {
 
 // #538: this page used to gate on `sample.currentStatus`, a field the real
 // withdraw/return write path (sample.service.js#withdrawSample/returnSample)
-// never sets — it writes `specimenStatus` (dict-02 ELM-0123) instead, which
-// already carries the withdrawal-lifecycle concept via its `partial`/
-// `depleted` values (Sample.js#computeStatus derives them from quantity on
-// every write). Deriving from specimenStatus below fixes that dead gate.
-type WithdrawalSample = Pick<Sample, 'specimenStatus' | 'totalWithdrawn' | 'totalReturned' | 'initialQuantity' | 'quantity'>;
-
-// Mirrors sample.service.js#withdrawSample's BLOCKED_SPECIMEN_STATUSES, plus
-// 'depleted' — a frontend-only UX guard against resubmitting a Total
-// withdrawal on an already-fully-withdrawn sample. The backend's own guard
-// doesn't independently block that case today (tracked separately, not part
-// of this fix).
-const WITHDRAWAL_BLOCKED_STATUSES = ['depleted', 'quarantined', 'destroyed', 'unavailable', 'disposed'];
+// never sets. RF006 AC2/AC3: the operational gate reads specimenStatus
+// (unavailable, quarantined and closed refuse withdrawal and return, as the
+// backend does), and how much is left reads quantityStatus, which the API
+// derives from the quantities on every write.
+type WithdrawalSample = Pick<
+  Sample,
+  'specimenStatus' | 'quantityStatus' | 'totalWithdrawn' | 'totalReturned' | 'initialQuantity' | 'currentQuantity' | 'quantity'
+>;
 
 export function canWithdrawSample(sample: WithdrawalSample | null): boolean {
   if (!sample) return false;
-  return !WITHDRAWAL_BLOCKED_STATUSES.includes(resolveSpecimenStatus(sample));
+  if (isSpecimenBlocked(sample)) return false;
+  // A frontend-only guard against resubmitting a Total withdrawal on a
+  // specimen with nothing left.
+  return resolveQuantityStatus(sample) !== 'depleted';
 }
 
 export function getPendingReturnQuantity(sample: WithdrawalSample | null): number {
   if (!sample) return 0;
+  // The backend refuses a return for these states; a closed specimen is
+  // final (RF026 AC7).
+  if (isSpecimenBlocked(sample)) return 0;
   const totalWithdrawn = sample.totalWithdrawn || 0;
   const totalReturned = sample.totalReturned || 0;
-  // Legacy data: status says fully withdrawn but the movement ledger has no
-  // recorded withdrawal quantity — fall back to the original amount.
-  if (resolveSpecimenStatus(sample) === 'depleted' && totalWithdrawn === 0) {
+  // Legacy data: the quantity says fully withdrawn but the movement ledger
+  // has no recorded withdrawal quantity — fall back to the original amount.
+  if (resolveQuantityStatus(sample) === 'depleted' && totalWithdrawn === 0) {
     return sample.initialQuantity ?? sample.quantity ?? 0;
   }
   return totalWithdrawn - totalReturned;
 }
 
 export function resolveInitialTab(sample: WithdrawalSample | null): 'withdraw' | 'return' {
-  const status = resolveSpecimenStatus(sample);
-  return status === 'partial' || status === 'depleted' ? 'return' : 'withdraw';
+  if (!sample || isSpecimenBlocked(sample)) return 'withdraw';
+  const quantityStatus = resolveQuantityStatus(sample);
+  return quantityStatus === 'partial' || quantityStatus === 'depleted' ? 'return' : 'withdraw';
 }
 
 export function getStorageLabel(location: SampleStorageLocationDTO | null): string {
@@ -497,6 +508,16 @@ export default function SampleWithdrawalReturnPage() {
                     style={{ color: getSpecimenStatusColor(resolveSpecimenStatus(sample)) }}
                   >
                     {translateSpecimenStatus(resolveSpecimenStatus(sample))}
+                  </span>
+                </div>
+                <div className="info-row">
+                  <span className="info-label">Quantidade:</span>
+                  <span
+                    className="info-value status-badge"
+                    data-testid="withdrawal-quantity-status"
+                    style={{ color: getQuantityStatusColor(resolveQuantityStatus(sample)) }}
+                  >
+                    {translateQuantityStatus(resolveQuantityStatus(sample))}
                   </span>
                 </div>
                 <div className="info-row">

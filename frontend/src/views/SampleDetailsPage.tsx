@@ -13,6 +13,7 @@ import { useAuth } from '../contexts/AuthContext';
 import AnalysisUploadModal from '../components/AnalysisUploadModal';
 import SampleFilesSection from '../components/SampleFilesSection';
 import InlineStorageMovementPanel from '../components/samples/InlineStorageMovementPanel';
+import CloseSpecimenAction from '../components/samples/CloseSpecimenAction';
 import { buildSprecAxisSummary, buildSprecSummary } from '../components/samples/sampleListFormatters';
 import { Sample, SampleStorageLocationDTO } from '../types/models';
 import { resultService, sampleService } from '../services/api';
@@ -265,15 +266,17 @@ export default function SampleDetailsPage() {
     { value: 'Withdrawn', label: t('samples.status.withdrawn', 'Retirada') },
     { value: 'Destroyed', label: t('samples.status.destroyed', 'Destruída') },
     { value: 'Unusable', label: t('samples.status.unusable', 'Inutilizada') },
+    { value: 'Closed', label: t('samples.status.closed', 'Encerrada') },
   ]), [t]);
 
   // #545: specimenStatus is the sole persisted source of truth (sample.service.js
   // strips currentStatus/status from every write since #540) — "Status Atual"
-  // is a read-only derived display, not an editable field.
+  // is a read-only derived display, not an editable field. RF006 AC3: the
+  // partial/total withdrawal part reads quantityStatus.
   const derivedStatusLabel = useMemo(() => {
-    const derived = resolveLegacySampleStatus(sample?.specimenStatus);
+    const derived = resolveLegacySampleStatus(sample);
     return statusOptions.find((option) => option.value === derived)?.label || derived;
-  }, [sample?.specimenStatus, statusOptions]);
+  }, [sample, statusOptions]);
 
   // #628: Result.specimenId is now the sole canonical shape (every write
   // path writes it, existing documents backfilled) — a direct match, not
@@ -451,6 +454,16 @@ export default function SampleDetailsPage() {
                     {t('common.edit') || 'Editar'}
                   </Button>
                 )}
+                <CloseSpecimenAction
+                  sample={sample}
+                  canEdit={canEdit}
+                  t={t}
+                  onClosed={(result) => setSample((prev) => (prev ? {
+                    ...prev,
+                    specimenStatus: result.specimenStatus,
+                    quantityStatus: result.quantityStatus,
+                  } : prev))}
+                />
                 <Button variant="secondary" onClick={() => navigate(`/samples/${id}/chain`)} style={{ padding: '0.25rem 0.5rem', fontSize: '0.85rem' }} data-testid="sample-detail-chain-button">
                   {t('samples.chain') || 'Cadeia de Custódia'}
                 </Button>

@@ -62,6 +62,16 @@ export type ApiEnvelope<T> = {
   data?: T;
 };
 
+// POST /samples/:id/close's 200 body `data` (RF026 AC7).
+export type SpecimenCloseResult = {
+  specimenId: string;
+  previousStatus: string;
+  specimenStatus: 'closed';
+  quantityStatus: 'depleted';
+  operationalStateDecisionId: string;
+  triggerEventId: string;
+};
+
 const NO_TOKEN_PROTECTED_REQUEST = 'NO_TOKEN_PROTECTED_REQUEST';
 const TOKEN_OPTIONAL_ROUTES = [
   '/auth/login',
@@ -334,6 +344,10 @@ export const sampleService = {
   // RF019 AC5: leaving quarantine is an evidenced release, not an update.
   releaseQuarantine: (id: number | string, data: { evidenceIds: string[]; reason?: string | null }) =>
     api.post(`/samples/${id}/quarantine/release`, data),
+  // RF026 AC7: closes a fully consumed (quantityStatus depleted) specimen;
+  // 409 SPECIMEN_CLOSE_REFUSED otherwise.
+  close: (id: number | string) =>
+    api.post<{ success: boolean; data: SpecimenCloseResult }>(`/samples/${id}/close`, {}),
   delete: (id: number | string) => api.delete(`/samples/${id}`),
   withdraw: (sampleID: number | string, data: Partial<Withdrawal>) => 
     api.post(`/samples/${sampleID}/withdraw`, data),

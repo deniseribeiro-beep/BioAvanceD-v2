@@ -31,6 +31,14 @@ describe('attachExternalDocument', () => {
     expect(api.releaseQuarantine).not.toHaveBeenCalled();
   });
 
+  it('records the document on a closed sample without writing its status (RF026 AC7: closed is final)', async () => {
+    const api = fakeApi();
+    await attachExternalDocument(api, { id: 'SPC-3', specimenStatus: 'closed' }, { actor: 'coord-1', reason: 'x', now });
+
+    expect(api.update).toHaveBeenCalledWith('SPC-3', { consentStatus: 'EXTERNAL_ATTACHED', importedBy: 'coord-1' });
+    expect(api.releaseQuarantine).not.toHaveBeenCalled();
+  });
+
   it('does not release when recording the document fails', async () => {
     const api = fakeApi();
     api.update.mockRejectedValue(new Error('boom'));

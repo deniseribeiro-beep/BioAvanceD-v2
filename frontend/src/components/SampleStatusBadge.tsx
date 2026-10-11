@@ -12,6 +12,7 @@ const palette: Record<SampleLifecycleStatus, { bg: string; fg: string; label: st
   PARTIAL: { bg: '#e6f3fb', fg: '#56B4E9', label: 'Parcial' },
   DEPLETED: { bg: '#f4f4f4', fg: '#777777', label: 'Esgotada' },
   UNAVAILABLE: { bg: '#ffe8dc', fg: '#D55E00', label: 'Indisponível' },
+  CLOSED: { bg: '#e9e9ee', fg: '#4a4a55', label: 'Encerrada' },
 };
 
 export default function SampleStatusBadge({ status }: Props) {

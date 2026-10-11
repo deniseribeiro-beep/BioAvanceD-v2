@@ -87,10 +87,14 @@ const TREATMENT_STATUS_OPTIONS = [
   { label: 'Washout', value: 'WASHOUT' },
 ];
 
+// RF006 AC2/AC3: BLOCKED filters specimenStatus (unavailable); PARTIAL and
+// DEPLETED filter the derived quantityStatus.
 const RELEASE_STATUS_OPTIONS = [
   { label: 'Ativa', value: 'AVAILABLE' },
   { label: 'Em Quarentena', value: 'QUARANTINE' },
-  { label: 'Esgotada', value: 'BLOCKED' },
+  { label: 'Bloqueada', value: 'BLOCKED' },
+  { label: 'Parcialmente retirada', value: 'PARTIAL' },
+  { label: 'Esgotada', value: 'DEPLETED' },
 ];
 
 const RCS_GRADE_OPTIONS = ['A', 'B', 'C', 'D', 'E'].map((grade) => ({ label: grade, value: grade }));
@@ -316,7 +320,7 @@ export function buildQualityFields(dictionary: SprecDictionary): ReportFilterFie
       label: 'Filtro de Status',
       kind: 'select',
       options: RELEASE_STATUS_OPTIONS,
-      helperText: 'Status do grafo e da amostra: ativa, quarentena ou esgotada.',
+      helperText: 'Status da amostra (ativa, quarentena, bloqueada) ou da quantidade (parcialmente retirada, esgotada).',
     },
   ];
 }

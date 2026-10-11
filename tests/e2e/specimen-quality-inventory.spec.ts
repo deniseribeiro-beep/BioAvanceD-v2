@@ -799,7 +799,10 @@ test.describe('Chain of custody (RF006) — real backend', () => {
     expect(movement.createdAt).toBeTruthy();
   });
 
-  test('transitions to PARTIAL after a partial withdrawal, then DEPLETED once fully withdrawn (criteria 2, 3)', async ({
+  // RF006 AC2/AC3: a withdrawal moves the derived quantityStatus, never
+  // specimenStatus; RF026 AC7: a depleted specimen is then closed through
+  // POST /close, the one status change in this flow, recorded as a decision.
+  test('moves quantityStatus to partial then depleted while specimenStatus stays available, then closes on validated consumption (criteria 2, 3)', async ({
     request,
   }) => {
     const admin = await realLogin(request);
@@ -815,12 +818,24 @@ test.describe('Chain of custody (RF006) — real backend', () => {
       },
     });
     expect(partial.status()).toBe(200);
-    expect((await partial.json()).data.newStatus).toBe('partial');
+    const partialBody = (await partial.json()).data;
+    expect(partialBody.newStatus).toBe('available');
+    expect(partialBody.quantityStatus).toBe('partial');
 
     const afterPartial = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, {
       headers: { Authorization: `Bearer ${admin.token}` },
     });
-    expect((await afterPartial.json()).data.specimenStatus).toBe('partial');
+    const afterPartialBody = (await afterPartial.json()).data;
+    expect(afterPartialBody.specimenStatus).toBe('available');
+    expect(afterPartialBody.quantityStatus).toBe('partial');
+
+    // A specimen still holding material is not closed.
+    const earlyClose = await request.post(`${apiBaseURL}/api/samples/${sampleID}/close`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {},
+    });
+    expect(earlyClose.status()).toBe(409);
+    expect((await earlyClose.json()).error).toBe('SPECIMEN_CLOSE_REFUSED');
 
     const total = await request.post(`${apiBaseURL}/api/samples/${sampleID}/withdraw`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -831,37 +846,103 @@ test.describe('Chain of custody (RF006) — real backend', () => {
       },
     });
     expect(total.status()).toBe(200);
-    expect((await total.json()).data.newStatus).toBe('depleted');
+    const totalBody = (await total.json()).data;
+    expect(totalBody.newStatus).toBe('available');
+    expect(totalBody.quantityStatus).toBe('depleted');
 
     const afterTotal = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, {
       headers: { Authorization: `Bearer ${admin.token}` },
     });
-    expect((await afterTotal.json()).data.specimenStatus).toBe('depleted');
+    const afterTotalBody = (await afterTotal.json()).data;
+    expect(afterTotalBody.specimenStatus).toBe('available');
+    expect(afterTotalBody.quantityStatus).toBe('depleted');
 
-    // RF006 AC7 (#1315): each status change is an append-only OperationalStateDecision, oldest first.
+    // RF006 AC7 (#1315): withdrawals change no status, so they record no decision.
+    const beforeClose = await request.get(`${apiBaseURL}/api/samples/${sampleID}/state-decisions`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(beforeClose.status()).toBe(200);
+    expect((await beforeClose.json()).data).toEqual([]);
+
+    const close = await request.post(`${apiBaseURL}/api/samples/${sampleID}/close`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {},
+    });
+    expect(close.status()).toBe(200);
+    const closeBody = (await close.json()).data;
+    expect(closeBody).toEqual(expect.objectContaining({
+      previousStatus: 'available',
+      specimenStatus: 'closed',
+      quantityStatus: 'depleted',
+    }));
+    expect(closeBody.operationalStateDecisionId).toBeTruthy();
+    expect(closeBody.triggerEventId).toBeTruthy();
+
+    const afterClose = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect((await afterClose.json()).data.specimenStatus).toBe('closed');
+
+    // The close is the one status change, append-only, naming RF026 AC7's rule.
     const decisions = await request.get(`${apiBaseURL}/api/samples/${sampleID}/state-decisions`, {
       headers: { Authorization: `Bearer ${admin.token}` },
     });
     expect(decisions.status()).toBe(200);
     const rows = (await decisions.json()).data;
-    expect(rows.map((row: { previousStatus: string; newStatus: string }) => [row.previousStatus, row.newStatus])).toEqual([
-      ['available', 'partial'],
-      ['partial', 'depleted'],
+    expect(rows).toEqual([
+      expect.objectContaining({
+        previousStatus: 'available',
+        newStatus: 'closed',
+        rulesApplied: ['rf026_ac7_validated_consumption'],
+        triggerEventId: closeBody.triggerEventId,
+      }),
     ]);
-    expect(rows.every((row: { reasonCodes: string[]; triggerEventId: string }) => row.reasonCodes.includes('withdraw') && row.triggerEventId)).toBe(true);
+
+    // closed is final: a second close is refused, and so is a withdrawal.
+    const again = await request.post(`${apiBaseURL}/api/samples/${sampleID}/close`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {},
+    });
+    expect(again.status()).toBe(409);
+    expect((await again.json()).error).toBe('SPECIMEN_CLOSE_REFUSED');
+
+    const withdrawClosed = await request.post(`${apiBaseURL}/api/samples/${sampleID}/withdraw`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {
+        withdrawalType: 'Total',
+        withdrawalResponsible: 'Custody Test Responsible',
+        linkedProject: 'RF006 e2e fixture project',
+      },
+    });
+    expect(withdrawClosed.status()).toBe(400);
+    expect((await withdrawClosed.json()).message).toMatch(/closed/);
   });
 
-  test('blocks a withdrawal against a specimen in a blocked lifecycle status (criterion 4)', async ({ request }) => {
+  test('blocks a withdrawal against a specimen in a blocked lifecycle status, and refuses a v1.3.0 status write (criterion 4)', async ({ request }) => {
     const admin = await realLogin(request);
     const { sampleID } = await seedWithdrawableSample(request, admin);
 
-    const block = await request.put(`${apiBaseURL}/api/samples/${sampleID}`, {
+    // RF006 AC2: destroyed is a v1.3.0 value no write accepts.
+    const legacy = await request.put(`${apiBaseURL}/api/samples/${sampleID}`, {
       headers: { Authorization: `Bearer ${admin.token}` },
       data: { specimenStatus: 'destroyed' },
     });
+    expect(legacy.status()).toBe(422);
+    const legacyBody = await legacy.json();
+    expect(legacyBody.error).toBe('SPECIMEN_STATUS_WRITE_REFUSED');
+    expect(legacyBody.details).toEqual(expect.any(Array));
+
+    const afterLegacy = await request.get(`${apiBaseURL}/api/samples/${sampleID}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect((await afterLegacy.json()).data.specimenStatus).toBe('available');
+
+    const block = await request.put(`${apiBaseURL}/api/samples/${sampleID}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { specimenStatus: 'unavailable' },
+    });
     expect(block.status()).toBe(200);
-    const blockBody = (await block.json()).data;
-    expect(blockBody.specimenStatus).toBe('destroyed');
+    expect((await block.json()).data.specimenStatus).toBe('unavailable');
 
     const withdraw = await request.post(`${apiBaseURL}/api/samples/${sampleID}/withdraw`, {
       headers: { Authorization: `Bearer ${admin.token}` },
@@ -874,17 +955,17 @@ test.describe('Chain of custody (RF006) — real backend', () => {
     expect(withdraw.status()).toBe(400);
     const body = await withdraw.json();
     expect(body.message).toMatch(/não está disponível para retirada/);
-    // specimenStatus (#408/#540) is lowercase-canonical ('destroyed'), not
-    // the uppercase legacy enum this assertion was written against.
-    expect(body.message).toMatch(/destroyed/);
+    // specimenStatus (#408/#540) is lowercase-canonical.
+    expect(body.message).toMatch(/unavailable/);
 
-    // RF006 AC7 (#1315): the edit's status change is recorded; the refused withdrawal records none.
+    // RF006 AC7 (#1315): the accepted edit's status change is recorded; the
+    // refused write and the refused withdrawal record none.
     const decisions = await request.get(`${apiBaseURL}/api/samples/${sampleID}/state-decisions`, {
       headers: { Authorization: `Bearer ${admin.token}` },
     });
     expect(decisions.status()).toBe(200);
     expect((await decisions.json()).data).toEqual([
-      expect.objectContaining({ previousStatus: 'available', newStatus: 'destroyed', rulesApplied: ['manual_status_update'] }),
+      expect.objectContaining({ previousStatus: 'available', newStatus: 'unavailable', rulesApplied: ['manual_status_update'] }),
     ]);
   });
 
