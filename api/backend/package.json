@@ -42,6 +42,7 @@
     "migrate:security-config-keys": "node src/scripts/migrateSecurityConfigCanonicalKeys.js",
     "migrate:consent-token-hash": "node src/scripts/migrateConsentTokenHash.js",
     "migrate:specimen-status-v2": "node src/scripts/migrateSpecimenStatusV2.js",
+    "migrate:storage-assignments-to-chain": "node src/scripts/migrateStorageAssignmentsToChain.js",
     "encryption:rewrite": "node src/scripts/rewriteEncryptedFields.js",
     "iot:simulate": "node scripts/iot-simulator.js",
     "seed:essential:list": "node scripts/seed-essential-reference-data.js --list",
