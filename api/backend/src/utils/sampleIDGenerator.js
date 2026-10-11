@@ -8,7 +8,8 @@ async function generateUniqueSpecimenId(db, collectionName = 'samples') {
   while (attempts < maxAttempts) {
     const specimenId = crypto.randomInt(1000000, 9999999);
     const collection = db.collection(collectionName);
-    const existing = await collection.findOne({ specimenId });
+    // #1220: SampleModel.create stores String(specimenId); a Number never matches it.
+    const existing = await collection.findOne({ specimenId: String(specimenId) });
     if (!existing) {
       logger.info(`ID único de espécime gerado: ${specimenId} (tentativa ${attempts + 1})`);
       return specimenId;
