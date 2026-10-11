@@ -1338,3 +1338,45 @@ test.describe('Telemetry reading identity and replay (#1317, RF009) — real bac
     expect(invalid.status(), await invalid.text()).toBe(422);
   });
 });
+
+// #1317 (RF009 AC4, RF017 AC5): a reading is bound to the TelemetryDatastream
+// of its sensor valid at its observedAt, created through the route.
+test.describe('Telemetry datastream binding (#1317, RF009 AC4) — real backend', () => {
+  test('a reading inside a datastream validity carries its id; one after the end carries none', async ({ request }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const sensorId = `rf009-bind-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const start = new Date(Date.now() - 60 * 60 * 1000);
+    const end = new Date(Date.now() - 30 * 60 * 1000);
+
+    const created = await request.post(`${apiBaseURL}/api/telemetry-datastreams`, {
+      headers: auth,
+      data: {
+        sensorId, equipmentId: `${sensorId}-freezer`, storageLocationId: `${sensorId}-loc`, observedProperty: 'temperature', unit: 'Cel',
+        samplingPolicyId: 'sampling-e2e', thresholdProfileId: 'threshold-e2e', validityPeriod: { start: start.toISOString() },
+      },
+    });
+    expect(created.status(), await created.text()).toBe(201);
+    const stream = (await created.json()).data;
+    const registered = await request.post(`${apiBaseURL}/api/device-registrations`, {
+      headers: auth,
+      data: { deviceId: sensorId, communicationProfileId: 'https-e2e', credentialReference: `secret-manager:device/${sensorId}` },
+    });
+    expect(registered.status(), await registered.text()).toBe(201);
+    const ended = await request.post(`${apiBaseURL}/api/telemetry-datastreams/${stream.telemetryDatastreamId}/end`, {
+      headers: auth, data: { end: end.toISOString() },
+    });
+    expect(ended.status(), await ended.text()).toBe(200);
+
+    const send = (timestamp: Date) =>
+      request.post(`${apiBaseURL}/api/temperature/reading`, { headers: auth, data: { sensorId, temperatureValue: -80, timestamp: timestamp.toISOString() } });
+    const inside = await send(new Date(start.getTime() + 60 * 1000));
+    expect(inside.status(), await inside.text()).toBe(201);
+    expect((await inside.json()).data.telemetryDatastreamId).toBe(stream.telemetryDatastreamId);
+
+    // The default mode records the gap and still stores the reading.
+    const after = await send(end);
+    expect(after.status(), await after.text()).toBe(201);
+    expect((await after.json()).data.telemetryDatastreamId).toBeNull();
+  });
+});

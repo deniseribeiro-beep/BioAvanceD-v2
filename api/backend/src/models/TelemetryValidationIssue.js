@@ -9,12 +9,15 @@ const crypto = require('crypto');
 // The dictionary lists no closed vocabulary for issueCode, severity or
 // disposition, only the example `clock_drift` / `error` / `quarantined`.
 // The values accepted are the ones the contract emits:
-// - issueCode: `clock_drift` (device time beyond the clock tolerance) and
-//   `invalid_value` (a value that is not a physically possible reading);
+// - issueCode: `clock_drift` (device time beyond the clock tolerance),
+//   `invalid_value` (a value that is not a physically possible reading),
+//   `unbound_datastream` (no TelemetryDatastream of the sensor valid at
+//   observedAt) and `device_not_registered` (no active DeviceRegistration
+//   for the sensor), RF009 AC4;
 // - severity: `error`, the dictionary's own value for a clock drift;
 // - disposition: `quarantined` (the reading is kept, flagged by this issue)
 //   and `rejected` (the reading is refused), RF009 AC7's two outcomes.
-const ISSUE_CODE_VALUES = ['clock_drift', 'invalid_value'];
+const ISSUE_CODE_VALUES = ['clock_drift', 'invalid_value', 'unbound_datastream', 'device_not_registered'];
 const SEVERITY_VALUES = ['error'];
 const DISPOSITION_VALUES = ['quarantined', 'rejected'];
 const REQUIRED = ['ingestionEventId', 'issueCode', 'severity', 'details', 'disposition'];

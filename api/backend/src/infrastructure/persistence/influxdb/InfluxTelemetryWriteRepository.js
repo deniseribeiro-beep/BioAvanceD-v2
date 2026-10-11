@@ -101,6 +101,10 @@ class InfluxTelemetryWriteRepository {
     if (reading.clockStatus) {
       point.tag('clockStatus', String(reading.clockStatus));
     }
+    // RF009 AC4: the TelemetryDatastream the reading was bound to.
+    if (reading.telemetryDatastreamId) {
+      point.tag('telemetryDatastreamId', String(reading.telemetryDatastreamId));
+    }
 
     const observedAt = reading.observedAt || reading.timestamp;
     point.timestamp(observedAt ? new Date(observedAt) : new Date());

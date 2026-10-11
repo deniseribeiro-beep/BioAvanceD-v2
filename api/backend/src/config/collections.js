@@ -48,6 +48,8 @@ const CANONICAL_COLLECTIONS = Object.freeze({
   shipments: env.COLL_SHIPMENTS || 'shipments',
   devices: env.COLL_DEVICES || 'devices',
   deviceLifecycleEvents: env.COLL_DEVICE_LIFECYCLE_EVENTS || 'deviceLifecycleEvents',
+  deviceRegistrations: env.COLL_DEVICE_REGISTRATIONS || 'deviceRegistrations',
+  telemetryDatastreams: env.COLL_TELEMETRY_DATASTREAMS || 'telemetryDatastreams',
   referenceDatasetReleases: env.COLL_REFERENCE_DATASET_RELEASES || 'referenceDatasetReleases',
   referenceImportRuns: env.COLL_REFERENCE_IMPORT_RUNS || 'referenceImportRuns',
   referenceImportIssues: env.COLL_REFERENCE_IMPORT_ISSUES || 'referenceImportIssues',

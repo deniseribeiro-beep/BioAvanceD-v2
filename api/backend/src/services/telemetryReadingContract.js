@@ -36,6 +36,8 @@ const { createHash, randomUUID } = require('crypto');
  *   reaches the services yet.
  */
 const { CANONICAL_MODEL_RELEASE_ID } = require('../foundation/readiness');
+const env = require('../config/env');
+const { resolveReadingBinding } = require('./telemetryBinding.service');
 const TemperatureModel = require('../models/Temperature');
 const TelemetryIngestionEventModel = require('../models/TelemetryIngestionEvent');
 const TelemetryValidationIssueModel = require('../models/TelemetryValidationIssue');
@@ -56,6 +58,9 @@ const MAX_PLAUSIBLE_CELSIUS = 150;
 const PROTOCOL_BY_SERVICE = { mqtt: 'mqtt', 'iot-api': 'https', 'temperature-api': 'https', 'iot-queue': 'adapter' };
 const MAX_IDEMPOTENCY_KEY_LENGTH = 200;
 const TELEMETRY_READING_SCHEMA_VERSION = 'telemetry.reading.v1';
+// Every ingestion path receives temperature readings, the observed property
+// their datastreams bind (V2E-0566's example).
+const READING_OBSERVED_PROPERTY = 'temperature';
 
 function canonicalJson(value) {
   if (value instanceof Date) return JSON.stringify(value.toISOString());
@@ -189,16 +194,83 @@ function validationIssuesOf(identity, payload = {}) {
   return issues;
 }
 
+function bindingMode() {
+  return String(env.TELEMETRY_BINDING_MODE || 'record').toLowerCase() === 'enforce' ? 'enforce' : 'record';
+}
+
 /**
- * Records a reading's validation issues and decides its fate. A reading
- * with no issue writes nothing. Otherwise one TelemetryIngestionEvent and
- * its TelemetryValidationIssues are written to MongoDB; a rejected reading
- * then throws a 422 with nothing stored, and a quarantined one returns its
- * issues and goes on to be stored. A failed issue write is logged and does
- * not change the reading's fate.
+ * RF009 AC4, RF017 AC5 (#1317): binds a reading to the TelemetryDatastream
+ * of its sensor valid at its observedAt, and checks the sensor has an active
+ * DeviceRegistration. Returns the datastream's id (null without one) and the
+ * issue drafts for what is missing: under TELEMETRY_BINDING_MODE `enforce`
+ * they reject the reading, under `record` (the default) they quarantine it,
+ * so it is stored and flagged. A lookup that fails is logged; under
+ * `enforce` it refuses the reading with a 503, since the binding cannot be
+ * shown, and under `record` the reading goes on unbound and unflagged.
+ */
+async function readingBindingOf(storeOf, identity, payload = {}) {
+  const mode = bindingMode();
+  const sensorId = String(payload.sensorId || payload.sensorID || '').trim();
+  let binding;
+  try {
+    binding = await resolveReadingBinding(await storeOf(), {
+      sensorId, observedProperty: READING_OBSERVED_PROPERTY, observedAt: identity.observedAt,
+    });
+  } catch (error) {
+    logger.error(`[ISO20387][TELEMETRY] Falha ao resolver o TelemetryDatastream da leitura: ${error.message || error}`);
+    if (mode === 'enforce') {
+      throw Object.assign(new Error('Vínculo da leitura a TelemetryDatastream e DeviceRegistration não verificável'), {
+        statusCode: 503, code: 'TELEMETRY_BINDING_UNVERIFIABLE', auditReason: 'telemetry_binding_unverifiable',
+      });
+    }
+    return { telemetryDatastreamId: null, drafts: [] };
+  }
+
+  const disposition = mode === 'enforce' ? 'rejected' : 'quarantined';
+  const drafts = [];
+  if (!binding.datastream) {
+    drafts.push({
+      issueCode: 'unbound_datastream',
+      severity: 'error',
+      fieldPath: 'sensorId',
+      details: `Sensor ${sensorId} não tem TelemetryDatastream de ${READING_OBSERVED_PROPERTY} válido em ${identity.observedAt.toISOString()} (RF009 AC4, RF017 AC5)`,
+      disposition,
+    });
+  }
+  if (!binding.registration) {
+    drafts.push({
+      issueCode: 'device_not_registered',
+      severity: 'error',
+      fieldPath: 'sensorId',
+      details: `Sensor ${sensorId} não tem DeviceRegistration ativo (RF009 AC4)`,
+      disposition,
+    });
+  }
+  return { telemetryDatastreamId: binding.datastream?.telemetryDatastreamId || null, drafts };
+}
+
+/**
+ * Records a reading's validation issues and decides its fate. The reading
+ * is first bound (readingBindingOf), and `identity.telemetryDatastreamId` is
+ * stamped with its datastream, or null, so every path stores it with the
+ * reading. A reading with no issue writes nothing. Otherwise one
+ * TelemetryIngestionEvent and its TelemetryValidationIssues are written to
+ * MongoDB; a rejected reading then throws a 422 with nothing stored, and a
+ * quarantined one returns its issues and goes on to be stored. A failed
+ * issue write is logged and does not change the reading's fate.
  */
 async function screenReading(db, identity, payload = {}) {
-  const drafts = validationIssuesOf(identity, payload);
+  // `db` may be a function resolving it, so a path that opens its
+  // connection lazily opens it once, here.
+  let store;
+  const storeOf = async () => {
+    if (!store) store = typeof db === 'function' ? await db() : db;
+    return store;
+  };
+
+  const binding = await readingBindingOf(storeOf, identity, payload);
+  identity.telemetryDatastreamId = binding.telemetryDatastreamId;
+  const drafts = [...validationIssuesOf(identity, payload), ...binding.drafts];
   if (!drafts.length) return [];
 
   const rejected = drafts.filter((draft) => draft.disposition === 'rejected');
@@ -216,18 +288,18 @@ async function screenReading(db, identity, payload = {}) {
   });
 
   try {
-    // `db` may be a function resolving it, so a path that opens its
-    // connection lazily opens it only for a reading with an issue.
-    const store = typeof db === 'function' ? await db() : db;
-    await store.collection('telemetryIngestionEvents').insertOne(event);
-    await store.collection('telemetryValidationIssues').insertMany(issues);
+    const resolved = await storeOf();
+    await resolved.collection('telemetryIngestionEvents').insertOne(event);
+    await resolved.collection('telemetryValidationIssues').insertMany(issues);
   } catch (error) {
     logger.error(`[ISO20387][TELEMETRY] Falha ao registrar TelemetryValidationIssue: ${error.message || error}`);
   }
 
   if (rejected.length) {
     const error = validationError(rejected.map((issue) => issue.details).join('; '));
-    error.auditReason = 'invalid_value';
+    // The first rejecting issue's code: `invalid_value`, `unbound_datastream`
+    // or `device_not_registered`.
+    error.auditReason = rejected[0].issueCode;
     error.details = rejected.map((issue) => issue.details);
     throw error;
   }

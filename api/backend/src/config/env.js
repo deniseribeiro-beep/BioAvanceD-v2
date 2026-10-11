@@ -58,6 +58,11 @@ module.exports = {
   TELEMETRY_TRIGGER_COOLDOWN_MINUTES: process.env.TELEMETRY_TRIGGER_COOLDOWN_MINUTES,
   TELEMETRY_MIN_TEMP_ALERT: process.env.TELEMETRY_MIN_TEMP_ALERT,
   TELEMETRY_MAX_TEMP_ALERT: process.env.TELEMETRY_MAX_TEMP_ALERT,
+  // RF009 AC4, RF017 AC5: what the ingestion contract does with a reading
+  // whose sensor has no TelemetryDatastream valid at its observedAt, or no
+  // active DeviceRegistration. `record` (the default) accepts it and records
+  // a TelemetryValidationIssue; `enforce` refuses it with a 422.
+  TELEMETRY_BINDING_MODE: process.env.TELEMETRY_BINDING_MODE || 'record',
 
   // MQTT telemetry ingestion
   MQTT_ENABLED: process.env.MQTT_ENABLED === 'true' || process.env.MQTT_ENABLED === '1',
@@ -211,6 +216,8 @@ module.exports = {
   COLL_SHIPMENTS: process.env.COLL_SHIPMENTS || 'shipments',
   COLL_DEVICES: process.env.COLL_DEVICES || 'devices',
   COLL_DEVICE_LIFECYCLE_EVENTS: process.env.COLL_DEVICE_LIFECYCLE_EVENTS || 'deviceLifecycleEvents',
+  COLL_DEVICE_REGISTRATIONS: process.env.COLL_DEVICE_REGISTRATIONS || 'deviceRegistrations',
+  COLL_TELEMETRY_DATASTREAMS: process.env.COLL_TELEMETRY_DATASTREAMS || 'telemetryDatastreams',
   COLL_REFERENCE_DATASET_RELEASES: process.env.COLL_REFERENCE_DATASET_RELEASES || 'referenceDatasetReleases',
   COLL_REFERENCE_IMPORT_RUNS: process.env.COLL_REFERENCE_IMPORT_RUNS || 'referenceImportRuns',
   COLL_REFERENCE_IMPORT_ISSUES: process.env.COLL_REFERENCE_IMPORT_ISSUES || 'referenceImportIssues',

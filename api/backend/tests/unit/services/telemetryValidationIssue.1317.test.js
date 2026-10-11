@@ -21,13 +21,22 @@ const RECEIVED = new Date('2026-10-10T12:00:00.000Z');
 const SYNCED = new Date(RECEIVED.getTime() - 60 * 1000).toISOString();
 const DRIFTED = new Date(RECEIVED.getTime() - CLOCK_SKEW_TOLERANCE_MS - 1).toISOString();
 
+// Sensor s1 is bound (RF009 AC4): a datastream valid at every reading here
+// and an active registration, so these cases see only the value checks.
+// Binding itself is covered in telemetryBinding.1317.test.js.
+const S1_DATASTREAM = {
+  telemetryDatastreamId: 'ds-s1', sensorId: 's1', observedProperty: 'temperature', validityPeriod: { start: new Date('2020-01-01T00:00:00.000Z'), end: null },
+};
+const S1_REGISTRATION = { deviceRegistrationId: 'reg-s1', deviceId: 's1', status: 'active' };
+
 function fakeDb() {
   const collections = {};
   const collectionOf = (name) => {
     collections[name] = collections[name] || {
       collectionName: name,
       createIndex: vi.fn().mockResolvedValue('ok'),
-      findOne: vi.fn().mockResolvedValue(null),
+      findOne: vi.fn().mockResolvedValue(name === 'deviceRegistrations' ? S1_REGISTRATION : null),
+      find: vi.fn(() => ({ toArray: async () => (name === 'telemetryDatastreams' ? [S1_DATASTREAM] : []) })),
       insertOne: vi.fn().mockResolvedValue({ insertedId: `${name}-id` }),
       insertMany: vi.fn().mockResolvedValue({ insertedCount: 1 }),
     };
@@ -73,11 +82,12 @@ describe('validationIssuesOf', () => {
 });
 
 describe('screenReading', () => {
-  it('a synchronized reading writes nothing', async () => {
-    const { db } = fakeDb();
+  it('a synchronized reading of a bound sensor writes nothing', async () => {
+    const { db, collectionOf } = fakeDb();
     const identity = readingIdentityOf({ sensorId: 's1', temperatureValue: 4, timestamp: SYNCED }, RECEIVED);
-    await expect(screenReading(db, identity, { temperatureValue: 4 })).resolves.toEqual([]);
-    expect(db.collection).not.toHaveBeenCalled();
+    await expect(screenReading(db, identity, { sensorId: 's1', temperatureValue: 4 })).resolves.toEqual([]);
+    expect(collectionOf('telemetryIngestionEvents').insertOne).not.toHaveBeenCalled();
+    expect(collectionOf('telemetryValidationIssues').insertMany).not.toHaveBeenCalled();
   });
 
   it('a drifted reading records its issue and ingestion event, and is accepted', async () => {
@@ -121,15 +131,15 @@ describe('screenReading', () => {
     expect(error).toHaveBeenCalledWith(expect.stringContaining('mongo down'));
   });
 
-  it('resolves a lazy db only for a reading with an issue', async () => {
+  it('resolves a lazy db once per reading, for its binding and any issue', async () => {
     const { db } = fakeDb();
     const lazy = vi.fn().mockResolvedValue(db);
     const synced = readingIdentityOf({ sensorId: 's1', temperatureValue: 4, timestamp: SYNCED }, RECEIVED);
-    await screenReading(lazy, synced, { temperatureValue: 4 });
-    expect(lazy).not.toHaveBeenCalled();
-    const drifted = readingIdentityOf({ sensorId: 's1', temperatureValue: 4, timestamp: DRIFTED }, RECEIVED);
-    await screenReading(lazy, drifted, { temperatureValue: 4 });
+    await screenReading(lazy, synced, { sensorId: 's1', temperatureValue: 4 });
     expect(lazy).toHaveBeenCalledTimes(1);
+    const drifted = readingIdentityOf({ sensorId: 's1', temperatureValue: 4, timestamp: DRIFTED }, RECEIVED);
+    await screenReading(lazy, drifted, { sensorId: 's1', temperatureValue: 4 });
+    expect(lazy).toHaveBeenCalledTimes(2);
   });
 });
 

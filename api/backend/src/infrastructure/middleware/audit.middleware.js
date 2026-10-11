@@ -218,6 +218,9 @@ const ENTITY_MAP = {
   // its own audit row naming the assignment it created or closed.
   'physical-chain': 'Container',
   'devices': 'Device',
+  // #1317: the telemetry binding; each write also audits explicitly.
+  'device-registrations': 'DeviceRegistration',
+  'telemetry-datastreams': 'TelemetryDatastream',
   'studies': 'Study',
   'terminologies': 'TerminologyConcept',
   'workflow-runs': 'WorkflowRun'

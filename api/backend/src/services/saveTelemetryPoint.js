@@ -6,7 +6,8 @@ const {
 } = require('../infrastructure/database/influxdb/connection');
 
 // #1317: `identity` is the reading contract's (telemetryReadingContract.js);
-// its id is a field and its clockStatus a tag on the point.
+// its id is a field, and its clockStatus and telemetryDatastreamId tags, on
+// the point.
 async function saveTelemetryPoint(sensorId, temperature, timestamp, identity = null) {
   try {
     if (sensorId === undefined || sensorId === null || sensorId === '') {
@@ -24,6 +25,7 @@ async function saveTelemetryPoint(sensorId, temperature, timestamp, identity = n
       .timestamp(timestamp ? new Date(timestamp) : new Date());
     if (identity?.telemetryReadingId) point.stringField('telemetryReadingId', String(identity.telemetryReadingId));
     if (identity?.clockStatus) point.tag('clockStatus', String(identity.clockStatus));
+    if (identity?.telemetryDatastreamId) point.tag('telemetryDatastreamId', String(identity.telemetryDatastreamId));
 
     await connectInfluxDB();
     const writeApi = getInfluxWriteApi();
