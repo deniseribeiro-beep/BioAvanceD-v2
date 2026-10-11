@@ -334,7 +334,10 @@ class SampleModel {
       locationID: data.locationID ?? null,
       linkedProject: data.linkedProject,
       collectionSite: data.collectionSite || null,
-      organizationId: data.organizationId || null,
+      // #1192: the tenancy key is never taken from a request or a file. The create
+      // paths will stamp it server-side; until then the backfill sets it from
+      // collectionSite, and readers fall back to collectionSite.
+      organizationId: null,
       sprec: data.sprec ?? null,
       merkleRoot: data.merkleRoot || null,
       sealedRcsAssessmentId: data.sealedRcsAssessmentId ?? null,

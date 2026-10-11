@@ -24,6 +24,7 @@ Issue #1192.
 3. **Behaviour, as the later slices of #1192 land:**
    - readers resolve the key as `organizationId ?? collectionSite` until the backfill has run (`services/sampleTenancy.service.js`);
    - every create stamps `organizationId`;
+   - the key is server-stamped only: no request body or import file sets it, and `SampleModel.create()` stores `null` until the create slices stamp it;
    - PUT cannot write it (it is not in `ALLOWED_UPDATE_FIELDS`);
    - custody keeps governing `/api/physical-chain`.
 4. **The backfill** `npm run migrate:sample-organization` (`scripts/migrateSampleOrganization.js`) copies `collectionSite` into `organizationId` wherever `organizationId` is unset. It writes no other field and is idempotent.

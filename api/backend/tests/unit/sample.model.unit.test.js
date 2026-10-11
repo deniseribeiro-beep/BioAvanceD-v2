@@ -24,9 +24,9 @@ describe('Sample.create - collectionSite (ELM-0128)', () => {
   });
 
   // #1192: the tenancy key, separate from the collection site.
-  it('maps organizationId apart from collectionSite', () => {
+  it("a create ignores a caller's organizationId and stores null", () => {
     const result = Sample.create({ ...base, organizationId: 'org-custodian', collectionSite: 'org-partner' });
-    expect(result.organizationId).toBe('org-custodian');
+    expect(result.organizationId).toBeNull();
     expect(result.collectionSite).toBe('org-partner');
   });
 
