@@ -22,6 +22,18 @@ describe('Sample.create - collectionSite (ELM-0128)', () => {
     const result = Sample.create({ ...base });
     expect(result.collectionSite).toBeNull();
   });
+
+  // #1192: the tenancy key, separate from the collection site.
+  it('maps organizationId apart from collectionSite', () => {
+    const result = Sample.create({ ...base, organizationId: 'org-custodian', collectionSite: 'org-partner' });
+    expect(result.organizationId).toBe('org-custodian');
+    expect(result.collectionSite).toBe('org-partner');
+  });
+
+  it('defaults organizationId to null when not provided', () => {
+    const result = Sample.create({ ...base, collectionSite: 'org-partner' });
+    expect(result.organizationId).toBeNull();
+  });
 });
 
 describe('Sample.validateSpecimenStatus', () => {

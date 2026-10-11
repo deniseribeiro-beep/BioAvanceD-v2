@@ -26,6 +26,7 @@ const WIRED = [
   ['migrate:user-organizations', 'migrateUserOrganizations.js'],
   ['migrate:consent-token-hash', 'migrateConsentTokenHash.js'],
   ['migrate:specimen-status-v2', 'migrateSpecimenStatusV2.js'],
+  ['migrate:sample-organization', 'migrateSampleOrganization.js'],
   ['migrate:storage-assignments-to-chain', 'migrateStorageAssignmentsToChain.js'],
   ['encryption:rewrite', 'rewriteEncryptedFields.js'],
   ['seed:disease-validation-rules', 'seedDiseaseValidationRules.js'],

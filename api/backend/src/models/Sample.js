@@ -92,6 +92,9 @@ const SampleSchema = new Schema({
   location: { type: Object, default: null },
   linkedProject: { type: String, required: true },
   collectionSite: { type: String, default: null },
+  // #1192: the tenancy key, separate from the collection site (ELM-0128).
+  // A local extension; see docs/decisions/2026-10-11-sample-tenancy.md.
+  organizationId: { type: String, default: null },
   sprec: { type: Schema.Types.Mixed, default: null },
   merkleRoot: { type: String, default: null },
   // #502: pins integrity verification to the RcsAssessment/SpecimenPreanalytics
@@ -331,6 +334,7 @@ class SampleModel {
       locationID: data.locationID ?? null,
       linkedProject: data.linkedProject,
       collectionSite: data.collectionSite || null,
+      organizationId: data.organizationId || null,
       sprec: data.sprec ?? null,
       merkleRoot: data.merkleRoot || null,
       sealedRcsAssessmentId: data.sealedRcsAssessmentId ?? null,
