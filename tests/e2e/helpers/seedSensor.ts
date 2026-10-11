@@ -264,6 +264,83 @@ export async function seedSensorWithFreezerSample(
   };
 }
 
+export interface SeededFreezerSensor {
+  sensorId: string;
+  deviceId: string;
+  policyId: string;
+  freezerId: string;
+}
+
+/**
+ * #1368 fixture: seeds a TemperaturePolicy, a Device, and a SensorMetadata
+ * doc bound to an already-seeded FREEZER container (e.g. the one
+ * seedParticipant.ts's seedStorageBoxLocation created), so
+ * TelemetryMonitor.resolveRootSamples resolves the samples the API placed in
+ * that freezer instead of a sample this fixture inserted itself
+ * (seedSensorWithFreezerSample).
+ */
+export async function seedSensorOnFreezer(
+  freezerId: string,
+  minTemp: number,
+  maxTemp: number
+): Promise<SeededFreezerSensor> {
+  const db = await getDb();
+  const suffix = Date.now();
+  const sensorId = `rf009-e2e-freezer-sensor-${suffix}`;
+  const deviceId = `rf009-e2e-freezer-device-${suffix}`;
+
+  const policyResult = await db.collection('temperaturePolicies').insertOne({
+    name: `RF009 freezer e2e policy ${suffix}`,
+    minTemp,
+    maxTemp,
+    hysteresis: 0.5,
+    // #678 dict-02 ThresholdProfile alignment -- see seedSensorWithPolicy's
+    // own comment above for why these are set explicitly here.
+    metricType: 'temperature',
+    ruleVersion: '1.0.0',
+    effectivePeriod: { start: new Date(), end: null },
+    minimumDuration: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+
+  const deviceResult = await db.collection('devices').insertOne({
+    deviceId,
+    deviceType: 'freezer',
+    qualificationStatus: 'qualified',
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+
+  // #984: see seedSensorWithPolicy's own comment above.
+  const macSuffix = suffix.toString(16).padStart(6, '0').slice(-6);
+
+  await db.collection('sensorMetadata').insertOne({
+    sensorId,
+    macAddress: `AA:BB:CC:${macSuffix.slice(0, 2)}:${macSuffix.slice(2, 4)}:${macSuffix.slice(4, 6)}`,
+    equipment: null,
+    device: deviceResult.insertedId,
+    temperaturePolicy: policyResult.insertedId,
+    storageContainer: new ObjectId(freezerId),
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+
+  return { sensorId, deviceId, policyId: policyResult.insertedId.toString(), freezerId };
+}
+
+/** Deletes everything seedSensorOnFreezer created, plus any excursion/incident it triggered; the freezer itself belongs to its own seeder. */
+export async function removeSensorOnFreezer(sensor: SeededFreezerSensor): Promise<void> {
+  const db = await getDb();
+  await Promise.all([
+    db.collection('sensorMetadata').deleteMany({ sensorId: sensor.sensorId }),
+    db.collection('devices').deleteMany({ deviceId: sensor.deviceId }),
+    db.collection('temperaturePolicies').deleteMany({ _id: new ObjectId(sensor.policyId) }),
+    db.collection('environmentalExcursions').deleteMany({ equipmentId: sensor.deviceId }),
+    db.collection('temperatureIncidents').deleteMany({ sensorKey: sensor.sensorId }),
+  ]);
+}
+
 /** Reads back the Mongo Sample document seedSensorWithFreezerSample created. */
 export async function findFreezerSample(sensor: SeededFreezerSample): Promise<any | null> {
   const db = await getDb();

@@ -334,6 +334,47 @@ export async function waitForSampleGovernedBy(
   );
 }
 
+async function countDerivedFromEdges(childId: string, parentId: string): Promise<number> {
+  const session = getDriver().session({ database });
+  try {
+    const result = await session.run(
+      'MATCH (c:Sample {id: $childId})-[:DERIVED_FROM]->(p:Sample {id: $parentId}) RETURN count(*) AS n',
+      { childId, parentId }
+    );
+    return Number(result.records[0].get('n'));
+  } finally {
+    await session.close();
+  }
+}
+
+/**
+ * #1368 fixture: polls Neo4j until `(:Sample {id: childId})-[:DERIVED_FROM]->
+ * (:Sample {id: parentId})` exists, or throws once `timeoutMs` elapses. Both
+ * ids are Mongo _id strings, the key the projector MERGEs a LINEAGE_REGISTERED
+ * edge under; the event is projected asynchronously by the outbox worker.
+ */
+export async function waitForDerivedFrom(
+  childId: string,
+  parentId: string,
+  { timeoutMs = 15_000, intervalMs = 500 }: { timeoutMs?: number; intervalMs?: number } = {}
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let lastSeen = 0;
+
+  while (Date.now() < deadline) {
+    lastSeen = await countDerivedFromEdges(childId, parentId);
+    if (lastSeen > 0) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+
+  throw new Error(
+    `waitForDerivedFrom: timed out after ${timeoutMs}ms waiting for Sample ${childId} ` +
+      `-[DERIVED_FROM]-> Sample ${parentId} (last seen: no DERIVED_FROM edge)`
+  );
+}
+
 /** Counts `:Sample` nodes with the given id — #1225's phantom-node check (a consent id must never key a Sample). */
 export async function countSampleNodes(sampleId: string): Promise<number> {
   const session = getDriver().session({ database });
