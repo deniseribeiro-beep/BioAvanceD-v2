@@ -1244,7 +1244,9 @@ class SampleService {
         .find({
           $or: [
             { specimenId: specimenIdStr },
-            { barcode: (sample && sample.barcode) || specimenIdStr }
+            { barcode: (sample && sample.barcode) || specimenIdStr },
+            // #1220: legacy rows are keyed by the sample's _id.
+            ...(sample ? [{ specimenId: String(sample._id) }] : [])
           ]
         })
         .sort({ timestamp: -1 })

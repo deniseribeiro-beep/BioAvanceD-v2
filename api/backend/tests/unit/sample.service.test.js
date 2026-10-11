@@ -2317,6 +2317,24 @@ describe('sample.service', () => {
       });
     });
 
+    // #1220: a legacy movement keyed by the sample's _id, under another
+    // barcode, still belongs to the sample's history.
+    it('returns a movement keyed by the sample _id under a different barcode', async () => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue({ _id: 'oid-1', specimenId: 'SPC-1', barcode: 'BC-1' });
+      const rows = [
+        { movementID: 1, specimenId: 'oid-1', barcode: 'BC-OLD' },
+        { movementID: 2, specimenId: 'other', barcode: 'BC-OTHER' },
+      ];
+      db.collections.sample_movements.find.mockImplementation((filter) => makeCursor(
+        rows.filter((row) => filter.$or.some((arm) => Object.entries(arm).every(([key, value]) => row[key] === value))),
+      ));
+
+      const movements = await sampleService.getSampleMovements(db, 'SPC-1');
+
+      expect(movements).toEqual([{ movementID: 1, specimenId: 'oid-1', barcode: 'BC-OLD' }]);
+    });
+
     it('propagates an error from the collection query', async () => {
       const db = makeDb();
       db.collections.sample_movements.find.mockImplementation(() => {
