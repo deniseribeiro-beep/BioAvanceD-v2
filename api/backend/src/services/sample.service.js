@@ -26,7 +26,7 @@ const AllocateSampleUseCase = require('../core/use-cases/AllocateSampleUseCase')
 const MongoStorageRepository = require('../infrastructure/persistence/mongo/MongoStorageRepository');
 const MongoAuditRepository = require('../infrastructure/persistence/mongo/MongoAuditRepository');
 const LineageRepository = require('../infrastructure/database/neo4j/LineageRepository');
-const { recordSpecimenProjection } = require('./graphProjection.service');
+const { recordSpecimenProjection, GraphProjectionService } = require('./graphProjection.service');
 const { ObjectId } = require('mongodb');
 
 const { CRITICAL_SENSOR_STATUSES, isEquipmentBlocked } = require('../models/equipmentStatus');
@@ -345,78 +345,124 @@ class SampleService {
       }
 
       const sample = SampleModel.create(sampleData);
-
-      const result = await samplesCollection.insertOne(sample);
-
-      const movementsCollection = await getCollection(db, 'sampleMovements');
       const createdQuantity = Number(sample.currentQuantity ?? sample.quantity ?? 0);
-      const createMovementID = await SampleMovementModel.generateMovementID(db);
 
-      try {
-        await appendMovementWithHashChain(movementsCollection, SampleMovementModel.create({
-          movementId: createMovementID,
-          specimenId: sample.specimenId,
-          barcode: sample.barcode,
-          type: 'create',
-          quantity: createdQuantity,
-          unit: sample.unit || 'µL',
-          responsible: options?.auditInfo?.userName || options?.auditInfo?.actorName || 'SYSTEM',
-          destination: `storage:${boxId}:${positionCode}`,
-          purpose: 'sample_birth',
-          linkedProject: sample.linkedProject || null,
-          observations: options?.auditInfo?.notes || null,
-          userId: options?.auditInfo?.userId || null,
-          userName: options?.auditInfo?.userName || null,
-          userRole: options?.auditInfo?.userRole || null,
-          ipAddress: options?.auditInfo?.ipAddress || null,
-          userAgent: options?.auditInfo?.userAgent || null,
-          previousQuantity: 0,
-          newQuantity: createdQuantity
-        }));
-      } catch (ledgerError) {
-        await samplesCollection.deleteOne({ _id: result.insertedId });
-        throw new Error(`Falha ao registrar cadeia de custódia no nascimento da amostra: ${ledgerError.message || ledgerError}`);
-      }
+      const buildBirthMovement = (createMovementID) => SampleMovementModel.create({
+        movementId: createMovementID,
+        specimenId: sample.specimenId,
+        barcode: sample.barcode,
+        type: 'create',
+        quantity: createdQuantity,
+        unit: sample.unit || 'µL',
+        responsible: options?.auditInfo?.userName || options?.auditInfo?.actorName || 'SYSTEM',
+        destination: `storage:${boxId}:${positionCode}`,
+        purpose: 'sample_birth',
+        linkedProject: sample.linkedProject || null,
+        observations: options?.auditInfo?.notes || null,
+        userId: options?.auditInfo?.userId || null,
+        userName: options?.auditInfo?.userName || null,
+        userRole: options?.auditInfo?.userRole || null,
+        ipAddress: options?.auditInfo?.ipAddress || null,
+        userAgent: options?.auditInfo?.userAgent || null,
+        previousQuantity: 0,
+        newQuantity: createdQuantity
+      });
+      const ledgerFailure = (ledgerError) => new Error(`Falha ao registrar cadeia de custódia no nascimento da amostra: ${ledgerError.message || ledgerError}`);
 
       // #474: storageLocation is no longer written directly onto the create
       // doc — the sample is inserted unallocated, then AllocateSampleUseCase
       // performs the atomic occupancyGrid write, storageLocation update,
       // StorageAssignment record, and audit/lineage trail (same use case
       // allocate-sample.controller.js and RegisterSampleUseCase reuse).
-      const allocateUseCase = new AllocateSampleUseCase({
+      const buildAllocateUseCase = () => new AllocateSampleUseCase({
         storageRepository: new MongoStorageRepository(db),
         auditRepository: new MongoAuditRepository(db),
         lineageRepository: new LineageRepository(db)
       });
-
-      try {
-        await allocateUseCase.execute({
-          specimenId: result.insertedId,
-          boxId: String(boxId),
-          position: positionCode,
-          actor: {
-            userId: options?.auditInfo?.userId || null,
-            userName: options?.auditInfo?.userName || options?.auditInfo?.actorName || null,
-            userRole: options?.auditInfo?.userRole || null,
-            ipAddress: options?.auditInfo?.ipAddress || null,
-            userAgent: options?.auditInfo?.userAgent || null
-          }
-        });
-      } catch (allocationError) {
-        await samplesCollection.deleteOne({ _id: result.insertedId });
+      const allocationCommand = (insertedId) => ({
+        specimenId: insertedId,
+        boxId: String(boxId),
+        position: positionCode,
+        actor: {
+          userId: options?.auditInfo?.userId || null,
+          userName: options?.auditInfo?.userName || options?.auditInfo?.actorName || null,
+          userRole: options?.auditInfo?.userRole || null,
+          ipAddress: options?.auditInfo?.ipAddress || null,
+          userAgent: options?.auditInfo?.userAgent || null
+        }
+      });
+      const allocationFailure = (allocationError) => {
         const message = allocationError?.message || String(allocationError);
         const wrapped = new Error(`Falha ao alocar amostra na posição de armazenamento: ${message}`);
         wrapped.statusCode = message.includes('STORAGE_COLLISION') || message.includes('já está alocada') ? 409 : 422;
-        throw wrapped;
-      }
+        return wrapped;
+      };
+
+      // RF023 AC3, RNF019 C1: on a deployment that runs transactions, the
+      // sample insert, its birth movement, the allocation's writes with its
+      // custody event, SPECIMEN_UPSERTED and the caller's own in-transaction
+      // step (options.onCreatedInTransaction, the register custody event)
+      // commit or abort together: a failed append leaves no sample and no
+      // movement. Without a transaction the writes run in sequence, each
+      // failure deleting the inserted sample, and SPECIMEN_UPSERTED is logged
+      // rather than thrown.
+      const result = await withTransactionWhereSupported(db, async (session) => {
+        if (!session) {
+          const insertResult = await samplesCollection.insertOne(sample);
+
+          const movementsCollection = await getCollection(db, 'sampleMovements');
+          const createMovementID = await SampleMovementModel.generateMovementID(db);
+          try {
+            await appendMovementWithHashChain(movementsCollection, buildBirthMovement(createMovementID));
+          } catch (ledgerError) {
+            await samplesCollection.deleteOne({ _id: insertResult.insertedId });
+            throw ledgerFailure(ledgerError);
+          }
+
+          try {
+            await buildAllocateUseCase().execute(allocationCommand(insertResult.insertedId));
+          } catch (allocationError) {
+            await samplesCollection.deleteOne({ _id: insertResult.insertedId });
+            throw allocationFailure(allocationError);
+          }
+
+          await recordSpecimenProjection(db, {
+            specimenId: String(insertResult.insertedId),
+            participantId: sample.participantId,
+            sourceService: 'sample.service'
+          });
+          return insertResult;
+        }
+
+        const insertResult = await samplesCollection.insertOne(sample, { session });
+
+        const movementsCollection = await getCollection(db, 'sampleMovements');
+        const createMovementID = await SampleMovementModel.generateMovementID(db);
+        try {
+          await appendMovementWithHashChain(movementsCollection, buildBirthMovement(createMovementID), { session });
+        } catch (ledgerError) {
+          throw ledgerFailure(ledgerError);
+        }
+
+        try {
+          await buildAllocateUseCase().execute(allocationCommand(insertResult.insertedId), { session });
+        } catch (allocationError) {
+          throw allocationFailure(allocationError);
+        }
+
+        await new GraphProjectionService().appendSpecimenEvent(db, {
+          specimenId: String(insertResult.insertedId),
+          participantId: sample.participantId,
+          sourceService: 'sample.service'
+        }, { session });
+
+        if (typeof options?.onCreatedInTransaction === 'function') {
+          await options.onCreatedInTransaction({ _id: insertResult.insertedId, ...sample }, session);
+        }
+        return insertResult;
+      });
 
       sample.storageLocation = { boxId, position: positionCode };
-
-      await recordSpecimenProjection(db, {
-        specimenId: String(result.insertedId),
-        participantId: sample.participantId,
-        sourceService: 'sample.service'
-      });
 
       // #510: expose the canonical StorageAssignment (dict-02 ELM-0167-0178)
       // the allocation above just opened, alongside the legacy storageLocation

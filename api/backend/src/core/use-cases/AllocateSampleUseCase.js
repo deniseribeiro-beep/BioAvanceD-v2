@@ -15,13 +15,23 @@ class AllocateSampleUseCase {
   }
 
   /**
+   * `options.session` is a caller's own open transaction (a sample create
+   * allocating the sample it just inserted): the allocation's writes and its
+   * custody append join it instead of opening a second one, and its reads see
+   * the caller's uncommitted insert. Without it the allocation runs its own
+   * transaction, as before.
+   *
    * @param {{ specimenId: string, boxId: string, position: string, actor: { userId?: string|null, userName?: string|null, userRole?: string|null, ipAddress?: string|null, userAgent?: string|null } }} command
+   * @param {{ session?: import('mongodb').ClientSession }} [options]
    */
-  async execute(command) {
+  async execute(command, options = {}) {
     this.validateCommand(command);
 
+    const outerSession = options?.session || null;
     const normalizedPosition = String(command.position).trim().toUpperCase();
-    const sample = await this.storageRepository.findSampleById(command.specimenId);
+    const sample = outerSession
+      ? await this.storageRepository.findSampleById(command.specimenId, outerSession)
+      : await this.storageRepository.findSampleById(command.specimenId);
     if (!sample) {
       throw new Error('Amostra não encontrada');
     }
@@ -50,7 +60,11 @@ class AllocateSampleUseCase {
     const lineageResult = await this.validateLineageBeforeMongo(lineagePayload);
     let lineageEventId = null;
 
-    await this.storageRepository.withTransaction(async (session) => {
+    const runInTransaction = outerSession
+      ? (handler) => handler(outerSession)
+      : (handler) => this.storageRepository.withTransaction(handler);
+
+    await runInTransaction(async (session) => {
       const sample = await this.storageRepository.findSampleById(command.specimenId, session);
       if (!sample) {
         throw new Error('Amostra não encontrada');

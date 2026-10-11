@@ -23,6 +23,7 @@ class RegisterSampleUseCase {
     let topologySynced = false;
     let fallbackQueued = false;
     try {
+      const strictMode = this.resolveStrictMode(sampleData);
       const createOptions = {
         ...(command?.options || {}),
         auditInfo: {
@@ -34,9 +35,53 @@ class RegisterSampleUseCase {
         }
       };
 
-      createdSample = await this.sampleRepository.create(sampleData, createOptions);
+      // RF023 AC3, RNF019 C1: where the create runs a transaction, the
+      // register custody event is appended inside it. A strict-mode failure
+      // aborts the create, so no sample is left to roll back; a permissive
+      // one is kept for the self-healing queue and the create commits.
+      // A create that runs no transaction never calls this, and the append
+      // follows the create as below.
+      let inTransaction = null;
+      if (typeof this.lineageRepository?.recordCustodyEvent === 'function') {
+        createOptions.onCreatedInTransaction = async (sampleInTransaction, session) => {
+          const lineagePayload = this.buildLineagePayload(sampleInTransaction, sampleData, command);
+          inTransaction = { lineagePayload, error: null };
+          try {
+            await this.persistTopology(lineagePayload, { session });
+          } catch (appendError) {
+            inTransaction.error = appendError;
+            if (strictMode) {
+              throw appendError;
+            }
+          }
+        };
+      }
 
-      const strictMode = this.resolveStrictMode(sampleData);
+      try {
+        createdSample = await this.sampleRepository.create(sampleData, createOptions);
+      } catch (createError) {
+        if (strictMode && inTransaction?.error) {
+          throw this.strictModeBlocked(createError);
+        }
+        throw createError;
+      }
+
+      if (inTransaction) {
+        if (inTransaction.error) {
+          fallbackQueued = await this.enqueueForSelfHealing(inTransaction.lineagePayload, inTransaction.error, strictMode);
+        } else {
+          topologySynced = true;
+        }
+        return {
+          sample: createdSample,
+          strictMode,
+          topology: {
+            synced: topologySynced,
+            fallbackQueued
+          }
+        };
+      }
+
       const lineagePayload = this.buildLineagePayload(createdSample, sampleData, command);
 
       try {
@@ -45,10 +90,7 @@ class RegisterSampleUseCase {
       } catch (neo4jError) {
         if (strictMode) {
           await this.rollbackMongoSample(createdSample);
-          const strictError = new Error(`STRICT_MODE_BLOCKED: ${neo4jError.message || 'Falha ao persistir linhagem no Neo4j'}`);
-          strictError.code = 'STRICT_MODE_BLOCKED';
-          strictError.statusCode = 403;
-          throw strictError;
+          throw this.strictModeBlocked(neo4jError);
         }
 
         fallbackQueued = await this.enqueueForSelfHealing(lineagePayload, neo4jError, strictMode);
@@ -66,6 +108,13 @@ class RegisterSampleUseCase {
       this.logger.error('[RegisterSampleUseCase] Falha no registro de amostra:', error.message || error);
       throw error;
     }
+  }
+
+  strictModeBlocked(cause) {
+    const strictError = new Error(`STRICT_MODE_BLOCKED: ${cause?.message || 'Falha ao persistir linhagem no Neo4j'}`);
+    strictError.code = 'STRICT_MODE_BLOCKED';
+    strictError.statusCode = 403;
+    return strictError;
   }
 
   resolveStrictMode(sampleData) {
@@ -102,17 +151,22 @@ class RegisterSampleUseCase {
     };
   }
 
-  async persistTopology(lineagePayload) {
+  async persistTopology(lineagePayload, options = {}) {
     if (!this.lineageRepository) {
       throw new Error('LineageRepository não injetado');
     }
 
     // #1312: the register step is an outbox append (CUSTODY_EVENT_RECORDED),
-    // never a Neo4j write. The sample create runs no Mongo transaction of
-    // its own here, so the append follows it: a strict-mode failure rolls the
-    // sample back, a permissive one queues the step for retry.
+    // never a Neo4j write. With `options.session` it is appended inside the
+    // create's own transaction; without one it follows the create: a
+    // strict-mode failure rolls the sample back, a permissive one queues the
+    // step for retry.
     if (typeof this.lineageRepository.recordCustodyEvent === 'function') {
-      await this.lineageRepository.recordCustodyEvent(lineagePayload);
+      if (options?.session) {
+        await this.lineageRepository.recordCustodyEvent(lineagePayload, { session: options.session });
+      } else {
+        await this.lineageRepository.recordCustodyEvent(lineagePayload);
+      }
       return;
     }
 

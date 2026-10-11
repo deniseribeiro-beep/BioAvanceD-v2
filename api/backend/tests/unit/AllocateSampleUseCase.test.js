@@ -163,6 +163,47 @@ describe('AllocateSampleUseCase', () => {
     expect(appendOrder).toBeGreaterThan(auditRepository.appendImmutableAudit.mock.invocationCallOrder[0]);
   });
 
+  // RF023 AC3: a sample create allocating the sample it just inserted passes
+  // its own session; the allocation joins it instead of opening a second
+  // transaction, and reads the uncommitted sample through it.
+  it('#1367: an outer session is used for every read and write, and no transaction of its own is opened', async () => {
+    const { useCase, storageRepository, auditRepository, lineageRepository } = makeDeps({ withLineageRepo: true });
+
+    const result = await useCase.execute(baseCommand(), { session: 'outer-session' });
+
+    expect(result.lineageEventId).toBe('evt-1');
+    expect(storageRepository.withTransaction).not.toHaveBeenCalled();
+    expect(storageRepository.findSampleById.mock.calls).toEqual([
+      ['sample-1', 'outer-session'],
+      ['sample-1', 'outer-session']
+    ]);
+    expect(storageRepository.allocateSamplePosition).toHaveBeenCalledWith(
+      { specimenId: 'sample-1', boxId: 'box-new', position: 'B2' },
+      'outer-session'
+    );
+    expect(auditRepository.appendImmutableAudit.mock.calls[0][1]).toBe('outer-session');
+    expect(lineageRepository.recordCustodyEvent.mock.calls[0][1]).toEqual({ session: 'outer-session' });
+  });
+
+  it('#1367: a failed custody append under an outer session propagates, so the caller\'s transaction aborts', async () => {
+    const { useCase, storageRepository } = makeDeps({
+      withLineageRepo: true,
+      lineageImpl: { recordCustodyEvent: async () => { throw new Error('outbox down'); } }
+    });
+
+    await expect(useCase.execute(baseCommand(), { session: 'outer-session' })).rejects.toThrow('outbox down');
+    expect(storageRepository.withTransaction).not.toHaveBeenCalled();
+  });
+
+  it('#1367: without an outer session the first lookup takes no session argument, as before', async () => {
+    const { useCase, storageRepository } = makeDeps();
+
+    await useCase.execute(baseCommand());
+
+    expect(storageRepository.findSampleById.mock.calls[0]).toEqual(['sample-1']);
+    expect(storageRepository.withTransaction).toHaveBeenCalledTimes(1);
+  });
+
   it('#1312: the pre-Mongo validation carries no consent flag; it reads nothing', async () => {
     const { useCase, lineageRepository } = makeDeps({ withLineageRepo: true });
 

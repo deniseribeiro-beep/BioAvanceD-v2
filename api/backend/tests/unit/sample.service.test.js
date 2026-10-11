@@ -485,6 +485,153 @@ describe('sample.service', () => {
       expect(db.collections.samples.deleteOne).toHaveBeenCalledWith({ _id: 'generated-id' });
     });
 
+    // RF023 AC3, RNF019 C1: the create's insert, birth movement, allocation,
+    // SPECIMEN_UPSERTED and the caller's in-transaction step commit in one
+    // transaction where the deployment runs one.
+    describe('one transaction where one runs (#1367)', () => {
+      const OUTBOX = 'graph_projection_outbox';
+
+      // A replica-set `hello`, and a session that applies the writes made
+      // with it only when the transaction body returns: a throw discards
+      // them, as the server's abort does.
+      function makeTransactionalDb() {
+        const db = makeDb({ [OUTBOX]: makeCollection(OUTBOX) });
+        mockOperationalStorage(db);
+        db.client.db = vi.fn(() => ({ command: vi.fn().mockResolvedValue({ setName: 'rs0' }) }));
+
+        const committed = { samples: [], sample_movements: [] };
+        let staged = [];
+        db.session.withTransaction = vi.fn(async (body) => {
+          staged = [];
+          try {
+            await body();
+          } catch (error) {
+            staged = [];
+            throw error;
+          }
+          for (const [name, doc] of staged) committed[name].push(doc);
+        });
+        const stagedInsert = (name) => vi.fn(async (doc, options) => {
+          if (options?.session === db.session) staged.push([name, doc]);
+          else committed[name].push(doc);
+          return { insertedId: 'generated-id' };
+        });
+        db.collections.samples.insertOne = stagedInsert('samples');
+        db.collections.sample_movements.insertOne = stagedInsert('sample_movements');
+        return { db, committed };
+      }
+
+      const outboxCall = (db, eventType) => db.collections[OUTBOX].updateOne.mock.calls
+        .find(([, update]) => update?.$setOnInsert?.eventType === eventType);
+
+      it('writes the insert, both movements, the allocation and both outbox appends with the one session, and hands it to the caller step', async () => {
+        const { db, committed } = makeTransactionalDb();
+        const onCreatedInTransaction = vi.fn().mockResolvedValue(undefined);
+
+        const result = await sampleService.createSample(db, validSampleData(), { onCreatedInTransaction });
+
+        expect(result._id).toBe('generated-id');
+        expect(db.client.startSession).toHaveBeenCalledTimes(1);
+        expect(db.session.withTransaction).toHaveBeenCalledTimes(1);
+
+        expect(db.collections.samples.insertOne.mock.calls[0][1]).toEqual({ session: db.session });
+        const movementSessions = db.collections.sample_movements.insertOne.mock.calls.map(([doc, options]) => [doc.type, options?.session]);
+        expect(movementSessions).toEqual([['create', db.session], ['allocate', db.session]]);
+        expect(db.collection('storageBoxes').updateOne.mock.calls[0][2]).toEqual({ session: db.session });
+        expect(db.collections.samples.updateOne.mock.calls[0][2]).toEqual({ session: db.session });
+        expect(db.collection('storageAssignments').insertOne.mock.calls[0][1]).toEqual({ session: db.session });
+
+        const specimenUpserted = outboxCall(db, 'SPECIMEN_UPSERTED');
+        expect(specimenUpserted).toBeDefined();
+        expect(specimenUpserted[2]).toEqual({ upsert: true, session: db.session });
+        const allocateCustody = outboxCall(db, 'CUSTODY_EVENT_RECORDED');
+        expect(allocateCustody[1].$setOnInsert.payload.custodyEventType).toBe('allocate');
+        expect(allocateCustody[2]).toEqual({ upsert: true, session: db.session });
+
+        expect(onCreatedInTransaction).toHaveBeenCalledTimes(1);
+        expect(onCreatedInTransaction).toHaveBeenCalledWith(
+          expect.objectContaining({ _id: 'generated-id', barcode: 'BR-TEST-001' }),
+          db.session
+        );
+        expect(committed.samples).toHaveLength(1);
+        expect(committed.sample_movements).toHaveLength(2);
+      });
+
+      it('a failed SPECIMEN_UPSERTED append aborts the create: no sample, no movement, no compensating delete', async () => {
+        const { db, committed } = makeTransactionalDb();
+        db.collections[OUTBOX].updateOne.mockImplementation(async (_filter, update) => {
+          if (update?.$setOnInsert?.eventType === 'SPECIMEN_UPSERTED') throw new Error('outbox down');
+          return { acknowledged: true };
+        });
+        const onCreatedInTransaction = vi.fn();
+
+        await expect(sampleService.createSample(db, validSampleData(), { onCreatedInTransaction }))
+          .rejects.toThrow('outbox down');
+
+        expect(db.collections.samples.insertOne).toHaveBeenCalledTimes(1);
+        expect(committed.samples).toEqual([]);
+        expect(committed.sample_movements).toEqual([]);
+        expect(db.collections.samples.deleteOne).not.toHaveBeenCalled();
+        expect(onCreatedInTransaction).not.toHaveBeenCalled();
+      });
+
+      it('a failed caller step aborts the create the same way', async () => {
+        const { db, committed } = makeTransactionalDb();
+        const onCreatedInTransaction = vi.fn().mockRejectedValue(new Error('register append failed'));
+
+        await expect(sampleService.createSample(db, validSampleData(), { onCreatedInTransaction }))
+          .rejects.toThrow('register append failed');
+
+        expect(committed.samples).toEqual([]);
+        expect(committed.sample_movements).toEqual([]);
+      });
+
+      it('without a known transactional deployment the writes run in sequence as before, with no session and no caller step', async () => {
+        const db = makeDb({ [OUTBOX]: makeCollection(OUTBOX) });
+        mockOperationalStorage(db);
+        const onCreatedInTransaction = vi.fn();
+
+        const result = await sampleService.createSample(db, validSampleData(), { onCreatedInTransaction });
+
+        expect(result._id).toBe('generated-id');
+        expect(db.collections.samples.insertOne.mock.calls[0]).toHaveLength(1);
+        expect(db.collections.sample_movements.insertOne.mock.calls[0][1]).toBeUndefined();
+        expect(outboxCall(db, 'SPECIMEN_UPSERTED')[2]).toEqual({ upsert: true });
+        // The allocation still opens its own transaction, as before.
+        expect(db.client.startSession).toHaveBeenCalledTimes(1);
+        expect(onCreatedInTransaction).not.toHaveBeenCalled();
+      });
+
+      it('a failed SPECIMEN_UPSERTED append without a transaction is logged and the sample stands, as before', async () => {
+        const db = makeDb({ [OUTBOX]: makeCollection(OUTBOX) });
+        mockOperationalStorage(db);
+        db.collections[OUTBOX].updateOne.mockImplementation(async (_filter, update) => {
+          if (update?.$setOnInsert?.eventType === 'SPECIMEN_UPSERTED') throw new Error('outbox down');
+          return { acknowledged: true };
+        });
+
+        const result = await sampleService.createSample(db, validSampleData());
+
+        expect(result._id).toBe('generated-id');
+        expect(db.collections.samples.deleteOne).not.toHaveBeenCalled();
+      });
+
+      it('a known standalone deployment keeps today\'s outcome: the allocation refuses and the inserted sample is deleted', async () => {
+        const db = makeDb({ [OUTBOX]: makeCollection(OUTBOX) });
+        mockOperationalStorage(db);
+        db.client.db = vi.fn(() => ({ command: vi.fn().mockResolvedValue({ ismaster: true }) }));
+        const onCreatedInTransaction = vi.fn();
+
+        await expect(sampleService.createSample(db, validSampleData(), { onCreatedInTransaction }))
+          .rejects.toMatchObject({ statusCode: 422, message: expect.stringMatching(/Falha ao alocar amostra.*replica set/) });
+
+        expect(db.collections.samples.insertOne.mock.calls[0]).toHaveLength(1);
+        expect(db.collections.samples.deleteOne).toHaveBeenCalledWith({ _id: 'generated-id' });
+        expect(db.client.startSession).not.toHaveBeenCalled();
+        expect(onCreatedInTransaction).not.toHaveBeenCalled();
+      });
+    });
+
     it('generates a specimenId automatically when none is provided', async () => {
       const db = makeDb();
       mockOperationalStorage(db);
