@@ -780,7 +780,8 @@ async function handleIntakeWizard(req, res) {
       }),
       ...collectCanonicalViolations(data?.specimen, {
         specimenId: ['sampleID', 'sampleId', 'specimenID', 'mongoSampleId'],
-        parentSpecimenId: ['parentSampleId'],
+        // dict-02 ELM-0120 is the plural parentSpecimenIds (#1368).
+        parentSpecimenIds: ['parentSampleId', 'parentSpecimenId'],
         registeredAt: ['registerDate', 'registrationDate'],
         withdrawnAt: ['withdrawalDate'],
         receivedAt: ['receivedTime'],

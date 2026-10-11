@@ -561,6 +561,24 @@ describe('intakeWizard routes', () => {
       expect(res.body.fields).toContain('patientID');
     });
 
+    // #1368: dict-02 ELM-0120 is the plural parentSpecimenIds; either
+    // singular name is refused by name, as POST /api/samples refuses it.
+    it.each(['parentSpecimenId', 'parentSampleId'])('returns 422 NON_CANONICAL_FIELD naming the singular parent name %s', async (alias) => {
+      const { router } = loadRoute();
+      const app = buildApp(router, {});
+
+      const payload = {
+        ...VALID_PAYLOAD,
+        specimen: { ...VALID_PAYLOAD.specimen, [alias]: 'SPC-PARENT' },
+      };
+
+      const res = await request(app).post('/api/intake-wizard').send(payload);
+
+      expect(res.status).toBe(422);
+      expect(res.body.error).toBe('NON_CANONICAL_FIELD');
+      expect(res.body.fields).toEqual([alias]);
+    });
+
     it('returns 422 NON_CANONICAL_FIELD when the payload fails canonical schema validation', async () => {
       const { router } = loadRoute();
       const app = buildApp(router, {});
