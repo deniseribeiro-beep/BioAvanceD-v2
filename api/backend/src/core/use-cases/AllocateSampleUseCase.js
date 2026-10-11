@@ -136,7 +136,10 @@ class AllocateSampleUseCase {
     }
 
     try {
-      await this.lineageRepository.validateBeforePersistence(payload);
+      // Custody reads no consent from the Neo4j projection: MongoDB is the
+      // consent authority and the projection is eventually consistent, and
+      // revocation is prospective (RF010 AC6), so it never blocks custody.
+      await this.lineageRepository.validateBeforePersistence({ ...payload, requireEthicalConsent: false });
       const persisted = await this.lineageRepository.recordCustodyEvent(payload);
       return { lineageValidated: true, lineagePersisted: true, eventId: persisted?.eventId || null };
     } catch (error) {

@@ -140,6 +140,16 @@ describe('AllocateSampleUseCase', () => {
     expect(lineageRepository.recordCustodyEvent).toHaveBeenCalledTimes(1);
   });
 
+  it('#1225: custody does not ask the Neo4j projection for consent (MongoDB is the authority; revocation is prospective)', async () => {
+    const { useCase, lineageRepository } = makeDeps({ withLineageRepo: true });
+
+    await useCase.execute(baseCommand());
+
+    expect(lineageRepository.validateBeforePersistence).toHaveBeenCalledWith(
+      expect.objectContaining({ specimenId: baseCommand().specimenId, requireEthicalConsent: false })
+    );
+  });
+
   it('throws "Amostra não encontrada" when sample is not found on the first lookup, before any transaction attempt', async () => {
     const { useCase, storageRepository } = makeDeps({ sample: null });
 

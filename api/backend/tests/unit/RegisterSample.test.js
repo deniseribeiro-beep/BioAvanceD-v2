@@ -194,7 +194,10 @@ describe('RegisterSample', () => {
           specimenId: String(createdSample._id),
           barcode: 'BC-1',
           eventType: 'register',
-          actorId: 'U1'
+          actorId: 'U1',
+          // #1225: consent was read from MongoDB before the create; the
+          // projection cannot hold it yet, so the graph gate does not ask.
+          requireEthicalConsent: false
         })
       );
       expect(lineageRepository.recordCustodyEvent).toHaveBeenCalled();

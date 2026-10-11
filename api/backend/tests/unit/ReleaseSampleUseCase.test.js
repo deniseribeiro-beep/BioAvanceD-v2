@@ -58,6 +58,11 @@ describe('ReleaseSampleUseCase', () => {
     expect(auditRepository.appendImmutableAudit).toHaveBeenCalledTimes(1);
     const [auditPayload] = auditRepository.appendImmutableAudit.mock.calls[0];
     expect(auditPayload.after.storageLocation).toBeNull();
+    // #1225: custody does not ask the Neo4j projection for consent; a
+    // revoked consent must not block release to quarantine or discard.
+    expect(lineageRepository.validateBeforePersistence).toHaveBeenCalledWith(
+      expect.objectContaining({ specimenId: 'sample-1', requireEthicalConsent: false })
+    );
   });
 
   it('throws when command is undefined', async () => {

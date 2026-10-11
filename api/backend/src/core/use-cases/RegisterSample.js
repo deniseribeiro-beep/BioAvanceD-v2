@@ -50,7 +50,9 @@ class RegisterSample {
         actorId: command?.actor?.userId || null,
         reason: riskContext.reason,
         happenedAt: new Date(),
-        requireEthicalConsent: true
+        // assertConsent above read the consent from MongoDB, its authority;
+        // the Neo4j projection cannot have it yet at create time.
+        requireEthicalConsent: false
       };
 
       await this.handleLineage(lineagePayload, strictMode);

@@ -101,6 +101,17 @@ describe('MoveSampleUseCase', () => {
     expect(auditRepository.appendImmutableAudit).toHaveBeenCalledTimes(1);
   });
 
+  it('#1225: custody does not ask the Neo4j projection for consent (MongoDB is the authority; revocation is prospective)', async () => {
+    const { useCase, lineageRepository } = makeDeps({ withLineageRepo: true });
+
+    const result = await useCase.execute(baseCommand());
+
+    expect(result.lineageValidated).toBe(true);
+    expect(lineageRepository.validateBeforePersistence).toHaveBeenCalledWith(
+      expect.objectContaining({ specimenId: 'sample-1', requireEthicalConsent: false })
+    );
+  });
+
   it('rejects a missing/non-object command', async () => {
     const { useCase } = makeDeps();
     await expect(useCase.execute(null)).rejects.toThrow('Comando de movimentação inválido');
