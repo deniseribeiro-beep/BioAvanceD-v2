@@ -770,7 +770,7 @@ describe('StorageService.autoAssignSampleToBox', () => {
         occupancyGrid: {},
         currentOccupancy: 0
       });
-      samplesFindOne.mockResolvedValue({ _id: specimenId, barcode: 'BC-9', storageLocation: null });
+      samplesFindOne.mockResolvedValue({ _id: specimenId, specimenId: 'SP-9', barcode: 'BC-9', storageLocation: null });
 
       const result = await service.autoAssignSampleToBox(specimenId.toString(), boxId.toString());
 
@@ -779,7 +779,10 @@ describe('StorageService.autoAssignSampleToBox', () => {
 
       const [auditRow, auditOptions] = movements.insertOne.mock.calls[0];
       expect(auditRow.type).toBe('auto_allocate');
-      expect(auditRow.specimenId).toBe(specimenId.toString());
+      // #1220: keyed by the canonical specimenId, as the create path writes it;
+      // the graph event keeps the _id.
+      expect(auditRow.specimenId).toBe('SP-9');
+      expect(graphProjection.appendStoragePositionEvent.mock.calls[0][1].specimenId).toBe(specimenId.toString());
       expect(auditRow.barcode).toBe('BC-9');
       expect(auditRow.previousState).toEqual({ storageLocation: null });
       expect(auditRow.newState).toEqual({
@@ -794,6 +797,25 @@ describe('StorageService.autoAssignSampleToBox', () => {
       expect(boxesUpdateOne.mock.calls[0][2]).toEqual({ session: txSession });
       expect(movements.insertOne.mock.invocationCallOrder[0])
         .toBeLessThan(txSession.endSession.mock.invocationCallOrder[0]);
+    });
+
+    it('#1220: a legacy sample without a specimenId keys its audit row by the _id', async () => {
+      const boxId = new ObjectId();
+      const specimenId = new ObjectId();
+
+      boxesFindOne.mockResolvedValue({
+        _id: boxId,
+        name: 'Box A',
+        dimension: { rows: 1, cols: 1 },
+        occupancyGrid: {},
+        currentOccupancy: 0
+      });
+      samplesFindOne.mockResolvedValue({ _id: specimenId, barcode: 'BC-9', storageLocation: null });
+
+      const result = await service.autoAssignSampleToBox(specimenId.toString(), boxId.toString());
+
+      expect(result.success).toBe(true);
+      expect(movements.insertOne.mock.calls[0][0].specimenId).toBe(specimenId.toString());
     });
 
     it('does not append an audit row when the auto-assignment fails before the transaction (e.g. BOX_FULL)', async () => {
@@ -875,6 +897,44 @@ describe('StorageService.releaseSampleFromPosition', () => {
 
     const sampleUpdateCall = samplesUpdateOne.mock.calls[0];
     expect(sampleUpdateCall[1].$unset).toHaveProperty('storageLocation');
+  });
+
+  // #1220: the custody ledger row is keyed by the canonical specimenId, as the
+  // create path writes it; the release response keeps the _id.
+  it('#1220: the audit row carries the canonical specimenId while the response keeps the _id', async () => {
+    const boxId = new ObjectId().toString();
+    const sampleId = new ObjectId().toString();
+
+    samplesFindOne.mockResolvedValue({
+      _id: new ObjectId(sampleId),
+      specimenId: 'SP-5',
+      barcode: 'BC-5',
+      storageLocation: { boxId, position: 'C3' }
+    });
+    storageAssignmentsFindOne.mockResolvedValue({ boxId, positionCode: 'C3', removedAt: null });
+
+    const result = await service.releaseSampleFromPosition(sampleId);
+
+    expect(result.success).toBe(true);
+    expect(result.releasedFrom.specimenId).toBe(sampleId);
+    expect(movements.insertOne.mock.calls[0][0].specimenId).toBe('SP-5');
+  });
+
+  it('#1220: a legacy sample without a specimenId keys its release audit row by the _id', async () => {
+    const boxId = new ObjectId().toString();
+    const sampleId = new ObjectId().toString();
+
+    samplesFindOne.mockResolvedValue({
+      _id: new ObjectId(sampleId),
+      barcode: 'BC-5',
+      storageLocation: { boxId, position: 'C3' }
+    });
+    storageAssignmentsFindOne.mockResolvedValue({ boxId, positionCode: 'C3', removedAt: null });
+
+    const result = await service.releaseSampleFromPosition(sampleId);
+
+    expect(result.success).toBe(true);
+    expect(movements.insertOne.mock.calls[0][0].specimenId).toBe(sampleId);
   });
 
   it('returns NO_STORAGE_LOCATION when the sample is not currently allocated anywhere', async () => {

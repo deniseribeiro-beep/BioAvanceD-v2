@@ -136,6 +136,30 @@ describe('MoveSampleUseCase', () => {
     expect(appendOrder).toBeGreaterThan(auditRepository.appendImmutableAudit.mock.invocationCallOrder[0]);
   });
 
+  // #1220: the custody ledger row is keyed by the canonical specimenId, as the
+  // create path writes it; the storage call, graph event and response keep the _id.
+  it('#1220: the audit row carries the canonical specimenId while storage, lineage and the response get the _id', async () => {
+    const { useCase, storageRepository, auditRepository, lineageRepository } = makeDeps({
+      sample: makeSample({ specimenId: 'SP-1' }),
+      withLineageRepo: true
+    });
+
+    const result = await useCase.execute(baseCommand());
+
+    expect(auditRepository.appendImmutableAudit.mock.calls[0][0].specimenId).toBe('SP-1');
+    expect(storageRepository.moveSamplePosition.mock.calls[0][0].specimenId).toBe('sample-1');
+    expect(lineageRepository.recordCustodyEvent.mock.calls[0][0].specimenId).toBe('sample-1');
+    expect(result.specimenId).toBe('sample-1');
+  });
+
+  it('#1220: a legacy sample without a specimenId keys its audit row by the _id', async () => {
+    const { useCase, auditRepository } = makeDeps();
+
+    await useCase.execute(baseCommand());
+
+    expect(auditRepository.appendImmutableAudit.mock.calls[0][0].specimenId).toBe('sample-1');
+  });
+
   it.each(['fail-closed', 'fail-open'])('#1312: a failed append aborts the transaction and refuses the move (%s)', async (mode) => {
     env.LINEAGE_MODE = mode;
     const { useCase } = makeDeps({

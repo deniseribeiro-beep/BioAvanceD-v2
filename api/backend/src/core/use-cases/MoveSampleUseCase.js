@@ -122,7 +122,7 @@ class MoveSampleUseCase {
 
       const auditResult = await this.auditRepository.appendImmutableAudit(
         {
-          specimenId: String(sample._id),
+          specimenId: String(sample.specimenId || sample._id),
           barcode: sample.barcode || null,
           eventType: 'move',
           before: {

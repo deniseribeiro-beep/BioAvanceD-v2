@@ -402,6 +402,20 @@ describe('SampleGraphValidator', () => {
     });
   });
 
+  // #1220: the seal's custody ledger row is keyed by the canonical specimenId,
+  // never the string "undefined" a retired sampleID input left behind.
+  it('#1220: the clinical seal movement is keyed by the sample\'s canonical specimenId', async () => {
+    const sample = buildSample({ specimenId: 'SP-0001' });
+    samplesCollection.findOne.mockResolvedValue(sample);
+    consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
+
+    const report = await validator.validateSampleCompliance(sample._id);
+
+    expect(report.suggestedStatus).toBe('AVAILABLE');
+    expect(sampleMovementsCollection.insertOne).toHaveBeenCalledTimes(1);
+    expect(sampleMovementsCollection.insertOne.mock.calls[0][0].specimenId).toBe('SP-0001');
+  });
+
   describe('#532: writes specimenStatus/QuarantineAction instead of release_status', () => {
     function mockActiveAction(reasonCodes) {
       quarantineActionsCollection.find.mockReturnValue({

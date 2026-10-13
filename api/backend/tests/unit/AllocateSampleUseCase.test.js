@@ -163,6 +163,29 @@ describe('AllocateSampleUseCase', () => {
     expect(appendOrder).toBeGreaterThan(auditRepository.appendImmutableAudit.mock.invocationCallOrder[0]);
   });
 
+  // #1220: the custody ledger row is keyed by the canonical specimenId, as the
+  // create path writes it; the storage and graph calls keep the _id.
+  it('#1220: the audit row carries the canonical specimenId while storage and lineage get the _id', async () => {
+    const { useCase, storageRepository, auditRepository, lineageRepository } = makeDeps({
+      sample: makeSample({ specimenId: 'SP-1' }),
+      withLineageRepo: true
+    });
+
+    await useCase.execute(baseCommand());
+
+    expect(auditRepository.appendImmutableAudit.mock.calls[0][0].specimenId).toBe('SP-1');
+    expect(storageRepository.allocateSamplePosition.mock.calls[0][0].specimenId).toBe('sample-1');
+    expect(lineageRepository.recordCustodyEvent.mock.calls[0][0].specimenId).toBe('sample-1');
+  });
+
+  it('#1220: a legacy sample without a specimenId keys its audit row by the _id', async () => {
+    const { useCase, auditRepository } = makeDeps();
+
+    await useCase.execute(baseCommand());
+
+    expect(auditRepository.appendImmutableAudit.mock.calls[0][0].specimenId).toBe('sample-1');
+  });
+
   // RF023 AC3: a sample create allocating the sample it just inserted passes
   // its own session; the allocation joins it instead of opening a second
   // transaction, and reads the uncommitted sample through it.

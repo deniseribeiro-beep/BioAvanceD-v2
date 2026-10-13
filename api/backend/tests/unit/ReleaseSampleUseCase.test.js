@@ -99,6 +99,38 @@ describe('ReleaseSampleUseCase', () => {
     expect(appendOrder).toBeGreaterThan(auditRepository.appendImmutableAudit.mock.invocationCallOrder[0]);
   });
 
+  // #1220: the custody ledger row is keyed by the canonical specimenId, as the
+  // create path writes it; the storage call and graph event keep the _id.
+  it('#1220: the audit row carries the canonical specimenId while storage and lineage get the _id', async () => {
+    const storageRepository = makeStorageRepository({ sampleSnapshot: makeSampleSnapshot({ specimenId: 'SP-1' }) });
+    const auditRepository = makeAuditRepository();
+    const lineageRepository = {
+      validateBeforePersistence: vi.fn(() => Promise.resolve()),
+      recordCustodyEvent: vi.fn(() => Promise.resolve({ eventId: 'evt-1' }))
+    };
+    const useCase = new ReleaseSampleUseCase({ storageRepository, auditRepository, lineageRepository });
+
+    await useCase.execute(baseCommand);
+
+    expect(auditRepository.appendImmutableAudit.mock.calls[0][0].specimenId).toBe('SP-1');
+    expect(storageRepository.releaseSamplePosition.mock.calls[0][0].specimenId).toBe('sample-1');
+    expect(lineageRepository.recordCustodyEvent.mock.calls[0][0].specimenId).toBe('sample-1');
+  });
+
+  it('#1220: a legacy sample without a specimenId keys its audit row by the _id', async () => {
+    const storageRepository = makeStorageRepository({ sampleSnapshot: makeSampleSnapshot() });
+    const auditRepository = makeAuditRepository();
+    const lineageRepository = {
+      validateBeforePersistence: vi.fn(() => Promise.resolve()),
+      recordCustodyEvent: vi.fn(() => Promise.resolve({ eventId: 'evt-1' }))
+    };
+    const useCase = new ReleaseSampleUseCase({ storageRepository, auditRepository, lineageRepository });
+
+    await useCase.execute(baseCommand);
+
+    expect(auditRepository.appendImmutableAudit.mock.calls[0][0].specimenId).toBe('sample-1');
+  });
+
   it.each(['fail-closed', 'fail-open'])('#1312: a failed append aborts the transaction and refuses the release (%s)', async (mode) => {
     env.LINEAGE_MODE = mode;
     const storageRepository = makeStorageRepository({ sampleSnapshot: makeSampleSnapshot() });

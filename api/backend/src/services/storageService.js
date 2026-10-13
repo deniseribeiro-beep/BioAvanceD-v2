@@ -158,7 +158,7 @@ class StorageService {
         // its custody row.
         await this.auditRepository.appendImmutableAudit(
           {
-            specimenId: sampleObjId.toString(),
+            specimenId: String(sampleSnapshot.specimenId || sampleObjId),
             barcode: sampleSnapshot?.barcode || null,
             eventType: 'auto_allocate',
             before: {
@@ -273,7 +273,7 @@ class StorageService {
 
       // Registrar auditoria (mesmo ledger sample_movements usado pelos use-cases)
       await this.auditRepository.appendImmutableAudit({
-        specimenId: sampleObjId.toString(),
+        specimenId: String(sample.specimenId || sampleObjId),
         barcode: sample.barcode,
         eventType: 'release',
         before: {

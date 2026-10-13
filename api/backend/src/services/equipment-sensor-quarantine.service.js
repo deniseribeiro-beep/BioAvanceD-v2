@@ -401,7 +401,6 @@ async function quarantineSamplesByFilter(db, filter, context = {}) {
     if (SampleModel.isTerminalSpecimen(sample)) {
       continue;
     }
-    const sampleId = String(sample._id);
     const previousStatus = SampleModel.resolveSpecimenStatus(sample);
     const specimenStatus = 'quarantined';
     const updatePayload = {
@@ -465,7 +464,7 @@ async function quarantineSamplesByFilter(db, filter, context = {}) {
       movementsCollection,
       SampleMovementModel.create({
         movementID,
-        sampleID: sampleId,
+        specimenId: quarantineActionService.canonicalSpecimenId(sample),
         barcode: sample.barcode || null,
         type: 'adjust',
         quantity: quantitySnapshot,

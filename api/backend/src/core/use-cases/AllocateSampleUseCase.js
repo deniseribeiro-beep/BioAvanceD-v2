@@ -90,7 +90,7 @@ class AllocateSampleUseCase {
 
       await this.auditRepository.appendImmutableAudit(
         {
-          specimenId: String(sample._id),
+          specimenId: String(sample.specimenId || sample._id),
           barcode: sample.barcode || null,
           eventType: 'allocate',
           before: {

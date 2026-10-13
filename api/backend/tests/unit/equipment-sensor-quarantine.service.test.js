@@ -205,7 +205,7 @@ describe('equipment-sensor-quarantine.service', () => {
       expect(sampleMovementLedgerModule.appendMovementWithHashChain).toHaveBeenCalledWith(
         movementsCollection,
         expect.objectContaining({
-          sampleID: 'S1',
+          specimenId: 'S1',
           type: 'adjust',
           purpose: 'sensor_equipment_quarantine',
           quantity: 5
@@ -528,7 +528,7 @@ describe('equipment-sensor-quarantine.service', () => {
       expect(SampleMovementModel.generateMovementID.mock.calls).toStrictEqual([[db, session]]);
       expect(sampleMovementLedgerModule.appendMovementWithHashChain).toHaveBeenCalledWith(
         movementsCollection,
-        expect.objectContaining({ sampleID: 'S-SESS', movementID: 'MOV-1' }),
+        expect.objectContaining({ specimenId: 'SP-SESS', movementID: 'MOV-1' }),
         { session }
       );
       expect(samplesCollection.updateOne.mock.calls[0][2]).toStrictEqual({ session });
