@@ -41,6 +41,28 @@ function specimenIdOf(sample) {
   return String(specimenId);
 }
 
+// The keys a specimen's legacy storageAssignments rows may carry: the
+// canonical specimenId (#1220) first, then String(_id), as the old writers
+// keyed them (#1374).
+function legacyRowKeys(sample) {
+  return [...new Set([sample?.specimenId, sample?._id]
+    .filter((key) => key !== null && key !== undefined && key !== '')
+    .map(String))];
+}
+
+// The same placement recorded under both keys is one placement: a later row
+// with an earlier row's position and placedAt instant is dropped, so it is
+// not placed twice over itself. The rows come earliest first.
+function dropDuplicatePlacements(rows) {
+  const seen = new Set();
+  return rows.filter((row) => {
+    const key = `${storagePositionIdFor(row.boxId, row.positionCode)}@${new Date(row.placedAt).getTime()}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function rackIdForBox(box) {
   return String(box?._id ?? box);
 }
@@ -209,7 +231,9 @@ async function releaseSpecimen(db, { sample, at }, session) {
 }
 
 // The chain first; the open legacy StorageAssignment row is a historical
-// fallback, keyed as its writer keyed it, by the sample's _id. Once the
+// fallback, read by the canonical specimenId (#1220) first, then by the
+// sample's _id, as the old writers keyed it; a canonical row wins where
+// both are open. Once the
 // specimen is loaded the chain is authoritative: loaded and not placed is
 // released, whatever a stale legacy row still says (#1374).
 async function currentPlacement(db, sample, session) {
@@ -235,8 +259,11 @@ async function currentPlacement(db, sample, session) {
       };
     }
   }
-  if (!sample?._id) return null;
-  const legacy = await db.collection('storageAssignments').findOne({ specimenId: String(sample._id), removedAt: null }, sessionOptions(session));
+  const storageAssignments = db.collection('storageAssignments');
+  const legacy = (sample?.specimenId
+    && await storageAssignments.findOne({ specimenId: String(sample.specimenId), removedAt: null }, sessionOptions(session)))
+    || (sample?._id
+    && await storageAssignments.findOne({ specimenId: String(sample._id), removedAt: null }, sessionOptions(session)));
   if (!legacy) return null;
   return {
     boxId: legacy.boxId,
@@ -254,11 +281,13 @@ async function currentPlacement(db, sample, session) {
 // container loaded from the earliest placement, one position assignment per
 // row over [placedAt, removedAt), and each box located. A second run finds
 // what the first wrote and writes nothing. storageAssignments is only read.
+// The rows are read under both keys (legacyRowKeys), and a placement
+// recorded under both is placed once.
 async function adoptLegacyPlacement(db, sample, session) {
   const specimenId = specimenIdOf(sample);
-  const rows = (await db.collection('storageAssignments').find({ specimenId: String(sample._id) }, sessionOptions(session)).toArray())
+  const rows = dropDuplicatePlacements((await db.collection('storageAssignments').find({ specimenId: { $in: legacyRowKeys(sample) } }, sessionOptions(session)).toArray())
     .filter((row) => row.boxId && row.positionCode && row.placedAt)
-    .sort((a, b) => new Date(a.placedAt) - new Date(b.placedAt));
+    .sort((a, b) => new Date(a.placedAt) - new Date(b.placedAt)));
   const result = { containerId: null, positionAssignments: 0, rackLocations: 0 };
   if (!rows.length) return result;
 
@@ -301,6 +330,8 @@ module.exports = {
   storagePositionIdFor,
   splitPositionId,
   legacyWriteEventId,
+  legacyRowKeys,
+  dropDuplicatePlacements,
   ensureRackLocated,
   placeSpecimen,
   moveSpecimen,

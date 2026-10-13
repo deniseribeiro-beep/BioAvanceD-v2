@@ -17,6 +17,7 @@ function same(a, b) {
 
 function matches(doc, filter) {
   return Object.entries(filter).every(([key, value]) => {
+    if (key === '$or') return value.some((branch) => matches(doc, branch));
     if (value === null) return doc[key] === null || doc[key] === undefined;
     if (value && typeof value === 'object' && Array.isArray(value.$in)) return value.$in.some((option) => same(doc[key], option));
     return same(doc[key], value);
@@ -143,21 +144,86 @@ describe('storageAssignmentChainMigration.service (#1314)', () => {
     expect(writesOf(db)).toHaveLength(writesAfterFirst);
   });
 
-  it('skips, with a reason, a row whose sample is missing and a row keyed by the canonical specimenId', async () => {
-    const db = createFakeDb(seed([
-      { storageAssignmentId: 'sg-1', specimenId: 'ghost-sample', boxId: String(BOX_2._id), positionCode: 'D4', placedAt: T(1), removedAt: null },
-      { storageAssignmentId: 'sc-1', specimenId: 'SPC-2026-0002', boxId: String(BOX_2._id), positionCode: 'E5', placedAt: T(1), removedAt: null },
-    ]));
+  // #1374: some rows are keyed by the canonical specimenId (#1220). They are
+  // adopted with the sample's _id-keyed rows, and the specimen, reached under
+  // both keys, is counted once. sc-1 closes as sb-1 opens, so they do not overlap.
+  const CANONICAL_ROW = { storageAssignmentId: 'sc-1', specimenId: 'SPC-2026-0002', boxId: String(BOX_2._id), positionCode: 'E5', placedAt: T(1), removedAt: T(2) };
+  const GHOST_ROW = { storageAssignmentId: 'sg-1', specimenId: 'ghost-sample', boxId: String(BOX_2._id), positionCode: 'D4', placedAt: T(1), removedAt: null };
+
+  it('adopts a row keyed by the canonical specimenId with the sample\'s _id-keyed rows, and skips only a row whose sample is missing (#1374)', async () => {
+    const db = createFakeDb(seed([GHOST_ROW, CANONICAL_ROW]));
 
     const summary = await migrateStorageAssignmentsToChain(db);
 
-    expect(summary).toMatchObject({ specimensMigrated: 2, assignmentsDecomposed: 3, alreadyMigrated: 0 });
-    expect(summary.skipped).toEqual([
-      { specimenId: 'ghost-sample', reason: expect.stringContaining('not found') },
-      { specimenId: 'SPC-2026-0002', reason: expect.stringContaining('canonical specimenId') },
+    expect(summary).toEqual({
+      specimensMigrated: 2, assignmentsDecomposed: 4, alreadyMigrated: 0,
+      skipped: [{ specimenId: 'ghost-sample', reason: expect.stringContaining('not found') }],
+    });
+    expect(db.collections.specimenContainerAssignments.docs.map(({ specimenId, sourceEventId }) => ({ specimenId, sourceEventId }))).toEqual([
+      { specimenId: 'SPC-2026-0001', sourceEventId: 'legacy-storage-assignment:sa-1' },
+      { specimenId: 'SPC-2026-0002', sourceEventId: 'legacy-storage-assignment:sc-1' },
+    ]);
+    const sampleBLoad = db.collections.specimenContainerAssignments.docs[1];
+    expect(db.collections.containerPositionAssignments.docs
+      .filter((cpa) => cpa.containerId === sampleBLoad.containerId)
+      .map(({ storagePositionId, placedAt, removedAt }) => ({ storagePositionId, placedAt, removedAt }))).toEqual([
+      { storagePositionId: '64b000000000000000000002:E05', placedAt: T(1), removedAt: T(2) },
+      { storagePositionId: '64b000000000000000000001:C03', placedAt: T(2), removedAt: null },
     ]);
     expect(db.collections.containerPositionAssignments.docs.map(({ storagePositionId }) => storagePositionId))
       .not.toContain('64b000000000000000000002:D04');
+  });
+
+  it('a dryRun, the apply and a second run agree over a canonical-keyed row (#1374)', async () => {
+    const db = createFakeDb(seed([CANONICAL_ROW]));
+
+    const planned = await migrateStorageAssignmentsToChain(db, { dryRun: true });
+    expect(planned).toEqual({ specimensMigrated: 2, assignmentsDecomposed: 4, alreadyMigrated: 0, skipped: [] });
+    expect(db.log).toEqual([]);
+    expect(await migrateStorageAssignmentsToChain(db)).toEqual(planned);
+    const writesAfterApply = writesOf(db).length;
+    expect(await migrateStorageAssignmentsToChain(db)).toEqual({ specimensMigrated: 0, assignmentsDecomposed: 0, alreadyMigrated: 2, skipped: [] });
+    expect(await migrateStorageAssignmentsToChain(db, { dryRun: true })).toEqual({ specimensMigrated: 0, assignmentsDecomposed: 0, alreadyMigrated: 2, skipped: [] });
+    expect(writesOf(db)).toHaveLength(writesAfterApply);
+  });
+
+  it('skips, with the overlap error, a specimen open at two positions under its two keys, and still migrates the other (#1374)', async () => {
+    const db = createFakeDb(seed([{ ...CANONICAL_ROW, removedAt: null }]));
+
+    const summary = await migrateStorageAssignmentsToChain(db);
+
+    expect(summary).toEqual({
+      specimensMigrated: 1, assignmentsDecomposed: 2, alreadyMigrated: 0,
+      skipped: [{ specimenId: String(SAMPLE_B._id), reason: expect.stringContaining('Ocupação incompatível') }],
+    });
+    expect(db.collections.specimenContainerAssignments.docs[0]).toMatchObject({ specimenId: 'SPC-2026-0001', sourceEventId: 'legacy-storage-assignment:sa-1' });
+  });
+
+  it('adopts a sample with no specimenId, its load keyed by String(_id) (#1374)', async () => {
+    const SAMPLE_C = { _id: new ObjectId('64a000000000000000000003'), primaryContainer: 'cryogenic_vial' };
+    const db = createFakeDb(seed([
+      { storageAssignmentId: 'sx-1', specimenId: String(SAMPLE_C._id), boxId: String(BOX_2._id), positionCode: 'F6', placedAt: T(1), removedAt: null },
+    ]));
+    db.collections.samples.docs.push(SAMPLE_C);
+
+    expect(await migrateStorageAssignmentsToChain(db, { dryRun: true })).toEqual({ specimensMigrated: 3, assignmentsDecomposed: 4, alreadyMigrated: 0, skipped: [] });
+    expect(await migrateStorageAssignmentsToChain(db)).toEqual({ specimensMigrated: 3, assignmentsDecomposed: 4, alreadyMigrated: 0, skipped: [] });
+
+    const load = db.collections.specimenContainerAssignments.docs.find((doc) => doc.sourceEventId === 'legacy-storage-assignment:sx-1');
+    expect(load).toMatchObject({ specimenId: '64a000000000000000000003', assignmentStatus: 'active' });
+    expect(db.collections.containerPositionAssignments.docs.filter((cpa) => cpa.containerId === load.containerId)
+      .map(({ storagePositionId }) => storagePositionId)).toEqual(['64b000000000000000000002:F06']);
+    expect(await migrateStorageAssignmentsToChain(db, { dryRun: true })).toEqual({ specimensMigrated: 0, assignmentsDecomposed: 0, alreadyMigrated: 3, skipped: [] });
+  });
+
+  it('places once, and counts once, a placement recorded under both keys (#1374)', async () => {
+    const db = createFakeDb(seed([
+      { storageAssignmentId: 'sc-2', specimenId: 'SPC-2026-0002', boxId: String(BOX_1._id), positionCode: 'C3', placedAt: T(2), removedAt: null },
+    ]));
+
+    expect(await migrateStorageAssignmentsToChain(db, { dryRun: true })).toEqual({ specimensMigrated: 2, assignmentsDecomposed: 3, alreadyMigrated: 0, skipped: [] });
+    expect(await migrateStorageAssignmentsToChain(db)).toEqual({ specimensMigrated: 2, assignmentsDecomposed: 3, alreadyMigrated: 0, skipped: [] });
+    expect(db.collections.containerPositionAssignments.docs.filter((cpa) => cpa.storagePositionId === '64b000000000000000000001:C03')).toHaveLength(1);
   });
 
   it('dryRun writes nothing, opens no transaction, and reports what a run would adopt', async () => {

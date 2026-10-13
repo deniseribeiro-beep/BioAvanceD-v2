@@ -3,11 +3,15 @@ const { getCollection, resolveCollectionName } = require('../utils/collectionRes
 const { withTransactionWhereSupported } = require('../utils/mongoTransaction');
 const { ensurePhysicalChainIndexes } = require('./physicalChain.service');
 const { ensureLocationIndexes } = require('./storageLocation.service');
-const { adoptLegacyPlacement, storagePositionIdFor } = require('./legacyPlacementChain.service');
+const {
+  adoptLegacyPlacement, storagePositionIdFor, legacyRowKeys, dropDuplicatePlacements,
+} = require('./legacyPlacementChain.service');
 
 // #1314: the historical StorageAssignment rows (ELM-0167..0178, kept for
 // historical reads only) decomposed into the physical chain, one specimen
-// per transaction, through adoptLegacyPlacement. A second run adopts
+// per transaction, through adoptLegacyPlacement. A row is keyed by the
+// sample's _id or by its canonical specimenId (#1220); a specimen reached
+// under both keys is adopted, and counted, once (#1374). A second run adopts
 // nothing new. storageAssignments is only read: no row is written or
 // deleted.
 //
@@ -23,15 +27,17 @@ function idCandidates(id) {
   return ObjectId.isValid(raw) && raw.length === 24 ? [new ObjectId(raw), raw] : [raw];
 }
 
-// The rows adoptLegacyPlacement decomposes: complete, earliest first.
+// The rows adoptLegacyPlacement decomposes: complete, earliest first, a
+// placement recorded under both keys once.
 function completeRows(rows) {
-  return rows
+  return dropDuplicatePlacements(rows
     .filter((row) => row.boxId && row.positionCode && row.placedAt)
-    .sort((a, b) => new Date(a.placedAt) - new Date(b.placedAt));
+    .sort((a, b) => new Date(a.placedAt) - new Date(b.placedAt)));
 }
 
-// The sample a row names: by _id, as the rows' writers key them, or by its
-// canonical specimenId.
+// The sample a row's key names: by _id, as the old writers key the rows, or
+// by its canonical specimenId. Either way the sample's rows are then read
+// under both keys.
 async function resolveSample(samples, specimenId) {
   const byId = await samples.findOne({ _id: { $in: idCandidates(specimenId) } });
   if (byId) return { sample: byId, keyedBy: '_id' };
@@ -43,7 +49,7 @@ async function resolveSample(samples, specimenId) {
 // still place, and whether its container is already loaded from them.
 async function pendingPlacements(db, sample, rows) {
   const loads = await getCollection(db, 'specimenContainerAssignments');
-  const specimenId = String(sample.specimenId);
+  const specimenId = String(sample.specimenId || sample._id);
   const loaded = await loads.findOne({ specimenId, sourceEventId: `${LEGACY_ASSIGNMENT_EVENT_PREFIX}${rows[0].storageAssignmentId}` })
     || await loads.findOne({ specimenId, assignmentStatus: 'active' });
   if (!loaded) return { loaded: false, pending: rows.length };
@@ -64,23 +70,18 @@ async function migrateStorageAssignmentsToChain(db, { dryRun = false } = {}) {
   }
 
   const specimenIds = (await storageAssignments.distinct('specimenId')).filter((id) => id !== null && id !== undefined && id !== '');
+  const visited = new Set();
   for (const specimenId of specimenIds) {
     const resolved = await resolveSample(samples, specimenId);
     if (!resolved) {
       summary.skipped.push({ specimenId: String(specimenId), reason: 'sample not found by _id or specimenId' });
       continue;
     }
-    const { sample, keyedBy } = resolved;
-    // adoptLegacyPlacement reads the rows keyed by the sample's _id.
-    if (keyedBy === 'specimenId') {
-      summary.skipped.push({ specimenId: String(specimenId), reason: 'rows keyed by the canonical specimenId; adoptLegacyPlacement reads rows keyed by the sample _id' });
-      continue;
-    }
-    if (!sample.specimenId) {
-      summary.skipped.push({ specimenId: String(specimenId), reason: 'sample has no specimenId' });
-      continue;
-    }
-    const rows = completeRows(await storageAssignments.find({ specimenId: String(sample._id) }).toArray());
+    const { sample } = resolved;
+    // The sample's other key reaches it again; its rows were read the first time.
+    if (visited.has(String(sample._id))) continue;
+    visited.add(String(sample._id));
+    const rows = completeRows(await storageAssignments.find({ specimenId: { $in: legacyRowKeys(sample) } }).toArray());
     if (!rows.length) {
       summary.skipped.push({ specimenId: String(specimenId), reason: 'no row with boxId, positionCode and placedAt' });
       continue;

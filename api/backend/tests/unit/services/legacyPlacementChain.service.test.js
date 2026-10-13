@@ -7,7 +7,7 @@ const logger = require('../../../src/utils/logger');
 const bridge = require('../../../src/services/legacyPlacementChain.service');
 
 // #1314: a query-matching fake. Equality (Dates by instant, ObjectIds by
-// hex), `null` as missing-or-null, and `$in`, the way Mongo matches. Every
+// hex), `null` as missing-or-null, `$in` and `$or`, the way Mongo matches. Every
 // write and index build is recorded with the options it was given.
 function same(a, b) {
   if (a === b) return true;
@@ -18,6 +18,7 @@ function same(a, b) {
 
 function matches(doc, filter) {
   return Object.entries(filter).every(([key, value]) => {
+    if (key === '$or') return value.some((branch) => matches(doc, branch));
     if (value === null) return doc[key] === null || doc[key] === undefined;
     if (value && typeof value === 'object' && Array.isArray(value.$in)) return value.$in.some((option) => same(doc[key], option));
     return same(doc[key], value);
@@ -303,5 +304,63 @@ describe('legacyPlacementChain.service (#1314)', () => {
     const writesAfterFirst = db.writes.length;
     expect(await bridge.adoptLegacyPlacement(db, SAMPLE, SESSION)).toMatchObject({ positionAssignments: 0, rackLocations: 0 });
     expect(db.writes).toHaveLength(writesAfterFirst);
+  });
+
+  // #1374: some legacy rows are keyed by the canonical specimenId (#1220).
+  it('legacyRowKeys names the canonical specimenId first, then String(_id), each once', () => {
+    expect(bridge.legacyRowKeys(SAMPLE)).toEqual(['SPC-2026-0001', '64a000000000000000000001']);
+    expect(bridge.legacyRowKeys({ _id: SAMPLE._id })).toEqual(['64a000000000000000000001']);
+    expect(bridge.legacyRowKeys({ _id: 'smp-1', specimenId: 'smp-1' })).toEqual(['smp-1']);
+  });
+
+  it('adoptLegacyPlacement adopts a row keyed by the canonical specimenId with the _id-keyed rows (#1374)', async () => {
+    const rows = [
+      { storageAssignmentId: 'sc-1', specimenId: 'SPC-2026-0001', boxId: String(BOX_1._id), positionCode: 'A1', placedAt: T(1), removedAt: T(2) },
+      { storageAssignmentId: 'sa-2', specimenId: String(SAMPLE._id), boxId: String(BOX_2._id), positionCode: 'B2', placedAt: T(2), removedAt: null },
+    ];
+    const db = createFakeDb({ ...topology(), storageAssignments: rows });
+
+    expect(await bridge.adoptLegacyPlacement(db, SAMPLE, SESSION)).toMatchObject({ positionAssignments: 2, rackLocations: 2 });
+    expect(db.collections.specimenContainerAssignments.docs).toEqual([
+      expect.objectContaining({ specimenId: 'SPC-2026-0001', loadedAt: T(1), sourceEventId: 'legacy-storage-assignment:sc-1' }),
+    ]);
+    expect(db.collections.containerPositionAssignments.docs).toEqual([
+      expect.objectContaining({ storagePositionId: '64b000000000000000000001:A01', placedAt: T(1), removedAt: T(2) }),
+      expect.objectContaining({ storagePositionId: '64b000000000000000000002:B02', placedAt: T(2), removedAt: null }),
+    ]);
+  });
+
+  it('adoptLegacyPlacement places once a placement recorded under both keys (#1374)', async () => {
+    const placement = { boxId: String(BOX_1._id), positionCode: 'A1', placedAt: T(1), removedAt: null };
+    const db = createFakeDb({ ...topology(), storageAssignments: [
+      { storageAssignmentId: 'sa-1', specimenId: String(SAMPLE._id), ...placement },
+      { storageAssignmentId: 'sc-1', specimenId: 'SPC-2026-0001', ...placement, positionCode: 'A01' },
+    ] });
+
+    expect(await bridge.adoptLegacyPlacement(db, SAMPLE, SESSION)).toMatchObject({ positionAssignments: 1 });
+    expect(db.collections.containerPositionAssignments.docs).toEqual([
+      expect.objectContaining({ storagePositionId: '64b000000000000000000001:A01', placedAt: T(1), removedAt: null }),
+    ]);
+  });
+
+  it('currentPlacement with no chain load reads an open row keyed by the canonical specimenId (#1374)', async () => {
+    const db = createFakeDb({ ...topology(), storageAssignments: [
+      { storageAssignmentId: 'sc-1', specimenId: 'SPC-2026-0001', boxId: String(BOX_2._id), positionCode: 'C4', placedAt: T(1), removedAt: null },
+    ] });
+
+    expect(await bridge.currentPlacement(db, SAMPLE, SESSION)).toMatchObject({
+      boxId: String(BOX_2._id), positionCode: 'C4', placedAt: T(1), source: 'legacy_storage_assignment',
+    });
+  });
+
+  it('currentPlacement prefers the canonical-keyed open row over an _id-keyed one (#1374)', async () => {
+    const db = createFakeDb({ ...topology(), storageAssignments: [
+      { storageAssignmentId: 'sa-1', specimenId: String(SAMPLE._id), boxId: String(BOX_1._id), positionCode: 'A1', placedAt: T(1), removedAt: null },
+      { storageAssignmentId: 'sc-1', specimenId: 'SPC-2026-0001', boxId: String(BOX_2._id), positionCode: 'C4', placedAt: T(2), removedAt: null },
+    ] });
+
+    expect(await bridge.currentPlacement(db, SAMPLE, SESSION)).toMatchObject({
+      boxId: String(BOX_2._id), positionCode: 'C4', placedAt: T(2), source: 'legacy_storage_assignment',
+    });
   });
 });
