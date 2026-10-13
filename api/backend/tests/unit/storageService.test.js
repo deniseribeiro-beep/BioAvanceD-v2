@@ -892,6 +892,8 @@ describe('StorageService.releaseSampleFromPosition', () => {
   let samplesUpdateOne;
   let boxesUpdateOne;
   let storageAssignmentsFindOne;
+  let storageAssignments;
+  let chain;
   let movements;
   let db;
   let service;
@@ -902,18 +904,30 @@ describe('StorageService.releaseSampleFromPosition', () => {
     boxesUpdateOne = vi.fn().mockResolvedValue({});
     // No open StorageAssignment by default (sample not currently allocated).
     storageAssignmentsFindOne = vi.fn().mockResolvedValue(null);
+    // #1374: release adopts a legacy-only specimen from its rows; the open
+    // row the reader resolves is the only one.
+    storageAssignments = {
+      findOne: storageAssignmentsFindOne,
+      find: vi.fn(() => ({
+        toArray: async () => {
+          const open = await storageAssignmentsFindOne();
+          return open ? [open] : [];
+        }
+      })),
+      insertOne: vi.fn(),
+      updateOne: vi.fn()
+    };
+    chain = Object.fromEntries(['containers', ...CHAIN_COLLECTIONS].map((name) => [name, makeChainCollection()]));
     movements = makeMovementsCollection();
 
     db = makeDb({
       collection: vi.fn((name) => {
         if (name === 'samples') return { findOne: samplesFindOne, updateOne: samplesUpdateOne };
-        if (name === 'storageBoxes') return { updateOne: boxesUpdateOne };
+        if (name === 'storageBoxes') return { updateOne: boxesUpdateOne, findOne: vi.fn().mockResolvedValue(null) };
         if (name === 'sample_movements') return movements;
         if (name === 'counters') return makeCountersCollection();
-        if (name === 'storageAssignments') {
-          return { updateOne: vi.fn().mockResolvedValue({}), findOne: storageAssignmentsFindOne };
-        }
-        if (CHAIN_COLLECTIONS.includes(name)) return { findOne: vi.fn().mockResolvedValue(null) };
+        if (name === 'storageAssignments') return storageAssignments;
+        if (chain[name]) return chain[name];
         throw new Error(`unexpected collection: ${name}`);
       })
     });
@@ -946,6 +960,42 @@ describe('StorageService.releaseSampleFromPosition', () => {
 
     const sampleUpdateCall = samplesUpdateOne.mock.calls[0];
     expect(sampleUpdateCall[1].$unset).toHaveProperty('storageLocation');
+  });
+
+  // #1374: release closes the specimen's position on the physical chain; a
+  // legacy-only specimen is adopted first and stays loaded in its container.
+  // No StorageAssignment row is written.
+  it('closes the released position on the physical chain, adopting a legacy-only specimen, not a StorageAssignment row (#1374)', async () => {
+    const boxId = new ObjectId().toString();
+    const sampleId = new ObjectId().toString();
+
+    samplesFindOne.mockResolvedValue({
+      _id: new ObjectId(sampleId),
+      specimenId: 'SP-6',
+      barcode: 'BC-6',
+      storageLocation: { boxId, position: 'C3' }
+    });
+    storageAssignmentsFindOne.mockResolvedValue({
+      storageAssignmentId: 'SA-6', specimenId: sampleId, boxId, positionCode: 'C3', placedAt: new Date('2026-01-01T00:00:00Z'), removedAt: null
+    });
+
+    const result = await service.releaseSampleFromPosition(sampleId);
+
+    expect(result.success).toBe(true);
+    const { containerId } = chain.containers.insertOne.mock.calls[0][0];
+    expect(chain.containers.insertOne).toHaveBeenCalledTimes(1);
+    expect(chain.specimenContainerAssignments.insertOne).toHaveBeenCalledWith(
+      expect.objectContaining({ specimenId: 'SP-6', containerId, sourceEventId: 'legacy-storage-assignment:SA-6' }),
+      undefined
+    );
+    const placements = await chain.containerPositionAssignments.find({}).toArray();
+    expect(placements.map((row) => [row.containerId, row.storagePositionId, row.assignmentStatus])).toEqual([
+      [containerId, `${boxId}:C03`, 'ended']
+    ]);
+    const loads = await chain.specimenContainerAssignments.find({}).toArray();
+    expect(loads.map((row) => row.assignmentStatus)).toEqual(['active']);
+    expect(storageAssignments.insertOne).not.toHaveBeenCalled();
+    expect(storageAssignments.updateOne).not.toHaveBeenCalled();
   });
 
   // #1220: the custody ledger row is keyed by the canonical specimenId, as the

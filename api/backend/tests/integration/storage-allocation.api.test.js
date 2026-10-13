@@ -359,14 +359,20 @@ describe('DELETE /api/storage/release/:sampleId', () => {
     expect(db.client.startSession).not.toHaveBeenCalled();
   });
 
-  it('a valid release succeeds and the assignment-closing update carries the transaction session', async () => {
-    const sample = { _id: SAMPLE_ID, barcode: 'BR-001', collectionSite: HOME_ORG, storageLocation: { boxId: BOX_ID, position: 'A1' } };
-    const openAssignment = { specimenId: String(SAMPLE_ID), boxId: BOX_ID, positionCode: 'A1', removedAt: null };
-    const assignmentUpdateOne = vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
+  // #1374: release closes the specimen's position on the physical chain in
+  // the transaction session. This specimen is placed only through the
+  // legacy path, so it is adopted first -- one container -- and that
+  // container's position is closed; no StorageAssignment row is written.
+  it('a valid release of a legacy-only specimen adopts it and closes its chain position in the transaction session', async () => {
+    const sample = { _id: SAMPLE_ID, specimenId: 'SPC-0001', barcode: 'BR-001', collectionSite: HOME_ORG, storageLocation: { boxId: BOX_ID, position: 'A1' } };
+    const openAssignment = {
+      storageAssignmentId: 'SA-1', specimenId: String(SAMPLE_ID), boxId: BOX_ID, positionCode: 'A1', placedAt: new Date('2026-01-01T00:00:00Z'), removedAt: null
+    };
 
     const samples = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sample) });
-    const storageAssignments = createCollectionMock({ findOne: vi.fn().mockResolvedValue(openAssignment), updateOne: assignmentUpdateOne });
-    const db = dbWithRbac({ samples, storageAssignments, ...ledgerCollections() }, 2);
+    const storageAssignments = createMatchingCollection([openAssignment], { collectionName: 'storageAssignments' });
+    const chain = chainCollections();
+    const db = dbWithRbac({ samples, storageAssignments, ...chain, ...ledgerCollections() }, 2);
     app.locals.db = db;
 
     const res = await request(app)
@@ -374,7 +380,61 @@ describe('DELETE /api/storage/release/:sampleId', () => {
       .set('Authorization', `Bearer ${makeToken(2)}`);
 
     expect(res.status).toBe(200);
-    expect(assignmentUpdateOne).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.objectContaining({ session: db.session }));
+    const session = db.session;
+    expect(chain.containers.insertOne).toHaveBeenCalledTimes(1);
+    const { containerId } = chain.containers.docs[0];
+    expect(chain.specimenContainerAssignments.insertOne).toHaveBeenCalledWith(
+      expect.objectContaining({ specimenId: 'SPC-0001', containerId, sourceEventId: 'legacy-storage-assignment:SA-1' }),
+      expect.objectContaining({ session })
+    );
+    expect(chain.containerPositionAssignments.docs.map((row) => [row.containerId, row.storagePositionId, row.assignmentStatus])).toEqual([
+      [containerId, `${BOX_ID}:A01`, 'ended'],
+    ]);
+    for (const call of chain.containerPositionAssignments.insertOne.mock.calls) {
+      expect(call[1]).toEqual(expect.objectContaining({ session }));
+    }
+    expect(chain.containerPositionAssignments.updateOne).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.objectContaining({ session }));
+    expect(chain.specimenContainerAssignments.docs.map((row) => [row.containerId, row.assignmentStatus])).toEqual([[containerId, 'active']]);
+    expect(storageAssignments.insertOne).not.toHaveBeenCalled();
+    expect(storageAssignments.updateOne).not.toHaveBeenCalled();
+  });
+
+  // #1374: a specimen already on the chain keeps its container loaded; only
+  // its position assignment closes.
+  it('a valid release of a chain-placed specimen closes its position assignment in the transaction session, the container stays loaded', async () => {
+    const sample = { _id: SAMPLE_ID, specimenId: 'SPC-0001', barcode: 'BR-001', collectionSite: HOME_ORG, storageLocation: { boxId: BOX_ID, position: 'A1' } };
+    const placedAt = new Date('2026-01-01T00:00:00Z');
+
+    const samples = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sample) });
+    const storageAssignments = createCollectionMock();
+    const chain = chainCollections();
+    chain.containers.docs.push({ containerId: 'CNT-1', containerType: 'unidentified_container', emptyStatus: 'occupied' });
+    chain.specimenContainerAssignments.docs.push({
+      specimenContainerAssignmentId: 'SCA-1', specimenId: 'SPC-0001', containerId: 'CNT-1', loadedAt: placedAt, unloadedAt: null, assignmentStatus: 'active'
+    });
+    chain.containerPositionAssignments.docs.push({
+      containerPositionAssignmentId: 'CPA-1', containerId: 'CNT-1', storagePositionId: `${BOX_ID}:A01`, placedAt, removedAt: null, assignmentStatus: 'active'
+    });
+    const db = dbWithRbac({ samples, storageAssignments, ...chain, ...ledgerCollections() }, 2);
+    app.locals.db = db;
+
+    const res = await request(app)
+      .delete(`/api/storage/release/${SAMPLE_ID}`)
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+
+    expect(res.status).toBe(200);
+    expect(chain.containerPositionAssignments.updateOne).toHaveBeenCalledWith(
+      expect.objectContaining({ containerPositionAssignmentId: 'CPA-1' }),
+      expect.anything(),
+      expect.objectContaining({ session: db.session })
+    );
+    expect(chain.containerPositionAssignments.docs.map((row) => row.assignmentStatus)).toEqual(['ended']);
+    expect(chain.specimenContainerAssignments.docs.map((row) => row.assignmentStatus)).toEqual(['active']);
+    expect(chain.specimenContainerAssignments.updateOne).not.toHaveBeenCalled();
+    expect(chain.containers.insertOne).not.toHaveBeenCalled();
+    expect(chain.containerPositionAssignments.insertOne).not.toHaveBeenCalled();
+    expect(storageAssignments.insertOne).not.toHaveBeenCalled();
+    expect(storageAssignments.updateOne).not.toHaveBeenCalled();
   });
 });
 
@@ -502,7 +562,8 @@ describe('storage mutations are bounded by the caller organization (#1211)', () 
     const openAssignment = { specimenId: String(SAMPLE_ID), boxId: BOX_ID, positionCode: 'A1', removedAt: null };
     const samples = createCollectionMock({ findOne: vi.fn().mockResolvedValue(foreignSample({ boxId: BOX_ID, position: 'A1' })) });
     const storageAssignments = createCollectionMock({ findOne: vi.fn().mockResolvedValue(openAssignment) });
-    app.locals.db = dbWithRbac({ samples, storageAssignments, ...ledgerCollections() }, 2);
+    const chain = chainCollections();
+    app.locals.db = dbWithRbac({ samples, storageAssignments, ...chain, ...ledgerCollections() }, 2);
 
     const res = await request(app)
       .delete(`/api/storage/release/${SAMPLE_ID}`)
@@ -511,6 +572,7 @@ describe('storage mutations are bounded by the caller organization (#1211)', () 
     expect(res.status).toBe(403);
     expect(res.body.error).toBe('SAMPLE_OUT_OF_SCOPE');
     expect(storageAssignments.updateOne).not.toHaveBeenCalled();
+    expect(chain.containerPositionAssignments.updateOne).not.toHaveBeenCalled();
   });
 
   // #1216: the create response names a specimen by its specimenId, and the
@@ -548,7 +610,8 @@ describe('storage mutations are bounded by the caller organization (#1211)', () 
     const openAssignment = { specimenId: String(SAMPLE_ID), boxId: BOX_ID, positionCode: 'A1', removedAt: null };
     const samples = samplesBySpecimenId({ ...foreignSample({ boxId: BOX_ID, position: 'A1' }), specimenId: SPECIMEN_ID });
     const storageAssignments = createCollectionMock({ findOne: vi.fn().mockResolvedValue(openAssignment) });
-    app.locals.db = dbWithRbac({ samples, storageAssignments, ...ledgerCollections() }, 2);
+    const chain = chainCollections();
+    app.locals.db = dbWithRbac({ samples, storageAssignments, ...chain, ...ledgerCollections() }, 2);
 
     const res = await request(app)
       .delete(`/api/storage/release/${SPECIMEN_ID}`)
@@ -557,6 +620,7 @@ describe('storage mutations are bounded by the caller organization (#1211)', () 
     expect(res.status).toBe(403);
     expect(res.body.error).toBe('SAMPLE_OUT_OF_SCOPE');
     expect(storageAssignments.updateOne).not.toHaveBeenCalled();
+    expect(chain.containerPositionAssignments.updateOne).not.toHaveBeenCalled();
   });
 
   it('PATCH /freezer/:freezerId/room refuses a freezer on another organization\'s Equipment', async () => {

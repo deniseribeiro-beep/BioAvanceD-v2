@@ -1072,7 +1072,9 @@ describe('storage.routes', () => {
     // constructed by the controller itself, neither one doubled) against
     // createMatchingCollection, so the filter actually sent to
     // storageAssignments can be captured and asserted instead of assumed.
-    it('queries storageAssignments by specimenId as a STRING via the real repository (issue #856 key-shape hazard)', async () => {
+    // #1374: the read consults the physical chain first, by the same string
+    // key, and falls back to the open legacy row; release writes neither.
+    it('queries the chain and storageAssignments by specimenId as a STRING via the real repository (issue #856 key-shape hazard)', async () => {
       const { router } = loadRoute({ useRealRelease: true });
       const { capturedFilters } = createFilterCaptureStore();
       const samples = createMatchingCollection([
@@ -1087,10 +1089,12 @@ describe('storage.routes', () => {
       // also having to fake db.client.startSession/MongoAuditRepository/
       // LineageRepository.
       const storageAssignments = createMatchingCollection([], { capturedFilters, key: 'storageAssignments' });
+      const specimenContainerAssignments = createMatchingCollection([], { capturedFilters, key: 'specimenContainerAssignments' });
       const app = buildApp(router, {
         collection: (name) => {
           if (name === 'samples') return samples;
           if (name === 'storageAssignments') return storageAssignments;
+          if (name === 'specimenContainerAssignments') return specimenContainerAssignments;
           return null;
         },
       });
@@ -1102,6 +1106,10 @@ describe('storage.routes', () => {
       // falls to its else branch: 400. That status is incidental to this
       // test -- the load-bearing assertion is the filter shape below.
       expect(res.status).toBe(400);
+      expect(capturedFilters.specimenContainerAssignments).toEqual({
+        specimenId: 'sample-1',
+        assignmentStatus: 'active',
+      });
       expect(capturedFilters.storageAssignments).toEqual({
         specimenId: 'sample-1',
         removedAt: null,

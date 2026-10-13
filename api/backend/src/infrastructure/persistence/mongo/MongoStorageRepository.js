@@ -4,13 +4,13 @@ const { getCollection } = require('../../../utils/collectionResolver');
 // added this probe there; writing a second one here is how the insufficient
 // startSession() guard came to exist in two places already.
 const { isKnownStandaloneDeployment } = require('../../../utils/mongoTransaction');
-const StorageAssignmentModel = require('../../../models/StorageAssignment');
 const positionGrid = require('../../../utils/storagePositionGrid');
 const { escapeRegex } = require('../../../utils/escapeRegex');
 const {
   currentPlacement,
   placeSpecimen,
   moveSpecimen,
+  releaseSpecimen,
   legacyWriteEventId
 } = require('../../../services/legacyPlacementChain.service');
 
@@ -251,48 +251,6 @@ class MongoStorageRepository {
         boxId: box._id
       }
     };
-  }
-
-  /**
-   * dict-02 StorageAssignment (ELM-0167-0178, P1X-0072/0073): open a new
-   * placement-history record for a specimen's physical stay at a position.
-   * @param {{ specimenId: string, boxId: ObjectId, positionCode: string }} input
-   * @param {import('mongodb').ClientSession} [session]
-   */
-  async openStorageAssignment(input, session) {
-    const storageAssignmentsCollection = this.db.collection('storageAssignments');
-    const hierarchy = await this.findStorageHierarchyForBox(input.boxId, session);
-
-    const record = StorageAssignmentModel.open({
-      specimenId: input.specimenId,
-      boxId: input.boxId,
-      positionCode: input.positionCode,
-      ...hierarchy
-    });
-
-    await storageAssignmentsCollection.insertOne(record, { session });
-    return record;
-  }
-
-  /**
-   * dict-02 StorageAssignment: close the open placement-history record for
-   * a specimen's stay at a position (removedAt/occupancyStatus), rather
-   * than overwriting/discarding it.
-   * @param {{ specimenId: string, boxId: ObjectId, positionCode: string }} input
-   * @param {import('mongodb').ClientSession} [session]
-   */
-  async closeStorageAssignment(input, session) {
-    const storageAssignmentsCollection = this.db.collection('storageAssignments');
-    await storageAssignmentsCollection.updateOne(
-      {
-        specimenId: String(input.specimenId),
-        boxId: String(input.boxId),
-        positionCode: input.positionCode,
-        removedAt: null
-      },
-      { $set: StorageAssignmentModel.closeFields() },
-      { session }
-    );
   }
 
   /**
@@ -654,10 +612,9 @@ class MongoStorageRepository {
       { session }
     );
 
-    await this.closeStorageAssignment(
-      { specimenId: input.specimenId, boxId: sourceBoxObjId, positionCode: String(sourcePosition).toUpperCase() },
-      session
-    );
+    // #1374: the container leaves its position on the physical chain, in
+    // this session; the specimen stays loaded in it.
+    await releaseSpecimen(this.db, { sample, at: new Date() }, session);
 
     return {
       from: {
