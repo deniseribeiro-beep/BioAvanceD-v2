@@ -375,6 +375,9 @@ class SampleService {
       }
 
       const sample = SampleModel.create(sampleData);
+      // #1192: the tenancy key comes only from the caller's server-built
+      // options, never from sampleData, which a request body or import row fills.
+      sample.organizationId = options.organizationId ? String(options.organizationId) : null;
       const createdQuantity = Number(sample.currentQuantity ?? sample.quantity ?? 0);
 
       const buildBirthMovement = (createMovementID) => SampleMovementModel.create({

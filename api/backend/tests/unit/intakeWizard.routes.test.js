@@ -275,6 +275,7 @@ describe('intakeWizard routes', () => {
 
         expect(res.status).toBe(200);
         expect(sampleServiceModule.createSample.mock.calls[0][1].collectionSite).toBe('org-a');
+        expect(sampleServiceModule.createSample.mock.calls[0][2].organizationId).toBe('org-a');
         const [, payload, options] = patientIdentityServiceModule.matchOrUpsertParticipant.mock.calls[0];
         expect(payload.clinicalUnitId).toBe('org-a');
         expect(options).toEqual({ organizationScope: scope });

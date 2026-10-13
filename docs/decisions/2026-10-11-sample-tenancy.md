@@ -24,8 +24,9 @@ Issue #1192.
 3. **Behaviour, as the later slices of #1192 land:**
    - readers resolve the key as `organizationId ?? collectionSite` until the backfill has run (`services/sampleTenancy.service.js`);
    - every create stamps `organizationId`;
-   - the key is server-stamped only: no request body or import file sets it, and `SampleModel.create()` stores `null` until the create slices stamp it;
-   - PUT cannot write it (it is not in `ALLOWED_UPDATE_FIELDS`);
+   - the key is server-stamped only: no request body or import file sets it. `SampleModel.create()` stores `null`, and the create paths stamp it after: `createSample` from its `organizationId` option (POST /api/samples, the intake wizard) and the LGPD sample import from its resolved organization;
+   - `collectionSite` (ELM-0128) keeps the site the caller names. When the caller names none, the create fills it with the stamped organization, as before #1192. The LGPD sample import names no site (its row parser maps none), so its samples get the organization as their site;
+   - PUT cannot write it (it is not in `ALLOWED_UPDATE_FIELDS`). PUT refuses moving `collectionSite` to another organization only while the sample has no `organizationId`, because until then `collectionSite` is still its tenancy key. Once `organizationId` is set, editing `collectionSite` is editing data;
    - custody keeps governing `/api/physical-chain`.
 4. **The backfill** `npm run migrate:sample-organization` (`scripts/migrateSampleOrganization.js`) copies `collectionSite` into `organizationId` wherever `organizationId` is unset. It writes no other field and is idempotent.
 
@@ -34,9 +35,11 @@ Issue #1192.
 - **Why not custody.** `physicalChainScope.service.js` scopes `/api/physical-chain` by the current CustodianshipAssignment. Applied to the sample routes, that would hide every new sample from the organization that created it: `createSample` opens no custody, and it cannot open one on its own, because a CustodianshipAssignment needs an authorization (V2E-0112, `authorizationId` 1..1). The issue's Interim section rules that out. So the sample routes get a stored key, and the physical chain keeps custody.
 - **The fallback reads `collectionSite`** because that is what scoped every sample until now. A sample stored before the change stays visible to exactly the organizations that saw it before, whether or not the backfill has run.
 
-## This slice
+## The slices so far
 
-Only the foundation, with no change in behaviour: the field on the model and its create mapping, the helper, the backfill script and this record. No reader and no create stamp moves yet, and the migration has not been run.
+The foundation added the field on the model and its create mapping, the helper, the backfill script and this record. The reader slices moved every sample reader onto the helper. The create slice stamps `organizationId` on POST /api/samples, the intake wizard and the LGPD sample import, and stops them from overwriting a named `collectionSite`. The migration has not been run.
+
+**Not stamped:** `POST /api/users/register-sample`, the batch-validation import (`batch-validation-engine.service.js`) and `import.service.js` carry no organization scope today. Their samples keep `organizationId` null and fall back to `collectionSite`.
 
 ## Not decided here
 

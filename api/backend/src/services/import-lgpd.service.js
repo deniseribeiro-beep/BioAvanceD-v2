@@ -1257,8 +1257,8 @@ class ImportLGPDService {
       startBoxId: importOptions?.startBoxId ? String(importOptions.startBoxId) : null,
       autoIncrement: Boolean(importOptions?.autoIncrement),
       groupFields,
-      // #1353: the organization the import stamped as each sample's
-      // collectionSite, so a resubmitted row lands in the same one.
+      // #1353, #1192: the organization the import stamps as each sample's
+      // organizationId, so a resubmitted row lands in the same one.
       organizationId: importOptions?.organizationId ? String(importOptions.organizationId) : null,
     };
   }
@@ -1971,16 +1971,22 @@ class ImportLGPDService {
         sampleData.barcode = String(sampleData.barcode).trim();
       }
 
-      // #1353: the tenancy key the scoped sample readers filter on, resolved
-      // once per import from the importer's organization scope, as
-      // POST /api/samples stamps it (#1185). Null only for a global caller
-      // who named no organization, which leaves the row as it was.
-      if (organizationId) {
+      // #1353, #1192: the organization resolved once per import from the
+      // importer's scope, as POST /api/samples resolves it (#1185), is
+      // stamped as the sample's organizationId, the tenancy key. A named
+      // collection site (ELM-0128) would be kept, but parseSampleRow maps
+      // none today, so the unnamed site gets the organization, as before.
+      // Null only for a global caller who named no organization, which
+      // leaves the row as it was.
+      if (organizationId && (sampleData.collectionSite === undefined
+        || sampleData.collectionSite === null
+        || sampleData.collectionSite === '')) {
         sampleData.collectionSite = organizationId;
       }
 
       // Cria amostra
       const sample = SampleModel.create(sampleData);
+      sample.organizationId = organizationId ? String(organizationId) : null;
       sample.patientName = sampleData.patientName || matchedPatient?.patient?.patientName || null;
       sample.patient_name_confirmed = sample.patientName;
       sample.patientObjectId = sampleData.patientObjectId || null;

@@ -478,13 +478,16 @@ describe('ImportLGPDService.importSamples', () => {
     expect(samplesCollection.insertOne).toHaveBeenCalledTimes(1);
   });
 
-  // #1353: the tenancy key the scoped sample readers filter on.
-  it('stamps the resolved organizationId as each imported sample\'s collectionSite (#1353)', async () => {
-    vi.spyOn(service, 'readFile').mockResolvedValue([{ ...VALID_ROW, collectionSite: 'ORG-FOREIGN' }]);
+  // #1353, #1192: the resolved organization is the tenancy key, stamped as
+  // organizationId. The import names no collection site (parseSampleRow maps
+  // none), so the unnamed site is filled with the organization, as before.
+  it('stores the stamped organizationId on an imported row and fills its unnamed collectionSite with it (#1353, #1192)', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
 
     const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' }, { organizationId: 'ORG-OWN' });
 
     expect(result.success).toBe(1);
+    expect(samplesCollection.insertOne.mock.calls[0][0].organizationId).toBe('ORG-OWN');
     expect(samplesCollection.insertOne.mock.calls[0][0].collectionSite).toBe('ORG-OWN');
     // A participant the row creates is stamped the same way.
     expect(patientIdentityService.matchOrUpsertParticipant.mock.calls[0][1]).toMatchObject({ clinicalUnitId: 'ORG-OWN' });
@@ -506,6 +509,7 @@ describe('ImportLGPDService.importSamples', () => {
 
     expect(result.success).toBe(1);
     expect(samplesCollection.insertOne.mock.calls[0][0].collectionSite).toBeNull();
+    expect(samplesCollection.insertOne.mock.calls[0][0].organizationId).toBeNull();
   });
 
   it('persists externalQualityAssessment (camelCase) on the inserted document when rcsScore/scoreBasedGrade columns are present (#226)', async () => {

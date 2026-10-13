@@ -859,7 +859,13 @@ async function handleIntakeWizard(req, res) {
     });
 
     const sampleToPersist = buildSampleDocumentFromIntake(data, matchOutcome.patient);
-    if (organizationId) {
+    // #1192: the collection site the intake names (ELM-0128) is kept; one
+    // naming none gets the stamped organization, as before. The tenancy key
+    // is the organizationId option createSample stamps below.
+    const namedCollectionSite = data?.specimen?.collectionSite;
+    if (namedCollectionSite !== undefined && namedCollectionSite !== null && namedCollectionSite !== '') {
+      sampleToPersist.collectionSite = String(namedCollectionSite);
+    } else if (organizationId) {
       sampleToPersist.collectionSite = String(organizationId);
     }
     sampleToPersist.boxId = automaticLocation.box._id;
@@ -895,6 +901,7 @@ async function handleIntakeWizard(req, res) {
         userAgent: req.get('user-agent') || null,
         notes: 'Cadastro integrado via Intake Wizard',
       },
+      organizationId: organizationId ? String(organizationId) : null,
       neo4jDriver: req.app.locals.neo4jDriver || null,
     });
 

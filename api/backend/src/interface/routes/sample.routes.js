@@ -378,15 +378,22 @@ router.post('/',
         quarantineService: req.app.locals.neo4jQuarantineService || req.app.locals.topologicalQuarantine || null
       });
 
-      // #1185: #1071's create rule -- an organization-scoped caller registers
-      // into its own organization whatever collectionSite the body names. A
-      // global caller keeps the body's value.
-      const sampleData = req.organizationScope?.scope === 'global'
+      // #1185, #1192: #1071's create rule decides the organization the sample
+      // belongs to -- an organization-scoped caller's own, a global caller's
+      // pick named as collectionSite, or none -- and createSample stamps it as
+      // Sample.organizationId. The collection site the body names (ELM-0128)
+      // is kept; a body naming none gets the stamped organization, as before.
+      const organizationId = resolveOrganizationIdForCreate(req.organizationScope, req.body?.collectionSite);
+      const namesCollectionSite = req.body?.collectionSite !== undefined
+        && req.body?.collectionSite !== null
+        && req.body?.collectionSite !== '';
+      const sampleData = namesCollectionSite || !organizationId
         ? req.body
-        : { ...req.body, collectionSite: resolveOrganizationIdForCreate(req.organizationScope, req.body?.collectionSite) };
+        : { ...req.body, collectionSite: organizationId };
 
       const result = await registerSampleUseCase.execute({
         sampleData,
+        options: { organizationId },
         actor: {
           userId: req.user?.id || req.user?._id?.toString() || req.user?.userID || null,
           userName: req.user?.name || req.user?.username || null,
@@ -1127,10 +1134,14 @@ router.put('/:id', authenticate, requirePermission('editSample'), requireOrganiz
     }
 
     // #1053: the check above proves the sample is CURRENTLY the caller's.
-    // updateSample's allowlist contains collectionSite -- the field this
-    // module scopes on -- so without a destination check an in-scope caller
-    // could push their own sample into another organization.
-    if (sampleForScope) {
+    // updateSample's allowlist contains collectionSite, so without a
+    // destination check an in-scope caller could push their own sample into
+    // another organization. #1192: that holds only while the sample has no
+    // organizationId, when collectionSite is still its tenancy key; once the
+    // key is stamped, editing collectionSite is editing data.
+    const sampleOrganizationId = sampleForScope?.organizationId;
+    if (sampleForScope
+      && (sampleOrganizationId === undefined || sampleOrganizationId === null || sampleOrganizationId === '')) {
       assertOrganizationFieldNotReparented(req.organizationScope, sampleForScope.collectionSite, req.body?.collectionSite, 'collectionSite');
     }
 

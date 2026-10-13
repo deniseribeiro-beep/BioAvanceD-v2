@@ -469,10 +469,11 @@ describe('sample.routes', () => {
     });
 
     // #1185: the create side of #1053's sample slice. POST / carried no
-    // organization scope and passed the body's collectionSite straight
-    // through, so a scoped caller could register a sample into another
-    // organization. #1071's rule: an organization scope stamps its own id.
-    describe('#1185: a scoped create stamps the caller organization as collectionSite', () => {
+    // organization scope, so a scoped caller could register a sample into
+    // another organization. #1071's rule: an organization scope stamps its
+    // own id. #1192: the stamp is the organizationId option createSample
+    // stores as the tenancy key; the body's collectionSite (ELM-0128) is kept.
+    describe('#1185, #1192: a scoped create stamps the caller organization as organizationId', () => {
       const created = () => vi.fn().mockResolvedValue({
         sample: { _id: { toString: () => 's1' }, participantId: '12345678' },
         strictMode: true,
@@ -483,7 +484,7 @@ describe('sample.routes', () => {
         next();
       };
 
-      it('replaces a body collectionSite naming another organization', async () => {
+      it('keeps a body collectionSite naming another site and stamps the caller organization', async () => {
         const executeMock = created();
         const { router } = loadRoute({ registerSampleUseCaseExecute: executeMock, requireOrganizationScopeImpl: orgScoped });
         const app = buildApp(router, {});
@@ -492,11 +493,12 @@ describe('sample.routes', () => {
 
         expect(res.status).toBe(201);
         expect(executeMock).toHaveBeenCalledWith(expect.objectContaining({
-          sampleData: expect.objectContaining({ collectionSite: 'org-mine' }),
+          sampleData: expect.objectContaining({ collectionSite: 'org-other' }),
+          options: { organizationId: 'org-mine' },
         }));
       });
 
-      it('stamps the caller organization when the body names no collectionSite', async () => {
+      it('fills collectionSite with the caller organization when the body names none', async () => {
         const executeMock = created();
         const { router } = loadRoute({ registerSampleUseCaseExecute: executeMock, requireOrganizationScopeImpl: orgScoped });
         const app = buildApp(router, {});
@@ -506,10 +508,22 @@ describe('sample.routes', () => {
         expect(res.status).toBe(201);
         expect(executeMock).toHaveBeenCalledWith(expect.objectContaining({
           sampleData: expect.objectContaining({ collectionSite: 'org-mine' }),
+          options: { organizationId: 'org-mine' },
         }));
       });
 
-      it('CONTROL: a global scope keeps the body collectionSite', async () => {
+      it('never takes organizationId from the body', async () => {
+        const executeMock = created();
+        const { router } = loadRoute({ registerSampleUseCaseExecute: executeMock, requireOrganizationScopeImpl: orgScoped });
+        const app = buildApp(router, {});
+
+        const res = await request(app).post('/api/samples').send({ ...VALID_PAYLOAD, organizationId: 'org-evil' });
+
+        expect(res.status).toBe(201);
+        expect(executeMock.mock.calls[0][0].options.organizationId).toBe('org-mine');
+      });
+
+      it('CONTROL: a global scope keeps the body collectionSite and stamps it', async () => {
         const executeMock = created();
         const { router } = loadRoute({ registerSampleUseCaseExecute: executeMock });
         const app = buildApp(router, {});
@@ -519,6 +533,7 @@ describe('sample.routes', () => {
         expect(res.status).toBe(201);
         expect(executeMock).toHaveBeenCalledWith(expect.objectContaining({
           sampleData: expect.objectContaining({ collectionSite: 'org-other' }),
+          options: { organizationId: 'org-other' },
         }));
       });
     });
@@ -2566,9 +2581,10 @@ describe('sample.routes', () => {
     });
 
     // #1053: the #623 check above is the SOURCE -- is this sample mine now.
-    // updateSample's allowlist contains collectionSite, the field this module
-    // scopes on, so an in-scope caller could still push their own sample into
-    // another organization with that check passing on the way through.
+    // updateSample's allowlist contains collectionSite, so an in-scope caller
+    // could still push their own sample into another organization with that
+    // check passing on the way through. #1192: collectionSite is the tenancy
+    // key only while the sample has no organizationId.
     describe('#1053: a PUT cannot re-parent the sample to another collectionSite', () => {
       const orgScoped = (req, res, next) => {
         req.organizationScope = { scope: 'organization', organizationIds: ['org-mine'] };
@@ -2588,6 +2604,21 @@ describe('sample.routes', () => {
 
         expect(res.status).toBe(403);
         expect(updateSample).not.toHaveBeenCalled();
+      });
+
+      it('lets a PUT edit the collectionSite of a sample whose organizationId is stamped (#1192)', async () => {
+        const updateSample = vi.fn().mockResolvedValue({ _id: '1', collectionSite: 'org-other' });
+        const getSample = vi.fn().mockResolvedValue({ _id: '1', organizationId: 'org-mine', collectionSite: 'org-mine' });
+        const { router } = loadRoute({
+          sampleServiceOverrides: { updateSample, getSample },
+          requireOrganizationScopeImpl: orgScoped,
+        });
+        const app = buildApp(router, {});
+
+        const res = await request(app).put('/api/samples/000000000000000000000000').send({ collectionSite: 'org-other' });
+
+        expect(res.status).toBe(200);
+        expect(updateSample).toHaveBeenCalled();
       });
 
       it('CONTROL: an update that does not name collectionSite still succeeds', async () => {

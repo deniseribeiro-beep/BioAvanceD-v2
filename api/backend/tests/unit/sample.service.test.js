@@ -371,6 +371,35 @@ describe('sample.service', () => {
       expect(result.collectionSite).toBe('org-uuid-123');
     });
 
+    // #1192: Sample.organizationId, the tenancy key, is stamped from the
+    // caller's server-built options only, never from the sample data.
+    it('stores the organizationId option as the sample organizationId (#1192)', async () => {
+      const db = makeDb();
+      mockOperationalStorage(db);
+
+      await sampleService.createSample(db, validSampleData(), { organizationId: 'org-1' });
+
+      expect(db.collections.samples.insertOne.mock.calls[0][0].organizationId).toBe('org-1');
+    });
+
+    it('stores a null organizationId when the caller passes no option (#1192)', async () => {
+      const db = makeDb();
+      mockOperationalStorage(db);
+
+      await sampleService.createSample(db, validSampleData());
+
+      expect(db.collections.samples.insertOne.mock.calls[0][0].organizationId).toBeNull();
+    });
+
+    it('never takes organizationId from the sample data (#1192)', async () => {
+      const db = makeDb();
+      mockOperationalStorage(db);
+
+      await sampleService.createSample(db, validSampleData({ organizationId: 'org-evil' }));
+
+      expect(db.collections.samples.insertOne.mock.calls[0][0].organizationId).toBeNull();
+    });
+
     it('rejects with 404 when collectionSite does not resolve to an Organization', async () => {
       const db = makeDb({ organizations: makeCollection('organizations') });
       mockOperationalStorage(db);
