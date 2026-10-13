@@ -929,7 +929,10 @@ describe('StorageService.releaseSampleFromPosition', () => {
         if (name === 'storageAssignments') return storageAssignments;
         if (chain[name]) return chain[name];
         throw new Error(`unexpected collection: ${name}`);
-      })
+      }),
+      // #1374: the release runs in MongoStorageRepository.withTransaction,
+      // which derives its session from `db.client`, as autoAssign's does.
+      client: { startSession: vi.fn(() => makeSession()) }
     });
     service = new StorageService(db);
   });
@@ -986,7 +989,7 @@ describe('StorageService.releaseSampleFromPosition', () => {
     expect(chain.containers.insertOne).toHaveBeenCalledTimes(1);
     expect(chain.specimenContainerAssignments.insertOne).toHaveBeenCalledWith(
       expect.objectContaining({ specimenId: 'SP-6', containerId, sourceEventId: 'legacy-storage-assignment:SA-6' }),
-      undefined
+      { session: db.client.startSession.mock.results[0].value }
     );
     const placements = await chain.containerPositionAssignments.find({}).toArray();
     expect(placements.map((row) => [row.containerId, row.storagePositionId, row.assignmentStatus])).toEqual([
@@ -1068,6 +1071,69 @@ describe('StorageService.releaseSampleFromPosition', () => {
     expect(result.success).toBe(false);
     expect(result.error).toBe('RELEASE_ERROR');
     expect(result.message).toBe('db down');
+  });
+
+  // #1374: the box, sample and audit writes share one transaction, so a
+  // release never commits without its sample_movements row.
+  describe('in one transaction (#1374)', () => {
+    let session;
+    let inTransaction;
+
+    beforeEach(() => {
+      session = makeSession();
+      inTransaction = false;
+      session.withTransaction = vi.fn(async (fn) => {
+        inTransaction = true;
+        try { await fn(); } finally { inTransaction = false; }
+      });
+      db.client = { ...db.client, startSession: vi.fn(() => session) };
+      service = new StorageService(db);
+
+      const boxId = new ObjectId().toString();
+      samplesFindOne.mockResolvedValue({
+        _id: new ObjectId(),
+        specimenId: 'SP-8',
+        barcode: 'BC-8',
+        storageLocation: { boxId, position: 'B2' }
+      });
+      storageAssignmentsFindOne.mockResolvedValue({ boxId, positionCode: 'B2', removedAt: null });
+    });
+
+    it('writes the box, the sample and the audit row in the release transaction', async () => {
+      const seen = {};
+      const track = (name, spy, result) => spy.mockImplementation(async (...args) => {
+        seen[name] = inTransaction && args[args.length - 1]?.session === session;
+        return result;
+      });
+      track('box', boxesUpdateOne, { matchedCount: 1 });
+      track('sample', samplesUpdateOne, { matchedCount: 1 });
+      track('audit', movements.insertOne, { insertedId: new ObjectId() });
+
+      const result = await service.releaseSampleFromPosition(new ObjectId().toString());
+
+      expect(result.success).toBe(true);
+      expect(db.client.startSession).toHaveBeenCalledTimes(1);
+      expect(seen).toEqual({ box: true, sample: true, audit: true });
+    });
+
+    it('a failed audit insert surfaces from the transaction as RELEASE_ERROR, with no compensating write', async () => {
+      let failedInTransaction = null;
+      movements.insertOne.mockImplementation(async (_doc, options) => {
+        failedInTransaction = inTransaction && options?.session === session;
+        throw new Error('ledger unreachable');
+      });
+
+      const result = await service.releaseSampleFromPosition(new ObjectId().toString());
+
+      expect(failedInTransaction).toBe(true);
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('RELEASE_ERROR');
+      expect(result.message).toBe('ledger unreachable');
+      expect(boxesUpdateOne).toHaveBeenCalledTimes(1);
+      expect(samplesUpdateOne).toHaveBeenCalledTimes(1);
+      const compensations = boxesUpdateOne.mock.calls.filter((call) => call[1]?.$set?.[`occupancyGrid.B2`]);
+      expect(compensations).toHaveLength(0);
+    });
   });
 
   it('falls back to the raw specimenId when ObjectId.isValid throws while converting it', async () => {

@@ -230,6 +230,9 @@ class StorageService {
    * Liberar amostra de uma posição
    * Remove de occupancyGrid e atualiza amostra
    *
+   * #1374: a liberação (box, amostra e cadeia física) e a sua linha de
+   * auditoria em sample_movements commitam juntas, numa única transação.
+   *
    * @param {ObjectId} specimenId - ID da amostra
    * @returns {Promise<{ success: boolean, error?: string, releasedFrom?: object }>}
    */
@@ -269,25 +272,32 @@ class StorageService {
 
       // Liberar posição (occupancyGrid da box + storageLocation da amostra),
       // via MongoStorageRepository para não duplicar a lógica atômica de escrita.
-      await this.storageRepository.releaseSamplePosition({ specimenId: sampleObjId });
+      // #1374: the release and its custody row run in one transaction, so a
+      // release can never commit without its sample_movements row.
+      await this.storageRepository.withTransaction(async (session) => {
+        await this.storageRepository.releaseSamplePosition({ specimenId: sampleObjId }, session);
 
-      // Registrar auditoria (mesmo ledger sample_movements usado pelos use-cases)
-      await this.auditRepository.appendImmutableAudit({
-        specimenId: String(sample.specimenId || sampleObjId),
-        barcode: sample.barcode,
-        eventType: 'release',
-        before: {
-          storageLocation: { boxId, position },
-          quantity: sample.quantity,
-          unit: sample.unit || 'µL'
-        },
-        after: {
-          storageLocation: null
-        },
-        context: {
-          actor: { userName: 'SYSTEM' }
-        },
-        timestamp: new Date()
+        // Registrar auditoria (mesmo ledger sample_movements usado pelos use-cases)
+        await this.auditRepository.appendImmutableAudit(
+          {
+            specimenId: String(sample.specimenId || sampleObjId),
+            barcode: sample.barcode,
+            eventType: 'release',
+            before: {
+              storageLocation: { boxId, position },
+              quantity: sample.quantity,
+              unit: sample.unit || 'µL'
+            },
+            after: {
+              storageLocation: null
+            },
+            context: {
+              actor: { userName: 'SYSTEM' }
+            },
+            timestamp: new Date()
+          },
+          session
+        );
       });
 
       logger.info(`✅ Amostra ${specimenId} liberada de ${boxId}/${position}`);
