@@ -4,6 +4,10 @@ const express = require('express');
 const request = require('supertest');
 const { SYSTEM_REPORT_TEMPLATES } = require('../../src/services/report-template-seed.service');
 const { createCursorMock } = require('../factories/cursor.factory');
+const { sampleOrganizationScopeClause } = require('../../src/services/sampleTenancy.service');
+
+// #1192: the sample scope follows the tenancy key, whatever its clause says.
+const ORG_1_SAMPLE_SCOPE = sampleOrganizationScopeClause({ scope: 'organization', organizationIds: ['org-1'] });
 
 const modulePaths = {
   auth: require.resolve('../../src/infrastructure/middleware/auth'),
@@ -1179,7 +1183,7 @@ describe('reports.routes.js gaps', () => {
     // history are unscoped by design but tested separately elsewhere,
     // see the #620 describe block below).
 
-    it('amostra: filtra a query por collectionSite para um usuário organization-scoped', async () => {
+    it('amostra: filtra a query pela chave de tenancy para um usuário organization-scoped', async () => {
       const { db, capturedQueries } = buildCollectionDb({ ...ORG_SCOPED_RBAC, samples: [{ sampleID: 'S1', collectionSite: 'org-1' }] });
       const testApp = appWithDb(db);
 
@@ -1187,7 +1191,7 @@ describe('reports.routes.js gaps', () => {
 
       expect(response.status).toBe(200);
       expect(capturedQueries.samples.$and).toEqual(
-        expect.arrayContaining([{ collectionSite: { $in: ['org-1'] } }])
+        expect.arrayContaining([ORG_1_SAMPLE_SCOPE])
       );
     });
 
@@ -1233,7 +1237,7 @@ describe('reports.routes.js gaps', () => {
       );
     });
 
-    it('tissueoriginhistory: combina o filtro de origem com collectionSite via $and', async () => {
+    it('tissueoriginhistory: combina o filtro de origem com a chave de tenancy via $and', async () => {
       const { db, capturedQueries } = buildCollectionDb({ ...ORG_SCOPED_RBAC, samples: [{ sampleID: 'S1', sampleOrigin: 'Fígado', collectionSite: 'org-1' }] });
       const testApp = appWithDb(db);
 
@@ -1241,11 +1245,11 @@ describe('reports.routes.js gaps', () => {
 
       expect(response.status).toBe(200);
       expect(capturedQueries.samples.$and).toEqual(
-        expect.arrayContaining([{ collectionSite: { $in: ['org-1'] } }])
+        expect.arrayContaining([ORG_1_SAMPLE_SCOPE])
       );
     });
 
-    it('amostra: Administrador (scope global) não recebe filtro de collectionSite', async () => {
+    it('amostra: Administrador (scope global) não recebe filtro de tenancy', async () => {
       const { db, capturedQueries } = buildCollectionDb({ samples: [{ sampleID: 'S1' }] });
       const testApp = appWithDb(db);
 
@@ -1256,7 +1260,7 @@ describe('reports.routes.js gaps', () => {
     });
 
     // #621: Result has no organization reference of its own — scope is
-    // derived by joining through its linked Sample's collectionSite.
+    // derived by joining through its linked Sample's tenancy key (#1192).
     // #628: Result.specimenId is now the sole canonical shape (every
     // write path writes it, existing documents backfilled), so the join
     // matches on specimenId alone — not the dual _id/specimenId check
@@ -1271,7 +1275,7 @@ describe('reports.routes.js gaps', () => {
       const response = await request(testApp).post('/api/reports/results/preview').send({ filters: {} });
 
       expect(response.status).toBe(200);
-      expect(capturedQueries.samples).toEqual({ collectionSite: { $in: ['org-1'] } });
+      expect(capturedQueries.samples).toEqual(ORG_1_SAMPLE_SCOPE);
       expect(capturedQueries.results).toEqual({ specimenId: { $in: ['SPX-1'] } });
     });
 

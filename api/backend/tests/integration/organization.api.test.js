@@ -424,7 +424,35 @@ describe('DELETE /api/organizations/:id', () => {
       { $or: [{ organizationId: 'org-uuid-1' }, { organizationIds: 'org-uuid-1' }] },
       { limit: 1 }
     );
-    expect(samples.countDocuments).toHaveBeenCalledWith({ collectionSite: 'org-uuid-1' }, { limit: 1 });
+    expect(samples.countDocuments).toHaveBeenCalledWith(
+      { $or: [{ organizationId: 'org-uuid-1' }, { collectionSite: 'org-uuid-1' }] },
+      { limit: 1 }
+    );
+  });
+
+  // #1192: a sample's tenancy key names its organization even when its
+  // collection site names another, so it alone must refuse.
+  it('refuses with 409 while only a sample organizationId references the organization', async () => {
+    const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue({ _id: 'mongo-org-1', organizationId: 'org-uuid-1' }),
+      deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }),
+    });
+    const samples = createCollectionMock({
+      countDocuments: vi.fn(async (filter) => (Array.isArray(filter.$or) && filter.$or.some((t) => t.organizationId === 'org-uuid-1') ? 1 : 0)),
+    });
+    app.locals.db = createDbMock({
+      organizations: coll,
+      samples,
+      ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]),
+    });
+
+    const res = await request(app)
+      .delete('/api/organizations/mongo-org-1')
+      .set('Authorization', `Bearer ${makeToken(4)}`);
+
+    expect(res.status).toBe(409);
+    expect(res.body.references).toEqual(['samples']);
+    expect(coll.deleteOne).not.toHaveBeenCalled();
   });
 
   // A deleted sensor's alerts keep its organizationId: they alone must refuse.

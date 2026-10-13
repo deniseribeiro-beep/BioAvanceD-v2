@@ -16,6 +16,7 @@ const specimenPreanalyticsService = require('../../services/specimen-preanalytic
 const rcsAssessmentService = require('../../services/rcs-assessment.service');
 const { resolveUserOrganizationScope, isOrganizationScopeUsable, applyOrganizationScopeFilter, isRecordInOrganizationScope, isAuditReader } = require('../../services/rbac-assignment.service');
 const { resolveReportGrantScope, allowsReport, allowsReportType, reportIdFilter } = require('../../services/report-grant.service');
+const { sampleOrganizationScopeClause } = require('../../services/sampleTenancy.service');
 
 function normalizeReport(report) {
   return {
@@ -300,10 +301,11 @@ async function buildSampleQuery(db, filters = {}) {
   }
 
   // #341 (RF003 AC#3): org-scoped caller's sample-rooted report queries
-  // only see samples whose collectionSite is one of their scoped
-  // organizations, same field/pattern #340 wired into listSamples.
-  if (filters.organizationScope && filters.organizationScope.scope === 'organization') {
-    conditions.push({ collectionSite: { $in: filters.organizationScope.organizationIds } });
+  // only see samples whose tenancy key is one of their scoped
+  // organizations (#1192: organizationId, falling back to collectionSite).
+  const sampleScopeClause = sampleOrganizationScopeClause(filters.organizationScope);
+  if (sampleScopeClause) {
+    conditions.push(sampleScopeClause);
   }
 
   return conditions.length > 0 ? { $and: conditions } : {};
@@ -322,7 +324,7 @@ async function getMatchingPatientIds(samplesCollection, sampleQuery) {
 
 // #341 (RF003 AC#3): only report types rooted in the samples/patients
 // collections (plus, per #621, Result — scoped via a join through its
-// linked Sample's collectionSite; per #634/#635/#636, Sensor/Equipment/
+// linked Sample's tenancy key (#1192); per #634/#635/#636, Sensor/Equipment/
 // Temperature — scoped directly by their own organizationId) carry an
 // organization reference to scope by — confirmed with Dennis 2026-08-18.
 // access-log/withdrawal-history report types, and saved Report documents
@@ -594,10 +596,7 @@ async function handlePatient(db, filters) {
 async function handleSampleAnalysis(db, filters) {
   const samplesCollection = resolveCollection(db, ['samples', 'amostras']);
   const resultsCollection = resolveCollection(db, ['results']);
-  const sampleAnalysisQuery =
-    filters.organizationScope && filters.organizationScope.scope === 'organization'
-      ? { collectionSite: { $in: filters.organizationScope.organizationIds } }
-      : {};
+  const sampleAnalysisQuery = sampleOrganizationScopeClause(filters.organizationScope) || {};
   const samples = await samplesCollection.find(sampleAnalysisQuery).limit(100).toArray();
 
   // #633: `sample.sampleID` doesn't exist on the canonical Sample
@@ -764,15 +763,14 @@ async function handleResult(db, filters) {
   let query = {};
   if (filters.organizationScope && filters.organizationScope.scope === 'organization') {
     // #621: Result has no organization reference of its own — derive
-    // scope via a join through its linked Sample's collectionSite.
+    // scope via a join through its linked Sample's tenancy key (#1192).
     // #628: Result.specimenId is now the sole canonical shape (every
     // write path writes it, and the #628 migration backfilled existing
     // documents) — a single-shape match, not the dual _id/specimenId
     // check #621 originally needed while the field was still stale.
     const samplesCollection = resolveCollection(db, ['samples', 'amostras']);
-    const scopedSamples = await samplesCollection
-      .find({ collectionSite: { $in: filters.organizationScope.organizationIds } })
-      .toArray();
+    const sampleScopeClause = sampleOrganizationScopeClause(filters.organizationScope);
+    const scopedSamples = await samplesCollection.find(sampleScopeClause).toArray();
     const scopedSpecimenIds = scopedSamples
       .map((sample) => sample.specimenId)
       .filter((value) => value !== undefined && value !== null)
@@ -805,10 +803,8 @@ async function handleTissueOriginHistory(db, filters) {
   const baseQuery = {
     $or: [{ sampleOrigin: { $exists: true, $ne: null } }, { linkedProject: { $exists: true, $ne: null } }],
   };
-  const query =
-    filters.organizationScope && filters.organizationScope.scope === 'organization'
-      ? { $and: [baseQuery, { collectionSite: { $in: filters.organizationScope.organizationIds } }] }
-      : baseQuery;
+  const sampleScopeClause = sampleOrganizationScopeClause(filters.organizationScope);
+  const query = sampleScopeClause ? { $and: [baseQuery, sampleScopeClause] } : baseQuery;
 
   const samples = await collection.find(query).sort({ registeredAt: -1, createdAt: -1 }).limit(100).toArray();
   const total = await collection.countDocuments(query);
@@ -823,10 +819,8 @@ async function handleExtracellularNetwork(db, filters) {
       { sampleOrigin: { $regex: 'extracel', $options: 'i' } },
     ],
   };
-  const query =
-    filters.organizationScope && filters.organizationScope.scope === 'organization'
-      ? { $and: [baseQuery, { collectionSite: { $in: filters.organizationScope.organizationIds } }] }
-      : baseQuery;
+  const sampleScopeClause = sampleOrganizationScopeClause(filters.organizationScope);
+  const query = sampleScopeClause ? { $and: [baseQuery, sampleScopeClause] } : baseQuery;
 
   const samples = await collection.find(query).sort({ registeredAt: -1, createdAt: -1 }).limit(100).toArray();
   const total = await collection.countDocuments(query);
