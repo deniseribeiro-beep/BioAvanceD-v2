@@ -10,6 +10,7 @@ const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
+const { createMatchingCollection } = require('../factories/filter.factory');
 
 // #1006: route -> requirePermission -> controller -> service integration
 // coverage for the storage mutation routes (POST /allocate, POST /move,
@@ -68,6 +69,18 @@ function ledgerCollections() {
   };
 }
 
+// #1374: an allocation places the specimen on the physical chain. Each chain
+// collection is passed by name: createDbMock resolves an unknown name by
+// substring, so `containers` would otherwise answer with `storageContainers`.
+function chainCollections() {
+  return {
+    containers: createMatchingCollection([], { collectionName: 'containers' }),
+    specimenContainerAssignments: createMatchingCollection([], { collectionName: 'specimenContainerAssignments' }),
+    containerPositionAssignments: createMatchingCollection([], { collectionName: 'containerPositionAssignments' }),
+    rackLocationAssignments: createMatchingCollection([], { collectionName: 'rackLocationAssignments' }),
+  };
+}
+
 // #1211: every storage mutation is bounded by the caller's organization. A
 // sample is scoped by collectionSite (the interim tenancy key, #1192); a box
 // by its root freezer's Equipment, as the topology creates are (#1210).
@@ -109,12 +122,11 @@ describe('POST /api/storage/allocate', () => {
   });
 
   it('accessType 2 allocates successfully and really enters a transaction -- session opened once, ended once', async () => {
-    const sample = { _id: SAMPLE_ID, barcode: 'BR-001', collectionSite: HOME_ORG, storageLocation: null };
+    const sample = { _id: SAMPLE_ID, specimenId: 'SPC-0001', barcode: 'BR-001', collectionSite: HOME_ORG, storageLocation: null };
     const box = { _id: BOX_ID, name: 'Box A1-01', parent_id: HOME_TREE.rackId, dimension: { rows: 9, cols: 9 }, occupancyGrid: {} };
     const samples = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sample) });
     const storageBoxes = createCollectionMock({ findOne: vi.fn().mockResolvedValue(box) });
-    const storageAssignments = createCollectionMock();
-    const db = dbWithRbac({ samples, storageBoxes, ...treeInOrg(HOME_ORG), storageAssignments, ...ledgerCollections() }, 2);
+    const db = dbWithRbac({ samples, storageBoxes, ...treeInOrg(HOME_ORG), ...chainCollections(), ...ledgerCollections() }, 2);
     app.locals.db = db;
 
     const res = await request(app)
@@ -127,17 +139,17 @@ describe('POST /api/storage/allocate', () => {
     expect(db.session.endSession).toHaveBeenCalledTimes(1);
   });
 
-  it('carries the same transaction session on every write -- box update, sample update, assignment insert, movement insert', async () => {
-    const sample = { _id: SAMPLE_ID, barcode: 'BR-001', collectionSite: HOME_ORG, storageLocation: null };
+  it('carries the same transaction session on every write -- box update, sample update, chain inserts, movement insert', async () => {
+    const sample = { _id: SAMPLE_ID, specimenId: 'SPC-0001', barcode: 'BR-001', collectionSite: HOME_ORG, storageLocation: null };
     const box = { _id: BOX_ID, name: 'Box A1-01', parent_id: HOME_TREE.rackId, dimension: { rows: 9, cols: 9 }, occupancyGrid: {} };
     const boxUpdateOne = vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
     const sampleUpdateOne = vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
-    const assignmentInsertOne = vi.fn().mockResolvedValue({ insertedId: new ObjectId() });
     const samples = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sample), updateOne: sampleUpdateOne });
     const storageBoxes = createCollectionMock({ findOne: vi.fn().mockResolvedValue(box), updateOne: boxUpdateOne });
-    const storageAssignments = createCollectionMock({ insertOne: assignmentInsertOne });
+    const storageAssignments = createCollectionMock();
+    const chain = chainCollections();
     const { sample_movements, counters } = ledgerCollections();
-    const db = dbWithRbac({ samples, storageBoxes, ...treeInOrg(HOME_ORG), storageAssignments, sample_movements, counters }, 2);
+    const db = dbWithRbac({ samples, storageBoxes, ...treeInOrg(HOME_ORG), storageAssignments, ...chain, sample_movements, counters }, 2);
     app.locals.db = db;
 
     const res = await request(app)
@@ -149,7 +161,21 @@ describe('POST /api/storage/allocate', () => {
     const session = db.session;
     expect(boxUpdateOne).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.objectContaining({ session }));
     expect(sampleUpdateOne).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.objectContaining({ session }));
-    expect(assignmentInsertOne).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ session }));
+    // #1374: the specimen, keyed by its business specimenId, goes on the
+    // physical chain; no StorageAssignment row is opened.
+    expect(chain.containers.insertOne).toHaveBeenCalledTimes(1);
+    expect(chain.containers.insertOne).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ session }));
+    expect(chain.specimenContainerAssignments.insertOne).toHaveBeenCalledTimes(1);
+    expect(chain.specimenContainerAssignments.insertOne).toHaveBeenCalledWith(
+      expect.objectContaining({ specimenId: 'SPC-0001', containerId: chain.containers.docs[0].containerId }),
+      expect.objectContaining({ session })
+    );
+    expect(chain.containerPositionAssignments.insertOne).toHaveBeenCalledTimes(1);
+    expect(chain.containerPositionAssignments.insertOne).toHaveBeenCalledWith(
+      expect.objectContaining({ containerId: chain.containers.docs[0].containerId, storagePositionId: `${BOX_ID}:A01` }),
+      expect.objectContaining({ session })
+    );
+    expect(storageAssignments.insertOne).not.toHaveBeenCalled();
     expect(sample_movements.insertOne).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ session }));
   });
 
@@ -493,10 +519,10 @@ describe('storage mutations are bounded by the caller organization (#1211)', () 
   });
 
   it('an Administrador (global scope) allocates another organization\'s sample into another organization\'s box (control)', async () => {
-    const samples = createCollectionMock({ findOne: vi.fn().mockResolvedValue(foreignSample()) });
+    const samples = createCollectionMock({ findOne: vi.fn().mockResolvedValue({ ...foreignSample(), specimenId: 'SPC-0009' }) });
     const storageBoxes = createCollectionMock({ findOne: vi.fn().mockResolvedValue(boxUnder(FOREIGN_TREE)) });
     const storageAssignments = createCollectionMock();
-    app.locals.db = dbWithRbac({ samples, storageBoxes, storageAssignments, ...treeInOrg('org-other', FOREIGN_TREE), ...ledgerCollections() }, 4);
+    app.locals.db = dbWithRbac({ samples, storageBoxes, storageAssignments, ...treeInOrg('org-other', FOREIGN_TREE), ...chainCollections(), ...ledgerCollections() }, 4);
 
     const res = await request(app)
       .post('/api/storage/allocate')
@@ -520,6 +546,7 @@ describe('an active legal hold blocks allocation and movement (RF006 AC6, #1315)
       storageAssignments: createCollectionMock(),
       legalHolds: legalHoldsWith(holds),
       ...treeInOrg(HOME_ORG),
+      ...chainCollections(),
       ...ledgerCollections(),
     }, 2);
     app.locals.db = db;

@@ -15,15 +15,41 @@ function makeCollection(overrides = {}) {
   };
 }
 
+// #1374: a physical-chain collection, empty at first, that keeps what is
+// inserted and matches a query by equality and `$or`.
+function matchesChainQuery(doc, filter) {
+  return Object.entries(filter).every(([key, value]) =>
+    key === '$or' ? value.some((branch) => matchesChainQuery(doc, branch)) : doc[key] === value
+  );
+}
+
+function makeChainCollection() {
+  const docs = [];
+  return makeCollection({
+    findOne: vi.fn(async (filter) => docs.find((doc) => matchesChainQuery(doc, filter)) || null),
+    find: vi.fn((filter = {}) => ({ toArray: async () => docs.filter((doc) => matchesChainQuery(doc, filter)) })),
+    insertOne: vi.fn(async (doc) => {
+      docs.push({ ...doc });
+      return { insertedId: docs.length };
+    }),
+    updateOne: vi.fn(async (filter, update) => {
+      const doc = docs.find((row) => matchesChainQuery(row, filter));
+      if (doc) Object.assign(doc, update.$set);
+      return { matchedCount: doc ? 1 : 0 };
+    })
+  });
+}
+
 function makeDb(collections) {
   const defaults = {
     storagePaths: makeCollection({ findOne: vi.fn().mockResolvedValue(null) }),
     storageBoxes: makeCollection({ findOne: vi.fn().mockResolvedValue(null) }),
     storageContainers: makeCollection({ findOne: vi.fn().mockResolvedValue(null) }),
     rooms: makeCollection({ findOne: vi.fn().mockResolvedValue(null) }),
-    specimenContainerAssignments: makeCollection({ findOne: vi.fn().mockResolvedValue(null) }),
-    containerPositionAssignments: makeCollection({ findOne: vi.fn().mockResolvedValue(null) }),
-    rackLocationAssignments: makeCollection({ findOne: vi.fn().mockResolvedValue(null) }),
+    containers: makeChainCollection(),
+    specimenContainerAssignments: makeChainCollection(),
+    containerPositionAssignments: makeChainCollection(),
+    rackLocationAssignments: makeChainCollection(),
     storageAssignments: makeCollection({
       insertOne: vi.fn().mockResolvedValue({ insertedId: 'stub' }),
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
@@ -582,7 +608,7 @@ describe('MongoStorageRepository', () => {
 
     it('happy path allocates the position', async () => {
       const samples = makeCollection({
-        findOne: vi.fn().mockResolvedValueOnce({ _id: sampleId }),
+        findOne: vi.fn().mockResolvedValueOnce({ _id: sampleId, specimenId: 'SPC-0001' }),
         updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 })
       });
       const storageBoxes = makeCollection({
@@ -623,35 +649,54 @@ describe('MongoStorageRepository', () => {
       expect(samples.updateOne).not.toHaveBeenCalled();
     });
 
-    // Issue #402: opening a position must also open a StorageAssignment
-    // placement-history record for it.
-    it('opens a StorageAssignment for the newly allocated position (#402)', async () => {
+    // #1374: the allocation places the specimen on the physical chain, keyed
+    // by its business specimenId, in the caller's session; the legacy
+    // StorageAssignment row is no longer written.
+    it('places the specimen on the physical chain in the session, not a StorageAssignment row (#1374)', async () => {
+      const session = {};
       const samples = makeCollection({
-        findOne: vi.fn().mockResolvedValueOnce({ _id: sampleId }),
+        findOne: vi.fn().mockResolvedValueOnce({ _id: sampleId, specimenId: 'SPC-0001' }),
         updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 })
       });
       const storageBoxes = makeCollection({
         findOne: vi.fn().mockResolvedValueOnce(boxDoc),
         updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 })
       });
-      const storageAssignmentsInsertOne = vi.fn().mockResolvedValueOnce({ insertedId: 'x' });
-      const storageAssignments = makeCollection({ insertOne: storageAssignmentsInsertOne });
-      const db = makeDb({ samples, storageBoxes, storageAssignments });
+      const containers = makeChainCollection();
+      const specimenContainerAssignments = makeChainCollection();
+      const containerPositionAssignments = makeChainCollection();
+      const storageAssignments = makeCollection({ insertOne: vi.fn() });
+      const db = makeDb({
+        samples, storageBoxes, containers, specimenContainerAssignments, containerPositionAssignments, storageAssignments
+      });
       const repo = new MongoStorageRepository(db);
 
-      await repo.allocateSamplePosition(baseInput, {});
+      await repo.allocateSamplePosition(baseInput, session);
 
-      expect(storageAssignmentsInsertOne).toHaveBeenCalledWith(
+      expect(containers.insertOne).toHaveBeenCalledTimes(1);
+      expect(containers.insertOne.mock.calls[0][1]).toEqual({ session });
+      const container = containers.insertOne.mock.calls[0][0];
+
+      expect(specimenContainerAssignments.insertOne).toHaveBeenCalledTimes(1);
+      expect(specimenContainerAssignments.insertOne).toHaveBeenCalledWith(
         expect.objectContaining({
-          specimenId: sampleId,
-          boxId,
-          positionCode: 'A1',
-          placedAt: expect.any(Date),
-          removedAt: null,
-          occupancyStatus: 'ocupada'
+          specimenId: 'SPC-0001',
+          containerId: container.containerId,
+          sourceEventId: expect.stringMatching(new RegExp(`^legacy-storage-allocate:${sampleId}:`))
         }),
-        { session: {} }
+        { session }
       );
+
+      expect(containerPositionAssignments.insertOne).toHaveBeenCalledTimes(1);
+      expect(containerPositionAssignments.insertOne).toHaveBeenCalledWith(
+        expect.objectContaining({
+          containerId: container.containerId,
+          storagePositionId: `${boxId}:A01`
+        }),
+        { session }
+      );
+
+      expect(storageAssignments.insertOne).not.toHaveBeenCalled();
     });
 
     it('throws when sample not found', async () => {

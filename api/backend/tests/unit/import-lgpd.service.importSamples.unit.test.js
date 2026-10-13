@@ -744,6 +744,7 @@ describe('ImportLGPDService.importSamples', () => {
   // backfill script materializes and #462/#463/#464 already walk.
   describe('boxId auto-assignment (#459)', () => {
     const { ObjectId } = require('mongodb');
+    const { createMatchingCollection } = require('../factories/filter.factory');
 
     function makeStorageChain(boxCount = 2) {
       const freezerId = new ObjectId();
@@ -831,21 +832,31 @@ describe('ImportLGPDService.importSamples', () => {
         // mockOperationalStorage fix in #510/#513.
         findOne: vi.fn().mockResolvedValue(null),
       };
+      // #1374: the allocation places each specimen on the physical chain,
+      // and the placement reader reads it there first.
+      const physicalChain = {
+        containers: createMatchingCollection([], { collectionName: 'containers' }),
+        specimenContainerAssignments: createMatchingCollection([], { collectionName: 'specimenContainerAssignments' }),
+        containerPositionAssignments: createMatchingCollection([], { collectionName: 'containerPositionAssignments' }),
+        rackLocationAssignments: createMatchingCollection([], { collectionName: 'rackLocationAssignments' }),
+      };
       base.db.collection = vi.fn((name) => {
         if (name === 'storageContainers') return storageContainersCollection;
         if (name === 'storageBoxes') return storageBoxesCollection;
         if (name === 'storageAssignments') return storageAssignmentsCollection;
         if (name === 'equipment') return equipmentCollection;
         if (name === 'sensors') return sensorsCollection;
+        if (physicalChain[name]) return physicalChain[name];
         return originalCollection(name);
       });
       base.storageAssignments = storageAssignments;
+      base.physicalChain = physicalChain;
       return base;
     }
 
     it('assigns the next available box when autoIncrement is on and the row has no boxId', async () => {
       const chain = makeStorageChain(2);
-      const { db, samplesCollection, storageAssignments } = makeDbWithStorageChain(chain);
+      const { db, samplesCollection, storageAssignments, physicalChain } = makeDbWithStorageChain(chain);
       vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
 
       const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' }, {
@@ -858,7 +869,19 @@ describe('ImportLGPDService.importSamples', () => {
       const inserted = samplesCollection.insertOne.mock.calls[0][0];
       expect(String(inserted.storageLocation.boxId)).toBe(String(chain.boxes[0]._id));
       expect(inserted.storageLocation.position).toBe('A1');
-      expect(storageAssignments).toHaveLength(1);
+      // #1374: one chain placement per imported sample, keyed by its
+      // business specimenId; no StorageAssignment row.
+      expect(physicalChain.containers.docs).toHaveLength(1);
+      expect(physicalChain.specimenContainerAssignments.docs).toEqual([
+        expect.objectContaining({ specimenId: inserted.specimenId, containerId: physicalChain.containers.docs[0].containerId }),
+      ]);
+      expect(physicalChain.containerPositionAssignments.docs).toEqual([
+        expect.objectContaining({
+          containerId: physicalChain.containers.docs[0].containerId,
+          storagePositionId: `${chain.boxes[0]._id}:A01`,
+        }),
+      ]);
+      expect(storageAssignments).toHaveLength(0);
     });
 
     // #817: the per-row work moved into processSampleRow, and the loop now

@@ -7,7 +7,11 @@ const { isKnownStandaloneDeployment } = require('../../../utils/mongoTransaction
 const StorageAssignmentModel = require('../../../models/StorageAssignment');
 const positionGrid = require('../../../utils/storagePositionGrid');
 const { escapeRegex } = require('../../../utils/escapeRegex');
-const { currentPlacement } = require('../../../services/legacyPlacementChain.service');
+const {
+  currentPlacement,
+  placeSpecimen,
+  legacyWriteEventId
+} = require('../../../services/legacyPlacementChain.service');
 
 /**
  * Repositório Mongo para operações de armazenamento físico de amostras.
@@ -485,8 +489,12 @@ class MongoStorageRepository {
       throw new Error('Falha ao atualizar amostra');
     }
 
-    await this.openStorageAssignment(
-      { specimenId: input.specimenId, boxId: boxObjId, positionCode: normalizedPosition },
+    // #1374: the placement goes on the physical chain, in this session; a
+    // chain refusal (ASSIGNMENT_OVERLAP) aborts the transaction.
+    const at = new Date();
+    await placeSpecimen(
+      this.db,
+      { sample, box, position: normalizedPosition, at, sourceEventId: legacyWriteEventId('allocate', sample, at) },
       session
     );
   }
