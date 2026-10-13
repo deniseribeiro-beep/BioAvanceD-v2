@@ -2094,6 +2094,7 @@
       "naiveStatus": "Treatment-naive",
       "omim": "OMIM",
       "orpha": "ORPHA",
+      "parentSpecimenIds": "Parent samples (specimenIds)",
       "recordNumber": "Medical record",
       "selectStatus": "Select status",
       "sprecMatrix": "SPREC Matrix",

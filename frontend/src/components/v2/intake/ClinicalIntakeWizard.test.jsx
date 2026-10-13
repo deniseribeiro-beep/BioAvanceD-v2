@@ -138,6 +138,37 @@ describe('ClinicalIntakeWizard buildSubmissionPayload', () => {
     expect(payload.specimen.sprec.sampleType).toBe('BLD');
     expect(payload.specimen.sprec.primaryContainer).toBe('PL1');
   });
+
+  it('#1371: specimen.parentSpecimenIds splits the field on whitespace, commas and semicolons, trimmed and de-duplicated in order', () => {
+    const formData = {
+      isHealthyControl: true,
+      patientName: 'Paciente Teste',
+      linkedProject: 'PROJ-1',
+      parentSpecimenIds: ' SP-1, SP-2;SP-1 ',
+    };
+
+    const payload = buildSubmissionPayload(formData);
+
+    expect(payload.specimen.parentSpecimenIds).toEqual(['SP-1', 'SP-2']);
+    // dict-02 ELM-0120 is parentSpecimenIds; the singular names are refused by the server.
+    expect(payload.specimen).not.toHaveProperty('parentSpecimenId');
+    expect(payload.specimen).not.toHaveProperty('parentSampleId');
+  });
+
+  it('#1371: an empty or absent parentSpecimenIds field leaves specimen without the parentSpecimenIds key', () => {
+    for (const parentSpecimenIds of [undefined, '']) {
+      const formData = {
+        isHealthyControl: true,
+        patientName: 'Paciente Teste',
+        linkedProject: 'PROJ-1',
+        ...(parentSpecimenIds === undefined ? {} : { parentSpecimenIds }),
+      };
+
+      const payload = buildSubmissionPayload(formData);
+
+      expect(payload.specimen).not.toHaveProperty('parentSpecimenIds');
+    }
+  });
 });
 
 const FIXTURE_DICTIONARIES = {

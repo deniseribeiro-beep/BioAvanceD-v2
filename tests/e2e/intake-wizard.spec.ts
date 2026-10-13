@@ -18,7 +18,7 @@ import {
 import type { SeededStorageBox } from './helpers/seedParticipant';
 import { seedOrphaPhenotypeGraph, removeOrphaPhenotypeGraph, closeNeo4jDriver } from './helpers/queryNeo4j';
 import { generateValidCpf } from './helpers/cpf';
-import { MongoClient } from 'mongodb';
+import { MongoClient, ObjectId } from 'mongodb';
 
 const mongoUri = process.env.E2E_MONGO_URI || 'mongodb://localhost:27017?directConnection=true';
 const mongoDbName = process.env.E2E_MONGO_DB || 'bioavanced_test';
@@ -762,5 +762,122 @@ test.describe('Clinical-entity wiring — real backend (#696, proving #693\'s RF
     expect(participantRes.status(), await participantRes.text()).toBe(200);
     const participant = await db.collection('patients').findOne({ participantId });
     expect(participant?.clinicalUnitId).toBe(secondOrg);
+  });
+
+  // #1371 (dict-02 ELM-0120): the wizard names a derivative's parents by
+  // specimenId; the sample stores them and the outbox carries one
+  // LINEAGE_REGISTERED per parent, keyed by each sample's _id.
+  const lineageSamples: Array<{ mongoId: string; specimenId: string }> = [];
+
+  test.afterAll(async () => {
+    if (lineageSamples.length === 0) return;
+    const mongoIds = lineageSamples.map((sample) => sample.mongoId);
+    const specimenIds = lineageSamples.map((sample) => sample.specimenId);
+    const client = new MongoClient(mongoUri);
+    try {
+      await client.connect();
+      const db = client.db(mongoDbName);
+      await Promise.all([
+        db.collection('samples').deleteMany({ _id: { $in: mongoIds.map((id) => new ObjectId(id)) } }),
+        db.collection('sample_movements').deleteMany({
+          $or: [
+            { specimenId: { $in: [...specimenIds, ...mongoIds] } },
+            { sampleID: { $in: [...specimenIds, ...mongoIds] } },
+          ],
+        }),
+        db.collection('storageAssignments').deleteMany({ specimenId: { $in: mongoIds } }),
+        db.collection('graph_projection_outbox').deleteMany({ aggregateType: 'Sample', aggregateId: { $in: mongoIds } }),
+        db.collection<{ _id: string }>('graph_projection_outbox_aggregate_versions').deleteMany({
+          _id: { $in: mongoIds.map((id) => `Sample:${id}`) },
+        }),
+      ]);
+    } finally {
+      await client.close();
+    }
+  });
+
+  test('a derivative registered through the wizard names its parent specimenId, stored on the sample and carried by a LINEAGE_REGISTERED outbox event (#1371)', async ({ page, request }) => {
+    await realAuthLogin(request, page);
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const patientName = `#1371 e2e patient ${suffix}`;
+    const document = generateValidCpf();
+
+    // The #1354 path, less the organization picker.
+    const registerThroughWizard = async (label: string, parentSpecimenIds?: string) => {
+      await page.goto('/next/intake');
+      await expect(page.getByTestId('intake-wizard-root')).toBeVisible();
+
+      await page.getByTestId('wizard-full-name').fill(patientName);
+      await page.getByTestId('wizard-birth-date').fill('01/01/1990');
+      if (parentSpecimenIds) {
+        // Same name and birth date: the derivative's intake matches the
+        // participant the parent's intake created.
+        await expect(page.getByTestId('wizard-patient-match-alert')).toBeVisible({ timeout: 10_000 });
+      }
+      await page.getByTestId('wizard-gender').selectOption('F');
+      await page.getByTestId('wizard-email').fill(`e2e-1371-${suffix}@example.com`);
+      await page.getByTestId('wizard-document').fill(document);
+      await page.getByTestId('wizard-next-button').click();
+
+      await expect(page.getByTestId('wizard-sprec-axis-1')).toBeVisible();
+      await page.getByTestId('wizard-sprec-matrix').selectOption('fluid');
+      await page.getByTestId('wizard-sample-type').selectOption({ index: 1 });
+      await page.getByTestId('wizard-sample-origin').selectOption({ index: 1 });
+      await page.getByTestId('wizard-extraction-protocol').selectOption({ index: 1 });
+      await page.getByTestId('wizard-sprec-axis-1').selectOption({ index: 1 });
+      await page.getByTestId('wizard-sprec-axis-2').selectOption({ index: 1 });
+      await page.getByTestId('wizard-processing-unknown').check();
+      await page.getByTestId('wizard-sprec-axis-7').selectOption({ index: 1 });
+      await page.getByTestId('wizard-quantity').fill('5');
+      await page.getByTestId('wizard-linked-project').fill(`E2E-1371-${label}-${suffix}`);
+      if (parentSpecimenIds) {
+        await page.getByTestId('wizard-parent-specimen-ids').fill(parentSpecimenIds);
+      }
+      await page.getByTestId('wizard-institution-name').fill('Hospital E2E 1371');
+      await page.getByTestId('wizard-next-button').click();
+
+      await expect(page.getByTestId('wizard-diagnosis-search')).toBeVisible();
+      await page.getByTestId('wizard-diagnosis-search').fill(diseaseLabel);
+      await expect(page.getByTestId('wizard-diagnosis-option-0')).toBeVisible({ timeout: 10_000 });
+      await page.getByTestId('wizard-diagnosis-option-0').click();
+      await expect(page.locator('.phenotype-card', { hasText: phenotypeLabel })).toBeVisible({ timeout: 10_000 });
+      await page.getByTestId('wizard-treatment-status').selectOption('NAIVE');
+
+      const submissionResponse = page.waitForResponse((response) => response.url().includes('/intake-wizard') && response.request().method() === 'POST');
+      await page.getByTestId('wizard-submit-button').click();
+      const response = await submissionResponse;
+      const rawBody = await response.text();
+      expect(response.ok(), `POST /intake-wizard (${label}) -> ${response.status()}: ${rawBody.slice(0, 500)}`).toBe(true);
+      const body = JSON.parse(rawBody);
+      const sample = {
+        mongoId: String(body?.sample?._id || ''),
+        specimenId: String(body?.sample?.specimenId || ''),
+      };
+      expect(sample.mongoId, `${label} sample _id`).toBeTruthy();
+      expect(sample.specimenId, `${label} sample specimenId`).toBeTruthy();
+      lineageSamples.push(sample);
+      return { sample, participantId: String(body?.patientMatch?.patientID || '') };
+    };
+
+    const parent = await registerThroughWizard('parent');
+    expect(parent.participantId).toBeTruthy();
+
+    const derivative = await registerThroughWizard('derivative', parent.sample.specimenId);
+    expect(derivative.participantId).toBe(parent.participantId);
+
+    const db = mongoClient.db(mongoDbName);
+    const stored = await db.collection('samples').findOne({ _id: new ObjectId(derivative.sample.mongoId) });
+    expect(stored?.parentSpecimenIds).toEqual([parent.sample.specimenId]);
+
+    const lineageEvents = await db.collection('graph_projection_outbox').find({
+      eventType: 'LINEAGE_REGISTERED',
+      aggregateType: 'Sample',
+      aggregateId: derivative.sample.mongoId,
+    }).toArray();
+    expect(lineageEvents).toHaveLength(1);
+    expect(lineageEvents[0].payload).toEqual({
+      specimenId: String(derivative.sample.mongoId),
+      parentSpecimenId: String(parent.sample.mongoId),
+    });
   });
 });

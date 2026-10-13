@@ -2094,6 +2094,7 @@
       "naiveStatus": "Virgem de Tratamento (Naive)",
       "omim": "OMIM",
       "orpha": "ORPHA",
+      "parentSpecimenIds": "Muestras de origen (specimenIds)",
       "recordNumber": "Número de historia clínica",
       "selectStatus": "Selecione o status",
       "sprecMatrix": "Matriz SPREC",

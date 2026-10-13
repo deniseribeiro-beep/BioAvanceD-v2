@@ -375,6 +375,7 @@ const initialState = {
   ischemiaTimeMinutes: '',
   preAnalyticalUnknown: false,
   linkedProject: '',
+  parentSpecimenIds: '',
   collectionInstitution: '',
   collectionInstitutionAcronym: '',
   selectedConsentTemplateId: '',
@@ -1446,6 +1447,12 @@ function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomark
   const participantId = String(formData.patientID || '').trim() || 'placeholder';
   const sampleUnit = getSampleQuantityUnit(formData.sprecSampleType, SPREC_FLUID_DICTIONARY.sampleType.options);
   const patientDocument = normalizeDocumentForPayload(formData.documento);
+  const parentSpecimenIds = [...new Set(
+    String(formData.parentSpecimenIds || '')
+      .split(/[\s,;]+/)
+      .map((value) => value.trim())
+      .filter(Boolean),
+  )];
   const diagnosis = formData.isHealthyControl ? null : {
     diagnosisName: String(formData.diagnosisCidDescription || formData.diagnosisDefinition || '').trim() || null,
     icdCode: String(formData.diagnosisCidCode || '').trim() || null,
@@ -1577,6 +1584,10 @@ function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomark
       linkedProject: formData.linkedProject.trim(),
       sprec: canonicalSprec,
       merkleRoot: sampleMerkleRoot,
+      // dict-02 ELM-0120 parentSpecimenIds (Reference[], 0..*): sent only
+      // when the operator names a parent, so a plain intake's payload is
+      // unchanged; the server checks each id (#1371).
+      ...(parentSpecimenIds.length > 0 ? { parentSpecimenIds } : {}),
     },
     clinical,
     consent: {
@@ -3075,6 +3086,7 @@ export default function ClinicalIntakeWizard(props) {
               </Select>
             )}
             <Input id="linkedProject" name="linkedProject" data-testid="wizard-linked-project" className="w-full rounded-lg px-3 py-2" label={t('wizard.fields.linkedProject', 'Projeto vinculado')} value={formData.linkedProject} onChange={handleFieldChange('linkedProject')} required />
+            <Input id="parentSpecimenIds" name="parentSpecimenIds" data-testid="wizard-parent-specimen-ids" className="w-full rounded-lg px-3 py-2" label={t('wizard.fields.parentSpecimenIds', 'Amostras de origem (specimenIds)')} value={formData.parentSpecimenIds} onChange={handleFieldChange('parentSpecimenIds')} />
             <Input id="institutionName" name="institutionName" data-testid="wizard-institution-name" className="w-full rounded-lg px-3 py-2" label={t('wizard.fields.institutionName', 'Nome da Instituição')} value={formData.collectionInstitution} onChange={handleFieldChange('collectionInstitution')} required />
             <Input className="w-full rounded-lg px-3 py-2 uppercase bg-gray-100" label={t('wizard.fields.institutionAcronym', 'Sigla da Instituição')} value={String(formData.collectionInstitutionAcronym || '').toUpperCase()} readOnly />
           </div>
