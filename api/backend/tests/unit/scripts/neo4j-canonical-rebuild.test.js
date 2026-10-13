@@ -46,7 +46,12 @@ function createFakeCollection() {
     find(filter = {}, options = {}) {
       let current = docs.filter((doc) => matches(doc, filter));
       if (options.projection) {
-        current = current.map((doc) => doc);
+        // An inclusion projection keeps _id plus the keys set to 1, so a
+        // field the script reads but does not project is missing here too.
+        const included = Object.keys(options.projection).filter((key) => options.projection[key] === 1);
+        current = current.map((doc) => Object.fromEntries(
+          Object.entries(doc).filter(([key]) => key === '_id' || included.includes(key)),
+        ));
       }
       const cursor = {
         sort(criteria = {}) {
@@ -145,6 +150,38 @@ describe('neo4j-canonical-rebuild#seedCanonicalOutbox', () => {
     expect(specimenEvent.aggregateId).toBe('s4');
     expect(specimenEvent.payload).toEqual({ specimenId: 's4', participantId: 'P4' });
     expect(events.filter((e) => e.eventType === 'CONSENT_UPSERTED' && e.aggregateType === 'Sample')).toHaveLength(0);
+    expect(events.filter((e) => e.eventType === 'LINEAGE_REGISTERED')).toHaveLength(0);
+  });
+
+  it('emits one LINEAGE_REGISTERED per stored parent, keyed by the child and parent _id, trimmed and de-duplicated in order (#1371)', async () => {
+    const db = createFakeDb({
+      samples: [
+        { _id: 'sp', specimenId: 'SP-P', participantId: 'P1' },
+        { _id: 'sp2', specimenId: 'SP-P2', participantId: 'P1' },
+        { _id: 'sc', specimenId: 'SP-C', participantId: 'P1', parentSpecimenIds: ['SP-P', ' SP-P ', 'SP-P2'] },
+      ],
+    });
+
+    await seedCanonicalOutbox(db, fakeOutbox());
+
+    const lineageEvents = db.collections.graph_projection_outbox.docs.filter((e) => e.eventType === 'LINEAGE_REGISTERED');
+    expect(lineageEvents.map((e) => ({ aggregateType: e.aggregateType, aggregateId: e.aggregateId, payload: e.payload }))).toEqual([
+      { aggregateType: 'Sample', aggregateId: 'sc', payload: { specimenId: 'sc', parentSpecimenId: 'sp' } },
+      { aggregateType: 'Sample', aggregateId: 'sc', payload: { specimenId: 'sc', parentSpecimenId: 'sp2' } },
+    ]);
+  });
+
+  it('skips a parent that resolves to no stored sample or to the sample itself, without throwing (#1371)', async () => {
+    const db = createFakeDb({
+      samples: [
+        { _id: 'sc', specimenId: 'SP-C', participantId: 'P1', parentSpecimenIds: ['SP-GONE', 'SP-C'] },
+      ],
+    });
+
+    await expect(seedCanonicalOutbox(db, fakeOutbox())).resolves.toBeUndefined();
+
+    const lineageEvents = db.collections.graph_projection_outbox.docs.filter((e) => e.eventType === 'LINEAGE_REGISTERED');
+    expect(lineageEvents).toHaveLength(0);
   });
 
   it('does not emit a QUALITY_ASSESSED event for a sample with no quality field at all', async () => {

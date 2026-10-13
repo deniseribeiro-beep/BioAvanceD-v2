@@ -11,12 +11,13 @@ const rcsAssessmentService = require('../src/services/rcs-assessment.service');
 async function seedCanonicalOutbox(db, outbox) {
   const patients = await db.collection('patients').find({}, { projection: { _id: 1, participantId: 1, participantId: 1 } }).toArray();
   const consents = await db.collection('consents').find({}, { projection: { _id: 1, participantId: 1, participantId: 1, status: 1, signedAt: 1, updatedAt: 1 } }).toArray();
-  const samples = await db.collection('samples').find({}, { projection: { _id: 1, participantId: 1, specimenId: 1, quality: 1, rcsScore: 1, sealedRcsAssessmentId: 1, updatedAt: 1 } }).toArray();
+  const samples = await db.collection('samples').find({}, { projection: { _id: 1, participantId: 1, specimenId: 1, quality: 1, rcsScore: 1, sealedRcsAssessmentId: 1, updatedAt: 1, parentSpecimenIds: 1 } }).toArray();
   // #525: rcsScore for the QUALITY_ASSESSED event below resolves through the
   // canonical RcsAssessment entity (#383) instead of trusting the legacy
   // embedded Sample.rcsScore copy, same sealed-pin-else-newest precedent
   // MerkleService/specimen-preanalytics.service.js use — falling back to the
   // embedded field only for samples with no recorded snapshot yet.
+  // #1371: each stored parent re-emits its LINEAGE_REGISTERED (DERIVED_FROM).
   const currentAssessmentsBySpecimenId = await rcsAssessmentService.getCurrentAssessmentsForSpecimens(db, samples);
 
   const donorKeyByPatient = new Map();
@@ -70,6 +71,38 @@ async function seedCanonicalOutbox(db, outbox) {
           status: String(sample.quality || 'UNKNOWN'),
           score: currentAssessment?.rcsScore ?? sample.rcsScore ?? null,
           evaluatedAt: sample.updatedAt || new Date(),
+        },
+        sourceService: 'neo4j-canonical-rebuild'
+      });
+    }
+  }
+
+  // #1371: a sample stores its parents' specimenIds; the lineage event carries
+  // each parent's _id, the key the graph holds a Sample under.
+  const sampleIdBySpecimenId = new Map();
+  for (const sample of samples) {
+    if (sample.specimenId) {
+      sampleIdBySpecimenId.set(String(sample.specimenId), String(sample._id));
+    }
+  }
+  for (const sample of samples) {
+    const childId = String(sample._id);
+    const parentSpecimenIds = [...new Set((Array.isArray(sample.parentSpecimenIds) ? sample.parentSpecimenIds : [])
+      .map((parentId) => String(parentId).trim())
+      .filter(Boolean))];
+    for (const parentSpecimenId of parentSpecimenIds) {
+      const parentId = sampleIdBySpecimenId.get(parentSpecimenId);
+      if (!parentId || parentId === childId) {
+        logger.warn('[GRAPH_OUTBOX] Linhagem ignorada: parentSpecimenId não resolve para outra amostra', { specimenId: childId, parentSpecimenId });
+        continue;
+      }
+      await outbox.appendEvent(db, {
+        eventType: 'LINEAGE_REGISTERED',
+        aggregateType: 'Sample',
+        aggregateId: childId,
+        payload: {
+          specimenId: childId,
+          parentSpecimenId: parentId,
         },
         sourceService: 'neo4j-canonical-rebuild'
       });
