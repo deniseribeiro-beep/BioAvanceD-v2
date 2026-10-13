@@ -110,6 +110,9 @@ no box dimensions — real dimensions land whenever a consumer migration
 (#462-#464) next writes that box. Re-running is a no-op: containers/boxes
 are found-or-created by their deterministic key, and an already-open
 `StorageAssignment` for the same specimen/box/position is not duplicated.
+
+2026-10-13 (#1374, RULE-026): the backfill no longer writes `storageAssignments`. Each specimen is placed on the physical chain through `legacyPlacementChain.service.js` `placeSpecimen`, one transaction per specimen; a re-run skips a specimen the chain already places there.
+
 Proven with the strongest native-only bar this repo's conventions
 recognizes: an in-memory collection fake with real `$in`/exact-match
 query-matching semantics, not a stub returning canned data
