@@ -1,5 +1,6 @@
 const defaultLogger = require('../../utils/logger');
 const env = require('../../config/env');
+const { isTransientTransactionError } = require('../../utils/mongoTransaction');
 
 class RegisterSampleUseCase {
   constructor({ sampleRepository, lineageRepository, quarantineService, logger } = {}) {
@@ -37,8 +38,11 @@ class RegisterSampleUseCase {
 
       // RF023 AC3, RNF019 C1: where the create runs a transaction, the
       // register custody event is appended inside it. A strict-mode failure
-      // aborts the create, so no sample is left to roll back; a permissive
-      // one is kept for the self-healing queue and the create commits.
+      // aborts the create, so no sample is left to roll back. A permissive
+      // failure has already aborted the transaction at the server (#1370), so
+      // it aborts the create too, the create is re-run without this step, and
+      // the append follows the commit as below, queued if it fails again. A
+      // transient conflict is rethrown as itself for the driver's retry.
       // A create that runs no transaction never calls this, and the append
       // follows the create as below.
       let inTransaction = null;
@@ -50,9 +54,15 @@ class RegisterSampleUseCase {
             await this.persistTopology(lineagePayload, { session });
           } catch (appendError) {
             inTransaction.error = appendError;
-            if (strictMode) {
+            if (isTransientTransactionError(appendError) || strictMode) {
               throw appendError;
             }
+            // A plain Error, never a MongoError, so the driver aborts the
+            // transaction without retrying it.
+            const deferred = new Error(`REGISTER_APPEND_DEFERRED: ${appendError?.message || appendError}`);
+            deferred.code = 'REGISTER_APPEND_DEFERRED';
+            deferred.cause = appendError;
+            throw deferred;
           }
         };
       }
@@ -63,7 +73,12 @@ class RegisterSampleUseCase {
         if (strictMode && inTransaction?.error) {
           throw this.strictModeBlocked(createError);
         }
-        throw createError;
+        if (strictMode || createError?.code !== 'REGISTER_APPEND_DEFERRED') {
+          throw createError;
+        }
+        const { onCreatedInTransaction, ...createOptionsWithoutHook } = createOptions;
+        createdSample = await this.sampleRepository.create(sampleData, createOptionsWithoutHook);
+        inTransaction = null;
       }
 
       if (inTransaction) {

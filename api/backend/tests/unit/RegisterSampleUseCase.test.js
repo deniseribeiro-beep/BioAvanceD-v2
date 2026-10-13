@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 const RegisterSampleUseCase = require('../../src/core/use-cases/RegisterSampleUseCase');
 const env = require('../../src/config/env');
+const { MongoServerError } = require('mongodb');
 
 // Distinct from src/core/use-cases/RegisterSample.js (covered by
 // RegisterSample.test.js) -- this is a separate class with its own
@@ -199,9 +200,12 @@ describe('RegisterSampleUseCase', () => {
     describe('register custody append inside the create transaction (#1367)', () => {
       // A create that runs a transaction: it calls the in-transaction step
       // with its session and, like an abort, rejects with the step's error.
+      // A create offered no step just returns the sample.
       function transactionalCreate(createdSample) {
         return vi.fn(async (_sampleData, options) => {
-          await options.onCreatedInTransaction(createdSample, 'create-session');
+          if (typeof options.onCreatedInTransaction === 'function') {
+            await options.onCreatedInTransaction(createdSample, 'create-session');
+          }
           return createdSample;
         });
       }
@@ -241,23 +245,65 @@ describe('RegisterSampleUseCase', () => {
         expect(lineageRepository.recordCustodyEvent).toHaveBeenCalledTimes(1);
       });
 
-      it('permissive mode: a failed append is queued and the create commits (partial success)', async () => {
+      // #1370: a failed append inside a transaction has aborted it at the
+      // server, so a permissive create re-runs without the step and the
+      // append follows the commit.
+      it('permissive mode: a failed append aborts the transaction, the create re-runs without the step, and the append that fails again is queued', async () => {
         env.LINEAGE_MODE = 'fail-open';
         const createdSample = { _id: 'S-T3' };
         const sampleRepository = { create: transactionalCreate(createdSample) };
         const lineageRepository = { recordCustodyEvent: vi.fn().mockRejectedValue(new Error('outbox down')) };
         const quarantineService = { enqueue: vi.fn().mockResolvedValue(undefined) };
-        const useCase = new RegisterSampleUseCase({ sampleRepository, lineageRepository, quarantineService });
+        const useCase = new RegisterSampleUseCase({ sampleRepository, lineageRepository, quarantineService, logger: makeLogger() });
 
         const result = await useCase.execute({ sampleData: { barcode: 'BC-T3' } });
 
         expect(result.sample).toBe(createdSample);
         expect(result.topology).toEqual({ synced: false, fallbackQueued: true });
-        expect(lineageRepository.recordCustodyEvent).toHaveBeenCalledTimes(1);
+        expect(sampleRepository.create).toHaveBeenCalledTimes(2);
+        expect(sampleRepository.create.mock.calls[0][1].onCreatedInTransaction).toEqual(expect.any(Function));
+        expect(sampleRepository.create.mock.calls[1][1]).not.toHaveProperty('onCreatedInTransaction');
+        expect(lineageRepository.recordCustodyEvent).toHaveBeenCalledTimes(2);
+        expect(lineageRepository.recordCustodyEvent.mock.calls[0][1]).toEqual({ session: 'create-session' });
+        expect(lineageRepository.recordCustodyEvent.mock.calls[1]).toHaveLength(1);
+        expect(quarantineService.enqueue).toHaveBeenCalledTimes(1);
         expect(quarantineService.enqueue).toHaveBeenCalledWith(
           expect.objectContaining({ specimenId: 'S-T3', eventType: 'register' }),
           expect.objectContaining({ reason: 'neo4j_failure_permissive_mode', neo4jError: 'outbox down', strictMode: false })
         );
+      });
+
+      it('permissive mode: an append that fails in the transaction and succeeds after the commit is synced, nothing queued', async () => {
+        env.LINEAGE_MODE = 'fail-open';
+        const createdSample = { _id: 'S-T6' };
+        const sampleRepository = { create: transactionalCreate(createdSample) };
+        const lineageRepository = {
+          recordCustodyEvent: vi.fn()
+            .mockRejectedValueOnce(new Error('outbox down'))
+            .mockResolvedValueOnce({ eventId: 'evt' })
+        };
+        const quarantineService = { enqueue: vi.fn().mockResolvedValue(undefined) };
+        const useCase = new RegisterSampleUseCase({ sampleRepository, lineageRepository, quarantineService, logger: makeLogger() });
+
+        const result = await useCase.execute({ sampleData: { barcode: 'BC-T6' } });
+
+        expect(result).toEqual({ sample: createdSample, strictMode: false, topology: { synced: true, fallbackQueued: false } });
+        expect(sampleRepository.create).toHaveBeenCalledTimes(2);
+        expect(lineageRepository.recordCustodyEvent).toHaveBeenCalledTimes(2);
+        expect(quarantineService.enqueue).not.toHaveBeenCalled();
+      });
+
+      it('permissive mode: a transient transaction error from the append is rethrown as itself for the driver to retry', async () => {
+        env.LINEAGE_MODE = 'fail-open';
+        const transientError = new MongoServerError({ message: 'x', code: 112, errorLabels: ['TransientTransactionError'] });
+        const sampleRepository = { create: transactionalCreate({ _id: 'S-T7' }) };
+        const lineageRepository = { recordCustodyEvent: vi.fn().mockRejectedValue(transientError) };
+        const quarantineService = { enqueue: vi.fn().mockResolvedValue(undefined) };
+        const useCase = new RegisterSampleUseCase({ sampleRepository, lineageRepository, quarantineService, logger: makeLogger() });
+
+        await expect(useCase.execute({ sampleData: { barcode: 'BC-T7' } })).rejects.toBe(transientError);
+        expect(sampleRepository.create).toHaveBeenCalledTimes(1);
+        expect(quarantineService.enqueue).not.toHaveBeenCalled();
       });
 
       it('a create that runs no transaction never calls the step, and the append follows it with no session, as before', async () => {
