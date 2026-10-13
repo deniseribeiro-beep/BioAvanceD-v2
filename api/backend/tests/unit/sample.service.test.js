@@ -73,6 +73,35 @@ function makeCountersCollection() {
   };
 }
 
+// #1374: the physical-chain collections the allocation writes. Each keeps
+// what is inserted and matches a query by equality and `$or`, so the echo
+// read after the create finds the placement the allocation wrote.
+const CHAIN_COLLECTIONS = ['containers', 'specimenContainerAssignments', 'containerPositionAssignments', 'rackLocationAssignments'];
+
+function matchesChainQuery(doc, filter = {}) {
+  return Object.entries(filter).every(([key, value]) =>
+    key === '$or' ? value.some((branch) => matchesChainQuery(doc, branch)) : doc[key] === value
+  );
+}
+
+function makeChainCollection(name) {
+  const docs = [];
+  return {
+    ...makeCollection(name),
+    findOne: vi.fn(async (filter) => docs.find((doc) => matchesChainQuery(doc, filter)) || null),
+    find: vi.fn((filter) => makeCursor(docs.filter((doc) => matchesChainQuery(doc, filter)))),
+    insertOne: vi.fn(async (doc) => {
+      docs.push({ ...doc });
+      return { insertedId: docs.length };
+    }),
+    updateOne: vi.fn(async (filter, update) => {
+      const doc = docs.find((row) => matchesChainQuery(row, filter));
+      if (doc) Object.assign(doc, update.$set);
+      return { matchedCount: doc ? 1 : 0, modifiedCount: doc ? 1 : 0 };
+    })
+  };
+}
+
 // Mirrors the real driver closely enough to prove withMongoTransaction's
 // wiring (#297): withTransaction runs the handler and lets a thrown error
 // propagate uncommitted, same as the real session aborting on throw.
@@ -97,6 +126,7 @@ function makeDb(overrides = {}) {
     storageContainers: makeCollection('storageContainers'),
     storageAssignments: makeCollection('storageAssignments'),
     results: makeCollection('results'),
+    ...Object.fromEntries(CHAIN_COLLECTIONS.map((name) => [name, makeChainCollection(name)])),
     ...overrides
   };
   const session = makeSession();
@@ -178,9 +208,18 @@ function mockOperationalStorage(db) {
   // createSample's own insertOne — distinct from the specimenId/barcode
   // duplicate-check lookups earlier in the same call, which keep resolving
   // null (the default from makeCollection) unless a test overrides them.
+  // #1374: the chain keys a placement by the business specimenId, so the
+  // looked-up sample carries the one createSample inserted. The inserts are
+  // kept on the db, since a case may replace or wrap samples.insertOne.
+  db.insertedSamples = [];
+  db.collections.samples.insertOne.mockImplementation(async (doc) => {
+    db.insertedSamples.push(doc);
+    return { insertedId: 'generated-id' };
+  });
   db.collections.samples.findOne.mockImplementation((query) => {
     if (query && query._id !== undefined) {
-      return Promise.resolve({ _id: query._id, barcode: null, storageLocation: null });
+      const inserted = db.insertedSamples.at(-1);
+      return Promise.resolve({ _id: query._id, specimenId: inserted?.specimenId, barcode: null, storageLocation: null });
     }
     return Promise.resolve(null);
   });
@@ -228,59 +267,46 @@ describe('sample.service', () => {
       expect(insertedSample.locationID).toBeNull();
     });
 
-    it('exposes the canonical storageAssignment on the response, resolved from the just-opened StorageAssignment record, per issue #510', async () => {
+    it('exposes the current placement on the response, read from the physical chain the allocation just wrote, per issue #510/#1374', async () => {
       const db = makeDb();
       mockOperationalStorage(db);
-      const baseImplementation = db.collection.getMockImplementation();
-      const placedAt = new Date('2026-10-01T00:00:00.000Z');
-      const opened = { specimenId: 'generated-id', boxId: BOX_ID, positionCode: 'B2', placedAt, removedAt: null };
-      const storageAssignmentsFindOne = vi.fn(({ specimenId, removedAt }) => {
-        if (specimenId === opened.specimenId && removedAt === null) {
-          return Promise.resolve(opened);
-        }
-        return Promise.resolve(null);
-      });
-      // Override just storageAssignments.findOne with real query-matching
-      // semantics, keeping mockOperationalStorage's other storage-chain mocks.
-      db.collection.mockImplementation((name) => {
-        if (name === 'storageAssignments') {
-          return { insertOne: vi.fn().mockResolvedValue({ insertedId: 'assignment-1' }), findOne: storageAssignmentsFindOne };
-        }
-        return baseImplementation(name);
-      });
 
       const result = await sampleService.createSample(db, validSampleData({ positionCode: 'B2' }));
 
-      // #1374: the echo is the current placement, here the legacy fallback.
+      const [container] = db.collections.containers.insertOne.mock.calls[0];
       expect(result.storageAssignment).toEqual({
-        boxId: BOX_ID, positionCode: 'B2', containerId: null, storagePositionId: null, storageRackId: null, storageLocationId: null,
-        placedAt, source: 'legacy_storage_assignment',
+        boxId: BOX_ID.toString(),
+        positionCode: 'B2',
+        containerId: container.containerId,
+        storagePositionId: `${BOX_ID}:B02`,
+        storageRackId: BOX_ID.toString(),
+        storageLocationId: null,
+        placedAt: expect.any(Date),
+        source: 'physical_chain'
       });
       expect(result.storageLocation).toEqual({ boxId: BOX_ID, position: 'B2' });
     });
 
-    it('opens a StorageAssignment for the specimen at boxId/positionCode, per issue #462/#474', async () => {
+    it('places the specimen on the physical chain at boxId/positionCode, keyed by its business specimenId, per issue #462/#474/#1374', async () => {
       const db = makeDb();
       mockOperationalStorage(db);
 
-      const result = await sampleService.createSample(db, validSampleData());
+      await sampleService.createSample(db, validSampleData());
 
-      const storageAssignments = db.collection('storageAssignments');
-      expect(storageAssignments.insertOne).toHaveBeenCalledTimes(1);
-      const [assignmentArg] = storageAssignments.insertOne.mock.calls[0];
-      // #474: routed through AllocateSampleUseCase/MongoStorageRepository's
-      // openStorageAssignment, which resolves the hierarchy via storagePaths
-      // (mocked above) rather than sample.service.js's own parent_id walk —
-      // fields come back as strings (StorageAssignmentModel.open casts them).
-      expect(assignmentArg).toMatchObject({
-        specimenId: 'generated-id',
-        boxId: BOX_ID.toString(),
-        positionCode: 'A1',
-        equipmentId: String(FREEZER_ID),
-        shelfId: String(SHELF_ID),
-        rackId: String(RACK_ID),
-        occupancyStatus: 'ocupada'
+      expect(db.collections.containers.insertOne).toHaveBeenCalledTimes(1);
+      const [container] = db.collections.containers.insertOne.mock.calls[0];
+      expect(db.collections.specimenContainerAssignments.insertOne).toHaveBeenCalledTimes(1);
+      expect(db.collections.specimenContainerAssignments.insertOne.mock.calls[0][0]).toMatchObject({
+        specimenId: '555001',
+        containerId: container.containerId
       });
+      expect(db.collections.containerPositionAssignments.insertOne).toHaveBeenCalledTimes(1);
+      expect(db.collections.containerPositionAssignments.insertOne.mock.calls[0][0]).toMatchObject({
+        containerId: container.containerId,
+        storagePositionId: `${BOX_ID}:A01`
+      });
+      // The legacy StorageAssignment row is no longer written.
+      expect(db.collection('storageAssignments').insertOne).not.toHaveBeenCalled();
     });
 
     it('rejects with 422 when required MIABIS fields are missing', async () => {
@@ -538,6 +564,9 @@ describe('sample.service', () => {
         const db = makeDb({ [OUTBOX]: makeCollection(OUTBOX) });
         mockOperationalStorage(db);
         db.client.db = vi.fn(() => ({ command: vi.fn().mockResolvedValue({ setName: 'rs0' }) }));
+        // As the driver does, a second startSession is a session of its own,
+        // so a write in a transaction a callee opens is not the create's.
+        db.client.startSession.mockImplementationOnce(() => db.session).mockImplementation(() => makeSession());
 
         const committed = { samples: [], sample_movements: [] };
         const transaction = { inBody: false };
@@ -574,6 +603,7 @@ describe('sample.service', () => {
           return counterUpdate(query, update, options);
         });
         const stagedInsert = (name) => vi.fn(async (doc, options) => {
+          if (name === 'samples') db.insertedSamples.push(doc);
           if (options?.session === db.session) staged.push([name, doc]);
           else committed[name].push(doc);
           return { insertedId: 'generated-id' };
@@ -601,7 +631,13 @@ describe('sample.service', () => {
         expect(movementSessions).toEqual([['create', db.session], ['allocate', db.session]]);
         expect(db.collection('storageBoxes').updateOne.mock.calls[0][2]).toEqual({ session: db.session });
         expect(db.collections.samples.updateOne.mock.calls[0][2]).toEqual({ session: db.session });
-        expect(db.collection('storageAssignments').insertOne.mock.calls[0][1]).toEqual({ session: db.session });
+        // #1374: the allocation's chain writes take the create's session.
+        for (const name of ['containers', 'specimenContainerAssignments', 'containerPositionAssignments']) {
+          const inserts = db.collections[name].insertOne.mock.calls;
+          expect(inserts).toHaveLength(1);
+          expect(inserts[0][1]).toEqual({ session: db.session });
+        }
+        expect(db.collection('storageAssignments').insertOne).not.toHaveBeenCalled();
 
         const specimenUpserted = outboxCall(db, 'SPECIMEN_UPSERTED');
         expect(specimenUpserted).toBeDefined();
@@ -653,12 +689,17 @@ describe('sample.service', () => {
           }
           return collection;
         };
+        // #1374: kept before the watch wraps them, to show the chain was written.
+        const chainInserts = CHAIN_COLLECTIONS.map((name) => [name, db.collections[name].insertOne]);
         for (const [name, collection] of Object.entries(db.collections)) watch(name, collection);
         const resolve = db.collection.getMockImplementation();
         db.collection.mockImplementation((name) => watch(name, resolve(name)));
 
-        await sampleService.createSample(db, validSampleData()).catch(() => {});
+        await expect(sampleService.createSample(db, validSampleData()))
+          .resolves.toMatchObject({ _id: 'generated-id' });
 
+        const written = chainInserts.filter(([, insertOne]) => insertOne.mock.calls.length > 0).map(([name]) => name);
+        expect(written).toEqual(['containers', 'specimenContainerAssignments', 'containerPositionAssignments']);
         expect(outside).toEqual([]);
       });
 
@@ -789,6 +830,26 @@ describe('sample.service', () => {
         expect(db.collections.samples.insertOne).not.toHaveBeenCalled();
       });
 
+      // Decided 7 of the legacy placement chain: with the create's session
+      // the chain builds no index, since an index build beside the open
+      // transaction is a write conflict.
+      it('builds no physical-chain index while the create\'s transaction runs (#1374)', async () => {
+        const { db, transaction } = makeTransactionalDb();
+        const builtInside = [];
+        for (const name of CHAIN_COLLECTIONS) {
+          db.collections[name].createIndex.mockImplementation(async () => {
+            if (transaction.inBody) builtInside.push(name);
+            return true;
+          });
+        }
+
+        await expect(sampleService.createSample(db, validSampleData()))
+          .resolves.toMatchObject({ _id: 'generated-id' });
+
+        expect(db.collections.containerPositionAssignments.insertOne).toHaveBeenCalledTimes(1);
+        expect(builtInside).toEqual([]);
+      });
+
       it('builds the movement indexes before the transaction opens (#1369)', async () => {
         const { db } = makeTransactionalDb();
 
@@ -829,9 +890,9 @@ describe('sample.service', () => {
       it('#1370: a transient conflict from the allocation leaves the create as the same error, for the driver to retry', async () => {
         const { db } = makeTransactionalDb();
         const conflict = transientConflict();
-        db.collection('storageAssignments').insertOne.mockImplementation(async (_doc, options) => {
+        db.collections.containerPositionAssignments.insertOne.mockImplementation(async (_doc, options) => {
           if (options?.session === db.session) throw conflict;
-          return { insertedId: 'assignment-1' };
+          return { insertedId: 'placement-1' };
         });
 
         await expect(sampleService.createSample(db, validSampleData())).rejects.toBe(conflict);
@@ -851,9 +912,9 @@ describe('sample.service', () => {
       it('#1370: a MongoServerError with no transient label from the allocation keeps the wrapper and its 422', async () => {
         const { db } = makeTransactionalDb();
         const failure = new MongoServerError({ message: 'assignment write failed', code: 2 });
-        db.collection('storageAssignments').insertOne.mockImplementation(async (_doc, options) => {
+        db.collections.containerPositionAssignments.insertOne.mockImplementation(async (_doc, options) => {
           if (options?.session === db.session) throw failure;
-          return { insertedId: 'assignment-1' };
+          return { insertedId: 'placement-1' };
         });
 
         await expect(sampleService.createSample(db, validSampleData())).rejects.toMatchObject({

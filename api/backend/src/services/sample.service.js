@@ -404,8 +404,9 @@ class SampleService {
 
       // #474: storageLocation is no longer written directly onto the create
       // doc — the sample is inserted unallocated, then AllocateSampleUseCase
-      // performs the atomic occupancyGrid write, storageLocation update,
-      // StorageAssignment record, and audit/lineage trail (same use case
+      // performs the atomic occupancyGrid write, storageLocation update, the
+      // specimen's placement on the physical chain (#1374, in the create's
+      // session) and audit/lineage trail (same use case
       // allocate-sample.controller.js and RegisterSampleUseCase reuse).
       const buildAllocateUseCase = () => new AllocateSampleUseCase({
         storageRepository: new MongoStorageRepository(db),
@@ -509,9 +510,10 @@ class SampleService {
 
       sample.storageLocation = { boxId, position: positionCode };
 
-      // #510: expose the canonical StorageAssignment (dict-02 ELM-0167-0178)
-      // the allocation above just opened, alongside the legacy storageLocation
-      // snapshot — additive, same precedent #507 set for findSampleById.
+      // #510: expose the current placement findCurrentStorageAssignment reads
+      // from the physical chain the allocation above just wrote (#1374),
+      // alongside the legacy storageLocation snapshot — additive, same
+      // precedent #507 set for findSampleById.
       sample.storageAssignment = await new MongoStorageRepository(db)
         .findCurrentStorageAssignment(result.insertedId);
 
