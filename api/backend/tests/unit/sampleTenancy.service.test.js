@@ -67,11 +67,11 @@ describe('sampleOrganizationScopeClause', () => {
     expect(sampleOrganizationScopeClause(GLOBAL)).toBeNull();
   });
 
-  it('matches organizationId, or collectionSite where organizationId is null', () => {
+  it('matches organizationId, or collectionSite where organizationId is null, missing or empty', () => {
     expect(sampleOrganizationScopeClause(ORG_A)).toEqual({
       $or: [
         { organizationId: { $in: ['org-a'] } },
-        { organizationId: null, collectionSite: { $in: ['org-a'] } },
+        { organizationId: { $in: [null, ''] }, collectionSite: { $in: ['org-a'] } },
       ],
     });
   });

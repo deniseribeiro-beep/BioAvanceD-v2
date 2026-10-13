@@ -32,14 +32,16 @@ function isSampleInOrganizationScope(sample, scope) {
   return Boolean(organizationId) && scope.organizationIds.includes(organizationId);
 }
 
-// `organizationId: null` also matches a document without the field.
+// The fallback branch takes the unset set sampleOrganizationOf and the
+// backfill fall back on: null, missing (`$in` with null matches a document
+// without the field) or ''.
 function sampleOrganizationScopeClause(scope) {
   if (!scope || scope.scope !== 'organization') return null;
   const ids = scope.organizationIds;
   return {
     $or: [
       { [SAMPLE_ORGANIZATION_FIELD]: { $in: ids } },
-      { [SAMPLE_ORGANIZATION_FIELD]: null, collectionSite: { $in: ids } },
+      { [SAMPLE_ORGANIZATION_FIELD]: { $in: [null, ''] }, collectionSite: { $in: ids } },
     ],
   };
 }

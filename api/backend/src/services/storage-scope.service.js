@@ -1,16 +1,15 @@
 const { ObjectId } = require('mongodb');
 const { getCollection } = require('../utils/collectionResolver');
-const { isRecordInOrganizationScope, applyOrganizationScopeFilter } = require('./rbac-assignment.service');
+const { isSampleInOrganizationScope, sampleOrganizationScopeClause } = require('./sampleTenancy.service');
 const { StorageTopologyAuthoringService, topologyError } = require('./storage-topology-authoring.service');
 
 /**
  * #1211: organization bounds for the storage routes that act on an existing
  * specimen, box or container.
  *
- * A specimen is scoped by collectionSite, the same key every sample route
- * filters on. That field is also the recorded collection site, and #1192
- * tracks separating the two; until then it is the only tenancy key a sample
- * has. A box or container has no organizationId of its own, so its scope is
+ * A specimen is scoped by its tenancy key, read through
+ * sampleTenancy.service.js: organizationId, falling back to collectionSite
+ * while organizationId is unset (#1192). A box or container has no organizationId of its own, so its scope is
  * its root freezer's Equipment's, exactly as the topology creates check it
  * (#1210).
  *
@@ -38,7 +37,7 @@ async function assertSampleInScope(db, sampleId, organizationScope) {
   const samples = await getCollection(db, 'samples');
   const sample = await samples.findOne({ _id: toObjectId(sampleId) });
   if (!sample) return;
-  if (!isRecordInOrganizationScope(sample, organizationScope, 'collectionSite')) {
+  if (!isSampleInOrganizationScope(sample, organizationScope)) {
     throw topologyError('SAMPLE_OUT_OF_SCOPE', 'A amostra pertence a outra organização', 403);
   }
 }
@@ -68,7 +67,7 @@ async function assertContainerInScope(db, containerId, organizationScope) {
  */
 function sampleScopeFilter(organizationScope) {
   assertScopePresent(organizationScope);
-  return applyOrganizationScopeFilter({}, organizationScope, 'collectionSite');
+  return sampleOrganizationScopeClause(organizationScope) || {};
 }
 
 async function freezerScopeFilter(db, organizationScope) {

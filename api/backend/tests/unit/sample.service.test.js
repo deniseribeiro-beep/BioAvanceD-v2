@@ -5,6 +5,7 @@ const require = createRequire(import.meta.url);
 
 const sampleService = require('../../src/services/sample.service');
 const qualityDomain = require('../../src/services/quality-domain.service');
+const { sampleOrganizationScopeClause } = require('../../src/services/sampleTenancy.service');
 const { ObjectId, MongoServerError } = require('mongodb');
 
 const BOX_ID = new ObjectId();
@@ -1591,16 +1592,16 @@ describe('sample.service', () => {
       await expect(sampleService.listSamples(db, {})).rejects.toThrow('mongo down');
     });
 
-    // #340: org-scoped caller sees only samples whose collectionSite is one
-    // of their scoped organizations.
-    it('restricts the query to collectionSite $in organizationIds for an organization scope', async () => {
+    // #340: org-scoped caller sees only samples whose tenancy key is one of
+    // their scoped organizations; #1192: the key is organizationId, falling
+    // back to collectionSite.
+    it('restricts the query to the sample tenancy clause for an organization scope', async () => {
       const db = makeDb();
-      await sampleService.listSamples(db, {
-        organizationScope: { scope: 'organization', organizationIds: ['org-1', 'org-2'] }
-      });
+      const organizationScope = { scope: 'organization', organizationIds: ['org-1', 'org-2'] };
+      await sampleService.listSamples(db, { organizationScope });
 
       expect(db.collections.samples.find).toHaveBeenCalledWith({
-        collectionSite: { $in: ['org-1', 'org-2'] }
+        $and: [sampleOrganizationScopeClause(organizationScope)]
       });
     });
 

@@ -106,6 +106,18 @@ describe('custody routes (#1316, RF021 AC4-AC6)', () => {
     expect(auditLogger.log).toHaveBeenCalledWith(expect.objectContaining({ resourceType: 'CustodianshipAssignment', action: 'CREATE' }));
   });
 
+  // #1192: with no custody yet, the holder is the sample's organization
+  // (organizationId), not the recorded collection site.
+  it("lets the sample's organization assign the first custody of a specimen collected elsewhere", async () => {
+    await domain.samples.insertOne({ specimenId: 'SPC-ORG', collectionId: 'COL-1', organizationId: 'org-A', collectionSite: 'org-B' });
+    const first = custody({ specimenId: 'SPC-ORG' });
+
+    expect((await post('/custody', 'coord-b', { ...first, custodianOrganizationId: 'org-B' })).body.error).toBe('SPECIMEN_OUT_OF_SCOPE');
+    const res = await post('/custody', 'coord-a', first);
+    expect(res.status).toBe(201);
+    expect(res.body.data).toMatchObject({ specimenId: 'SPC-ORG', custodianOrganizationId: 'org-A' });
+  });
+
   it("refuses another organization's specimen, a custodian outside the caller's scope, and a Técnico", async () => {
     expect((await post('/custody', 'coord-b', custody({ custodianOrganizationId: 'org-B' }))).body.error).toBe('SPECIMEN_OUT_OF_SCOPE');
     expect((await post('/custody', 'coord-a', custody({ custodianOrganizationId: 'org-B' }))).body.error).toBe('CUSTODIAN_OUT_OF_SCOPE');

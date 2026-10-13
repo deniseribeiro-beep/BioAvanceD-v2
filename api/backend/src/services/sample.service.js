@@ -20,7 +20,7 @@ const specimenPreanalyticsService = require('./specimen-preanalytics.service');
 const quarantineActionService = require('./quarantine-action.service');
 const legalHoldService = require('./legalHold.service');
 const operationalStateDecisionService = require('./operationalStateDecision.service');
-const { applyOrganizationScopeFilter } = require('./rbac-assignment.service');
+const { applySampleOrganizationScope } = require('./sampleTenancy.service');
 const participantIdentityService = require('./participantIdentity.service');
 const AllocateSampleUseCase = require('../core/use-cases/AllocateSampleUseCase');
 const MongoStorageRepository = require('../infrastructure/persistence/mongo/MongoStorageRepository');
@@ -757,11 +757,12 @@ class SampleService {
       }
 
       // #340 (RF003 AC#3): org-scoped caller sees only samples whose
-      // collectionSite is one of their scoped organizations. No-op for a
-      // 'global' (Administrador) scope. Caller must resolve+attach
-      // organizationScope via rbac.js's requireOrganizationScope first.
+      // tenancy key (organizationId, falling back to collectionSite, #1192)
+      // is one of their scoped organizations. No-op for a 'global'
+      // (Administrador) scope. Caller must resolve+attach organizationScope
+      // via rbac.js's requireOrganizationScope first.
       if (filters.organizationScope) {
-        applyOrganizationScopeFilter(query, filters.organizationScope, 'collectionSite');
+        applySampleOrganizationScope(query, filters.organizationScope);
       }
 
       const limit = filters.limit || 50;

@@ -2,6 +2,7 @@ const { getCollection } = require('../utils/collectionResolver');
 const { findSampleByAnyId } = require('../utils/sampleLookup');
 const { currentCustody } = require('./custodianship.service');
 const { splitPositionId } = require('./legacyPlacementChain.service');
+const { sampleOrganizationOf } = require('./sampleTenancy.service');
 
 // #1314, #1316: organization bounds for the physical-chain and custody
 // routes. Containers and positions carry no organization, and a rack's is
@@ -9,7 +10,7 @@ const { splitPositionId } = require('./legacyPlacementChain.service');
 // instant (RF021 AC4), never the
 // recorded collection site. A specimen with no custody is in no
 // organization's scope but a global caller's, with one exception: the first
-// custody of a specimen is assigned by its collection site's organization,
+// custody of a specimen is assigned by the sample's organization (#1192),
 // since nothing else names one yet.
 //
 // A missing scope fails closed (#1081). Out of scope is a 403.
@@ -50,8 +51,8 @@ async function assertSpecimenInScope(db, specimenId, organizationScope, at = new
 }
 
 // RF021 AC4: a custody may be assigned by the holder of the specimen's
-// current custody, or, for its first one, by its collection site's
-// organization, and only to one of the caller's own organizations.
+// current custody, or, for its first one, by the sample's organization
+// (#1192), and only to one of the caller's own organizations.
 async function assertCustodyAssignable(db, { specimenId, custodianOrganizationId }, organizationScope, at = new Date()) {
   assertScopePresent(organizationScope);
   if (organizationScope.scope === 'global') return;
@@ -61,7 +62,7 @@ async function assertCustodyAssignable(db, { specimenId, custodianOrganizationId
   const sample = await findSampleByAnyId(await getCollection(db, 'samples'), specimenId);
   if (!sample) return; // the service answers its own 404
   const custody = await currentCustody(db, sample.specimenId, at);
-  const holder = custody ? custody.custodianOrganizationId : sample.collectionSite;
+  const holder = custody ? custody.custodianOrganizationId : sampleOrganizationOf(sample);
   if (!inScope(organizationScope, holder)) {
     throw new ScopeError(`Espécime ${specimenId} sob custódia ou coleta de outra organização`, 'SPECIMEN_OUT_OF_SCOPE');
   }

@@ -10,11 +10,12 @@ const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
+const { sampleOrganizationScopeClause } = require('../../src/services/sampleTenancy.service');
 
 // #1211, the read half: the eight storage GETs described every
 // organization's freezers, boxes and specimen positions to any authenticated
 // caller. Same two scope keys as the mutations (storage-allocation.api.test.js):
-// a specimen by collectionSite, a box or freezer by its root freezer's
+// a specimen by its tenancy key (#1192), a box or freezer by its root freezer's
 // Equipment. A single-record read out of scope answers 403 (#340's
 // get-by-id precedent); the two list reads filter instead.
 
@@ -76,6 +77,32 @@ describe('single-record storage reads are bounded by the caller organization (#1
   it('GET /sample/:sampleId refuses another organization\'s specimen', async () => {
     const samples = createCollectionMock({
       findOne: vi.fn().mockResolvedValue({ _id: SAMPLE_ID, barcode: 'BR-9', collectionSite: 'org-other' }),
+    });
+    app.locals.db = dbWithRbac({ samples });
+
+    const res = await get(`/sample/${SAMPLE_ID}`);
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe('SAMPLE_OUT_OF_SCOPE');
+  });
+
+  // #1192: the tenancy key is organizationId; collectionSite is read only
+  // while it is unset.
+  it('GET /sample/:sampleId answers for a specimen whose organizationId is the caller\'s, collected elsewhere', async () => {
+    const samples = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue({ _id: SAMPLE_ID, barcode: 'BR-9', organizationId: HOME_ORG, collectionSite: 'org-other' }),
+    });
+    app.locals.db = dbWithRbac({ samples });
+
+    const res = await get(`/sample/${SAMPLE_ID}`);
+
+    expect(res.status).not.toBe(403);
+    expect(res.body.error).not.toBe('SAMPLE_OUT_OF_SCOPE');
+  });
+
+  it('GET /sample/:sampleId refuses a specimen collected at the caller\'s site whose organizationId is another\'s', async () => {
+    const samples = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue({ _id: SAMPLE_ID, barcode: 'BR-9', organizationId: 'org-other', collectionSite: HOME_ORG }),
     });
     app.locals.db = dbWithRbac({ samples });
 
@@ -173,6 +200,8 @@ describe('storage list reads are filtered to the caller organization (#1211)', (
 
     expect(res.status).toBe(200);
     expect(samples.find).toHaveBeenCalledTimes(1);
-    expect(JSON.stringify(samples.find.mock.calls[0][0])).toContain(JSON.stringify({ collectionSite: { $in: [HOME_ORG] } }));
+    expect(JSON.stringify(samples.find.mock.calls[0][0])).toContain(
+      JSON.stringify(sampleOrganizationScopeClause({ scope: 'organization', organizationIds: [HOME_ORG] })),
+    );
   });
 });
