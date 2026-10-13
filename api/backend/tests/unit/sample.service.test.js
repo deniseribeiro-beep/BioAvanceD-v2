@@ -232,7 +232,8 @@ describe('sample.service', () => {
       const db = makeDb();
       mockOperationalStorage(db);
       const baseImplementation = db.collection.getMockImplementation();
-      const opened = { specimenId: 'generated-id', boxId: BOX_ID, positionCode: 'B2', removedAt: null };
+      const placedAt = new Date('2026-10-01T00:00:00.000Z');
+      const opened = { specimenId: 'generated-id', boxId: BOX_ID, positionCode: 'B2', placedAt, removedAt: null };
       const storageAssignmentsFindOne = vi.fn(({ specimenId, removedAt }) => {
         if (specimenId === opened.specimenId && removedAt === null) {
           return Promise.resolve(opened);
@@ -250,7 +251,11 @@ describe('sample.service', () => {
 
       const result = await sampleService.createSample(db, validSampleData({ positionCode: 'B2' }));
 
-      expect(result.storageAssignment).toEqual(opened);
+      // #1374: the echo is the current placement, here the legacy fallback.
+      expect(result.storageAssignment).toEqual({
+        boxId: BOX_ID, positionCode: 'B2', containerId: null, storagePositionId: null, storageRackId: null, storageLocationId: null,
+        placedAt, source: 'legacy_storage_assignment',
+      });
       expect(result.storageLocation).toEqual({ boxId: BOX_ID, position: 'B2' });
     });
 

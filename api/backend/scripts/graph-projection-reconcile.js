@@ -130,7 +130,13 @@ async function findSamplesDriftedFromGraph(db, neo4jSession, options = {}) {
     for (const load of loads) {
       const id = sampleIdByKey.get(String(load.specimenId));
       const storagePositionId = positionIdByContainer.get(String(load.containerId));
-      if (!id || !storagePositionId) continue;
+      if (!id) continue;
+      // #1374: loaded and not placed is released, whatever a stale open
+      // legacy row for the same sample still says.
+      if (!storagePositionId) {
+        expectedPosition.delete(id);
+        continue;
+      }
       const { storageRackId, code } = splitPositionId(storagePositionId);
       if (storageRackId) expectedPosition.set(id, `${storageRackId}/${legacyPositionCode(code)}`);
     }

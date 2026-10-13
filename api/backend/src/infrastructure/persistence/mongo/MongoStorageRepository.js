@@ -7,6 +7,7 @@ const { isKnownStandaloneDeployment } = require('../../../utils/mongoTransaction
 const StorageAssignmentModel = require('../../../models/StorageAssignment');
 const positionGrid = require('../../../utils/storagePositionGrid');
 const { escapeRegex } = require('../../../utils/escapeRegex');
+const { currentPlacement } = require('../../../services/legacyPlacementChain.service');
 
 /**
  * Repositório Mongo para operações de armazenamento físico de amostras.
@@ -69,12 +70,15 @@ class MongoStorageRepository {
   }
 
   /**
-   * dict-02 StorageAssignment (ELM-0167-0178, #507): the return shape hands
-   * callers the canonical custody entity via `storageAssignment` instead of
-   * leaving them to read the raw `storageLocation.boxId/position` snapshot
-   * embedded on the Mongo document — that embedding stays as an internal
-   * persistence-layer detail, not part of the contract this method exposes.
-   * @param {string} specimenId
+   * #507, #1374: the return shape hands callers the sample's current
+   * placement via `storageAssignment` instead of leaving them to read the
+   * raw `storageLocation.boxId/position` snapshot embedded on the Mongo
+   * document. The physical chain is read first and the open legacy
+   * StorageAssignment row (ELM-0167-0178) is the fallback; the value has
+   * `boxId`, `positionCode` (legacy `A1` form), `placedAt`, `source` and the
+   * chain ids (`containerId`, `storagePositionId`, `storageRackId`,
+   * `storageLocationId`), or is null when the sample is not placed.
+   * @param {string} specimenId the sample's Mongo _id
    * @param {import('mongodb').ClientSession} [session]
    */
   async findSampleById(specimenId, session) {
@@ -83,25 +87,24 @@ class MongoStorageRepository {
     const sample = await samplesCollection.findOne({ _id: normalizedId }, { session });
     if (!sample) return null;
 
-    const storageAssignment = await this.findCurrentStorageAssignment(specimenId, session);
+    const storageAssignment = await currentPlacement(this.db, sample, session);
     return { ...sample, storageAssignment };
   }
 
   /**
-   * dict-02 StorageAssignment (ELM-0167-0178, #507): resolve the open
-   * (not yet `removedAt`) placement-history record for a specimen, i.e. its
-   * current physical position, per the `StorageLocation`+`StorageAssignment`
-   * canonical entity pair (`docs/architecture/canonical-data-contract-v1.md`
-   * section 7.4).
-   * @param {string} specimenId
+   * #507, #1374: the sample's current placement, the same value
+   * `findSampleById` attaches as `storageAssignment`: the physical chain
+   * first, the open legacy StorageAssignment row as the fallback, with
+   * `boxId`, `positionCode` (legacy `A1` form), `placedAt`, `source` and the
+   * chain ids. Null when the sample is missing or not placed.
+   * @param {string} specimenId the sample's Mongo _id
    * @param {import('mongodb').ClientSession} [session]
    */
   async findCurrentStorageAssignment(specimenId, session) {
-    const storageAssignmentsCollection = this.db.collection('storageAssignments');
-    return storageAssignmentsCollection.findOne(
-      { specimenId: String(specimenId), removedAt: null },
-      { session }
-    );
+    const samplesCollection = await getCollection(this.db, 'samples');
+    const sample = await samplesCollection.findOne({ _id: this.toObjectId(specimenId) }, { session });
+    if (!sample) return null;
+    return currentPlacement(this.db, sample, session);
   }
 
   /**

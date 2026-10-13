@@ -190,6 +190,76 @@ describe('legacyPlacementChain.service (#1314)', () => {
     expect(await bridge.currentPlacement(db, SAMPLE, SESSION)).toBeNull();
   });
 
+  it('currentPlacement reads a loaded, released specimen as not placed, whatever its open legacy row says (#1374)', async () => {
+    const legacyRow = { storageAssignmentId: 'sa-1', specimenId: String(SAMPLE._id), boxId: String(BOX_2._id), positionCode: 'C4', placedAt: T(1), removedAt: null };
+    const db = createFakeDb({ ...topology(), storageAssignments: [legacyRow] });
+    await bridge.placeSpecimen(db, { sample: SAMPLE, box: BOX_1, position: 'A1', at: T(2), sourceEventId: 'evt-place' }, SESSION);
+    await bridge.releaseSpecimen(db, { sample: SAMPLE, at: T(3) }, SESSION);
+
+    expect(await bridge.currentPlacement(db, SAMPLE, SESSION)).toBeNull();
+    expect(legacyRow.removedAt).toBeNull();
+  });
+
+  it('releaseSpecimen adopts a legacy-only specimen first, then closes its position (#1374)', async () => {
+    const legacyRow = { storageAssignmentId: 'sa-1', specimenId: String(SAMPLE._id), boxId: String(BOX_2._id), positionCode: 'B2', placedAt: T(1), removedAt: null };
+    const db = createFakeDb({ ...topology(), storageAssignments: [legacyRow] });
+
+    expect(await bridge.releaseSpecimen(db, { sample: SAMPLE, at: T(3) }, SESSION)).not.toBeNull();
+
+    expect(db.collections.specimenContainerAssignments.docs).toEqual([
+      expect.objectContaining({ specimenId: 'SPC-2026-0001', loadedAt: T(1), assignmentStatus: 'active', sourceEventId: 'legacy-storage-assignment:sa-1' }),
+    ]);
+    expect(db.collections.containerPositionAssignments.docs).toEqual([
+      expect.objectContaining({ storagePositionId: '64b000000000000000000002:B02', placedAt: T(1), removedAt: T(3), assignmentStatus: 'ended' }),
+    ]);
+    expect(await bridge.currentPlacement(db, SAMPLE, SESSION)).toBeNull();
+    expect(db.writes.filter((write) => write.collection === 'storageAssignments')).toEqual([]);
+    expect(db.writes.filter((write) => write.options?.session !== SESSION)).toEqual([]);
+  });
+
+  it('releaseSpecimen returns null when nothing is placed, after adoption too', async () => {
+    const closedRow = { storageAssignmentId: 'sa-1', specimenId: String(SAMPLE._id), boxId: String(BOX_2._id), positionCode: 'B2', placedAt: T(1), removedAt: T(2) };
+    expect(await bridge.releaseSpecimen(createFakeDb(topology()), { sample: SAMPLE, at: T(3) }, SESSION)).toBeNull();
+    expect(await bridge.releaseSpecimen(createFakeDb({ ...topology(), storageAssignments: [closedRow] }), { sample: SAMPLE, at: T(3) }, SESSION)).toBeNull();
+  });
+
+  it('moveSpecimen adopts a legacy-only specimen first, then moves its one container (#1374)', async () => {
+    const legacyRow = { storageAssignmentId: 'sa-1', specimenId: String(SAMPLE._id), boxId: String(BOX_1._id), positionCode: 'A1', placedAt: T(1), removedAt: null };
+    const db = createFakeDb({ ...topology(), storageAssignments: [legacyRow] });
+
+    await bridge.moveSpecimen(db, { sample: SAMPLE, toBox: BOX_2, toPosition: 'B2', at: T(2), sourceEventId: 'evt-move' }, SESSION);
+
+    const [container] = db.collections.containers.docs;
+    expect(db.collections.containers.docs).toHaveLength(1);
+    expect(db.collections.specimenContainerAssignments.docs).toEqual([
+      expect.objectContaining({ specimenId: 'SPC-2026-0001', containerId: container.containerId, loadedAt: T(1), assignmentStatus: 'active', sourceEventId: 'legacy-storage-assignment:sa-1' }),
+    ]);
+    expect(db.collections.containerPositionAssignments.docs).toEqual([
+      expect.objectContaining({ containerId: container.containerId, storagePositionId: '64b000000000000000000001:A01', placedAt: T(1), removedAt: T(2), assignmentStatus: 'ended' }),
+      expect.objectContaining({ containerId: container.containerId, storagePositionId: '64b000000000000000000002:B02', placedAt: T(2), removedAt: null, assignmentStatus: 'active' }),
+    ]);
+    expect(await bridge.currentPlacement(db, SAMPLE, SESSION)).toMatchObject({ boxId: String(BOX_2._id), positionCode: 'B2', source: 'physical_chain' });
+    expect(db.writes.filter((write) => write.collection === 'storageAssignments')).toEqual([]);
+    expect(db.writes.filter((write) => write.options?.session !== SESSION)).toEqual([]);
+  });
+
+  it.each([
+    ['an object', { code: 'x' }, 'unidentified_container'],
+    ['a blank string', '  ', 'unidentified_container'],
+    ['a number', 42, 'unidentified_container'],
+    ['a plain code', 'cryogenic_vial', 'cryogenic_vial'],
+  ])('primaryContainer given as %s reaches containerType as a plain code or the not-identified type (#1374)', async (_case, primaryContainer, containerType) => {
+    const db = createFakeDb(topology());
+    await bridge.placeSpecimen(db, { sample: { ...SAMPLE, primaryContainer }, box: BOX_1, position: 'A1', at: T(1), sourceEventId: 'evt-place' }, SESSION);
+    expect(db.collections.containers.docs[0].containerType).toBe(containerType);
+  });
+
+  it('legacyWriteEventId names a legacy write by its operation, sample and instant (V2E-0683, V2E-0690)', () => {
+    expect(bridge.legacyWriteEventId('allocate', SAMPLE, T(1))).toBe('legacy-storage-allocate:64a000000000000000000001:2026-10-01T00:00:00.000Z');
+    expect(bridge.legacyWriteEventId('auto-assign', SAMPLE, '2026-10-02T03:04:05.000Z')).toBe('legacy-storage-auto-assign:64a000000000000000000001:2026-10-02T03:04:05.000Z');
+    expect(bridge.legacyWriteEventId('move', { _id: 'smp-1' }, T(3))).toBe('legacy-storage-move:smp-1:2026-10-03T00:00:00.000Z');
+  });
+
   it('adoptLegacyPlacement decomposes the legacy rows once, and a second run writes nothing', async () => {
     const rows = [
       { storageAssignmentId: 'sa-2', specimenId: String(SAMPLE._id), boxId: String(BOX_2._id), positionCode: 'B2', placedAt: T(3), removedAt: null },

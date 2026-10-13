@@ -67,6 +67,18 @@ function splitPositionId(storagePositionId) {
   return { storageRackId: storagePositionId.slice(0, separator), code: storagePositionId.slice(separator + 1) };
 }
 
+// V2E-0683 and V2E-0690 are 1..1: a legacy write (`allocate`,
+// `auto-assign`, `move`) names its own event, by the sample and the instant.
+function legacyWriteEventId(operation, sample, at) {
+  return `legacy-storage-${operation}:${String(sample._id)}:${new Date(at).toISOString()}`;
+}
+
+// #1374: primaryContainer reaches V2E-0647 only as a plain, non-blank code.
+function containerTypeOf(sample) {
+  const code = sample?.primaryContainer;
+  return typeof code === 'string' && code.trim() ? code.trim() : UNIDENTIFIED_CONTAINER_TYPE;
+}
+
 function sameInstant(a, b) {
   return new Date(a).getTime() === new Date(b).getTime();
 }
@@ -148,7 +160,7 @@ async function ensureLoaded(db, sample, { at, sourceEventId }, session) {
   const open = await physicalChain.openSpecimenAssignment(db, specimenId, session);
   if (open) return open;
   const container = await physicalChain.createContainer(db, {
-    containerType: sample.primaryContainer || UNIDENTIFIED_CONTAINER_TYPE,
+    containerType: containerTypeOf(sample),
   }, { session });
   return physicalChain.loadSpecimen(db, {
     specimenId, containerId: container.containerId, sourceEventId, loadedAt: at,
@@ -165,9 +177,19 @@ async function placeSpecimen(db, { sample, box, position, at, sourceEventId }, s
   return { specimenContainerAssignment: loaded, containerPositionAssignment: placed, rackLocationAssignment: rackLocation };
 }
 
+// #1374: a specimen placed only through the legacy path is adopted first,
+// so a move or release acts on the chain its open legacy row describes.
+async function loadedOrAdopted(db, sample, session) {
+  const specimenId = specimenIdOf(sample);
+  const loaded = await physicalChain.openSpecimenAssignment(db, specimenId, session);
+  if (loaded) return loaded;
+  const adopted = await adoptLegacyPlacement(db, sample, session);
+  return adopted.containerId ? physicalChain.openSpecimenAssignment(db, specimenId, session) : null;
+}
+
 async function moveSpecimen(db, { sample, toBox, toPosition, at, sourceEventId }, session) {
   const movedAt = at || new Date();
-  const loaded = await physicalChain.openSpecimenAssignment(db, specimenIdOf(sample), session);
+  const loaded = await loadedOrAdopted(db, sample, session);
   if (loaded) {
     const current = await physicalChain.openPositionAssignment(db, loaded.containerId, session);
     if (current) await physicalChain.removeContainer(db, current.containerPositionAssignmentId, movedAt, { session });
@@ -177,7 +199,7 @@ async function moveSpecimen(db, { sample, toBox, toPosition, at, sourceEventId }
 
 // The container leaves its position; the specimen stays in it.
 async function releaseSpecimen(db, { sample, at }, session) {
-  const loaded = await physicalChain.openSpecimenAssignment(db, specimenIdOf(sample), session);
+  const loaded = await loadedOrAdopted(db, sample, session);
   if (!loaded) return null;
   const current = await physicalChain.openPositionAssignment(db, loaded.containerId, session);
   if (!current) return null;
@@ -185,11 +207,14 @@ async function releaseSpecimen(db, { sample, at }, session) {
 }
 
 // The chain first; the open legacy StorageAssignment row is a historical
-// fallback, keyed as its writer keyed it, by the sample's _id.
+// fallback, keyed as its writer keyed it, by the sample's _id. Once the
+// specimen is loaded the chain is authoritative: loaded and not placed is
+// released, whatever a stale legacy row still says (#1374).
 async function currentPlacement(db, sample, session) {
   if (sample?.specimenId) {
     const loaded = await physicalChain.openSpecimenAssignment(db, sample.specimenId, session);
     const placed = loaded && await physicalChain.openPositionAssignment(db, loaded.containerId, session);
+    if (loaded && !placed) return null;
     if (placed) {
       const { storageRackId, code } = splitPositionId(placed.storagePositionId);
       const rackLocation = storageRackId
@@ -273,6 +298,7 @@ module.exports = {
   legacyPositionCode,
   storagePositionIdFor,
   splitPositionId,
+  legacyWriteEventId,
   ensureRackLocated,
   placeSpecimen,
   moveSpecimen,

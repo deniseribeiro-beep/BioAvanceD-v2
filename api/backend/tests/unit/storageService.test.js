@@ -19,6 +19,9 @@ function makeDb(overrides = {}) {
   };
 }
 
+// #1374: the physical chain collections the placement reader consults.
+const CHAIN_COLLECTIONS = ['specimenContainerAssignments', 'containerPositionAssignments', 'rackLocationAssignments'];
+
 describe('StorageService - pure/near-pure helpers', () => {
   let service;
 
@@ -282,6 +285,9 @@ describe('StorageService.autoAssignSampleToBox', () => {
         // matching every existing test in this block (none exercises AC#7 itself).
         if (name === 'storagePaths') return { findOne: vi.fn().mockResolvedValue(null) };
         if (name === 'storageContainers') return { findOne: vi.fn().mockResolvedValue(null) };
+        // #1374: the sample's placement is read from the physical chain
+        // first; nothing is loaded there by default.
+        if (CHAIN_COLLECTIONS.includes(name)) return { findOne: vi.fn().mockResolvedValue(null) };
         throw new Error(`unexpected collection: ${name}`);
       }),
       // #994: this was `getMongo: vi.fn(() => ({ startSession: ... }))`, and it
@@ -865,6 +871,7 @@ describe('StorageService.releaseSampleFromPosition', () => {
         if (name === 'storageAssignments') {
           return { updateOne: vi.fn().mockResolvedValue({}), findOne: storageAssignmentsFindOne };
         }
+        if (CHAIN_COLLECTIONS.includes(name)) return { findOne: vi.fn().mockResolvedValue(null) };
         throw new Error(`unexpected collection: ${name}`);
       })
     });

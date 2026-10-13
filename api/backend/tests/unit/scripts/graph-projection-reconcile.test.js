@@ -241,6 +241,19 @@ describe('graph-projection-reconcile', () => {
       ]);
     });
 
+    it('expects no position for a chain-released sample, whatever a stale open legacy row says (#1374)', async () => {
+      const released = {
+        loads: chain.loads,
+        placements: [{ containerId: 'CTN-1', storagePositionId: 'box-1:A01', assignmentStatus: 'removed' }],
+      };
+      const { drifted } = await findSamplesDriftedFromGraph(
+        makeDb(placed, [{ specimenId: 'smp-canon', boxId: 'box-2', positionCode: 'B02' }], released),
+        makeNeo4jSession({ 'smp-canon': {} }), { pseudonymizeDonorId },
+      );
+
+      expect(drifted).toEqual([]);
+    });
+
     it('plans a repair only where an event can make it, and a rebuild for what no event removes', () => {
       expect(planDriftRepair({ donor: { expected: 'D1', actual: [] } })).toEqual({ actions: ['specimen'], needsRebuild: false });
       expect(planDriftRepair({ donor: { expected: 'D1', actual: ['D9'] } })).toEqual({ actions: ['specimen'], needsRebuild: true });
