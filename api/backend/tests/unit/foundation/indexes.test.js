@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 const { INDEX_TARGETS, buildFoundationIndexes, verifyFoundationIndexes } = require('../../../src/foundation/indexes');
 const { ensureSessionIndexes } = require('../../../src/utils/sessionIndexes');
+const { CANONICAL_COLLECTIONS } = require('../../../src/config/collections');
 const { createFakeDb } = require('./helpers/fake-db');
 
 /**
@@ -24,6 +25,34 @@ describe('Foundation index builds', () => {
     expect(builds.every((build) => build.ok === true)).toBe(true);
     expect(builds.some((build) => build.unique)).toBe(true);
     expect(await verifyFoundationIndexes(db, builds)).toEqual([]);
+  });
+
+  // #1374: a chain write inside a caller's session builds no index, so the
+  // Foundation job builds the chain's and StorageLocation's partial unique
+  // indexes beforehand.
+  it('builds the physical chain and StorageLocation indexes by name', async () => {
+    const chainCollections = [
+      CANONICAL_COLLECTIONS.containers,
+      CANONICAL_COLLECTIONS.specimenContainerAssignments,
+      CANONICAL_COLLECTIONS.containerPositionAssignments,
+      CANONICAL_COLLECTIONS.rackLocationAssignments,
+      CANONICAL_COLLECTIONS.storageLocations,
+    ];
+    const targeted = INDEX_TARGETS.map((target) => target.collection);
+    for (const collection of chainCollections) expect(targeted, collection).toContain(collection);
+
+    const builds = await buildFoundationIndexes(createFakeDb());
+    const named = (name) => builds.find((build) => build.name === name);
+    for (const [name, collection] of [
+      ['uniq_containerId', CANONICAL_COLLECTIONS.containers],
+      ['uniq_open_specimen', CANONICAL_COLLECTIONS.specimenContainerAssignments],
+      ['uniq_open_container', CANONICAL_COLLECTIONS.containerPositionAssignments],
+      ['uniq_open_position', CANONICAL_COLLECTIONS.containerPositionAssignments],
+      ['uniq_open_rack', CANONICAL_COLLECTIONS.rackLocationAssignments],
+      ['uniq_storageLocationId', CANONICAL_COLLECTIONS.storageLocations],
+    ]) {
+      expect(named(name), name).toMatchObject({ collection, unique: true, ok: true });
+    }
   });
 
   it('reports a build whose index is gone on read-back', async () => {

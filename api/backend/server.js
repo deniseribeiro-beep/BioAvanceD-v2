@@ -16,6 +16,8 @@ const { initializeSecuritySystem } = require("./src/infrastructure/middleware/in
 const { seedReportTemplates } = require("./src/services/report-template-seed.service");
 const { seedRolesAndPermissions } = require("./src/services/rbac-catalog-seed.service");
 const { assertReadiness } = require("./src/foundation/readiness");
+const { ensurePhysicalChainIndexes } = require("./src/services/physicalChain.service");
+const { ensureLocationIndexes } = require("./src/services/storageLocation.service");
 const { validateEncryptionAndHalt, validateAuditSigningAndWarn } = require("./src/config/validateEnv");
 
 // #1040: Model.createIndexes() index-build errors (and unhandled rejections
@@ -120,6 +122,13 @@ async function startServer() {
       const report = await assertReadiness(db, { environment: env.NODE_ENV });
       logger.info(`[RF022] ReadinessReport ${report.readinessReportId} ready (${report.canonicalModelReleaseId})`);
     }
+
+    // #1374: a chain write inside a caller's session builds no index, so the
+    // API builds the physical chain's and StorageLocation's indexes before it
+    // serves, whether or not a Foundation run built them first. Both latch
+    // per db and log a failed build instead of throwing.
+    await ensurePhysicalChainIndexes(db);
+    await ensureLocationIndexes(db);
 
     // #830/#826: modelos Mongoose ainda são consultados pela API (p.ex.
     // Sample.findById em miabisValidator, e os modelos de hierarquia de

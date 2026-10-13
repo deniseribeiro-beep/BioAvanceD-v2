@@ -18,6 +18,13 @@ const {
   ensureGovernanceInvariantCatalogIndexes,
   ensureConfigurationValidationRunIndexes,
 } = require('../utils/governanceRegistryIndexes');
+const {
+  ensureContainerIndexes,
+  ensureSpecimenContainerAssignmentIndexes,
+  ensureContainerPositionAssignmentIndexes,
+  ensureRackLocationAssignmentIndexes,
+  ensureStorageLocationIndexes,
+} = require('../utils/physicalChainIndexes');
 const { ensureParticipantIdentityIndexes } = require('../utils/participantIdentityIndexes');
 const { ensureSampleIndexes } = require('../utils/sampleIndexes');
 const { ensureSessionIndexes } = require('../utils/sessionIndexes');
@@ -43,6 +50,11 @@ const INDEX_TARGETS = [
   { collection: CANONICAL_COLLECTIONS.canonicalModelReleases, ensure: ensureCanonicalModelReleaseIndexes },
   { collection: CANONICAL_COLLECTIONS.governanceInvariantCatalogs, ensure: ensureGovernanceInvariantCatalogIndexes },
   { collection: CANONICAL_COLLECTIONS.configurationValidationRuns, ensure: ensureConfigurationValidationRunIndexes },
+  { collection: CANONICAL_COLLECTIONS.containers, ensure: ensureContainerIndexes },
+  { collection: CANONICAL_COLLECTIONS.specimenContainerAssignments, ensure: ensureSpecimenContainerAssignmentIndexes },
+  { collection: CANONICAL_COLLECTIONS.containerPositionAssignments, ensure: ensureContainerPositionAssignmentIndexes },
+  { collection: CANONICAL_COLLECTIONS.rackLocationAssignments, ensure: ensureRackLocationAssignmentIndexes },
+  { collection: CANONICAL_COLLECTIONS.storageLocations, ensure: ensureStorageLocationIndexes },
 ];
 
 function recordingCollection(collection, builds, collectionName) {
