@@ -199,7 +199,7 @@ class StorageService {
         // The placement's projection event is recorded; the projector applies it.
         graphPersisted: Boolean(assignedPosition),
         sampleLocation: {
-          specimenId: String(sampleObjId),
+          specimenId: String(sampleSnapshot.specimenId || sampleSnapshot._id),
           boxId: String(boxObjId),
           position: assignedPosition
         }
@@ -305,7 +305,7 @@ class StorageService {
       return {
         success: true,
         releasedFrom: {
-          specimenId,
+          specimenId: String(sample.specimenId || sample._id),
           boxId,
           position
         }
@@ -362,21 +362,21 @@ class StorageService {
       let actualCount = 0;
 
       // Verificar cada posição ocupada
-      for (const [position, specimenId] of (box.occupancyGrid || new Map())) {
-        if (specimenId) {
+      for (const [position, sampleObjectId] of (box.occupancyGrid || new Map())) {
+        if (sampleObjectId) {
           actualCount++;
 
           // Confirmar que amostra ainda existe e está apontando para essa posição
-          const sample = await samplesCollection.findOne({ _id: specimenId });
+          const sample = await samplesCollection.findOne({ _id: sampleObjectId });
 
           if (!sample) {
-            errors.push(`Orfão: posição ${position} referencia amostra inexistente ${specimenId}`);
+            errors.push(`Orfão: posição ${position} referencia amostra inexistente ${sampleObjectId}`);
           } else if (
             sample.storageLocation?.boxId?.toString() !== boxObjId.toString() ||
             sample.storageLocation?.position !== position
           ) {
             errors.push(
-              `Inconsistência: Box referencia ${specimenId} em ${position}, ` +
+              `Inconsistência: Box referencia ${sampleObjectId} em ${position}, ` +
               `mas amostra aponta para ${sample.storageLocation?.boxId}/${sample.storageLocation?.position}`
             );
           }

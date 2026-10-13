@@ -116,7 +116,7 @@ class MoveSampleUseCase {
 
       movedAt = new Date();
       sampleSnapshot = {
-        specimenId: String(sample._id),
+        specimenId: String(sample.specimenId || sample._id),
         barcode: sample.barcode || null
       };
 

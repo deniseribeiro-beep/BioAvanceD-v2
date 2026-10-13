@@ -121,7 +121,7 @@ class AllocateSampleUseCase {
     return {
       success: true,
       sampleLocation: {
-        specimenId: String(command.specimenId),
+        specimenId: String(sample.specimenId || sample._id),
         boxId: String(command.boxId),
         position: normalizedPosition
       },

@@ -164,18 +164,20 @@ describe('AllocateSampleUseCase', () => {
   });
 
   // #1220: the custody ledger row is keyed by the canonical specimenId, as the
-  // create path writes it; the storage and graph calls keep the _id.
-  it('#1220: the audit row carries the canonical specimenId while storage and lineage get the _id', async () => {
+  // create path writes it, and the response echoes it; the storage and graph
+  // calls keep the _id.
+  it('#1220: the audit row and the response carry the canonical specimenId while storage and lineage get the _id', async () => {
     const { useCase, storageRepository, auditRepository, lineageRepository } = makeDeps({
       sample: makeSample({ specimenId: 'SP-1' }),
       withLineageRepo: true
     });
 
-    await useCase.execute(baseCommand());
+    const result = await useCase.execute(baseCommand());
 
     expect(auditRepository.appendImmutableAudit.mock.calls[0][0].specimenId).toBe('SP-1');
     expect(storageRepository.allocateSamplePosition.mock.calls[0][0].specimenId).toBe('sample-1');
     expect(lineageRepository.recordCustodyEvent.mock.calls[0][0].specimenId).toBe('sample-1');
+    expect(result.sampleLocation.specimenId).toBe('SP-1');
   });
 
   it('#1220: a legacy sample without a specimenId keys its audit row by the _id', async () => {

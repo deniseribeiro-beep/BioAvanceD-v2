@@ -158,6 +158,7 @@ describe('POST /api/storage/allocate', () => {
       .send({ sampleId: SAMPLE_ID.toString(), boxId: BOX_ID.toString(), position: 'A1' });
 
     expect(res.status).toBe(201);
+    expect(res.body.data.specimenId).toBe('SPC-0001');
     const session = db.session;
     expect(boxUpdateOne).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.objectContaining({ session }));
     expect(sampleUpdateOne).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.objectContaining({ session }));
@@ -264,6 +265,7 @@ describe('POST /api/storage/move', () => {
       .send({ sampleId: SAMPLE_ID.toString(), targetBoxId: TARGET_BOX_ID.toString(), targetPosition: 'B2' });
 
     expect(res.status).toBe(200);
+    expect(res.body.data.specimenId).toBe('SPC-0001');
     const session = db.session;
     expect(chain.containers.insertOne).toHaveBeenCalledTimes(1);
     const { containerId } = chain.containers.docs[0];
@@ -380,6 +382,7 @@ describe('DELETE /api/storage/release/:sampleId', () => {
       .set('Authorization', `Bearer ${makeToken(2)}`);
 
     expect(res.status).toBe(200);
+    expect(res.body.data.specimenId).toBe('SPC-0001');
     const session = db.session;
     expect(chain.containers.insertOne).toHaveBeenCalledTimes(1);
     const { containerId } = chain.containers.docs[0];

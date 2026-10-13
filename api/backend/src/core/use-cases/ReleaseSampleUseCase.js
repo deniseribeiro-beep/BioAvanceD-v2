@@ -62,7 +62,7 @@ class ReleaseSampleUseCase {
       );
 
       releasedFrom = {
-        specimenId: String(command.specimenId),
+        specimenId: String(sample.specimenId || sample._id),
         boxId: release.from.boxId,
         position: release.from.position
       };

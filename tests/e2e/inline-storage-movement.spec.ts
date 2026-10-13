@@ -193,7 +193,7 @@ test.describe('Inline storage movement panel (#488)', () => {
         body: JSON.stringify({
           success: true,
           data: {
-            specimenId: STORED_SAMPLE._id,
+            specimenId: STORED_SAMPLE.specimenId,
             box: { boxId: 'box-488-0', boxName: 'Caixa 0', position: 'A1' },
             path: 'Freezer 488/Prateleira 1/Rack 1/Caixa 0',
             fullHierarchy: { freezerId: FREEZER._id, shelfId: 'shelf-0', rackId: 'rack-0', boxId: 'box-488-0' },

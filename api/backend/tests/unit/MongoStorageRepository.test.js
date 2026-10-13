@@ -1731,6 +1731,26 @@ describe('MongoStorageRepository', () => {
       expect(result.location.fullHierarchy).toBeNull();
     });
 
+    // #1220: the location echoes the canonical specimenId, not the sample's _id.
+    it('#1220: the location carries the sample\'s canonical specimenId', async () => {
+      const boxId = new ObjectId();
+      const samples = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({
+          _id: sampleId,
+          specimenId: 'SPC-1',
+          barcode: 'BC-6',
+          storageLocation: { boxId, position: 'D4' }
+        })
+      });
+      const storagePaths = makeCollection({ findOne: vi.fn().mockResolvedValueOnce(null) });
+      const db = makeDb({ samples, storagePaths });
+      const repo = new MongoStorageRepository(db);
+
+      const result = await repo.getSampleStorageLocation({ sampleId });
+      expect(result.found).toBe(true);
+      expect(result.location.specimenId).toBe('SPC-1');
+    });
+
     // #657: storagePaths is never written anywhere in api/backend/src (#654),
     // so every real sample hit this branch and always showed path:'N/A' --
     // reuse #654's live parent_id-walk fallback here too.
@@ -1822,6 +1842,23 @@ describe('MongoStorageRepository', () => {
 
       expect(result.get('sample-d').path).toBe('N/A');
       expect(result.get('sample-d').fullHierarchy).toBeNull();
+    });
+
+    // #1220: each location echoes the canonical specimenId; the Map stays keyed
+    // by the _id, which sample.routes.js joins on.
+    it('#1220: each location carries the canonical specimenId while the Map stays keyed by the _id', async () => {
+      const boxId = new ObjectId();
+      const toArray = vi.fn().mockResolvedValue([]);
+      const storagePaths = makeCollection({ find: vi.fn().mockReturnValue({ toArray }) });
+      const db = makeDb({ storagePaths });
+      const repo = new MongoStorageRepository(db);
+
+      const result = await repo.resolveStorageLocationsForSamples([
+        { _id: 'sample-f', specimenId: 'SPC-1', storageLocation: { boxId, position: 'E5' } }
+      ]);
+
+      expect(result.has('SPC-1')).toBe(false);
+      expect(result.get('sample-f').specimenId).toBe('SPC-1');
     });
 
     it('skips the storagePaths query entirely when no sample has a boxId', async () => {

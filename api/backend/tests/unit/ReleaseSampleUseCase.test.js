@@ -100,8 +100,9 @@ describe('ReleaseSampleUseCase', () => {
   });
 
   // #1220: the custody ledger row is keyed by the canonical specimenId, as the
-  // create path writes it; the storage call and graph event keep the _id.
-  it('#1220: the audit row carries the canonical specimenId while storage and lineage get the _id', async () => {
+  // create path writes it, and the response echoes it; the storage call and
+  // graph event keep the _id.
+  it('#1220: the audit row and the response carry the canonical specimenId while storage and lineage get the _id', async () => {
     const storageRepository = makeStorageRepository({ sampleSnapshot: makeSampleSnapshot({ specimenId: 'SP-1' }) });
     const auditRepository = makeAuditRepository();
     const lineageRepository = {
@@ -110,11 +111,12 @@ describe('ReleaseSampleUseCase', () => {
     };
     const useCase = new ReleaseSampleUseCase({ storageRepository, auditRepository, lineageRepository });
 
-    await useCase.execute(baseCommand);
+    const result = await useCase.execute(baseCommand);
 
     expect(auditRepository.appendImmutableAudit.mock.calls[0][0].specimenId).toBe('SP-1');
     expect(storageRepository.releaseSamplePosition.mock.calls[0][0].specimenId).toBe('sample-1');
     expect(lineageRepository.recordCustodyEvent.mock.calls[0][0].specimenId).toBe('sample-1');
+    expect(result.releasedFrom.specimenId).toBe('SP-1');
   });
 
   it('#1220: a legacy sample without a specimenId keys its audit row by the _id', async () => {

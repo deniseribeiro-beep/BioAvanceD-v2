@@ -219,15 +219,15 @@ class MongoStorageTopologyReadRepository {
     let actualCount = 0;
     const occupancyGrid = box.occupancyGrid || {};
 
-    for (const [position, specimenId] of Object.entries(occupancyGrid)) {
-      if (!specimenId) continue;
+    for (const [position, sampleObjectId] of Object.entries(occupancyGrid)) {
+      if (!sampleObjectId) continue;
       actualCount += 1;
 
-      const normalizedSampleId = this.toObjectId(specimenId);
+      const normalizedSampleId = this.toObjectId(sampleObjectId);
       const sample = await samplesCollection.findOne({ _id: normalizedSampleId });
 
       if (!sample) {
-        errors.push(`Orfão: posição ${position} referencia amostra inexistente ${specimenId}`);
+        errors.push(`Orfão: posição ${position} referencia amostra inexistente ${sampleObjectId}`);
         continue;
       }
 
@@ -236,7 +236,7 @@ class MongoStorageTopologyReadRepository {
         sample.storageLocation?.position !== position
       ) {
         errors.push(
-          `Inconsistência: Box referencia ${specimenId} em ${position}, ` +
+          `Inconsistência: Box referencia ${sampleObjectId} em ${position}, ` +
           `mas amostra aponta para ${sample.storageLocation?.boxId}/${sample.storageLocation?.position}`
         );
       }

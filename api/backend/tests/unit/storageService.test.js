@@ -352,6 +352,7 @@ describe('StorageService.autoAssignSampleToBox', () => {
 
     expect(result.success).toBe(true);
     expect(result.sampleLocation.position).toBe('A2');
+    expect(result.sampleLocation.specimenId).toBe('SPC-9');
     expect(result.graphPersisted).toBe(true);
 
     const boxUpdateCall = boxesUpdateOne.mock.calls[0];
@@ -1002,8 +1003,8 @@ describe('StorageService.releaseSampleFromPosition', () => {
   });
 
   // #1220: the custody ledger row is keyed by the canonical specimenId, as the
-  // create path writes it; the release response keeps the _id.
-  it('#1220: the audit row carries the canonical specimenId while the response keeps the _id', async () => {
+  // create path writes it, and the release response echoes it.
+  it('#1220: the audit row and the response carry the canonical specimenId', async () => {
     const boxId = new ObjectId().toString();
     const sampleId = new ObjectId().toString();
 
@@ -1018,7 +1019,7 @@ describe('StorageService.releaseSampleFromPosition', () => {
     const result = await service.releaseSampleFromPosition(sampleId);
 
     expect(result.success).toBe(true);
-    expect(result.releasedFrom.specimenId).toBe(sampleId);
+    expect(result.releasedFrom.specimenId).toBe('SP-5');
     expect(movements.insertOne.mock.calls[0][0].specimenId).toBe('SP-5');
   });
 

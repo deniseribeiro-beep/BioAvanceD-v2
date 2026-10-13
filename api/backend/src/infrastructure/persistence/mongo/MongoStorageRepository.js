@@ -842,7 +842,7 @@ class MongoStorageRepository {
     return {
       found: true,
       location: {
-        specimenId: sample._id,
+        specimenId: String(sample.specimenId || sample._id),
         barcode: sample.barcode,
         box: {
           boxId: sample.storageLocation.boxId,
@@ -911,7 +911,7 @@ class MongoStorageRepository {
       const storagePath = pathByBoxId.get(boxKey) || null;
       const liveResolution = storagePath ? null : liveByBoxId.get(boxKey);
       result.set(key, {
-        specimenId: sample._id,
+        specimenId: String(sample.specimenId || sample._id),
         barcode: sample.barcode,
         box: {
           boxId: sample.storageLocation.boxId,
