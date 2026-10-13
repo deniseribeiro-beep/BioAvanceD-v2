@@ -6,6 +6,7 @@ import request from 'supertest';
 const require = createRequire(import.meta.url);
 
 const { createMatchingCollection } = require('../factories/filter.factory');
+const { sampleOrganizationScopeClause } = require('../../src/services/sampleTenancy.service');
 
 const authPath = require.resolve('../../src/infrastructure/middleware/auth');
 const rbacPath = require.resolve('../../src/infrastructure/middleware/rbac');
@@ -1162,11 +1163,13 @@ describe('sample.routes', () => {
     });
 
     // #1187: the search now filters on the caller's organizations, as
-    // GET / does.
+    // GET / does. #1192: by the sample's organizationId, falling back to
+    // collectionSite, under $and so the barcode/_id $or is kept.
     it('filters the search to the caller organizations', async () => {
+      const scope = { scope: 'organization', organizationIds: ['org-mine'] };
       const { router } = loadRoute({
         requireOrganizationScopeImpl: (req, res, next) => {
-          req.organizationScope = { scope: 'organization', organizationIds: ['org-mine'] };
+          req.organizationScope = scope;
           next();
         },
       });
@@ -1179,9 +1182,13 @@ describe('sample.routes', () => {
       const res = await request(app).get('/api/samples/search/by-term').query({ q: 'BC1' });
 
       expect(res.status).toBe(200);
-      expect(find).toHaveBeenCalledWith(
-        expect.objectContaining({ collectionSite: { $in: ['org-mine'] } })
-      );
+      const query = find.mock.calls[0][0];
+      expect(query.$and).toEqual([sampleOrganizationScopeClause(scope)]);
+      expect(query.$or).toEqual([
+        { barcode: { $regex: 'BC1', $options: 'i' } },
+        { _id: { $regex: 'BC1', $options: 'i' } },
+      ]);
+      expect(query).not.toHaveProperty('collectionSite');
     });
 
     it('returns 500 when the collection lookup throws', async () => {
@@ -1313,6 +1320,44 @@ describe('sample.routes', () => {
     it('returns 403 when the sample exists but is outside the caller\'s organization scope', async () => {
       const getSampleMovements = vi.fn().mockResolvedValue([{ movementID: 'm1' }]);
       const getSample = vi.fn().mockResolvedValue({ _id: 's1', collectionSite: 'org-other' });
+      const { router } = loadRoute({
+        sampleServiceOverrides: { getSampleMovements, getSample },
+        requireOrganizationScopeImpl: (req, res, next) => {
+          req.organizationScope = { scope: 'organization', organizationIds: ['org-mine'] };
+          next();
+        },
+      });
+      const app = buildApp(router, {});
+
+      const res = await request(app).get('/api/samples/s1/movements');
+
+      expect(res.status).toBe(403);
+      expect(getSampleMovements).not.toHaveBeenCalled();
+    });
+
+    // #1192: the scope reads organizationId first; collectionSite is only the
+    // fallback while organizationId is unset.
+    it('serves a sample whose organizationId is the caller\'s, whatever its collectionSite', async () => {
+      const getSampleMovements = vi.fn().mockResolvedValue([{ movementID: 'm1' }]);
+      const getSample = vi.fn().mockResolvedValue({ _id: 's1', organizationId: 'org-mine', collectionSite: 'org-other' });
+      const { router } = loadRoute({
+        sampleServiceOverrides: { getSampleMovements, getSample },
+        requireOrganizationScopeImpl: (req, res, next) => {
+          req.organizationScope = { scope: 'organization', organizationIds: ['org-mine'] };
+          next();
+        },
+      });
+      const app = buildApp(router, {});
+
+      const res = await request(app).get('/api/samples/s1/movements');
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual([{ movementID: 'm1' }]);
+    });
+
+    it('returns 403 for a sample whose organizationId is another\'s, even with the caller\'s collectionSite', async () => {
+      const getSampleMovements = vi.fn().mockResolvedValue([{ movementID: 'm1' }]);
+      const getSample = vi.fn().mockResolvedValue({ _id: 's1', organizationId: 'org-other', collectionSite: 'org-mine' });
       const { router } = loadRoute({
         sampleServiceOverrides: { getSampleMovements, getSample },
         requireOrganizationScopeImpl: (req, res, next) => {

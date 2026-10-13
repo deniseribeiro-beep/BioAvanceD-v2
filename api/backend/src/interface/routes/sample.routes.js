@@ -8,7 +8,9 @@ const { requireOrganizationScope, requireRole } = require('../../infrastructure/
 const quarantineReleaseService = require('../../services/quarantine-release.service');
 // #1266: lgpd.allowDataExport switches the HL7/FHIR/CDA file exports off.
 const { requireDataExportAllowed } = require('../../infrastructure/middleware/lgpdExportGate');
-const { isRecordInOrganizationScope, assertOrganizationFieldNotReparented, resolveOrganizationIdForCreate, applyOrganizationScopeFilter } = require('../../services/rbac-assignment.service');
+const { assertOrganizationFieldNotReparented, resolveOrganizationIdForCreate } = require('../../services/rbac-assignment.service');
+// #1192: a sample is scoped by organizationId, falling back to collectionSite.
+const { isSampleInOrganizationScope, applySampleOrganizationScope } = require('../../services/sampleTenancy.service');
 // const { authenticate } = require('../../infrastructure/middleware/auth');
 const sampleService = require('../../services/sample.service');
 
@@ -28,7 +30,7 @@ router.get('/:id/miabis-compliance', authenticate, requireOrganizationScope, asy
     // getSample call purely for the scope check, since validateMiabisCompliance
     // doesn't expose the raw sample document.
     const sampleForScope = await sampleService.getSample(db, sampleId);
-    if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+    if (sampleForScope && !isSampleInOrganizationScope(sampleForScope, req.organizationScope)) {
       return res.status(403).json({
         success: false,
         error: 'Acesso negado',
@@ -61,7 +63,7 @@ router.get('/:id/compliance-graph', authenticate, requireOrganizationScope, asyn
     // getSample call purely for the scope check, since
     // SampleGraphValidator doesn't expose the raw sample document.
     const sampleForScope = await sampleService.getSample(db, req.params.id);
-    if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+    if (sampleForScope && !isSampleInOrganizationScope(sampleForScope, req.organizationScope)) {
       return res.status(403).json({
         success: false,
         error: 'Acesso negado',
@@ -729,7 +731,7 @@ router.get('/:id/label', authenticate, requireOrganizationScope, async (req, res
     // #619: mirrors #340's GET /:id out-of-scope 403 — a sub-resource
     // route for an existing sample outside the caller's organization scope
     // must not leak the label either.
-    if (!isRecordInOrganizationScope(sample, req.organizationScope, 'collectionSite')) {
+    if (!isSampleInOrganizationScope(sample, req.organizationScope)) {
       return res.status(403).json({
         success: false,
         error: 'Acesso negado',
@@ -805,7 +807,7 @@ router.get('/:id/label/print-job', authenticate, requireOrganizationScope, async
       });
     }
 
-    if (!isRecordInOrganizationScope(sample, req.organizationScope, 'collectionSite')) {
+    if (!isSampleInOrganizationScope(sample, req.organizationScope)) {
       return res.status(403).json({
         success: false,
         error: 'Acesso negado',
@@ -897,7 +899,7 @@ router.post('/labels/batch', authenticate, requireOrganizationScope, async (req,
           return { specimenId: id, success: false, error: 'Amostra não encontrada' };
         }
 
-        if (!isRecordInOrganizationScope(sample, req.organizationScope, 'collectionSite')) {
+        if (!isSampleInOrganizationScope(sample, req.organizationScope)) {
           return { specimenId: id, success: false, error: 'Acesso negado', status: 403 };
         }
 
@@ -961,7 +963,7 @@ router.get('/:id', authenticate, requireOrganizationScope, async (req, res) => {
     // 403s rather than 404s, matching sample-file.controller.js's
     // out-of-scope precedent — direct access, not a discoverability leak
     // via a different error code, but not a silent pass-through either.
-    if (sample && !isRecordInOrganizationScope(sample, req.organizationScope, 'collectionSite')) {
+    if (sample && !isSampleInOrganizationScope(sample, req.organizationScope)) {
       return res.status(403).json({
         success: false,
         error: 'Acesso negado',
@@ -1035,7 +1037,7 @@ router.post('/:id/withdraw',
       // #623: mirrors #340/#619's out-of-scope 403 pattern — the scope
       // check runs before the mutation, not just before a read.
       const sampleForScope = await sampleService.getSample(db, req.params.id);
-      if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+      if (sampleForScope && !isSampleInOrganizationScope(sampleForScope, req.organizationScope)) {
         return res.status(403).json({
           success: false,
           error: 'Acesso negado',
@@ -1116,7 +1118,7 @@ router.put('/:id', authenticate, requirePermission('editSample'), requireOrganiz
     // #623: mirrors #340/#619's out-of-scope 403 pattern — the scope
     // check runs before the mutation, not just before a read.
     const sampleForScope = await sampleService.getSample(db, req.params.id);
-    if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+    if (sampleForScope && !isSampleInOrganizationScope(sampleForScope, req.organizationScope)) {
       return res.status(403).json({
         success: false,
         error: 'Acesso negado',
@@ -1237,7 +1239,7 @@ router.delete('/:id', authenticate, requirePermission('deleteSample'), requireOr
     // #623: mirrors #340/#619's out-of-scope 403 pattern — the scope
     // check runs before the mutation, not just before a read.
     const sampleForScope = await sampleService.getSample(db, req.params.id);
-    if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+    if (sampleForScope && !isSampleInOrganizationScope(sampleForScope, req.organizationScope)) {
       return res.status(403).json({
         success: false,
         error: 'Acesso negado',
@@ -1317,7 +1319,7 @@ router.get('/search/by-term', authenticate, requireOrganizationScope, async (req
       withdrawnAt: null
     };
     // #1187: scoped like GET / -- this search carried only `authenticate`.
-    applyOrganizationScopeFilter(query, req.organizationScope, 'collectionSite');
+    applySampleOrganizationScope(query, req.organizationScope);
 
     const samples = await samplesCollection
       .find(query)
@@ -1383,7 +1385,7 @@ router.get('/by-barcode/:barcode', authenticate, requireOrganizationScope, async
 
     // #1187: GET /:id's #340 check. This lookup returned the sample and its
     // patient's name to any authenticated caller.
-    if (!isRecordInOrganizationScope(result.sample, req.organizationScope, 'collectionSite')) {
+    if (!isSampleInOrganizationScope(result.sample, req.organizationScope)) {
       return res.status(403).json({
         success: false,
         error: 'Acesso negado',
@@ -1420,7 +1422,7 @@ router.get('/by-barcode/:barcode', authenticate, requireOrganizationScope, async
   }
 });
 
-// #655/#653: this route had no requireOrganizationScope/isRecordInOrganizationScope
+// #655/#653: this route had no requireOrganizationScope/organization-scope
 // check at all, unlike every other sample sub-resource route in this file --
 // filed as #653 when this was still an unreached backend capability;
 // SampleLabelPage.tsx now depends on it directly, so the gap is fixed
@@ -1444,7 +1446,7 @@ router.get('/by-barcode/:barcode/symbology-assets', authenticate, requireOrganiz
       });
     }
 
-    if (!isRecordInOrganizationScope(lookup.sample, req.organizationScope, 'collectionSite')) {
+    if (!isSampleInOrganizationScope(lookup.sample, req.organizationScope)) {
       return res.status(403).json({
         success: false,
         error: 'Acesso negado',
@@ -1497,7 +1499,7 @@ router.get('/:id/results', authenticate, requireOrganizationScope, async (req, r
 
     // #619: mirrors #340's GET /:id out-of-scope 403 for this sub-resource.
     const sampleForScope = await sampleService.getSample(db, req.params.id);
-    if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+    if (sampleForScope && !isSampleInOrganizationScope(sampleForScope, req.organizationScope)) {
       return res.status(403).json({
         success: false,
         error: 'Acesso negado',
@@ -1550,7 +1552,7 @@ router.post('/:id/return', authenticate, requirePermission('withdrawSample', 'UP
     // #623: mirrors #340/#619's out-of-scope 403 pattern — the scope
     // check runs before the mutation, not just before a read.
     const sampleForScope = await sampleService.getSample(db, req.params.id);
-    if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+    if (sampleForScope && !isSampleInOrganizationScope(sampleForScope, req.organizationScope)) {
       return res.status(403).json({
         success: false,
         error: 'Acesso negado',
@@ -1621,7 +1623,7 @@ router.get('/:id/movements', authenticate, requireOrganizationScope, async (req,
 
     // #619: mirrors #340's GET /:id out-of-scope 403 for this sub-resource.
     const sampleForScope = await sampleService.getSample(db, req.params.id);
-    if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+    if (sampleForScope && !isSampleInOrganizationScope(sampleForScope, req.organizationScope)) {
       return res.status(403).json({
         success: false,
         error: 'Acesso negado',
@@ -1660,7 +1662,7 @@ router.get('/:id/rcs-assessments', authenticate, requireOrganizationScope, async
 
     // #619: mirrors #340's GET /:id out-of-scope 403 for this sub-resource.
     const sampleForScope = await sampleService.getSample(db, req.params.id);
-    if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+    if (sampleForScope && !isSampleInOrganizationScope(sampleForScope, req.organizationScope)) {
       return res.status(403).json({
         success: false,
         error: 'Acesso negado',
@@ -1700,7 +1702,7 @@ router.get('/:id/sprec-profiles', authenticate, requireOrganizationScope, async 
 
     // #619: mirrors #340's GET /:id out-of-scope 403 for this sub-resource.
     const sampleForScope = await sampleService.getSample(db, req.params.id);
-    if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+    if (sampleForScope && !isSampleInOrganizationScope(sampleForScope, req.organizationScope)) {
       return res.status(403).json({
         success: false,
         error: 'Acesso negado',
@@ -1741,7 +1743,7 @@ router.post('/:id/quarantine/release', authenticate, requireRole(3, 4), requireO
     if (!sample) {
       return res.status(404).json({ success: false, error: 'Amostra não encontrada' });
     }
-    if (!isRecordInOrganizationScope(sample, req.organizationScope, 'collectionSite')) {
+    if (!isSampleInOrganizationScope(sample, req.organizationScope)) {
       return res.status(403).json({ success: false, error: 'Acesso negado', message: 'Esta amostra pertence a outra organização' });
     }
     const released = await quarantineReleaseService.releaseQuarantine(db, sample, {
@@ -1800,7 +1802,7 @@ router.post('/:id/close', authenticate, requirePermission('editSample', 'UPDATE'
     if (!sampleForScope) {
       return res.status(404).json({ success: false, error: 'Amostra não encontrada' });
     }
-    if (!isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+    if (!isSampleInOrganizationScope(sampleForScope, req.organizationScope)) {
       return res.status(403).json({ success: false, error: 'Acesso negado', message: 'Esta amostra pertence a outra organização' });
     }
 
@@ -1852,7 +1854,7 @@ router.get('/:id/quarantine-actions', authenticate, requireOrganizationScope, as
 
     // #619: mirrors #340's GET /:id out-of-scope 403 for this sub-resource.
     const sampleForScope = await sampleService.getSample(db, req.params.id);
-    if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+    if (sampleForScope && !isSampleInOrganizationScope(sampleForScope, req.organizationScope)) {
       return res.status(403).json({
         success: false,
         error: 'Acesso negado',
@@ -1889,7 +1891,7 @@ router.get('/:id/state-decisions', authenticate, requireOrganizationScope, async
     }
 
     const sampleForScope = await sampleService.getSample(db, req.params.id);
-    if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+    if (sampleForScope && !isSampleInOrganizationScope(sampleForScope, req.organizationScope)) {
       return res.status(403).json({
         success: false,
         error: 'Acesso negado',
