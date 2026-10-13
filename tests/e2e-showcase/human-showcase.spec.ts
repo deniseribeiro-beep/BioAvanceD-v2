@@ -986,3 +986,152 @@ test.describe('Human-paced e2e showcase reel — RF024 access requests', () => {
     }
   });
 });
+
+// W6 reel: consent revocation (RF010 AC5/AC6/AC7, #1309) judged on governed
+// purpose codes (#1347). A participant signs a term whose two permissions
+// each name a DUO purpose; an access request for one of them is evaluated as
+// permit, the consent is revoked for that purpose only, and the same request
+// is re-evaluated as deny, so the committee cannot approve it. Not shown: the
+// revocation itself is recorded off camera through the API, because the
+// product has no operator UI for revoking a consent or reading its history;
+// AccessPolicy (#663) has no UI either and is not shown.
+test.describe('Human-paced e2e showcase reel — W6 consent revocation', () => {
+  const boxes: SeededStorageBox[] = [];
+
+  test.afterAll(async () => {
+    await Promise.all(boxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {})));
+    await closeSeedDb();
+  });
+
+  test('RF010 AC6/AC7 a consent revoked for the requested purpose turns an access request from permit to deny', async ({ page, request }) => {
+    const session = await realLogin(request);
+    await seedRealAuth(page, session);
+    const headers = { Authorization: `Bearer ${session.token}` };
+    const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const studyId = `showcase-revoke-study-${stamp}`;
+    const protocolId = `showcase-revoke-protocol-${stamp}`;
+    const healthCode = `DUO:showcase-revoke-hmb-${stamp}`;
+    const diseaseCode = `DUO:showcase-revoke-ds-${stamp}`;
+    const healthKey = 'showcase-health';
+    const diseaseKey = 'showcase-disease';
+    const title = `0 Showcase TCLE revogação ${stamp}`;
+    await seedStudy(studyId);
+    await seedProtocol(protocolId, { protocolVersion: '1.0' });
+    await seedDuoConcept(healthCode);
+    await seedDuoConcept(diseaseCode);
+
+    const org = await request.post(`${apiBaseURL}/api/organizations`, {
+      headers,
+      data: { officialName: `0 Showcase Revogação ${stamp}`, countryCode: 'BR' },
+    });
+    expect(org.ok(), await org.text()).toBeTruthy();
+    const organizationId = (await org.json()).data.organizationId as string;
+
+    const participant = await createRealParticipant(request, apiBaseURL!, session.token);
+    const client = new MongoClient(process.env.E2E_MONGO_URI || 'mongodb://localhost:27017?directConnection=true');
+    await client.connect();
+    const db = client.db(process.env.E2E_MONGO_DB || 'bioavanced_test');
+
+    try {
+      // A term whose permissions name governed purposes, signed for both.
+      const term = await request.post(`${apiBaseURL}/api/e-consent/consent-templates`, {
+        headers,
+        data: {
+          title,
+          content: 'Termo com finalidades codificadas pela DUO.',
+          permissions: [
+            { key: healthKey, label: 'Pesquisa em saúde', required: false, purposeCode: healthCode },
+            { key: diseaseKey, label: 'Pesquisa da doença', required: false, purposeCode: diseaseCode },
+          ],
+        },
+      });
+      expect(term.status(), await term.text()).toBe(201);
+      const termId = String((await term.json()).data._id);
+      const signed = await request.post(`${apiBaseURL}/api/e-consent/consents`, {
+        headers,
+        data: { participantId: participant.participantId, consentTemplateId: termId, responses: { [healthKey]: true, [diseaseKey]: true } },
+      });
+      expect(signed.status(), await signed.text()).toBe(201);
+      const consentId = String((await signed.json()).data._id);
+
+      const box = await seedStorageBoxLocation();
+      boxes.push(box);
+      const sample = await request.post(`${apiBaseURL}/api/samples`, {
+        headers,
+        data: {
+          participantId: participant.participantId,
+          sampleType: 'PLASMA',
+          sampleOrigin: 'VENOUS_BLOOD',
+          extractionProtocol: 'TUBE_EDTA',
+          quantity: 5,
+          quality: 'GOOD',
+          linkedProject: 'Showcase revogação de consentimento',
+          registeredAt: new Date().toISOString(),
+          boxId: box.boxId,
+          positionCode: box.positionCode,
+        },
+      });
+      expect([201, 202], await sample.text()).toContain(sample.status());
+      const specimenId = (await sample.json()).data.specimenId as string;
+
+      // 1. A request for the health purpose, registered by the operator.
+      await page.goto('/access-requests');
+      await beat(page, LARGE);
+      await page.getByTestId('access-request-requester-input').fill('Dra. Pesquisadora Solicitante');
+      await page.getByTestId('access-request-organization-select').selectOption(organizationId);
+      await page.getByTestId('access-request-study-input').fill(studyId);
+      await page.getByTestId('access-request-protocol-input').fill(protocolId);
+      await page.getByTestId('access-request-purpose-input').fill('Pesquisa em saúde com amostras de plasma');
+      await page.getByTestId('access-request-duo-select').selectOption(healthCode);
+      await page.getByTestId('access-request-item-id-1').fill(specimenId);
+      await beat(page, MEDIUM);
+      await page.getByTestId('access-request-submit').click();
+      await expect(page.getByTestId('access-request-detail')).toBeVisible();
+      await page.getByTestId('access-request-detail').scrollIntoViewIfNeeded();
+      await beat(page, LARGE);
+
+      // 2. Evaluated: the signed consent permits this purpose.
+      await page.getByTestId('access-request-evaluate').click();
+      await expect(page.getByTestId(`access-request-item-result-${specimenId}`)).toHaveText('permit');
+      await beat(page, LARGE);
+
+      // Off camera: the product has no operator UI for revoking a consent, so
+      // the participant's revocation of the health purpose goes through the API.
+      const revoked = await request.post(`${apiBaseURL}/api/e-consent/consents/${consentId}/revoke`, {
+        headers,
+        data: { scope: [healthKey], reason: 'Participante retirou o consentimento para pesquisa em saúde' },
+      });
+      expect(revoked.status(), await revoked.text()).toBe(200);
+
+      // 3. Re-evaluated: the revoked purpose is denied, and the reason names it.
+      await page.getByTestId('access-request-evaluate').click();
+      await expect(page.getByTestId(`access-request-item-result-${specimenId}`)).toHaveText('deny');
+      await expect(page.getByTestId('access-request-overall')).toHaveText(/: incompatível$/);
+      await expect(page.getByTestId(`access-request-item-${specimenId}`)).toContainText(healthCode);
+      await beat(page, LARGE);
+
+      // 4. The committee cannot approve an incompatible request.
+      await page.getByTestId('access-decision-justification-input').fill('Tentativa de aprovação após a revogação');
+      await beat(page, SMALL);
+      await page.getByTestId('access-decision-submit').click();
+      await expect(page.getByTestId('access-request-detail-error')).toContainText('incompatível');
+      await expect(page.getByTestId('access-request-decision-status')).toContainText('pending');
+      await beat(page, MEDIUM);
+
+      // 5. It records the refusal instead.
+      await page.getByTestId('access-decision-status-select').selectOption('rejected');
+      await page.getByTestId('access-decision-justification-input').fill('Consentimento revogado para a finalidade solicitada');
+      await beat(page, SMALL);
+      await page.getByTestId('access-decision-submit').click();
+      await expect(page.getByTestId('access-request-decision-status')).toContainText('rejected');
+      await beat(page, LARGE);
+    } finally {
+      await request.delete(`${apiBaseURL}/api/organizations/${organizationId}`, { headers }).catch(() => {});
+      await db.collection('consent_templates').deleteMany({ title });
+      await db.collection('terminologyConcepts').deleteMany({ code: { $in: [healthCode, diseaseCode] } });
+      await db.collection('patientConsents').deleteMany({ participantId: participant.participantId });
+      await db.collection('consentPermissions').deleteMany({ participantId: participant.participantId });
+      await client.close();
+    }
+  });
+});
