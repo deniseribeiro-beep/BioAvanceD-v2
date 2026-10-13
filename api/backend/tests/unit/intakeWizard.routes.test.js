@@ -228,6 +228,84 @@ describe('intakeWizard routes', () => {
       );
     });
 
+    // #1371: a derivative names its parents as specimen.parentSpecimenIds
+    // (dict-02 ELM-0120), and the wizard hands them to createSample, which
+    // validates them and registers the lineage.
+    describe('parentSpecimenIds (#1371)', () => {
+      function parentsFixture() {
+        const samplesCollection = {
+          insertOne: vi.fn().mockResolvedValue({ insertedId: 'sample-1' }),
+          findOne: vi.fn().mockResolvedValue({ _id: 'sample-1', participantId: '12345678' }),
+          updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
+        };
+        const getCollectionImpl = vi.fn(async (_db, key) => {
+          if (key === 'samples') return samplesCollection;
+          if (key === 'patients') return { updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) };
+          if (key === 'consents') return { findOne: vi.fn().mockResolvedValue(null) };
+          throw new Error(`unexpected key ${key}`);
+        });
+        const db = {
+          collection: (name) => {
+            if (name === 'sensors') return { find: () => makeCursor([{ sensorId: 'SEN-1', sensorType: 'temperature', locationId: 'EQ-1', maintenanceStatus: 'operational' }]) };
+            if (name === 'equipment') return { findOne: vi.fn().mockResolvedValue({ equipmentID: 'EQ-1', status: 'active' }) };
+            if (name === 'storageBoxes') {
+              return {
+                find: () => makeCursor([{
+                  _id: 'box-1',
+                  name: 'Box A',
+                  status: 'ACTIVE',
+                  dimension: { rows: 1, cols: 1 },
+                  currentOccupancy: 0,
+                  occupancyGrid: {},
+                  parent_id: 'rack-1',
+                }]),
+              };
+            }
+            if (name === 'storageContainers') return { findOne: vi.fn(async (query) => defaultStorageContainersFindOne(query)) };
+            throw new Error(`unexpected collection ${name}`);
+          },
+        };
+
+        const { router } = loadRoute({ getCollectionImpl });
+        const sampleServiceModule = require(sampleServicePath);
+        vi.spyOn(sampleServiceModule, 'createSample').mockResolvedValue({ _id: 'sample-1', participantId: '12345678' });
+        const StorageService = require(storageServicePath);
+        vi.spyOn(StorageService.prototype, 'autoAssignSampleToBox').mockResolvedValue({
+          success: true,
+          sampleLocation: { boxId: 'box-1', position: 'A1' },
+        });
+
+        return { app: buildApp(router, db), sampleServiceModule };
+      }
+
+      it('hands the named parents to createSample and answers 200', async () => {
+        const { app, sampleServiceModule } = parentsFixture();
+
+        const res = await request(app).post('/api/intake-wizard').send({
+          ...VALID_PAYLOAD,
+          specimen: { ...VALID_PAYLOAD.specimen, parentSpecimenIds: ['SPC-PARENT'] },
+        });
+
+        expect(res.status).toBe(200);
+        expect(sampleServiceModule.createSample).toHaveBeenCalledTimes(1);
+        expect(sampleServiceModule.createSample.mock.calls[0][1].parentSpecimenIds).toEqual(['SPC-PARENT']);
+      });
+
+      it('returns 422 NON_CANONICAL_FIELD for a single string instead of a list, and creates nothing', async () => {
+        const { app, sampleServiceModule } = parentsFixture();
+
+        const res = await request(app).post('/api/intake-wizard').send({
+          ...VALID_PAYLOAD,
+          specimen: { ...VALID_PAYLOAD.specimen, parentSpecimenIds: 'SPC-PARENT' },
+        });
+
+        expect(res.status).toBe(422);
+        expect(res.body.error).toBe('NON_CANONICAL_FIELD');
+        expect(res.body.fields).toContain('specimen.parentSpecimenIds');
+        expect(sampleServiceModule.createSample).not.toHaveBeenCalled();
+      });
+    });
+
     // #1355: the intake stamps the caller's organization on the sample and on
     // a participant it creates, resolved before anything is written.
     describe('organization scope (#1355)', () => {

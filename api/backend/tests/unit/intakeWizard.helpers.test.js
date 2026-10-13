@@ -165,6 +165,24 @@ describe('intakeWizard helpers', () => {
     expect(document.sampleOrigin).toBe('UNKNOWN');
   });
 
+  it('buildSampleDocumentFromIntake carries specimen.parentSpecimenIds trimmed (ELM-0120, #1371)', () => {
+    const document = helpers.buildSampleDocumentFromIntake({
+      participant: { patientName: 'Paciente Teste' },
+      specimen: { parentSpecimenIds: [' SP-1 ', 'SP-2'] },
+    });
+
+    expect(document.parentSpecimenIds).toEqual(['SP-1', 'SP-2']);
+  });
+
+  it('buildSampleDocumentFromIntake carries no parent when the specimen names none (#1371)', () => {
+    const document = helpers.buildSampleDocumentFromIntake({
+      participant: { patientName: 'Paciente Teste' },
+      specimen: {},
+    });
+
+    expect(document.parentSpecimenIds).toEqual([]);
+  });
+
   it('buildPharmacologyData returns null/empty fields when nothing is set', () => {
     const pharmacology = helpers.buildPharmacologyData({});
 

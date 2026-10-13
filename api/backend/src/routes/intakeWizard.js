@@ -499,6 +499,7 @@ function buildSampleDocumentFromIntake(data = {}, matchedPatient = null) {
     unit: normalizeString(specimen.unit) || null,
     specimenStatus,
     linkedProject: normalizeString(specimen.linkedProject) || 'INTAKE_WIZARD',
+    parentSpecimenIds: normalizeArray(specimen.parentSpecimenIds).map((parentId) => normalizeString(parentId)).filter(Boolean),
     sprec: normalizeObject(specimen.sprec),
     consentTemplateId: normalizeString(consent.consentTemplateId) || null,
     clinicalData: buildClinicalData(data),

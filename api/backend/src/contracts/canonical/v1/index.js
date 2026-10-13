@@ -41,6 +41,8 @@ const specimenSchema = {
     // ELM-0128: the collection site, an Organization reference. The intake
     // stamps the caller's resolved organization here (#1355).
     collectionSite: { type: 'string' },
+    // dict-02 ELM-0120: the specimens this one derives from (#1371).
+    parentSpecimenIds: { type: 'array', items: { type: 'string', minLength: 1 }, uniqueItems: true },
     merkleRoot: { type: 'string' },
     sprec: {
       type: 'object',
