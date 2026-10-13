@@ -14,6 +14,7 @@ const sessionService = require('../../src/services/session.service');
 const consentValidator = require('../../src/services/consent.validator');
 const { createCollectionMock, createDbMock: baseCreateDbMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
+const { sampleOrganizationScopeClause } = require('../../src/services/sampleTenancy.service');
 
 // #421: every accessType this file's tokens use (1, 2, 4) needs its own
 // UserRoleAssignment so requireRole/requirePermission resolve correctly
@@ -52,9 +53,9 @@ const SPECIMEN_ID = 'SPX-628-1';
 
 // #1082: buildRbacCollections gives every non-accessType-4 user scopeType
 // 'organization' with scopeId 'test-org-default'. The five write routes now
-// gate on the destination sample's collectionSite, and
-// isRecordInOrganizationScope treats a record with no value in the scoped
-// field as OUT of scope by design -- so a fixture sample carrying no
+// gate on the destination sample's tenancy key (#1192: organizationId, falling
+// back to collectionSite), and isSampleInOrganizationScope treats a sample with
+// neither field as OUT of scope by design -- so a fixture sample carrying no
 // organization is refused for everyone but Administrador. The fixtures below
 // never modelled the field; that is fixture debt, not a wrong gate.
 const FIXTURE_ORG = 'test-org-default';
@@ -1017,11 +1018,28 @@ describe('GET /api/results organization scoping (#910)', () => {
   // buildRbacCollections gives every non-accessType-4 user
   // scopeType 'organization' with scopeId 'test-org-default'.
   const MY_ORG = 'test-org-default';
+  // #1192: the tenancy key is organizationId, falling back to collectionSite
+  // only while organizationId is unset; these two disagree on purpose.
+  const ORG_ID_IN_SCOPE_SPECIMEN = 'SPX-ORGID-IN-SCOPE';
+  const ORG_ID_OUT_SCOPE_SPECIMEN = 'SPX-ORGID-OTHER-ORG';
 
   const SAMPLES = [
     { specimenId: IN_SCOPE_SPECIMEN, collectionSite: MY_ORG },
     { specimenId: OUT_SCOPE_SPECIMEN, collectionSite: 'some-other-org' },
+    { specimenId: ORG_ID_IN_SCOPE_SPECIMEN, organizationId: MY_ORG, collectionSite: 'some-other-org' },
+    { specimenId: ORG_ID_OUT_SCOPE_SPECIMEN, organizationId: 'some-other-org', collectionSite: MY_ORG },
   ];
+
+  // Evaluates the `{ $and: [{ $or: [...] }] }` shape the tenancy helper
+  // builds: each $or branch is field equality, `{ $in }`, or `null`
+  // (which also matches a missing field).
+  function matchesClause(doc, clause) {
+    return clause.$or.some((branch) => Object.entries(branch).every(([key, cond]) => {
+      if (cond === null) return doc[key] === undefined || doc[key] === null;
+      if (cond && Array.isArray(cond.$in)) return cond.$in.includes(doc[key]);
+      return doc[key] === cond;
+    }));
+  }
 
   // Honours the filter it is handed rather than returning a canned list --
   // a distinct() mock that ignored its filter would pass whether or not the
@@ -1029,10 +1047,8 @@ describe('GET /api/results organization scoping (#910)', () => {
   function samplesMock() {
     return createCollectionMock({
       distinct: vi.fn(async (field, filter = {}) => {
-        const allowed = filter.collectionSite && filter.collectionSite.$in;
-        const matched = allowed
-          ? SAMPLES.filter((d) => allowed.includes(d.collectionSite))
-          : SAMPLES;
+        const clauses = filter.$and || [];
+        const matched = SAMPLES.filter((d) => clauses.every((clause) => matchesClause(d, clause)));
         return [...new Set(matched.map((d) => d[field]))];
       }),
       findOne: vi.fn(async (query = {}) => SAMPLES.find((d) => d.specimenId === query.specimenId) || null),
@@ -1046,7 +1062,22 @@ describe('GET /api/results organization scoping (#910)', () => {
     const res = await request(app).get('/api/results').set('Authorization', `Bearer ${makeToken(2)}`);
 
     expect(res.status).toBe(200);
-    expect(findSpy).toHaveBeenCalledWith({ specimenId: { $in: [IN_SCOPE_SPECIMEN] } });
+    expect(findSpy).toHaveBeenCalledWith({ specimenId: { $in: [IN_SCOPE_SPECIMEN, ORG_ID_IN_SCOPE_SPECIMEN] } });
+  });
+
+  it('narrows the in-scope samples through the tenancy helper clause (#1192)', async () => {
+    const samples = samplesMock();
+    app.locals.db = createDbMock({
+      results: createCollectionMock({ find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }) }),
+      samples,
+    });
+
+    const res = await request(app).get('/api/results').set('Authorization', `Bearer ${makeToken(2)}`);
+
+    expect(res.status).toBe(200);
+    expect(samples.distinct).toHaveBeenCalledWith('specimenId', {
+      $and: [sampleOrganizationScopeClause({ scope: 'organization', organizationIds: [MY_ORG] })],
+    });
   });
 
   it('leaves the list query unfiltered for a global scope, preserving the Administrador bypass', async () => {
@@ -1082,6 +1113,30 @@ describe('GET /api/results organization scoping (#910)', () => {
     const res = await request(app).get(`/api/results/${RESULT_OID}`).set('Authorization', `Bearer ${makeToken(2)}`);
 
     expect(res.status).toBe(200);
+  });
+
+  it('allows a detail read when the sample organizationId is in scope though its collectionSite is not (#1192)', async () => {
+    const inScope = { ...FAKE_RESULT, specimenId: ORG_ID_IN_SCOPE_SPECIMEN };
+    app.locals.db = createDbMock({
+      results: createCollectionMock({ findOne: vi.fn().mockResolvedValue(inScope) }),
+      samples: samplesMock(),
+    });
+
+    const res = await request(app).get(`/api/results/${RESULT_OID}`).set('Authorization', `Bearer ${makeToken(2)}`);
+
+    expect(res.status).toBe(200);
+  });
+
+  it('403s a detail read when the sample organizationId is out of scope though its collectionSite is in scope (#1192)', async () => {
+    const outOfScope = { ...FAKE_RESULT, specimenId: ORG_ID_OUT_SCOPE_SPECIMEN };
+    app.locals.db = createDbMock({
+      results: createCollectionMock({ findOne: vi.fn().mockResolvedValue(outOfScope) }),
+      samples: samplesMock(),
+    });
+
+    const res = await request(app).get(`/api/results/${RESULT_OID}`).set('Authorization', `Bearer ${makeToken(2)}`);
+
+    expect(res.status).toBe(403);
   });
 
   it('403s the download of an out-of-scope result WITHOUT leaking its external URL', async () => {

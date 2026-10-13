@@ -7,7 +7,7 @@ const { ObjectId } = require('mongodb');
 const { findSampleByAnyId } = require('../utils/sampleLookup');
 const SampleFileModel = require('../models/SampleFile');
 const { getUserAnonId } = require('../utils/userAnonymization');
-const { isRecordInOrganizationScope } = require('../services/rbac-assignment.service');
+const { isSampleInOrganizationScope } = require('../services/sampleTenancy.service');
 // #643: extracted to a shared module so the Assay/Dataset scientific-file
 // linkage controllers reuse the exact same crypto path instead of a second
 // implementation -- see fileCrypto.js for the RF007/RNF029 rationale.
@@ -152,7 +152,7 @@ class SampleFileController {
       // #625: mirrors sample.routes.js's own out-of-scope 403 pattern.
       // req.organizationScope is only absent when requireOrganizationScope
       // wasn't run ahead of this handler (never true in production).
-      if (req.organizationScope && !isRecordInOrganizationScope(sample, req.organizationScope, 'collectionSite')) {
+      if (req.organizationScope && !isSampleInOrganizationScope(sample, req.organizationScope)) {
         if (fs.existsSync(file.path)) {
           try {
             fs.unlinkSync(file.path);
@@ -369,7 +369,7 @@ class SampleFileController {
       }
 
       // #625: mirrors sample.routes.js's own out-of-scope 403 pattern.
-      if (req.organizationScope && !isRecordInOrganizationScope(sample, req.organizationScope, 'collectionSite')) {
+      if (req.organizationScope && !isSampleInOrganizationScope(sample, req.organizationScope)) {
         return res.status(403).json({
           success: false,
           error: req.t ? req.t('samples.accessDenied') : 'Acesso negado',
@@ -502,7 +502,7 @@ class SampleFileController {
       // scope" and doesn't block the download on its own.
       if (req.organizationScope) {
         const sampleForScope = resolvedSample;
-        if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+        if (sampleForScope && !isSampleInOrganizationScope(sampleForScope, req.organizationScope)) {
           return res.status(403).json({
             success: false,
             error: req.t ? req.t('samples.accessDenied') : 'Acesso negado',
@@ -637,7 +637,7 @@ class SampleFileController {
       // just this check and tolerant of a failed/missing lookup.
       if (req.organizationScope) {
         const sampleForScope = resolvedSample;
-        if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+        if (sampleForScope && !isSampleInOrganizationScope(sampleForScope, req.organizationScope)) {
           return res.status(403).json({
             success: false,
             error: req.t ? req.t('samples.accessDenied') : 'Acesso negado',
@@ -781,7 +781,7 @@ class SampleFileController {
       // checked before the mutation, same as deleteFile.
       if (req.organizationScope) {
         const sampleForScope = resolvedSample;
-        if (sampleForScope && !isRecordInOrganizationScope(sampleForScope, req.organizationScope, 'collectionSite')) {
+        if (sampleForScope && !isSampleInOrganizationScope(sampleForScope, req.organizationScope)) {
           cleanupUploadedFile();
           return res.status(403).json({
             success: false,
@@ -993,7 +993,7 @@ class SampleFileController {
       }
 
       // #625: mirrors sample.routes.js's own out-of-scope 403 pattern.
-      if (req.organizationScope && !isRecordInOrganizationScope(sample, req.organizationScope, 'collectionSite')) {
+      if (req.organizationScope && !isSampleInOrganizationScope(sample, req.organizationScope)) {
         return res.status(403).json({
           success: false,
           error: req.t ? req.t('samples.accessDenied') : 'Acesso negado',
@@ -1095,7 +1095,7 @@ class SampleFileController {
       }
 
       // #625: mirrors sample.routes.js's own out-of-scope 403 pattern.
-      if (req.organizationScope && !isRecordInOrganizationScope(sample, req.organizationScope, 'collectionSite')) {
+      if (req.organizationScope && !isSampleInOrganizationScope(sample, req.organizationScope)) {
         return res.status(403).json({
           success: false,
           error: req.t ? req.t('samples.accessDenied') : 'Acesso negado',
@@ -1196,7 +1196,7 @@ class SampleFileController {
       }
 
       // #625: mirrors sample.routes.js's own out-of-scope 403 pattern.
-      if (req.organizationScope && !isRecordInOrganizationScope(sample, req.organizationScope, 'collectionSite')) {
+      if (req.organizationScope && !isSampleInOrganizationScope(sample, req.organizationScope)) {
         return res.status(403).json({
           success: false,
           error: req.t ? req.t('samples.accessDenied') : 'Acesso negado',

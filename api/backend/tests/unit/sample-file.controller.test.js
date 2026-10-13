@@ -488,6 +488,45 @@ describe('sample-file.controller', () => {
       expect(res.status).toHaveBeenCalledWith(403);
     });
 
+    // #1192: the sample's tenancy key is organizationId, falling back to
+    // collectionSite only while organizationId is unset.
+    it('lists files when organizationId is in scope though collectionSite is not', async () => {
+      const specimenId = new ObjectId().toString();
+      const sample = { _id: new ObjectId(specimenId), organizationId: 'org-1', collectionSite: 'org-9' };
+      const db = createDb({
+        samples: { findOne: vi.fn().mockResolvedValue(sample) },
+        sample_files: { find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }) }
+      });
+      const req = {
+        app: { locals: { db } },
+        params: { specimenId },
+        organizationScope: { scope: 'organization', organizationIds: ['org-1'] }
+      };
+      const res = createRes();
+
+      await controller.listFiles(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+    });
+
+    it('returns 403 when organizationId is out of scope though collectionSite is in scope', async () => {
+      const specimenId = new ObjectId().toString();
+      const sample = { _id: new ObjectId(specimenId), organizationId: 'org-9', collectionSite: 'org-1' };
+      const db = createDb({
+        samples: { findOne: vi.fn().mockResolvedValue(sample) }
+      });
+      const req = {
+        app: { locals: { db } },
+        params: { specimenId },
+        organizationScope: { scope: 'organization', organizationIds: ['org-1'] }
+      };
+      const res = createRes();
+
+      await controller.listFiles(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+    });
+
     it('returns sanitized files without storagePath', async () => {
       const specimenId = new ObjectId().toString();
       const sample = { _id: new ObjectId(specimenId) };
