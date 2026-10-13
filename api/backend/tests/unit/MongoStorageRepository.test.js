@@ -5,6 +5,7 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const MongoStorageRepository = require('../../src/infrastructure/persistence/mongo/MongoStorageRepository.js');
 const { createContendedCollectionMock } = require('../factories/db.factory.js');
+const { placeSpecimen } = require('../../src/services/legacyPlacementChain.service.js');
 
 function makeCollection(overrides = {}) {
   return {
@@ -53,7 +54,8 @@ function makeDb(collections) {
     storageAssignments: makeCollection({
       insertOne: vi.fn().mockResolvedValue({ insertedId: 'stub' }),
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
-      findOne: vi.fn().mockResolvedValue(null)
+      findOne: vi.fn().mockResolvedValue(null),
+      find: vi.fn(() => ({ toArray: async () => [] }))
     })
   };
   return {
@@ -472,6 +474,7 @@ describe('MongoStorageRepository', () => {
           .mockResolvedValueOnce({ matchedCount: 1 }) // target
       });
       const samples = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({ _id: new ObjectId(sampleId), specimenId: 'SPC-0001' }),
         updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 })
       });
       const db = makeDb({ storageBoxes, samples });
@@ -482,10 +485,12 @@ describe('MongoStorageRepository', () => {
       expect(samples.updateOne).toHaveBeenCalledTimes(1);
     });
 
-    // Issue #402: dict-02 StorageAssignment — a move must close the
-    // placement-history record at the source position and open a new one
-    // at the target, not just overwrite Sample.storageLocation.
-    it('closes the source StorageAssignment and opens one for the target (#402)', async () => {
+    // #1374: the move goes on the physical chain, in the caller's session:
+    // the container leaves its source position and takes the target one;
+    // no StorageAssignment row is written.
+    it('moves the specimen container on the physical chain in the session, not StorageAssignment rows (#1374)', async () => {
+      const session = {};
+      const sample = { _id: new ObjectId(sampleId), specimenId: 'SPC-0001' };
       const storageBoxes = makeCollection({
         findOne: vi.fn().mockResolvedValueOnce({ _id: toBoxId, status: 'ACTIVE' }),
         updateOne: vi
@@ -494,41 +499,96 @@ describe('MongoStorageRepository', () => {
           .mockResolvedValueOnce({ matchedCount: 1 })
       });
       const samples = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce(sample),
         updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 })
       });
-      const storagePaths = makeCollection({ findOne: vi.fn().mockResolvedValue(null) });
-      const storageAssignmentsUpdateOne = vi.fn().mockResolvedValueOnce({ matchedCount: 1 });
-      const storageAssignmentsInsertOne = vi.fn().mockResolvedValueOnce({ insertedId: 'x' });
-      const storageAssignments = makeCollection({
-        updateOne: storageAssignmentsUpdateOne,
-        insertOne: storageAssignmentsInsertOne
+      const containers = makeChainCollection();
+      const specimenContainerAssignments = makeChainCollection();
+      const containerPositionAssignments = makeChainCollection();
+      const storageAssignments = makeCollection({ insertOne: vi.fn(), updateOne: vi.fn() });
+      const db = makeDb({
+        storageBoxes, samples, containers, specimenContainerAssignments, containerPositionAssignments, storageAssignments
       });
-      const db = makeDb({ storageBoxes, samples, storagePaths, storageAssignments });
+      await placeSpecimen(db, { sample, box: { _id: fromBoxId }, position: 'A1', at: new Date('2026-01-01T00:00:00Z'), sourceEventId: 'seed' }, session);
+      const [source] = await containerPositionAssignments.find({}).toArray();
+      vi.clearAllMocks();
       const repo = new MongoStorageRepository(db);
 
-      await repo.moveSamplePosition(input, {});
+      await repo.moveSamplePosition(input, session);
 
-      expect(storageAssignmentsUpdateOne).toHaveBeenCalledWith(
-        expect.objectContaining({
-          specimenId: sampleId,
-          boxId: fromBoxId,
-          positionCode: 'A1',
-          removedAt: null
-        }),
-        expect.objectContaining({ $set: expect.objectContaining({ removedAt: expect.any(Date), occupancyStatus: 'livre' }) }),
-        { session: {} }
+      expect(samples.findOne).toHaveBeenCalledWith({ _id: expect.any(ObjectId) }, { session });
+      expect(containerPositionAssignments.updateOne).toHaveBeenCalledWith(
+        { containerPositionAssignmentId: source.containerPositionAssignmentId, assignmentStatus: 'active' },
+        { $set: expect.objectContaining({ removedAt: expect.any(Date) }) },
+        { session }
       );
-      expect(storageAssignmentsInsertOne).toHaveBeenCalledWith(
-        expect.objectContaining({
-          specimenId: sampleId,
-          boxId: toBoxId,
-          positionCode: 'B2',
-          placedAt: expect.any(Date),
-          removedAt: null,
-          occupancyStatus: 'ocupada'
-        }),
-        { session: {} }
+      expect(containerPositionAssignments.insertOne).toHaveBeenCalledTimes(1);
+      expect(containerPositionAssignments.insertOne).toHaveBeenCalledWith(
+        expect.objectContaining({ containerId: source.containerId, storagePositionId: `${toBoxId}:B02` }),
+        { session }
       );
+      expect(containers.insertOne).not.toHaveBeenCalled();
+      expect(specimenContainerAssignments.insertOne).not.toHaveBeenCalled();
+      expect(storageAssignments.insertOne).not.toHaveBeenCalled();
+      expect(storageAssignments.updateOne).not.toHaveBeenCalled();
+    });
+
+    // #1374: a specimen placed only through the legacy path is adopted
+    // first -- one container, loaded at its open legacy row -- and the move
+    // then takes that container to the target.
+    it('adopts a specimen whose only placement is an open legacy row, then moves it to the target (#1374)', async () => {
+      const session = {};
+      const sample = { _id: new ObjectId(sampleId), specimenId: 'SPC-0002' };
+      const storageBoxes = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce({ _id: toBoxId, status: 'ACTIVE' }),
+        updateOne: vi
+          .fn()
+          .mockResolvedValueOnce({ matchedCount: 1 })
+          .mockResolvedValueOnce({ matchedCount: 1 })
+      });
+      const samples = makeCollection({
+        findOne: vi.fn().mockResolvedValueOnce(sample),
+        updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 })
+      });
+      const legacyRow = {
+        storageAssignmentId: 'SA-1',
+        specimenId: sampleId,
+        boxId: fromBoxId,
+        positionCode: 'A1',
+        placedAt: new Date('2026-01-01T00:00:00Z'),
+        removedAt: null
+      };
+      const storageAssignments = makeCollection({
+        find: vi.fn(() => ({ toArray: async () => [legacyRow] })),
+        insertOne: vi.fn(),
+        updateOne: vi.fn()
+      });
+      const containers = makeChainCollection();
+      const specimenContainerAssignments = makeChainCollection();
+      const containerPositionAssignments = makeChainCollection();
+      const db = makeDb({
+        storageBoxes, samples, containers, specimenContainerAssignments, containerPositionAssignments, storageAssignments
+      });
+      const repo = new MongoStorageRepository(db);
+
+      await repo.moveSamplePosition(input, session);
+
+      expect(containers.insertOne).toHaveBeenCalledTimes(1);
+      const { containerId } = containers.insertOne.mock.calls[0][0];
+      expect(specimenContainerAssignments.insertOne).toHaveBeenCalledTimes(1);
+      expect(specimenContainerAssignments.insertOne).toHaveBeenCalledWith(
+        expect.objectContaining({ specimenId: 'SPC-0002', containerId, sourceEventId: 'legacy-storage-assignment:SA-1' }),
+        { session }
+      );
+      const placements = await containerPositionAssignments.find({}).toArray();
+      expect(placements.map((row) => [row.storagePositionId, row.assignmentStatus])).toEqual([
+        [`${fromBoxId}:A01`, 'ended'],
+        [`${toBoxId}:B02`, 'active']
+      ]);
+      expect(placements.every((row) => row.containerId === containerId)).toBe(true);
+      for (const call of containerPositionAssignments.insertOne.mock.calls) expect(call[1]).toEqual({ session });
+      expect(storageAssignments.insertOne).not.toHaveBeenCalled();
+      expect(storageAssignments.updateOne).not.toHaveBeenCalled();
     });
 
     it('throws "Origem inconsistente" when source update matchedCount is 0', async () => {

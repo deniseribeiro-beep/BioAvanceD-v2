@@ -240,16 +240,22 @@ describe('POST /api/storage/move', () => {
     expect(db.client.startSession).not.toHaveBeenCalled();
   });
 
-  it('a valid move succeeds and the movement insert carries the transaction session', async () => {
-    const sample = { _id: SAMPLE_ID, barcode: 'BR-001', collectionSite: HOME_ORG, storageLocation: { boxId: BOX_ID, position: 'A1' } };
+  // #1374: the move goes on the physical chain in the transaction session.
+  // This specimen is placed only through the legacy path, so it is adopted
+  // first -- one container -- and that container leaves A1 for the target.
+  it('a valid move succeeds: a legacy-only specimen is adopted and moved on the physical chain, every write in the transaction session', async () => {
+    const sample = { _id: SAMPLE_ID, specimenId: 'SPC-0001', barcode: 'BR-001', collectionSite: HOME_ORG, storageLocation: { boxId: BOX_ID, position: 'A1' } };
     const targetBox = { _id: TARGET_BOX_ID, name: 'Box B', parent_id: HOME_TREE.rackId, dimension: { rows: 9, cols: 9 }, occupancyGrid: {} };
-    const openAssignment = { specimenId: String(SAMPLE_ID), boxId: BOX_ID, positionCode: 'A1', removedAt: null };
+    const openAssignment = {
+      storageAssignmentId: 'SA-1', specimenId: String(SAMPLE_ID), boxId: BOX_ID, positionCode: 'A1', placedAt: new Date('2026-01-01T00:00:00Z'), removedAt: null
+    };
 
     const samples = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sample) });
     const storageBoxes = createCollectionMock({ findOne: vi.fn().mockResolvedValue(targetBox) });
-    const storageAssignments = createCollectionMock({ findOne: vi.fn().mockResolvedValue(openAssignment) });
+    const storageAssignments = createMatchingCollection([openAssignment], { collectionName: 'storageAssignments' });
+    const chain = chainCollections();
     const { sample_movements, counters } = ledgerCollections();
-    const db = dbWithRbac({ samples, storageBoxes, ...treeInOrg(HOME_ORG), storageAssignments, sample_movements, counters }, 2);
+    const db = dbWithRbac({ samples, storageBoxes, ...treeInOrg(HOME_ORG), storageAssignments, ...chain, sample_movements, counters }, 2);
     app.locals.db = db;
 
     const res = await request(app)
@@ -258,7 +264,71 @@ describe('POST /api/storage/move', () => {
       .send({ sampleId: SAMPLE_ID.toString(), targetBoxId: TARGET_BOX_ID.toString(), targetPosition: 'B2' });
 
     expect(res.status).toBe(200);
-    expect(sample_movements.insertOne).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ session: db.session }));
+    const session = db.session;
+    expect(chain.containers.insertOne).toHaveBeenCalledTimes(1);
+    const { containerId } = chain.containers.docs[0];
+    expect(chain.specimenContainerAssignments.insertOne).toHaveBeenCalledTimes(1);
+    expect(chain.specimenContainerAssignments.insertOne).toHaveBeenCalledWith(
+      expect.objectContaining({ specimenId: 'SPC-0001', containerId, sourceEventId: 'legacy-storage-assignment:SA-1' }),
+      expect.objectContaining({ session })
+    );
+    expect(chain.containerPositionAssignments.docs.map((row) => [row.containerId, row.storagePositionId, row.assignmentStatus])).toEqual([
+      [containerId, `${BOX_ID}:A01`, 'ended'],
+      [containerId, `${TARGET_BOX_ID}:B02`, 'active'],
+    ]);
+    for (const call of chain.containerPositionAssignments.insertOne.mock.calls) {
+      expect(call[1]).toEqual(expect.objectContaining({ session }));
+    }
+    expect(chain.containerPositionAssignments.updateOne).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.objectContaining({ session }));
+    expect(storageAssignments.insertOne).not.toHaveBeenCalled();
+    expect(storageAssignments.updateOne).not.toHaveBeenCalled();
+    expect(sample_movements.insertOne).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ session }));
+  });
+
+  // #1374: a specimen already on the chain keeps its container; only the
+  // position assignment changes.
+  it('a valid move of a chain-placed specimen closes its position assignment and opens one at the target, in the transaction session', async () => {
+    const sample = { _id: SAMPLE_ID, specimenId: 'SPC-0001', barcode: 'BR-001', collectionSite: HOME_ORG, storageLocation: { boxId: BOX_ID, position: 'A1' } };
+    const targetBox = { _id: TARGET_BOX_ID, name: 'Box B', parent_id: HOME_TREE.rackId, dimension: { rows: 9, cols: 9 }, occupancyGrid: {} };
+    const placedAt = new Date('2026-01-01T00:00:00Z');
+
+    const samples = createCollectionMock({ findOne: vi.fn().mockResolvedValue(sample) });
+    const storageBoxes = createCollectionMock({ findOne: vi.fn().mockResolvedValue(targetBox) });
+    const storageAssignments = createCollectionMock();
+    const chain = chainCollections();
+    chain.containers.docs.push({ containerId: 'CNT-1', containerType: 'unidentified_container', emptyStatus: 'occupied' });
+    chain.specimenContainerAssignments.docs.push({
+      specimenContainerAssignmentId: 'SCA-1', specimenId: 'SPC-0001', containerId: 'CNT-1', loadedAt: placedAt, unloadedAt: null, assignmentStatus: 'active'
+    });
+    chain.containerPositionAssignments.docs.push({
+      containerPositionAssignmentId: 'CPA-1', containerId: 'CNT-1', storagePositionId: `${BOX_ID}:A01`, placedAt, removedAt: null, assignmentStatus: 'active'
+    });
+    const { sample_movements, counters } = ledgerCollections();
+    const db = dbWithRbac({ samples, storageBoxes, ...treeInOrg(HOME_ORG), storageAssignments, ...chain, sample_movements, counters }, 2);
+    app.locals.db = db;
+
+    const res = await request(app)
+      .post('/api/storage/move')
+      .set('Authorization', `Bearer ${makeToken(2)}`)
+      .send({ sampleId: SAMPLE_ID.toString(), targetBoxId: TARGET_BOX_ID.toString(), targetPosition: 'B2' });
+
+    expect(res.status).toBe(200);
+    const session = db.session;
+    expect(chain.containerPositionAssignments.updateOne).toHaveBeenCalledWith(
+      expect.objectContaining({ containerPositionAssignmentId: 'CPA-1' }),
+      expect.anything(),
+      expect.objectContaining({ session })
+    );
+    expect(chain.containerPositionAssignments.insertOne).toHaveBeenCalledTimes(1);
+    expect(chain.containerPositionAssignments.insertOne).toHaveBeenCalledWith(
+      expect.objectContaining({ containerId: 'CNT-1', storagePositionId: `${TARGET_BOX_ID}:B02` }),
+      expect.objectContaining({ session })
+    );
+    expect(chain.containers.insertOne).not.toHaveBeenCalled();
+    expect(chain.specimenContainerAssignments.insertOne).not.toHaveBeenCalled();
+    expect(storageAssignments.insertOne).not.toHaveBeenCalled();
+    expect(storageAssignments.updateOne).not.toHaveBeenCalled();
+    expect(sample_movements.insertOne).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ session }));
   });
 });
 

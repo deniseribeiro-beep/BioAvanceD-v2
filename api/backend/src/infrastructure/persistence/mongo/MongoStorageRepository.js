@@ -10,6 +10,7 @@ const { escapeRegex } = require('../../../utils/escapeRegex');
 const {
   currentPlacement,
   placeSpecimen,
+  moveSpecimen,
   legacyWriteEventId
 } = require('../../../services/legacyPlacementChain.service');
 
@@ -390,12 +391,13 @@ class MongoStorageRepository {
       throw new Error('Falha ao atualizar localização da amostra');
     }
 
-    await this.closeStorageAssignment(
-      { specimenId: input.specimenId, boxId: fromBoxObjId, positionCode: input.fromPosition },
-      session
-    );
-    await this.openStorageAssignment(
-      { specimenId: input.specimenId, boxId: toBoxObjId, positionCode: input.toPosition },
+    // #1374: the move goes on the physical chain, in this session; a
+    // specimen placed only through the legacy path is adopted first.
+    const sample = await samplesCollection.findOne({ _id: sampleObjId }, { session });
+    const at = new Date();
+    await moveSpecimen(
+      this.db,
+      { sample, toBox, toPosition: input.toPosition, at, sourceEventId: legacyWriteEventId('move', sample, at) },
       session
     );
   }
