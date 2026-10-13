@@ -13,7 +13,7 @@ const { generateUniqueSpecimenId } = require('../utils/sampleIDGenerator');
 const { appendMovementWithHashChain } = require('../utils/sampleMovementLedger');
 const { getCollection } = require('../utils/collectionResolver');
 const crypto = require('crypto');
-const { withMongoTransaction, withTransactionWhereSupported } = require('../utils/mongoTransaction');
+const { withMongoTransaction, withTransactionWhereSupported, isTransientTransactionError } = require('../utils/mongoTransaction');
 const rcsAssessmentService = require('./rcs-assessment.service');
 const qualityDomain = require('./quality-domain.service');
 const specimenPreanalyticsService = require('./specimen-preanalytics.service');
@@ -476,12 +476,14 @@ class SampleService {
         try {
           await appendMovementWithHashChain(movementsCollection, buildBirthMovement(createMovementID), { session });
         } catch (ledgerError) {
+          if (isTransientTransactionError(ledgerError)) throw ledgerError;
           throw ledgerFailure(ledgerError);
         }
 
         try {
           await buildAllocateUseCase().execute(allocationCommand(insertResult.insertedId), { session });
         } catch (allocationError) {
+          if (isTransientTransactionError(allocationError)) throw allocationError;
           throw allocationFailure(allocationError);
         }
 

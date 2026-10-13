@@ -781,6 +781,52 @@ describe('sample.service', () => {
         expect(onCreatedInTransaction).not.toHaveBeenCalled();
       });
 
+      // #1370: the driver retries the transaction body only for a MongoError
+      // labelled TransientTransactionError, so such an error must leave the
+      // body as itself, not inside the create's wrapper.
+      const transientConflict = () => new MongoServerError({
+        message: 'Write conflict during plan execution',
+        code: 112,
+        codeName: 'WriteConflict',
+        errorLabels: ['TransientTransactionError']
+      });
+
+      it('#1370: a transient conflict from the allocation leaves the create as the same error, for the driver to retry', async () => {
+        const { db } = makeTransactionalDb();
+        const conflict = transientConflict();
+        db.collection('storageAssignments').insertOne.mockImplementation(async (_doc, options) => {
+          if (options?.session === db.session) throw conflict;
+          return { insertedId: 'assignment-1' };
+        });
+
+        await expect(sampleService.createSample(db, validSampleData())).rejects.toBe(conflict);
+      });
+
+      it('#1370: a transient conflict from the birth movement append leaves the create as the same error', async () => {
+        const { db } = makeTransactionalDb();
+        const conflict = transientConflict();
+        db.collections.sample_movements.insertOne = vi.fn(async (_doc, options) => {
+          if (options?.session === db.session) throw conflict;
+          return { insertedId: 'generated-id' };
+        });
+
+        await expect(sampleService.createSample(db, validSampleData())).rejects.toBe(conflict);
+      });
+
+      it('#1370: a MongoServerError with no transient label from the allocation keeps the wrapper and its 422', async () => {
+        const { db } = makeTransactionalDb();
+        const failure = new MongoServerError({ message: 'assignment write failed', code: 2 });
+        db.collection('storageAssignments').insertOne.mockImplementation(async (_doc, options) => {
+          if (options?.session === db.session) throw failure;
+          return { insertedId: 'assignment-1' };
+        });
+
+        await expect(sampleService.createSample(db, validSampleData())).rejects.toMatchObject({
+          statusCode: 422,
+          message: expect.stringMatching(/Falha ao alocar amostra.*assignment write failed/)
+        });
+      });
+
       it('a failed caller step aborts the create the same way', async () => {
         const { db, committed } = makeTransactionalDb();
         const onCreatedInTransaction = vi.fn().mockRejectedValue(new Error('register append failed'));

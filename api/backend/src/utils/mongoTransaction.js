@@ -115,9 +115,23 @@ async function probeTopology(db) {
   return topology;
 }
 
+/**
+ * #1370: `session.withTransaction` retries its callback only when the thrown
+ * error is a driver `MongoError` labelled `TransientTransactionError`, so a
+ * transaction body rethrows such an error as itself rather than wrapping it.
+ * Duck-typed on `hasErrorLabel`, so a caller need not require `mongodb`.
+ *
+ * @param {unknown} error
+ * @returns {boolean}
+ */
+function isTransientTransactionError(error) {
+  return typeof error?.hasErrorLabel === 'function' && error.hasErrorLabel('TransientTransactionError');
+}
+
 module.exports = {
   withMongoTransaction,
   withTransactionWhereSupported,
   isTransactionCapable,
   isKnownStandaloneDeployment,
+  isTransientTransactionError,
 };
