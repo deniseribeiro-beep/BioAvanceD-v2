@@ -33,8 +33,10 @@ function toObjectId(id) {
   return ObjectId.isValid(String(id)) && String(id).length === 24 ? new ObjectId(String(id)) : id;
 }
 
+// The business specimenId; a legacy sample that has none is keyed by its
+// _id, as the custody ledger keys it (#1374).
 function specimenIdOf(sample) {
-  const specimenId = sample?.specimenId;
+  const specimenId = sample?.specimenId || sample?._id;
   if (!specimenId) throw new Error('specimenId é obrigatório para a cadeia física');
   return String(specimenId);
 }
@@ -211,8 +213,8 @@ async function releaseSpecimen(db, { sample, at }, session) {
 // specimen is loaded the chain is authoritative: loaded and not placed is
 // released, whatever a stale legacy row still says (#1374).
 async function currentPlacement(db, sample, session) {
-  if (sample?.specimenId) {
-    const loaded = await physicalChain.openSpecimenAssignment(db, sample.specimenId, session);
+  if (sample?.specimenId || sample?._id) {
+    const loaded = await physicalChain.openSpecimenAssignment(db, specimenIdOf(sample), session);
     const placed = loaded && await physicalChain.openPositionAssignment(db, loaded.containerId, session);
     if (loaded && !placed) return null;
     if (placed) {

@@ -814,7 +814,7 @@ describe('MongoStorageRepository', () => {
 
     it('scans for the first free position and allocates it atomically', async () => {
       const samples = makeCollection({
-        findOne: vi.fn().mockResolvedValueOnce({ _id: specimenId, storageLocation: null }),
+        findOne: vi.fn().mockResolvedValueOnce({ _id: specimenId, specimenId: 'SPC-0002', storageLocation: null }),
         updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 })
       });
       const storageBoxes = makeCollection({
@@ -938,37 +938,55 @@ describe('MongoStorageRepository', () => {
       );
     });
 
-    // #1003: auto-assign is the only one of the four storage-placement
-    // writers that never opened a StorageAssignment row -- direct analogue
-    // of allocateSamplePosition's own "#402" case above.
-    it('opens a StorageAssignment for the newly auto-assigned position (#1003)', async () => {
+    // #1374: auto-assign places the specimen on the physical chain like the
+    // other writers, keyed by its business specimenId, in the caller's
+    // session; the legacy StorageAssignment row is no longer written.
+    it('places the auto-assigned specimen on the physical chain in the session, not a StorageAssignment row (#1374)', async () => {
+      const session = {};
       const samples = makeCollection({
-        findOne: vi.fn().mockResolvedValueOnce({ _id: specimenId, storageLocation: null }),
+        findOne: vi.fn().mockResolvedValueOnce({ _id: specimenId, specimenId: 'SPC-0002', storageLocation: null }),
         updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 })
       });
       const storageBoxes = makeCollection({
-        findOne: vi.fn().mockResolvedValueOnce(boxDoc),
+        findOne: vi.fn().mockResolvedValueOnce({ ...boxDoc, occupancyGrid: {}, currentOccupancy: 0 }),
         updateOne: vi.fn().mockResolvedValueOnce({ matchedCount: 1 })
       });
-      const storageAssignmentsInsertOne = vi.fn().mockResolvedValueOnce({ insertedId: 'x' });
-      const storageAssignments = makeCollection({ insertOne: storageAssignmentsInsertOne });
-      const db = makeDb({ samples, storageBoxes, storageAssignments });
+      const containers = makeChainCollection();
+      const specimenContainerAssignments = makeChainCollection();
+      const containerPositionAssignments = makeChainCollection();
+      const storageAssignments = makeCollection({ insertOne: vi.fn() });
+      const db = makeDb({
+        samples, storageBoxes, containers, specimenContainerAssignments, containerPositionAssignments, storageAssignments
+      });
       const repo = new MongoStorageRepository(db);
 
-      const position = await repo.autoAssignSamplePosition({ specimenId, boxId }, {});
+      const position = await repo.autoAssignSamplePosition({ specimenId, boxId }, session);
 
-      expect(position).toBe('A2');
-      expect(storageAssignmentsInsertOne).toHaveBeenCalledWith(
+      expect(position).toBe('A1');
+      expect(containers.insertOne).toHaveBeenCalledTimes(1);
+      expect(containers.insertOne.mock.calls[0][1]).toEqual({ session });
+      const container = containers.insertOne.mock.calls[0][0];
+
+      expect(specimenContainerAssignments.insertOne).toHaveBeenCalledTimes(1);
+      expect(specimenContainerAssignments.insertOne).toHaveBeenCalledWith(
         expect.objectContaining({
-          specimenId: String(specimenId),
-          boxId: String(boxId),
-          positionCode: 'A2',
-          placedAt: expect.any(Date),
-          removedAt: null,
-          occupancyStatus: 'ocupada'
+          specimenId: 'SPC-0002',
+          containerId: container.containerId,
+          sourceEventId: expect.stringMatching(new RegExp(`^legacy-storage-auto-assign:${specimenId}:`))
         }),
-        { session: {} }
+        { session }
       );
+
+      expect(containerPositionAssignments.insertOne).toHaveBeenCalledTimes(1);
+      expect(containerPositionAssignments.insertOne).toHaveBeenCalledWith(
+        expect.objectContaining({
+          containerId: container.containerId,
+          storagePositionId: `${boxId}:A01`
+        }),
+        { session }
+      );
+
+      expect(storageAssignments.insertOne).not.toHaveBeenCalled();
     });
   });
 

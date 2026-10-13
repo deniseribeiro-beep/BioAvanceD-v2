@@ -579,13 +579,13 @@ class MongoStorageRepository {
       throw new Error('Falha ao atualizar a amostra após alocação automática');
     }
 
-    // #1003: the other three storage-placement writers (allocateSamplePosition,
-    // moveSamplePosition, releaseSamplePosition) each open/close a
-    // StorageAssignment row -- auto-assign never did, so findSampleById never
-    // resolved a storageAssignment for an auto-assigned specimen and
-    // releaseSamplePosition/moveSamplePosition both refused to act on it.
-    await this.openStorageAssignment(
-      { specimenId: input.specimenId, boxId: boxObjId, positionCode: lockedPosition },
+    // #1374: auto-assign places the specimen on the physical chain, in this
+    // session, like the other writers, so the reader resolves its placement;
+    // a chain refusal (ASSIGNMENT_OVERLAP) aborts the transaction.
+    const at = new Date();
+    await placeSpecimen(
+      this.db,
+      { sample: freshSample, box: freshBox, position: lockedPosition, at, sourceEventId: legacyWriteEventId('auto-assign', freshSample, at) },
       session
     );
 

@@ -254,6 +254,24 @@ describe('legacyPlacementChain.service (#1314)', () => {
     expect(db.collections.containers.docs[0].containerType).toBe(containerType);
   });
 
+  // #1374: a legacy sample with no specimenId is keyed by its _id, as the
+  // custody ledger keys it; the placement and its read use the same key.
+  it('places a sample with no specimenId under String(_id), and currentPlacement reads it back (#1374)', async () => {
+    const db = createFakeDb(topology());
+    const sample = { ...SAMPLE, specimenId: undefined };
+
+    await bridge.placeSpecimen(db, { sample, box: BOX_1, position: 'A1', at: T(1), sourceEventId: 'evt-place' }, SESSION);
+
+    const [container] = db.collections.containers.docs;
+    expect(db.collections.specimenContainerAssignments.docs).toEqual([
+      expect.objectContaining({ specimenId: String(SAMPLE._id), containerId: container.containerId, assignmentStatus: 'active' }),
+    ]);
+    expect(await bridge.currentPlacement(db, sample, SESSION)).toMatchObject({
+      boxId: String(BOX_1._id), positionCode: 'A1', containerId: container.containerId,
+      storagePositionId: '64b000000000000000000001:A01', source: 'physical_chain',
+    });
+  });
+
   it('legacyWriteEventId names a legacy write by its operation, sample and instant (V2E-0683, V2E-0690)', () => {
     expect(bridge.legacyWriteEventId('allocate', SAMPLE, T(1))).toBe('legacy-storage-allocate:64a000000000000000000001:2026-10-01T00:00:00.000Z');
     expect(bridge.legacyWriteEventId('auto-assign', SAMPLE, '2026-10-02T03:04:05.000Z')).toBe('legacy-storage-auto-assign:64a000000000000000000001:2026-10-02T03:04:05.000Z');

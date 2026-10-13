@@ -22,6 +22,31 @@ function makeDb(overrides = {}) {
 // #1374: the physical chain collections the placement reader consults.
 const CHAIN_COLLECTIONS = ['specimenContainerAssignments', 'containerPositionAssignments', 'rackLocationAssignments'];
 
+// #1374: a physical-chain collection, empty at first, that keeps what is
+// inserted and matches a query by equality and `$or`.
+function matchesChainQuery(doc, filter) {
+  return Object.entries(filter).every(([key, value]) =>
+    key === '$or' ? value.some((branch) => matchesChainQuery(doc, branch)) : doc[key] === value
+  );
+}
+
+function makeChainCollection() {
+  const docs = [];
+  return {
+    findOne: vi.fn(async (filter) => docs.find((doc) => matchesChainQuery(doc, filter)) || null),
+    find: vi.fn((filter = {}) => ({ toArray: async () => docs.filter((doc) => matchesChainQuery(doc, filter)) })),
+    insertOne: vi.fn(async (doc) => {
+      docs.push({ ...doc });
+      return { insertedId: docs.length };
+    }),
+    updateOne: vi.fn(async (filter, update) => {
+      const doc = docs.find((row) => matchesChainQuery(row, filter));
+      if (doc) Object.assign(doc, update.$set);
+      return { matchedCount: doc ? 1 : 0 };
+    })
+  };
+}
+
 describe('StorageService - pure/near-pure helpers', () => {
   let service;
 
@@ -240,6 +265,7 @@ describe('StorageService.autoAssignSampleToBox', () => {
   let storageAssignmentsFindOne;
   let storageAssignmentsInsertOne;
   let storageAssignmentsUpdateOne;
+  let chain;
   let movements;
   let counters;
   let db;
@@ -255,12 +281,12 @@ describe('StorageService.autoAssignSampleToBox', () => {
     samplesUpdateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
     // No open StorageAssignment by default (sample not currently allocated).
     storageAssignmentsFindOne = vi.fn().mockResolvedValue(null);
-    // #1003: autoAssignSamplePosition now opens a StorageAssignment row
-    // (insertOne; updateOne closes one) --
-    // without these spies the existing cases below would go red on "insertOne
-    // is not a function" rather than on anything this block actually tests.
+    // #1374: autoAssignSamplePosition places the specimen on the physical
+    // chain, not a StorageAssignment row; the spies stay so a case can
+    // assert no row is written.
     storageAssignmentsInsertOne = vi.fn().mockResolvedValue({ insertedId: 'stub' });
     storageAssignmentsUpdateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+    chain = Object.fromEntries(['containers', ...CHAIN_COLLECTIONS].map((name) => [name, makeChainCollection()]));
     movements = makeMovementsCollection();
     // #988: appendImmutableAudit (now called inside the transaction) reads
     // 'counters' via MongoAuditRepository.generateMovementID.
@@ -285,9 +311,9 @@ describe('StorageService.autoAssignSampleToBox', () => {
         // matching every existing test in this block (none exercises AC#7 itself).
         if (name === 'storagePaths') return { findOne: vi.fn().mockResolvedValue(null) };
         if (name === 'storageContainers') return { findOne: vi.fn().mockResolvedValue(null) };
-        // #1374: the sample's placement is read from the physical chain
-        // first; nothing is loaded there by default.
-        if (CHAIN_COLLECTIONS.includes(name)) return { findOne: vi.fn().mockResolvedValue(null) };
+        // #1374: the sample's placement is read from, and written to, the
+        // physical chain; nothing is loaded there by default.
+        if (chain[name]) return chain[name];
         throw new Error(`unexpected collection: ${name}`);
       }),
       // #994: this was `getMongo: vi.fn(() => ({ startSession: ... }))`, and it
@@ -317,6 +343,7 @@ describe('StorageService.autoAssignSampleToBox', () => {
     });
     samplesFindOne.mockResolvedValue({
       _id: specimenId,
+      specimenId: 'SPC-9',
       barcode: 'BC-9',
       storageLocation: null
     });
@@ -339,6 +366,19 @@ describe('StorageService.autoAssignSampleToBox', () => {
     // #544: status is a retired legacy field (specimenStatus is the sole
     // source of truth since #408) — auto-assign must not write it.
     expect(sampleUpdateCall[1].$set['status']).toBeUndefined();
+
+    // #1374: the placement goes on the physical chain, keyed by the business
+    // specimenId, in the transaction's session; no StorageAssignment row.
+    const session = sampleUpdateCall[2].session;
+    expect(chain.specimenContainerAssignments.insertOne).toHaveBeenCalledWith(
+      expect.objectContaining({ specimenId: 'SPC-9' }),
+      { session }
+    );
+    expect(chain.containerPositionAssignments.insertOne).toHaveBeenCalledWith(
+      expect.objectContaining({ storagePositionId: `${boxId}:A02` }),
+      { session }
+    );
+    expect(storageAssignmentsInsertOne).not.toHaveBeenCalled();
   });
 
   it('#479: reports the transaction-committed position, not the stale pre-transaction scan, when they diverge', async () => {
@@ -364,6 +404,7 @@ describe('StorageService.autoAssignSampleToBox', () => {
     });
     samplesFindOne.mockResolvedValue({
       _id: specimenId,
+      specimenId: 'SPC-9',
       barcode: 'BC-9',
       storageLocation: null
     });
@@ -582,7 +623,7 @@ describe('StorageService.autoAssignSampleToBox', () => {
       occupancyGrid: {},
       currentOccupancy: 0
     });
-    samplesFindOne.mockResolvedValue({ _id: specimenId, barcode: 'BC-9', storageLocation: null });
+    samplesFindOne.mockResolvedValue({ _id: specimenId, specimenId: 'SPC-9', barcode: 'BC-9', storageLocation: null });
 
     const result = await service.autoAssignSampleToBox(specimenId.toString(), boxId.toString());
 
@@ -621,6 +662,7 @@ describe('StorageService.autoAssignSampleToBox', () => {
     });
     samplesFindOne.mockResolvedValue({
       _id: specimenId,
+      specimenId: 'SPC-9',
       barcode: 'BC-9',
       storageLocation: null
     });
@@ -661,7 +703,7 @@ describe('StorageService.autoAssignSampleToBox', () => {
       occupancyGrid: {},
       currentOccupancy: 0
     });
-    samplesFindOne.mockResolvedValue({ _id: specimenId, barcode: 'BC-9', storageLocation: null });
+    samplesFindOne.mockResolvedValue({ _id: specimenId, specimenId: 'SPC-9', barcode: 'BC-9', storageLocation: null });
 
     const result = await service.autoAssignSampleToBox(specimenId.toString(), boxId.toString());
 
@@ -720,7 +762,7 @@ describe('StorageService.autoAssignSampleToBox', () => {
         occupancyGrid: {},
         currentOccupancy: 0
       });
-      samplesFindOne.mockResolvedValue({ _id: specimenId, barcode: 'BC-9', storageLocation: null });
+      samplesFindOne.mockResolvedValue({ _id: specimenId, specimenId: 'SPC-9', barcode: 'BC-9', storageLocation: null });
 
       const result = await service.autoAssignSampleToBox(specimenId.toString(), boxId.toString());
 
@@ -745,7 +787,7 @@ describe('StorageService.autoAssignSampleToBox', () => {
         occupancyGrid: {},
         currentOccupancy: 0
       });
-      samplesFindOne.mockResolvedValue({ _id: specimenId, barcode: 'BC-9', storageLocation: null });
+      samplesFindOne.mockResolvedValue({ _id: specimenId, specimenId: 'SPC-9', barcode: 'BC-9', storageLocation: null });
 
       const result = await service.autoAssignSampleToBox(specimenId.toString(), boxId.toString());
 
