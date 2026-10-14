@@ -2071,18 +2071,21 @@ class ImportLGPDService {
 
       // RF005/RNF007 (#575): patientName is civil identity — never
       // written to Patient (was a bare patientName $set here before).
-      await patientsCollection.updateOne(
-        { _id: matchedPatient.patient._id },
-        {
-          $set: {
-            updatedAt: new Date(),
-            lastClinicalData: sample.clinicalData || {},
-          },
-          $addToSet: {
-            linkedSampleIds: String(insertResult.insertedId),
-          },
-        }
-      );
+      // #1356: a match outside the importer's scope is linked, never written.
+      if (!matchedPatient?.outOfScope) {
+        await patientsCollection.updateOne(
+          { _id: matchedPatient.patient._id },
+          {
+            $set: {
+              updatedAt: new Date(),
+              lastClinicalData: sample.clinicalData || {},
+            },
+            $addToSet: {
+              linkedSampleIds: String(insertResult.insertedId),
+            },
+          }
+        );
+      }
 
       return { ok: true, sampleId: insertResult.insertedId };
     } catch (error) {

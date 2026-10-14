@@ -339,9 +339,10 @@ describe('intakeWizard routes', () => {
       }
 
       it("stamps a single-organization caller's organization as collectionSite and on the participant match", async () => {
+        const patients = { updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) };
         const getCollectionImpl = vi.fn(async (_db, key) => ({
           samples: { findOne: vi.fn().mockResolvedValue({ _id: 'sample-1', participantId: '12345678' }), updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) },
-          patients: { updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) },
+          patients,
           consents: { findOne: vi.fn().mockResolvedValue(null) },
         })[key]);
         const { router, patientIdentityServiceModule } = loadRoute({ getCollectionImpl });
@@ -357,6 +358,36 @@ describe('intakeWizard routes', () => {
         const [, payload, options] = patientIdentityServiceModule.matchOrUpsertParticipant.mock.calls[0];
         expect(payload.clinicalUnitId).toBe('org-a');
         expect(options).toEqual({ organizationScope: scope });
+        // The participant is in the caller's scope, so it is updated.
+        expect(patients.updateOne).toHaveBeenCalledTimes(1);
+      });
+
+      it("links the sample to a participant matched outside the caller's scope but writes nothing on that participant (#1356)", async () => {
+        const patients = { updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) };
+        const getCollectionImpl = vi.fn(async (_db, key) => ({
+          samples: { findOne: vi.fn().mockResolvedValue({ _id: 'sample-1', participantId: '12345678' }), updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) },
+          patients,
+          consents: { findOne: vi.fn().mockResolvedValue(null) },
+        })[key]);
+        const { router } = loadRoute({
+          getCollectionImpl,
+          matchOrUpsertParticipant: vi.fn().mockResolvedValue({
+            created: false,
+            matchType: 'participantId',
+            outOfScope: true,
+            patient: { _id: 'patient-b', participantId: '12345678' },
+          }),
+        });
+        const sampleServiceModule = require(sampleServicePath);
+        vi.spyOn(sampleServiceModule, 'createSample').mockResolvedValue({ _id: 'sample-1', participantId: '12345678' });
+        const scope = { scope: 'organization', organizationIds: ['org-a'] };
+
+        const res = await request(scopedApp(router, placementDb(), scope)).post('/api/intake-wizard').send(VALID_PAYLOAD);
+
+        expect(res.status).toBe(200);
+        expect(sampleServiceModule.createSample).toHaveBeenCalledTimes(1);
+        expect(sampleServiceModule.createSample.mock.calls[0][1].participantId).toBe('12345678');
+        expect(patients.updateOne).not.toHaveBeenCalled();
       });
 
       it('refuses a multi-organization caller who names no collectionSite, writing nothing', async () => {

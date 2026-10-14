@@ -848,9 +848,12 @@ async function handleIntakeWizard(req, res) {
       severity: 'info',
       message: matchOutcome?.created
         ? 'Novo paciente criado durante intake wizard.'
-        : 'Paciente existente identificado e atualizado durante intake wizard.',
+        : matchOutcome?.outOfScope
+          ? 'Paciente existente identificado fora do escopo do usuário e vinculado sem atualização durante intake wizard.'
+          : 'Paciente existente identificado e atualizado durante intake wizard.',
       payload: {
         created: Boolean(matchOutcome?.created),
+        outOfScope: Boolean(matchOutcome?.outOfScope),
         matched: !Boolean(matchOutcome?.created),
         matchType: matchOutcome?.matchType || null,
         patientID: matchOutcome?.patient?.participantId || null,
@@ -937,19 +940,22 @@ async function handleIntakeWizard(req, res) {
       registeredAt: sampleToPersist.registeredAt,
     });
 
-    const patientsCollection = await getCollection(db, 'patients');
-    await patientsCollection.updateOne(
-      { _id: matchOutcome.patient._id },
-      {
-        $set: {
-          lastClinicalData: sampleToPersist.clinicalData || {},
-          updatedAt: new Date(),
-        },
-        $addToSet: {
-          linkedSampleIds: String(createdSample._id),
-        },
-      }
-    );
+    // #1356: a match outside the caller's scope is linked, never written.
+    if (!matchOutcome?.outOfScope) {
+      const patientsCollection = await getCollection(db, 'patients');
+      await patientsCollection.updateOne(
+        { _id: matchOutcome.patient._id },
+        {
+          $set: {
+            lastClinicalData: sampleToPersist.clinicalData || {},
+            updatedAt: new Date(),
+          },
+          $addToSet: {
+            linkedSampleIds: String(createdSample._id),
+          },
+        }
+      );
+    }
 
     const storageLocation = {
       equipmentID: automaticLocation.freezer?.containerID || null,

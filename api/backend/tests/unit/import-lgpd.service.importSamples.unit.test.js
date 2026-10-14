@@ -500,6 +500,21 @@ describe('ImportLGPDService.importSamples', () => {
     await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' }, { organizationId: 'ORG-OWN', organizationScope });
 
     expect(patientIdentityService.matchOrUpsertParticipant.mock.calls[0][2]).toEqual({ organizationScope });
+    // An in-scope match is the importer's own participant, so it is updated.
+    expect(patientsCollection.updateOne).toHaveBeenCalledTimes(1);
+  });
+
+  it('links a row to a participant matched outside the importer\'s scope but writes nothing on that participant (#1356)', async () => {
+    patientIdentityService.matchOrUpsertParticipant.mockResolvedValue({ ...MATCHED_PATIENT, outOfScope: true });
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+    const organizationScope = { scope: 'organization', organizationIds: ['ORG-OWN'] };
+
+    const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' }, { organizationId: 'ORG-OWN', organizationScope });
+
+    expect(result.success).toBe(1);
+    expect(samplesCollection.insertOne).toHaveBeenCalledTimes(1);
+    expect(samplesCollection.insertOne.mock.calls[0][0].participantId).toBe('12345678');
+    expect(patientsCollection.updateOne).not.toHaveBeenCalled();
   });
 
   it('leaves collectionSite unset when no organizationId was resolved, a global caller naming none (#1353)', async () => {

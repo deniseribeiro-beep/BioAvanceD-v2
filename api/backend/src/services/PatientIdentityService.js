@@ -102,7 +102,8 @@ class participantIdentityService {
 
     if (existing) {
       // #1356: a caller scoped to other organizations may link to a matched
-      // participant (whether it should is #1192's question) but never writes
+      // participant (decided in docs/decisions/
+      // 2026-10-13-participant-cross-organization-link.md) but never writes
       // that participant's records: that is the reparent class #1053 closed
       // on the update routes. An unstamped participant is out of scope for
       // everyone but global scope, the scope filters' own rule.
