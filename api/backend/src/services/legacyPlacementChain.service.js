@@ -342,6 +342,7 @@ module.exports = {
   legacyWriteEventId,
   legacyRowKeys,
   dropDuplicatePlacements,
+  organizationIdFor,
   ensureRackLocated,
   placeSpecimen,
   moveSpecimen,

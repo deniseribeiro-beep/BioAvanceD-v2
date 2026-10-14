@@ -29,6 +29,7 @@ const WIRED = [
   ['migrate:sample-organization', 'migrateSampleOrganization.js'],
   ['migrate:storage-assignments-to-chain', 'migrateStorageAssignmentsToChain.js'],
   ['migrate:specimen-role', 'migrateSpecimenRole.js'],
+  ['migrate:facilities-rooms-to-locations', 'migrateFacilitiesRoomsToLocations.js'],
   ['encryption:rewrite', 'rewriteEncryptedFields.js'],
   ['seed:disease-validation-rules', 'seedDiseaseValidationRules.js'],
 

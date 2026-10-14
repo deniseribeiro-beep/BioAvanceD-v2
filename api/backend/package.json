@@ -45,6 +45,7 @@
     "migrate:sample-organization": "node src/scripts/migrateSampleOrganization.js",
     "migrate:storage-assignments-to-chain": "node src/scripts/migrateStorageAssignmentsToChain.js",
     "migrate:specimen-role": "node src/scripts/migrateSpecimenRole.js",
+    "migrate:facilities-rooms-to-locations": "node src/scripts/migrateFacilitiesRoomsToLocations.js",
     "encryption:rewrite": "node src/scripts/rewriteEncryptedFields.js",
     "iot:simulate": "node scripts/iot-simulator.js",
     "seed:essential:list": "node scripts/seed-essential-reference-data.js --list",
