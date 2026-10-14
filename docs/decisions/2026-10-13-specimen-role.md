@@ -9,6 +9,7 @@ Dictionary: Specimen.specimenRole, ELM-0121 (code 1..1 Core, `primary|aliquot|de
 3. **The role agrees with the parents.** `SampleModel.validate` refuses a `primary` or a `control` with parents, and an `aliquot` or a `derivative` without one. A `pool` has no parent rule. `POST /api/samples` refuses an unknown role early with 422; the parent check is the model's.
 4. **The role is set at creation only.** Like `parentSpecimenIds`, it is not in `updateSample`'s `ALLOWED_UPDATE_FIELDS`.
 5. **Readers use `SampleModel.resolveSpecimenRole`** until the backfill (`migrate:specimen-role`, next commit) has run: the stored role when it is one of the five, else the default a create would have given the document.
+6. **The backfill `src/scripts/migrateSpecimenRole.js`** (`npm run migrate:specimen-role [-- --dry-run]`) gives a sample with no role (absent, null or empty) that same default, leaves a valid role in any case alone, and lists any other value in its summary's `invalid` without writing it.
 
 ## Chosen where the sources leave a gap
 
