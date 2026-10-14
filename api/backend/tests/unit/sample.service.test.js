@@ -183,9 +183,10 @@ function mockOperationalStorage(db) {
     storageContainers: { findOne: vi.fn((query) => Promise.resolve(containersById.get(String(query._id)) || null)) },
     equipment: { findOne: vi.fn().mockResolvedValue({ equipmentID: 'EQ-1' }) },
     sensors: { findOne: vi.fn().mockResolvedValue({ status: 'ok' }) },
-    // #474: AllocateSampleUseCase's openStorageAssignment resolves hierarchy
-    // via storagePaths (not the parent_id walk resolveStorageHierarchyForBox
-    // still uses for the pre-allocation equipment/sensor gate above).
+    // #474: AllocateSampleUseCase resolves the hierarchy via storagePaths
+    // (MongoStorageRepository.findStorageHierarchyForBox, not the parent_id
+    // walk resolveStorageHierarchyForBox still uses for the pre-allocation
+    // equipment/sensor gate above).
     storagePaths: {
       findOne: vi.fn().mockResolvedValue({ boxId: BOX_ID, rackId: RACK_ID, shelfId: SHELF_ID, freezerId: FREEZER_ID })
     },
@@ -546,6 +547,21 @@ describe('sample.service', () => {
       expect(db.collections.samples.deleteOne).toHaveBeenCalledWith({ _id: 'generated-id' });
     });
 
+    // #1378: without a transaction a failed label issue deletes the inserted
+    // sample, as a failed allocation does.
+    it('rolls back the inserted sample when its code is already an active label (#1378)', async () => {
+      const db = makeDb();
+      mockOperationalStorage(db);
+      db.collections.labelIdentifiers = makeCollection('labelIdentifiers');
+      db.collections.labelIdentifiers.insertOne.mockRejectedValue(Object.assign(new Error('E11000 duplicate key'), { code: 11000 }));
+
+      await expect(sampleService.createSample(db, validSampleData())).rejects.toMatchObject({
+        statusCode: 409,
+        message: expect.stringMatching(/^Falha ao emitir a etiqueta da amostra: Valor BR-TEST-001 já ativo/)
+      });
+      expect(db.collections.samples.deleteOne).toHaveBeenCalledWith({ _id: 'generated-id' });
+    });
+
     // RF023 AC3, RNF019 C1: the create's insert, birth movement, allocation,
     // SPECIMEN_UPSERTED and the caller's in-transaction step commit in one
     // transaction where the deployment runs one.
@@ -561,7 +577,8 @@ describe('sample.service', () => {
       // commits after its snapshot, so the transaction's own later write to
       // that document raises WriteConflict.
       function makeTransactionalDb() {
-        const db = makeDb({ [OUTBOX]: makeCollection(OUTBOX) });
+        // #1378: the label the create issues on the allocated container.
+        const db = makeDb({ [OUTBOX]: makeCollection(OUTBOX), labelIdentifiers: makeChainCollection('labelIdentifiers') });
         mockOperationalStorage(db);
         db.client.db = vi.fn(() => ({ command: vi.fn().mockResolvedValue({ setName: 'rs0' }) }));
         // As the driver does, a second startSession is a session of its own,
@@ -689,8 +706,9 @@ describe('sample.service', () => {
           }
           return collection;
         };
-        // #1374: kept before the watch wraps them, to show the chain was written.
-        const chainInserts = CHAIN_COLLECTIONS.map((name) => [name, db.collections[name].insertOne]);
+        // #1374, #1378: kept before the watch wraps them, to show the chain
+        // and the label were written.
+        const chainInserts = [...CHAIN_COLLECTIONS, 'labelIdentifiers'].map((name) => [name, db.collections[name].insertOne]);
         for (const [name, collection] of Object.entries(db.collections)) watch(name, collection);
         const resolve = db.collection.getMockImplementation();
         db.collection.mockImplementation((name) => watch(name, resolve(name)));
@@ -699,7 +717,7 @@ describe('sample.service', () => {
           .resolves.toMatchObject({ _id: 'generated-id' });
 
         const written = chainInserts.filter(([, insertOne]) => insertOne.mock.calls.length > 0).map(([name]) => name);
-        expect(written).toEqual(['containers', 'specimenContainerAssignments', 'containerPositionAssignments']);
+        expect(written).toEqual(['containers', 'specimenContainerAssignments', 'containerPositionAssignments', 'labelIdentifiers']);
         expect(outside).toEqual([]);
       });
 
@@ -707,6 +725,7 @@ describe('sample.service', () => {
         const { db, transaction } = makeTransactionalDb();
         seedParents(db, [parentSample()]);
         const outboxUpdate = db.collections[OUTBOX].updateOne;
+        const labelInsert = db.collections.labelIdentifiers.insertOne;
         const WRITES =['insertOne', 'insertMany', 'updateOne', 'updateMany', 'findOneAndUpdate', 'replaceOne', 'deleteOne', 'bulkWrite'];
         const outside = [];
         const watched = new WeakSet();
@@ -732,7 +751,49 @@ describe('sample.service', () => {
           .resolves.toMatchObject({ _id: 'generated-id' });
 
         expect(outboxUpdate.mock.calls.map(([, update]) => update?.$setOnInsert?.eventType)).toContain('LINEAGE_REGISTERED');
+        expect(labelInsert).toHaveBeenCalledTimes(1);
         expect(outside).toEqual([]);
+      });
+
+      // #1378: the sample's code is issued as a LabelIdentifier on the
+      // container the allocation loaded, in the create's session.
+      it('issues one active LabelIdentifier for the barcode on the allocated container, in the create\'s session (#1378)', async () => {
+        const { db, committed } = makeTransactionalDb();
+
+        await sampleService.createSample(db, validSampleData(), { auditInfo: { userId: 'user-7' } });
+
+        const containerInserts = db.collections.containers.insertOne.mock.calls;
+        expect(containerInserts).toHaveLength(1);
+        const labelInserts = db.collections.labelIdentifiers.insertOne.mock.calls;
+        expect(labelInserts).toHaveLength(1);
+        const [label, options] = labelInserts[0];
+        expect(options).toEqual({ session: db.session });
+        expect(label).toMatchObject({
+          encodedValue: 'BR-TEST-001',
+          targetType: 'container',
+          targetId: containerInserts[0][0].containerId,
+          identifierOrigin: 'institution_applied',
+          status: 'active',
+          printBatchId: null,
+          issuedBy: 'user-7'
+        });
+        expect(committed.samples).toEqual([expect.objectContaining({ barcode: 'BR-TEST-001' })]);
+      });
+
+      it('a code already active as a label aborts the create with 409: nothing committed, no compensating delete (#1378)', async () => {
+        const { db, committed } = makeTransactionalDb();
+        db.collections.labelIdentifiers.insertOne.mockRejectedValue(Object.assign(new Error('E11000 duplicate key'), { code: 11000 }));
+        const onCreatedInTransaction = vi.fn();
+
+        await expect(sampleService.createSample(db, validSampleData(), { onCreatedInTransaction })).rejects.toMatchObject({
+          statusCode: 409,
+          message: expect.stringMatching(/^Falha ao emitir a etiqueta da amostra: Valor BR-TEST-001 já ativo/)
+        });
+
+        expect(committed.samples).toEqual([]);
+        expect(committed.sample_movements).toEqual([]);
+        expect(db.collections.samples.deleteOne).not.toHaveBeenCalled();
+        expect(onCreatedInTransaction).not.toHaveBeenCalled();
       });
 
       // #1368: a derivative's parents, found by the create's

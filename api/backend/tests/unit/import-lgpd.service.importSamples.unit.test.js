@@ -33,6 +33,7 @@ const { revealStagedRecord } = require('../../src/utils/stagedRowCrypto');
 const patientIdentityService = require('../../src/services/PatientIdentityService');
 const qualityDomain = require('../../src/services/quality-domain.service');
 const DrugService = require('../../src/services/DrugService');
+const { createMatchingCollection } = require('../factories/filter.factory');
 
 const MATCHED_PATIENT = {
   patient: { _id: 'patient-obj-1', participantId: '12345678', patientName: 'Maria Silva' },
@@ -111,7 +112,8 @@ function makeDb({ sampleTypeFound = true, sampleOriginFound = true, protocolFoun
   const sampleOriginsCollection = { findOne: vi.fn().mockResolvedValue(sampleOriginFound ? { id: 'VENOUS_BLOOD', description: 'Sangue Venoso Periferico' } : null) };
   const extractionProtocolsCollection = { findOne: vi.fn().mockResolvedValue(protocolFound ? { id: 'TUBE_EDTA', description: 'Tubo EDTA (Tampa Roxa)' } : null) };
   // AllocateSampleUseCase's audit trail (MongoAuditRepository) and
-  // storagePaths hierarchy lookup (MongoStorageRepository.openStorageAssignment).
+  // storagePaths hierarchy lookup (MongoStorageRepository.checkLocationBlocked
+  // and findStorageHierarchyForBox).
   const sampleMovementsCollection = {
     insertOne: vi.fn().mockResolvedValue({ insertedId: 'movement-1' }),
     find: vi.fn(() => ({ sort: () => ({ limit: () => ({ toArray: async () => [], next: async () => null }) }) })),
@@ -186,7 +188,21 @@ function makeDb({ sampleTypeFound = true, sampleOriginFound = true, protocolFoun
     findOneAndUpdate: vi.fn().mockResolvedValue({ version: 1 }),
   };
 
+  // #1374, #1378: the allocation places a specimen on the physical chain,
+  // and every imported row is issued a LabelIdentifier on its container:
+  // the one the allocation loaded, else one created and loaded at the issue,
+  // after the legacy placement (storageAssignments) it would adopt is read.
+  const physicalChain = {
+    containers: createMatchingCollection([], { collectionName: 'containers' }),
+    specimenContainerAssignments: createMatchingCollection([], { collectionName: 'specimenContainerAssignments' }),
+    containerPositionAssignments: createMatchingCollection([], { collectionName: 'containerPositionAssignments' }),
+    rackLocationAssignments: createMatchingCollection([], { collectionName: 'rackLocationAssignments' }),
+    labelIdentifiers: createMatchingCollection([], { collectionName: 'labelIdentifiers' }),
+    storageAssignments: createMatchingCollection([], { collectionName: 'storageAssignments' }),
+  };
+
   const collections = {
+    ...physicalChain,
     graph_projection_outbox: graphOutboxCollection,
     graph_projection_outbox_aggregate_versions: graphOutboxVersionsCollection,
     import_batches: importBatchesCollection,
@@ -216,7 +232,7 @@ function makeDb({ sampleTypeFound = true, sampleOriginFound = true, protocolFoun
     },
   };
 
-  return { db, samplesCollection, patientsCollection, rcsAssessmentsCollection, specimenPreanalyticsCollection, importBatchesCollection, importStagingRecordsCollection };
+  return { db, samplesCollection, patientsCollection, rcsAssessmentsCollection, specimenPreanalyticsCollection, importBatchesCollection, importStagingRecordsCollection, physicalChain };
 }
 
 describe('ImportLGPDService.importSamples', () => {
@@ -759,7 +775,6 @@ describe('ImportLGPDService.importSamples', () => {
   // backfill script materializes and #462/#463/#464 already walk.
   describe('boxId auto-assignment (#459)', () => {
     const { ObjectId } = require('mongodb');
-    const { createMatchingCollection } = require('../factories/filter.factory');
 
     function makeStorageChain(boxCount = 2) {
       const freezerId = new ObjectId();
@@ -847,25 +862,18 @@ describe('ImportLGPDService.importSamples', () => {
         // mockOperationalStorage fix in #510/#513.
         findOne: vi.fn().mockResolvedValue(null),
       };
-      // #1374: the allocation places each specimen on the physical chain,
-      // and the placement reader reads it there first.
-      const physicalChain = {
-        containers: createMatchingCollection([], { collectionName: 'containers' }),
-        specimenContainerAssignments: createMatchingCollection([], { collectionName: 'specimenContainerAssignments' }),
-        containerPositionAssignments: createMatchingCollection([], { collectionName: 'containerPositionAssignments' }),
-        rackLocationAssignments: createMatchingCollection([], { collectionName: 'rackLocationAssignments' }),
-      };
+      // #1374: the allocation places each specimen on the physical chain
+      // (makeDb's), and the placement reader reads it there first.
+      const { physicalChain } = base;
       base.db.collection = vi.fn((name) => {
         if (name === 'storageContainers') return storageContainersCollection;
         if (name === 'storageBoxes') return storageBoxesCollection;
         if (name === 'storageAssignments') return storageAssignmentsCollection;
         if (name === 'equipment') return equipmentCollection;
         if (name === 'sensors') return sensorsCollection;
-        if (physicalChain[name]) return physicalChain[name];
         return originalCollection(name);
       });
       base.storageAssignments = storageAssignments;
-      base.physicalChain = physicalChain;
       return base;
     }
 
@@ -897,6 +905,36 @@ describe('ImportLGPDService.importSamples', () => {
         }),
       ]);
       expect(storageAssignments).toHaveLength(0);
+    });
+
+    // #1378: a placed row's code is issued on the container the allocation
+    // loaded; no second container is created.
+    it('issues a placed row one LabelIdentifier on the container its allocation loaded (#1378)', async () => {
+      const chain = makeStorageChain(1);
+      const { db, samplesCollection, physicalChain } = makeDbWithStorageChain(chain);
+      vi.spyOn(service, 'readFile').mockResolvedValue([{ ...VALID_ROW, barcode: 'BC-PLACED-1' }]);
+
+      const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' }, {
+        startBoxId: String(chain.boxes[0]._id),
+      });
+
+      expect(result.success).toBe(1);
+      const inserted = samplesCollection.insertOne.mock.calls[0][0];
+      expect(physicalChain.containers.docs).toHaveLength(1);
+      const { containerId } = physicalChain.containers.docs[0];
+      expect(physicalChain.specimenContainerAssignments.docs).toEqual([
+        expect.objectContaining({ specimenId: inserted.specimenId, containerId }),
+      ]);
+      expect(physicalChain.labelIdentifiers.docs).toEqual([
+        expect.objectContaining({
+          encodedValue: 'BC-PLACED-1',
+          targetType: 'container',
+          targetId: containerId,
+          identifierOrigin: 'institution_applied',
+          status: 'active',
+          printBatchId: null,
+        }),
+      ]);
     });
 
     // #817: the per-row work moved into processSampleRow, and the loop now
@@ -1151,6 +1189,7 @@ describe('ImportLGPDService.processSampleRow (#817)', () => {
   let db;
   let samplesCollection;
   let patientsCollection;
+  let physicalChain;
 
   function rowContext(overrides = {}) {
     return {
@@ -1170,7 +1209,7 @@ describe('ImportLGPDService.processSampleRow (#817)', () => {
   }
 
   beforeEach(() => {
-    ({ db, samplesCollection, patientsCollection } = makeDb());
+    ({ db, samplesCollection, patientsCollection, physicalChain } = makeDb());
     vi.spyOn(patientIdentityService, 'matchOrUpsertParticipant').mockResolvedValue(MATCHED_PATIENT);
     vi.spyOn(qualityDomain, 'resolveMethodologicalQuality').mockReturnValue({
       governance_status: 1,
@@ -1189,6 +1228,47 @@ describe('ImportLGPDService.processSampleRow (#817)', () => {
 
     expect(outcome).toEqual({ ok: true, sampleId: 'sample-id-1' });
     expect(samplesCollection.insertOne).toHaveBeenCalledTimes(1);
+  });
+
+  // #1378: a row with no placement has its container created and loaded at
+  // the label's issue, under a specimen-label-issuance source event.
+  it('issues an unplaced row one LabelIdentifier on a container loaded at the issue (#1378)', async () => {
+
+    const outcome = await service.processSampleRow(db, { ...VALID_ROW, barcode: 'BC-UNPLACED-1' }, rowContext());
+
+    expect(outcome).toEqual({ ok: true, sampleId: 'sample-id-1' });
+    const inserted = samplesCollection.insertOne.mock.calls[0][0];
+    expect(physicalChain.containers.docs).toHaveLength(1);
+    const { containerId } = physicalChain.containers.docs[0];
+    expect(physicalChain.specimenContainerAssignments.docs).toEqual([
+      expect.objectContaining({
+        specimenId: inserted.specimenId,
+        containerId,
+        sourceEventId: expect.stringMatching(/^specimen-label-issuance:sample-id-1:/),
+      }),
+    ]);
+    expect(physicalChain.containerPositionAssignments.docs).toHaveLength(0);
+    expect(physicalChain.labelIdentifiers.docs).toEqual([
+      expect.objectContaining({
+        encodedValue: 'BC-UNPLACED-1',
+        targetType: 'container',
+        targetId: containerId,
+        identifierOrigin: 'institution_applied',
+        status: 'active',
+        printBatchId: null,
+      }),
+    ]);
+  });
+
+  // #1378: this import has no duplicate-barcode check of its own, so a code
+  // already active as a label fails the row after its insert.
+  it('fails a row whose code is already an active label, reporting the inserted id (#1378)', async () => {
+    physicalChain.labelIdentifiers.insertOne = vi.fn().mockRejectedValue(Object.assign(new Error('E11000 duplicate key'), { code: 11000 }));
+
+    const outcome = await service.processSampleRow(db, { ...VALID_ROW, barcode: 'BC-TAKEN-1' }, rowContext());
+
+    expect(outcome).toMatchObject({ ok: false, sampleId: 'sample-id-1' });
+    expect(outcome.errors[0]).toMatch(/BC-TAKEN-1 já ativo/);
   });
 
   it('returns the rejection without inserting, for the caller to record', async () => {

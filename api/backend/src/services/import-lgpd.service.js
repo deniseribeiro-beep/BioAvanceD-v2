@@ -31,6 +31,7 @@ const rcsAssessmentService = require('./rcs-assessment.service');
 const { insertSampleWithProjection } = require('./graphProjection.service');
 const specimenPreanalyticsService = require('./specimen-preanalytics.service');
 const AllocateSampleUseCase = require('../core/use-cases/AllocateSampleUseCase');
+const { issueSpecimenLabel } = require('./specimenLabel.service');
 const MongoStorageRepository = require('../infrastructure/persistence/mongo/MongoStorageRepository');
 const MongoAuditRepository = require('../infrastructure/persistence/mongo/MongoAuditRepository');
 const LineageRepository = require('../infrastructure/database/neo4j/LineageRepository');
@@ -2058,6 +2059,16 @@ class ImportLGPDService {
         });
         sample.storageLocation = { boxId: candidateLocation.boxId, position: candidateLocation.position };
       }
+
+      // #1378: the row's code is issued as a LabelIdentifier (V2E-0169) on
+      // the specimen's container: the one the allocation loaded, else one
+      // created and loaded here. A code already active as a label fails
+      // the row (LABEL_EXISTS).
+      await issueSpecimenLabel(db, { ...sample, _id: insertResult.insertedId }, {
+        code: sample.barcode,
+        actorId: actor?.userId || null,
+        at: new Date(),
+      });
 
       try {
         await validator.validateSampleCompliance(String(insertResult.insertedId));

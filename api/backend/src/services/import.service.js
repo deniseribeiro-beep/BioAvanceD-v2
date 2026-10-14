@@ -22,6 +22,7 @@ const qualityDomain = require('./quality-domain.service');
 const qualityCompatibility = require('./quality-compatibility.service');
 const rcsAssessmentService = require('./rcs-assessment.service');
 const { insertSampleWithProjection } = require('./graphProjection.service');
+const { issueSpecimenLabel } = require('./specimenLabel.service');
 const specimenPreanalyticsService = require('./specimen-preanalytics.service');
 const { generateUniqueSpecimenId } = require('../utils/sampleIDGenerator');
 const { generateUniqueParticipantId } = require('../utils/patientAnonymization');
@@ -32,6 +33,19 @@ const { hashConsentToken } = require('../utils/consentTokenHash');
  * RF007 - Upload e Importação de Dados
  * Suporta: Pacientes (CSV/JSON), Amostras (CSV/JSON), Arquivos de Analise (ZIP/RAW/CSV), Temperatura (CSV/Streaming)
  */
+// #1378: a row that gives a code has it issued as a LabelIdentifier
+// (V2E-0169) on the specimen's container, created and loaded here, as
+// its first placement would be. This import generates no code, so a row
+// without one gets no label. A code already active as a label fails the row.
+async function issueImportedSampleLabel(db, sample, insertedId) {
+  if (sample.barcode === undefined || sample.barcode === null || !String(sample.barcode).trim()) return;
+  await issueSpecimenLabel(db, { ...sample, _id: insertedId }, {
+    code: String(sample.barcode).trim(),
+    actorId: null,
+    at: new Date(),
+  });
+}
+
 class ImportService {
   normalizeImportKey(value) {
     return String(value || '')
@@ -603,6 +617,7 @@ class ImportService {
                 });
               }
             }
+            await issueImportedSampleLabel(db, sample, insertResult.insertedId);
             try {
               await validator.validateSampleCompliance(String(insertResult.insertedId));
             } catch (validationError) {
@@ -707,6 +722,7 @@ class ImportService {
                 });
               }
             }
+            await issueImportedSampleLabel(db, sample, insertResult.insertedId);
             try {
               await validator.validateSampleCompliance(String(insertResult.insertedId));
             } catch (validationError) {

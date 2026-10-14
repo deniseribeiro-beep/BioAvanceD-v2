@@ -22,6 +22,7 @@ const legalHoldService = require('./legalHold.service');
 const operationalStateDecisionService = require('./operationalStateDecision.service');
 const { applySampleOrganizationScope } = require('./sampleTenancy.service');
 const participantIdentityService = require('./participantIdentity.service');
+const { issueSpecimenLabel } = require('./specimenLabel.service');
 const AllocateSampleUseCase = require('../core/use-cases/AllocateSampleUseCase');
 const MongoStorageRepository = require('../infrastructure/persistence/mongo/MongoStorageRepository');
 const MongoAuditRepository = require('../infrastructure/persistence/mongo/MongoAuditRepository');
@@ -431,11 +432,27 @@ class SampleService {
         wrapped.statusCode = message.includes('STORAGE_COLLISION') || message.includes('já está alocada') ? 409 : 422;
         return wrapped;
       };
+      // #1378: the sample's code is issued as a LabelIdentifier (V2E-0169)
+      // on the container the allocation has just loaded it into.
+      // Sample.barcode (ELM-0116) is still written for read compatibility.
+      const labelIssuedAt = new Date();
+      const issueLabel = (insertedId, session) => issueSpecimenLabel(db, { ...sample, _id: insertedId }, {
+        code: sample.barcode,
+        actorId: options?.auditInfo?.userId || null,
+        at: labelIssuedAt,
+        session
+      });
+      const labelFailure = (labelError) => {
+        const message = labelError?.message || String(labelError);
+        const wrapped = new Error(`Falha ao emitir a etiqueta da amostra: ${message}`);
+        wrapped.statusCode = labelError?.code === 'LABEL_EXISTS' ? 409 : 422;
+        return wrapped;
+      };
       const movementsCollection = await getCollection(db, 'sampleMovements');
 
       // RF023 AC3, RNF019 C1: on a deployment that runs transactions, the
       // sample insert, its birth movement, the allocation's writes with its
-      // custody event, SPECIMEN_UPSERTED, a derivative's LINEAGE_REGISTERED
+      // custody event, the label's issue (#1378), SPECIMEN_UPSERTED, a derivative's LINEAGE_REGISTERED
       // (#1368) and the caller's own in-transaction step
       // (options.onCreatedInTransaction, the register custody event) commit
       // or abort together: a failed append leaves no sample and no movement.
@@ -459,6 +476,13 @@ class SampleService {
           } catch (allocationError) {
             await samplesCollection.deleteOne({ _id: insertResult.insertedId });
             throw allocationFailure(allocationError);
+          }
+
+          try {
+            await issueLabel(insertResult.insertedId, null);
+          } catch (labelError) {
+            await samplesCollection.deleteOne({ _id: insertResult.insertedId });
+            throw labelFailure(labelError);
           }
 
           await recordSpecimenProjection(db, {
@@ -489,6 +513,13 @@ class SampleService {
         } catch (allocationError) {
           if (isTransientTransactionError(allocationError)) throw allocationError;
           throw allocationFailure(allocationError);
+        }
+
+        try {
+          await issueLabel(insertResult.insertedId, session);
+        } catch (labelError) {
+          if (isTransientTransactionError(labelError)) throw labelError;
+          throw labelFailure(labelError);
         }
 
         await new GraphProjectionService().appendSpecimenEvent(db, {

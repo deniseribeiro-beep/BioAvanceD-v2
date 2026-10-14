@@ -7,6 +7,7 @@ import fs from 'fs';
 const require2 = createRequire(import.meta.url);
 const importService = require2('../../src/services/import.service');
 const SampleGraphValidator = require2('../../src/services/SampleGraphValidator');
+const { createMatchingCollection } = require2('../factories/filter.factory');
 
 const tmpFiles = [];
 
@@ -90,11 +91,19 @@ function makeAggregateVersionsCollection() {
   };
 }
 
+// #1378: a row that gives a barcode is issued a LabelIdentifier on a
+// container created and loaded for it, after the legacy placement
+// (storageAssignments) it would adopt is read.
+const PHYSICAL_CHAIN_COLLECTIONS = ['containers', 'specimenContainerAssignments', 'labelIdentifiers', 'storageAssignments'];
+
 function makeDb(collection, rcsAssessmentsCollection = makeRcsAssessmentsCollection(), specimenPreanalyticsCollection = makeSpecimenPreanalyticsCollection(), outboxCollection = makeOutboxCollection()) {
   const aggregateVersionsCollection = makeAggregateVersionsCollection();
+  const physicalChain = Object.fromEntries(PHYSICAL_CHAIN_COLLECTIONS.map((name) => [name, createMatchingCollection([], { collectionName: name })]));
   return {
     outboxCollection,
+    physicalChain,
     collection: (name) => {
+      if (physicalChain[name]) return physicalChain[name];
       if (name === 'rcsAssessments') return rcsAssessmentsCollection;
       if (name === 'specimenPreanalytics') return specimenPreanalyticsCollection;
       if (name === 'graph_projection_outbox') return outboxCollection;
@@ -292,6 +301,60 @@ describe('ImportService.importSamples (JSON)', () => {
 
     expect(result.success).toBe(1);
     expect(result.errors).toEqual([]);
+  });
+});
+
+describe('ImportService.importSamples (JSON) LabelIdentifier issue (#1378)', () => {
+  beforeEach(() => {
+    vi.spyOn(SampleGraphValidator.prototype, 'validateSampleCompliance').mockResolvedValue({ suggestedStatus: 'QUARANTINE' });
+  });
+
+  it('issues a row with a barcode one active LabelIdentifier on its one container', async () => {
+    const filePath = writeTmpFile('labelled.json', JSON.stringify(validSample({ barcode: '  BC-IMPORT-1 ' })));
+    const db = makeDb(makeSamplesCollection());
+
+    const result = await importService.importSamples(db, { path: filePath, originalname: 'labelled.json' });
+
+    expect(result).toEqual({ success: 1, errors: [], total: 1 });
+    const { containers, specimenContainerAssignments, labelIdentifiers } = db.physicalChain;
+    expect(containers.docs).toHaveLength(1);
+    const { containerId } = containers.docs[0];
+    expect(specimenContainerAssignments.docs).toEqual([
+      expect.objectContaining({ containerId, sourceEventId: expect.stringMatching(/^specimen-label-issuance:sample-1:/) }),
+    ]);
+    expect(labelIdentifiers.docs).toEqual([
+      expect.objectContaining({
+        encodedValue: 'BC-IMPORT-1',
+        targetType: 'container',
+        targetId: containerId,
+        identifierOrigin: 'institution_applied',
+        status: 'active',
+        printBatchId: null,
+      }),
+    ]);
+  });
+
+  it('issues no label to a row without a barcode, since this import generates none', async () => {
+    const filePath = writeTmpFile('unlabelled.json', JSON.stringify(validSample()));
+    const db = makeDb(makeSamplesCollection());
+
+    const result = await importService.importSamples(db, { path: filePath, originalname: 'unlabelled.json' });
+
+    expect(result).toEqual({ success: 1, errors: [], total: 1 });
+    expect(db.physicalChain.labelIdentifiers.docs).toEqual([]);
+    expect(db.physicalChain.containers.docs).toEqual([]);
+  });
+
+  it('records a row error when its barcode is already an active label', async () => {
+    const filePath = writeTmpFile('taken.json', JSON.stringify(validSample({ barcode: 'BC-TAKEN-1' })));
+    const db = makeDb(makeSamplesCollection());
+    db.physicalChain.labelIdentifiers.insertOne = vi.fn().mockRejectedValue(Object.assign(new Error('E11000 duplicate key'), { code: 11000 }));
+
+    const result = await importService.importSamples(db, { path: filePath, originalname: 'taken.json' });
+
+    expect(result.success).toBe(0);
+    expect(result.total).toBe(1);
+    expect(result.errors).toEqual([{ row: 1, error: expect.stringMatching(/BC-TAKEN-1 já ativo/) }]);
   });
 });
 
