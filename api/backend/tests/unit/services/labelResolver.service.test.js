@@ -76,7 +76,7 @@ describe('labelResolver.service (RF016 AC6)', () => {
 
     const result = await resolver.resolveScan(db, scan);
 
-    expect(result).toMatchObject({ resolved: true, containerId: 'CT-1', specimenId: 'SPC-1' });
+    expect(result).toMatchObject({ resolved: true, source: 'label', containerId: 'CT-1', specimenId: 'SPC-1' });
     expect(db.collections.scanEvents.docs).toHaveLength(1);
     expect(db.collections.scanEvents.docs[0]).toMatchObject({
       normalizedValue: 'BVA2:synthetic:8K3M', targetType: 'specimen', targetId: 'SPC-1', result: 'resolved', rawValueProtected: null,
@@ -110,6 +110,96 @@ describe('labelResolver.service (RF016 AC6)', () => {
     expect(await resolver.resolveScan(db, { ...scan, rawValue: 'BVA2:other' })).toMatchObject({ resolved: false, reason: 'UNKNOWN_IDENTIFIER' });
     const policy = { allowedSymbologies: ['code_128'] };
     expect(await resolver.resolveScan(db, scan, { policy })).toMatchObject({ resolved: false, reason: 'SYMBOLOGY_NOT_ALLOWED' });
+  });
+
+  // #1378 (ELM-0116): a code printed before its label was migrated still
+  // resolves through the sample's legacy barcode during the migration window.
+  describe('legacy Sample.barcode during the migration window', () => {
+    const legacyScan = { ...scan, rawValue: 'BR-2025-001', symbology: 'code_128' };
+
+    it('resolves a legacy code to its specimen and its container, and records one scan', async () => {
+      const db = await seeded();
+      await db.collection('samples').insertOne({ _id: 'oid-1', specimenId: 'SPC-9', barcode: 'BR-2025-001' });
+      await physicalChain.createContainer(db, { containerId: 'CT-9', containerType: 'cryovial' });
+      await physicalChain.loadSpecimen(db, { specimenId: 'SPC-9', containerId: 'CT-9', sourceEventId: 'evt-9' });
+
+      const result = await resolver.resolveScan(db, legacyScan);
+
+      expect(result).toMatchObject({
+        resolved: true, source: 'legacy_barcode', normalizedValue: 'BR-2025-001', label: null, containerId: 'CT-9', specimenId: 'SPC-9',
+      });
+      expect(db.collections.scanEvents.docs).toHaveLength(1);
+      expect(db.collections.scanEvents.docs[0]).toMatchObject({
+        normalizedValue: 'BR-2025-001', targetType: 'specimen', targetId: 'SPC-9', operationContext: 'lookup', result: 'resolved',
+      });
+    });
+
+    it('a legacy sample on no container resolves with a null containerId', async () => {
+      const db = await seeded();
+      await db.collection('samples').insertOne({ _id: 'oid-1', specimenId: 'SPC-9', barcode: 'BR-2025-001' });
+
+      expect(await resolver.resolveScan(db, legacyScan)).toMatchObject({ resolved: true, source: 'legacy_barcode', containerId: null, specimenId: 'SPC-9' });
+    });
+
+    it('a value that is both an active label and a legacy barcode resolves through the label', async () => {
+      const db = await seeded();
+      await physicalChain.loadSpecimen(db, { specimenId: 'SPC-1', containerId: 'CT-1', sourceEventId: 'evt-1' });
+      await db.collection('samples').insertOne({ _id: 'oid-2', specimenId: 'SPC-OTHER', barcode: 'BVA2:synthetic:8K3M' });
+
+      const result = await resolver.resolveScan(db, scan);
+
+      expect(result).toMatchObject({ resolved: true, source: 'label', containerId: 'CT-1', specimenId: 'SPC-1' });
+      expect(db.collections.scanEvents.docs).toHaveLength(1);
+    });
+
+    it('a label on an empty container does not fall back to a legacy barcode', async () => {
+      const db = await seeded();
+      await db.collection('samples').insertOne({ _id: 'oid-2', specimenId: 'SPC-OTHER', barcode: 'BVA2:synthetic:8K3M' });
+
+      expect(await resolver.resolveScan(db, scan)).toMatchObject({ resolved: false, reason: 'EMPTY_CONTAINER' });
+    });
+
+    it('refuses a legacy sample the inScope guard denies, before any ScanEvent is written', async () => {
+      const db = await seeded();
+      await db.collection('samples').insertOne({ _id: 'oid-1', specimenId: 'SPC-9', barcode: 'BR-2025-001' });
+
+      const asked = [];
+      const result = await resolver.resolveScan(db, legacyScan, { inScope: async (specimenId) => { asked.push(specimenId); return false; } });
+
+      expect(result).toMatchObject({ resolved: false, reason: 'OUT_OF_SCOPE' });
+      expect(result.specimenId).toBeUndefined();
+      expect(asked).toEqual(['SPC-9']);
+      expect(db.collections.scanEvents?.docs ?? []).toHaveLength(0);
+    });
+
+    it('a value no label and no sample carries is still UNKNOWN_IDENTIFIER', async () => {
+      const db = await seeded();
+      await db.collection('samples').insertOne({ _id: 'oid-1', specimenId: 'SPC-9', barcode: 'BR-2025-001' });
+
+      expect(await resolver.resolveScan(db, { ...legacyScan, rawValue: 'br-2025-001' })).toMatchObject({ resolved: false, reason: 'UNKNOWN_IDENTIFIER' });
+      expect(await resolver.resolveScan(db, { ...legacyScan, rawValue: 'BR-2025-002' })).toMatchObject({ resolved: false, reason: 'UNKNOWN_IDENTIFIER' });
+      expect(db.collections.scanEvents?.docs ?? []).toHaveLength(0);
+    });
+
+    it('a legacy sample with no specimenId resolves to String(_id)', async () => {
+      const db = await seeded();
+      const _id = { toString: () => '652f1c0a9b1e8a0012345678' };
+      await db.collection('samples').insertOne({ _id, barcode: 'BR-2025-001' });
+
+      const result = await resolver.resolveScan(db, legacyScan);
+
+      expect(result).toMatchObject({ resolved: true, source: 'legacy_barcode', specimenId: '652f1c0a9b1e8a0012345678' });
+      expect(db.collections.scanEvents.docs[0].targetId).toBe('652f1c0a9b1e8a0012345678');
+    });
+
+    it('a barcode stored as a number resolves from its scanned digits', async () => {
+      const db = await seeded();
+      await db.collection('samples').insertOne({ _id: 'oid-3', specimenId: 'SPC-7', barcode: 20250042 });
+
+      expect(await resolver.resolveScan(db, { ...legacyScan, rawValue: '20250042' })).toMatchObject({
+        resolved: true, source: 'legacy_barcode', specimenId: 'SPC-7',
+      });
+    });
   });
 
   it('refuses a second active label with the same value in one namespace', async () => {

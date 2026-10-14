@@ -3,6 +3,7 @@ const logger = require('../utils/logger');
 const LabelIdentifierModel = require('../models/LabelIdentifier');
 const ScanEventModel = require('../models/ScanEvent');
 const IdentificationPolicyModel = require('../models/IdentificationPolicy');
+const physicalChain = require('./physicalChain.service');
 const { ensureLabelIdentifierIndexes, ensureScanEventIndexes } = require('../utils/physicalChainIndexes');
 
 // #1314 (RF016 AC6): the resolver captures, decodes, normalizes and
@@ -56,9 +57,43 @@ async function registerLabel(db, data, { session, printed = true, provenance } =
   return label;
 }
 
-// Returns { resolved, reason, label, containerId, specimenId, scanEvent }.
+// #1378 (ELM-0116, "retained for migration read compatibility"): a code
+// printed before its label was migrated is still a sample's legacy barcode.
+// Exact match only; an all-digit value also matches its Number, since a
+// legacy barcode may be stored as one. This fallback goes when the
+// migration window closes.
+async function findLegacySample(db, normalizedValue) {
+  const samples = await getCollection(db, 'samples');
+  const sample = await samples.findOne({ barcode: normalizedValue });
+  if (sample || !/^[0-9]+$/.test(normalizedValue)) return sample;
+  return samples.findOne({ barcode: Number(normalizedValue) });
+}
+
+async function recordScan(db, scan, { normalizedValue, symbology, specimenId, retainRawValue }) {
+  const scanEvent = ScanEventModel.create({
+    deviceId: scan.deviceId,
+    actorId: scan.actorId,
+    locationId: scan.locationId,
+    rawValueProtected: retainRawValue ? scan.rawValue ?? null : null,
+    normalizedValue,
+    symbology,
+    targetType: 'specimen',
+    targetId: specimenId,
+    operationContext: 'lookup',
+    result: 'resolved',
+    correlationId: scan.correlationId,
+    occurredAt: scan.occurredAt,
+  }, { retainRawValue });
+  await ensureLabelIndexes(db);
+  await (await getCollection(db, 'scanEvents')).insertOne(scanEvent);
+  return scanEvent;
+}
+
+// Returns { resolved, reason, source, label, containerId, specimenId, scanEvent }.
 // `inScope`, when given, is asked about the resolved specimen before any
 // ScanEvent is written, so a scan the caller may not see leaves no event.
+// An active label always wins over a legacy barcode with the same value, and
+// a label that resolves to no specimen does not fall back.
 async function resolveScan(db, scan, { policy = null, retainRawValue = false, inScope = null } = {}) {
   const normalizedValue = normalizeScannedValue(scan.rawValue ?? scan.normalizedValue);
   const symbology = String(scan.symbology || '').toLowerCase();
@@ -68,7 +103,18 @@ async function resolveScan(db, scan, { policy = null, retainRawValue = false, in
 
   const label = await (await getCollection(db, 'labelIdentifiers')).findOne({ encodedValue: normalizedValue, status: 'active' });
   if (!label) {
-    return { resolved: false, reason: 'UNKNOWN_IDENTIFIER', normalizedValue };
+    const sample = await findLegacySample(db, normalizedValue);
+    if (!sample) {
+      return { resolved: false, reason: 'UNKNOWN_IDENTIFIER', normalizedValue };
+    }
+    // The chain's key: a legacy sample with no specimenId is keyed by its _id.
+    const specimenId = String(sample.specimenId || sample._id);
+    if (inScope && !(await inScope(specimenId))) {
+      return { resolved: false, reason: 'OUT_OF_SCOPE', normalizedValue };
+    }
+    const assignment = await physicalChain.openSpecimenAssignment(db, specimenId);
+    const scanEvent = await recordScan(db, scan, { normalizedValue, symbology, specimenId, retainRawValue });
+    return { resolved: true, source: 'legacy_barcode', normalizedValue, label: null, containerId: assignment ? assignment.containerId : null, specimenId, scanEvent };
   }
   if (label.targetType !== 'container') {
     return { resolved: false, reason: 'NOT_A_CONTAINER', normalizedValue, label };
@@ -82,23 +128,8 @@ async function resolveScan(db, scan, { policy = null, retainRawValue = false, in
     return { resolved: false, reason: 'OUT_OF_SCOPE', normalizedValue };
   }
 
-  const scanEvent = ScanEventModel.create({
-    deviceId: scan.deviceId,
-    actorId: scan.actorId,
-    locationId: scan.locationId,
-    rawValueProtected: retainRawValue ? scan.rawValue ?? null : null,
-    normalizedValue,
-    symbology,
-    targetType: 'specimen',
-    targetId: open.specimenId,
-    operationContext: 'lookup',
-    result: 'resolved',
-    correlationId: scan.correlationId,
-    occurredAt: scan.occurredAt,
-  }, { retainRawValue });
-  await ensureLabelIndexes(db);
-  await (await getCollection(db, 'scanEvents')).insertOne(scanEvent);
-  return { resolved: true, normalizedValue, label, containerId: label.targetId, specimenId: open.specimenId, scanEvent };
+  const scanEvent = await recordScan(db, scan, { normalizedValue, symbology, specimenId: open.specimenId, retainRawValue });
+  return { resolved: true, source: 'label', normalizedValue, label, containerId: label.targetId, specimenId: open.specimenId, scanEvent };
 }
 
 module.exports = {
