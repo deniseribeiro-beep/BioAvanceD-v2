@@ -102,6 +102,7 @@ const {
   EXTRACTION_PROTOCOL_IDS,
   MIABIS_QUALITY_IDS,
 } = require('../../config/constants/specimen.constants');
+const { SPECIMEN_ROLE_VALUES } = require('../../models/Sample');
 
 // #789: the prohibited pre-rename vocabulary, in ONE place. It was inlined
 // in validateCreateSamplePayload only, so `GET /` had no way to reject the
@@ -220,6 +221,13 @@ function validateCreateSamplePayload(req, res, next) {
     } else if (new Set(payload.parentSpecimenIds.map((parentId) => parentId.trim())).size !== payload.parentSpecimenIds.length) {
       errors.push('parentSpecimenIds não pode repetir um specimenId');
     }
+  }
+
+  // ELM-0121 (#1201): the model checks the role against the parents.
+  if (payload.specimenRole !== undefined
+    && (typeof payload.specimenRole !== 'string'
+      || !SPECIMEN_ROLE_VALUES.includes(payload.specimenRole.trim().toLowerCase()))) {
+    errors.push('specimenRole deve ser primary, aliquot, derivative, pool ou control');
   }
 
   if (errors.length > 0) {

@@ -205,6 +205,57 @@ describe('Sample parentSpecimenIds (ELM-0120, #1368)', () => {
   });
 });
 
+describe('Sample specimenRole (ELM-0121)', () => {
+  const base = {
+    specimenId: 'SP-1', participantId: '12345678', sampleType: 'PLASMA', sampleOrigin: 'VENOUS_BLOOD',
+    extractionProtocol: 'TUBE_EDTA', registeredAt: new Date('2024-01-01'), quantity: 10, linkedProject: 'ProjectX',
+  };
+
+  it('create defaults to primary without parents', () => {
+    expect(Sample.create({ ...base }).specimenRole).toBe('primary');
+  });
+
+  it('create defaults to derivative with parents', () => {
+    expect(Sample.create({ ...base, parentSpecimenIds: ['SP-0'] }).specimenRole).toBe('derivative');
+  });
+
+  it('create keeps a given role, folded', () => {
+    expect(Sample.create({ ...base, parentSpecimenIds: ['SP-0'], specimenRole: 'aliquot' }).specimenRole).toBe('aliquot');
+    expect(Sample.create({ ...base, parentSpecimenIds: ['SP-0'], specimenRole: ' Aliquot ' }).specimenRole).toBe('aliquot');
+  });
+
+  it('validate accepts a pool without parents and an aliquot with one', () => {
+    expect(Sample.validate({ ...base, specimenRole: 'pool' }).isValid).toBe(true);
+    expect(Sample.validate({ ...base, specimenRole: 'aliquot', parentSpecimenIds: ['SP-0'] }).isValid).toBe(true);
+  });
+
+  it('validate refuses an unknown role', () => {
+    expect(Sample.validate({ ...base, specimenRole: 'mother' }).errors).toContain('specimenRole inválido');
+  });
+
+  it('validate refuses a primary with parents', () => {
+    expect(Sample.validate({ ...base, specimenRole: 'primary', parentSpecimenIds: ['SP-0'] }).errors)
+      .toContain('specimenRole primary não pode ter parentSpecimenIds');
+  });
+
+  it('validate refuses a control with parents', () => {
+    expect(Sample.validate({ ...base, specimenRole: 'control', parentSpecimenIds: ['SP-0'] }).errors)
+      .toContain('specimenRole control não pode ter parentSpecimenIds');
+  });
+
+  it('validate refuses a derivative without parents', () => {
+    expect(Sample.validate({ ...base, specimenRole: 'derivative' }).errors)
+      .toContain('specimenRole derivative exige parentSpecimenIds');
+  });
+
+  it('resolveSpecimenRole reads the stored role, else derives it from the parents', () => {
+    expect(Sample.resolveSpecimenRole({})).toBe('primary');
+    expect(Sample.resolveSpecimenRole({ parentSpecimenIds: ['SP-0'] })).toBe('derivative');
+    expect(Sample.resolveSpecimenRole({ specimenRole: 'control' })).toBe('control');
+    expect(Sample.resolveSpecimenRole({ specimenRole: 'bogus' })).toBe('primary');
+  });
+});
+
 describe('Sample.validateWithdrawalType', () => {
   it('returns true for Parcial', () => {
     expect(Sample.validateWithdrawalType('Parcial')).toBe(true);

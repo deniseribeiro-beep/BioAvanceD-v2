@@ -353,6 +353,39 @@ describe('sample.routes', () => {
       });
     });
 
+    describe('#1201: specimenRole (ELM-0121)', () => {
+      it('passes aliquot on to the handler', () => {
+        const { router } = loadRoute();
+        const res = {
+          status: vi.fn().mockReturnThis(),
+          json: vi.fn().mockReturnThis(),
+        };
+        const next = vi.fn();
+        router._test.validateCreateSamplePayload({ body: { ...VALID_PAYLOAD, specimenRole: 'aliquot', parentSpecimenIds: ['SP-0'] } }, res, next);
+
+        expect(next).toHaveBeenCalledTimes(1);
+        expect(res.status).not.toHaveBeenCalled();
+      });
+
+      it.each([
+        ['an unknown role', 'mother'],
+        ['a non-string', 7],
+      ])('refuses %s with 422', async (_label, specimenRole) => {
+        const executeMock = vi.fn();
+        const { router } = loadRoute({ registerSampleUseCaseExecute: executeMock });
+        const app = buildApp(router, {});
+
+        const res = await request(app)
+          .post('/api/samples')
+          .send({ ...VALID_PAYLOAD, specimenRole });
+
+        expect(res.status).toBe(422);
+        expect(res.body.error).toBe('Payload inválido');
+        expect(res.body.details).toContain('specimenRole deve ser primary, aliquot, derivative, pool ou control');
+        expect(executeMock).not.toHaveBeenCalled();
+      });
+    });
+
     it('rejects a sampleType that is a valid string but not a recognized MIABIS id', async () => {
       const { router } = loadRoute({ registerSampleUseCaseExecute: vi.fn() });
       const app = buildApp(router, {});

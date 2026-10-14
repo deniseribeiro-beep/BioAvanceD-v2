@@ -40,6 +40,10 @@ const LEGACY_SPECIMEN_STATUS_MAP = {
 // initialQuantity and currentQuantity, never written by a client.
 const QUANTITY_STATUS_VALUES = ['full', 'partial', 'depleted'];
 
+// v2.0.0 ELM-0121 (code 1..1 Core), ENUM-0053..0057. See
+// docs/decisions/2026-10-13-specimen-role.md.
+const SPECIMEN_ROLE_VALUES = ['primary', 'aliquot', 'derivative', 'pool', 'control'];
+
 // The states that refuse withdrawal and return, and that no quantity change
 // moves.
 const BLOCKED_SPECIMEN_STATUSES = ['unavailable', 'quarantined', 'closed'];
@@ -120,6 +124,9 @@ const SampleSchema = new Schema({
     enum: SPECIMEN_STATUS_VALUES,
     default: 'available'
   },
+  // ELM-0121: set at creation. Null only on a document written before the
+  // field, until the backfill has run; readers use resolveSpecimenRole.
+  specimenRole: { type: String, enum: SPECIMEN_ROLE_VALUES, default: null },
   // RF006 AC3: derived from initialQuantity/currentQuantity on every write
   // that moves either; clients cannot set it.
   quantityStatus: { type: String, enum: QUANTITY_STATUS_VALUES, default: null },
@@ -213,6 +220,15 @@ class SampleModel {
     return this.computeQuantityStatus(initial, current);
   }
 
+  // The stored role, or the one a create would have given a document
+  // written before the field existed: derivative with parents, else primary.
+  static resolveSpecimenRole(sample) {
+    const stored = String(sample?.specimenRole || '').trim().toLowerCase();
+    if (SPECIMEN_ROLE_VALUES.includes(stored)) return stored;
+    const parents = sample?.parentSpecimenIds;
+    return Array.isArray(parents) && parents.length > 0 ? 'derivative' : 'primary';
+  }
+
   // External representations (import CSVs, FHIR) still speak the legacy
   // lifecycleStatus vocabulary — map onto specimenStatus per the case-fold
   // rules in canonical-data-contract-v1.md's Specimen section, point 1:
@@ -283,6 +299,19 @@ class SampleModel {
         }
       }
     }
+    // ELM-0121, REL-0175: a primary or control has no parents; an aliquot
+    // or a derivative names at least one. A pool has no parent rule here.
+    if (data.specimenRole !== undefined && data.specimenRole !== null) {
+      const role = String(data.specimenRole).trim().toLowerCase();
+      const hasParents = Array.isArray(data.parentSpecimenIds) && data.parentSpecimenIds.length > 0;
+      if (!SPECIMEN_ROLE_VALUES.includes(role)) {
+        errors.push('specimenRole inválido');
+      } else if ((role === 'primary' || role === 'control') && hasParents) {
+        errors.push(`specimenRole ${role} não pode ter parentSpecimenIds`);
+      } else if ((role === 'aliquot' || role === 'derivative') && !hasParents) {
+        errors.push(`specimenRole ${role} exige parentSpecimenIds`);
+      }
+    }
     return { isValid: errors.length === 0, errors };
   }
 
@@ -300,6 +329,15 @@ class SampleModel {
       : 'available';
     // RF006 AC3: derived, whatever the caller sent.
     const quantityStatus = this.computeQuantityStatus(initialQuantity, currentQuantity);
+    const parentSpecimenIds = Array.isArray(data.parentSpecimenIds)
+      ? [...new Set(data.parentSpecimenIds
+        .filter((parentId) => typeof parentId === 'string' && parentId.trim() !== '')
+        .map((parentId) => parentId.trim()))]
+      : [];
+    // ELM-0121: the given role, else derivative with parents, else primary.
+    const specimenRole = data.specimenRole !== undefined && data.specimenRole !== null
+      ? String(data.specimenRole).trim().toLowerCase()
+      : (parentSpecimenIds.length > 0 ? 'derivative' : 'primary');
 
     return {
       specimenId: String(data.specimenId),
@@ -364,11 +402,8 @@ class SampleModel {
       studyId: data.studyId || null,
       protocolId: data.protocolId || null,
       collectionId: data.collectionId || null,
-      parentSpecimenIds: Array.isArray(data.parentSpecimenIds)
-        ? [...new Set(data.parentSpecimenIds
-          .filter((parentId) => typeof parentId === 'string' && parentId.trim() !== '')
-          .map((parentId) => parentId.trim()))]
-        : [],
+      parentSpecimenIds,
+      specimenRole,
       linkedFiles: Array.isArray(data.linkedFiles) ? data.linkedFiles : [],
       qrCode: data.qrCode || null,
       storageLocation: data.storageLocation || null,
@@ -391,3 +426,4 @@ module.exports.TERMINAL_STORED_SPECIMEN_STATUSES = TERMINAL_STORED_SPECIMEN_STAT
 module.exports.LEGACY_SPECIMEN_STATUS_VALUES = LEGACY_SPECIMEN_STATUS_VALUES;
 module.exports.LEGACY_SPECIMEN_STATUS_MAP = LEGACY_SPECIMEN_STATUS_MAP;
 module.exports.QUANTITY_STATUS_VALUES = QUANTITY_STATUS_VALUES;
+module.exports.SPECIMEN_ROLE_VALUES = SPECIMEN_ROLE_VALUES;
