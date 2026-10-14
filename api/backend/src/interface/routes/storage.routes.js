@@ -26,6 +26,7 @@ const { assertSampleInScope, assertBoxInScope, assertContainerInScope } = requir
 const { getCollection } = require('../../utils/collectionResolver');
 const { findSampleByAnyId } = require('../../utils/sampleLookup');
 const legalHoldService = require('../../services/legalHold.service');
+const { assignFreezerRoom } = require('../../services/legacyPlacementChain.service');
 
 /**
  * Storage Routes - Gerenciamento de Armazenagem Física (ISO 20387)
@@ -575,32 +576,25 @@ router.get('/freezer/:freezerId/tree', requireOrganizationScope,
 
 /**
  * PATCH /api/storage/freezer/:freezerId/room
- * Atribuir/alterar a Room (dict-02 StorageAssignment.roomId, ELM-0169) de um
- * FREEZER — closes the assignment-path gap #419 deferred from #418 (models
- * existed, nothing could set them).
+ * Atribuir/alterar a sala de um FREEZER (#1379). A sala é uma StorageLocation
+ * do tipo room (P1X-0099/0102), e a atribuição é o parentLocationId
+ * (P1X-0102) da location do FREEZER, escrito por assignFreezerRoom.
+ * storageContainers.roomId (ELM-0169, deprecated) e a coleção rooms não são
+ * lidos nem escritos.
  *
- * Body:
- * {
- *   "roomId": "507f1f77bcf86cd799439012"
- * }
+ * Body: { "roomId": "<storageLocationId da sala>" }, ou o _id de uma Room
+ * antiga, resolvido pelo seu código legacy-room:<_id>. Ausente, null ou ''
+ * desatribui.
  *
  * Response 200:
  * {
  *   "success": true,
- *   "data": { "_id": "...", "roomId": "507f..." }
+ *   "data": { "_id": "...", "roomId": "<storageLocationId da sala> | null", "storageLocationId": "<location do FREEZER>" }
  * }
  *
- * Response 404:
- * {
- *   "success": false,
- *   "error": "FREEZER_NOT_FOUND" | "ROOM_NOT_FOUND"
- * }
- *
- * Response 400 (container não é FREEZER):
- * {
- *   "success": false,
- *   "error": "NOT_A_FREEZER"
- * }
+ * Response 400: "ID inválido" | "roomId inválido" | NOT_A_FREEZER
+ * Response 404: FREEZER_NOT_FOUND | ROOM_NOT_FOUND
+ * Response 422: ROOM_OUT_OF_ORGANIZATION | FREEZER_ORGANIZATION_UNRESOLVED
  */
 router.patch('/freezer/:freezerId/room', authenticate, requirePermission('manageStorageTopology'), requireOrganizationScope,
   requireStorageTargetsInScope({ container: (req) => req.params.freezerId }), async (req, res) => {
@@ -624,23 +618,22 @@ router.patch('/freezer/:freezerId/room', authenticate, requirePermission('manage
       });
     }
 
+    // #856: a non-string roomId is refused. A string need not be an
+    // ObjectId: a location id is a uuid (P1X-0098).
     const { roomId } = req.body;
-    let roomObjectId = null;
-    if (roomId) {
-      if (!ObjectId.isValid(roomId)) {
-        return res.status(400).json({ success: false, error: 'roomId inválido' });
-      }
-      roomObjectId = new ObjectId(roomId);
-      const room = await db.collection('rooms').findOne({ _id: roomObjectId, deletedAt: null });
-      if (!room) {
-        return res.status(404).json({ success: false, error: 'ROOM_NOT_FOUND' });
-      }
+    if (roomId !== undefined && roomId !== null && roomId !== '' && (typeof roomId !== 'string' || !roomId.trim())) {
+      return res.status(400).json({ success: false, error: 'roomId inválido' });
     }
 
-    await db.collection('storageContainers').updateOne(
-      { _id: freezerObjectId },
-      { $set: { roomId: roomObjectId, updatedAt: new Date() } }
-    );
+    let assigned;
+    try {
+      assigned = await assignFreezerRoom(db, freezer, roomId ? roomId.trim() : null);
+    } catch (error) {
+      if (typeof error?.statusCode !== 'number') throw error;
+      return res.status(error.statusCode).json({ success: false, error: error.code, message: error.message });
+    }
+    const { freezerLocation, roomLocation } = assigned;
+    const roomLocationId = roomLocation ? roomLocation.storageLocationId : null;
 
     const auditLogger = require('../../utils/auditLogger');
     auditLogger.init(db);
@@ -651,14 +644,14 @@ router.patch('/freezer/:freezerId/room', authenticate, requirePermission('manage
       status: 'success',
       severity: 'info',
       message: 'Room atribuída ao FREEZER',
-      payload: { roomId: roomObjectId ? roomObjectId.toString() : null },
+      payload: { roomId: roomLocationId, storageLocationId: freezerLocation.storageLocationId },
       req: req,
       module: 'Armazenamento'
     });
 
     return res.status(200).json({
       success: true,
-      data: { _id: freezerObjectId, roomId: roomObjectId }
+      data: { _id: freezerObjectId, roomId: roomLocationId, storageLocationId: freezerLocation.storageLocationId }
     });
   } catch (error) {
     logger.error('[Storage] Erro ao atribuir room ao freezer:', error.message || error);
@@ -716,11 +709,13 @@ async function auditTopologyCreate(req, resourceType, resourceId, payload) {
  * POST /api/storage/topology/containers
  *
  * Body: { name, containerType: FREEZER|SHELF|RACK|DRAWER, parentId?,
- *         equipmentId? (FREEZER), roomId? (FREEZER), temperature? (FREEZER),
+ *         equipmentId? (FREEZER), roomId? (FREEZER: a room StorageLocation,
+ *         #1379), temperature? (FREEZER),
  *         temperatureUnit?, capacity?, status?, description? }
  *
  * 201 { success, data }; 400 INVALID_INPUT | INVALID_HIERARCHY | ...;
  * 404 PARENT_NOT_FOUND | EQUIPMENT_NOT_FOUND | ROOM_NOT_FOUND;
+ * 422 ROOM_OUT_OF_ORGANIZATION (#1379);
  * 409 STORAGE_CONTAINER_CONFLICT (a FREEZER already holds that equipment).
  */
 router.post('/topology/containers', requirePermission('manageStorageTopology'), requireOrganizationScope, async (req, res) => {
@@ -730,7 +725,7 @@ router.post('/topology/containers', requirePermission('manageStorageTopology'), 
     await auditTopologyCreate(req, 'StorageContainerLayout', created._id, {
       containerType: created.containerType,
       parentId: created.parent_id ? String(created.parent_id) : null,
-      roomId: created.roomId ? String(created.roomId) : null,
+      roomId: created.roomLocationId || null,
       equipmentId: created.containerID || null
     });
     return res.status(201).json({ success: true, data: created });

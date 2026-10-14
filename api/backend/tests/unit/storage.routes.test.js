@@ -1156,7 +1156,9 @@ describe('storage.routes', () => {
       expect(res.body.error).toBe('ID inválido');
     });
 
-    it('returns 400 for a non-ObjectId roomId in the body (issue #856)', async () => {
+    // #1379: a roomId string need not be an ObjectId (a location id is a
+    // uuid), so #856's case is now a roomId that is not a string at all.
+    it('returns 400 for a non-string roomId in the body (issue #856)', async () => {
       const { router } = loadRoute();
       const storageContainers = createMatchingCollection([
         { _id: '507f1f77bcf86cd799439011', containerType: 'FREEZER', name: 'Freezer 1' },
@@ -1167,35 +1169,36 @@ describe('storage.routes', () => {
 
       const res = await request(app)
         .patch('/api/storage/freezer/507f1f77bcf86cd799439011/room')
-        .send({ roomId: 'not-an-object-id' });
+        .send({ roomId: 123 });
 
       expect(res.status).toBe(400);
       expect(res.body.error).toBe('roomId inválido');
     });
 
-    it('returns 200 and issues the expected storageContainers.updateOne on success (issue #856)', async () => {
+    it('returns 200 and parents the freezer location under the room location on success (issue #856, #1379)', async () => {
       const { router } = loadRoute();
-      const storageContainers = createMatchingCollection([
-        { _id: '507f1f77bcf86cd799439011', containerType: 'FREEZER', name: 'Freezer 1' },
-      ]);
-      const rooms = createMatchingCollection([
-        { _id: '507f1f77bcf86cd799439012', deletedAt: null, name: 'Room A' },
-      ]);
-      const app = buildApp(router, {
-        collection: (name) => (name === 'storageContainers' ? storageContainers : name === 'rooms' ? rooms : null),
-      });
+      const collections = {
+        storageContainers: createMatchingCollection([
+          { _id: '507f1f77bcf86cd799439011', containerType: 'FREEZER', containerID: 4201, name: 'Freezer 1' },
+        ]),
+        equipment: createMatchingCollection([{ equipmentID: 4201, organizationId: 'org-1', deletedAt: null }]),
+        organizations: createMatchingCollection([{ organizationId: 'org-1' }]),
+        storageLocations: createMatchingCollection([
+          { storageLocationId: 'loc-room-1', code: 'legacy-room:507f1f77bcf86cd799439012', locationType: 'room', organizationId: 'org-1', parentLocationId: null },
+        ]),
+      };
+      const app = buildApp(router, { collection: (name) => collections[name] || null });
 
       const res = await request(app)
         .patch('/api/storage/freezer/507f1f77bcf86cd799439011/room')
-        .send({ roomId: '507f1f77bcf86cd799439012' });
+        .send({ roomId: 'loc-room-1' });
 
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
-      expect(storageContainers.updateOne).toHaveBeenCalledTimes(1);
-      const [filter, update] = storageContainers.updateOne.mock.calls[0];
-      expect(String(filter._id)).toBe('507f1f77bcf86cd799439011');
-      expect(String(update.$set.roomId)).toBe('507f1f77bcf86cd799439012');
-      expect(update.$set.updatedAt).toBeInstanceOf(Date);
+      const freezerLocation = collections.storageLocations.docs.find((location) => location.locationType === 'freezer');
+      expect(freezerLocation).toMatchObject({ parentLocationId: 'loc-room-1', organizationId: 'org-1' });
+      expect(res.body.data).toMatchObject({ roomId: 'loc-room-1', storageLocationId: freezerLocation.storageLocationId });
+      expect(collections.storageContainers.updateOne).not.toHaveBeenCalled();
     });
   });
 });

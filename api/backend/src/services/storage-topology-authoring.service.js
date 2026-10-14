@@ -1,6 +1,9 @@
 const { ObjectId } = require('mongodb');
 const { ensureStorageContainerIndexes, ensureStorageBoxIndexes } = require('../utils/storageIndexes');
 const { isRecordInOrganizationScope } = require('./rbac-assignment.service');
+const { getCollection } = require('../utils/collectionResolver');
+const { ROOM_LOCATION_TYPE, findLegacyLocation } = require('./facilityRoomLocation.service');
+const { assignFreezerRoom } = require('./legacyPlacementChain.service');
 
 const CONTAINER_PARENT_TYPES = Object.freeze({
   SHELF: 'FREEZER',
@@ -30,6 +33,12 @@ function optionalObjectId(value, field) {
   if (value === undefined || value === null || value === '') return null;
   if (!ObjectId.isValid(value)) throw topologyError('INVALID_INPUT', `${field} inválido`);
   return new ObjectId(value);
+}
+
+function optionalText(value, field) {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string' || !value.trim()) throw topologyError('INVALID_INPUT', `${field} inválido`);
+  return value.trim();
 }
 
 function buildIdVariants(value) {
@@ -102,6 +111,26 @@ class StorageTopologyAuthoringService {
     this.assertEquipmentInScope(equipment, organizationScope);
   }
 
+  /**
+   * #1379: a FREEZER's room is a StorageLocation of type room (P1X-0099),
+   * named by its storageLocationId or by an old Room _id through its
+   * legacy-room code, as assignFreezerRoom resolves it. It must sit in the
+   * FREEZER's Equipment's organization: a location with an invented owner
+   * would put a rack in the wrong tenancy. Checked before the insert, so a
+   * refusal writes nothing.
+   */
+  async findRoomLocationFor(roomId, equipment) {
+    const roomLocation = await (await getCollection(this.db, 'storageLocations')).findOne({ storageLocationId: roomId })
+      || await findLegacyLocation(this.db, ROOM_LOCATION_TYPE, roomId);
+    if (!roomLocation || roomLocation.locationType !== ROOM_LOCATION_TYPE) {
+      throw topologyError('ROOM_NOT_FOUND', 'Room não encontrada', 404);
+    }
+    if (String(roomLocation.organizationId) !== String(equipment.organizationId)) {
+      throw topologyError('ROOM_OUT_OF_ORGANIZATION', 'A sala pertence a outra organização', 422);
+    }
+    return roomLocation;
+  }
+
   async createContainer(input = {}, actorId = null, organizationScope = null) {
     await this.ensureLayoutIndexes();
 
@@ -117,7 +146,7 @@ class StorageTopologyAuthoringService {
     }
 
     const parentId = optionalObjectId(input.parentId ?? input.parent_id, 'parentId');
-    const roomId = optionalObjectId(input.roomId, 'roomId');
+    const roomId = optionalText(input.roomId, 'roomId');
     const storageContainers = this.db.collection('storageContainers');
 
     if (containerType === 'FREEZER') {
@@ -138,6 +167,7 @@ class StorageTopologyAuthoringService {
     }
 
     let containerID;
+    let roomLocation = null;
     if (containerType === 'FREEZER') {
       const equipmentIdentifier = requiredText(input.equipmentId ?? input.containerID, 'equipmentId');
       const equipment = await this.db.collection('equipment').findOne({
@@ -165,10 +195,7 @@ class StorageTopologyAuthoringService {
         throw topologyError('STORAGE_CONTAINER_CONFLICT', 'containerID já está associado a outro FREEZER', 409);
       }
 
-      if (roomId) {
-        const room = await this.db.collection('rooms').findOne({ _id: roomId, deletedAt: null });
-        if (!room) throw topologyError('ROOM_NOT_FOUND', 'Room não encontrada', 404);
-      }
+      if (roomId) roomLocation = await this.findRoomLocationFor(roomId, equipment);
     }
 
     const temperatureUnit = String(input.temperatureUnit || 'CELSIUS').toUpperCase();
@@ -182,7 +209,6 @@ class StorageTopologyAuthoringService {
       description: input.description ? String(input.description).trim() : null,
       containerType,
       parent_id: parentId,
-      roomId: containerType === 'FREEZER' ? roomId : null,
       temperature: containerType === 'FREEZER' && input.temperature !== undefined ? Number(input.temperature) : null,
       temperatureUnit,
       capacity: input.capacity === undefined || input.capacity === null ? null : Number(input.capacity),
@@ -201,15 +227,18 @@ class StorageTopologyAuthoringService {
       throw topologyError('INVALID_CAPACITY', 'capacity deve ser número maior ou igual a zero');
     }
 
+    let result;
     try {
-      const result = await storageContainers.insertOne(doc);
-      return { _id: result.insertedId, ...doc };
+      result = await storageContainers.insertOne(doc);
     } catch (error) {
       if (error?.code === 11000) {
         throw topologyError('STORAGE_CONTAINER_CONFLICT', 'containerID já está associado a outro FREEZER', 409);
       }
       throw error;
     }
+    const created = { _id: result.insertedId, ...doc };
+    if (roomLocation) await assignFreezerRoom(this.db, created, roomLocation.storageLocationId);
+    return { ...created, roomLocationId: roomLocation ? roomLocation.storageLocationId : null };
   }
 
   async createBox(input = {}, actorId = null, organizationScope = null) {

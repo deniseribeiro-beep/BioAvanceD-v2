@@ -626,33 +626,49 @@ describe('storage mutations are bounded by the caller organization (#1211)', () 
     expect(chain.containerPositionAssignments.updateOne).not.toHaveBeenCalled();
   });
 
+  // #1379: the room is a StorageLocation of type room in the freezer's
+  // organization; the assignment is the freezer location's parent.
+  function roomLocationsIn(organizationId) {
+    return {
+      organizations: createMatchingCollection([{ organizationId }], { collectionName: 'organizations' }),
+      storageLocations: createMatchingCollection([
+        { storageLocationId: 'loc-room-1', code: `legacy-room:${new ObjectId()}`, name: 'Sala 1', locationType: 'room', parentLocationId: null, organizationId },
+      ], { collectionName: 'storageLocations' }),
+    };
+  }
+
   it('PATCH /freezer/:freezerId/room refuses a freezer on another organization\'s Equipment', async () => {
     const tree = treeInOrg('org-other', FOREIGN_TREE);
-    const rooms = createCollectionMock({ findOne: vi.fn().mockResolvedValue({ _id: new ObjectId(), deletedAt: null }) });
-    app.locals.db = dbWithRbac({ ...tree, rooms }, 3);
+    const locations = roomLocationsIn('org-other');
+    app.locals.db = dbWithRbac({ ...tree, ...locations }, 3);
 
     const res = await request(app)
       .patch(`/api/storage/freezer/${FOREIGN_TREE.freezerId}/room`)
       .set('Authorization', `Bearer ${makeToken(3)}`)
-      .send({ roomId: new ObjectId().toString() });
+      .send({ roomId: 'loc-room-1' });
 
     expect(res.status).toBe(403);
     expect(res.body.error).toBe('EQUIPMENT_OUT_OF_SCOPE');
     expect(tree.storageContainers.updateOne).not.toHaveBeenCalled();
+    expect(locations.storageLocations.insertOne).not.toHaveBeenCalled();
+    expect(locations.storageLocations.updateOne).not.toHaveBeenCalled();
   });
 
   it('PATCH /freezer/:freezerId/room still works on the caller\'s own freezer (control)', async () => {
     const tree = treeInOrg(HOME_ORG);
-    const rooms = createCollectionMock({ findOne: vi.fn().mockResolvedValue({ _id: new ObjectId(), deletedAt: null }) });
-    app.locals.db = dbWithRbac({ ...tree, rooms }, 3);
+    const locations = roomLocationsIn(HOME_ORG);
+    app.locals.db = dbWithRbac({ ...tree, ...locations }, 3);
 
     const res = await request(app)
       .patch(`/api/storage/freezer/${HOME_TREE.freezerId}/room`)
       .set('Authorization', `Bearer ${makeToken(3)}`)
-      .send({ roomId: new ObjectId().toString() });
+      .send({ roomId: 'loc-room-1' });
 
     expect(res.status).toBe(200);
-    expect(tree.storageContainers.updateOne).toHaveBeenCalledTimes(1);
+    expect(locations.storageLocations.docs).toContainEqual(expect.objectContaining({
+      locationType: 'freezer', parentLocationId: 'loc-room-1', organizationId: HOME_ORG,
+    }));
+    expect(tree.storageContainers.updateOne).not.toHaveBeenCalled();
   });
 
   it('an Administrador (global scope) allocates another organization\'s sample into another organization\'s box (control)', async () => {

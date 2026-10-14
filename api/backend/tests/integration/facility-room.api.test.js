@@ -33,12 +33,9 @@ function givenSession() {
 
 const FACILITY_ID = new ObjectId();
 const ROOM_ID = new ObjectId();
-const FREEZER_ID = new ObjectId();
 
 const FAKE_FACILITY = { _id: FACILITY_ID, name: 'Campus Central', code: null, address: null, description: null, deletedAt: null };
 const FAKE_ROOM = { _id: ROOM_ID, facilityId: FACILITY_ID, name: 'Sala 1', code: null, description: null, deletedAt: null };
-const FAKE_FREEZER = { _id: FREEZER_ID, name: 'Ultra-Freezer 01', containerType: 'FREEZER', roomId: null };
-const FAKE_SHELF = { _id: new ObjectId(), name: 'Shelf 1', containerType: 'SHELF', roomId: null };
 
 beforeEach(() => { givenSession(); });
 afterEach(() => { vi.restoreAllMocks(); });
@@ -254,103 +251,6 @@ describe('GET /api/rooms?facilityId=', () => {
 
     expect(res.status).toBe(200);
     expect(find).toHaveBeenCalledWith(expect.objectContaining({ facilityId: expect.any(ObjectId) }));
-  });
-});
-
-describe('PATCH /api/storage/freezer/:freezerId/room', () => {
-  it('returns 404 when freezer does not exist', async () => {
-    const storageColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(null) });
-    app.locals.db = dbWithRbac({ storageContainers: storageColl }, 4);
-
-    const res = await request(app)
-      .patch(`/api/storage/freezer/${FREEZER_ID}/room`)
-      .set('Authorization', `Bearer ${makeToken(4)}`)
-      .send({ roomId: ROOM_ID.toString() });
-    expect(res.status).toBe(404);
-    expect(res.body.error).toBe('FREEZER_NOT_FOUND');
-  });
-
-  // #1022: the catch-all was the ONLY failure path in this router that did
-  // not use 5xx -- it answered 400 with error INTERNAL_ERROR, which tells a
-  // caller "you sent something wrong" and "the server broke" in the same
-  // body. The route's own expected failures (FREEZER_NOT_FOUND 404,
-  // NOT_A_FREEZER 400, ROOM_NOT_FOUND 404) are all handled above the catch,
-  // so nothing legitimate reaches it -- only a genuine unhandled exception.
-  // Same class #892 already fixed in this router for checkBoxIntegrity.
-  it('#1022: an unhandled exception answers 500, not 400', async () => {
-    const storageColl = createCollectionMock({
-      findOne: vi.fn().mockRejectedValue(new Error('driver exploded')),
-    });
-    app.locals.db = dbWithRbac({ storageContainers: storageColl }, 4);
-
-    const res = await request(app)
-      .patch(`/api/storage/freezer/${FREEZER_ID}/room`)
-      .set('Authorization', `Bearer ${makeToken(4)}`)
-      .send({ roomId: ROOM_ID.toString() });
-
-    expect(res.status).toBe(500);
-    expect(res.body.error).toBe('INTERNAL_ERROR');
-    expect(res.body.success).toBe(false);
-  });
-
-  it('rejects a non-FREEZER container with 400', async () => {
-    const storageColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(FAKE_SHELF) });
-    app.locals.db = dbWithRbac({ storageContainers: storageColl }, 4);
-
-    const res = await request(app)
-      .patch(`/api/storage/freezer/${FAKE_SHELF._id}/room`)
-      .set('Authorization', `Bearer ${makeToken(4)}`)
-      .send({ roomId: ROOM_ID.toString() });
-    expect(res.status).toBe(400);
-    expect(res.body.error).toBe('NOT_A_FREEZER');
-  });
-
-  it('returns 404 when roomId does not resolve to a real Room', async () => {
-    const storageColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(FAKE_FREEZER) });
-    const roomsColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(null) });
-    app.locals.db = dbWithRbac({ storageContainers: storageColl, rooms: roomsColl }, 4);
-
-    const res = await request(app)
-      .patch(`/api/storage/freezer/${FREEZER_ID}/room`)
-      .set('Authorization', `Bearer ${makeToken(4)}`)
-      .send({ roomId: ROOM_ID.toString() });
-    expect(res.status).toBe(404);
-    expect(res.body.error).toBe('ROOM_NOT_FOUND');
-  });
-
-  it('assigns roomId to a FREEZER when both resolve', async () => {
-    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
-    const storageColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(FAKE_FREEZER), updateOne });
-    const roomsColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue(FAKE_ROOM) });
-    app.locals.db = dbWithRbac({ storageContainers: storageColl, rooms: roomsColl }, 4);
-
-    const res = await request(app)
-      .patch(`/api/storage/freezer/${FREEZER_ID}/room`)
-      .set('Authorization', `Bearer ${makeToken(4)}`)
-      .send({ roomId: ROOM_ID.toString() });
-
-    expect(res.status).toBe(200);
-    expect(updateOne).toHaveBeenCalledWith(
-      { _id: expect.any(ObjectId) },
-      { $set: expect.objectContaining({ roomId: expect.any(ObjectId) }) }
-    );
-  });
-
-  it('clears roomId when body omits it (unassign)', async () => {
-    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
-    const storageColl = createCollectionMock({ findOne: vi.fn().mockResolvedValue({ ...FAKE_FREEZER, roomId: ROOM_ID }), updateOne });
-    app.locals.db = dbWithRbac({ storageContainers: storageColl }, 4);
-
-    const res = await request(app)
-      .patch(`/api/storage/freezer/${FREEZER_ID}/room`)
-      .set('Authorization', `Bearer ${makeToken(4)}`)
-      .send({});
-
-    expect(res.status).toBe(200);
-    expect(updateOne).toHaveBeenCalledWith(
-      { _id: expect.any(ObjectId) },
-      { $set: expect.objectContaining({ roomId: null }) }
-    );
   });
 });
 

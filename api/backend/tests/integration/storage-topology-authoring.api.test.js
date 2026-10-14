@@ -10,6 +10,7 @@ const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
 const auditLogger = require('../../src/utils/auditLogger');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
+const { createMatchingCollection } = require('../factories/filter.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
 
 // #1124: before this, no request on a running stack could create a
@@ -64,6 +65,16 @@ function chainInOrg(organizationId) {
   return { freezerId, shelfId, rackId, storageContainers, equipment };
 }
 
+// #1379: a FREEZER's room is a StorageLocation of type room.
+function roomLocationIn(organizationId) {
+  return {
+    organizations: createMatchingCollection([{ organizationId: 'test-org-default' }, { organizationId: 'org-other' }], { collectionName: 'organizations' }),
+    storageLocations: createMatchingCollection([
+      { storageLocationId: 'loc-room-1', code: `legacy-room:${new ObjectId()}`, name: 'Sala fria', locationType: 'room', parentLocationId: null, organizationId },
+    ], { collectionName: 'storageLocations' }),
+  };
+}
+
 describe('governed storage topology authoring (#1124)', () => {
   it('rejects Técnico: layout authoring is manageStorageTopology, not manageStorageAllocation', async () => {
     const storageContainers = createCollectionMock();
@@ -80,16 +91,13 @@ describe('governed storage topology authoring (#1124)', () => {
 
   it('creates a FREEZER from an existing Equipment and preserves the RF004 equipment identifier join', async () => {
     const freezerId = new ObjectId();
-    const roomId = new ObjectId();
     const storageInsert = vi.fn().mockResolvedValue({ insertedId: freezerId });
     const storageContainers = createCollectionMock({ insertOne: storageInsert });
     const equipment = createCollectionMock({
       findOne: vi.fn().mockResolvedValue({ _id: new ObjectId(), equipmentID: 4201, organizationId: 'test-org-default', deletedAt: null }),
     });
-    const rooms = createCollectionMock({
-      findOne: vi.fn().mockResolvedValue({ _id: roomId, name: 'Sala fria', deletedAt: null }),
-    });
-    app.locals.db = dbWithRbac({ storageContainers, equipment, rooms }, 3);
+    const locations = roomLocationIn('test-org-default');
+    app.locals.db = dbWithRbac({ storageContainers, equipment, ...locations }, 3);
 
     const res = await request(app)
       .post('/api/storage/topology/containers')
@@ -98,7 +106,7 @@ describe('governed storage topology authoring (#1124)', () => {
         name: 'Ultra-Freezer 01',
         containerType: 'FREEZER',
         equipmentId: '4201',
-        roomId: roomId.toString(),
+        roomId: 'loc-room-1',
         temperature: -80,
       });
 
@@ -113,11 +121,40 @@ describe('governed storage topology authoring (#1124)', () => {
       containerType: 'FREEZER',
       parent_id: null,
       containerID: 4201,
-      roomId,
       temperature: -80,
       status: 'OPERATIONAL',
     }));
-    expect(auditLogger.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'CREATE', resourceType: 'StorageContainerLayout' }));
+    // #1379: the room is the freezer location's parent, not a stored roomId.
+    expect(storageInsert.mock.calls[0][0]).not.toHaveProperty('roomId');
+    expect(res.body.data.roomLocationId).toBe('loc-room-1');
+    expect(locations.storageLocations.docs).toContainEqual(expect.objectContaining({
+      code: `legacy-storage-container:${freezerId}`, locationType: 'freezer', parentLocationId: 'loc-room-1', organizationId: 'test-org-default',
+    }));
+    expect(auditLogger.log).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'CREATE', resourceType: 'StorageContainerLayout', payload: expect.objectContaining({ roomId: 'loc-room-1' }),
+    }));
+  });
+
+  it.each([
+    ['an unknown room', 'loc-missing', 'test-org-default', 404, 'ROOM_NOT_FOUND'],
+    ['another organization\'s room', 'loc-room-1', 'org-other', 422, 'ROOM_OUT_OF_ORGANIZATION'],
+  ])('refuses a FREEZER naming %s, and writes nothing', async (_case, roomId, roomOrganizationId, status, code) => {
+    const storageContainers = createCollectionMock();
+    const equipment = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue({ _id: new ObjectId(), equipmentID: 4201, organizationId: 'test-org-default', deletedAt: null }),
+    });
+    const locations = roomLocationIn(roomOrganizationId);
+    app.locals.db = dbWithRbac({ storageContainers, equipment, ...locations }, 3);
+
+    const res = await request(app)
+      .post('/api/storage/topology/containers')
+      .set('Authorization', `Bearer ${makeToken(3)}`)
+      .send({ name: 'Ultra-Freezer 01', containerType: 'FREEZER', equipmentId: '4201', roomId });
+
+    expect(res.status).toBe(status);
+    expect(res.body.error).toBe(code);
+    expect(storageContainers.insertOne).not.toHaveBeenCalled();
+    expect(locations.storageLocations.insertOne).not.toHaveBeenCalled();
   });
 
   it('answers 404 EQUIPMENT_NOT_FOUND for a FREEZER naming no Equipment, and writes nothing', async () => {
