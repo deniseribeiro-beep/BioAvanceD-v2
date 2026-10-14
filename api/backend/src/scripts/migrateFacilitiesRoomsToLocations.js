@@ -12,8 +12,16 @@
  * and rooms are counted, not written. facilities and rooms are only read.
  * The rule is docs/decisions/2026-10-14-facility-room-locations.md.
  *
+ * Then each FREEZER with a roomId whose mirrored location
+ * (`legacy-storage-container:<_id>`) sits at the root is re-parented under
+ * its room's location when that is in the same organization; one under
+ * another organization's room is listed in unresolved. The summary's
+ * freezers counts scanned, reparented, alreadyUnderRoom, noLocation and
+ * roomNotMirrored. storageContainers is only read.
+ *
  * Idempotent: a facility or room already mirrored is counted in
- * alreadyMigrated, so a second run writes nothing.
+ * alreadyMigrated, and a freezer already under a location in
+ * alreadyUnderRoom, so a second run writes nothing.
  *
  * Usage (from api/backend):
  *   npm run migrate:facilities-rooms-to-locations                          applies

@@ -1,6 +1,6 @@
 # 2026-10-14: every Facility and Room is mirrored as a StorageLocation
 
-Dictionary: StorageLocation P1X-0098..0104; StorageAssignment.facilityId ELM-0168 and StorageAssignment.roomId ELM-0169, deprecated in v2.0.0 (Dicionário de Dados v2.0.0). Issue #1379, slice 1 of 4.
+Dictionary: StorageLocation P1X-0098..0104; StorageAssignment.facilityId ELM-0168 and StorageAssignment.roomId ELM-0169, deprecated in v2.0.0 (Dicionário de Dados v2.0.0). Issue #1379, slices 1 and 2 of 4.
 
 ## The question
 
@@ -31,9 +31,9 @@ These decisions are inferences, not owner rulings: they extend item 3 of `2026-1
 4. **Deleted rows are not mirrored.** A facility or room with `deletedAt` set is counted `deleted`. A room whose facility is not stored is `facility_not_found`; one whose facility is deleted or unresolved is `facility_not_mirrored`.
 5. **Not carried.** A facility's `address`, `description` and its old nullable `code`, and a room's `description` and `code`, have no StorageLocation field and are not copied. The old collections stay in the database as history.
 6. **Idempotent.** A facility or room whose `legacy-<kind>:<_id>` location exists is counted `alreadyMigrated` and nothing is written; a room under an already-mirrored facility takes that location as its parent and that location's organization as its facility's. A second run writes nothing. `--dry-run` writes nothing and counts what it would create.
+7. **2026-10-14 (slice 2): a freezer's location sits under its room's location.** A FREEZER's mirrored location (`legacy-storage-container:<_id>`) is found by its code alone, whatever its parent, so the placement chain never duplicates a freezer that has been moved under a room; the code stays unique because the old `_id` is. When the chain first creates it, its parent is the room's location (`legacy-room:<roomId>`) if the freezer has a `roomId`, that room is mirrored, and the room's location is in the freezer's resolved organization; else it is at the root. `assignFreezerRoom(db, freezer, roomLocationRef, { session })` (`services/legacyPlacementChain.service.js`) is the one writer of that parent afterwards: it takes a room location's `storageLocationId`, an old Room `_id`, or null to unassign, refuses an unknown or non-room location (`ROOM_NOT_FOUND`, 404), another organization's room (`ROOM_OUT_OF_ORGANIZATION`, 422) and a freezer with no resolved organization (`FREEZER_ORGANIZATION_UNRESOLVED`, 422), and writes neither `storageContainers` nor `rooms`. Every read and write runs in the caller's session (`2026-10-11-legacy-placement-chain.md`, item 7). The migration re-parents a freezer location written at the root before its room was mirrored, counted in `freezers`; one whose room's location is in another organization is unresolved `conflicting_organizations`, and a second run re-parents nothing.
 
 ## Not decided here
 
-- Locating each FREEZER's mirrored location under its room's location (slice 2).
 - The facility and room routes reading and writing StorageLocation (slice 3).
 - Retiring the facility and room routes and the `facilities` and `rooms` collections (slice 4).

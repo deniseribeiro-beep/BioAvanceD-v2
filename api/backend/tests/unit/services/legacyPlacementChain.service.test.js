@@ -364,3 +364,121 @@ describe('legacyPlacementChain.service (#1314)', () => {
     });
   });
 });
+
+// #1379: a freezer's mirrored location sits under its room's location.
+describe('legacyPlacementChain.service: a freezer under its room (#1379)', () => {
+  const ROOM_ID = new ObjectId('64d000000000000000000001');
+  const FREEZER_CODE = 'legacy-storage-container:F1';
+  const FREEZER = { _id: 'F1', containerType: 'FREEZER', containerID: 4201, name: 'Freezer 1', parent_id: null, roomId: ROOM_ID };
+  const BOTH_ORGANIZATIONS = [{ organizationId: 'org-1' }, { organizationId: 'org-2' }];
+
+  function roomLocation({ storageLocationId = 'loc-room-1', organizationId = 'org-1', locationType = 'room', code = `legacy-room:${ROOM_ID}` } = {}) {
+    return { storageLocationId, locationType, name: 'Sala 1', code, parentLocationId: null, organizationId, locationStatus: 'active' };
+  }
+
+  function freezerLocation(parentLocationId) {
+    return { storageLocationId: 'loc-f1', locationType: 'freezer', name: 'Freezer 1', code: FREEZER_CODE, parentLocationId, organizationId: 'org-1', locationStatus: 'active' };
+  }
+
+  // topology(), its freezer in ROOM_ID.
+  function roomTopology({ storageLocations = [roomLocation()], organizations } = {}) {
+    const base = topology(organizations ? { organizations } : {});
+    return {
+      ...base,
+      storageContainers: base.storageContainers.map((container) => (container._id === 'F1' ? { ...container, roomId: ROOM_ID } : container)),
+      storageLocations,
+    };
+  }
+
+  const freezerLocations = (db) => db.collections.storageLocations.docs.filter((location) => location.code === FREEZER_CODE);
+  const shelfLocation = (db) => db.collections.storageLocations.docs.find((location) => location.code === 'legacy-storage-container:S1');
+
+  it('places a specimen with the freezer location created under its mirrored room', async () => {
+    const db = createFakeDb(roomTopology());
+
+    await bridge.placeSpecimen(db, { sample: SAMPLE, box: BOX_1, position: 'A1', at: T(1), sourceEventId: 'evt-place' }, SESSION);
+
+    const [freezer] = freezerLocations(db);
+    expect(freezer).toMatchObject({ locationType: 'freezer', parentLocationId: 'loc-room-1', organizationId: 'org-1' });
+    expect(shelfLocation(db).parentLocationId).toBe(freezer.storageLocationId);
+  });
+
+  it('finds a freezer location already under its room, and does not duplicate it', async () => {
+    const db = createFakeDb(roomTopology({ storageLocations: [roomLocation(), freezerLocation('loc-room-1')] }));
+
+    await bridge.placeSpecimen(db, { sample: SAMPLE, box: BOX_1, position: 'A1', at: T(1), sourceEventId: 'evt-place' }, SESSION);
+
+    expect(freezerLocations(db)).toHaveLength(1);
+    expect(shelfLocation(db).parentLocationId).toBe('loc-f1');
+  });
+
+  it('leaves the freezer location at the root when its room is mirrored under another organization', async () => {
+    const db = createFakeDb(roomTopology({ storageLocations: [roomLocation({ organizationId: 'org-2' })], organizations: BOTH_ORGANIZATIONS }));
+
+    await bridge.placeSpecimen(db, { sample: SAMPLE, box: BOX_1, position: 'A1', at: T(1), sourceEventId: 'evt-place' }, SESSION);
+
+    expect(freezerLocations(db)).toEqual([expect.objectContaining({ parentLocationId: null, organizationId: 'org-1' })]);
+  });
+
+  it('assignFreezerRoom creates the freezer location under the room, re-parents it and unassigns it', async () => {
+    const other = roomLocation({ storageLocationId: 'loc-room-2', code: 'legacy-room:64d000000000000000000002' });
+    const db = createFakeDb(roomTopology({ storageLocations: [roomLocation(), other] }));
+
+    const created = await bridge.assignFreezerRoom(db, FREEZER, 'loc-room-1');
+    expect(created.roomLocation).toMatchObject({ storageLocationId: 'loc-room-1' });
+    expect(created.freezerLocation).toMatchObject({ code: FREEZER_CODE, locationType: 'freezer', name: 'Freezer 1', parentLocationId: 'loc-room-1', organizationId: 'org-1' });
+
+    const moved = await bridge.assignFreezerRoom(db, FREEZER, 'loc-room-2');
+    expect(moved.freezerLocation).toMatchObject({ storageLocationId: created.freezerLocation.storageLocationId, parentLocationId: 'loc-room-2' });
+
+    const unassigned = await bridge.assignFreezerRoom(db, FREEZER, null);
+    expect(unassigned).toEqual({ freezerLocation: expect.objectContaining({ parentLocationId: null }), roomLocation: null });
+    expect(freezerLocations(db)).toEqual([expect.objectContaining({ storageLocationId: created.freezerLocation.storageLocationId, parentLocationId: null })]);
+    expect(db.writes.filter((write) => ['storageContainers', 'rooms'].includes(write.collection))).toEqual([]);
+  });
+
+  it('assignFreezerRoom resolves an old Room _id through its legacy-room code', async () => {
+    const db = createFakeDb(roomTopology());
+
+    expect((await bridge.assignFreezerRoom(db, FREEZER, ROOM_ID)).freezerLocation.parentLocationId).toBe('loc-room-1');
+    expect((await bridge.assignFreezerRoom(db, FREEZER, String(ROOM_ID))).freezerLocation.parentLocationId).toBe('loc-room-1');
+    expect(freezerLocations(db)).toHaveLength(1);
+  });
+
+  it.each([
+    ['an unknown room', 'loc-missing', [roomLocation()]],
+    ['a location that is not a room', 'loc-shelf', [roomLocation({ storageLocationId: 'loc-shelf', locationType: 'shelf', code: 'legacy-storage-container:S9' })]],
+  ])('assignFreezerRoom refuses %s with ROOM_NOT_FOUND', async (_case, ref, storageLocations) => {
+    const db = createFakeDb(roomTopology({ storageLocations }));
+
+    await expect(bridge.assignFreezerRoom(db, FREEZER, ref)).rejects.toMatchObject({ code: 'ROOM_NOT_FOUND', statusCode: 404 });
+    expect(db.writes).toEqual([]);
+  });
+
+  it('assignFreezerRoom refuses another organization\'s room', async () => {
+    const existing = freezerLocation(null);
+    const db = createFakeDb(roomTopology({ storageLocations: [roomLocation({ organizationId: 'org-2' }), existing], organizations: BOTH_ORGANIZATIONS }));
+
+    await expect(bridge.assignFreezerRoom(db, FREEZER, 'loc-room-1')).rejects.toMatchObject({ code: 'ROOM_OUT_OF_ORGANIZATION', statusCode: 422 });
+    expect(db.collections.storageLocations.docs.find((location) => location.code === FREEZER_CODE).parentLocationId).toBeNull();
+    expect(db.writes).toEqual([]);
+  });
+
+  it('assignFreezerRoom refuses a freezer with no resolved organization', async () => {
+    const db = createFakeDb(roomTopology());
+
+    await expect(bridge.assignFreezerRoom(db, { ...FREEZER, containerID: 9999 }, 'loc-room-1'))
+      .rejects.toMatchObject({ code: 'FREEZER_ORGANIZATION_UNRESOLVED', statusCode: 422 });
+    expect(db.writes).toEqual([]);
+  });
+
+  it('assignFreezerRoom runs every write in the caller\'s session, and builds no index', async () => {
+    const db = createFakeDb(roomTopology());
+
+    await bridge.assignFreezerRoom(db, FREEZER, 'loc-room-1', { session: SESSION });
+    await bridge.assignFreezerRoom(db, FREEZER, null, { session: SESSION });
+
+    expect(db.writes.length).toBeGreaterThan(0);
+    expect(db.writes.filter((write) => write.options?.session !== SESSION)).toEqual([]);
+  });
+});

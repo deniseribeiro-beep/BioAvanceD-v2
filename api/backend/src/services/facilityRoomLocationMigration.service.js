@@ -1,6 +1,6 @@
 const { getCollection } = require('../utils/collectionResolver');
 const { createLocation } = require('./storageLocation.service');
-const { organizationIdFor } = require('./legacyPlacementChain.service');
+const { organizationIdFor, LOCATION_CODE_PREFIX } = require('./legacyPlacementChain.service');
 const {
   FACILITY_LOCATION_TYPE, ROOM_LOCATION_TYPE, legacyLocationCode, findLegacyLocation,
 } = require('./facilityRoomLocation.service');
@@ -18,6 +18,10 @@ const {
 //
 // Idempotent: a facility or room already mirrored is found by its code and
 // counted in alreadyMigrated; a second run writes nothing.
+//
+// Then each freezer location written at the root before its room was
+// mirrored is re-parented under its room's location, in the same
+// organization (slice 2). A second run re-parents nothing.
 
 function counters() {
   return { scanned: 0, created: 0, alreadyMigrated: 0, deleted: 0 };
@@ -57,6 +61,7 @@ async function mirrorFacilitiesAndRooms(db, { dryRun = false, organizationId = n
     mode: dryRun ? 'dry-run' : 'apply',
     facilities: counters(),
     rooms: counters(),
+    freezers: { scanned: 0, reparented: 0, alreadyUnderRoom: 0, noLocation: 0, roomNotMirrored: 0 },
     unresolved: [],
   };
 
@@ -155,7 +160,47 @@ async function mirrorFacilitiesAndRooms(db, { dryRun = false, organizationId = n
     summary.rooms.created += 1;
   }
 
+  await reparentFreezers(db, summary, dryRun);
   return summary;
+}
+
+// A non-deleted FREEZER with a roomId whose location sits at the root moves
+// under its room's location, when that location is in the freezer
+// location's organization.
+async function reparentFreezers(db, summary, dryRun) {
+  const freezers = await db.collection('storageContainers')
+    .find({ containerType: 'FREEZER', deletedAt: null })
+    .toArray();
+  const locations = await getCollection(db, 'storageLocations');
+  for (const freezer of freezers) {
+    if (!freezer.roomId) continue;
+    summary.freezers.scanned += 1;
+    const location = await locations.findOne({ code: `${LOCATION_CODE_PREFIX}${String(freezer._id)}` });
+    if (!location) {
+      summary.freezers.noLocation += 1;
+      continue;
+    }
+    if (location.parentLocationId) {
+      summary.freezers.alreadyUnderRoom += 1;
+      continue;
+    }
+    const room = await findLegacyLocation(db, ROOM_LOCATION_TYPE, freezer.roomId);
+    if (!room) {
+      summary.freezers.roomNotMirrored += 1;
+      continue;
+    }
+    if (String(room.organizationId) !== String(location.organizationId)) {
+      summary.unresolved.push({
+        kind: 'freezer', id: String(freezer._id), reason: 'conflicting_organizations',
+        organizationIds: [...new Set([String(room.organizationId), String(location.organizationId)])].sort(),
+      });
+      continue;
+    }
+    if (!dryRun) {
+      await locations.updateOne({ storageLocationId: location.storageLocationId }, { $set: { parentLocationId: room.storageLocationId } });
+    }
+    summary.freezers.reparented += 1;
+  }
 }
 
 module.exports = { mirrorFacilitiesAndRooms };

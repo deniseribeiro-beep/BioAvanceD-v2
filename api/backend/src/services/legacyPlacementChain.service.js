@@ -2,7 +2,8 @@ const { ObjectId } = require('mongodb');
 const { getCollection } = require('../utils/collectionResolver');
 const logger = require('../utils/logger');
 const physicalChain = require('./physicalChain.service');
-const { findOrCreateLocationByCode } = require('./storageLocation.service');
+const { StorageLocationError, createLocation, findOrCreateLocationByCode } = require('./storageLocation.service');
+const { ROOM_LOCATION_TYPE, findLegacyLocation } = require('./facilityRoomLocation.service');
 
 // #1314: the bridge from a legacy box placement (storageBoxes, a position
 // code such as `A1`) to the normalized physical chain: specimen ->
@@ -142,6 +143,67 @@ async function organizationIdFor(db, root, session) {
   return organization ? organizationId : null;
 }
 
+function freezerLocationCode(freezer) {
+  return `${LOCATION_CODE_PREFIX}${String(freezer._id)}`;
+}
+
+function freezerLocationData(freezer, organizationId, parentLocationId) {
+  const code = freezerLocationCode(freezer);
+  return { code, name: freezer.name || code, locationType: 'freezer', parentLocationId, organizationId };
+}
+
+// #1379: a freezer's location is found by its code alone, whatever its
+// parent, since it may sit under its room's location
+// (docs/decisions/2026-10-14-facility-room-locations.md).
+async function findFreezerLocation(db, freezer, session) {
+  return (await getCollection(db, 'storageLocations')).findOne({ code: freezerLocationCode(freezer) }, sessionOptions(session));
+}
+
+// The root FREEZER's location (organizationIdFor resolves only a FREEZER);
+// created under its room's location when the room is
+// mirrored in the same organization, else at the root.
+async function ensureFreezerLocated(db, freezer, organizationId, session) {
+  const existing = await findFreezerLocation(db, freezer, session);
+  if (existing) return existing;
+  const room = freezer.roomId ? await findLegacyLocation(db, ROOM_LOCATION_TYPE, freezer.roomId, session) : null;
+  const parentLocationId = room && String(room.organizationId) === organizationId ? room.storageLocationId : null;
+  return createLocation(db, freezerLocationData(freezer, organizationId, parentLocationId), { session });
+}
+
+// #1379: the one writer of a freezer location's parent. roomLocationRef is a
+// room location's storageLocationId, an old Room _id (resolved through its
+// `legacy-room:` code), or null to unassign. storageContainers and rooms are
+// not written.
+async function assignFreezerRoom(db, freezer, roomLocationRef, { session } = {}) {
+  const organizationId = await organizationIdFor(db, freezer, session);
+  if (!organizationId) {
+    throw new StorageLocationError('FREEZER sem organização resolvida', 'FREEZER_ORGANIZATION_UNRESOLVED', 422);
+  }
+  let roomLocation = null;
+  if (roomLocationRef !== null && roomLocationRef !== undefined && roomLocationRef !== '') {
+    roomLocation = await (await getCollection(db, 'storageLocations')).findOne({ storageLocationId: String(roomLocationRef) }, sessionOptions(session))
+      || await findLegacyLocation(db, ROOM_LOCATION_TYPE, roomLocationRef, session);
+    if (!roomLocation || roomLocation.locationType !== ROOM_LOCATION_TYPE) {
+      throw new StorageLocationError(`Sala ${roomLocationRef} não encontrada`, 'ROOM_NOT_FOUND', 404);
+    }
+    if (String(roomLocation.organizationId) !== organizationId) {
+      throw new StorageLocationError(`Sala ${roomLocationRef} pertence a outra organização`, 'ROOM_OUT_OF_ORGANIZATION', 422);
+    }
+  }
+  const parentLocationId = roomLocation ? roomLocation.storageLocationId : null;
+  const existing = await findFreezerLocation(db, freezer, session);
+  if (!existing) {
+    const freezerLocation = await createLocation(db, freezerLocationData(freezer, organizationId, parentLocationId), { session });
+    return { freezerLocation, roomLocation };
+  }
+  await (await getCollection(db, 'storageLocations')).updateOne(
+    { storageLocationId: existing.storageLocationId },
+    { $set: { parentLocationId } },
+    sessionOptions(session),
+  );
+  return { freezerLocation: { ...existing, parentLocationId }, roomLocation };
+}
+
 // RULE-035: the box, as a StorageRack, is located at its immediate parent,
 // mirrored with every ancestor as a StorageLocation. With no organization
 // the chain ends at the rack: no location and no assignment are written.
@@ -158,8 +220,8 @@ async function ensureRackLocated(db, box, session, { at, sourceEventId } = {}) {
     return null;
   }
 
-  let parent = null;
-  for (const container of ancestors) {
+  let parent = await ensureFreezerLocated(db, ancestors[0], organizationId, session);
+  for (const container of ancestors.slice(1)) {
     const code = `${LOCATION_CODE_PREFIX}${String(container._id)}`;
     parent = await findOrCreateLocationByCode(db, {
       code,
@@ -334,6 +396,7 @@ async function adoptLegacyPlacement(db, sample, session) {
 
 module.exports = {
   UNIDENTIFIED_CONTAINER_TYPE,
+  LOCATION_CODE_PREFIX,
   rackIdForBox,
   chainPositionCode,
   legacyPositionCode,
@@ -344,6 +407,7 @@ module.exports = {
   dropDuplicatePlacements,
   organizationIdFor,
   ensureRackLocated,
+  assignFreezerRoom,
   placeSpecimen,
   moveSpecimen,
   releaseSpecimen,

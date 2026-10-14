@@ -96,6 +96,7 @@ describe('mirrorFacilitiesAndRooms (#1379)', () => {
       mode: 'apply',
       facilities: { scanned: 1, created: 1, alreadyMigrated: 0, deleted: 0 },
       rooms: { scanned: 1, created: 1, alreadyMigrated: 0, deleted: 0 },
+      freezers: { scanned: 1, reparented: 0, alreadyUnderRoom: 0, noLocation: 1, roomNotMirrored: 0 },
       unresolved: [],
     });
     const [facility, room] = locationsOf(db);
@@ -223,5 +224,73 @@ describe('findLegacyLocation (#1379)', () => {
 
     expect(location).toMatchObject({ locationType: 'room', code: `legacy-room:${ROOM_1._id}`, name: 'Sala 1' });
     expect(await findLegacyLocation(db, 'facility', ROOM_1._id)).toBeNull();
+  });
+});
+
+// #1379 slice 2: a freezer location written at the root before its room was
+// mirrored moves under the room's location.
+describe('mirrorFacilitiesAndRooms re-parents freezer locations (#1379)', () => {
+  const FREEZER_CODE = 'legacy-storage-container:F1';
+
+  function location(storageLocationId, locationType, code, parentLocationId, organizationId = 'org-1') {
+    return { storageLocationId, locationType, name: storageLocationId, code, parentLocationId, organizationId, locationStatus: 'active' };
+  }
+
+  const freezerAtRoot = () => location('loc-f1', 'freezer', FREEZER_CODE, null);
+  const freezerLocation = (db) => locationsOf(db).find((row) => row.code === FREEZER_CODE);
+
+  // The facility and room already mirrored in organizationId.
+  function mirrored(organizationId = 'org-1') {
+    return [
+      location('loc-facility', 'facility', `legacy-facility:${FACILITY._id}`, null, organizationId),
+      location('loc-room-1', 'room', `legacy-room:${ROOM_1._id}`, 'loc-facility', organizationId),
+    ];
+  }
+
+  it('moves a root freezer location under its room once, and a second run moves nothing', async () => {
+    const db = createFakeDb({ ...topology(), storageLocations: [freezerAtRoot()] });
+
+    const summary = await mirrorFacilitiesAndRooms(db);
+
+    const room = locationsOf(db).find((row) => row.code === `legacy-room:${ROOM_1._id}`);
+    expect(freezerLocation(db).parentLocationId).toBe(room.storageLocationId);
+    expect(summary.freezers).toEqual({ scanned: 1, reparented: 1, alreadyUnderRoom: 0, noLocation: 0, roomNotMirrored: 0 });
+    expect(summary.unresolved).toEqual([]);
+
+    const written = db.writes.length;
+    const again = await mirrorFacilitiesAndRooms(db);
+
+    expect(db.writes).toHaveLength(written);
+    expect(again.freezers).toEqual({ scanned: 1, reparented: 0, alreadyUnderRoom: 1, noLocation: 0, roomNotMirrored: 0 });
+  });
+
+  it('under a dry run writes nothing and counts the freezer it would move', async () => {
+    const db = createFakeDb({ ...topology(), storageLocations: [...mirrored(), freezerAtRoot()] });
+
+    const summary = await mirrorFacilitiesAndRooms(db, { dryRun: true });
+
+    expect(db.writes).toEqual([]);
+    expect(freezerLocation(db).parentLocationId).toBeNull();
+    expect(summary.freezers).toMatchObject({ scanned: 1, reparented: 1 });
+  });
+
+  it('leaves a freezer whose room location is in another organization unresolved', async () => {
+    const db = createFakeDb({ ...topology(), storageLocations: [...mirrored('org-2'), freezerAtRoot()] });
+
+    const summary = await mirrorFacilitiesAndRooms(db);
+
+    expect(db.writes).toEqual([]);
+    expect(freezerLocation(db).parentLocationId).toBeNull();
+    expect(summary.freezers).toMatchObject({ scanned: 1, reparented: 0 });
+    expect(summary.unresolved).toEqual([{ kind: 'freezer', id: 'F1', reason: 'conflicting_organizations', organizationIds: ['org-1', 'org-2'] }]);
+  });
+
+  it('counts a freezer whose room is not mirrored, and does not move it', async () => {
+    const db = createFakeDb({ ...topology({ facilities: [] }), storageLocations: [freezerAtRoot()] });
+
+    const summary = await mirrorFacilitiesAndRooms(db);
+
+    expect(freezerLocation(db).parentLocationId).toBeNull();
+    expect(summary.freezers).toEqual({ scanned: 1, reparented: 0, alreadyUnderRoom: 0, noLocation: 0, roomNotMirrored: 1 });
   });
 });
