@@ -21,7 +21,7 @@ const clinicalOutcomeService = require('../services/clinical-outcome.service');
 const derivedScoreService = require('../services/derived-score.service');
 const { computeCharlsonScore, ALGORITHM_VERSION: CCI_ALGORITHM_VERSION, SCORE_TYPE: CCI_SCORE_TYPE } = require('../services/charlsonComorbidityIndex');
 const logger = require('../utils/logger');
-const { resolveOrganizationIdForCreate } = require('../services/rbac-assignment.service');
+const { resolveOrganizationIdForCreate, isRecordInOrganizationScope } = require('../services/rbac-assignment.service');
 const { validate } = require('../contracts/canonical/v1');
 
 // #693 (RF005 clinical-data slice 5/5): systemUri constants matching this
@@ -1079,14 +1079,23 @@ router.get('/patient-match', async (req, res) => {
     }
 
     let patientStatus = 'ACTIVE';
+    let patientRecord = null;
     if (identity?.participantId) {
       const patientsCollection = await getCollection(db, 'patients');
-      const patientRecord = await patientsCollection.findOne(
+      patientRecord = await patientsCollection.findOne(
         { participantId: identity.participantId },
-        { projection: { status: 1 } }
+        { projection: { status: 1, clinicalUnitId: 1 } }
       );
       patientStatus = normalizeString(patientRecord?.status) || 'ACTIVE';
     }
+
+    // #1377: a match outside the caller's organizations answers as a
+    // non-match, by the rule matchOrUpsertParticipant applies (#1356), so the
+    // lookup leaks neither its civil fields nor its existence. A missing
+    // Patient record is out of scope for everyone but global scope.
+    const outOfScope = Boolean(identity)
+      && !isRecordInOrganizationScope(patientRecord, req.organizationScope, 'clinicalUnitId');
+    const matched = Boolean(identity) && !outOfScope;
 
     auditLogger.init(db);
     await auditLogger.log({
@@ -1095,12 +1104,13 @@ router.get('/patient-match', async (req, res) => {
       resourceId: identity?.participantId || participantIdQuery || null,
       status: 'success',
       severity: 'info',
-      message: identity
+      message: matched
         ? 'Heurística de intake encontrou paciente existente para upsert.'
         : 'Heurística de intake não encontrou paciente correspondente.',
       payload: {
         endpoint: '/patient-match',
-        matched: Boolean(identity),
+        matched,
+        ...(outOfScope ? { outOfScope: true } : {}),
         query: {
           patientID: participantIdQuery || null,
           patientName: patientName || null,
@@ -1113,8 +1123,8 @@ router.get('/patient-match', async (req, res) => {
 
     return res.json({
       success: true,
-      matched: Boolean(identity),
-      patient: identity
+      matched,
+      patient: matched
         ? {
           patientID: normalizeString(identity.participantId),
           patientName: normalizeString(identity.patientName),
@@ -1122,7 +1132,7 @@ router.get('/patient-match', async (req, res) => {
           status: patientStatus,
         }
         : null,
-      message: identity
+      message: matched
         ? 'Paciente identificado. Novos dados serão vinculados ao perfil histórico.'
         : '',
     });

@@ -1339,5 +1339,72 @@ function defaultStorageContainersFindOne({ _id }) {
       expect(res.body.patient.patientID).toBe('');
       expect(res.body.patient.patientName).toBe('');
     });
+
+    // #1377: the lookup applies the scope rule matchOrUpsertParticipant
+    // applies (#1356) to the Patient record's clinicalUnitId. A match outside
+    // the caller's organizations answers as a non-match, so neither its civil
+    // fields nor its existence reach the caller; the audit keeps the truth.
+    describe('organization scope (#1377)', () => {
+      function scopedApp(router, organizationScope) {
+        const app = express();
+        app.use(express.json());
+        app.locals.db = {};
+        app.use((req, _res, next) => { req.organizationScope = organizationScope; next(); });
+        app.use('/api/intake-wizard', router);
+        return app;
+      }
+
+      const SCOPED = { scope: 'organization', organizationIds: ['ORG-A'] };
+
+      function matchIn(clinicalUnitId) {
+        return makeIdentityCollectionRouter({
+          identityFindOne: vi.fn().mockResolvedValue({ participantId: '12345678', patientName: 'Paciente Teste', birthDate: '2000-01-01' }),
+          patientRecord: { status: 'ACTIVE', clinicalUnitId },
+        });
+      }
+
+      it('answers a scoped caller as a non-match when the matched patient belongs to another organization', async () => {
+        const { getCollectionImpl, patientsFindOne } = matchIn('ORG-B');
+        const { router, auditLoggerModule } = loadRoute({ getCollectionImpl });
+        const app = scopedApp(router, SCOPED);
+
+        const res = await request(app).get('/api/intake-wizard/patient-match').query({ patientID: '12345678' });
+
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual({ success: true, matched: false, patient: null, message: '' });
+        expect(JSON.stringify(res.body)).not.toMatch(/Paciente Teste|2000-01-01/);
+        expect(patientsFindOne.mock.calls[0][1].projection).toEqual(expect.objectContaining({ clinicalUnitId: 1 }));
+        const audit = auditLoggerModule.log.mock.calls[0][0];
+        expect(audit.payload).toEqual(expect.objectContaining({ matched: false, outOfScope: true }));
+      });
+
+      it('returns the match to a scoped caller when the matched patient belongs to its organization', async () => {
+        const { getCollectionImpl } = matchIn('ORG-A');
+        const { router } = loadRoute({ getCollectionImpl });
+        const app = scopedApp(router, SCOPED);
+
+        const res = await request(app).get('/api/intake-wizard/patient-match').query({ patientID: '12345678' });
+
+        expect(res.status).toBe(200);
+        expect(res.body.matched).toBe(true);
+        expect(res.body.patient).toEqual(
+          expect.objectContaining({ patientID: '12345678', patientName: 'Paciente Teste', status: 'ACTIVE' })
+        );
+      });
+
+      it('returns another organization\'s match to a global caller', async () => {
+        const { getCollectionImpl } = matchIn('ORG-B');
+        const { router } = loadRoute({ getCollectionImpl });
+        const app = scopedApp(router, { scope: 'global', organizationIds: [] });
+
+        const res = await request(app).get('/api/intake-wizard/patient-match').query({ patientID: '12345678' });
+
+        expect(res.status).toBe(200);
+        expect(res.body.matched).toBe(true);
+        expect(res.body.patient).toEqual(
+          expect.objectContaining({ patientID: '12345678', patientName: 'Paciente Teste' })
+        );
+      });
+    });
   });
 });
