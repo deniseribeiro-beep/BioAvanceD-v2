@@ -165,26 +165,21 @@ export interface SampleEmbeddedStorageLocation {
   path?: string | null;
 }
 
-// dict-02 StorageAssignment (ELM-0167-0178): o registro bruto de
-// storageAssignments, anexado de forma aditiva (não substitui storageLocation)
-// em MongoStorageRepository.findSampleById/findCurrentStorageAssignment (#507,
-// #510) e em sample.service.js#createSample/intakeWizard.js no POST de criação.
-// Sem boxName/readable/path resolvidos — para isso, use SampleStorageLocationDTO.
-export interface StorageAssignmentRecord {
-  storageAssignmentId: string;
-  specimenId: string;
-  storageLocationId?: string | null;
-  facilityId?: string | null;
-  roomId?: string | null;
-  equipmentId?: string | null;
-  shelfId?: string | null;
-  rackId?: string | null;
+// The sample's current placement as the API resolves it (#1374): the physical
+// chain (SpecimenContainerAssignment, ContainerPositionAssignment,
+// RackLocationAssignment, #1314) first, the open legacy StorageAssignment row
+// (ELM-0167..0178, historical reads only) as a fallback with the chain ids
+// null. Sent under the key `storageAssignment` by the sample create responses.
+// No boxName/readable/path: for those, use SampleStorageLocationDTO.
+export interface SamplePlacement {
   boxId: string | null;
-  positionCode: string;
-  nominalTemperature?: number | null;
-  placedAt?: Date | string;
-  removedAt?: Date | string | null;
-  occupancyStatus?: 'ocupada' | 'livre' | string;
+  positionCode: string | null;
+  containerId: string | null;
+  storagePositionId: string | null;
+  storageRackId: string | null;
+  storageLocationId: string | null;
+  placedAt?: Date | string | null;
+  source: 'physical_chain' | 'legacy_storage_assignment';
 }
 
 // Resposta de GET /storage/sample/:sampleId (GetSampleStorageLocationUseCase /
@@ -328,11 +323,12 @@ export interface Sample {
   withdrawalResponsible?: string;
   sampleDestination?: string;
   storageLocation?: SampleEmbeddedStorageLocation | null;
-  // dict-02 StorageAssignment, anexado de forma aditiva ao storageLocation
-  // acima (#495) — só presente em respostas específicas que já o resolvem
-  // (POST de criação); GET /samples/:id ainda não o resolve (ver #495 no
-  // dict-07/dict-08 tracking).
-  storageAssignment?: StorageAssignmentRecord | null;
+  // The current placement as the API resolves it (#1374): the physical chain
+  // (#1314) first, the open legacy StorageAssignment row (ELM-0167..0178,
+  // historical reads only) as a fallback. Added alongside storageLocation
+  // above, not replacing it; sent by the sample create responses and by the
+  // storage use cases' sample reads. GET /samples/:id does not return it.
+  storageAssignment?: SamplePlacement | null;
   // GET /samples (list view) only (#517) — batched, per-row resolution of
   // the same shape GET /storage/sample/:sampleId returns, so SamplesPageView
   // doesn't have to read storageLocation above directly nor make one

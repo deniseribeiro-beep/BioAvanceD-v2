@@ -196,7 +196,7 @@ export default function SampleWithdrawalReturnPage() {
         }
         // Carregar movimentações
         await loadMovements(result.sample._id || '');
-        // Carregar localização física resolvida (dict-02 StorageAssignment, #495)
+        // Carregar localização física resolvida (caixa, posição e caminho)
         await loadStorageLocation(result.sample._id || '');
         // Auto-switch para aba de devolução se amostra está retirada
         setActiveTab(resolveInitialTab(result.sample));
@@ -223,7 +223,7 @@ export default function SampleWithdrawalReturnPage() {
     }
   };
 
-  // Carregar localização física resolvida (StorageAssignment, dict-02 ELM-0167-0178)
+  // Carregar localização física resolvida (caixa, posição e caminho) via GET /storage/sample/:sampleId
   const loadStorageLocation = async (sampleId: string) => {
     const response = await storageApi.getSampleLocation(sampleId);
     setStorageLocation(response.success && response.data ? (response.data as SampleStorageLocationDTO) : null);

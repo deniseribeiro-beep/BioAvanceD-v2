@@ -218,8 +218,8 @@ export default function SampleDetailsPage() {
     return { summary, details: summary };
   };
 
-  // dict-02 StorageAssignment (ELM-0167-0178, #495) — GET /samples/:id doesn't
-  // resolve this, so it's fetched separately via GET /storage/sample/:sampleId.
+  // The resolved storage location (box, position and path): GET /samples/:id
+  // doesn't resolve it, so it's fetched separately via GET /storage/sample/:sampleId.
   const loadStorageLocation = async (sampleId: string) => {
     const response = await storageApi.getSampleLocation(sampleId);
     setStorageLocation(response.success && response.data ? (response.data as SampleStorageLocationDTO) : null);
