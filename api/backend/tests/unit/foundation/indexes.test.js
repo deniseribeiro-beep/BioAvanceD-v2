@@ -50,6 +50,7 @@ describe('Foundation index builds', () => {
       ['uniq_open_position', CANONICAL_COLLECTIONS.containerPositionAssignments],
       ['uniq_open_rack', CANONICAL_COLLECTIONS.rackLocationAssignments],
       ['uniq_storageLocationId', CANONICAL_COLLECTIONS.storageLocations],
+      ['uniq_active_label_value', CANONICAL_COLLECTIONS.labelIdentifiers],
     ]) {
       expect(named(name), name).toMatchObject({ collection, unique: true, ok: true });
     }

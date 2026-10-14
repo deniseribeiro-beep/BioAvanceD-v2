@@ -211,6 +211,16 @@ async function loadedOrAdopted(db, sample, session) {
   return adopted.containerId ? physicalChain.openSpecimenAssignment(db, specimenId, session) : null;
 }
 
+// #1378: the specimen's one container, the one its label is issued on: its
+// open load, else its adopted legacy placement, else a container created and
+// loaded as its first placement would be. Returns the open
+// SpecimenContainerAssignment.
+async function ensureSpecimenContainer(db, sample, { at, sourceEventId }, session) {
+  const loaded = await loadedOrAdopted(db, sample, session);
+  if (loaded) return loaded;
+  return ensureLoaded(db, sample, { at, sourceEventId }, session);
+}
+
 async function moveSpecimen(db, { sample, toBox, toPosition, at, sourceEventId }, session) {
   const movedAt = at || new Date();
   const loaded = await loadedOrAdopted(db, sample, session);
@@ -338,4 +348,5 @@ module.exports = {
   releaseSpecimen,
   currentPlacement,
   adoptLegacyPlacement,
+  ensureSpecimenContainer,
 };

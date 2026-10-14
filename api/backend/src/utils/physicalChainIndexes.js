@@ -49,10 +49,27 @@ async function ensureStorageLocationIndexes(collection) {
   await collection.createIndex({ organizationId: 1 });
 }
 
+// #1378: one active label per value in a namespace (RF016 AC4). A label
+// issued inside a caller's transaction relies on this boot-time build.
+async function ensureLabelIdentifierIndexes(collection) {
+  if (!canIndex(collection)) return;
+  await collection.createIndex(
+    { namespaceRegistryId: 1, encodedValue: 1 },
+    { unique: true, name: 'uniq_active_label_value', partialFilterExpression: { status: 'active' } }
+  );
+}
+
+async function ensureScanEventIndexes(collection) {
+  if (!canIndex(collection)) return;
+  await collection.createIndex({ targetId: 1, occurredAt: -1 });
+}
+
 module.exports = {
   ensureContainerIndexes,
   ensureSpecimenContainerAssignmentIndexes,
   ensureContainerPositionAssignmentIndexes,
   ensureRackLocationAssignmentIndexes,
   ensureStorageLocationIndexes,
+  ensureLabelIdentifierIndexes,
+  ensureScanEventIndexes,
 };

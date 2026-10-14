@@ -47,6 +47,14 @@ describe('LabelIdentifier model (RF016 AC4/AC5)', () => {
     expect(() => LabelIdentifierModel.create(withoutBoth)).toThrow('Identificador institucional exige templateVersionId, printBatchId (RF016 AC4)');
   });
 
+  it('waives the print batch of a label issued unprinted, and only then (#1378, V2E-0178)', () => {
+    const { printBatchId, ...unprinted } = institutional;
+    expect(LabelIdentifierModel.create(unprinted, { printed: false })).toMatchObject({ printBatchId: null, issuedBy: 'user-1' });
+    expect(() => LabelIdentifierModel.create(unprinted)).toThrow('Identificador institucional exige printBatchId (RF016 AC4)');
+    const { issuedBy, ...unissued } = unprinted;
+    expect(() => LabelIdentifierModel.create(unissued, { printed: false })).toThrow('Identificador institucional exige issuedBy (RF016 AC4)');
+  });
+
   it('records origin, placement and source immutability, each required (RF016 AC4)', () => {
     expect(() => LabelIdentifierModel.create({ ...manufacturer, carrierPlacement: null })).toThrow(/carrierPlacement/);
     expect(() => LabelIdentifierModel.create({ ...manufacturer, identifierOrigin: null })).toThrow(/identifierOrigin/);

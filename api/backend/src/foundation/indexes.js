@@ -24,6 +24,8 @@ const {
   ensureContainerPositionAssignmentIndexes,
   ensureRackLocationAssignmentIndexes,
   ensureStorageLocationIndexes,
+  ensureLabelIdentifierIndexes,
+  ensureScanEventIndexes,
 } = require('../utils/physicalChainIndexes');
 const { ensureParticipantIdentityIndexes } = require('../utils/participantIdentityIndexes');
 const { ensureSampleIndexes } = require('../utils/sampleIndexes');
@@ -55,6 +57,8 @@ const INDEX_TARGETS = [
   { collection: CANONICAL_COLLECTIONS.containerPositionAssignments, ensure: ensureContainerPositionAssignmentIndexes },
   { collection: CANONICAL_COLLECTIONS.rackLocationAssignments, ensure: ensureRackLocationAssignmentIndexes },
   { collection: CANONICAL_COLLECTIONS.storageLocations, ensure: ensureStorageLocationIndexes },
+  { collection: CANONICAL_COLLECTIONS.labelIdentifiers, ensure: ensureLabelIdentifierIndexes },
+  { collection: CANONICAL_COLLECTIONS.scanEvents, ensure: ensureScanEventIndexes },
 ];
 
 function recordingCollection(collection, builds, collectionName) {

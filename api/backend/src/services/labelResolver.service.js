@@ -3,6 +3,7 @@ const logger = require('../utils/logger');
 const LabelIdentifierModel = require('../models/LabelIdentifier');
 const ScanEventModel = require('../models/ScanEvent');
 const IdentificationPolicyModel = require('../models/IdentificationPolicy');
+const { ensureLabelIdentifierIndexes, ensureScanEventIndexes } = require('../utils/physicalChainIndexes');
 
 // #1314 (RF016 AC6): the resolver captures, decodes, normalizes and
 // resolves, and nothing else. It never authorizes the operation a scan is
@@ -17,11 +18,8 @@ async function ensureLabelIndexes(db) {
   if (!db || ensuredDbs.has(db)) return;
   ensuredDbs.add(db);
   try {
-    await (await getCollection(db, 'labelIdentifiers')).createIndex(
-      { namespaceRegistryId: 1, encodedValue: 1 },
-      { unique: true, name: 'uniq_active_label_value', partialFilterExpression: { status: 'active' } }
-    );
-    await (await getCollection(db, 'scanEvents')).createIndex({ targetId: 1, occurredAt: -1 });
+    await ensureLabelIdentifierIndexes(await getCollection(db, 'labelIdentifiers'));
+    await ensureScanEventIndexes(await getCollection(db, 'scanEvents'));
   } catch (error) {
     logger.warn(`[LABEL_RESOLVER] Falha ao criar índices: ${error.message}`);
   }
@@ -34,16 +32,21 @@ function normalizeScannedValue(raw) {
   return String(raw ?? '').trim().replace(/^\][A-Za-z][0-9A-Za-z]/, '');
 }
 
-async function registerLabel(db, data) {
-  await ensureLabelIndexes(db);
+// #1378: with a session the label is inserted in the caller's transaction
+// and no index is built beside it; the Foundation job builds it at boot.
+// `printed: false` issues a label with no print batch. `provenance` is
+// kept beside the model's fields as `migratedFrom`.
+async function registerLabel(db, data, { session, printed = true, provenance } = {}) {
+  if (!session) await ensureLabelIndexes(db);
   let label;
   try {
-    label = LabelIdentifierModel.create(data);
+    label = LabelIdentifierModel.create(data, { printed });
   } catch (error) {
     throw Object.assign(error, { code: 'VALIDATION_ERROR', statusCode: 422 });
   }
+  if (provenance) label = { ...label, migratedFrom: provenance };
   try {
-    await (await getCollection(db, 'labelIdentifiers')).insertOne(label);
+    await (await getCollection(db, 'labelIdentifiers')).insertOne(label, session ? { session } : undefined);
   } catch (error) {
     if (error?.code === 11000) {
       throw Object.assign(new Error(`Valor ${label.encodedValue} já ativo neste namespace`), { code: 'LABEL_EXISTS', statusCode: 409 });

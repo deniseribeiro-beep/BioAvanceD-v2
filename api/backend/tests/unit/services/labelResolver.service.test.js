@@ -116,4 +116,33 @@ describe('labelResolver.service (RF016 AC6)', () => {
     const db = await seeded();
     await expect(resolver.registerLabel(db, { ...label, targetId: 'CT-2' })).rejects.toMatchObject({ code: 'LABEL_EXISTS', statusCode: 409 });
   });
+
+  // #1378: an index build beside an open transaction is a write conflict.
+  it('with a session builds no index and inserts in the caller\'s session, keeping provenance as migratedFrom', async () => {
+    const db = createFakeDb();
+    const collection = db.collection('labelIdentifiers');
+    const calls = [];
+    collection.createIndex = async () => { calls.push('createIndex'); };
+    const insertOne = collection.insertOne.bind(collection);
+    collection.insertOne = async (doc, options) => { calls.push(options); return insertOne(doc); };
+    const session = { id: 'caller-session' };
+    const provenance = { elementId: 'ELM-0116', sampleId: 'S-1', value: 'BVA2:synthetic:8K3M' };
+
+    const stored = await resolver.registerLabel(db, label, { session, provenance });
+
+    expect(calls).toEqual([{ session }]);
+    expect(stored).toMatchObject({ encodedValue: 'BVA2:synthetic:8K3M', migratedFrom: provenance });
+    expect(collection.docs[0].migratedFrom).toEqual(provenance);
+  });
+
+  it('passes printed to the model: an institutional label needs a batch unless issued unprinted', async () => {
+    const institutional = {
+      ...label, symbology: 'code_128', identifierOrigin: 'institution_applied', namespaceRegistryId: 'ns-biobank',
+      carrierPlacement: 'container_side', immutableAtSource: false,
+      issuedAt: '2026-10-13T12:00:00.000Z', issuedBy: 'user-1', templateVersionId: 'tpl-1',
+    };
+    const db = createFakeDb();
+    await expect(resolver.registerLabel(db, institutional)).rejects.toMatchObject({ code: 'VALIDATION_ERROR', statusCode: 422 });
+    expect(await resolver.registerLabel(db, institutional, { printed: false })).toMatchObject({ printBatchId: null });
+  });
 });

@@ -21,7 +21,10 @@ const STATUS_VALUES = ['active'];
 
 // RF016 AC4: issuance, template and batch are required only of an
 // institutional identifier. RULE-034 waives them for a manufacturer's.
-const INSTITUTIONAL_ISSUANCE_FIELDS = ['issuedAt', 'issuedBy', 'templateVersionId', 'printBatchId'];
+// The batch (V2E-0178) only "quando houve impressão institucional": a label
+// issued unprinted (`{ printed: false }`) has none (#1378).
+const INSTITUTIONAL_ISSUANCE_FIELDS = ['issuedAt', 'issuedBy', 'templateVersionId'];
+const PRINT_FIELDS = ['printBatchId'];
 
 // RULE-012, RF016 AC8: the encoded value is opaque. A CPF, an e-mail or
 // free text (a space, as in a name) is refused before it can be printed.
@@ -68,7 +71,7 @@ class LabelIdentifierModel {
     };
   }
 
-  static create(data = {}) {
+  static create(data = {}, { printed = true } = {}) {
     const fields = this.fieldsOf(data);
     for (const field of ['encodedValue', 'symbology', 'targetType', 'targetId', 'identifierOrigin', 'namespaceRegistryId', 'carrierPlacement']) {
       if (!fields[field]) {
@@ -96,7 +99,8 @@ class LabelIdentifierModel {
         throw new Error('Identificador manufacturer_applied deve ter alvo container (RULE-034)');
       }
     } else {
-      const missing = INSTITUTIONAL_ISSUANCE_FIELDS.filter((field) => !fields[field]);
+      const required = printed ? [...INSTITUTIONAL_ISSUANCE_FIELDS, ...PRINT_FIELDS] : INSTITUTIONAL_ISSUANCE_FIELDS;
+      const missing = required.filter((field) => !fields[field]);
       if (missing.length) {
         throw new Error(`Identificador institucional exige ${missing.join(', ')} (RF016 AC4)`);
       }
