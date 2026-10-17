@@ -1476,3 +1476,34 @@ test.describe('Temperature report reads InfluxDB (#1317, RF009 AC1) — real bac
     expect(iotRow).toMatchObject({ temperatureValue: 5, temperatureUnit: '°C', logId: iotBody.telemetryReadingId });
   });
 });
+
+// #1317 (RF009 AC1): the temperature history reads its readings from
+// InfluxDB, so a POST /api/iot/telemetry reading (InfluxDB only) shows in it,
+// and skip pages through it.
+test.describe('Temperature history reads InfluxDB (#1317, RF009 AC1) — real backend', () => {
+  test('a reading posted to /api/iot/telemetry shows in the history, and skip pages past it', async ({ request }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const sensorId = `rf009-history-iot-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    const reading = await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+      headers: ingestHeaders(),
+      data: { sensorId, temperature: 5, timestamp: new Date().toISOString() },
+    });
+    expect(reading.status(), await reading.text()).toBe(200);
+    const readingBody = await reading.json();
+
+    const history = await request.get(`${apiBaseURL}/api/temperature/history?sensorId=${encodeURIComponent(sensorId)}`, { headers: auth });
+    expect(history.status(), await history.text()).toBe(200);
+    const page = (await history.json()).data;
+    expect(page.total).toBe(1);
+    expect(page.temperatures).toHaveLength(1);
+    expect(page.temperatures[0]).toMatchObject({ logId: readingBody.telemetryReadingId, temperatureValue: 5, temperatureUnit: '°C' });
+
+    const skipped = await request.get(`${apiBaseURL}/api/temperature/history?sensorId=${encodeURIComponent(sensorId)}&skip=1`, { headers: auth });
+    expect(skipped.status(), await skipped.text()).toBe(200);
+    const skippedPage = (await skipped.json()).data;
+    expect(skippedPage.temperatures).toEqual([]);
+    expect(skippedPage.total).toBe(1);
+  });
+});

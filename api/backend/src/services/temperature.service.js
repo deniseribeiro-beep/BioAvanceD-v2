@@ -1,6 +1,7 @@
 const TemperatureModel = require('../models/Temperature');
 const logger = require('../utils/logger');
 const influxTelemetryWriteRepository = require('../infrastructure/persistence/influxdb/InfluxTelemetryWriteRepository');
+const influxTelemetryReadRepository = require('../infrastructure/persistence/influxdb/InfluxTelemetryReadRepository');
 const notificationServiceV2 = require('./NotificationService');
 const notificationDispatchService = require('./notificationDispatch.service');
 const { applyOrganizationScopeFilter } = require('./rbac-assignment.service');
@@ -264,84 +265,43 @@ class TemperatureService {
 
   async getTemperatureHistory(db, filters = {}) {
     try {
-      const temperaturesCollection = db.collection('temperatures');
-      const query = {};
+      // RF009 AC1 (#1317): readings live in InfluxDB, so the history reads
+      // both measurements through temperatureReport, not the Mongo
+      // `temperatures` copy. A point carries no organizationId, so an
+      // org-scoped caller sees the readings of their organizations' sensors
+      // (filtered again in JS: the test fakes do not apply queries). An
+      // invalid date answers empty, as the Mongo read matched nothing there,
+      // and temperatureReport answers an empty window or sensor set empty.
+      const limit = Number.isInteger(filters.limit) && filters.limit > 0 ? filters.limit : 1000;
+      const skip = Number.isInteger(filters.skip) && filters.skip >= 0 ? filters.skip : 0;
 
-      // #917: `filters.sensorID` is a live *input* alias (the frontend's
-      // api.ts sends `sensorID` as a query param), so the coalesce stays. What
-      // went is the `{ sensorID: sensorIdValue }` query branch this used to
-      // pair it with: `TemperatureModel.create` writes `sensorId` only, and
-      // always has, so no stored reading ever carried the capitalised key.
+      const start = filters.startDate ? new Date(filters.startDate) : null;
+      // A Flux stop is exclusive, where the Mongo read's endDate was $lte.
+      const stop = filters.endDate ? new Date(new Date(filters.endDate).getTime() + 1) : null;
+      if ((start && Number.isNaN(start.getTime())) || (stop && Number.isNaN(stop.getTime()))) {
+        return { temperatures: [], total: 0, limit, skip };
+      }
+
+      let sensorIds = null;
+      if (filters.organizationScope?.scope === 'organization') {
+        const orgIds = filters.organizationScope.organizationIds || [];
+        const sensors = (await db.collection('sensors').find({ organizationId: { $in: orgIds } }).toArray())
+          .filter((sensor) => orgIds.includes(sensor.organizationId));
+        sensorIds = [...new Set(sensors.map((sensor) => sensor.sensorId).filter(Boolean).map(String))];
+      }
+
+      // #917: `filters.sensorID` is a live input alias (the frontend's api.ts
+      // sends it as a query param), so the coalesce stays.
       const sensorIdValue = filters.sensorId || filters.sensorID;
       if (sensorIdValue) {
-        query.sensorId = sensorIdValue;
+        sensorIds = sensorIds ? sensorIds.filter((id) => id === String(sensorIdValue)) : [String(sensorIdValue)];
       }
 
-      if (filters.startDate || filters.endDate) {
-        const dateQuery = {};
-        if (filters.startDate) {
-          dateQuery.$gte = new Date(filters.startDate);
-        }
-        if (filters.endDate) {
-          dateQuery.$lte = new Date(filters.endDate);
-        }
-        
-        // Busca tanto em timestamp quanto em dateTime (compatibilidade).
-        //
-        // #917: this used to branch on `query.$or` already existing and, when
-        // it did, wrap both into an `$and`. The only thing that ever set
-        // `query.$or` before this point was the sensorId/sensorID pair above;
-        // now that the sensor filter is a plain key the merge branch is
-        // unreachable, and the two conditions compose as sibling keys --
-        // `{ sensorId, $or: [...] }` is the same query the `$and` built, one
-        // wrapper shallower.
-        query.$or = [
-          { timestamp: dateQuery },
-          { dateTime: dateQuery }
-        ];
-      }
+      const { rows, total } = await influxTelemetryReadRepository.temperatureReport({
+        start, stop, sensorIds, critical: null, limit, offset: skip
+      });
 
-      // #636 (F3-G09): org-scoped caller sees only readings whose
-      // organizationId is one of their scoped organizations. No-op for a
-      // 'global' (Administrador) scope. Caller must resolve+attach
-      // organizationScope via rbac.js's requireOrganizationScope first.
-      if (filters.organizationScope) {
-        applyOrganizationScopeFilter(query, filters.organizationScope, 'organizationId');
-      }
-
-      const limit = filters.limit || 1000;
-      const skip = filters.skip || 0;
-
-      // Tenta ordenar por timestamp, se não existir, ordena por dateTime ou _id
-      let sortQuery = { timestamp: -1 };
-      try {
-        // Verifica se existe pelo menos um documento com timestamp
-        const sample = await temperaturesCollection.findOne({ timestamp: { $exists: true } });
-        if (!sample) {
-          // Se não existe timestamp, tenta dateTime
-          const sampleWithDateTime = await temperaturesCollection.findOne({ dateTime: { $exists: true } });
-          if (sampleWithDateTime) {
-            sortQuery = { dateTime: -1 };
-          } else {
-            // Se não existe nenhum, ordena por _id (mais recente primeiro)
-            sortQuery = { _id: -1 };
-          }
-        }
-      } catch (sortError) {
-        // Em caso de erro, usa _id como fallback
-        sortQuery = { _id: -1 };
-      }
-
-      const temperatures = await temperaturesCollection
-        .find(query)
-        .sort(sortQuery)
-        .limit(limit)
-        .skip(skip)
-        .toArray();
-
-      const total = await temperaturesCollection.countDocuments(query);
-
-      return { temperatures: temperatures || [], total: total || 0, limit, skip };
+      return { temperatures: rows, total, limit, skip };
     } catch (error) {
       logger.error('Erro ao buscar histórico de temperatura:', error.message);
       throw error;

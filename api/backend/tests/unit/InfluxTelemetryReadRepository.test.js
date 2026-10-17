@@ -105,8 +105,17 @@ describe('InfluxTelemetryReadRepository - temperatureReport (RF009 AC1, #1317)',
     expect(rowsQuery).toContain('r._measurement == "freezer_temperature" or r._measurement == "temperature"');
     expect(rowsQuery).toContain('pivot(rowKey: ["_time"]');
     expect(rowsQuery).toContain('sort(columns: ["_time"], desc: true)');
-    expect(rowsQuery).toContain('limit(n: 100)');
+    expect(rowsQuery).toContain('limit(n: 100, offset: 0)');
     expect(queryAt(1)).toContain('count(column: "celsius")');
+  });
+
+  // The temperature history pages through this method; the count is the
+  // whole match, so it carries no limit.
+  it('temperatureReport pages the rows by the given offset and leaves the count unlimited', async () => {
+    await repository.temperatureReport({ limit: 5, offset: 10 });
+
+    expect(queryAt(0)).toContain('limit(n: 5, offset: 10)');
+    expect(queryAt(1)).not.toContain('limit(');
   });
 
   it('temperatureReport bounds the range by the given start and stop', async () => {

@@ -6,6 +6,7 @@ const require = createRequire(import.meta.url);
 const TemperatureModel = require('../../src/models/Temperature');
 const logger = require('../../src/utils/logger');
 const influxTelemetryWriteRepository = require('../../src/infrastructure/persistence/influxdb/InfluxTelemetryWriteRepository');
+const influxTelemetryReadRepository = require('../../src/infrastructure/persistence/influxdb/InfluxTelemetryReadRepository');
 const notificationServiceV2 = require('../../src/services/NotificationService');
 const notificationDispatchService = require('../../src/services/notificationDispatch.service');
 const temperatureService = require('../../src/services/temperature.service');
@@ -25,14 +26,6 @@ function makeDb(collections = {}) {
 // what every pre-#1118 test in this file assumed implicitly.
 function alertFindOne(existing = null) {
   return vi.fn().mockResolvedValue(existing);
-}
-
-function makeFindChain(docs) {
-  const toArray = vi.fn().mockResolvedValue(docs);
-  const skip = vi.fn().mockReturnValue({ toArray });
-  const limit = vi.fn().mockReturnValue({ skip });
-  const sort = vi.fn().mockReturnValue({ limit });
-  return { sort, limit, skip, toArray };
 }
 
 describe('temperatureService.createTemperatureReading', () => {
@@ -562,128 +555,167 @@ describe('temperatureService.checkPolicyAndAlert', () => {
   });
 });
 
+// RF009 AC1 (#1317): the history reads InfluxDB through temperatureReport,
+// not the Mongo `temperatures` copy. A point carries no organizationId, so an
+// org-scoped caller is scoped to their organizations' sensors.
 describe('temperatureService.getTemperatureHistory', () => {
-  it('uses default limit and skip, and _id sort when no timestamp/dateTime docs exist', async () => {
-    const findOne = vi.fn().mockResolvedValue(null);
-    const chain = makeFindChain([]);
-    const find = vi.fn().mockReturnValue(chain);
-    const countDocuments = vi.fn().mockResolvedValue(0);
-    const db = makeDb({ temperatures: { findOne, find, countDocuments } });
+  function givenReport(result = { rows: [], total: 0 }) {
+    return vi.spyOn(influxTelemetryReadRepository, 'temperatureReport').mockResolvedValue(result);
+  }
+
+  function sensorsCollection(sensors) {
+    const toArray = vi.fn().mockResolvedValue(sensors);
+    return { find: vi.fn().mockReturnValue({ toArray }) };
+  }
+
+  it('uses default limit and skip and an unbounded, unscoped read', async () => {
+    const report = givenReport();
+    const db = makeDb({});
 
     const result = await temperatureService.getTemperatureHistory(db, {});
 
+    expect(report).toHaveBeenCalledWith({ start: null, stop: null, sensorIds: null, critical: null, limit: 1000, offset: 0 });
     expect(result.limit).toBe(1000);
     expect(result.skip).toBe(0);
-    expect(chain.sort).toHaveBeenCalledWith({ _id: -1 });
-    expect(find).toHaveBeenCalledWith({});
   });
 
-  // #917: was a two-branch `$or` over sensorId/sensorID. Nothing ever wrote
-  // the capitalised key -- TemperatureModel.create coalesces it into
-  // `sensorId` on the way in, and has since the initial commit -- so the
-  // second branch matched nothing and the filter is now a plain key.
-  it('builds a plain sensorId filter', async () => {
-    const findOne = vi.fn().mockResolvedValue({ timestamp: new Date() });
-    const chain = makeFindChain([]);
-    const find = vi.fn().mockReturnValue(chain);
-    const countDocuments = vi.fn().mockResolvedValue(0);
-    const db = makeDb({ temperatures: { findOne, find, countDocuments } });
+  it('reads no Mongo temperatures collection', async () => {
+    givenReport();
+    const db = makeDb({});
+
+    await temperatureService.getTemperatureHistory(db, { sensorId: 'sensor-1', startDate: '2024-01-01' });
+
+    expect(db.collection).not.toHaveBeenCalledWith('temperatures');
+  });
+
+  // #917: `sensorID` is a live input alias (api.ts sends it).
+  it('restricts the read to the given sensorId, or its sensorID alias', async () => {
+    const report = givenReport();
+    const db = makeDb({});
 
     await temperatureService.getTemperatureHistory(db, { sensorId: 'sensor-1' });
+    await temperatureService.getTemperatureHistory(db, { sensorID: 'sensor-2' });
 
-    expect(find).toHaveBeenCalledWith({ sensorId: 'sensor-1' });
-    expect(chain.sort).toHaveBeenCalledWith({ timestamp: -1 });
+    expect(report.mock.calls[0][0].sensorIds).toEqual(['sensor-1']);
+    expect(report.mock.calls[1][0].sensorIds).toEqual(['sensor-2']);
   });
 
-  it('builds a date-range-only $or filter across timestamp and dateTime', async () => {
-    const findOne = vi.fn().mockResolvedValue(null).mockResolvedValueOnce(null).mockResolvedValueOnce({ dateTime: new Date() });
-    const chain = makeFindChain([]);
-    const find = vi.fn().mockReturnValue(chain);
-    const countDocuments = vi.fn().mockResolvedValue(0);
-    const db = makeDb({ temperatures: { findOne, find, countDocuments } });
+  // A Flux stop is exclusive, where the Mongo read's endDate was $lte.
+  it('reads from startDate up to and including endDate', async () => {
+    const report = givenReport();
+    const db = makeDb({});
 
     const start = '2024-01-01';
     const end = '2024-01-31';
     await temperatureService.getTemperatureHistory(db, { startDate: start, endDate: end });
 
-    const calledQuery = find.mock.calls[0][0];
-    expect(calledQuery.$or).toEqual([
-      { timestamp: { $gte: new Date(start), $lte: new Date(end) } },
-      { dateTime: { $gte: new Date(start), $lte: new Date(end) } }
-    ]);
-    // second findOne fallback found a dateTime doc -> sort by dateTime
-    expect(chain.sort).toHaveBeenCalledWith({ dateTime: -1 });
+    const call = report.mock.calls[0][0];
+    expect(call.start).toEqual(new Date(start));
+    expect(call.stop).toEqual(new Date(new Date(end).getTime() + 1));
   });
 
-  // #917: this used to assert an `$and` wrapper. That merge branch existed
-  // only because the sensor filter was itself an `$or`; with a plain
-  // `sensorId` key the two conditions compose as siblings, which is the same
-  // query one wrapper shallower. The date-range `$or` is unchanged.
-  it('composes sensorId + date-range filters as sibling keys, no $and wrapper', async () => {
-    const findOne = vi.fn().mockResolvedValue({ timestamp: new Date() });
-    const chain = makeFindChain([]);
-    const find = vi.fn().mockReturnValue(chain);
-    const countDocuments = vi.fn().mockResolvedValue(0);
-    const db = makeDb({ temperatures: { findOne, find, countDocuments } });
+  it('leaves the stop open when only startDate is given', async () => {
+    const report = givenReport();
+    const db = makeDb({});
 
     const start = '2024-02-01';
-    await temperatureService.getTemperatureHistory(db, {
-      sensorId: 'sensor-9',
-      startDate: start
-    });
+    await temperatureService.getTemperatureHistory(db, { sensorId: 'sensor-9', startDate: start });
 
-    const calledQuery = find.mock.calls[0][0];
-    expect(calledQuery.$and).toBeUndefined();
-    expect(calledQuery.sensorId).toBe('sensor-9');
-    expect(calledQuery.$or).toEqual([
-      { timestamp: { $gte: new Date(start) } },
-      { dateTime: { $gte: new Date(start) } }
-    ]);
+    const call = report.mock.calls[0][0];
+    expect(call.start).toEqual(new Date(start));
+    expect(call.stop).toBeNull();
+    expect(call.sensorIds).toEqual(['sensor-9']);
   });
 
-  // #636 (F3-G09): an organization-scoped caller must only see readings
-  // whose organizationId is one of their scoped organizations -- a null
-  // organizationId (unscoped/legacy reading) must not be exposed.
-  it('applies an organizationId $in filter for an organization-scoped caller', async () => {
-    const findOne = vi.fn().mockResolvedValue(null);
-    const chain = makeFindChain([]);
-    const find = vi.fn().mockReturnValue(chain);
-    const countDocuments = vi.fn().mockResolvedValue(0);
-    const db = makeDb({ temperatures: { findOne, find, countDocuments } });
+  it('answers an empty page without a query when a date is invalid', async () => {
+    const report = givenReport();
+    const db = makeDb({});
+
+    const result = await temperatureService.getTemperatureHistory(db, { endDate: 'not-a-date' });
+
+    expect(result).toEqual({ temperatures: [], total: 0, limit: 1000, skip: 0 });
+    expect(report).not.toHaveBeenCalled();
+  });
+
+  // #636 (F3-G09): an org-scoped caller sees only their organizations'
+  // sensors' readings.
+  it('scopes an organization-scoped caller to their organizations\' sensors', async () => {
+    const report = givenReport();
+    const db = makeDb({
+      sensors: sensorsCollection([
+        { sensorId: 'S-org1', organizationId: 'org-1' },
+        { sensorId: 'S-org2', organizationId: 'org-2' },
+        { organizationId: 'org-1' },
+      ]),
+    });
 
     await temperatureService.getTemperatureHistory(db, {
       organizationScope: { scope: 'organization', organizationIds: ['org-1'] }
     });
 
-    expect(find).toHaveBeenCalledWith({ organizationId: { $in: ['org-1'] } });
+    expect(report.mock.calls[0][0].sensorIds).toEqual(['S-org1']);
   });
 
-  it('does not filter by organizationId for a global-scope caller (Administrador)', async () => {
-    const findOne = vi.fn().mockResolvedValue(null);
-    const chain = makeFindChain([]);
-    const find = vi.fn().mockReturnValue(chain);
-    const countDocuments = vi.fn().mockResolvedValue(0);
-    const db = makeDb({ temperatures: { findOne, find, countDocuments } });
+  it('gives an org-scoped caller no sensor when the requested sensorId is not theirs', async () => {
+    const report = givenReport();
+    const db = makeDb({ sensors: sensorsCollection([{ sensorId: 'S-org1', organizationId: 'org-1' }]) });
+
+    await temperatureService.getTemperatureHistory(db, {
+      sensorId: 'S-org2',
+      organizationScope: { scope: 'organization', organizationIds: ['org-1'] }
+    });
+
+    expect(report.mock.calls[0][0].sensorIds).toEqual([]);
+  });
+
+  it('gives an org-scoped caller whose organizations hold no sensor no sensor', async () => {
+    const report = givenReport();
+    const db = makeDb({ sensors: sensorsCollection([{ sensorId: 'S-org2', organizationId: 'org-2' }]) });
+
+    await temperatureService.getTemperatureHistory(db, {
+      organizationScope: { scope: 'organization', organizationIds: ['org-1'] }
+    });
+
+    expect(report.mock.calls[0][0].sensorIds).toEqual([]);
+  });
+
+  it('does not scope a global-scope caller (Administrador) and reads no sensors', async () => {
+    const report = givenReport();
+    const db = makeDb({});
 
     await temperatureService.getTemperatureHistory(db, { organizationScope: { scope: 'global' } });
 
-    expect(find).toHaveBeenCalledWith({});
+    expect(report.mock.calls[0][0].sensorIds).toBeNull();
+    expect(db.collection).not.toHaveBeenCalledWith('sensors');
   });
 
-  it('passes custom limit and skip through, and uses countDocuments for total', async () => {
-    const findOne = vi.fn().mockResolvedValue({ timestamp: new Date() });
-    const docs = [{ _id: 1 }, { _id: 2 }];
-    const chain = makeFindChain(docs);
-    const find = vi.fn().mockReturnValue(chain);
-    const countDocuments = vi.fn().mockResolvedValue(42);
-    const db = makeDb({ temperatures: { findOne, find, countDocuments } });
+  it('passes custom limit and skip through, and returns the read\'s rows and total', async () => {
+    const rows = [{ telemetryReadingId: 'r1' }, { telemetryReadingId: 'r2' }];
+    const report = givenReport({ rows, total: 42 });
+    const db = makeDb({});
 
     const result = await temperatureService.getTemperatureHistory(db, { limit: 5, skip: 10 });
 
-    expect(chain.limit).toHaveBeenCalledWith(5);
-    expect(chain.skip).toHaveBeenCalledWith(10);
-    expect(result.temperatures).toEqual(docs);
-    expect(result.total).toBe(42);
+    expect(report.mock.calls[0][0]).toMatchObject({ limit: 5, offset: 10 });
+    expect(result).toEqual({ temperatures: rows, total: 42, limit: 5, skip: 10 });
+  });
+
+  // Flux refuses a negative n or offset.
+  it('falls back to the default limit and skip when they are negative', async () => {
+    const report = givenReport();
+    const db = makeDb({});
+
+    await temperatureService.getTemperatureHistory(db, { limit: -5, skip: -1 });
+
+    expect(report.mock.calls[0][0]).toMatchObject({ limit: 1000, offset: 0 });
+  });
+
+  it('rejects when the InfluxDB read fails, rather than answering an empty page', async () => {
+    vi.spyOn(influxTelemetryReadRepository, 'temperatureReport').mockRejectedValue(new Error('influx down'));
+    vi.spyOn(logger, 'error').mockImplementation(() => {});
+    const db = makeDb({});
+
+    await expect(temperatureService.getTemperatureHistory(db, {})).rejects.toThrow('influx down');
   });
 });
 

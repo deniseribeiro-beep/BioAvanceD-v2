@@ -7,6 +7,8 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
 
 const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
+// RF009 AC1 (#1317): the history reads InfluxDB; tests have no InfluxDB env.
+const influxTelemetryReadRepository = require('../../src/infrastructure/persistence/influxdb/InfluxTelemetryReadRepository');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
 
@@ -23,14 +25,29 @@ function givenSession() {
   vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 'session-1' });
 }
 
-function givenTemperatureCollection(overrides = {}) {
+function givenTemperatureCollection(overrides = {}, extraCollections = {}) {
   const coll = createCollectionMock(overrides);
   app.locals.db = createDbMock({
     temperature_readings: coll,
     temperaturereadings: coll,
+    ...extraCollections,
     ...buildRbacCollections([{ userAccountId: 'qa-tecnico-1', accessType: 2 }])
   });
   return coll;
+}
+
+// The Técnico's organization is rbac.factory's test-org-default.
+const READINGS = [{ telemetryReadingId: 'r1', sensorId: 's1', temperatureValue: 4.2 }];
+
+function givenOwnSensorAndReadings() {
+  givenTemperatureCollection({}, {
+    sensors: createCollectionMock({
+      find: vi.fn().mockImplementation(() => ({
+        toArray: vi.fn().mockResolvedValue([{ sensorId: 's1', organizationId: 'test-org-default' }]),
+      })),
+    }),
+  });
+  return vi.spyOn(influxTelemetryReadRepository, 'temperatureReport').mockResolvedValue({ rows: READINGS, total: 1 });
 }
 
 describe('GET /api/temperature', () => {
@@ -42,22 +59,33 @@ describe('GET /api/temperature', () => {
     expect(response.status).toBe(401);
   });
 
-  it('lists temperature readings for a Técnico (accessType 2)', async () => {
-    givenTemperatureCollection({
-      find: vi.fn().mockImplementation(() => ({
-        toArray: vi.fn().mockResolvedValue([{ _id: 'r1', value: 4.2, unit: 'C', timestamp: new Date().toISOString() }]),
-        sort: vi.fn().mockReturnThis(),
-        skip: vi.fn().mockReturnThis(),
-        limit: vi.fn().mockReturnThis(),
-        project: vi.fn().mockReturnThis(),
-      })),
-    });
+  it('lists temperature readings for a Técnico (accessType 2) from InfluxDB, scoped to their sensors', async () => {
+    const report = givenOwnSensorAndReadings();
 
     const response = await request(app)
       .get('/api/temperature')
       .set('Authorization', `Bearer ${makeToken(2)}`);
 
-    expect([200, 204]).toContain(response.status);
+    expect(response.status).toBe(200);
+    expect(response.body.data.temperatures).toEqual(READINGS);
+    expect(response.body.data.total).toBe(1);
+    expect(report).toHaveBeenCalledWith(expect.objectContaining({ sensorIds: ['s1'] }));
+  });
+});
+
+describe('GET /api/temperature/history', () => {
+  beforeEach(() => { givenSession(); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('answers the InfluxDB readings under data.temperatures', async () => {
+    givenOwnSensorAndReadings();
+
+    const response = await request(app)
+      .get('/api/temperature/history')
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.temperatures).toEqual(READINGS);
   });
 });
 
@@ -77,6 +105,7 @@ describe('GET /api/temperature/control', () => {
         project: vi.fn().mockReturnThis(),
       })),
     });
+    vi.spyOn(influxTelemetryReadRepository, 'temperatureReport').mockResolvedValue({ rows: [], total: 0 });
 
     const response = await request(app)
       .get('/api/temperature/control')

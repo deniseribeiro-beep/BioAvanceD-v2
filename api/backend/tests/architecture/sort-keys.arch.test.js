@@ -249,19 +249,16 @@ test('#771: the sweep still collects the sort sites it is meant to cover', () =>
 });
 
 test('#771: every Mongo sort spec this guard cannot follow is a known one', () => {
-  // `.sort(someVariable)` is opaque to a static sweep. Two exist today and
-  // both are deliberate; a third should be adjudicated rather than left
-  // silently unchecked.
+  // `.sort(someVariable)` is opaque to a static sweep. One exists today and
+  // is deliberate; a second should be adjudicated rather than left silently
+  // unchecked.
   const KNOWN = [
     // Builds `{ [sortField]: order }`, but sortField is now allow-listed
     // against SORTABLE_LOG_FIELDS (derived from Log.js's own document
     // builder) and falls back to the date pair otherwise, so every key that
     // can reach the driver is real — #780. Still unfollowable statically,
     // because the spec is a variable at the call site.
-    'services/log.service.js',
-    // Picks between three object literals after probing which date field the
-    // collection actually carries; every branch's keys are real.
-    'services/temperature.service.js'
+    'services/log.service.js'
   ];
 
   const unfollowable = [];

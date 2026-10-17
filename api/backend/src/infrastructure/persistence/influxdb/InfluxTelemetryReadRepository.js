@@ -27,7 +27,8 @@ class InfluxTelemetryReadRepository {
   // Celsius. Celsius is computed in Flux, so the critical filter compares
   // each sensor's Celsius bounds before the limit, and in JS with
   // TemperatureModel.toCelsius for the rows returned. Every value enters the
-  // query through the `flux` template, never by concatenation.
+  // query through the `flux` template, never by concatenation. The
+  // temperature history also reads through it, with `critical: null`.
   async lastReadingAtBySensor() {
     await influxConnection.connectInfluxDB();
     const queryApi = influxConnection.getInfluxQueryApi();
@@ -53,7 +54,7 @@ class InfluxTelemetryReadRepository {
     return lastReadingAtBySensor;
   }
 
-  async temperatureReport({ start = null, stop = null, sensorIds = null, critical = null, limit = 100 } = {}) {
+  async temperatureReport({ start = null, stop = null, sensorIds = null, critical = null, limit = 100, offset = 0 } = {}) {
     const empty = { rows: [], total: 0 };
     // Fails closed: a caller scoped to no sensor sees nothing.
     if (Array.isArray(sensorIds) && sensorIds.length === 0) return empty;
@@ -98,7 +99,7 @@ class InfluxTelemetryReadRepository {
 
     const rawRows = await queryApi.collectRows(flux`${pipeline}
       |> sort(columns: ["_time"], desc: true)
-      |> limit(n: ${limit})`);
+      |> limit(n: ${limit}, offset: ${offset})`);
     const countRows = await queryApi.collectRows(flux`${pipeline}
       |> count(column: "celsius")`);
 
