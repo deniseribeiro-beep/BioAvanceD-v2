@@ -5,6 +5,7 @@ const backupService = require('./backup.service');
 const retentionSweepService = require('./retentionSweep.service');
 const backupPolicyService = require('./backup-policy.service');
 const { ALERT_TYPES, resolveActiveAlert, ensureActiveAlert } = require('./alertLifecycle.service');
+const influxTelemetryReadRepository = require('../infrastructure/persistence/influxdb/InfluxTelemetryReadRepository');
 
 const DEFAULT_STALE_MINUTES = 20;
 
@@ -23,13 +24,17 @@ function normalizeDate(value) {
 
 async function checkStaleTemperatureReadings(db) {
   const sensorsCollection = db.collection('sensors');
-  const temperaturesCollection = db.collection('temperatures');
   const alertsCollection = db.collection('alerts');
 
   const sensors = await sensorsCollection.find({}).toArray();
   if (!sensors.length) {
     return { sensors: 0, alerts: 0 };
   }
+
+  // RF009 AC1 (#1317): the last reading comes from InfluxDB, one query per
+  // run. A query failure propagates before any alert is written or resolved,
+  // so an outage neither raises missing_reading nor closes open episodes.
+  const lastReadingAtBySensor = await influxTelemetryReadRepository.lastReadingAtBySensor();
 
   const now = Date.now();
   const staleMinutes = Number(env.TEMP_STALE_MINUTES || DEFAULT_STALE_MINUTES);
@@ -41,18 +46,9 @@ async function checkStaleTemperatureReadings(db) {
     const sensorId = sensor.sensorId || sensor.sensorID;
     if (!sensorId) continue;
 
-    // #917: was `$or: [{ sensorId }, { sensorID: sensorId }]`. Nothing has
-    // ever written `sensorID` onto a temperature reading --
-    // `TemperatureModel.create` coalesces the alias into `sensorId` and has
-    // done since the initial commit -- so the second branch never matched.
-    // The `sensor.sensorId || sensor.sensorID` read above is untouched: that
-    // is a property read, not a filter key.
-    const lastReading = await temperaturesCollection.find({ sensorId })
-      .sort({ timestamp: -1, dateTime: -1, _id: -1 })
-      .limit(1)
-      .next();
+    const lastReadingAt = lastReadingAtBySensor.get(String(sensorId));
 
-    if (!lastReading) {
+    if (lastReadingAt === undefined) {
       const { created } = await ensureActiveAlert(alertsCollection, {
         sensorId,
         // #1062: the second alert writer. This one iterates full sensor
@@ -72,7 +68,7 @@ async function checkStaleTemperatureReadings(db) {
       continue;
     }
 
-    const lastTimestamp = normalizeDate(lastReading.timestamp || lastReading.dateTime || lastReading.createdAt);
+    const lastTimestamp = normalizeDate(lastReadingAt);
     if (!lastTimestamp) continue;
 
     const isStale = now - lastTimestamp.getTime() > staleMs;

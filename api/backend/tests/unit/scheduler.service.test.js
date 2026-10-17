@@ -17,6 +17,7 @@ const env = require('../../src/config/env');
 const backupService = require('../../src/services/backup.service');
 const retentionSweepService = require('../../src/services/retentionSweep.service');
 const backupPolicyService = require('../../src/services/backup-policy.service');
+const influxTelemetryReadRepository = require('../../src/infrastructure/persistence/influxdb/InfluxTelemetryReadRepository');
 const scheduler = require('../../src/services/scheduler.service');
 
 function makeCollection(overrides = {}) {
@@ -29,24 +30,16 @@ function makeCollection(overrides = {}) {
   };
 }
 
-function makeFindChain(result) {
-  return {
-    sort: vi.fn().mockReturnThis(),
-    limit: vi.fn().mockReturnThis(),
-    next: vi.fn().mockResolvedValue(result)
-  };
-}
+// RF009 AC1 (#1317): the last reading comes from InfluxDB, not from a Mongo
+// `temperatures` copy, so `db` fakes only sensors and alerts. Each case's
+// `lastReadingBySensor` feeds the repository spy in beforeEach below.
+let currentLastReadingBySensor = {};
 
 function makeDb({ sensors = [], lastReadingBySensor = {}, existingAlert = null }) {
+  currentLastReadingBySensor = lastReadingBySensor;
+
   const sensorsCollection = makeCollection({
     find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue(sensors) })
-  });
-
-  // #917: the query used to be `$or: [{ sensorId }, { sensorID: sensorId }]`.
-  // The second branch matched nothing -- TemperatureModel.create has never
-  // written a capitalised `sensorID` -- so it is now a plain `{ sensorId }`.
-  const temperaturesCollection = makeCollection({
-    find: vi.fn((query) => makeFindChain(lastReadingBySensor[query.sensorId] ?? null))
   });
 
   const alertsCollection = makeCollection({
@@ -55,7 +48,7 @@ function makeDb({ sensors = [], lastReadingBySensor = {}, existingAlert = null }
     updateMany: vi.fn().mockResolvedValue({})
   });
 
-  const collections = { sensors: sensorsCollection, temperatures: temperaturesCollection, alerts: alertsCollection };
+  const collections = { sensors: sensorsCollection, alerts: alertsCollection };
 
   return {
     collection: vi.fn((name) => collections[name]),
@@ -64,6 +57,21 @@ function makeDb({ sensors = [], lastReadingBySensor = {}, existingAlert = null }
 }
 
 describe('scheduler.service - checkStaleTemperatureReadings', () => {
+  let lastReadingAtBySensorSpy;
+
+  beforeEach(() => {
+    currentLastReadingBySensor = {};
+    lastReadingAtBySensorSpy = vi
+      .spyOn(influxTelemetryReadRepository, 'lastReadingAtBySensor')
+      .mockImplementation(async () => new Map(
+        Object.entries(currentLastReadingBySensor).map(([sensorId, reading]) => [sensorId, reading.timestamp])
+      ));
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('returns zero counts when there are no sensors', async () => {
     const db = makeDb({ sensors: [] });
 
@@ -224,6 +232,40 @@ describe('scheduler.service - checkStaleTemperatureReadings', () => {
     const result = await scheduler.checkStaleTemperatureReadings(db);
 
     expect(result).toEqual({ sensors: 1, alerts: 0 });
+    expect(db.__collections.alerts.insertOne).not.toHaveBeenCalled();
+    expect(db.__collections.alerts.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('reads no Mongo temperatures collection', async () => {
+    const db = makeDb({
+      sensors: [{ sensorId: 'S1' }, { sensorID: 'S2' }],
+      lastReadingBySensor: { S1: { timestamp: new Date() } }
+    });
+
+    await scheduler.checkStaleTemperatureReadings(db);
+
+    expect(db.collection).not.toHaveBeenCalledWith('temperatures');
+  });
+
+  it('queries InfluxDB once per run, not per sensor', async () => {
+    const db = makeDb({
+      sensors: [{ sensorId: 'S1' }, { sensorId: 'S2' }, { sensorId: 'S3' }],
+      lastReadingBySensor: { S1: { timestamp: new Date() } }
+    });
+
+    await scheduler.checkStaleTemperatureReadings(db);
+
+    expect(lastReadingAtBySensorSpy).toHaveBeenCalledTimes(1);
+  });
+
+  // An InfluxDB outage must neither raise missing_reading for every sensor
+  // nor resolve open episodes, so the failure propagates before any alert.
+  it('an InfluxDB query failure rejects and writes or resolves no alert', async () => {
+    lastReadingAtBySensorSpy.mockRejectedValue(new Error('influx down'));
+    const db = makeDb({ sensors: [{ sensorId: 'S1' }, { sensorId: 'S2' }] });
+
+    await expect(scheduler.checkStaleTemperatureReadings(db)).rejects.toThrow('influx down');
+
     expect(db.__collections.alerts.insertOne).not.toHaveBeenCalled();
     expect(db.__collections.alerts.updateMany).not.toHaveBeenCalled();
   });

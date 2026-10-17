@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 
 const quarantineActionService = require('../../../src/services/quarantine-action.service');
 const encounterService = require('../../../src/services/encounter.service');
@@ -6,6 +6,7 @@ const biomarkerObservationService = require('../../../src/services/biomarker-obs
 const sessionService = require('../../../src/services/session.service');
 const userSecurityService = require('../../../src/services/user-security.service');
 const { checkStaleTemperatureReadings } = require('../../../src/services/scheduler.service');
+const influxConnection = require('../../../src/infrastructure/database/influxdb/connection');
 const { CANONICAL_COLLECTIONS } = require('../../../src/config/collections');
 const { createFakeDb } = require('../foundation/helpers/fake-db');
 
@@ -119,12 +120,23 @@ describe('active session lists', () => {
 });
 
 describe('scheduler.service.checkStaleTemperatureReadings', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  // RF009 AC1 (#1317): the last reading comes from InfluxDB, one row per
+  // series, so the newest is picked in the read repository, not by a sort.
   it('judges staleness by the newest reading, so a fresh reading stored first keeps the sensor quiet', async () => {
     const db = createFakeDb();
     await db.collection('sensors').insertOne({ sensorId: 'T1' });
-    const temperatures = db.collection('temperatures');
-    await temperatures.insertOne({ _id: 'r-fresh', sensorId: 'T1', timestamp: new Date() });
-    await temperatures.insertOne({ _id: 'r-stale', sensorId: 'T1', timestamp: new Date(Date.now() - 24 * 60 * 60 * 1000) });
+    vi.spyOn(influxConnection, 'connectInfluxDB').mockResolvedValue(undefined);
+    vi.spyOn(influxConnection, 'getInfluxConfig').mockReturnValue({ bucket: 'test-bucket' });
+    vi.spyOn(influxConnection, 'getInfluxQueryApi').mockReturnValue({
+      collectRows: vi.fn().mockResolvedValue([
+        { sensorId: 'T1', _time: new Date().toISOString() },
+        { sensorId: 'T1', _time: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString() }
+      ])
+    });
 
     const result = await checkStaleTemperatureReadings(db);
 
