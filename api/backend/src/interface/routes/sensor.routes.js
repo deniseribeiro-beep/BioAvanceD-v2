@@ -5,7 +5,8 @@ const { authenticate } = require('../../infrastructure/middleware/auth');
 const { requirePermission, requireOrganizationScope } = require('../../infrastructure/middleware/rbac');
 
 // #1029: #634 gated only list and get, leaving five of the seven routes
-// cross-org. requireOrganizationScope is added to all five here; the four
+// cross-org (#1387 later removed the two reading routes).
+// requireOrganizationScope is added to all five here; the four
 // that act on an EXISTING sensor additionally do a fetch-404-then-403
 // ownership check in sensor.controller.js, because the middleware only
 // ATTACHES req.organizationScope -- it does not compare it to anything.
@@ -16,7 +17,8 @@ const { requirePermission, requireOrganizationScope } = require('../../infrastru
 // question is the same for sensor, equipment and temperature and is filed
 // rather than answered one module at a time.
 //
-// #1073: the two GETs keep 'viewTemperature'; the five writes moved to
+// #1073: the two GETs keep 'viewTemperature'; the five writes (#1387 later
+// removed the two reading routes) moved to
 // 'manageSensor' (lifecycle) and 'recordTemperature' (reading ingestion).
 // Both are seeded to exactly the roles that already held viewTemperature, so
 // no caller gains or loses a capability today -- what changes is that
@@ -48,20 +50,9 @@ router.get('/:id',
   sensorController.get.bind(sensorController)
 );
 
-router.post('/:id/reading',
-  authenticate,
-  requirePermission('recordTemperature'),
-  requireOrganizationScope,
-  sensorController.collectReading.bind(sensorController)
-);
-
-// Alias para collect-reading
-router.post('/:id/collect-reading',
-  authenticate,
-  requirePermission('recordTemperature'),
-  requireOrganizationScope,
-  sensorController.collectReading.bind(sensorController)
-);
+// #1387: the operator-initiated sensor read (POST /:id/reading and its alias
+// /:id/collect-reading) was removed; no requirement names it (RF009's actor is
+// the system). An on-demand read is new work on the telemetry read path.
 
 // Atualizar sensor
 router.put('/:id',

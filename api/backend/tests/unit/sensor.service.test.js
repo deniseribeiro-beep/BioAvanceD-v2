@@ -707,33 +707,8 @@ describe('sensor.service (non-quarantine paths)', () => {
     });
   });
 
-  describe('collectReading', () => {
-    it('throws "Sensor não encontrado" when the sensor does not exist', async () => {
-      const { db, collection } = makeDb();
-      collection.findOne.mockResolvedValue(null);
-
-      await expect(sensorService.collectReading(db, 'missing')).rejects.toThrow('Sensor não encontrado');
-    });
-
-    it('returns a shaped reading object with ready:true and fallback fields resolved', async () => {
-      const { db, collection } = makeDb();
-      collection.findOne.mockResolvedValue({
-        sensorID: 'S-9',
-        sensorType: 'humidity',
-        locationID: 'LOC-5',
-        policyId: 'POL-1'
-      });
-
-      const reading = await sensorService.collectReading(db, 'S-9');
-
-      expect(reading).toEqual({
-        sensorId: 'S-9',
-        sensorType: 'humidity',
-        locationId: 'LOC-5',
-        policyId: 'POL-1',
-        ready: true
-      });
-    });
+  it('has no collectReading: the manual read was removed (#1387)', () => {
+    expect(sensorService.collectReading).toBeUndefined();
   });
 
   describe('deleteSensor', () => {
@@ -795,13 +770,6 @@ describe('sensor.service (non-quarantine paths)', () => {
       await expect(
         sensorService.updateSensor(db, 'S-1', { status: 'maintenance' })
       ).rejects.toThrow('lookup failed');
-    });
-
-    it('collectReading rethrows when getSensor lookup fails', async () => {
-      const { db, collection } = makeDb();
-      collection.findOne.mockRejectedValue(new Error('reading lookup failed'));
-
-      await expect(sensorService.collectReading(db, 'S-1')).rejects.toThrow('reading lookup failed');
     });
 
     it('deleteSensor rethrows when deleteOne rejects', async () => {

@@ -137,27 +137,21 @@ describe('GET /api/sensors/:id', () => {
   });
 });
 
-describe('POST /api/sensors/:id/reading', () => {
-  it('returns 401 without token', async () => {
-    const res = await request(app).post('/api/sensors/S-001/reading').send({ value: 4.5 });
-    expect(res.status).toBe(401);
-  });
-
-  it('records a sensor reading', async () => {
-    // #1029: now also stubs getSensor -- the handler fetches the sensor to
-    // check ownership before acting, so without this the real getSensor runs
-    // against an unseeded mock, resolves null, and the handler 404s.
+describe('the manual sensor read is gone (#1387)', () => {
+  // A caller who holds recordTemperature, with the sensor present, reached
+  // the removed handler before; now neither path is routed at all.
+  it.each([
+    '/api/sensors/S-001/reading',
+    '/api/sensors/S-001/collect-reading',
+  ])('POST %s answers 404 to a recordTemperature holder', async (path) => {
     vi.spyOn(sensorService, 'getSensor').mockResolvedValue(FAKE_SENSOR);
-    vi.spyOn(sensorService, 'collectReading').mockResolvedValue({
-      sensorId: 'S-001', value: 4.5, unit: '°C', recordedAt: new Date().toISOString()
-    });
 
     const res = await request(app)
-      .post('/api/sensors/S-001/reading')
+      .post(path)
       .set('Authorization', `Bearer ${makeToken(2)}`)
       .send({ value: 4.5, unit: '°C' });
 
-    expect([200, 201, 400]).toContain(res.status);
+    expect(res.status).toBe(404);
   });
 });
 
@@ -245,32 +239,6 @@ describe('sensor write routes are organization-scoped (#1029)', () => {
 
     expect(res.status).toBe(403);
     expect(deleteSensor).not.toHaveBeenCalled();
-  });
-
-  it('POST /:id/reading refuses a sensor belonging to another organization', async () => {
-    vi.spyOn(sensorService, 'getSensor').mockResolvedValue(FOREIGN_SENSOR);
-    const collectReading = vi.spyOn(sensorService, 'collectReading').mockResolvedValue({ sensorId: 'S-FOREIGN' });
-
-    const res = await request(app)
-      .post('/api/sensors/S-FOREIGN/reading')
-      .set('Authorization', `Bearer ${makeToken(2)}`)
-      .send({ value: 4.5, unit: '°C' });
-
-    expect(res.status).toBe(403);
-    expect(collectReading).not.toHaveBeenCalled();
-  });
-
-  it('POST /:id/collect-reading refuses a sensor belonging to another organization', async () => {
-    vi.spyOn(sensorService, 'getSensor').mockResolvedValue(FOREIGN_SENSOR);
-    const collectReading = vi.spyOn(sensorService, 'collectReading').mockResolvedValue({ sensorId: 'S-FOREIGN' });
-
-    const res = await request(app)
-      .post('/api/sensors/S-FOREIGN/collect-reading')
-      .set('Authorization', `Bearer ${makeToken(2)}`)
-      .send({});
-
-    expect(res.status).toBe(403);
-    expect(collectReading).not.toHaveBeenCalled();
   });
 
   it('CONTROL: an IN-SCOPE sensor is still updatable', async () => {
@@ -406,19 +374,6 @@ describe('#1073: sensor writes are gated on a write permission, not viewTemperat
 
     expect(res.status).toBe(403);
     expect(sensorService.updateSensor).not.toHaveBeenCalled();
-  });
-
-  it('refuses POST /api/sensors/:id/collect-reading to a viewTemperature-only caller', async () => {
-    vi.spyOn(sensorService, 'getSensor').mockResolvedValue(FAKE_SENSOR);
-    vi.spyOn(sensorService, 'collectReading').mockResolvedValue({ sensorId: 'S-001', value: 4.5 });
-
-    const res = await request(app)
-      .post('/api/sensors/S-001/collect-reading')
-      .set('Authorization', `Bearer ${viewOnlyToken()}`)
-      .send({});
-
-    expect(res.status).toBe(403);
-    expect(sensorService.collectReading).not.toHaveBeenCalled();
   });
 
   // The seeded population is unchanged, so a Tecnico keeps every write it

@@ -37,7 +37,6 @@ describe('sensor.controller', () => {
   let createSensorMock;
   let listSensorsMock;
   let getSensorMock;
-  let collectReadingMock;
   let updateSensorMock;
   let deleteSensorMock;
   let auditLoggerInitMock;
@@ -48,7 +47,7 @@ describe('sensor.controller', () => {
     createSensorMock = vi.spyOn(sensorService, 'createSensor');
     listSensorsMock = vi.spyOn(sensorService, 'listSensors');
     getSensorMock = vi.spyOn(sensorService, 'getSensor');
-    // #1029: update, delete and collectReading now FETCH the sensor before
+    // #1029: update and delete now FETCH the sensor before
     // acting, so they can 404 a missing one and 403 a foreign-org one before
     // any mutation. Every case below that is not about that fetch needs the
     // sensor to exist; without this default they all 404. Cases that ARE about
@@ -56,7 +55,6 @@ describe('sensor.controller', () => {
     // arrangement than before -- the 404 comes from the fetch rather than from
     // the mutator returning null.
     getSensorMock.mockResolvedValue({ _id: 's1', sensorId: 's1', organizationId: 'test-org-default' });
-    collectReadingMock = vi.spyOn(sensorService, 'collectReading');
     updateSensorMock = vi.spyOn(sensorService, 'updateSensor');
     deleteSensorMock = vi.spyOn(sensorService, 'deleteSensor');
     auditLoggerInitMock = vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
@@ -348,101 +346,8 @@ describe('sensor.controller', () => {
     });
   });
 
-  describe('collectReading', () => {
-    it('returns 503 when db is unavailable', async () => {
-      const req = createRequest({ app: { locals: {} } });
-      const res = createResponse();
-
-      await sensorController.collectReading(req, res);
-
-      expect(res.statusCode).toBe(503);
-    });
-
-    it('collects a reading and logs audit when req.user is present', async () => {
-      const reading = { temperatureValue: 4.5 };
-      collectReadingMock.mockResolvedValue(reading);
-      const req = createRequest({ user: { id: 'u1' }, params: { id: 's1' } });
-      const res = createResponse();
-
-      await sensorController.collectReading(req, res);
-
-      expect(auditLoggerLogMock).toHaveBeenCalledWith(
-        expect.objectContaining({ action: 'READ', payload: { temperature: 4.5 } })
-      );
-      expect(res.statusCode).toBe(200);
-      expect(res.body).toEqual({ success: true, data: reading });
-    });
-
-    // #956: sensorService.collectReading is a placeholder that resolves the
-    // sensor doc and returns { sensorId, sensorType, locationId, policyId,
-    // ready: true } -- no temperatureValue, nothing read from hardware. The
-    // audit must not claim a successful reading was collected.
-    it('logs a warning audit (not success) when the service returns its real shape with no temperatureValue', async () => {
-      const reading = { sensorId: 's1', sensorType: 'temp', locationId: 'loc-1', policyId: 'pol-1', ready: true };
-      collectReadingMock.mockResolvedValue(reading);
-      const req = createRequest({ user: { id: 'u1' }, params: { id: 's1' } });
-      const res = createResponse();
-
-      await sensorController.collectReading(req, res);
-
-      expect(auditLoggerLogMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          action: 'READ',
-          status: 'warning',
-          severity: 'warning',
-          payload: { temperature: null },
-        })
-      );
-      const call = auditLoggerLogMock.mock.calls[0][0];
-      expect(call.message).not.toBe(`Leitura coletada do sensor: ${req.params.id}`);
-      expect(res.statusCode).toBe(200);
-      expect(res.body).toEqual({ success: true, data: reading });
-    });
-
-    // #956: 0 °C is a real, falsy reading -- `||` was recording it as null.
-    it('records a temperatureValue of 0 as 0, not null (?? fix)', async () => {
-      const reading = { temperatureValue: 0 };
-      collectReadingMock.mockResolvedValue(reading);
-      const req = createRequest({ user: { id: 'u1' }, params: { id: 's1' } });
-      const res = createResponse();
-
-      await sensorController.collectReading(req, res);
-
-      expect(auditLoggerLogMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          status: 'success',
-          severity: 'info',
-          payload: { temperature: 0 },
-        })
-      );
-    });
-
-    it('handles a null reading without throwing and skips audit without req.user', async () => {
-      collectReadingMock.mockResolvedValue(null);
-      const req = createRequest({ params: { id: 's1' } });
-      const res = createResponse();
-
-      await sensorController.collectReading(req, res);
-
-      expect(auditLoggerLogMock).not.toHaveBeenCalled();
-      expect(res.statusCode).toBe(200);
-      expect(res.body).toEqual({ success: true, data: null });
-    });
-
-    it('returns 500 when collection throws', async () => {
-      collectReadingMock.mockRejectedValue(new Error('collect failed'));
-      const req = createRequest({ params: { id: 's1' } });
-      const res = createResponse();
-
-      await sensorController.collectReading(req, res);
-
-      expect(res.statusCode).toBe(500);
-      expect(res.body).toEqual({
-        success: false,
-        error: 'Erro ao coletar leitura',
-        message: 'collect failed',
-      });
-    });
+  it('has no collectReading handler (#1387)', () => {
+    expect(sensorController.collectReading).toBeUndefined();
   });
 
   describe('update', () => {

@@ -546,8 +546,6 @@ export const temperatureService = {
 export const sensorService = {
   getAll: () => api.get<ApiEnvelope<Sensor[]>>('/sensors'),
   getById: (id: string) => api.get<Sensor>(`/sensors/${id}`),
-  collectReading: (id: string) => 
-    api.post<Temperature>(`/sensors/${id}/collect-reading`), // Implementa Sensor.collectReading()
   create: (data: Partial<Sensor>) => api.post<Sensor>('/sensors', data),
   update: (id: string, data: Partial<Sensor>) => api.put<Sensor>(`/sensors/${id}`, data),
   delete: (id: string) => api.delete(`/sensors/${id}`),

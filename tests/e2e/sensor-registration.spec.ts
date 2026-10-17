@@ -259,4 +259,48 @@ test.describe('Sensor registration links SensorMetadata (#311)', () => {
       for (const id of policyIds) if (id) await removeTemperaturePolicy(id);
     }
   });
+
+  // #1387: the operator-initiated sensor read was removed (no requirement
+  // names it; RF009's actor is the system). Neither route answers, and the
+  // sensors table renders a row without the 'Coletar Leitura' button.
+  test('the manual sensor read is gone: no row button, and both routes 404 (#1387)', async ({ page, request }) => {
+    const freezerId = await seedFreezerContainer();
+    const suffix = Date.now();
+    const sensorId = `rf009-ui-no-manual-read-e2e-${suffix}`;
+    const macSuffix = suffix.toString(16).padStart(4, '0').slice(-4);
+
+    try {
+      let session;
+      try {
+        session = await realLogin(request);
+      } catch (err: any) {
+        console.warn(`realLogin failed -- DB may not be seeded with an admin user yet: ${err.message}`);
+        return;
+      }
+      const headers = { Authorization: `Bearer ${session.token}` };
+
+      const createResponse = await request.post(`${apiBaseURL}/api/sensors`, {
+        headers,
+        data: {
+          sensorId,
+          sensorType: 'temperature',
+          macAddress: `AA:BB:CC:66:${macSuffix.slice(0, 2)}:${macSuffix.slice(2, 4)}`,
+          storageContainer: freezerId,
+        },
+      });
+      expect(createResponse.status()).toBe(201);
+
+      for (const path of ['reading', 'collect-reading']) {
+        const res = await request.post(`${apiBaseURL}/api/sensors/${sensorId}/${path}`, { headers });
+        expect(res.status()).toBe(404);
+      }
+
+      await seedRealAuth(page, session);
+      await page.goto('/facility-management?tab=sensors');
+      await expect(page.getByTestId(`sensor-edit-${sensorId}`)).toBeVisible();
+      await expect(page.getByTitle('Coletar Leitura')).toHaveCount(0);
+    } finally {
+      await removeSensorRegistration(sensorId, freezerId);
+    }
+  });
 });

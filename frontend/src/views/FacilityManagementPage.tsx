@@ -7,7 +7,7 @@ import Table from '../components/UI/Table';
 import Button from '../components/UI/Button';
 import Modal from '../components/UI/Modal';
 import Input from '../components/UI/Input';
-import { Plus, Edit, Trash2, Radio, AlertCircle, CheckCircle, Box, Thermometer, Radio as RadioIcon, Shield, Download, Filter, X } from 'lucide-react';
+import { Plus, Edit, Trash2, AlertCircle, CheckCircle, Box, Thermometer, Radio as RadioIcon, Shield, Download, Filter, X } from 'lucide-react';
 import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import { Equipment, Temperature, Sensor, Policy } from '../types/models';
 import { useEquipment } from '../hooks/useEquipment';
@@ -862,30 +862,11 @@ function HistorySection({
 
 // Seção de Sensores
 function SensorsSection() {
-  const { sensors, loading, error, collectReading, createSensor, updateSensor, deleteSensor } = useSensors();
+  const { sensors, loading, error, createSensor, updateSensor, deleteSensor } = useSensors();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingSensor, setEditingSensor] = useState<Sensor | null>(null);
-  const [isReading, setIsReading] = useState(false);
 
   const sensorRows = useMemo(() => (Array.isArray(sensors) ? sensors : []), [sensors]);
-
-  async function handleManualReading(sensorId: string | number) {
-    if (isReading) {
-      return;
-    }
-
-    setIsReading(true);
-
-    try {
-      const reading = await collectReading(String(sensorId));
-      const temperature = (reading as any)?.temperatureValue ?? (reading as any)?.temperature ?? 'N/A';
-      alert(`Leitura manual do sensor ${sensorId} realizada com sucesso: ${temperature}°C`);
-    } catch (err: any) {
-      alert(err.message || 'Erro ao coletar leitura do sensor');
-    } finally {
-      setIsReading(false);
-    }
-  }
 
   return (
     <>
@@ -936,15 +917,6 @@ function SensorsSection() {
               </td>
               <td>
                 <div className="table-actions">
-                  <button
-                    className="action-button"
-                    onClick={() => handleManualReading(sensorId)}
-                    title="Coletar Leitura"
-                    disabled={isReading}
-                    style={{ opacity: isReading ? 0.5 : 1, cursor: isReading ? 'not-allowed' : 'pointer' }}
-                  >
-                    <Radio size={16} />
-                  </button>
                   <button
                     className="action-button"
                     data-testid={`sensor-edit-${sensor.sensorId}`}

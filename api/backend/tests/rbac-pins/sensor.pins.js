@@ -7,8 +7,6 @@ module.exports = {
     { method: 'POST', path: '/', permission: 'manageSensor' },
     { method: 'GET', path: '/', permission: 'viewTemperature' },
     { method: 'GET', path: '/:id', permission: 'viewTemperature' },
-    { method: 'POST', path: '/:id/reading', permission: 'recordTemperature' },
-    { method: 'POST', path: '/:id/collect-reading', permission: 'recordTemperature' },
     { method: 'PUT', path: '/:id', permission: 'manageSensor' },
     { method: 'DELETE', path: '/:id', permission: 'manageSensor' },
   ],

@@ -449,31 +449,6 @@ class SensorService {
     }
   }
 
-  /**
-   * Coleta leitura atual do sensor
-   */
-  async collectReading(db, sensorId) {
-    try {
-      const sensor = await this.getSensor(db, sensorId);
-      if (!sensor) {
-        throw new Error('Sensor não encontrado');
-      }
-
-      // Aqui você integraria com o hardware real do sensor
-      // Por enquanto, retorna estrutura para leitura
-      return {
-        sensorId: sensor.sensorId || sensor.sensorID,
-        sensorType: sensor.sensorType,
-        locationId: sensor.locationId || sensor.locationID,
-        policyId: sensor.policyId || sensor.policyID,
-        ready: true
-      };
-    } catch (error) {
-      logger.error('Erro ao coletar leitura:', error.message);
-      throw error;
-    }
-  }
-
   async deleteSensor(db, sensorId) {
     try {
       const sensorsCollection = db.collection('sensors');
