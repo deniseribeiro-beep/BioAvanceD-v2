@@ -75,8 +75,7 @@ malformed CSV content can trigger it, only mocking the module would),
 merged-vs-isolated drift class — re-check isolated coverage before
 trusting the merged number for either), `NotificationService.js` (issue
 #258, accepted gap — `getNotificationQueue()`'s success path needs a
-real Redis connection, `sendCriticalTempAlertFromInflux()`'s Influx
-calls are destructured at module-require time so can't be spied on).
+real Redis connection).
 
 **No longer excluded — their blocking issues are now CLOSED:**
 `daily-merkle.job.js`, `audit-v2.service.js`,

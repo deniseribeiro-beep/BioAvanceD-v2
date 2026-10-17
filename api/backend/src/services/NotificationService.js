@@ -6,11 +6,6 @@ const logger = require('../utils/logger');
 const { connectDB } = require('../database/mongo');
 const participantIdentityService = require('./participantIdentity.service');
 const { initRedis } = require('../config/queue');
-const {
-  connectInfluxDB,
-  getInfluxQueryApi,
-  getInfluxConfig
-} = require('../infrastructure/database/influxdb/connection');
 
 const CONSENT_TOKEN_TTL_DAYS = 7;
 
@@ -937,37 +932,6 @@ class NotificationService {
       sms: smsSimulation,
       email: emailResult
     };
-  }
-
-  async sendCriticalTempAlertFromInflux(sampleId, options = {}) {
-    await connectInfluxDB();
-    const queryApi = getInfluxQueryApi();
-    const influx = getInfluxConfig();
-
-    const locationFilter = options.locationId
-      ? `|> filter(fn: (r) => r.locationId == "${String(options.locationId)}")`
-      : '';
-
-    const flux = `
-      from(bucket: "${influx.bucket}")
-        |> range(start: -${Number(options.lookbackHours || 1)}h)
-        |> filter(fn: (r) => r._measurement == "freezer_temperature")
-        |> filter(fn: (r) => r._field == "temperatureValue")
-        ${locationFilter}
-        |> sort(columns: ["_time"], desc: true)
-        |> limit(n: 1)
-    `;
-
-    const rows = await queryApi.collectRows(flux);
-    if (!rows.length) {
-      return {
-        triggered: false,
-        reason: 'Sem dados recentes no InfluxDB para simulação'
-      };
-    }
-
-    const latestTemp = Number(rows[0]._value);
-    return this.sendCriticalTempAlert(sampleId, latestTemp, options);
   }
 }
 
