@@ -63,6 +63,14 @@ const EXEMPT = new Map([
   ['organization.routes.js POST /', 'organizations are the scope reference list; manageOrganizations is Administrador-only (#1354)'],
   ['organization.routes.js PUT /:id', 'organizations are the scope reference list; manageOrganizations is Administrador-only (#1354)'],
   ['organization.routes.js DELETE /:id', 'organizations are the scope reference list; manageOrganizations is Administrador-only (#1354)'],
+  // An import job belongs to its uploader (importJobs.userID), not to an
+  // organization: GET /jobs lists the caller's own, and the job routes
+  // refuse any other caller in the controller (#1384).
+  ['import.routes.js POST /validate', 'file format check only, no record read'],
+  ['import.routes.js GET /jobs', 'self route: lists only the caller\'s own jobs (filters.userID)'],
+  ['import.routes.js GET /job/:jobID', 'self route: the controller refuses a job whose userID is not the caller\'s (#1384)'],
+  ['import.routes.js POST /job/:jobID/cancel', 'self route: the controller refuses a job whose userID is not the caller\'s (#1384)'],
+  ['import.routes.js GET /job/:jobID/report', 'self route: the controller refuses a job whose userID is not the caller\'s (#1384)'],
 ]);
 
 // NOT exemptions: routes that DO need the gate and do not have it yet, each
@@ -76,7 +84,17 @@ const EXEMPT = new Map([
 // #1211 scoped all thirteen, mutations and reads, and emptied this list. It
 // stays, with its stale check, as the place the next known gap is recorded.
 // #1353 gated the four LGPD import routes it held and emptied it again.
-const TRACKED_UNSCOPED = new Map([]);
+// #1384 listed these when it brought import.routes.js into the sweep.
+const TRACKED_UNSCOPED = new Map([
+  ['import.routes.js GET /batch/quarantine/:id', 'batch carries no organization to check (#1385)'],
+  ['import.routes.js POST /fhir/stage', 'batch carries no organization to check (#1385)'],
+  ['import.routes.js GET /fhir/batches/:id', 'batch carries no organization to check (#1385)'],
+  ['import.routes.js POST /fhir/batches/:id/validate', 'batch carries no organization to check (#1385)'],
+  ['import.routes.js POST /fhir/batches/:id/send-consents', 'batch carries no organization to check (#1385)'],
+  ['import.routes.js GET /fhir/batches/:id/consent-status', 'batch carries no organization to check (#1385)'],
+  ['import.routes.js POST /fhir/batches/:id/commit', 'batch carries no organization to check (#1385)'],
+  ['import.routes.js POST /fhir/batches/:id/records/:recordId/external-document', 'batch carries no organization to check (#1385)'],
+]);
 
 function routeFiles() {
   const files = [];
@@ -198,6 +216,27 @@ test('#1211: the eight storage reads carry the organization gate', () => {
     'GET /freezer/:freezerId/tree',
   ]) {
     const key = `storage.routes.js ${route}`;
+    assert.ok(byKey.has(key), `${key} not found by the sweep`);
+    assert.equal(byKey.get(key).gated, true, `${key} is not organization-scoped`);
+    assert.equal(EXEMPT.has(key) || TRACKED_UNSCOPED.has(key), false, `${key} must not be listed as unscoped`);
+  }
+});
+
+// #1384: the import creates resolve the caller's scope at the route, and the
+// staging-batch reads check the batch's organization against it. Pinned by
+// name, for the same reason as the #1210 test above.
+test('#1384: the import creates and staging-batch reads carry the organization gate', () => {
+  const { registrations } = sweep();
+  const byKey = new Map(registrations.map((r) => [r.key, r]));
+  for (const route of [
+    'POST /batch',
+    'POST /import',
+    'POST /import/samples',
+    'POST /upload',
+    'GET /batch/:jobId',
+    'GET /status/:jobId',
+  ]) {
+    const key = `import.routes.js ${route}`;
     assert.ok(byKey.has(key), `${key} not found by the sweep`);
     assert.equal(byKey.get(key).gated, true, `${key} is not organization-scoped`);
     assert.equal(EXEMPT.has(key) || TRACKED_UNSCOPED.has(key), false, `${key} must not be listed as unscoped`);

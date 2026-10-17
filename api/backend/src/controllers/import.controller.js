@@ -205,6 +205,7 @@ class ImportController {
             try {
               ({ organizationId } = await callerCreateOrganization.resolveCallerCreateOrganization(db, {
                 userId: req.user?.userID,
+                organizationScope: req.organizationScope,
                 requested: typeof req.body?.organizationId === 'string' ? req.body.organizationId.trim() : undefined
               }));
             } catch (scopeError) {

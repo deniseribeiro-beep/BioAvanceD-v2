@@ -488,6 +488,63 @@ describe('import-batch.controller', () => {
       });
     });
 
+    // #1384: the route runs requireOrganizationScope, and the batch's
+    // organization rides in rawData.organizationId (#1376).
+    describe('the organization of the batch (#1384)', () => {
+      const stagingImport = {
+        jobId: 'job-org',
+        fileName: 'org.csv',
+        status: 'completed',
+        totalRows: 2,
+        processedRows: 2,
+        rawData: { organizationId: 'ORG-A' },
+        createdAt: 'c3',
+        updatedAt: 'u3'
+      };
+
+      async function readAs(organizationScope, batch = stagingImport) {
+        const req = { params: { jobId: 'job-org' }, organizationScope };
+        const res = createRes();
+        const StagingImport = require('../../src/services/stagingImport.store');
+        vi.spyOn(StagingImport, 'findOne').mockResolvedValue(batch);
+        await controller.getBatchImportStatus(req, res);
+        return res;
+      }
+
+      it('refuses 403 a batch whose organization is outside the caller scope', async () => {
+        const res = await readAs({ scope: 'organization', organizationIds: ['ORG-B'] });
+
+        expect(res.status).toHaveBeenCalledWith(403);
+        expect(res.json).toHaveBeenCalledWith({
+          success: false,
+          error: 'Acesso negado',
+          message: 'Este lote pertence a outra organização'
+        });
+      });
+
+      it('refuses 403 a batch with no organization to a non-global caller', async () => {
+        const res = await readAs({ scope: 'organization', organizationIds: ['ORG-A'] }, { ...stagingImport, rawData: {} });
+
+        expect(res.status).toHaveBeenCalledWith(403);
+      });
+
+      it('answers 200 for a batch in the caller scope', async () => {
+        const res = await readAs({ scope: 'organization', organizationIds: ['ORG-A', 'ORG-B'] });
+
+        expect(res.status).toHaveBeenCalledWith(200);
+        expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+          success: true,
+          data: expect.objectContaining({ jobId: 'job-org', rawData: { organizationId: 'ORG-A' } })
+        }));
+      });
+
+      it('answers 200 for a global caller', async () => {
+        const res = await readAs({ scope: 'global', organizationIds: [] });
+
+        expect(res.status).toHaveBeenCalledWith(200);
+      });
+    });
+
     it('error path: returns 500 with error message when findOne throws', async () => {
       const req = { params: { jobId: 'job-err' } };
       const res = createRes();

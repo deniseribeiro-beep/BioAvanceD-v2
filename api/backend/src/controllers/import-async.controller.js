@@ -174,6 +174,7 @@ class ImportAsyncController {
         try {
           organizationOptions = await callerCreateOrganization.resolveCallerCreateOrganization(db, {
             userId: req.user?.userID,
+            organizationScope: req.organizationScope,
             requested: typeof req.body?.organizationId === 'string' ? req.body.organizationId.trim() : undefined
           });
         } catch (error) {
@@ -253,6 +254,26 @@ class ImportAsyncController {
   }
 
   /**
+   * #1384: an import job belongs to its uploader (importJobs.userID), so a
+   * job route answers only that user. Sends the 404/403 and returns false
+   * unless the caller's id positively matches the job's; it runs before the
+   * service, so a non-owner never triggers getJobStatus's status write.
+   */
+  async ensureJobOwner(db, req, res, jobID) {
+    const job = await db.collection('importJobs').findOne({ jobID }, { projection: { userID: 1 } });
+    if (!job) {
+      res.status(404).json({ success: false, error: 'Job não encontrado' });
+      return false;
+    }
+    const callerID = req.user?.userID || req.user?._id?.toString();
+    if (!callerID || job.userID == null || String(job.userID) !== String(callerID)) {
+      res.status(403).json({ success: false, error: 'Acesso negado', message: 'Este job pertence a outro usuário' });
+      return false;
+    }
+    return true;
+  }
+
+  /**
    * Obtém status do job
    */
   async getJobStatus(req, res) {
@@ -266,6 +287,7 @@ class ImportAsyncController {
       }
 
       const { jobID } = req.params;
+      if (!(await this.ensureJobOwner(db, req, res, jobID))) return;
       const job = await importAsyncService.getJobStatus(db, jobID);
 
       return res.status(200).json({
@@ -295,8 +317,15 @@ class ImportAsyncController {
         });
       }
 
+      // #1384: the service drops the userID filter when it is empty, which
+      // would list every user's jobs.
+      const callerID = req.user?.userID || req.user?._id?.toString();
+      if (!callerID) {
+        return res.status(403).json({ success: false, error: 'Acesso negado', message: 'Este job pertence a outro usuário' });
+      }
+
       const filters = {
-        userID: req.user?.userID || req.user?._id?.toString(),
+        userID: callerID,
         dataType: req.query.dataType,
         status: req.query.status,
         limit: req.query.limit,
@@ -333,6 +362,7 @@ class ImportAsyncController {
       }
 
       const { jobID } = req.params;
+      if (!(await this.ensureJobOwner(db, req, res, jobID))) return;
       const result = await importAsyncService.cancelJob(db, jobID);
 
       return res.status(200).json({
@@ -363,6 +393,7 @@ class ImportAsyncController {
       }
 
       const { jobID } = req.params;
+      if (!(await this.ensureJobOwner(db, req, res, jobID))) return;
       const report = await importAsyncService.getJobReport(db, jobID);
 
       return res.status(200).json({

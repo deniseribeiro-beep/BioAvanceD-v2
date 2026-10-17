@@ -5,7 +5,7 @@ const importAsyncController = require('../../controllers/import-async.controller
 const importBatchController = require('../../controllers/import-batch.controller');
 const fhirImportStagingController = require('../../controllers/fhir-import-staging.controller');
 const { authenticate } = require('../../infrastructure/middleware/auth');
-const { requirePermission } = require('../../infrastructure/middleware/rbac');
+const { requirePermission, requireOrganizationScope } = require('../../infrastructure/middleware/rbac');
 
 // RF007 - Upload e Importação de Dados
 // Requer autenticação e permissão de upload
@@ -18,6 +18,7 @@ const { requirePermission } = require('../../infrastructure/middleware/rbac');
 router.post('/batch',
   authenticate,
   requirePermission('uploadFiles'),
+  requireOrganizationScope,
   importBatchController.uploadMiddleware(),
   importBatchController.createBatchImport.bind(importBatchController)
 );
@@ -25,12 +26,14 @@ router.post('/batch',
 router.get('/batch/:jobId',
   authenticate,
   requirePermission('uploadFiles'),
+  requireOrganizationScope,
   importBatchController.getBatchImportStatus.bind(importBatchController)
 );
 
 router.get('/status/:jobId',
   authenticate,
   requirePermission('uploadFiles'),
+  requireOrganizationScope,
   importBatchController.getBatchImportStatus.bind(importBatchController)
 );
 
@@ -97,6 +100,7 @@ router.post('/validate',
 router.post('/import',
   authenticate,
   requirePermission('uploadFiles'),
+  requireOrganizationScope,
   importAsyncController.uploadMiddleware(),
   importAsyncController.createImportJob.bind(importAsyncController)
 );
@@ -104,6 +108,7 @@ router.post('/import',
 router.post('/import/samples',
   authenticate,
   requirePermission('uploadFiles'),
+  requireOrganizationScope,
   importAsyncController.uploadMiddleware(),
   importAsyncController.createSampleImportJob.bind(importAsyncController)
 );
@@ -137,6 +142,7 @@ router.get('/job/:jobID/report',
 router.post('/upload',
   authenticate,
   requirePermission('uploadFiles'),
+  requireOrganizationScope,
   importController.uploadMiddleware(),
   importController.import.bind(importController)
 );

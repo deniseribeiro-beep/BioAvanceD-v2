@@ -5,6 +5,7 @@ const fs = require('fs');
 const stagingImportService = require('../services/staging-import.service');
 const callerCreateOrganization = require('../services/callerCreateOrganization.service');
 const batchValidationEngine = require('../services/batch-validation-engine.service');
+const { isRecordInOrganizationScope } = require('../services/rbac-assignment.service');
 const logger = require('../utils/logger');
 const { UPLOADS_BASE } = require('../config/uploadConfig');
 
@@ -97,6 +98,7 @@ class ImportBatchController {
       try {
         ({ organizationId } = await callerCreateOrganization.resolveCallerCreateOrganization(db, {
           userId: req.user?.userID,
+          organizationScope: req.organizationScope,
           requested: typeof req.body?.organizationId === 'string' ? req.body.organizationId.trim() : undefined
         }));
       } catch (error) {
@@ -161,6 +163,17 @@ class ImportBatchController {
         return res.status(404).json({
           success: false,
           error: 'Lote não encontrado'
+        });
+      }
+
+      // #1384: the batch's organization rides in rawData.organizationId
+      // (#1376); a batch made before that has none, so only a global caller
+      // reads it.
+      if (req.organizationScope && !isRecordInOrganizationScope(stagingImport.rawData || {}, req.organizationScope, 'organizationId')) {
+        return res.status(403).json({
+          success: false,
+          error: 'Acesso negado',
+          message: 'Este lote pertence a outra organização'
         });
       }
 
