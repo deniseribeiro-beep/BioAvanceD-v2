@@ -247,4 +247,29 @@ describe('SessionModel - Unit Tests', () => {
       expect(isActive).toBe(false);
     });
   });
+
+  describe('canonicalMoveOf() (#1330)', () => {
+    it('returns null for a document carrying no legacy name', () => {
+      const canonical = {
+        _id: 'id-1',
+        sessionId: 'sess-1',
+        userAccountId: 'user-1',
+        accessTokenHash: 'hash-1',
+        lastActivityAt: new Date(),
+        sessionStartedAt: new Date(),
+        inactivityTimeoutMs: 1000
+      };
+
+      expect(SessionModel.canonicalMoveOf(canonical)).toBeNull();
+    });
+
+    it('moves a legacy value over a null canonical name, guarded on it being still null or absent', () => {
+      const move = SessionModel.canonicalMoveOf({ _id: 'id-1', sessionId: null, sessionID: 'x', userAccountId: 'user-1', userID: 'old' });
+
+      expect(move).toEqual({
+        filter: { _id: 'id-1', sessionId: null, sessionID: { $exists: true } },
+        update: { $set: { sessionId: 'x' }, $unset: { sessionID: '', userID: '' } }
+      });
+    });
+  });
 });

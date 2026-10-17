@@ -10,6 +10,16 @@
  */
 const LEGACY_FIELDS = ['sessionID', 'userID', 'tokenHash', 'lastActivity', 'createdAt', 'inactiveTimeout'];
 
+// Each canonical name mapped to the legacy name documents carried before it.
+const RENAMED = Object.freeze({
+  sessionId: 'sessionID',
+  userAccountId: 'userID',
+  accessTokenHash: 'tokenHash',
+  lastActivityAt: 'lastActivity',
+  sessionStartedAt: 'createdAt',
+  inactivityTimeoutMs: 'inactiveTimeout'
+});
+
 class SessionModel {
   // The stored session document's shape, pure: timestamps come from `data`
   // or stay null, and create() fills them. The catalog conformance guard
@@ -142,6 +152,38 @@ class SessionModel {
     return { set, unset };
   }
 
+  /**
+   * Moves the legacy names a session document still carries to the canonical
+   * names, as a { filter, update } pair, or null when it carries none.
+   *
+   * The readers use `??`, so a canonical name that is null or absent falls
+   * back to the legacy value: that value is moved, and the filter requires
+   * the canonical name to be still null or absent and the legacy one present.
+   * Every live writer sets the canonical name and removes the legacy one, so
+   * a document written since `session` was read fails the filter and the
+   * whole move is skipped. A legacy name whose canonical value is already set
+   * is never read, and is only removed.
+   */
+  static canonicalMoveOf(session) {
+    if (!session || session._id === undefined) return null;
+    const filter = { _id: session._id };
+    const $set = {};
+    const $unset = {};
+    for (const [canonical, legacy] of Object.entries(RENAMED)) {
+      if (session[legacy] === undefined) continue;
+      if (session[canonical] == null) {
+        $set[canonical] = session[legacy];
+        filter[canonical] = null;
+        filter[legacy] = { $exists: true };
+      }
+      $unset[legacy] = '';
+    }
+    if (Object.keys($unset).length === 0) return null;
+    const update = { $unset };
+    if (Object.keys($set).length > 0) update.$set = $set;
+    return { filter, update };
+  }
+
   // Drops the legacy names from an in-memory copy, after its canonical
   // values were assigned.
   static withoutLegacyNames(session) {
@@ -180,3 +222,4 @@ class SessionModel {
 
 module.exports = SessionModel;
 module.exports.LEGACY_FIELDS = LEGACY_FIELDS;
+module.exports.RENAMED = RENAMED;
