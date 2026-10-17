@@ -61,6 +61,8 @@ test.describe('Async importers persist a valid row (RF029) -- real backend', () 
       for (const jobId of createdBatchJobIds) {
         await db.collection('stagingImports').deleteOne({ jobId });
       }
+      // The InfluxDB point stays: no e2e spec deletes points.
+      await db.collection('temperatures').deleteMany({ sensorId: { $regex: '^rf009-import-' } });
       await client.close();
       client = null;
     }
@@ -185,5 +187,46 @@ test.describe('Async importers persist a valid row (RF029) -- real backend', () 
     expect(read.status()).toBe(200);
     const body = await read.json();
     expect(body.data.map((r: any) => r.testCode)).toEqual([testCode]);
+  });
+
+  // #1317 (RF009 AC1): the temperature history reads InfluxDB, and the
+  // temperature import wrote Mongo only, so before this the history answered
+  // total: 0 for an imported sensor.
+  test('POST /api/import/import with dataType=temperature writes the reading to InfluxDB, so the temperature history shows it (#1317, RF009 AC1)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const sensorId = `rf009-import-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const csv = `sensorId,temperatureValue,temperatureUnit,timestamp\n${sensorId},-20,°C,${new Date().toISOString()}`;
+
+    const upload = await request.post(`${apiBaseURL}/api/import/import`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      multipart: {
+        dataType: 'temperature',
+        file: { name: 'temperaturas-1317.csv', mimeType: 'text/csv', buffer: Buffer.from(csv, 'utf8') },
+      },
+    });
+    expect(upload.status(), await upload.text()).toBe(202);
+    const jobID = (await upload.json())?.data?.jobID;
+    expect(jobID).toBeTruthy();
+    createdImportJobIds.push(String(jobID));
+
+    let job: any = null;
+    await expect
+      .poll(
+        async () => {
+          job = await db.collection('importJobs').findOne({ jobID: String(jobID) });
+          return job?.status;
+        },
+        { timeout: 60_000, intervals: [1_000] }
+      )
+      .toMatch(/^(completed|completed_no_data|failed)$/);
+    expect(job.status, JSON.stringify(job.result ?? job.error ?? null)).toBe('completed');
+
+    const history = await request.get(`${apiBaseURL}/api/temperature/history?sensorId=${encodeURIComponent(sensorId)}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(history.status(), await history.text()).toBe(200);
+    const page = (await history.json()).data;
+    expect(page.total).toBe(1);
+    expect(page.temperatures[0]).toMatchObject({ sensorId, temperatureValue: -20, temperatureUnit: '°C' });
   });
 });

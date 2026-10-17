@@ -7,6 +7,8 @@ const PatientModel = require('../models/Patient');
 const SampleModule = require('../models/Sample');
 const SampleModel = SampleModule.SampleModel || SampleModule;
 const TemperatureModel = require('../models/Temperature');
+const influxTelemetryWriteRepository = require('../infrastructure/persistence/influxdb/InfluxTelemetryWriteRepository');
+const { readingIdentityOf, screenReading } = require('./telemetryReadingContract');
 const fhirValidator = require('./fhir-validator.service');
 const notificationService = require('./notification.service');
 const { getCollection } = require('../utils/collectionResolver');
@@ -822,7 +824,22 @@ class ImportService {
               errors: validation.errors
             });
           } else {
-            const temperature = TemperatureModel.create(tempData);
+            // RF009 AC1-AC3, AC7 (#1317): an imported reading takes the same reading
+            // contract and confirmed InfluxDB write as the other ingestion paths. The
+            // Mongo document is the queryable copy and is written only after InfluxDB
+            // confirms the point; a failed write stores nothing for that row.
+            const identity = readingIdentityOf(tempData, new Date(), { ingestionService: 'temperature-import' });
+            // [inference] the import time says nothing about the device's clock, since
+            // a file carries readings taken long before it was uploaded, so the clock is
+            // `unknown` (V2E-0556, the origin clock's known condition), not `drift`.
+            identity.clockStatus = 'unknown';
+            await screenReading(db, identity, tempData);
+            const temperature = { ...TemperatureModel.create(tempData), ...identity, timestamp: identity.observedAt };
+            try {
+              temperature.persistedAt = await influxTelemetryWriteRepository.writeTemperatureReadingNow(temperature);
+            } catch (error) {
+              throw new Error(`Leitura não persistida no InfluxDB: ${error.message || error}`);
+            }
             await temperaturesCollection.insertOne(temperature);
             results.success++;
           }
