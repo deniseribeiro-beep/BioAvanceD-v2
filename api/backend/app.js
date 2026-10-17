@@ -438,8 +438,6 @@ app.use("/api/physical-chain", require("./src/interface/routes/physical-chain.ro
 app.use("/api/devices", require("./src/interface/routes/device.routes"));
 app.use("/api/device-registrations", require("./src/interface/routes/deviceRegistration.routes"));
 app.use("/api/telemetry-datastreams", require("./src/interface/routes/telemetryDatastream.routes"));
-app.use("/api/facilities", require("./src/interface/routes/facility.routes"));
-app.use("/api/rooms", require("./src/interface/routes/room.routes"));
 app.use("/api/policies", require("./src/interface/routes/policy.routes"));
 app.use("/api/sensors", require("./src/interface/routes/sensor.routes"));
 app.use("/api/iot", require("./src/interface/routes/iot.routes"));
