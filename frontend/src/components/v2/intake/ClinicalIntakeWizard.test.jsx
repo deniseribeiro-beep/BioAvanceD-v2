@@ -5,7 +5,7 @@ import { LanguageProvider } from '../../../contexts/LanguageContext';
 import { apiClient } from '../../../api/client';
 import { consentService } from '../../../services/api';
 
-const { buildSubmissionPayload } = _test;
+const { buildSubmissionPayload, applyIntakeOrganization } = _test;
 
 // #871's mocking approach: replace apiClient/consentService at the network
 // boundary (not useSemanticCascade itself) so the real hook runs end to end
@@ -168,6 +168,23 @@ describe('ClinicalIntakeWizard buildSubmissionPayload', () => {
 
       expect(payload.specimen).not.toHaveProperty('parentSpecimenIds');
     }
+  });
+
+  it('#1376: the organization pick goes in the top-level organizationId and leaves specimen.collectionSite as the form built it', () => {
+    const payload = buildSubmissionPayload({ isHealthyControl: true, patientName: 'Paciente Teste', linkedProject: 'PROJ-1' });
+    payload.specimen.collectionSite = 'partner-x';
+
+    applyIntakeOrganization(payload, 'org-b');
+
+    expect(payload.organizationId).toBe('org-b');
+    expect(payload.specimen.collectionSite).toBe('partner-x');
+  });
+
+  it('#1376: with no organization pick the payload carries no organizationId and no collectionSite', () => {
+    const payload = applyIntakeOrganization(buildSubmissionPayload({ isHealthyControl: true, patientName: 'Paciente Teste', linkedProject: 'PROJ-1' }), '');
+
+    expect(payload).not.toHaveProperty('organizationId');
+    expect(payload.specimen).not.toHaveProperty('collectionSite');
   });
 });
 

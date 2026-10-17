@@ -390,7 +390,7 @@ describe('intakeWizard routes', () => {
         expect(patients.updateOne).not.toHaveBeenCalled();
       });
 
-      it('refuses a multi-organization caller who names no collectionSite, writing nothing', async () => {
+      it('refuses a multi-organization caller who names no organizationId, writing nothing', async () => {
         const { router, patientIdentityServiceModule } = loadRoute();
         const sampleServiceModule = require(sampleServicePath);
         vi.spyOn(sampleServiceModule, 'createSample');
@@ -404,9 +404,7 @@ describe('intakeWizard routes', () => {
       });
 
       // #1376: the organization is named in the intake's top-level
-      // organizationId; specimen.collectionSite (ELM-0128) is data. With no
-      // organizationId named, the site still picks, while the wizard sends
-      // its pick there.
+      // organizationId only; specimen.collectionSite (ELM-0128) is data.
       async function postMultiOrganization(payload) {
         const getCollectionImpl = vi.fn(async (_db, key) => ({
           samples: { findOne: vi.fn().mockResolvedValue({ _id: 'sample-1', participantId: '12345678' }), updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) },
@@ -429,12 +427,11 @@ describe('intakeWizard routes', () => {
         expect(createSample.mock.calls[0][1].collectionSite).toBe('org-b');
       });
 
-      it('still picks by specimen.collectionSite when no organizationId is named (#1376)', async () => {
+      it('refuses a multi-organization caller who names only specimen.collectionSite, as one naming nothing (#1376)', async () => {
         const { res, createSample } = await postMultiOrganization({ ...VALID_PAYLOAD, specimen: { ...VALID_PAYLOAD.specimen, collectionSite: 'org-b' } });
 
-        expect(res.status).toBe(200);
-        expect(createSample.mock.calls[0][2].organizationId).toBe('org-b');
-        expect(createSample.mock.calls[0][1].collectionSite).toBe('org-b');
+        expect(res.status).toBe(400);
+        expect(createSample).not.toHaveBeenCalled();
       });
 
       it('lets organizationId win over specimen.collectionSite and keeps the site (#1376)', async () => {

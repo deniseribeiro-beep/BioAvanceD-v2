@@ -1599,7 +1599,17 @@ function buildSubmissionPayload(formData, clinicalComorbidityItems = [], biomark
   };
 }
 
-export const _test = { buildSubmissionPayload };
+// #1376: the organization pick travels in the intake's top-level
+// organizationId; specimen.collectionSite (ELM-0128) is data and is left as
+// the form built it.
+function applyIntakeOrganization(payload, intakeOrganizationId) {
+  if (intakeOrganizationId) {
+    payload.organizationId = intakeOrganizationId;
+  }
+  return payload;
+}
+
+export const _test = { buildSubmissionPayload, applyIntakeOrganization };
 
 export default function ClinicalIntakeWizard(props) {
   const { t } = useLanguage();
@@ -1618,7 +1628,7 @@ export default function ClinicalIntakeWizard(props) {
   const [touched, setTouched] = useState(false);
   const [step1Attempted, setStep1Attempted] = useState(false);
   const [submitError, setSubmitError] = useState('');
-  // #1354/#1355: the organization the intake stamps (ELM-0128 collectionSite).
+  // #1354/#1355: the organization the intake stamps, sent as organizationId (#1376).
   // Asked only when the caller has a choice; a single-organization caller's
   // own is stamped by the backend.
   const organizationChoice = useCreateOrganizationChoice();
@@ -2719,9 +2729,7 @@ export default function ClinicalIntakeWizard(props) {
       if (patientMatchInfo?.patient?.patientID) {
         payload.participant.participantId = String(patientMatchInfo.patient.patientID).trim();
       }
-      if (intakeOrganizationId) {
-        payload.specimen.collectionSite = intakeOrganizationId;
-      }
+      applyIntakeOrganization(payload, intakeOrganizationId);
       console.log('[DEBUG] Payload pronto:', payload);
 
       let response;

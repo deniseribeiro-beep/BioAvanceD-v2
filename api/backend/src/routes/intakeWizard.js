@@ -828,13 +828,11 @@ async function handleIntakeWizard(req, res) {
     // /api/samples uses (#1185): a single-organization caller's own, a
     // multi-organization caller's pick among its own, or a global caller's
     // pick of any existing organization or none. The pick is the top-level
-    // organizationId. Transitional (#1376): with none named, the pick falls
-    // back to specimen.collectionSite (ELM-0128), because the wizard still
-    // sends it there; the fallback goes once the wizard sends organizationId.
+    // organizationId only; specimen.collectionSite (ELM-0128) is data.
     // Resolved before anything is written.
     const requestedOrganizationId = typeof data.organizationId === 'string' && data.organizationId.trim() !== ''
       ? data.organizationId.trim()
-      : data?.specimen?.collectionSite;
+      : undefined;
     let organizationId;
     try {
       ({ organizationId } = await resolveCallerCreateOrganization(db, {
