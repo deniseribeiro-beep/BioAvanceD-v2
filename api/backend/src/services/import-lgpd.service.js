@@ -1782,6 +1782,16 @@ class ImportLGPDService {
         sampleData.extractionProtocol = String(groupFields.extractionProtocol).trim();
       }
 
+      // ELM-0128 (#1376): a named collection site must be a registered
+      // Organization, as POST /api/samples checks. Checked before the
+      // participant match, so a rejected row writes nothing.
+      if (sampleData.collectionSite) {
+        const site = await db.collection('organizations').findOne({ organizationId: String(sampleData.collectionSite) });
+        if (!site) {
+          return { ok: false, errors: [`collectionSite ${sampleData.collectionSite} não encontrado`], data: { participantId: sampleData.participantId || null } };
+        }
+      }
+
       const matchedPatient = await participantIdentityService.matchOrUpsertParticipant(db, {
         participantId: sampleData.participantId,
         patientName: sampleData.patientName,
@@ -1976,8 +1986,8 @@ class ImportLGPDService {
       // #1353, #1192: the organization resolved once per import from the
       // importer's scope, as POST /api/samples resolves it (#1185), is
       // stamped as the sample's organizationId, the tenancy key. A named
-      // collection site (ELM-0128) would be kept, but parseSampleRow maps
-      // none today, so the unnamed site gets the organization, as before.
+      // collection site (ELM-0128), which parseSampleRow now maps (#1376),
+      // is kept; a row naming none gets the organization, as before.
       // Null only for a global caller who named no organization, which
       // leaves the row as it was.
       if (organizationId && (sampleData.collectionSite === undefined
@@ -2348,6 +2358,11 @@ class ImportLGPDService {
       // Nao vira specimenId, que e o ID interno gerado pelo createSample.
       sourceRecordId: row.sourceRecordId !== undefined && row.sourceRecordId !== null && String(row.sourceRecordId).trim() !== ''
         ? String(row.sourceRecordId).trim()
+        : null,
+      // ELM-0128, the collection site, a Reference(Organization) (#1376).
+      // Only the canonical header is read, as for the other #1192-era fields.
+      collectionSite: row.collectionSite !== undefined && row.collectionSite !== null && String(row.collectionSite).trim() !== ''
+        ? String(row.collectionSite).trim()
         : null,
       patientName: row.patientName?.trim() || row.nomePaciente?.trim() || row.nome?.trim() || null,
       patientBirthDate: this.parseBirthDate(row.birthDate || row.dataNascimento || row.patientBirthDate),

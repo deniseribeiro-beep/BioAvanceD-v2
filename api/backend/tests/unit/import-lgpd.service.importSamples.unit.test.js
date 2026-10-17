@@ -1595,3 +1595,63 @@ describe('ImportLGPDService.importSamples reference-data lookups (#702)', () => 
     expect(result.errors[0].errors[0]).toMatch(/não encontrado no banco de dados/);
   });
 });
+
+// ELM-0128 (#1376): a named collectionSite column is kept when it names a
+// registered Organization, and the row is rejected before any participant
+// write when it does not. A row naming none still gets the stamped one.
+describe('ImportLGPDService.importSamples collectionSite (#1376)', () => {
+  let db;
+  let samplesCollection;
+  let patientsCollection;
+  let organizationsCollection;
+
+  beforeEach(() => {
+    ({ db, samplesCollection, patientsCollection } = makeDb());
+    organizationsCollection = createMatchingCollection([{ organizationId: 'org-b' }], { collectionName: 'organizations' });
+    const collection = db.collection;
+    db.collection = vi.fn((name) => (name === 'organizations' ? organizationsCollection : collection(name)));
+
+    vi.spyOn(patientIdentityService, 'matchOrUpsertParticipant').mockResolvedValue(MATCHED_PATIENT);
+    vi.spyOn(qualityDomain, 'resolveMethodologicalQuality').mockReturnValue({
+      governance_status: 1,
+      final_grade: 'A',
+      category: 'A',
+      score: 90,
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('keeps a named site that is a registered Organization, with the stamped organizationId', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([{ ...VALID_ROW, collectionSite: 'org-b' }]);
+
+    const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' }, { organizationId: 'org-a' });
+
+    expect(result.success).toBe(1);
+    expect(samplesCollection.insertOne.mock.calls[0][0]).toMatchObject({ collectionSite: 'org-b', organizationId: 'org-a' });
+  });
+
+  it('rejects a row naming an unregistered site before any participant write', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([{ ...VALID_ROW, collectionSite: 'org-x' }]);
+
+    const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' }, { organizationId: 'org-a' });
+
+    expect(result.success).toBe(0);
+    expect(result.errors[0].errors).toEqual(['collectionSite org-x não encontrado']);
+    expect(patientIdentityService.matchOrUpsertParticipant).not.toHaveBeenCalled();
+    expect(patientsCollection.updateOne).not.toHaveBeenCalled();
+    expect(samplesCollection.insertOne).not.toHaveBeenCalled();
+  });
+
+  it('fills a row naming no site with the stamped organization, as before', async () => {
+    vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
+
+    const result = await service.importSamples(db, { path: '/x.csv', originalname: 'x.csv' }, { organizationId: 'org-a' });
+
+    expect(result.success).toBe(1);
+    expect(samplesCollection.insertOne.mock.calls[0][0].collectionSite).toBe('org-a');
+    expect(organizationsCollection.findOne).not.toHaveBeenCalled();
+  });
+});

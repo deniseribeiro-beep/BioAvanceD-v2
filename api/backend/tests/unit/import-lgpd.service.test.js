@@ -381,6 +381,15 @@ describe('ImportLGPDService', () => {
       const result = importLgpdService.parseSampleRow({ atcCode: 'atc:a10bx02' });
       expect(result.pharmacologyData.atcCode).toBe('A10BX02');
     });
+
+    it('maps a named collectionSite column, trimmed (ELM-0128, #1376)', () => {
+      expect(importLgpdService.parseSampleRow({ collectionSite: ' org-b ' }).collectionSite).toBe('org-b');
+    });
+
+    it('maps a blank or absent collectionSite column to null (ELM-0128, #1376)', () => {
+      expect(importLgpdService.parseSampleRow({ collectionSite: '   ' }).collectionSite).toBeNull();
+      expect(importLgpdService.parseSampleRow({}).collectionSite).toBeNull();
+    });
   });
 
   describe('buildMappedPatientRow', () => {
