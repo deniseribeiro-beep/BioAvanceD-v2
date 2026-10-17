@@ -128,6 +128,15 @@ describe('createTemperatureReading stores the identity and replays a client key'
     expect(write).not.toHaveBeenCalled();
   });
 
+  it('a reading stored before the two names replays its datastream as datastreamId', async () => {
+    vi.spyOn(influxTelemetryWriteRepository, 'writeTemperatureReadingNow').mockResolvedValue(new Date('2026-10-10T12:00:01.000Z'));
+    const temperatures = temperaturesCollection({ _id: 'old-id', sensorId: 's1', idempotencyKey: 'k-old', telemetryDatastreamId: 'ds-old' });
+    const db = { collection: vi.fn(() => temperatures) };
+    const result = await temperatureService.createTemperatureReading(db, { sensorId: 's1', temperatureValue: 4, idempotencyKey: 'k-old' });
+    expect(result).toMatchObject({ _id: 'old-id', datastreamId: 'ds-old', replayed: true });
+    expect(result).not.toHaveProperty('storageLocationId');
+  });
+
   it('control: a new client key is stored once', async () => {
     vi.spyOn(influxTelemetryWriteRepository, 'writeTemperatureReadingNow').mockResolvedValue(new Date('2026-10-10T12:00:01.000Z'));
     const temperatures = temperaturesCollection(null);

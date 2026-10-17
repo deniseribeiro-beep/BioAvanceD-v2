@@ -101,9 +101,15 @@ class InfluxTelemetryWriteRepository {
     if (reading.clockStatus) {
       point.tag('clockStatus', String(reading.clockStatus));
     }
-    // RF009 AC4: the TelemetryDatastream the reading was bound to.
-    if (reading.telemetryDatastreamId) {
-      point.tag('telemetryDatastreamId', String(reading.telemetryDatastreamId));
+    // RF009 AC4: the TelemetryDatastream the reading was bound to (V2E-0546)
+    // and the location it monitored (V2E-0547). A reading built before the
+    // two names, still buffered, has its datastream as telemetryDatastreamId.
+    const datastreamId = reading.datastreamId ?? reading.telemetryDatastreamId;
+    if (datastreamId) {
+      point.tag('datastreamId', String(datastreamId));
+    }
+    if (reading.storageLocationId) {
+      point.tag('storageLocationId', String(reading.storageLocationId));
     }
 
     const observedAt = reading.observedAt || reading.timestamp;

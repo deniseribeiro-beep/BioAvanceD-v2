@@ -201,12 +201,18 @@ function bindingMode() {
 /**
  * RF009 AC4, RF017 AC5 (#1317): binds a reading to the TelemetryDatastream
  * of its sensor valid at its observedAt, and checks the sensor has an active
- * DeviceRegistration. Returns the datastream's id (null without one) and the
+ * DeviceRegistration. Returns the reading's datastreamId (V2E-0546) and
+ * storageLocationId (V2E-0547), both null without a datastream, and the
  * issue drafts for what is missing: under TELEMETRY_BINDING_MODE `enforce`
  * they reject the reading, under `record` (the default) they quarantine it,
  * so it is stored and flagged. A lookup that fails is logged; under
  * `enforce` it refuses the reading with a 503, since the binding cannot be
  * shown, and under `record` the reading goes on unbound and unflagged.
+ *
+ * [inference] The location is the storageLocationId of the datastream valid
+ * at observedAt: V2E-0547 is the location monitored at the instant of
+ * observation, and that datastream is the one binding of sensor to location
+ * over time (V2E-0565, 1..1). A payload's own storageLocationId is never read.
  */
 async function readingBindingOf(storeOf, identity, payload = {}) {
   const mode = bindingMode();
@@ -223,7 +229,7 @@ async function readingBindingOf(storeOf, identity, payload = {}) {
         statusCode: 503, code: 'TELEMETRY_BINDING_UNVERIFIABLE', auditReason: 'telemetry_binding_unverifiable',
       });
     }
-    return { telemetryDatastreamId: null, drafts: [] };
+    return { datastreamId: null, storageLocationId: null, drafts: [] };
   }
 
   const disposition = mode === 'enforce' ? 'rejected' : 'quarantined';
@@ -246,14 +252,18 @@ async function readingBindingOf(storeOf, identity, payload = {}) {
       disposition,
     });
   }
-  return { telemetryDatastreamId: binding.datastream?.telemetryDatastreamId || null, drafts };
+  return {
+    datastreamId: binding.datastream?.telemetryDatastreamId || null,
+    storageLocationId: binding.datastream?.storageLocationId || null,
+    drafts,
+  };
 }
 
 /**
  * Records a reading's validation issues and decides its fate. The reading
- * is first bound (readingBindingOf), and `identity.telemetryDatastreamId` is
- * stamped with its datastream, or null, so every path stores it with the
- * reading. A reading with no issue writes nothing. Otherwise one
+ * is first bound (readingBindingOf), and `identity.datastreamId` (V2E-0546)
+ * and `identity.storageLocationId` (V2E-0547) are stamped from its
+ * datastream, or null, so every path stores them with the reading. A reading with no issue writes nothing. Otherwise one
  * TelemetryIngestionEvent and its TelemetryValidationIssues are written to
  * MongoDB; a rejected reading then throws a 422 with nothing stored, and a
  * quarantined one returns its issues and goes on to be stored. A failed
@@ -269,7 +279,8 @@ async function screenReading(db, identity, payload = {}) {
   };
 
   const binding = await readingBindingOf(storeOf, identity, payload);
-  identity.telemetryDatastreamId = binding.telemetryDatastreamId;
+  identity.datastreamId = binding.datastreamId;
+  identity.storageLocationId = binding.storageLocationId;
   const drafts = [...validationIssuesOf(identity, payload), ...binding.drafts];
   if (!drafts.length) return [];
 

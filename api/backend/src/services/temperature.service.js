@@ -29,6 +29,13 @@ async function ensureTemperatureIndexes(collection) {
   }
 }
 
+// RF009 AC7 (#1317): a replayed reading names its datastream datastreamId
+// (V2E-0546); one stored before that name carries it as
+// telemetryDatastreamId. Its other keys are returned as stored.
+function replayOf(stored) {
+  return { ...stored, datastreamId: stored.datastreamId ?? stored.telemetryDatastreamId ?? null, replayed: true };
+}
+
 function createTemperatureValidationError(message, statusCode = 422) {
   const error = new Error(message);
   error.statusCode = statusCode;
@@ -80,7 +87,7 @@ class TemperatureService {
       if (replayFilter) {
         await ensureTemperatureIndexes(temperaturesCollection);
         const stored = await temperaturesCollection.findOne(replayFilter);
-        if (stored) return { ...stored, replayed: true };
+        if (stored) return replayOf(stored);
       }
 
       // RF009 AC7 (#1317): a clock drift or an implausible value is recorded
@@ -119,7 +126,7 @@ class TemperatureService {
       } catch (error) {
         // Two concurrent sends of one key: the unique index lets one in.
         const stored = replayFilter && error?.code === 11000 ? await temperaturesCollection.findOne(replayFilter) : null;
-        if (stored) return { ...stored, replayed: true };
+        if (stored) return replayOf(stored);
         throw error;
       }
 

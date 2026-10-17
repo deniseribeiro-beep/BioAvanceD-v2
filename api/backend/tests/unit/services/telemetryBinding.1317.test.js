@@ -153,12 +153,13 @@ describe('screenReading binds every reading (RF009 AC4)', () => {
     return { ...fake, stream };
   }
 
-  it('a bound reading is stamped with its datastream and records nothing', async () => {
+  it('a bound reading is stamped with its datastream and its location and records nothing', async () => {
     env.TELEMETRY_BINDING_MODE = 'enforce';
     const { db, collectionOf, stream } = await boundDb();
     const { payload, identity } = reading('2026-10-02T00:00:00.000Z');
     await expect(screenReading(db, identity, payload)).resolves.toEqual([]);
-    expect(identity.telemetryDatastreamId).toBe(stream.telemetryDatastreamId);
+    expect(identity.datastreamId).toBe(stream.telemetryDatastreamId);
+    expect(identity.storageLocationId).toBe(STREAM.storageLocationId);
     expect(collectionOf('telemetryValidationIssues').docs).toHaveLength(0);
   });
 
@@ -192,7 +193,8 @@ describe('screenReading binds every reading (RF009 AC4)', () => {
     expect(issues.map((issue) => [issue.issueCode, issue.disposition])).toEqual([
       ['unbound_datastream', 'quarantined'], ['device_not_registered', 'quarantined'],
     ]);
-    expect(identity.telemetryDatastreamId).toBeNull();
+    expect(identity.datastreamId).toBeNull();
+    expect(identity.storageLocationId).toBeNull();
     expect(collectionOf('telemetryIngestionEvents').docs).toEqual([
       expect.objectContaining({ validationStatus: 'quarantined', telemetryReadingId: identity.telemetryReadingId }),
     ]);
@@ -207,11 +209,20 @@ describe('screenReading binds every reading (RF009 AC4)', () => {
     env.TELEMETRY_BINDING_MODE = 'record';
     const second = reading('2026-10-02T00:00:00.000Z');
     await expect(screenReading(failing, second.identity, second.payload)).resolves.toEqual([]);
-    expect(second.identity.telemetryDatastreamId).toBeNull();
+    expect(second.identity.datastreamId).toBeNull();
+    expect(second.identity.storageLocationId).toBeNull();
   });
 
-  it('the InfluxDB point carries the datastream as a tag', () => {
-    const point = influxTelemetryWriteRepository.toPoint({ sensorId: 'sensor-1', temperatureValue: -80, telemetryDatastreamId: 'ds-1', observedAt: new Date(START) });
-    expect(point.toLineProtocol()).toContain('telemetryDatastreamId=ds-1');
+  it('the InfluxDB point carries the datastream and the location as tags', () => {
+    const point = influxTelemetryWriteRepository.toPoint({ sensorId: 'sensor-1', temperatureValue: -80, datastreamId: 'ds-1', storageLocationId: 'loc-1', observedAt: new Date(START) });
+    const line = point.toLineProtocol();
+    expect(line).toContain('datastreamId=ds-1');
+    expect(line).toContain('storageLocationId=loc-1');
+    expect(line).not.toContain('telemetryDatastreamId');
+  });
+
+  it('a reading built before the two names keeps its datastream on the point', () => {
+    const point = influxTelemetryWriteRepository.toPoint({ sensorId: 'sensor-1', temperatureValue: -80, telemetryDatastreamId: 'ds-old', observedAt: new Date(START) });
+    expect(point.toLineProtocol()).toContain('datastreamId=ds-old');
   });
 });

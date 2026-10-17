@@ -217,6 +217,17 @@ describe('iot-streaming.service', () => {
       expect(first).toBe(second);
     });
 
+    // #1317 (V2E-0546, V2E-0547): the datastream and the location come from
+    // the binding, never from the payload; this db has no datastreams, so the
+    // reading is unbound.
+    it('a payload naming its own datastreamId and storageLocationId is stored with both null', async () => {
+      const { db, temperaturesCollection } = makeDb();
+      await service.processTemperatureData(db, { ...baseTemperatureData, datastreamId: 'spoofed', storageLocationId: 'spoofed' });
+      const stored = temperaturesCollection.insertOne.mock.calls[0][0];
+      expect(stored.datastreamId).toBeNull();
+      expect(stored.storageLocationId).toBeNull();
+    });
+
     it('a failed InfluxDB write throws and stores nothing', async () => {
       const { db, temperaturesCollection } = makeDb();
       influxTelemetryWriteRepository.writeTemperatureReadingNow.mockRejectedValue(new Error('influx down'));

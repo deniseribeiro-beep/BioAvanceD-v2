@@ -1342,7 +1342,7 @@ test.describe('Telemetry reading identity and replay (#1317, RF009) — real bac
 // #1317 (RF009 AC4, RF017 AC5): a reading is bound to the TelemetryDatastream
 // of its sensor valid at its observedAt, created through the route.
 test.describe('Telemetry datastream binding (#1317, RF009 AC4) — real backend', () => {
-  test('a reading inside a datastream validity carries its id; one after the end carries none', async ({ request }) => {
+  test('a reading inside a datastream validity carries its id and location; one after the end carries neither', async ({ request }) => {
     const admin = await realLogin(request);
     const auth = { Authorization: `Bearer ${admin.token}` };
     const sensorId = `rf009-bind-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -1372,11 +1372,15 @@ test.describe('Telemetry datastream binding (#1317, RF009 AC4) — real backend'
       request.post(`${apiBaseURL}/api/temperature/reading`, { headers: auth, data: { sensorId, temperatureValue: -80, timestamp: timestamp.toISOString() } });
     const inside = await send(new Date(start.getTime() + 60 * 1000));
     expect(inside.status(), await inside.text()).toBe(201);
-    expect((await inside.json()).data.telemetryDatastreamId).toBe(stream.telemetryDatastreamId);
+    const insideReading = (await inside.json()).data;
+    expect(insideReading.datastreamId).toBe(stream.telemetryDatastreamId);
+    expect(insideReading.storageLocationId).toBe(`${sensorId}-loc`);
 
     // The default mode records the gap and still stores the reading.
     const after = await send(end);
     expect(after.status(), await after.text()).toBe(201);
-    expect((await after.json()).data.telemetryDatastreamId).toBeNull();
+    const afterReading = (await after.json()).data;
+    expect(afterReading.datastreamId).toBeNull();
+    expect(afterReading.storageLocationId).toBeNull();
   });
 });
