@@ -14,6 +14,7 @@ require('../models/TemperaturePolicy.schema');
 require('../models/Device.schema');
 const { saveTelemetryPoint } = require('../services/saveTelemetryPoint');
 const { readingIdentityOf, screenReading } = require('../services/telemetryReadingContract');
+const { getDatastream } = require('../services/telemetryBinding.service');
 const { findCompletedIdempotentResult, recordCompletedIdempotentResult } = require('../ingestion/idempotency');
 const { sendCriticalAlertEmail } = require('../services/sendCriticalAlertEmail');
 const TemperatureIncidentModel = require('../models/TemperatureIncident');
@@ -49,6 +50,38 @@ async function resolveTemperaturePolicy(sensorId) {
   const value = { sensorMetadata, temperaturePolicy: sensorMetadata?.temperaturePolicy || null, db };
   sensorPolicyCache.set(cacheKey, { value, expiresAt: Date.now() + SENSOR_POLICY_CACHE_TTL_MS });
   return value;
+}
+
+// RF009 AC4, V2E-0569 (#1317): the TemperaturePolicy that a datastream's
+// thresholdProfileId names, or null. [inference] A bound reading is judged
+// against it: the datastream model interprets a reading "through the
+// datastream valid when it was observed", V2E-0569 puts the versioned limits
+// profile on the datastream, and TemperaturePolicy.schema.js maps
+// thresholdProfileId to the policy's `_id`. [inference] A 24-hex id matches
+// either an ObjectId `_id` (a policy created through the policy routes) or a
+// string one (a policy inserted with a string id). The ObjectId comes from
+// mongoose.Types for the #651 reason given in
+// upsertTemperatureIncidentAndQuarantine. Nothing is cached, so a policy edit
+// applies at the next reading.
+async function resolveDatastreamPolicy(db, datastreamId) {
+  if (!datastreamId) return null;
+  const stream = await getDatastream(db, datastreamId);
+  const profileId = stream.thresholdProfileId;
+  let policy = null;
+  if (profileId) {
+    const id = String(profileId);
+    const filter = /^[0-9a-fA-F]{24}$/.test(id)
+      ? { _id: { $in: [new mongoose.Types.ObjectId(id), id] } }
+      : { _id: id };
+    policy = await db.collection('temperaturePolicies').findOne(filter);
+  }
+  if (!policy) {
+    logger.warn('[ISO20387][IOT] O perfil de limites do TelemetryDatastream não nomeia uma política; vale a do sensor', {
+      datastreamId: String(datastreamId),
+      thresholdProfileId: profileId || null,
+    });
+  }
+  return policy || null;
 }
 
 async function applyColdChainQuarantine(db, incident) {
@@ -312,6 +345,26 @@ async function ingestTelemetry(req, res) {
       logger.warn('[ISO20387][IOT] Não foi possível resolver política do sensor:', error.message || error);
     }
 
+    // RF009 AC4, V2E-0569 (#1317): a reading bound to a datastream is judged
+    // against that datastream's threshold profile. [inference] The
+    // SensorMetadata policy stays the fallback, for an unbound reading, a
+    // profile that names no policy and a failed lookup: cold-chain
+    // availability wins (the Axis E decision on the audit below), so no
+    // excursion goes unchecked because of a datastream lookup. A new object,
+    // never the cached one: sensorPolicyCache holds it for the next unbound
+    // reading of this sensor.
+    if (identity.datastreamId) {
+      try {
+        const policyDb = policyData?.db || await connectMongoDB();
+        const streamPolicy = await resolveDatastreamPolicy(policyDb, identity.datastreamId);
+        if (streamPolicy) {
+          policyData = { ...(policyData || {}), db: policyDb, temperaturePolicy: streamPolicy };
+        }
+      } catch (error) {
+        logger.warn('[ISO20387][IOT] Não foi possível resolver a política do TelemetryDatastream; vale a do sensor:', error.message || error);
+      }
+    }
+
     const temperaturePolicy = policyData?.temperaturePolicy || null;
     if (temperaturePolicy) {
       const minTemp = Number(temperaturePolicy.minTemp);
@@ -452,4 +505,4 @@ async function ingestTelemetry(req, res) {
   }
 }
 
-module.exports = { ingestTelemetry, resolveTemperaturePolicy, sensorPolicyCache, upsertEnvironmentalExcursion };
+module.exports = { ingestTelemetry, resolveTemperaturePolicy, resolveDatastreamPolicy, sensorPolicyCache, upsertEnvironmentalExcursion };

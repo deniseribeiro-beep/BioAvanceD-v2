@@ -174,9 +174,13 @@ function buildDb() {
 
   const idempotencyKeysCollection = createFakeCollection([]);
 
+  // #1317: null unless a case binds the reading to a datastream.
+  const bindingCollections = { telemetryDatastreams: null, deviceRegistrations: null, temperaturePolicies: null };
+
   return {
     db: {
       collection: vi.fn().mockImplementation((name) => {
+        if (bindingCollections[name]) return bindingCollections[name];
         if (name === 'ingestionIdempotencyKeys') return idempotencyKeysCollection;
         if (name === 'temperatureIncidents') return incidentCollection;
         if (name === 'environmentalExcursions') return environmentalExcursionsCollection;
@@ -202,6 +206,7 @@ function buildDb() {
     samplesCollection,
     sampleMovementsCollection,
     quarantineActionsCollection,
+    bindingCollections,
   };
 }
 
@@ -298,6 +303,48 @@ describe('IoT API integration', () => {
       maximumValue: 12.5,
       excursionStatus: 'open',
     });
+  });
+
+  // RF009 AC4, V2E-0569 (#1317): the same reading, bound to a datastream
+  // whose threshold profile is 0..20, is in range. The case above is its
+  // control: the sensor's own 2..8 opens an incident.
+  it('#1317: POST /api/iot/telemetry judges a bound reading against its datastream threshold profile', async () => {
+    const stream = {
+      telemetryDatastreamId: 'ds-iot-1',
+      sensorId: 'sensor-1',
+      observedProperty: 'temperature',
+      storageLocationId: 'loc-iot-1',
+      validityPeriod: { start: new Date('2026-04-01T00:00:00.000Z'), end: null },
+      thresholdProfileId: 'policy-ds',
+    };
+    mockDb.bindingCollections.telemetryDatastreams = {
+      find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([stream]) }),
+      findOne: vi.fn(async (filter) => (filter.telemetryDatastreamId === stream.telemetryDatastreamId ? stream : null)),
+    };
+    // resolveReadingBinding reads the registration after the stream; without
+    // a findOne here the binding throws and the reading goes on unbound.
+    mockDb.bindingCollections.deviceRegistrations = { findOne: vi.fn().mockResolvedValue(null) };
+    mockDb.bindingCollections.temperaturePolicies = {
+      findOne: vi.fn(async (filter) => (filter._id === 'policy-ds' ? { _id: 'policy-ds', minTemp: 0, maxTemp: 20 } : null)),
+    };
+
+    const response = await request(app).post('/api/iot/telemetry')
+      .set('x-telemetry-ingest-secret', 'iot-test-secret')
+      .send({
+        sensorId: 'sensor-1',
+        temperature: 12.5,
+        timestamp: '2026-04-10T10:00:00.000Z',
+      });
+
+    expect(response.status).toBe(200);
+    expect(mockDb.bindingCollections.temperaturePolicies.findOne).toHaveBeenCalledWith({ _id: 'policy-ds' });
+    expect(sendCriticalAlertEmail).not.toHaveBeenCalled();
+    // The in-range path's detached clock stop has run, so an incident insert
+    // would have run by now too.
+    await vi.waitFor(() => {
+      expect(mockDb.incidentCollection.updateOne).toHaveBeenCalled();
+    });
+    expect(mockDb.incidentCollection.insertOne).not.toHaveBeenCalled();
   });
 
   it('#1207: POST /api/iot/telemetry quarantines the sensor samples once the excursion has outlasted its threshold', async () => {

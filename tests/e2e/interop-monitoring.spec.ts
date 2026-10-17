@@ -1399,4 +1399,37 @@ test.describe('Telemetry datastream binding (#1317, RF009 AC4) — real backend'
     expect(afterReading.datastreamId).toBeNull();
     expect(afterReading.storageLocationId).toBeNull();
   });
+
+  // V2E-0569: the reading is judged against its datastream's threshold
+  // profile, 2..8, not the sensor's own -100..100 policy.
+  test('a reading on POST /api/iot/telemetry opens an incident against its datastream threshold profile', async ({ request }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const sensor = await seedSensorWithPolicy(-100, 100);
+    const profile = await seedSensorWithPolicy(2, 8);
+    try {
+      const created = await request.post(`${apiBaseURL}/api/telemetry-datastreams`, {
+        headers: auth,
+        data: {
+          sensorId: sensor.sensorId, equipmentId: `${sensor.sensorId}-freezer`, storageLocationId: `${sensor.sensorId}-loc`,
+          observedProperty: 'temperature', unit: 'Cel', samplingPolicyId: 'sampling-e2e', thresholdProfileId: profile.policyId,
+          validityPeriod: { start: new Date(Date.now() - 60 * 60 * 1000).toISOString() },
+        },
+      });
+      expect(created.status(), await created.text()).toBe(201);
+
+      const response = await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+        headers: ingestHeaders(),
+        data: { sensorId: sensor.sensorId, temperature: 25, timestamp: new Date().toISOString() },
+      });
+      expect(response.status(), await response.text()).toBe(200);
+
+      await expect
+        .poll(async () => findTemperatureIncident(sensor.sensorId), { timeout: 15_000 })
+        .not.toBeNull();
+    } finally {
+      await removeSeededSensor(sensor);
+      await removeSeededSensor(profile);
+    }
+  });
 });

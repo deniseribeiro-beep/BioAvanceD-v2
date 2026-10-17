@@ -109,6 +109,9 @@ describe('iot.controller', () => {
   let temperatureIncidentsCollection;
   let usersCollection;
   let idempotencyKeysCollection;
+  // #1317: null unless a case binds the reading to a datastream.
+  let datastreamsCollection;
+  let temperaturePoliciesCollection;
 
   beforeEach(async () => {
     vi.resetModules();
@@ -156,6 +159,8 @@ describe('iot.controller', () => {
     };
 
     idempotencyKeysCollection = createFakeCollection([]);
+    datastreamsCollection = null;
+    temperaturePoliciesCollection = null;
 
     const fakeConnection = {
       collection: vi.fn().mockImplementation((name) => {
@@ -164,6 +169,8 @@ describe('iot.controller', () => {
         if (name === 'users') return usersCollection;
         if (name === 'roles') return rolesCollection;
         if (name === 'userRoleAssignments') return assignmentsCollection;
+        if (name === 'telemetryDatastreams' && datastreamsCollection) return datastreamsCollection;
+        if (name === 'temperaturePolicies' && temperaturePoliciesCollection) return temperaturePoliciesCollection;
         return {
           findOne: vi.fn().mockResolvedValue(null),
           updateOne: vi.fn().mockResolvedValue({ modifiedCount: 1 }),
@@ -1027,4 +1034,133 @@ describe('iot.controller', () => {
     expect(res.statusCode).toBe(200);
     expect(sendCriticalAlertEmailMock).not.toHaveBeenCalled();
   }, 15000);
+
+  // RF009 AC4, V2E-0569 (#1317): a reading bound to a datastream is judged
+  // against the TemperaturePolicy its thresholdProfileId names; the
+  // SensorMetadata policy (2..8 here) is the fallback. The readings carry no
+  // timestamp, so observedAt is now, inside the stream's validity.
+  describe('#1317: the threshold profile of the datastream valid at observedAt', () => {
+    const mongoose = require('mongoose');
+    const HEX_PROFILE_ID = '64b7f0c2a1b2c3d4e5f60718';
+    let stream;
+
+    function bindTo(thresholdProfileId) {
+      stream = {
+        telemetryDatastreamId: 'ds-1',
+        sensorId: 'sensor-2',
+        observedProperty: 'temperature',
+        storageLocationId: 'loc-1',
+        validityPeriod: { start: new Date('2026-01-01'), end: null },
+        thresholdProfileId,
+      };
+      datastreamsCollection = {
+        find: vi.fn(() => ({ toArray: async () => [stream] })),
+        findOne: vi.fn(async (filter) => (filter.telemetryDatastreamId === stream.telemetryDatastreamId ? stream : null)),
+      };
+    }
+
+    function policies(byId) {
+      temperaturePoliciesCollection = {
+        findOne: vi.fn(async (filter) => byId[filter._id] || null),
+      };
+    }
+
+    it('a reading inside the datastream profile opens no excursion, though it is outside the sensor policy', async () => {
+      bindTo('policy-ds');
+      policies({ 'policy-ds': { _id: 'policy-ds', minTemp: 0, maxTemp: 20 } });
+
+      const res = createResponse();
+      await ingestTelemetry({ body: { sensorId: 'sensor-2', temperature: 12.5 } }, res);
+
+      expect(res.statusCode).toBe(200);
+      expect(sendCriticalAlertEmailMock).not.toHaveBeenCalled();
+      // The in-range path's detached clock stop has run, so an incident
+      // insert would have run by now too.
+      await vi.waitFor(() => {
+        expect(temperatureIncidentsCollection.updateOne).toHaveBeenCalled();
+      });
+      expect(temperatureIncidentsCollection.insertOne).not.toHaveBeenCalled();
+    }, 15000);
+
+    it('CONTROL: the same reading with no datastream fires against the sensor policy', async () => {
+      const res = createResponse();
+      await ingestTelemetry({ body: { sensorId: 'sensor-2', temperature: 12.5 } }, res);
+
+      expect(res.statusCode).toBe(200);
+      expect(sendCriticalAlertEmailMock).toHaveBeenCalledWith('sensor-2', 12.5, 8, 'alerts@example.test');
+    }, 15000);
+
+    it('a reading inside the sensor policy fires when it is outside the datastream profile', async () => {
+      bindTo('policy-ds');
+      policies({ 'policy-ds': { _id: 'policy-ds', minTemp: -90, maxTemp: -70 } });
+
+      await ingestTelemetry({ body: { sensorId: 'sensor-2', temperature: 5 } }, createResponse());
+
+      expect(sendCriticalAlertEmailMock).toHaveBeenCalledWith('sensor-2', 5, -70, 'alerts@example.test');
+      const alertLine = consoleLogSpy.mock.calls.find(([tag]) => tag === '[ALERTA][IOT] Temperatura fora da política');
+      expect(JSON.parse(alertLine[1])).toMatchObject({ policyId: 'policy-ds', minTemp: -90, maxTemp: -70 });
+    }, 15000);
+
+    it('a profile that names no policy falls back to the sensor policy, with a warning', async () => {
+      const warnSpy = vi.spyOn(require('../../src/utils/logger'), 'warn').mockImplementation(() => undefined);
+      bindTo('policy-missing');
+      policies({});
+
+      await ingestTelemetry({ body: { sensorId: 'sensor-2', temperature: 12.5 } }, createResponse());
+
+      expect(sendCriticalAlertEmailMock).toHaveBeenCalledWith('sensor-2', 12.5, 8, 'alerts@example.test');
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('TelemetryDatastream'),
+        expect.objectContaining({ datastreamId: 'ds-1', thresholdProfileId: 'policy-missing' })
+      );
+      warnSpy.mockRestore();
+    }, 15000);
+
+    it('a 24-hex profile id is looked up as an ObjectId and as the raw string', async () => {
+      bindTo(HEX_PROFILE_ID);
+      policies({});
+
+      await ingestTelemetry({ body: { sensorId: 'sensor-2', temperature: 5 } }, createResponse());
+
+      expect(temperaturePoliciesCollection.findOne).toHaveBeenCalledTimes(1);
+      const [filter] = temperaturePoliciesCollection.findOne.mock.calls[0];
+      expect(filter._id.$in).toHaveLength(2);
+      expect(filter._id.$in[0]).toBeInstanceOf(mongoose.Types.ObjectId);
+      expect(filter._id.$in[0].toHexString()).toBe(HEX_PROFILE_ID);
+      expect(filter._id.$in[1]).toBe(HEX_PROFILE_ID);
+    }, 15000);
+
+    it('a 24-hex profile id resolves the policy whose _id is that ObjectId', async () => {
+      bindTo(HEX_PROFILE_ID);
+      const policy = { _id: new mongoose.Types.ObjectId(HEX_PROFILE_ID), minTemp: -90, maxTemp: -70 };
+      // Matches as MongoDB does through the mongoose connection: only an
+      // ObjectId of mongoose's own bson equals the stored _id (#651).
+      temperaturePoliciesCollection = {
+        findOne: vi.fn(async (filter) => {
+          const candidates = filter._id?.$in || [filter._id];
+          return candidates.some((id) => id instanceof mongoose.Types.ObjectId && id.equals(policy._id)) ? policy : null;
+        }),
+      };
+
+      await ingestTelemetry({ body: { sensorId: 'sensor-2', temperature: 5 } }, createResponse());
+
+      expect(sendCriticalAlertEmailMock).toHaveBeenCalledWith('sensor-2', 5, -70, 'alerts@example.test');
+    }, 15000);
+
+    it('a bound reading leaves the cached sensor policy as it was for the next unbound reading', async () => {
+      bindTo('policy-ds');
+      policies({ 'policy-ds': { _id: 'policy-ds', minTemp: 0, maxTemp: 20 } });
+
+      await ingestTelemetry({ body: { sensorId: 'sensor-2', temperature: 12.5 } }, createResponse());
+      expect(sendCriticalAlertEmailMock).not.toHaveBeenCalled();
+
+      // The default collection has no find, so the binding fails and, under
+      // `record`, the reading goes on unbound; its policy is the cached one.
+      datastreamsCollection = null;
+      await ingestTelemetry({ body: { sensorId: 'sensor-2', temperature: 12.5 } }, createResponse());
+
+      expect(sensorMetadataFindOneMock).toHaveBeenCalledTimes(1);
+      expect(sendCriticalAlertEmailMock).toHaveBeenCalledWith('sensor-2', 12.5, 8, 'alerts@example.test');
+    }, 15000);
+  });
 });
