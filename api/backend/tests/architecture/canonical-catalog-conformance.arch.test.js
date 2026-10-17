@@ -227,13 +227,13 @@ const KNOWN_DRIFT = {
   },
   UserAccount: {
     absent: [
-      { elementId: 'P1X-0182', field: 'userAccountId', note: 'TODO(#1330): 1..1 Core -- the user document has no id of its own beyond Mongo _id.' },
-      { elementId: 'P1X-0183', field: 'actorId', note: 'TODO(#1330): 1..1 Core -- not emitted.' },
-      { elementId: 'P1X-0188', field: 'institutionLegacy', note: 'TODO(#1330): 0..1 Extensão local -- not emitted; the document carries organizationId instead.' },
-      { elementId: 'P1X-0191', field: 'accessTypeLegacy', note: 'TODO(#1330): 0..1 Extensão local -- not emitted.' },
-      { elementId: 'P1X-0192', field: 'primaryRoleId', note: 'TODO(#1330): 1..1 Core -- not emitted; roles live in UserRoleAssignment.' },
-      { elementId: 'P1X-0196', field: 'mfaMethod', note: 'TODO(#1330): 0..1 Condicional -- not written: nothing sets it on the user document.' },
-      { elementId: 'P1X-0201', field: 'mfaLockedUntil', note: 'TODO(#1330): 0..1 Condicional -- not written: the MFA lock (mfaLocked) has no expiry.' }
+      { elementId: 'P1X-0182', field: 'userAccountId', note: "Deliberate absence: 1..1 Core -- the account's id is its Mongo _id, which every reference already stores as userAccountId; fieldsOf runs before insertion, so it cannot emit _id. See docs/decisions/2026-10-17-user-account-absent-elements.md." },
+      { elementId: 'P1X-0183', field: 'actorId', note: 'Deliberate absence: 1..1 Core -- no Actor entity exists in the code; every recorded actorId is the user id itself. See docs/decisions/2026-10-17-user-account-absent-elements.md.' },
+      { elementId: 'P1X-0188', field: 'institutionLegacy', note: 'Deliberate absence: 0..1 Extensão local -- the institution migration it aliases is finished (migrateUserOrganizations.js, #347); the document carries organizationId. See docs/decisions/2026-10-17-user-account-absent-elements.md.' },
+      { elementId: 'P1X-0191', field: 'accessTypeLegacy', note: "Deliberate absence: 0..1 Extensão local -- the 1-4 level is no longer stored on the user; it is resolved from the active role's hierarchyLevel (rbac-assignment.service.js resolveUserHierarchyLevel). See docs/decisions/2026-10-17-user-account-absent-elements.md." },
+      { elementId: 'P1X-0192', field: 'primaryRoleId', note: 'Deliberate absence: 1..1 Core -- the primary role is derived from the active UserRoleAssignment (rbac-assignment.service.js changeUserRole), not stored on the user. See docs/decisions/2026-10-17-user-account-absent-elements.md.' },
+      { elementId: 'P1X-0196', field: 'mfaMethod', note: "Deliberate absence: 0..1 Condicional -- only TOTP exists, fixed by policy (securitySettingCatalog.js authentication.mfaMethod enum ['totp']), so a per-account copy records nothing. See docs/decisions/2026-10-17-user-account-absent-elements.md." },
+      { elementId: 'P1X-0201', field: 'mfaLockedUntil', note: "Deliberate absence: 0..1 Condicional -- its condition never holds: no MFA lock-duration policy exists, and the mfaLocked flag is cleared only by an administrator's reset-mfa. See docs/decisions/2026-10-17-user-account-absent-elements.md." }
     ],
     extra: [
       { key: 'accountLockedUntil', note: "Deliberate local extension: the expiry of RF001 AC2's temporary password lock (#952), which every password check reads; dict-02 has no password-side lock expiry." },
