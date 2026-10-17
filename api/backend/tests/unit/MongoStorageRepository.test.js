@@ -65,60 +65,6 @@ function makeDb(collections) {
 
 describe('MongoStorageRepository', () => {
   describe('findStorageHierarchyForBox', () => {
-    // Issue #418: dict-02 StorageAssignment.facilityId/roomId (ELM-0168/0169)
-    // must resolve via the FREEZER's roomId -> Room.facilityId chain, not
-    // stay hardcoded null like #402 left them.
-    it('resolves facilityId/roomId via the freezer storageContainer and room (#418)', async () => {
-      const boxObjId = new ObjectId();
-      const freezerId = new ObjectId();
-      const roomId = new ObjectId();
-      const facilityId = new ObjectId();
-
-      const storagePaths = makeCollection({
-        findOne: vi.fn().mockResolvedValueOnce({
-          rackId: new ObjectId(),
-          shelfId: new ObjectId(),
-          freezerId
-        })
-      });
-      const storageContainers = makeCollection({
-        findOne: vi.fn().mockResolvedValueOnce({ _id: freezerId, roomId })
-      });
-      const rooms = makeCollection({
-        findOne: vi.fn().mockResolvedValueOnce({ _id: roomId, facilityId })
-      });
-      const db = makeDb({ storagePaths, storageContainers, rooms });
-      const repo = new MongoStorageRepository(db);
-
-      const result = await repo.findStorageHierarchyForBox(boxObjId, {});
-
-      expect(result.facilityId).toBe(String(facilityId));
-      expect(result.roomId).toBe(String(roomId));
-    });
-
-    it('leaves facilityId/roomId null when the freezer has no roomId', async () => {
-      const boxObjId = new ObjectId();
-      const freezerId = new ObjectId();
-
-      const storagePaths = makeCollection({
-        findOne: vi.fn().mockResolvedValueOnce({
-          rackId: new ObjectId(),
-          shelfId: new ObjectId(),
-          freezerId
-        })
-      });
-      const storageContainers = makeCollection({
-        findOne: vi.fn().mockResolvedValueOnce({ _id: freezerId, roomId: null })
-      });
-      const db = makeDb({ storagePaths, storageContainers });
-      const repo = new MongoStorageRepository(db);
-
-      const result = await repo.findStorageHierarchyForBox(boxObjId, {});
-
-      expect(result.facilityId).toBeNull();
-      expect(result.roomId).toBeNull();
-    });
-
     it('leaves everything null when there is no StoragePath and the box itself cannot be found either', async () => {
       const boxObjId = new ObjectId();
       const storagePaths = makeCollection({ findOne: vi.fn().mockResolvedValueOnce(null) });
@@ -131,23 +77,19 @@ describe('MongoStorageRepository', () => {
       expect(result).toEqual({
         rackId: null,
         shelfId: null,
-        equipmentId: null,
-        roomId: null,
-        facilityId: null
+        equipmentId: null
       });
     });
 
     // #654: storagePaths is never written anywhere in api/backend/src, so
     // every real box hits this branch -- without the live fallback, dict-02's
-    // hierarchy-enrichment fields (facilityId/roomId/equipmentId on
-    // StorageAssignment) silently never populate for any real box.
+    // hierarchy-enrichment field (equipmentId on StorageAssignment) silently
+    // never populates for any real box.
     it('#654: falls back to a live parent_id walk when there is no StoragePath document', async () => {
       const boxObjId = new ObjectId();
       const rackId = new ObjectId();
       const shelfId = new ObjectId();
       const freezerId = new ObjectId();
-      const roomId = new ObjectId();
-      const facilityId = new ObjectId();
 
       const storagePaths = makeCollection({ findOne: vi.fn().mockResolvedValueOnce(null) });
       const storageBoxes = makeCollection({
@@ -157,15 +99,9 @@ describe('MongoStorageRepository', () => {
         findOne: vi.fn()
           .mockResolvedValueOnce({ _id: rackId, containerType: 'RACK', parent_id: shelfId })
           .mockResolvedValueOnce({ _id: shelfId, containerType: 'SHELF', parent_id: freezerId })
-          .mockResolvedValueOnce({ _id: freezerId, containerType: 'FREEZER', parent_id: null, roomId })
-          // findFacilityAndRoomForFreezer's own lookup, called with the
-          // resolved freezerId once the walk above completes.
-          .mockResolvedValueOnce({ _id: freezerId, roomId })
+          .mockResolvedValueOnce({ _id: freezerId, containerType: 'FREEZER', parent_id: null })
       });
-      const rooms = makeCollection({
-        findOne: vi.fn().mockResolvedValueOnce({ _id: roomId, facilityId })
-      });
-      const db = makeDb({ storagePaths, storageBoxes, storageContainers, rooms });
+      const db = makeDb({ storagePaths, storageBoxes, storageContainers });
       const repo = new MongoStorageRepository(db);
 
       const result = await repo.findStorageHierarchyForBox(boxObjId, {});
@@ -173,9 +109,7 @@ describe('MongoStorageRepository', () => {
       expect(result).toEqual({
         rackId: String(rackId),
         shelfId: String(shelfId),
-        equipmentId: String(freezerId),
-        roomId: String(roomId),
-        facilityId: String(facilityId)
+        equipmentId: String(freezerId)
       });
     });
 
@@ -199,8 +133,7 @@ describe('MongoStorageRepository', () => {
           .mockResolvedValueOnce({ _id: drawerId, containerType: 'DRAWER', parent_id: rackId })
           .mockResolvedValueOnce({ _id: rackId, containerType: 'RACK', parent_id: shelfId })
           .mockResolvedValueOnce({ _id: shelfId, containerType: 'SHELF', parent_id: freezerId })
-          .mockResolvedValueOnce({ _id: freezerId, containerType: 'FREEZER', parent_id: null, roomId: null })
-          .mockResolvedValueOnce({ _id: freezerId, roomId: null })
+          .mockResolvedValueOnce({ _id: freezerId, containerType: 'FREEZER', parent_id: null })
       });
       const db = makeDb({ storagePaths, storageBoxes, storageContainers });
       const repo = new MongoStorageRepository(db);

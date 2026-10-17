@@ -107,11 +107,11 @@ test('the native-build scan finds the helpers it guards', () => {
 });
 
 test('a declaration with no native build is reported (control row)', () => {
-  const fake = { indexes: () => [[{ notBuiltAnywhere: 1 }, {}], [{ name: 1 }, { unique: true }]] };
+  const fake = { indexes: () => [[{ notBuiltAnywhere: 1 }, {}], [{ organizationId: 1 }, { unique: true }]] };
   const missing = unbuilt([{ file: 'Fake.js', schema: fake }], nativeBuilds());
-  // {name:1} IS built (facilityIndexes.js) but only as a lookup index, so
-  // declaring it unique must still be reported.
-  assert.deepEqual(missing, ['Fake.js: {notBuiltAnywhere:1}', 'Fake.js: {name:1} unique']);
+  // {organizationId:1} IS built (physicalChainIndexes.js) but only as a
+  // non-unique index, so declaring it unique must still be reported.
+  assert.deepEqual(missing, ['Fake.js: {notBuiltAnywhere:1}', 'Fake.js: {organizationId:1} unique']);
 });
 
 test('every index a Mongoose schema declares is built natively (#941)', () => {

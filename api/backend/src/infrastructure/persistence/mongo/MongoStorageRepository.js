@@ -150,10 +150,6 @@ class MongoStorageRepository {
    * equipment chain for a box via its StoragePath when one exists, falling
    * back to a live parent_id walk (#654) when it doesn't — which is every
    * real box today, since nothing writes storagePaths.
-   *
-   * facilityId/roomId (ELM-0168/0169, #418) resolve by walking up from the
-   * freezer's StorageContainer.roomId to Room.facilityId — best-effort,
-   * since a FREEZER isn't required to have a Room assigned.
    * @param {ObjectId} boxObjId
    * @param {import('mongodb').ClientSession} [session]
    */
@@ -175,43 +171,10 @@ class MongoStorageRepository {
       }
     }
 
-    const { roomId, facilityId } = await this.findFacilityAndRoomForFreezer(freezerId, session);
-
     return {
       rackId,
       shelfId,
-      equipmentId: freezerId ? String(freezerId) : null,
-      roomId,
-      facilityId
-    };
-  }
-
-  /**
-   * dict-02 StorageAssignment.facilityId/roomId (ELM-0168/0169, #418):
-   * resolve a FREEZER StorageContainer's Room, then that Room's Facility.
-   * @param {ObjectId} [freezerId]
-   * @param {import('mongodb').ClientSession} [session]
-   */
-  async findFacilityAndRoomForFreezer(freezerId, session) {
-    if (!freezerId) {
-      return { roomId: null, facilityId: null };
-    }
-
-    const storageContainersCollection = this.db.collection('storageContainers');
-    const freezer = await storageContainersCollection.findOne({ _id: freezerId }, { session });
-    if (!freezer || !freezer.roomId) {
-      return { roomId: null, facilityId: null };
-    }
-
-    const roomsCollection = this.db.collection('rooms');
-    const room = await roomsCollection.findOne({ _id: freezer.roomId }, { session });
-    if (!room) {
-      return { roomId: String(freezer.roomId), facilityId: null };
-    }
-
-    return {
-      roomId: String(freezer.roomId),
-      facilityId: room.facilityId ? String(room.facilityId) : null
+      equipmentId: freezerId ? String(freezerId) : null
     };
   }
 

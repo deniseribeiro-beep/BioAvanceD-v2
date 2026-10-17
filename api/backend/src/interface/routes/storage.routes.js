@@ -76,10 +76,11 @@ router.use((req, res, next) => {
 // allocation freezes #859's status quo rather than resolving it; that
 // question stays open.
 //
-// The other four files borrowing 'createPatient' (equipment.routes.js,
-// facility.routes.js, room.routes.js, routes/eConsent.js) are deliberately
-// left alone here -- see #888 for why folding them in would bury the
-// catalog change, which is the actually-risky part.
+// The other two files borrowing 'createPatient' (equipment.routes.js,
+// routes/eConsent.js) are deliberately left alone here; facility.routes.js
+// and room.routes.js, which also borrowed it, were retired (#1379). See #888
+// for why folding them in would bury the catalog change, which is the
+// actually-risky part.
 
 // ==================== IDENTIFICADOR DA AMOSTRA (#1216) ====================
 // The create response names a specimen by its canonical specimenId, and the

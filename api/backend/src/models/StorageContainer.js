@@ -42,14 +42,6 @@ const StorageContainerSchema = new mongoose.Schema(
       comment: "null para FREEZER, SHELF_ID para RACK, FREEZER_ID para SHELF",
     },
 
-    // dict-02 StorageAssignment.roomId (ELM-0169): sala controlada onde o
-    // equipamento está instalado. Aplicável apenas a FREEZER.
-    roomId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Room",
-      default: null,
-    },
-
     // Apenas Freezers
     temperature: {
       type: Number,
@@ -126,11 +118,6 @@ StorageContainerSchema.pre("save", async function (next) {
   // Validação: temperatura apenas para FREEZER
   if (this.containerType !== "FREEZER" && this.temperature !== null) {
     throw new Error("Apenas FREEZER pode ter temperatura");
-  }
-
-  // Validação: roomId apenas para FREEZER
-  if (this.containerType !== "FREEZER" && this.roomId) {
-    throw new Error("Apenas FREEZER pode ter roomId");
   }
 
   // Verificar hierarquia correta (SHELF pai de RACK)

@@ -3,8 +3,8 @@ const logger = require('./logger');
 /**
  * #941: build one non-unique LOOKUP index, best-effort, with its own catch.
  *
- * Shared by `storageIndexes.js` and `facilityIndexes.js` rather than copied
- * into each, because the failure MESSAGE is the part that matters and a
+ * Shared by `sampleIndexes.js`, `sessionIndexes.js` and `storageIndexes.js`
+ * rather than copied into each, because the failure MESSAGE is the part that matters and a
  * second copy of it would drift.
  *
  * ## Why this is separate from the unique-index builders

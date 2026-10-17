@@ -12,7 +12,6 @@
  */
 const { CANONICAL_COLLECTIONS } = require('../config/collections');
 const { ensureConfigurationReleaseIndexes } = require('../utils/configurationReleaseIndexes');
-const { ensureFacilityIndexes, ensureRoomIndexes } = require('../utils/facilityIndexes');
 const {
   ensureCanonicalModelReleaseIndexes,
   ensureGovernanceInvariantCatalogIndexes,
@@ -39,8 +38,6 @@ const {
 
 // Collection names as each helper's own callers resolve them.
 const INDEX_TARGETS = [
-  { collection: 'facilities', ensure: ensureFacilityIndexes },
-  { collection: 'rooms', ensure: ensureRoomIndexes },
   { collection: CANONICAL_COLLECTIONS.participantIdentities, ensure: ensureParticipantIdentityIndexes },
   { collection: CANONICAL_COLLECTIONS.samples, ensure: ensureSampleIndexes },
   { collection: 'sessions', ensure: ensureSessionIndexes },
