@@ -2,6 +2,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const importService = require('../services/import.service');
+const callerCreateOrganization = require('../services/callerCreateOrganization.service');
 const logService = require('../services/log.service');
 const logger = require('../utils/logger');
 const { UPLOADS_BASE } = require('../config/uploadConfig');
@@ -196,9 +197,23 @@ class ImportController {
           case 'patients':
             results = await importService.importPatients(db, file);
             break;
-          case 'samples':
-            results = await importService.importSamples(db, file);
+          case 'samples': {
+            // #1376, #1192: resolved before any row is read, so a refusal
+            // writes nothing; the sample's organizationId comes from the
+            // caller's scope, as on the LGPD import.
+            let organizationId;
+            try {
+              ({ organizationId } = await callerCreateOrganization.resolveCallerCreateOrganization(db, {
+                userId: req.user?.userID,
+                requested: typeof req.body?.organizationId === 'string' ? req.body.organizationId.trim() : undefined
+              }));
+            } catch (scopeError) {
+              importService.cleanupFile(file.path);
+              return res.status(scopeError.statusCode || 403).json({ success: false, error: scopeError.message });
+            }
+            results = await importService.importSamples(db, file, { organizationId });
             break;
+          }
           case 'temperature':
             results = await importService.importTemperature(db, file);
             break;

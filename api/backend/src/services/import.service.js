@@ -555,7 +555,9 @@ class ImportService {
   /**
    * Processa importação de amostras
    */
-  async importSamples(db, file) {
+  async importSamples(db, file, options = {}) {
+    // #1376: the organization the controller resolved from the caller's scope.
+    const organizationId = options.organizationId || null;
     try {
       const ext = path.extname(file.originalname).toLowerCase();
       const samplesCollection = await getCollection(db, 'samples');
@@ -584,6 +586,16 @@ class ImportService {
             }
 
             const sample = SampleModel.create(sampleData);
+            // #1376, #1192: the tenancy key comes from the caller's scope,
+            // never from the row (SampleModel.create nulls a row's own). A
+            // named collection site is kept; a row naming none gets the
+            // organization.
+            if (organizationId && (sample.collectionSite === undefined
+              || sample.collectionSite === null
+              || sample.collectionSite === '')) {
+              sample.collectionSite = organizationId;
+            }
+            sample.organizationId = organizationId ? String(organizationId) : null;
             // #1313 (RF023 AC3): the sample and its SPECIMEN_UPSERTED commit together.
             // #1378: after the migration window the inserted sample has no barcode.
             const insertResult = await insertSampleWithProjection(db, samplesCollection, withoutLegacyBarcode(sample), { sourceService: 'import.service' });
@@ -690,6 +702,16 @@ class ImportService {
             }
 
             const sample = SampleModel.create(sampleData);
+            // #1376, #1192: the tenancy key comes from the caller's scope,
+            // never from the row (SampleModel.create nulls a row's own). A
+            // named collection site is kept; a row naming none gets the
+            // organization.
+            if (organizationId && (sample.collectionSite === undefined
+              || sample.collectionSite === null
+              || sample.collectionSite === '')) {
+              sample.collectionSite = organizationId;
+            }
+            sample.organizationId = organizationId ? String(organizationId) : null;
             // #1313 (RF023 AC3): the sample and its SPECIMEN_UPSERTED commit together.
             // #1378: after the migration window the inserted sample has no barcode.
             const insertResult = await insertSampleWithProjection(db, samplesCollection, withoutLegacyBarcode(sample), { sourceService: 'import.service' });

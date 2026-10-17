@@ -483,6 +483,64 @@ describe('ImportService.importSamples (CSV)', () => {
   });
 });
 
+// #1376, #1192: the organization the caller's scope resolved is the
+// sample's tenancy key; a row never supplies it.
+describe('ImportService.importSamples stamps the caller organization (#1376)', () => {
+  const CSV_HEADER = 'participantId,sampleType,sampleOrigin,extractionProtocol,quantity,quality,linkedProject,registeredAt';
+
+  beforeEach(() => {
+    vi.spyOn(SampleGraphValidator.prototype, 'validateSampleCompliance').mockResolvedValue({ suggestedStatus: 'QUARANTINE' });
+  });
+
+  it('a JSON row is stamped with the organization and takes it as its site', async () => {
+    const filePath = writeTmpFile('org.json', JSON.stringify(validSample()));
+    const collection = makeSamplesCollection();
+
+    const result = await importService.importSamples(makeDb(collection), { path: filePath, originalname: 'org.json' }, { organizationId: 'org-a' });
+
+    expect(result).toEqual({ success: 1, errors: [], total: 1 });
+    expect(collection.inserted[0]).toMatchObject({ organizationId: 'org-a', collectionSite: 'org-a' });
+  });
+
+  it('a CSV row is stamped with the organization and takes it as its site', async () => {
+    const filePath = writeTmpFile('org.csv', `${CSV_HEADER}\n12345678,PLASMA,VENOUS_BLOOD,TUBE_EDTA,1.5,GOOD,Projeto QA,2026-01-01\n`);
+    const collection = makeSamplesCollection();
+
+    const result = await importService.importSamples(makeDb(collection), { path: filePath, originalname: 'org.csv' }, { organizationId: 'org-a' });
+
+    expect(result).toEqual({ success: 1, errors: [], total: 1 });
+    expect(collection.inserted[0]).toMatchObject({ organizationId: 'org-a', collectionSite: 'org-a' });
+  });
+
+  it('a JSON row naming its collection site keeps it and is still stamped with the organization', async () => {
+    const filePath = writeTmpFile('org-site.json', JSON.stringify(validSample({ collectionSite: 'org-b' })));
+    const collection = makeSamplesCollection();
+
+    await importService.importSamples(makeDb(collection), { path: filePath, originalname: 'org-site.json' }, { organizationId: 'org-a' });
+
+    expect(collection.inserted[0]).toMatchObject({ organizationId: 'org-a', collectionSite: 'org-b' });
+  });
+
+  it("a JSON row carrying its own organizationId is stamped with the caller's instead", async () => {
+    const filePath = writeTmpFile('org-row.json', JSON.stringify(validSample({ organizationId: 'org-x' })));
+    const collection = makeSamplesCollection();
+
+    await importService.importSamples(makeDb(collection), { path: filePath, originalname: 'org-row.json' }, { organizationId: 'org-a' });
+
+    expect(collection.inserted[0].organizationId).toBe('org-a');
+  });
+
+  it('with no organization resolved a row keeps organizationId null, as before', async () => {
+    const filePath = writeTmpFile('no-org.json', JSON.stringify(validSample({ organizationId: 'org-x' })));
+    const collection = makeSamplesCollection();
+
+    await importService.importSamples(makeDb(collection), { path: filePath, originalname: 'no-org.json' });
+
+    expect(collection.inserted[0].organizationId).toBeNull();
+    expect(collection.inserted[0].collectionSite).toBeNull();
+  });
+});
+
 describe('ImportService.importSamples (unsupported extension / top-level error)', () => {
   it('returns empty results for an unsupported file extension', async () => {
     const filePath = writeTmpFile('data.txt', 'irrelevant');
