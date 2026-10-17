@@ -109,6 +109,14 @@ function patientValue(patient, field) {
   return decrypted === undefined ? null : decrypted;
 }
 
+// #1386: an identity update removes the old <field>Encrypted envelope of
+// every ciphertext it sets. An empty $unset is refused before MongoDB 5.0,
+// so it is sent only when it names a field.
+function identityUpdateOf(setDoc) {
+  const legacyUnset = participantIdentityService.legacyCiphertextUnset(setDoc);
+  return Object.keys(legacyUnset).length > 0 ? { $set: setDoc, $unset: legacyUnset } : { $set: setDoc };
+}
+
 /**
  * #1166 slice 4: move the participant's contact off `patients` and onto its
  * ParticipantIdentity record, the only place dict-02 puts it. Safe to run
@@ -160,7 +168,7 @@ async function moveParticipantContactToIdentity(db) {
       try {
         await identityCollection.updateOne(
           { participantId: patient.participantId },
-          { $set: { ...participantIdentityService.encryptIdentityFields(contactUpdate), updatedAt: new Date() } }
+          identityUpdateOf({ ...participantIdentityService.encryptIdentityFields(contactUpdate), updatedAt: new Date() })
         );
       } catch (error) {
         if (!isDuplicateKey(error)) throw error;
@@ -199,7 +207,7 @@ async function moveParticipantContactToIdentity(db) {
     try {
       await identityCollection.updateOne(
         { participantId: identity.participantId },
-        { $set: { ...reencrypted, updatedAt: new Date() } }
+        identityUpdateOf({ ...reencrypted, updatedAt: new Date() })
       );
       summary.identitiesRehashed += 1;
     } catch (error) {

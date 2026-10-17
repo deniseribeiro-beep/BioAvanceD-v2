@@ -365,6 +365,53 @@ describe('PatientService.updatePatient additional branches', () => {
     tsSpy.mockRestore();
   });
 
+  // #1386: the identity sync removes the old <field>Encrypted envelope of
+  // every ciphertext name its $set writes, a cleared one included, and sends
+  // no $unset when it writes none.
+  describe('#1386: the identity sync removes the old <field>Encrypted names', () => {
+    function identitySyncDb() {
+      const patientsCollection = makeFakeCollection({
+        updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),
+        findOne: vi.fn().mockResolvedValue({ participantId: '12345678' })
+      });
+      const identitiesCollection = makeFakeCollection();
+      return { identitiesCollection, db: makeFakeDb({ patients: patientsCollection, participantIdentities: identitiesCollection }) };
+    }
+
+    it('unsets the old name of a field it re-encrypts', async () => {
+      const { identitiesCollection, db } = identitySyncDb();
+
+      await patientService.updatePatient(db, '12345678', { patientName: 'Maria Nova' });
+
+      const update = identitiesCollection.updateOne.mock.calls[0][1];
+      expect(update.$set.patientNameCiphertext).toBeTruthy();
+      expect(update.$unset).toEqual({ patientNameEncrypted: '' });
+    });
+
+    it('unsets the old name of a field it clears', async () => {
+      const { identitiesCollection, db } = identitySyncDb();
+
+      await patientService.updatePatient(db, '12345678', { birthDate: null });
+
+      const update = identitiesCollection.updateOne.mock.calls[0][1];
+      expect(update.$set.birthDateCiphertext).toBeNull();
+      expect(update.$unset).toEqual({ birthDateEncrypted: '' });
+    });
+
+    it('sends no $unset when it writes no ciphertext name (keyless stack)', async () => {
+      const keyRegistry = require('../../src/config/keyRegistry');
+      const keysSpy = vi.spyOn(keyRegistry, 'getActiveKey').mockReturnValue(null);
+      const { identitiesCollection, db } = identitySyncDb();
+
+      await patientService.updatePatient(db, '12345678', { patientName: 'Maria Nova' });
+
+      const update = identitiesCollection.updateOne.mock.calls[0][1];
+      expect(update.$set.patientName).toBe('Maria Nova');
+      expect(update).not.toHaveProperty('$unset');
+      keysSpy.mockRestore();
+    });
+  });
+
   it('converts a height value under 3 (meters) to centimeters', async () => {
     const patientsCollection = makeFakeCollection({
       updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }),

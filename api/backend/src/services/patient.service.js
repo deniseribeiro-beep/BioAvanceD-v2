@@ -1184,11 +1184,17 @@ class PatientService {
           ...clearedSiblings,
         };
 
+        // #1386: the old <field>Encrypted envelope goes with the rewrite. It
+        // is built from the $set after clearedSiblings, so a cleared field's
+        // old envelope goes too; an empty $unset (refused before MongoDB 5.0)
+        // is not sent.
+        const legacyUnset = participantIdentityService.legacyCiphertextUnset(encryptedIdentityUpdate);
         const identityCollection = await this.getIdentityCollection(db);
         await identityCollection.updateOne(
           { participantId: updatedPatient.participantId },
           {
             $set: encryptedIdentityUpdate,
+            ...(Object.keys(legacyUnset).length > 0 ? { $unset: legacyUnset } : {}),
             // #1386: a patient with no identity record gets one here.
             $setOnInsert: ParticipantIdentityModel.onInsertFields(),
           },

@@ -295,6 +295,62 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
     });
   });
 
+  // #1386: an update writer removes the old <field>Encrypted envelope of
+  // every ciphertext it sets, and sends no $unset when it sets none.
+  describe('#1386: a rewrite removes the old <field>Encrypted names', () => {
+    function legacyIdentity(participantId) {
+      const stored = identityCryptoService.encryptIdentityFields({
+        participantId,
+        patientName: 'Paciente Legado',
+        birthDate: new Date(1990, 0, 20),
+        identityDocument: '11144477735',
+      });
+      for (const field of ['patientName', 'birthDate', 'identityDocument']) {
+        stored[`${field}Encrypted`] = stored[`${field}Ciphertext`];
+        delete stored[`${field}Ciphertext`];
+      }
+      return stored;
+    }
+
+    it('unsets the old names on the match branch', async () => {
+      patientsCollection.findOne.mockResolvedValueOnce({ _id: '507f1f77bcf86cd799439011', participantId: '77777777' });
+      identitiesCollection.findOne.mockResolvedValueOnce(legacyIdentity('77777777'));
+
+      await patientIdentityService.matchOrUpsertParticipant(db, { participantId: '77777777' });
+
+      const update = identitiesCollection.updateOne.mock.calls[0][1];
+      expect(update.$unset).toEqual({ patientNameEncrypted: '', birthDateEncrypted: '', identityDocumentEncrypted: '' });
+      expect(identityCryptoService.decryptIdentity(update.$set)).toMatchObject({
+        patientName: 'Paciente Legado',
+        identityDocument: '11144477735',
+      });
+    });
+
+    it('unsets the old names on the new-participant branch', async () => {
+      identityCandidates([]);
+      patientsCollection.insertOne.mockResolvedValueOnce({ insertedId: '888f1f77bcf86cd799439888' });
+
+      await patientIdentityService.matchOrUpsertParticipant(db, {
+        patientName: 'Bruno Rocha',
+        birthDate: '05/06/1975',
+      });
+
+      const update = identitiesCollection.updateOne.mock.calls[0][1];
+      expect(update.$unset).toMatchObject({ patientNameEncrypted: '', birthDateEncrypted: '' });
+    });
+
+    it('sends no $unset when the match branch sets no ciphertext', async () => {
+      patientsCollection.findOne.mockResolvedValueOnce({ _id: '507f1f77bcf86cd799439011', participantId: '77777777' });
+      identitiesCollection.findOne.mockResolvedValueOnce(null);
+
+      await patientIdentityService.matchOrUpsertParticipant(db, { participantId: '77777777' });
+
+      const update = identitiesCollection.updateOne.mock.calls[0][1];
+      expect(Object.keys(update.$set)).toEqual(['updatedAt']);
+      expect(update).not.toHaveProperty('$unset');
+    });
+  });
+
   // #1113: the identity fallbacks were built from the PATIENTS document,
   // which has carried no civil identity since #575. Every fixture above is
   // pre-#575-shaped -- the patient still carries patientName/birthDate --

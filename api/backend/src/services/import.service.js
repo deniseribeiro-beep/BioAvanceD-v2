@@ -448,10 +448,15 @@ class ImportService {
             if (Object.prototype.hasOwnProperty.call(merged, 'identityDocument')) identityUpdate.identityDocument = merged.identityDocument;
 
             const identityCollection = getCollection(db, 'participantIdentities');
+            const identitySet = participantIdentityService.encryptIdentityFields(identityUpdate);
+            // #1386: the old <field>Encrypted envelope goes with the rewrite,
+            // and an empty $unset (refused before MongoDB 5.0) is not sent.
+            const legacyUnset = participantIdentityService.legacyCiphertextUnset(identitySet);
             await identityCollection.updateOne(
               { participantId: merged.participantId },
               {
-                $set: participantIdentityService.encryptIdentityFields(identityUpdate),
+                $set: identitySet,
+                ...(Object.keys(legacyUnset).length > 0 ? { $unset: legacyUnset } : {}),
                 // #1386: a merged participant with no identity record gets one here.
                 $setOnInsert: ParticipantIdentityModel.onInsertFields(),
               },

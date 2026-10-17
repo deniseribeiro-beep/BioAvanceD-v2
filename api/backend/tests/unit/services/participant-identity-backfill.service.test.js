@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createRequire } from 'module';
 
 process.env.ENCRYPTION_KEY = 'dGVzdGtleXRlc3RrZXl0ZXN0a2V5dGVzdGtleXQ=';
@@ -456,5 +456,73 @@ describe('participant-identity-backfill.service#checkParticipantIdentityParity c
     const parity = await checkParticipantIdentityParity(db);
 
     expect(parity).toEqual({ isFullParity: true, totalPatients: 1, missing: [], drifted: [] });
+  });
+});
+
+// #1386: both identity writes remove the old <field>Encrypted envelope of
+// every ciphertext they set, and send no $unset when they set none.
+describe('participant-identity-backfill.service#moveParticipantContactToIdentity old ciphertext names (#1386)', () => {
+  const participantIdentityService = require('../../../src/services/participantIdentity.service');
+  const { encryptValue } = require('../../../src/utils/fieldEncryption');
+
+  function recordUpdates(collection) {
+    const updates = [];
+    const updateOne = collection.updateOne.bind(collection);
+    collection.updateOne = async (filter, update) => {
+      updates.push(update);
+      return updateOne(filter, update);
+    };
+    return updates;
+  }
+
+  it('the contact move unsets the old name of the contact it writes', async () => {
+    const db = createFakeDb({
+      patients: [{ _id: 'p1', participantId: '81818181', email: 'novo@example.com' }],
+      participantIdentities: [{ _id: 'i1', participantId: '81818181', emailEncrypted: encryptValue('antigo@example.com') }]
+    });
+    const updates = recordUpdates(db.collections.participantIdentities);
+
+    await moveParticipantContactToIdentity(db);
+
+    expect(updates[0].$unset).toEqual({ emailEncrypted: '' });
+    const identity = db.collections.participantIdentities.docs[0];
+    expect(identity).not.toHaveProperty('emailEncrypted');
+    expect(participantIdentityService.decryptIdentity(identity).email).toBe('novo@example.com');
+  });
+
+  it('the re-encryption unsets the old name of the contact it rewrites', async () => {
+    const db = createFakeDb({
+      patients: [{ _id: 'p1', participantId: '82828282' }],
+      participantIdentities: [{ _id: 'i1', participantId: '82828282', phone: '11966665555', phoneEncrypted: encryptValue('11966665555') }]
+    });
+    const updates = recordUpdates(db.collections.participantIdentities);
+
+    const { summary } = await moveParticipantContactToIdentity(db);
+
+    expect(summary.identitiesRehashed).toBe(1);
+    expect(updates[0].$unset).toEqual({ phoneEncrypted: '' });
+    const identity = db.collections.participantIdentities.docs[0];
+    expect(identity).not.toHaveProperty('phoneEncrypted');
+    expect(identity.phoneCiphertext).toBeTruthy();
+  });
+
+  it('sends no $unset when a write sets no ciphertext (keyless stack)', async () => {
+    const keyRegistry = require('../../../src/config/keyRegistry');
+    const keysSpy = vi.spyOn(keyRegistry, 'getActiveKey').mockReturnValue(null);
+    const db = createFakeDb({
+      patients: [{ _id: 'p1', participantId: '83838383', email: 'semchave@example.com' }],
+      participantIdentities: [{ _id: 'i1', participantId: '83838383' }]
+    });
+    const updates = recordUpdates(db.collections.participantIdentities);
+
+    try {
+      await moveParticipantContactToIdentity(db);
+    } finally {
+      keysSpy.mockRestore();
+    }
+
+    expect(updates.length).toBeGreaterThan(0);
+    expect(updates[0].$set.email).toBe('semchave@example.com');
+    for (const update of updates) expect(update).not.toHaveProperty('$unset');
   });
 });

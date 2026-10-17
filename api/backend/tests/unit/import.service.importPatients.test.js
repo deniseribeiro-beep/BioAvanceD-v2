@@ -243,6 +243,42 @@ describe('ImportService.importPatients (JSON)', () => {
     expect(update.$set).not.toHaveProperty('identityStatus');
   });
 
+  // #1386: the merge removes the old <field>Encrypted envelope of every
+  // ciphertext it sets, and sends no $unset when it sets none.
+  it('#1386: the merge unsets the old <field>Encrypted name of each ciphertext it sets', async () => {
+    const filePath = writeTmpFile('merge-legacy.json', JSON.stringify(validPatient()));
+    const patients = makeCollection({
+      existing: { _id: 'existing-1', participantId: '10203040', identityDocument: '12345678900', birthDate: '1985-05-20' },
+    });
+    const participantIdentities = makeCollection({
+      existing: { participantId: '10203040', identityDocumentEncrypted: { iv: 'old' } },
+    });
+
+    await importService.importPatients(makeDb({ patients, participantIdentities }), { path: filePath, originalname: 'merge-legacy.json' });
+
+    const { update } = participantIdentities.updates[0];
+    expect(update.$set.identityDocumentCiphertext).toBeTruthy();
+    expect(update.$unset).toMatchObject({ patientNameEncrypted: '', birthDateEncrypted: '', identityDocumentEncrypted: '', emailEncrypted: '' });
+  });
+
+  it('#1386: a merge that sets no ciphertext (keyless stack) sends no $unset', async () => {
+    const keyRegistry = require2('../../src/config/keyRegistry');
+    vi.spyOn(keyRegistry, 'getActiveKey').mockReturnValue(null);
+    const filePath = writeTmpFile('merge-keyless.json', JSON.stringify(validPatient()));
+    const patients = makeCollection({
+      existing: { _id: 'existing-1', participantId: '10203040', identityDocument: '12345678900', birthDate: '1985-05-20' },
+    });
+    const participantIdentities = makeCollection({
+      existing: { participantId: '10203040', identityDocument: '12345678900' },
+    });
+
+    await importService.importPatients(makeDb({ patients, participantIdentities }), { path: filePath, originalname: 'merge-keyless.json' });
+
+    const { update } = participantIdentities.updates[0];
+    expect(update.$set.patientName).toBe('Maria Silva');
+    expect(update).not.toHaveProperty('$unset');
+  });
+
   it('dedups via identityDocumentHash (RF005/RNF007 #574), matching a record with no plaintext-queryable identityDocument left', async () => {
     const filePath = writeTmpFile('hash-match.json', JSON.stringify(validPatient()));
     const expectedHash = participantIdentityService.computeBlindIndex('identityDocument', '12345678900');

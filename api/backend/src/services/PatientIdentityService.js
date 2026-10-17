@@ -161,13 +161,19 @@ class participantIdentityService {
         updatedAt: new Date()
       };
       await participants.updateOne({ _id: existing._id }, { $set: update });
+      const identitySet = {
+        ...encryptedIdentityValues,
+        updatedAt: update.updatedAt,
+      };
+      // #1386: the old <field>Encrypted envelope goes with the rewrite. An
+      // empty $unset is refused before MongoDB 5.0, so it is sent only when
+      // it names a field.
+      const legacyUnset = identityCryptoService.legacyCiphertextUnset(identitySet);
       await identities.updateOne(
         { participantId: matchedParticipantId },
         {
-          $set: {
-            ...encryptedIdentityValues,
-            updatedAt: update.updatedAt,
-          },
+          $set: identitySet,
+          ...(Object.keys(legacyUnset).length > 0 ? { $unset: legacyUnset } : {}),
           // #1386: a participant matched without an identity record gets one here.
           $setOnInsert: ParticipantIdentityModel.onInsertFields(),
         },
@@ -203,14 +209,19 @@ class participantIdentityService {
       toInsert.clinicalUnitId = clinicalUnitId;
     }
     const result = await participants.insertOne(toInsert);
+    const identitySet = {
+      participantId: generatedParticipantId,
+      ...encryptedIdentityValues,
+      updatedAt: toInsert.updatedAt,
+    };
+    // #1386: a record left under a supplied participantId may still hold an
+    // old <field>Encrypted envelope; same rule as the match branch.
+    const legacyUnset = identityCryptoService.legacyCiphertextUnset(identitySet);
     await identities.updateOne(
       { participantId: generatedParticipantId },
       {
-        $set: {
-          participantId: generatedParticipantId,
-          ...encryptedIdentityValues,
-          updatedAt: toInsert.updatedAt,
-        },
+        $set: identitySet,
+        ...(Object.keys(legacyUnset).length > 0 ? { $unset: legacyUnset } : {}),
         $setOnInsert: ParticipantIdentityModel.onInsertFields(),
       },
       { upsert: true }
