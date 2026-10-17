@@ -147,12 +147,12 @@ const KNOWN_DRIFT = {
       { elementId: 'P1X-0348', field: 'participantIdentityId', note: 'TODO(#1330): 1..1 Core -- ParticipantIdentityModel has no id field of its own at all.' },
       { elementId: 'P1X-0354', field: 'identityDocumentCiphertext', note: 'TODO(#1330): 0..1 Condicional -- model stores identityDocument in the clear (see the identityDocument extra below), not as ciphertext.' },
       { elementId: 'P1X-0355', field: 'recordNumberCiphertext', note: 'TODO(#1330): 0..1 Condicional -- not emitted.' },
-      { elementId: 'P1X-0356', field: 'clinicalUnitId', note: 'TODO(#1330): 0..1 Condicional -- not emitted.' },
+      { elementId: 'P1X-0356', field: 'clinicalUnitId', note: 'Deliberate absence: 0..1 Condicional -- the clinical unit is Patient.clinicalUnitId, the tenancy key patient routes scope on; a copy here would go stale at a reparent. See docs/decisions/2026-10-17-participant-identity-names-and-fields.md.' },
       { elementId: 'P1X-0359', field: 'representativeIdentityDocumentCiphertext', note: 'TODO(#1330): 0..1 Condicional -- model stores representativeIdentityDocument in the clear (see the extra below), not as ciphertext.' },
       { elementId: 'P1X-0361', field: 'identityStatus', note: 'TODO(#1330): 1..1 Core -- not emitted.' },
       { elementId: 'P1X-0362', field: 'encryptionKeyVersion', note: 'TODO(#1330): 1..1 Core -- not emitted, consistent with no ciphertext field being emitted either.' },
-      { elementId: 'P1X-0363', field: 'lastVerifiedAt', note: 'TODO(#1330): 0..1 Condicional -- not emitted.' },
-      { elementId: 'P1X-0364', field: 'verifiedBy', note: 'TODO(#1330): 0..1 Condicional -- not emitted.' }
+      { elementId: 'P1X-0363', field: 'lastVerifiedAt', note: 'Deliberate absence: 0..1 Condicional -- its condition never holds: no flow verifies an identity, and re-identification only reads and audits it. See docs/decisions/2026-10-17-participant-identity-names-and-fields.md.' },
+      { elementId: 'P1X-0364', field: 'verifiedBy', note: 'Deliberate absence: 0..1 Condicional -- its condition never holds: no flow verifies an identity, and no Actor entity exists to reference. See docs/decisions/2026-10-17-participant-identity-names-and-fields.md.' }
     ],
     extra: [
       {
