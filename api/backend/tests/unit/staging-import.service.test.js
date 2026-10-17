@@ -175,6 +175,34 @@ describe('staging-import.service', () => {
       expect(result).toBe(storedDoc);
     });
 
+    // #1376: the worker that persists the rows has no request, so the
+    // uploader's organization is staged with the file, inside rawData.
+    it('stages the given organization as rawData.organizationId (#1376)', async () => {
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
+      vi.spyOn(fs, 'copyFileSync').mockImplementation(() => {});
+      const createSpy = vi.spyOn(StagingImport, 'create').mockResolvedValue({ jobId: 'j' });
+
+      const file = { path: '/tmp/upload-3', originalname: 'org.csv', mimetype: 'text/csv', size: 1 };
+      await stagingImportService.createStagingImport(file, { organizationId: 'org-a' });
+
+      const { rawData } = createSpy.mock.calls[0][0];
+      expect(rawData.organizationId).toBe('org-a');
+      expect(rawData.storageType).toBe('filesystem');
+    });
+
+    it('stages rawData.organizationId as null when no organization is given (#1376)', async () => {
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
+      vi.spyOn(fs, 'copyFileSync').mockImplementation(() => {});
+      const createSpy = vi.spyOn(StagingImport, 'create').mockResolvedValue({ jobId: 'j' });
+
+      const file = { path: '/tmp/upload-4', originalname: 'none.csv', mimetype: 'text/csv', size: 1 };
+      await stagingImportService.createStagingImport(file);
+
+      expect(createSpy.mock.calls[0][0].rawData.organizationId).toBeNull();
+    });
+
     // #941's index-wiring pin now lives in stagingImport.store.830.test.js:
     // the store ensures the jobId index on every collection it resolves.
 
@@ -256,13 +284,25 @@ describe('staging-import.service', () => {
       const file = { originalname: 'ok.csv' };
       const result = await stagingImportService.createBatchImportJob(file);
 
-      expect(createStagingImportSpy).toHaveBeenCalledWith(file);
+      expect(createStagingImportSpy).toHaveBeenCalledWith(file, { organizationId: null });
       expect(dispatchSpy).toHaveBeenCalledWith(stagingImportDoc);
       expect(result).toEqual({
         jobId: 'job-happy',
         stagingImport: stagingImportDoc,
         queueJob,
       });
+    });
+
+    it("passes the uploader's organization on to createStagingImport (#1376)", async () => {
+      const createStagingImportSpy = vi
+        .spyOn(stagingImportService, 'createStagingImport')
+        .mockResolvedValue({ jobId: 'job-org', fileName: 'org.csv' });
+      vi.spyOn(stagingImportService, 'dispatchBatchJob').mockResolvedValue({ id: 'q-org' });
+
+      const file = { originalname: 'org.csv' };
+      await stagingImportService.createBatchImportJob(file, { organizationId: 'org-a' });
+
+      expect(createStagingImportSpy).toHaveBeenCalledWith(file, { organizationId: 'org-a' });
     });
 
     it('failure path: when dispatchBatchJob throws, records failure on StagingImport and rethrows', async () => {

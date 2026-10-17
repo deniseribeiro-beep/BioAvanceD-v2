@@ -815,6 +815,9 @@ class BatchValidationEngine {
    * bloquear linhas históricas que contenham apenas inventário de amostras.
    */
   async persistSample(db, rawRow, rowNumber, context = {}) {
+    // #1376, #1192: the uploader's organization stamps the sample only; the
+    // participant created below gets none from it.
+    const { organizationId = null, ...rowContext } = context;
     const sampleData = importLGPDService.parseSampleRow(this.buildSampleRow(rawRow));
     sampleData.participantId = sampleData.participantId ? String(sampleData.participantId).trim() : null;
     sampleData.sampleType = sampleData.sampleType ? String(sampleData.sampleType).trim() : null;
@@ -881,7 +884,7 @@ class BatchValidationEngine {
           source: 'batch-import',
           skipConsentNotification: true,
           skipBiomarkerArtifacts: true,
-          ...context,
+          ...rowContext,
         });
       }
 
@@ -895,11 +898,18 @@ class BatchValidationEngine {
         biomarkers: semanticCascade.biomarkers,
       };
 
+      // #1376: as POST /api/samples does, an unnamed collection site defaults
+      // to the uploader's organization. buildSampleRow maps no site column.
+      if (organizationId && (sampleData.collectionSite === undefined || sampleData.collectionSite === null || sampleData.collectionSite === '')) {
+        sampleData.collectionSite = organizationId;
+      }
+
       const createdSample = await sampleService.createSample(db, sampleData, {
         isImport: true,
         batchImport: true,
         source: 'batch-import',
-        ...context,
+        ...rowContext,
+        organizationId,
       });
 
       const biomarkerPayloads = this.buildBiomarkerObservationPayloads(rawRow, patient, createdSample);
@@ -1134,6 +1144,8 @@ class BatchValidationEngine {
 
     const storagePath = stagingImport.rawData?.storagePath;
     const fileName = stagingImport.fileName;
+    // #1376: stamped at upload by createStagingImport.
+    const organizationId = stagingImport.rawData?.organizationId || null;
 
     if (!storagePath || !fs.existsSync(storagePath)) {
       throw new Error('Arquivo bruto do staging não encontrado');
@@ -1198,7 +1210,7 @@ class BatchValidationEngine {
         const rowNumber = sourceLine !== undefined ? sourceLine : absoluteIndex + rowBaseNumber;
 
         const rowResult = dataType === 'samples'
-          ? await this.persistSample(db, rawRow, rowNumber)
+          ? await this.persistSample(db, rawRow, rowNumber, { organizationId })
           : await this.persistPatient(db, rawRow, rowNumber);
 
         result.processedRows += 1;

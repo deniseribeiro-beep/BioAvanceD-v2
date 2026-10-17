@@ -5,6 +5,7 @@ const require = createRequire(import.meta.url);
 
 const controller = require('../../src/controllers/import-batch.controller');
 const stagingImportService = require('../../src/services/staging-import.service');
+const callerCreateOrganization = require('../../src/services/callerCreateOrganization.service');
 const logger = require('../../src/utils/logger');
 const mongooseConnection = require('../../src/infrastructure/database/mongodb/connection');
 const fs = require('fs');
@@ -177,6 +178,13 @@ describe('import-batch.controller', () => {
   });
 
   describe('createBatchImport', () => {
+    const appDb = { name: 'app-db' };
+
+    beforeEach(() => {
+      vi.spyOn(callerCreateOrganization, 'resolveCallerCreateOrganization')
+        .mockResolvedValue({ organizationId: 'org-a', organizationScope: { scope: 'single' } });
+    });
+
     it('returns 400 when req.file is missing', async () => {
       const req = {};
       const res = createRes();
@@ -192,7 +200,9 @@ describe('import-batch.controller', () => {
 
     it('happy path: returns 202 with correct body shape and cleans up temp file', async () => {
       const req = {
-        file: { path: '/tmp/some-upload.csv', originalname: 'some-upload.csv' }
+        file: { path: '/tmp/some-upload.csv', originalname: 'some-upload.csv' },
+        app: { locals: { db: appDb } },
+        user: { userID: 'user-1' }
       };
       const res = createRes();
 
@@ -211,7 +221,7 @@ describe('import-batch.controller', () => {
 
       await controller.createBatchImport(req, res);
 
-      expect(stagingImportService.createBatchImportJob).toHaveBeenCalledWith(req.file);
+      expect(stagingImportService.createBatchImportJob).toHaveBeenCalledWith(req.file, { organizationId: 'org-a' });
       expect(fs.existsSync).toHaveBeenCalledWith(req.file.path);
       expect(unlinkSpy).toHaveBeenCalledWith(req.file.path);
       expect(res.status).toHaveBeenCalledWith(202);
@@ -229,7 +239,8 @@ describe('import-batch.controller', () => {
 
     it('happy path: does not attempt cleanup when temp file does not exist', async () => {
       const req = {
-        file: { path: '/tmp/gone.csv', originalname: 'gone.csv' }
+        file: { path: '/tmp/gone.csv', originalname: 'gone.csv' },
+        app: { locals: { db: appDb } }
       };
       const res = createRes();
 
@@ -248,7 +259,8 @@ describe('import-batch.controller', () => {
 
     it('error path: returns 500, logs error, and still attempts temp-file cleanup', async () => {
       const req = {
-        file: { path: '/tmp/broken.csv', originalname: 'broken.csv' }
+        file: { path: '/tmp/broken.csv', originalname: 'broken.csv' },
+        app: { locals: { db: appDb } }
       };
       const res = createRes();
 
@@ -268,6 +280,75 @@ describe('import-batch.controller', () => {
         error: 'Erro ao criar batch import',
         message: 'service exploded'
       });
+    });
+
+    // #1376: the worker that persists the rows has no request, so the
+    // uploader's organization is resolved here and staged with the file.
+    it("resolves the uploader's organization and hands it to createBatchImportJob (#1376)", async () => {
+      const req = {
+        file: { path: '/tmp/org.csv', originalname: 'org.csv' },
+        app: { locals: { db: appDb } },
+        user: { userID: 'user-7' },
+        body: { organizationId: '  org-b  ' }
+      };
+      const res = createRes();
+
+      callerCreateOrganization.resolveCallerCreateOrganization.mockResolvedValue({ organizationId: 'org-b' });
+      vi.spyOn(stagingImportService, 'createBatchImportJob').mockResolvedValue({
+        jobId: 'job-org',
+        stagingImport: { jobId: 's-org', status: 'staged', fileName: 'org.csv' }
+      });
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
+
+      await controller.createBatchImport(req, res);
+
+      expect(callerCreateOrganization.resolveCallerCreateOrganization).toHaveBeenCalledWith(appDb, {
+        userId: 'user-7',
+        requested: 'org-b'
+      });
+      expect(stagingImportService.createBatchImportJob).toHaveBeenCalledWith(req.file, { organizationId: 'org-b' });
+      expect(res.status).toHaveBeenCalledWith(202);
+    });
+
+    it("returns the helper's 403, removes the temp file and stages nothing when the uploader has no organization (#1376)", async () => {
+      const req = {
+        file: { path: '/tmp/no-org.csv', originalname: 'no-org.csv' },
+        app: { locals: { db: appDb } },
+        user: { userID: 'user-orgless' }
+      };
+      const res = createRes();
+
+      const refusal = new Error('Sem organização atribuída');
+      refusal.statusCode = 403;
+      callerCreateOrganization.resolveCallerCreateOrganization.mockRejectedValue(refusal);
+      const jobSpy = vi.spyOn(stagingImportService, 'createBatchImportJob');
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      const unlinkSpy = vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
+
+      await controller.createBatchImport(req, res);
+
+      expect(jobSpy).not.toHaveBeenCalled();
+      expect(unlinkSpy).toHaveBeenCalledWith(req.file.path);
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Sem organização atribuída' });
+    });
+
+    it('returns 503, removes the temp file and stages nothing when there is no db (#1376)', async () => {
+      const req = { file: { path: '/tmp/no-db.csv', originalname: 'no-db.csv' } };
+      const res = createRes();
+
+      const jobSpy = vi.spyOn(stagingImportService, 'createBatchImportJob');
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      const unlinkSpy = vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
+
+      await controller.createBatchImport(req, res);
+
+      expect(callerCreateOrganization.resolveCallerCreateOrganization).not.toHaveBeenCalled();
+      expect(jobSpy).not.toHaveBeenCalled();
+      expect(unlinkSpy).toHaveBeenCalledWith(req.file.path);
+      expect(res.status).toHaveBeenCalledWith(503);
+      expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Banco de dados não disponível' });
     });
   });
 

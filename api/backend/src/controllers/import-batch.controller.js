@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 
 const stagingImportService = require('../services/staging-import.service');
+const callerCreateOrganization = require('../services/callerCreateOrganization.service');
 const batchValidationEngine = require('../services/batch-validation-engine.service');
 const logger = require('../utils/logger');
 const { UPLOADS_BASE } = require('../config/uploadConfig');
@@ -78,7 +79,37 @@ class ImportBatchController {
         });
       }
 
-      const result = await stagingImportService.createBatchImportJob(file);
+      // #1376: the organization the uploader's scope resolves is stamped on
+      // each sample the worker persists, so it is resolved here, before
+      // anything is staged.
+      const db = req.app?.locals?.db;
+      if (!db) {
+        if (fs.existsSync(file.path)) {
+          fs.unlinkSync(file.path);
+        }
+        return res.status(503).json({
+          success: false,
+          error: 'Banco de dados não disponível'
+        });
+      }
+
+      let organizationId;
+      try {
+        ({ organizationId } = await callerCreateOrganization.resolveCallerCreateOrganization(db, {
+          userId: req.user?.userID,
+          requested: typeof req.body?.organizationId === 'string' ? req.body.organizationId.trim() : undefined
+        }));
+      } catch (error) {
+        if (fs.existsSync(file.path)) {
+          fs.unlinkSync(file.path);
+        }
+        return res.status(error.statusCode || 403).json({
+          success: false,
+          error: error.message
+        });
+      }
+
+      const result = await stagingImportService.createBatchImportJob(file, { organizationId });
 
       if (req.file && fs.existsSync(req.file.path)) {
         fs.unlinkSync(req.file.path);

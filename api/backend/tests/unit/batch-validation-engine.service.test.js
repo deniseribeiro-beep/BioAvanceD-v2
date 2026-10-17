@@ -310,6 +310,63 @@ describe('batch-validation-engine.service', () => {
     expect(result.persistedIds).toContain('sample-object-id-2');
   });
 
+  // #1376, #1192: the uploader's organization, resolved at upload, stamps the
+  // sample and defaults its collection site, as POST /api/samples does.
+  it("stamps the uploader's organization on the sample and defaults its collectionSite to it (#1376)", async () => {
+    const db = createDb({
+      patientID: '12345678',
+      patient: { _id: 'patient-object-id-org', participantId: '12345678' },
+    });
+    const createSampleSpy = vi.spyOn(sampleService, 'createSample').mockResolvedValue({ _id: 'sample-org' });
+
+    const result = await batchValidationEngine.persistSample(
+      db,
+      { patientID: '12345678', sampleType: 'Sangue', sampleOrigin: 'Coleta', quantity: '1' },
+      2,
+      { organizationId: 'org-a' }
+    );
+
+    expect(result.classification).not.toBe('INVALID');
+    expect(createSampleSpy).toHaveBeenCalledTimes(1);
+    const [, sampleData, options] = createSampleSpy.mock.calls[0];
+    expect(options.organizationId).toBe('org-a');
+    expect(options).toMatchObject({ batchImport: true, source: 'batch-import' });
+    expect(sampleData.collectionSite).toBe('org-a');
+  });
+
+  // #1376 box 4: the participant's organization is its own decision, so the
+  // participant a sample row creates gets none from the upload.
+  it('creates the participant with no organizationId while the sample carries it (#1376)', async () => {
+    const db = createDb();
+    const createPatientSpy = vi.spyOn(patientService, 'createPatient').mockResolvedValue({
+      _id: 'patient-object-id-new',
+      participantId: '87654321',
+    });
+    const createSampleSpy = vi.spyOn(sampleService, 'createSample').mockResolvedValue({ _id: 'sample-new' });
+
+    await batchValidationEngine.persistSample(
+      db,
+      {
+        patientName: 'Paciente Org',
+        birthDate: '1990-01-01',
+        sex: 'F',
+        email: 'paciente.org@example.com',
+        consentTemplateId: 'template-1',
+        sampleType: 'Sangue',
+        sampleOrigin: 'Coleta',
+        quantity: '1',
+      },
+      3,
+      { organizationId: 'org-a' }
+    );
+
+    expect(createPatientSpy).toHaveBeenCalledTimes(1);
+    const patientOptions = createPatientSpy.mock.calls[0][2];
+    expect(patientOptions).toMatchObject({ batchImport: true, source: 'batch-import' });
+    expect(patientOptions).not.toHaveProperty('organizationId');
+    expect(createSampleSpy.mock.calls[0][2].organizationId).toBe('org-a');
+  });
+
   it('returns INVALID when required sample fields are missing', async () => {
     const db = createDb();
     const result = await batchValidationEngine.persistSample(db, {}, 4);
@@ -597,6 +654,29 @@ describe('batch-validation-engine.service processBatchImport', () => {
 
     // And the job document points at its own quarantine rather than orphaning it.
     expect(result.quarantineBatchId).toBe('batch-813-wiring');
+  });
+
+  // #1376: the worker has no request; the organization staged at upload is
+  // the one each sample row is persisted with.
+  it('passes the staged rawData.organizationId to persistSample (#1376)', async () => {
+    const filePath = writeTmpFile('samples-org.json', JSON.stringify([
+      { participantId: '12345678', sampleType: 'Sangue', sampleOrigin: 'Coleta', barcode: 'B-1' },
+    ]));
+
+    vi.spyOn(StagingImport, 'findOne').mockResolvedValue({
+      jobId: 'job-1376',
+      fileName: 'samples-org.json',
+      rawData: { storagePath: filePath, organizationId: 'org-a' },
+    });
+    vi.spyOn(StagingImport, 'updateOne').mockResolvedValue({});
+    const persistSpy = vi.spyOn(batchValidationEngine, 'persistSample').mockResolvedValue({
+      classification: 'VALID', errors: [], warnings: [], persistedId: 'sample-1',
+    });
+
+    await batchValidationEngine.processBatchImport({}, 'job-1376');
+
+    expect(persistSpy).toHaveBeenCalledTimes(1);
+    expect(persistSpy.mock.calls[0][3]).toEqual({ organizationId: 'org-a' });
   });
 
   it('does not open a quarantine batch when every row succeeded', async () => {

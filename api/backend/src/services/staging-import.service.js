@@ -47,11 +47,15 @@ class StagingImportService {
     };
   }
 
-  async createStagingImport(file) {
+  async createStagingImport(file, { organizationId = null } = {}) {
     // #830: the store is on the native driver and builds the jobId index
     // itself (#941), so there is no Mongoose connection to open first.
     const jobId = uuidv4();
-    const rawData = await this.persistRawFile(file, jobId);
+    const persisted = await this.persistRawFile(file, jobId);
+    // #1376: the organization is resolved at upload, when the caller is
+    // known, because the worker that persists the rows has no request. The
+    // store keeps only known top-level fields, so it rides inside rawData.
+    const rawData = { ...persisted, organizationId: organizationId ? String(organizationId) : null };
 
     const stagingImport = await StagingImport.create({
       jobId,
@@ -112,11 +116,11 @@ class StagingImportService {
     return queueJob;
   }
 
-  async createBatchImportJob(file) {
+  async createBatchImportJob(file, { organizationId = null } = {}) {
     let stagingImport = null;
 
     try {
-      stagingImport = await this.createStagingImport(file);
+      stagingImport = await this.createStagingImport(file, { organizationId });
       const queueJob = await this.dispatchBatchJob(stagingImport);
 
       return {
