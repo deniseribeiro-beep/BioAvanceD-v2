@@ -4,6 +4,7 @@ const logger = require('../utils/logger');
 const iotStreamingService = require('./iot-streaming.service');
 const mqttSignatureService = require('./mqtt-signature.service');
 const mqttIngestionAuditService = require('./mqtt-ingestion-audit.service');
+const { clientContractFieldsOf } = require('./telemetryReadingContract');
 
 class MqttTelemetryService {
   constructor() {
@@ -164,6 +165,11 @@ class MqttTelemetryService {
         locationId: payload.locationId || payload.locationID || null,
         facility: payload.facility || null,
         zone: payload.zone || null,
+        // RF009 AC7 (#1317): the client's idempotencyKey and provenance, so a
+        // resent message replays the stored reading. On a replay the audit
+        // row below records `processed` with the stored id, which shows the
+        // duplicate.
+        ...clientContractFieldsOf(payload),
         source: 'mqtt',
         createdAt: new Date(),
         updatedAt: new Date()

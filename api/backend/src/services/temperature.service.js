@@ -9,25 +9,7 @@ const { applyOrganizationScopeFilter } = require('./rbac-assignment.service');
 // scheduler owns missing/stale readings; this module owns the threshold
 // breach.
 const { ALERT_TYPES, resolveActiveAlert, ensureActiveAlert } = require('./alertLifecycle.service');
-const { readingIdentityOf, screenReading } = require('./telemetryReadingContract');
-
-// #1317: a client idempotencyKey is unique per sensor. Latched per collection
-// name before the await, like the custody indexes: a persistent failure is
-// logged once, and the replay lookup still runs without it.
-const temperatureIndexed = new Set();
-async function ensureTemperatureIndexes(collection) {
-  const name = collection?.collectionName || 'temperatures';
-  if (typeof collection?.createIndex !== 'function' || temperatureIndexed.has(name)) return;
-  temperatureIndexed.add(name);
-  try {
-    await collection.createIndex(
-      { sensorId: 1, idempotencyKey: 1 },
-      { unique: true, name: 'temperatures_client_idempotencyKey_v1', partialFilterExpression: { idempotencyKeySource: 'client' } }
-    );
-  } catch (error) {
-    logger.warn(`[TEMPERATURE] Falha ao criar índice de idempotencyKey: ${error.message}`);
-  }
-}
+const { readingIdentityOf, screenReading, ensureTemperatureIndexes, clientReplayFilterOf } = require('./telemetryReadingContract');
 
 // RF009 AC7 (#1317): a replayed reading names its datastream datastreamId
 // (V2E-0546); one stored before that name carries it as
@@ -81,9 +63,7 @@ class TemperatureService {
       const temperaturesCollection = db.collection('temperatures');
       // RF009 AC7 (#1317): a client key already stored for this sensor is a
       // replay; it returns the stored reading and writes nothing.
-      const replayFilter = identity.idempotencyKeySource === 'client'
-        ? { sensorId: String(temperatureData.sensorId || temperatureData.sensorID), idempotencyKey: identity.idempotencyKey, idempotencyKeySource: 'client' }
-        : null;
+      const replayFilter = clientReplayFilterOf(identity, temperatureData);
       if (replayFilter) {
         await ensureTemperatureIndexes(temperaturesCollection);
         const stored = await temperaturesCollection.findOne(replayFilter);

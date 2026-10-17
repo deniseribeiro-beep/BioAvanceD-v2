@@ -7,6 +7,7 @@ const require = createRequire(import.meta.url);
 // through Node's own require cache (createRequire), which vi.resetModules()
 // does not clear -- so a spy installed here is the one the controller calls.
 const auditLogger = require('../../src/utils/auditLogger');
+const { createFakeCollection } = require('./ingestion/testHelpers');
 
 const {
   saveTelemetryPointMock,
@@ -107,6 +108,7 @@ describe('iot.controller', () => {
   let mongooseConnectSpy;
   let temperatureIncidentsCollection;
   let usersCollection;
+  let idempotencyKeysCollection;
 
   beforeEach(async () => {
     vi.resetModules();
@@ -153,8 +155,11 @@ describe('iot.controller', () => {
       }),
     };
 
+    idempotencyKeysCollection = createFakeCollection([]);
+
     const fakeConnection = {
       collection: vi.fn().mockImplementation((name) => {
+        if (name === 'ingestionIdempotencyKeys') return idempotencyKeysCollection;
         if (name === 'temperatureIncidents') return temperatureIncidentsCollection;
         if (name === 'users') return usersCollection;
         if (name === 'roles') return rolesCollection;
@@ -921,6 +926,90 @@ describe('iot.controller', () => {
     expect(res.body).toMatchObject({ clockStatus: 'synchronized' });
     expect(res.body.persistedAt).toBeInstanceOf(Date);
     expect(saveTelemetryPointMock.mock.calls[0][3]).toMatchObject({ telemetryReadingId: res.body.telemetryReadingId, ingestionService: 'iot-api' });
+  }, 15000);
+
+  // RF009 AC7 (#1317): a client idempotencyKey replays here as on the
+  // temperature route, from RF029's key store, once InfluxDB holds the reading.
+  it('a second send of one client key answers 200 replayed with the first reading, written and audited once', async () => {
+    const body = { sensorId: 'sensor-2', temperature: 5, idempotencyKey: 'k-1' };
+    const first = createResponse();
+    const second = createResponse();
+
+    await ingestTelemetry({ body }, first);
+    await ingestTelemetry({ body: { ...body } }, second);
+
+    expect(first.statusCode).toBe(200);
+    expect(first.body.replayed).toBeUndefined();
+    expect(second.statusCode).toBe(200);
+    expect(second.body).toMatchObject({ success: true, accepted: true, replayed: true, telemetryReadingId: first.body.telemetryReadingId });
+    expect(saveTelemetryPointMock).toHaveBeenCalledTimes(1);
+    expect(auditLogSpy.mock.calls.filter(([entry]) => entry.action === 'CREATE')).toHaveLength(1);
+  }, 15000);
+
+  it('control: the same client key on another sensor is not a replay', async () => {
+    const first = createResponse();
+    const second = createResponse();
+
+    await ingestTelemetry({ body: { sensorId: 'sensor-2', temperature: 5, idempotencyKey: 'k-1' } }, first);
+    await ingestTelemetry({ body: { sensorId: 'sensor-3', temperature: 5, idempotencyKey: 'k-1' } }, second);
+
+    expect(second.statusCode).toBe(200);
+    expect(second.body.replayed).toBeUndefined();
+    expect(second.body.telemetryReadingId).not.toBe(first.body.telemetryReadingId);
+    expect(saveTelemetryPointMock).toHaveBeenCalledTimes(2);
+  }, 15000);
+
+  it('a first send that answers 503 records no key, so its retry is written and recorded', async () => {
+    const errorSpy = vi.spyOn(require('../../src/utils/logger'), 'error').mockImplementation(() => undefined);
+    saveTelemetryPointMock.mockRejectedValueOnce(new Error('influx boom'));
+    const body = { sensorId: 'sensor-2', temperature: 5, idempotencyKey: 'k-503' };
+    const first = createResponse();
+    const retry = createResponse();
+
+    await ingestTelemetry({ body }, first);
+    expect(first.statusCode).toBe(503);
+    expect(idempotencyKeysCollection.docs).toHaveLength(0);
+
+    await ingestTelemetry({ body: { ...body } }, retry);
+    expect(retry.statusCode).toBe(200);
+    expect(retry.body.replayed).toBeUndefined();
+    expect(saveTelemetryPointMock).toHaveBeenCalledTimes(2);
+    expect(idempotencyKeysCollection.docs).toEqual([
+      expect.objectContaining({
+        idempotencyKey: 'k-503',
+        scope: 'TelemetryReading:sensor-2',
+        status: 'completed',
+        resultRef: expect.objectContaining({ telemetryReadingId: retry.body.telemetryReadingId }),
+      }),
+    ]);
+    errorSpy.mockRestore();
+  }, 15000);
+
+  it('a key store that cannot be read is logged, and the reading is accepted', async () => {
+    const errorSpy = vi.spyOn(require('../../src/utils/logger'), 'error').mockImplementation(() => undefined);
+    idempotencyKeysCollection.findOne = vi.fn().mockRejectedValue(new Error('key store down'));
+    const res = createResponse();
+
+    await ingestTelemetry({ body: { sensorId: 'sensor-2', temperature: 5, idempotencyKey: 'k-down' } }, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toMatchObject({ success: true, accepted: true });
+    expect(saveTelemetryPointMock).toHaveBeenCalledTimes(1);
+    expect(errorSpy).toHaveBeenCalledWith('[ISO20387][IOT] Falha ao consultar idempotencyKey da telemetria:', 'key store down');
+    errorSpy.mockRestore();
+  }, 15000);
+
+  it('control: a reading without a client key never touches the key store', async () => {
+    const findSpy = vi.spyOn(idempotencyKeysCollection, 'findOne');
+    const updateSpy = vi.spyOn(idempotencyKeysCollection, 'updateOne');
+    const res = createResponse();
+
+    await ingestTelemetry({ body: { sensorId: 'sensor-2', temperature: 5 } }, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(idempotencyKeysCollection.docs).toHaveLength(0);
+    expect(findSpy).not.toHaveBeenCalled();
+    expect(updateSpy).not.toHaveBeenCalled();
   }, 15000);
 
   it('não dispara alerta quando a política de temperatura tem limites não numéricos', async () => {

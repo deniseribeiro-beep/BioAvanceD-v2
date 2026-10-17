@@ -1,7 +1,13 @@
 const logger = require('../utils/logger');
 const { getQueue } = require('../config/queue');
 const influxTelemetryWriteRepository = require('../infrastructure/persistence/influxdb/InfluxTelemetryWriteRepository');
-const { readingIdentityOf, screenReading } = require('./telemetryReadingContract');
+const {
+  readingIdentityOf,
+  screenReading,
+  ensureTemperatureIndexes,
+  clientReplayFilterOf,
+  clientContractFieldsOf,
+} = require('./telemetryReadingContract');
 
 /**
  * Serviço de IoT Streaming para Temperature Control
@@ -119,6 +125,8 @@ class IoTStreamingService {
         locationId: streamInfo.locationId,
         facility: streamInfo.facility,
         zone: streamInfo.zone,
+        // RF009 AC7 (#1317): the client's idempotencyKey and provenance.
+        ...clientContractFieldsOf(data),
         source: 'iot-streaming',
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -183,13 +191,35 @@ class IoTStreamingService {
       // copy, and a failed write throws with nothing stored.
       const { source: _source, createdAt: _createdAt, updatedAt: _updatedAt, ...received } = temperatureData;
       const identity = readingIdentityOf(received, new Date(), { ingestionService: temperatureData.source === 'mqtt' ? 'mqtt' : 'iot-queue' });
+      // RF009 AC7 (#1317): a client key already stored for this sensor is a
+      // replay, as on the temperature route; it returns the stored id and
+      // writes nothing. `[inference]` the queue and MQTT store into the
+      // temperature route's collection and use its per-sensor unique
+      // client-key index, so one key replays across all three paths.
+      const replayFilter = clientReplayFilterOf(identity, received);
+      if (replayFilter) {
+        await ensureTemperatureIndexes(temperaturesCollection);
+        const stored = await temperaturesCollection.findOne(replayFilter);
+        if (stored) {
+          logger.debug(`♻️ Leitura já registrada com este idempotencyKey: ${stored._id}`);
+          return stored._id;
+        }
+      }
       // RF009 AC7: a drift or an implausible value is recorded as a
       // TelemetryValidationIssue; an implausible value throws a 422 here.
       await screenReading(db, identity, received);
       const reading = { ...temperatureData, ...identity, timestamp: identity.observedAt };
       reading.persistedAt = await influxTelemetryWriteRepository.writeTemperatureReadingNow(reading);
 
-      const result = await temperaturesCollection.insertOne(reading);
+      let result;
+      try {
+        result = await temperaturesCollection.insertOne(reading);
+      } catch (error) {
+        // Two concurrent sends of one key: the unique index lets one in.
+        const winner = replayFilter && error?.code === 11000 ? await temperaturesCollection.findOne(replayFilter) : null;
+        if (winner) return winner._id;
+        throw error;
+      }
 
       logger.debug(`✅ Dados de temperatura processados: ${result.insertedId}`);
       return result.insertedId;

@@ -68,7 +68,48 @@ async function recordIdempotentResult(db, { idempotencyKey, scope, resultRef = n
   );
 }
 
+/**
+ * RF009 AC7 (#1317): the resultRef of a completed (idempotencyKey, scope), or
+ * null. For a caller that records a key only once its result exists, so a
+ * failed attempt leaves no claim behind and its retry runs in full.
+ */
+async function findCompletedIdempotentResult(db, { idempotencyKey, scope }) {
+  if (!idempotencyKey || !scope) {
+    throw new Error('findCompletedIdempotentResult: idempotencyKey e scope são obrigatórios');
+  }
+
+  const keys = db.collection(CANONICAL_COLLECTIONS.ingestionIdempotencyKeys);
+  const existing = await keys.findOne({ idempotencyKey, scope, status: 'completed' });
+  return existing ? existing.resultRef : null;
+}
+
+/** Records (idempotencyKey, scope) completed with its resultRef in one upsert; the first record wins and is never overwritten. */
+async function recordCompletedIdempotentResult(db, { idempotencyKey, scope, resultRef = null }) {
+  if (!idempotencyKey || !scope) {
+    throw new Error('recordCompletedIdempotentResult: idempotencyKey e scope são obrigatórios');
+  }
+
+  const keys = db.collection(CANONICAL_COLLECTIONS.ingestionIdempotencyKeys);
+  const now = new Date();
+  await keys.updateOne(
+    { idempotencyKey, scope },
+    {
+      $setOnInsert: {
+        idempotencyKey,
+        scope,
+        status: 'completed',
+        resultRef,
+        claimedAt: now,
+        completedAt: now,
+      },
+    },
+    { upsert: true },
+  );
+}
+
 module.exports = {
   claimIdempotencyKey,
   recordIdempotentResult,
+  findCompletedIdempotentResult,
+  recordCompletedIdempotentResult,
 };

@@ -14,6 +14,7 @@ require('../models/TemperaturePolicy.schema');
 require('../models/Device.schema');
 const { saveTelemetryPoint } = require('../services/saveTelemetryPoint');
 const { readingIdentityOf, screenReading } = require('../services/telemetryReadingContract');
+const { findCompletedIdempotentResult, recordCompletedIdempotentResult } = require('../ingestion/idempotency');
 const { sendCriticalAlertEmail } = require('../services/sendCriticalAlertEmail');
 const TemperatureIncidentModel = require('../models/TemperatureIncident');
 const EnvironmentalExcursionModel = require('../models/EnvironmentalExcursion');
@@ -257,6 +258,37 @@ async function ingestTelemetry(req, res) {
     let identity;
     try {
       identity = readingIdentityOf(req.body || {}, new Date(), { ingestionService: 'iot-api' });
+    } catch (error) {
+      res.locals.auditReason = error.auditReason || 'invalid_payload';
+      return res.status(error.statusCode || 422).json({ success: false, error: error.message });
+    }
+
+    // RF009 AC7 (#1317): a client idempotencyKey already accepted for this
+    // sensor is a replay. It answers 200 with the first reading, and writes,
+    // evaluates and audits nothing, like the temperature route's replay.
+    // `[inference]` this route stores no Mongo reading, so its key goes in
+    // RF029's key store under `TelemetryReading:<sensorId>`, and is recorded
+    // only once InfluxDB persisted the reading: a 422 or a 503 leaves it free
+    // for the retry. `[inference]` a failed lookup or record is logged and the
+    // reading goes on, since cold-chain availability wins (the Axis E
+    // decision on the audit below). So two concurrent first sends can both be
+    // written: that collection has no unique index, and adding one is out of
+    // this change's scope.
+    let replayScope = null;
+    if (identity.idempotencyKeySource === 'client') {
+      replayScope = `TelemetryReading:${normalizedSensorId}`;
+      let resultRef = null;
+      try {
+        resultRef = await findCompletedIdempotentResult(await connectMongoDB(), { idempotencyKey: identity.idempotencyKey, scope: replayScope });
+      } catch (error) {
+        logger.error('[ISO20387][IOT] Falha ao consultar idempotencyKey da telemetria:', error.message || error);
+      }
+      if (resultRef) {
+        return res.status(200).json({ success: true, accepted: true, replayed: true, ...resultRef });
+      }
+    }
+
+    try {
       // RF009 AC7: a drift or an implausible value is recorded as a
       // TelemetryValidationIssue; an implausible value is a 422 here.
       await screenReading(connectMongoDB, identity, req.body || {});
@@ -327,6 +359,26 @@ async function ingestTelemetry(req, res) {
     if (!persistedAt) {
       res.locals.auditReason = 'telemetry_not_persisted';
       return res.status(503).json({ success: false, code: 'TELEMETRY_NOT_PERSISTED', error: 'Leitura não persistida no InfluxDB' });
+    }
+
+    // RF009 AC7 (#1317): persisted, so the client key now replays this
+    // reading's 200 body.
+    if (replayScope) {
+      try {
+        await recordCompletedIdempotentResult(await connectMongoDB(), {
+          idempotencyKey: identity.idempotencyKey,
+          scope: replayScope,
+          resultRef: {
+            telemetryReadingId: identity.telemetryReadingId,
+            observedAt: identity.observedAt,
+            receivedAt: identity.receivedAt,
+            persistedAt,
+            clockStatus: identity.clockStatus
+          }
+        });
+      } catch (error) {
+        logger.error('[ISO20387][IOT] Falha ao registrar idempotencyKey da telemetria:', error.message || error);
+      }
     }
 
     // #1093: this route wrote no audit row at all. Its HTTP machine-ingest

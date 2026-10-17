@@ -145,6 +145,71 @@ function readingIdentityOf(payload, receivedAt = new Date(), { ingestionService 
   };
 }
 
+// #1317: a client idempotencyKey is unique per sensor. Latched per collection
+// name before the await, like the custody indexes: a persistent failure is
+// logged once, and the replay lookup still runs without it.
+const temperatureIndexed = new Set();
+async function ensureTemperatureIndexes(collection) {
+  const name = collection?.collectionName || 'temperatures';
+  if (typeof collection?.createIndex !== 'function' || temperatureIndexed.has(name)) return;
+  temperatureIndexed.add(name);
+  try {
+    await collection.createIndex(
+      { sensorId: 1, idempotencyKey: 1 },
+      { unique: true, name: 'temperatures_client_idempotencyKey_v1', partialFilterExpression: { idempotencyKeySource: 'client' } }
+    );
+  } catch (error) {
+    logger.warn(`[TEMPERATURE] Falha ao criar índice de idempotencyKey: ${error.message}`);
+  }
+}
+
+/**
+ * RF009 AC7 (#1317): the `temperatures` filter a client key replays from, or
+ * null for a derived key, which never dedupes. `[inference]` the temperature
+ * route, MQTT and the queue all store into `temperatures` behind its
+ * per-sensor unique client-key index, so one client key replays across the
+ * three paths: they share one reading contract. The sensorId is the value
+ * every path stores (Temperature's `sensorId || sensorID`), uncoerced, since
+ * Mongo matches type-strictly: a numeric one stays a number.
+ */
+function clientReplayFilterOf(identity, payload) {
+  if (identity.idempotencyKeySource !== 'client') return null;
+  return { sensorId: payload.sensorId || payload.sensorID, idempotencyKey: identity.idempotencyKey, idempotencyKeySource: 'client' };
+}
+
+const CLIENT_TEXT_FIELDS = ['idempotencyKey', 'sourceEventId', 'deviceMessageId', 'traceId'];
+
+// What readingIdentityOf accepts for each field: a non-blank text up to
+// MAX_IDEMPOTENCY_KEY_LENGTH, and a non-negative integer sequenceNumber.
+function acceptedContractValue(field, value) {
+  if (field === 'sequenceNumber') return Number.isInteger(value) && value >= 0;
+  return typeof value === 'string' && value.trim() !== '' && value.length <= MAX_IDEMPOTENCY_KEY_LENGTH;
+}
+
+/**
+ * RF009 AC2/AC7 (#1317): the contract fields a client sent, for a path that
+ * maps its payload onto a new object (MQTT, the socket stream). An absent or
+ * null field adds no key, so the payloadHash is unchanged. A value
+ * readingIdentityOf would refuse with a 422 is dropped with a warning naming
+ * the field and the sensor, never the value: these paths have no caller to
+ * answer, and cold-chain availability wins, so the reading is stored without
+ * it, as it was before the fields were passed on.
+ */
+function clientContractFieldsOf(payload) {
+  const fields = {};
+  for (const field of [...CLIENT_TEXT_FIELDS, 'sequenceNumber']) {
+    const value = payload?.[field];
+    if (value === undefined || value === null) continue;
+    if (acceptedContractValue(field, value)) {
+      fields[field] = value;
+    } else {
+      const sensor = payload.sensorId || payload.sensorID || payload.deviceId || 'desconhecido';
+      logger.warn(`[TELEMETRY] Campo ${field} inválido descartado da leitura do sensor ${sensor}`);
+    }
+  }
+  return fields;
+}
+
 /**
  * RF009 AC7 (#1317): the TelemetryValidationIssues a reading carries, as
  * drafts without their ingestion event.
@@ -350,6 +415,9 @@ async function screenReading(db, identity, payload = {}) {
 
 module.exports = {
   readingIdentityOf,
+  ensureTemperatureIndexes,
+  clientReplayFilterOf,
+  clientContractFieldsOf,
   validationIssuesOf,
   screenReading,
   canonicalJson,

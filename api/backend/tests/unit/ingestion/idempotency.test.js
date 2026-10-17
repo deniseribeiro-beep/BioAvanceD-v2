@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-const { claimIdempotencyKey, recordIdempotentResult } = require('../../../src/ingestion/idempotency');
+const {
+  claimIdempotencyKey,
+  recordIdempotentResult,
+  findCompletedIdempotentResult,
+  recordCompletedIdempotentResult,
+} = require('../../../src/ingestion/idempotency');
 const { createFakeDb } = require('./testHelpers');
 
 describe('ingestion/idempotency (RF029 AC 5)', () => {
@@ -57,6 +62,61 @@ describe('ingestion/idempotency (RF029 AC 5)', () => {
     it('requires idempotencyKey and scope', async () => {
       const db = createFakeDb({});
       await expect(recordIdempotentResult(db, { scope: 'Specimen' })).rejects.toThrow(/idempotencyKey e scope/);
+    });
+  });
+
+  // RF009 AC7 (#1317): a key recorded only once its result exists, for a
+  // caller that must not hold a claim across a write that can fail.
+  describe('findCompletedIdempotentResult', () => {
+    it('returns null for a missing key, or one only claimed', async () => {
+      const db = createFakeDb({
+        ingestionIdempotencyKeys: [{ idempotencyKey: 'key-claimed', scope: 'TelemetryReading:s1', status: 'claimed', resultRef: null }],
+      });
+      await expect(findCompletedIdempotentResult(db, { idempotencyKey: 'key-missing', scope: 'TelemetryReading:s1' })).resolves.toBeNull();
+      await expect(findCompletedIdempotentResult(db, { idempotencyKey: 'key-claimed', scope: 'TelemetryReading:s1' })).resolves.toBeNull();
+    });
+
+    it('returns the resultRef of a completed key', async () => {
+      const db = createFakeDb({
+        ingestionIdempotencyKeys: [{ idempotencyKey: 'key-1', scope: 'TelemetryReading:s1', status: 'completed', resultRef: { telemetryReadingId: 'r-1' } }],
+      });
+      await expect(findCompletedIdempotentResult(db, { idempotencyKey: 'key-1', scope: 'TelemetryReading:s1' })).resolves.toEqual({ telemetryReadingId: 'r-1' });
+    });
+
+    it('requires idempotencyKey and scope', async () => {
+      const db = createFakeDb({});
+      await expect(findCompletedIdempotentResult(db, { scope: 'TelemetryReading:s1' })).rejects.toThrow(/findCompletedIdempotentResult: idempotencyKey e scope/);
+      await expect(findCompletedIdempotentResult(db, { idempotencyKey: 'key-1' })).rejects.toThrow(/findCompletedIdempotentResult: idempotencyKey e scope/);
+    });
+  });
+
+  describe('recordCompletedIdempotentResult', () => {
+    it('inserts one completed row, and a second record with another resultRef keeps the first', async () => {
+      const db = createFakeDb({ ingestionIdempotencyKeys: [] });
+      await recordCompletedIdempotentResult(db, { idempotencyKey: 'key-1', scope: 'TelemetryReading:s1', resultRef: { telemetryReadingId: 'r-1' } });
+      await recordCompletedIdempotentResult(db, { idempotencyKey: 'key-1', scope: 'TelemetryReading:s1', resultRef: { telemetryReadingId: 'r-2' } });
+
+      const { docs } = db.collections.ingestionIdempotencyKeys;
+      expect(docs).toHaveLength(1);
+      expect(docs[0]).toMatchObject({ idempotencyKey: 'key-1', scope: 'TelemetryReading:s1', status: 'completed', resultRef: { telemetryReadingId: 'r-1' } });
+      expect(docs[0].completedAt).toBeInstanceOf(Date);
+      await expect(findCompletedIdempotentResult(db, { idempotencyKey: 'key-1', scope: 'TelemetryReading:s1' })).resolves.toEqual({ telemetryReadingId: 'r-1' });
+    });
+
+    it('scopes keys independently', async () => {
+      const db = createFakeDb({ ingestionIdempotencyKeys: [] });
+      await recordCompletedIdempotentResult(db, { idempotencyKey: 'key-1', scope: 'TelemetryReading:s1', resultRef: { telemetryReadingId: 'r-1' } });
+
+      await expect(findCompletedIdempotentResult(db, { idempotencyKey: 'key-1', scope: 'TelemetryReading:s2' })).resolves.toBeNull();
+      await recordCompletedIdempotentResult(db, { idempotencyKey: 'key-1', scope: 'TelemetryReading:s2', resultRef: { telemetryReadingId: 'r-2' } });
+      expect(db.collections.ingestionIdempotencyKeys.docs).toHaveLength(2);
+      await expect(findCompletedIdempotentResult(db, { idempotencyKey: 'key-1', scope: 'TelemetryReading:s2' })).resolves.toEqual({ telemetryReadingId: 'r-2' });
+    });
+
+    it('requires idempotencyKey and scope', async () => {
+      const db = createFakeDb({});
+      await expect(recordCompletedIdempotentResult(db, { scope: 'TelemetryReading:s1' })).rejects.toThrow(/recordCompletedIdempotentResult: idempotencyKey e scope/);
+      await expect(recordCompletedIdempotentResult(db, { idempotencyKey: 'key-1' })).rejects.toThrow(/recordCompletedIdempotentResult: idempotencyKey e scope/);
     });
   });
 });

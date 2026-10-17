@@ -84,6 +84,22 @@ test.describe('Telemetria e monitoramento ambiental (RF009) — real backend, in
     expect(points[0].value).toBeCloseTo(temperature, 5);
   });
 
+  // #1317 (RF009 AC7): a resent client idempotencyKey replays the first
+  // reading instead of writing a second one.
+  test('replays a reading resent with the same idempotencyKey (RF009 AC7)', async ({ request }) => {
+    const sensor = await seedSensorWithPolicy(2, 8);
+    const data = { sensorId: sensor.sensorId, temperature: 4.5, timestamp: new Date().toISOString(), idempotencyKey: `rf009-ac7-${Date.now()}` };
+
+    const first = await request.post(`${apiBaseURL}/api/iot/telemetry`, { headers: ingestHeaders(), data });
+    expect(first.status()).toBe(200);
+    const firstBody = await first.json();
+    expect(firstBody.replayed).toBeUndefined();
+
+    const second = await request.post(`${apiBaseURL}/api/iot/telemetry`, { headers: ingestHeaders(), data });
+    expect(second.status()).toBe(200);
+    expect(await second.json()).toMatchObject({ success: true, accepted: true, replayed: true, telemetryReadingId: firstBody.telemetryReadingId });
+  });
+
   test('rejects a reading with no sensorId (criterion 4, invalid)', async ({ request }) => {
     const response = await request.post(`${apiBaseURL}/api/iot/telemetry`, {
       headers: ingestHeaders(),

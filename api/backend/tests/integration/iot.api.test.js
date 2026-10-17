@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 const express = require('express');
 const request = require('supertest');
+const { createFakeCollection } = require('../unit/ingestion/testHelpers');
 
 const modulePaths = {
   connection: require.resolve('../../src/infrastructure/database/mongodb/connection'),
@@ -171,9 +172,12 @@ function buildDb() {
     }),
   };
 
+  const idempotencyKeysCollection = createFakeCollection([]);
+
   return {
     db: {
       collection: vi.fn().mockImplementation((name) => {
+        if (name === 'ingestionIdempotencyKeys') return idempotencyKeysCollection;
         if (name === 'temperatureIncidents') return incidentCollection;
         if (name === 'environmentalExcursions') return environmentalExcursionsCollection;
         if (name === 'users') return usersCollection;
@@ -380,6 +384,20 @@ describe('IoT API integration', () => {
       minimumValue: 9,
       maximumValue: 12.5,
     });
+  });
+
+  // RF009 AC7 (#1317): a client idempotencyKey replays the first reading.
+  it('POST /api/iot/telemetry answers a repeated client idempotencyKey with the first reading, written once', async () => {
+    const reading = { sensorId: 'sensor-1', temperature: 5, timestamp: '2026-04-10T10:10:00.000Z', idempotencyKey: 'k-api-1' };
+
+    const first = await request(app).post('/api/iot/telemetry').set('x-telemetry-ingest-secret', 'iot-test-secret').send(reading);
+    const second = await request(app).post('/api/iot/telemetry').set('x-telemetry-ingest-secret', 'iot-test-secret').send(reading);
+
+    expect(first.status).toBe(200);
+    expect(first.body.replayed).toBeUndefined();
+    expect(second.status).toBe(200);
+    expect(second.body).toMatchObject({ success: true, accepted: true, replayed: true, telemetryReadingId: first.body.telemetryReadingId });
+    expect(saveTelemetryPoint).toHaveBeenCalledTimes(1);
   });
 
   describe('test-support telemetry-monitor routes (#307)', () => {

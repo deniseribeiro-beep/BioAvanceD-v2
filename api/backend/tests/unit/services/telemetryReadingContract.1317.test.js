@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 
-const { readingIdentityOf, canonicalJson, CLOCK_SKEW_TOLERANCE_MS } = require('../../../src/services/telemetryReadingContract');
+const { readingIdentityOf, canonicalJson, CLOCK_SKEW_TOLERANCE_MS, clientContractFieldsOf, clientReplayFilterOf } = require('../../../src/services/telemetryReadingContract');
 const influxTelemetryWriteRepository = require('../../../src/infrastructure/persistence/influxdb/InfluxTelemetryWriteRepository');
 const temperatureService = require('../../../src/services/temperature.service');
 const logger = require('../../../src/utils/logger');
@@ -176,5 +176,49 @@ describe('createTemperatureReading stores the identity and replays a client key'
       { sensorId: 1, idempotencyKey: 1 },
       expect.objectContaining({ unique: true, partialFilterExpression: { idempotencyKeySource: 'client' } })
     );
+  });
+});
+
+// RF009 AC7 (#1317): MQTT and the queue pass the client's contract fields on,
+// so its idempotencyKey replays on every path.
+describe('clientContractFieldsOf and clientReplayFilterOf', () => {
+  it('keeps the five contract fields a payload sends', () => {
+    const sent = { idempotencyKey: 'k-1', sourceEventId: 'e-1', deviceMessageId: 'm-1', sequenceNumber: 0, traceId: 't-1' };
+    expect(clientContractFieldsOf({ sensorId: 's1', temperatureValue: 4, ...sent })).toEqual(sent);
+  });
+
+  it('drops an absent or null field, and a payload with none gives {}', () => {
+    expect(clientContractFieldsOf({ sensorId: 's1', idempotencyKey: null, deviceMessageId: 'm-1', traceId: undefined })).toEqual({ deviceMessageId: 'm-1' });
+    expect(clientContractFieldsOf({ sensorId: 's1', temperatureValue: 4 })).toEqual({});
+  });
+
+  // A value readingIdentityOf would refuse is dropped, not forwarded: MQTT
+  // and the queue have no caller to answer a 422, so the reading is stored
+  // without it, as before the fields were passed on.
+  it('drops a value readingIdentityOf refuses, warning with the field and sensor but never the value', () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    const fields = clientContractFieldsOf({
+      sensorId: 's1',
+      idempotencyKey: '  ',
+      sourceEventId: 'x'.repeat(201),
+      deviceMessageId: 12345,
+      sequenceNumber: '7',
+      traceId: 't-1',
+    });
+    expect(fields).toEqual({ traceId: 't-1' });
+    expect(warn).toHaveBeenCalledTimes(4);
+    const lines = warn.mock.calls.map((args) => args.join(' '));
+    for (const field of ['idempotencyKey', 'sourceEventId', 'deviceMessageId', 'sequenceNumber']) {
+      expect(lines.some((line) => line.includes(field) && line.includes('s1')), field).toBe(true);
+    }
+    expect(lines.join(' ')).not.toContain('12345');
+    expect(() => readingIdentityOf({ sensorId: 's1', temperatureValue: 4, ...fields }, RECEIVED)).not.toThrow();
+  });
+
+  it('a client key gives the per-sensor replay filter, a derived key none', () => {
+    const payload = { sensorId: 's1', temperatureValue: 4 };
+    expect(clientReplayFilterOf(readingIdentityOf({ ...payload, idempotencyKey: 'k-1' }, RECEIVED), { ...payload, idempotencyKey: 'k-1' }))
+      .toEqual({ sensorId: 's1', idempotencyKey: 'k-1', idempotencyKeySource: 'client' });
+    expect(clientReplayFilterOf(readingIdentityOf(payload, RECEIVED), payload)).toBeNull();
   });
 });
