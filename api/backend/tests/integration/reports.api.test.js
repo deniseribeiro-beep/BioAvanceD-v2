@@ -4,6 +4,24 @@ const express = require('express');
 const request = require('supertest');
 const { SYSTEM_REPORT_TEMPLATES } = require('../../src/services/report-template-seed.service');
 const { createFakeDb } = require('../unit/foundation/helpers/fake-db');
+// RF009 AC1 (#1317): the temperature report reads InfluxDB through this
+// singleton; every case spies it so none reaches a real connection.
+const influxTelemetryReadRepository = require('../../src/infrastructure/persistence/influxdb/InfluxTelemetryReadRepository');
+
+// A row as InfluxTelemetryReadRepository.temperatureReport returns it.
+function temperatureRow(overrides = {}) {
+  return {
+    logId: 'T-1',
+    telemetryReadingId: 'T-1',
+    timestamp: new Date('2026-01-15T10:00:00Z'),
+    sensorId: 'SEN-1',
+    measurement: 'freezer_temperature',
+    temperatureValue: -80,
+    temperatureUnit: '°C',
+    temperatureCelsius: -80,
+    ...overrides,
+  };
+}
 
 const modulePaths = {
   auth: require.resolve('../../src/infrastructure/middleware/auth'),
@@ -206,9 +224,11 @@ describe('Reports API integration', () => {
     next();
   };
   const requirePermission = () => (_req, _res, next) => next();
+  let temperatureReport;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    temperatureReport = vi.spyOn(influxTelemetryReadRepository, 'temperatureReport').mockResolvedValue({ rows: [], total: 0 });
 
     for (const modulePath of Object.values(modulePaths)) {
       delete require.cache[modulePath];
@@ -248,6 +268,7 @@ describe('Reports API integration', () => {
   });
 
   afterEach(() => {
+    temperatureReport.mockRestore();
     for (const modulePath of Object.values(modulePaths)) {
       delete require.cache[modulePath];
     }
@@ -514,23 +535,25 @@ describe('Reports API integration', () => {
       );
     });
 
-    // #864: readingStatus's whole vocabulary is valid|invalid|suspicious
-    // (Temperature.js) and no writer of the temperature collection ever
-    // sets `severity` -- so a doc whose only "critical" signal is
-    // readingStatus (verified never true in production) must NOT count
-    // toward statistics.alerts. What does count: a threshold breach
-    // (minThreshold/maxThreshold both non-null and temperatureValue outside
-    // them) and a faulty/maintenance sensorStatus. A null-threshold doc,
-    // the honest majority state today since no bulk writer persists
-    // thresholds (they live on Policy), must not count either.
-    it('temperatura: calcula estatísticas e conta alertas críticos via limiar de threshold e sensorStatus, não readingStatus (#864)', async () => {
-      const { db, capturedQueries } = buildCollectionDb({
-        temperature: [
-          { temperatureValue: 2.5, readingStatus: 'normal', sensorStatus: 'normal', minThreshold: null, maxThreshold: null },
-          { temperatureValue: 10, readingStatus: 'critical', sensorStatus: 'normal', minThreshold: null, maxThreshold: null },
-          { temperatureValue: 15, readingStatus: 'valid', sensorStatus: 'normal', minThreshold: 2, maxThreshold: 8 },
-          { temperatureValue: 5, readingStatus: 'valid', sensorStatus: 'faulty', minThreshold: null, maxThreshold: null },
+    // RF009 AC1 (#1317): the readings come from InfluxDB, and a point carries
+    // neither thresholds nor a sensor status. A breach is judged in Celsius
+    // against the sensor's temperature policy, and a sensor flagged
+    // maintenance|error in `sensors` counts as critical; a reading whose
+    // sensor has no policy and no flag never counts.
+    it('temperatura: calcula estatísticas em Celsius e conta alertas pela política do sensor e pelo sensor sinalizado (#1317)', async () => {
+      temperatureReport.mockResolvedValue({
+        rows: [
+          temperatureRow({ logId: 'T-1', sensorId: 'S-NOPOL', temperatureValue: 2.5, temperatureCelsius: 2.5 }),
+          temperatureRow({ logId: 'T-2', sensorId: 'S-NOPOL', temperatureValue: 10, temperatureCelsius: 10 }),
+          temperatureRow({ logId: 'T-3', sensorId: 'S1', temperatureValue: 59, temperatureUnit: '°F', temperatureCelsius: 15 }),
+          temperatureRow({ logId: 'T-4', sensorId: 'S-FLAG', temperatureValue: 5, temperatureCelsius: 5 }),
         ],
+        total: 4,
+      });
+      const { db } = buildCollectionDb({
+        sensorMetadata: [{ sensorId: 'S1', temperaturePolicy: 'pol-1' }],
+        temperaturePolicies: [{ _id: 'pol-1', minTemp: 2, maxTemp: 8 }],
+        sensors: [{ sensorId: 'S-FLAG', maintenanceStatus: 'error' }, { sensorId: 'S1', maintenanceStatus: 'operational' }],
       });
 
       const testApp = appWithDb(db);
@@ -539,18 +562,20 @@ describe('Reports API integration', () => {
         .send({ filters: { criticalAlertsOnly: 'true', startDate: '2026-01-01', endDate: '2026-01-31' } });
 
       expect(response.status).toBe(200);
-      // Only the threshold-breach doc and the faulty-sensor doc count; the
-      // readingStatus:'critical' doc (dead leg, removed) does not.
+      // Only the S1 breach (15 °C over 8) and the flagged-sensor reading count.
       expect(response.body.data.statistics).toEqual({ average: (2.5 + 10 + 15 + 5) / 4, min: 2.5, max: 15, alerts: 2 });
 
-      // The impossible readingStatus/severity regex legs are gone; the $or
-      // now carries only the sensorStatus leg and the two non-null-guarded
-      // threshold-breach $and legs.
-      expect(capturedQueries.temperature.$and[1].$or).toEqual([
-        { sensorStatus: { $regex: 'faulty|maintenance', $options: 'i' } },
-        { $and: [{ minThreshold: { $ne: null } }, { $expr: { $lt: ['$temperatureValue', '$minThreshold'] } }] },
-        { $and: [{ maxThreshold: { $ne: null } }, { $expr: { $gt: ['$temperatureValue', '$maxThreshold'] } }] },
-      ]);
+      // The Flux range stop is exclusive, so it sits 1 ms after endDate's
+      // 23:59:59.999.
+      const endOfDay = new Date('2026-01-31');
+      endOfDay.setHours(23, 59, 59, 999);
+      expect(temperatureReport).toHaveBeenCalledWith({
+        start: new Date('2026-01-01'),
+        stop: new Date(endOfDay.getTime() + 1),
+        sensorIds: null,
+        critical: { boundsBySensor: new Map([['S1', { min: 2, max: 8 }]]), flaggedSensorIds: ['S-FLAG'] },
+        limit: 100,
+      });
     });
 
     // #620: withdrawalhistory reads from sample_movements (type: 'withdraw'
@@ -1051,8 +1076,10 @@ describe('Reports API integration', () => {
       patients: { patients: [{ participantId: 'P-1', status: 'active' }] },
       samples: { samples: [{ specimenId: 'S-1', sampleType: 'blood' }] },
       sample_analysis: { samples: [{ specimenId: 'S-1', barcode: 'B-1' }], results: [{ specimenId: 'S-1', resultID: 'R-1' }] },
-      temperature: { temperature: [{ logId: 'T-1', sensorId: 'SEN-1', temperatureValue: -80 }] },
-      temperature_control: { temperature: [{ logId: 'T-1', sensorId: 'SEN-1', temperatureValue: -80 }] },
+      // RF009 AC1 (#1317): these two read InfluxDB; the case below hands
+      // them a row through the repository spy instead of a collection.
+      temperature: {},
+      temperature_control: {},
       sensors: { sensors: [{ sensorId: 'SEN-1', sensorType: 'temperature' }] },
       equipment: { equipment: [{ equipmentID: 'EQ-1', name: 'Freezer A' }] },
       results: { results: [{ resultID: 'R-1', specimenId: 'S-1' }] },
@@ -1082,6 +1109,9 @@ describe('Reports API integration', () => {
     });
 
     it.each(Object.entries(SEEDS))('%s exports rows rather than the no-data fallback', async (code, collections) => {
+      if (code === 'temperature' || code === 'temperature_control') {
+        temperatureReport.mockResolvedValue({ rows: [temperatureRow()], total: 1 });
+      }
       const { db } = buildCollectionDb(collections);
       const response = await request(appWithDb(db)).get(`/api/reports/${code}/export`);
 
@@ -1120,13 +1150,13 @@ describe('Reports API integration', () => {
     });
 
     it('#1058: temperature exports real rows instead of "Sem dados"', async () => {
-      const { db } = buildCollectionDb({
-        temperature: [{ logId: 'T-1', sensorId: 'SEN-1', temperatureValue: -80, temperatureUnit: 'C' }],
-      });
+      temperatureReport.mockResolvedValue({ rows: [temperatureRow()], total: 1 });
+      const { db } = buildCollectionDb({});
       const response = await request(appWithDb(db)).get('/api/reports/temperature/export');
 
       expect(response.status).toBe(200);
       expect(response.text.split('\n')[0]).not.toBe('total,message');
+      expect(response.text.split('\n')[0]).toContain('temperatureCelsius');
       expect(response.text).toContain('SEN-1');
     });
 
@@ -1361,9 +1391,8 @@ describe('Reports API integration', () => {
 
     // CONTROLS: unchanged by this fix, green before and after (#695).
     it('CONTROL: the non-row keys of a preview are kept (total, statistics, mode, previewLimited)', async () => {
-      const { db } = buildCollectionDb({
-        temperature: [{ logId: 'T-1', sensorId: 'SEN-1', temperatureValue: -80, temperatureUnit: 'C' }],
-      });
+      temperatureReport.mockResolvedValue({ rows: [temperatureRow()], total: 1 });
+      const { db } = buildCollectionDb({});
       const response = await request(appWithDb(db)).post('/api/reports/temperature/preview').send({});
 
       expect(response.status).toBe(200);
@@ -1474,21 +1503,24 @@ describe('Reports API integration', () => {
         expect(exportedColumn(response.text)).toEqual(['E-new', 'E-mid-2', 'E-mid-1', 'E-old']);
       });
 
-      it('GET /temperature/export lists readings newest first', async () => {
-        // resolveCollection takes the first candidate name, 'temperature'.
-        const db = withSortingStore('temperature', [
-          { readingId: 'R-mid', sensorId: 'T1', temperatureValue: -80, timestamp: new Date('2026-01-02T00:00:00Z') },
-          { readingId: 'R-new', sensorId: 'T1', temperatureValue: -79, timestamp: new Date('2026-01-03T00:00:00Z') },
-          { readingId: 'R-old', sensorId: 'T1', temperatureValue: -81, timestamp: new Date('2026-01-01T00:00:00Z') },
-        ]);
+      // RF009 AC1 (#1317): the readings come from InfluxDB, and the
+      // repository returns them newest first (its own unit case pins that);
+      // the export keeps the order it is handed.
+      it('GET /temperature/export keeps the repository\'s order', async () => {
+        temperatureReport.mockResolvedValue({
+          rows: [
+            temperatureRow({ logId: 'R-new', temperatureValue: -79, temperatureCelsius: -79, timestamp: new Date('2026-01-03T00:00:00Z') }),
+            temperatureRow({ logId: 'R-mid', temperatureValue: -80, temperatureCelsius: -80, timestamp: new Date('2026-01-02T00:00:00Z') }),
+            temperatureRow({ logId: 'R-old', temperatureValue: -81, temperatureCelsius: -81, timestamp: new Date('2026-01-01T00:00:00Z') }),
+          ],
+          total: 3,
+        });
+        const { db } = buildCollectionDb();
 
         const response = await request(appWithDb(db)).get('/api/reports/temperature/export');
 
         expect(response.status).toBe(200);
-        const text = response.text;
-        expect([text.indexOf('-79'), text.indexOf('-80'), text.indexOf('-81')].every((at) => at > 0)).toBe(true);
-        expect(text.indexOf('-79')).toBeLessThan(text.indexOf('-80'));
-        expect(text.indexOf('-80')).toBeLessThan(text.indexOf('-81'));
+        expect(exportedColumn(response.text)).toEqual(['R-new', 'R-mid', 'R-old']);
       });
 
       // The harness's buildDb sorts reports by reportID whatever spec it is

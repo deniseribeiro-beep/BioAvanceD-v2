@@ -17,6 +17,8 @@ const rcsAssessmentService = require('../../services/rcs-assessment.service');
 const { resolveUserOrganizationScope, isOrganizationScopeUsable, applyOrganizationScopeFilter, isRecordInOrganizationScope, isAuditReader } = require('../../services/rbac-assignment.service');
 const { resolveReportGrantScope, allowsReport, allowsReportType, reportIdFilter } = require('../../services/report-grant.service');
 const { sampleOrganizationScopeClause } = require('../../services/sampleTenancy.service');
+// RF009 AC1 (#1317): required as a module object, so a test spy reaches it.
+const influxTelemetryReadRepository = require('../../infrastructure/persistence/influxdb/InfluxTelemetryReadRepository');
 
 function normalizeReport(report) {
   return {
@@ -657,48 +659,77 @@ async function handleSample(db, filters) {
 }
 
 async function handleTemperature(db, filters, handlerOptions = {}) {
-  const collection = resolveCollection(db, ['temperature', 'temperatures']);
-  const dateRange = buildDateQuery(filters);
-  const queryParts = [];
-  if (dateRange) {
-    queryParts.push({ $or: [{ timestamp: dateRange }, { dateTime: dateRange }] });
+  // RF009 AC1 (#1317): readings live in InfluxDB, so the report reads them
+  // there (both measurements, see InfluxTelemetryReadRepository), not from
+  // the Mongo `temperatures` copy. A point carries no organizationId,
+  // thresholds or sensor status, so each comes from Mongo's registry:
+  // - scope: an org-scoped caller sees the readings of their organizations'
+  //   sensors (a sensor is its organization's, #634, #1071); a caller whose
+  //   organizations hold no sensor sees nothing;
+  // - thresholds: the sensor's temperature policy, joined as
+  //   TelemetryMonitor joins it (sensorMetadata.temperaturePolicy), in
+  //   Celsius;
+  // - the sensor flag: sensors.maintenanceStatus maintenance|error, where the
+  //   copy's sensorStatus faulty|maintenance stood.
+  // The fakes these handlers are tested with do not apply queries, so each
+  // lookup is filtered again in JS.
+  const range = buildDateQuery(filters);
+  const start = range?.$gte || null;
+  // A Flux range stop is exclusive, and $lte is already 23:59:59.999.
+  const stop = range?.$lte ? new Date(range.$lte.getTime() + 1) : null;
+
+  let sensorIds = null;
+  if (filters.organizationScope?.scope === 'organization') {
+    const orgIds = filters.organizationScope.organizationIds || [];
+    const sensors = (await db.collection('sensors').find({ organizationId: { $in: orgIds } }).toArray())
+      .filter((sensor) => orgIds.includes(sensor.organizationId));
+    sensorIds = [...new Set(sensors.map((sensor) => sensor.sensorId).filter(Boolean).map(String))];
+  }
+  const inScope = (sensorId) => !sensorIds || sensorIds.includes(String(sensorId));
+
+  const boundsBySensor = new Map();
+  let flaggedSensorIds = [];
+  if (!sensorIds || sensorIds.length > 0) {
+    const metas = (await db.collection('sensorMetadata')
+      .find(sensorIds ? { sensorId: { $in: sensorIds }, temperaturePolicy: { $ne: null } } : { temperaturePolicy: { $ne: null } })
+      .toArray())
+      .filter((meta) => meta.temperaturePolicy && inScope(meta.sensorId));
+    const policies = metas.length
+      ? await db.collection('temperaturePolicies').find({ _id: { $in: metas.map((meta) => meta.temperaturePolicy) } }).toArray()
+      : [];
+    const policyById = new Map(policies.map((policy) => [String(policy._id), policy]));
+    for (const meta of metas) {
+      const policy = policyById.get(String(meta.temperaturePolicy));
+      if (!policy) continue;
+      const bounds = {};
+      if (Number.isFinite(Number(policy.minTemp)) && policy.minTemp !== null) bounds.min = Number(policy.minTemp);
+      if (Number.isFinite(Number(policy.maxTemp)) && policy.maxTemp !== null) bounds.max = Number(policy.maxTemp);
+      boundsBySensor.set(String(meta.sensorId), bounds);
+    }
+
+    const flaggedStatuses = ['maintenance', 'error'];
+    flaggedSensorIds = [...new Set((await db.collection('sensors').find({ maintenanceStatus: { $in: flaggedStatuses } }).toArray())
+      .filter((sensor) => flaggedStatuses.includes(sensor.maintenanceStatus) && sensor.sensorId && inScope(sensor.sensorId))
+      .map((sensor) => String(sensor.sensorId)))];
   }
 
-  // #864: readingStatus's whole vocabulary is valid|invalid|suspicious
-  // (Temperature.js; import.service.js, iot-streaming.service.js and
-  // mqtt-telemetry.service.js all write only those three) and no writer of
-  // the temperature collection ever sets `severity` -- so the old
-  // readingStatus/severity 'critical|alert' regex legs could never match
-  // anything and are dropped rather than repaired. sensorStatus
-  // faulty|maintenance is kept (a broken/offline sensor is a real critical
-  // condition, and today the only populated signal). The threshold-breach
-  // leg below is correct but mostly unpopulated today -- minThreshold/
-  // maxThreshold default to null and none of the three bulk writers
-  // supplies them (thresholds normally come from a Policy at alert time) --
-  // so it is explicitly non-null-guarded rather than silently matching the
-  // null-threshold majority.
-  if (isTruthyFilter(filters.criticalAlertsOnly)) {
-    queryParts.push({
-      $or: [
-        { sensorStatus: { $regex: 'faulty|maintenance', $options: 'i' } },
-        { $and: [{ minThreshold: { $ne: null } }, { $expr: { $lt: ['$temperatureValue', '$minThreshold'] } }] },
-        { $and: [{ maxThreshold: { $ne: null } }, { $expr: { $gt: ['$temperatureValue', '$maxThreshold'] } }] },
-      ],
-    });
-  }
+  // An InfluxDB failure propagates: the route answers 500 rather than an
+  // empty report.
+  const { rows, total } = await influxTelemetryReadRepository.temperatureReport({
+    start,
+    stop,
+    sensorIds,
+    critical: isTruthyFilter(filters.criticalAlertsOnly) ? { boundsBySensor, flaggedSensorIds } : null,
+    limit: 100,
+  });
 
-  // #636 (F3-G09): org-scoped caller sees only readings whose
-  // organizationId is one of their scoped organizations.
-  if (filters.organizationScope && filters.organizationScope.scope === 'organization') {
-    queryParts.push({ organizationId: { $in: filters.organizationScope.organizationIds } });
-  }
-
-  const query = queryParts.length > 0 ? { $and: queryParts } : {};
-  const temperatures = await collection.find(query).sort({ timestamp: -1, dateTime: -1 }).limit(100).toArray();
-  const total = await collection.countDocuments(query);
+  const temperatures = rows.map((row) => {
+    const bounds = boundsBySensor.get(String(row.sensorId));
+    return { ...row, minThreshold: bounds?.min ?? null, maxThreshold: bounds?.max ?? null };
+  });
 
   const values = temperatures
-    .map((entry) => Number(entry.temperatureValue))
+    .map((entry) => Number(entry.temperatureCelsius))
     .filter((value) => Number.isFinite(value));
 
   const statistics = values.length
@@ -706,18 +737,13 @@ async function handleTemperature(db, filters, handlerOptions = {}) {
         average: values.reduce((sum, value) => sum + value, 0) / values.length,
         min: Math.min(...values),
         max: Math.max(...values),
-        // #864: mirrors the criticalAlertsOnly query predicate above in JS
-        // instead of the dead readingStatus 'alert'/'critical' substring
-        // check -- a breach requires a non-null threshold on the relevant
-        // side, so a null-threshold entry (today's honest majority) never
-        // counts.
+        // Mirrors the repository's critical filter: a Celsius breach of a
+        // bound the sensor's policy sets, or a flagged sensor.
         alerts: temperatures.filter((entry) => {
-          const value = Number(entry.temperatureValue);
-          const hasMin = entry.minThreshold !== null && entry.minThreshold !== undefined;
-          const hasMax = entry.maxThreshold !== null && entry.maxThreshold !== undefined;
-          const breachesMin = hasMin && Number.isFinite(value) && value < Number(entry.minThreshold);
-          const breachesMax = hasMax && Number.isFinite(value) && value > Number(entry.maxThreshold);
-          const sensorFlag = /faulty|maintenance/i.test(String(entry.sensorStatus || ''));
+          const celsius = Number(entry.temperatureCelsius);
+          const breachesMin = entry.minThreshold !== null && Number.isFinite(celsius) && celsius < entry.minThreshold;
+          const breachesMax = entry.maxThreshold !== null && Number.isFinite(celsius) && celsius > entry.maxThreshold;
+          const sensorFlag = flaggedSensorIds.includes(String(entry.sensorId));
           return breachesMin || breachesMax || sensorFlag;
         }).length,
       }
@@ -1071,7 +1097,7 @@ const EXPORT_CATALOG = {
   // nothing in a temperature report needs it.
   temperature: {
     rowKey: 'temperatures',
-    columns: ['logId', 'timestamp', 'sensorId', 'sensorName', 'sensorType', 'locationId', 'locationName', 'facility', 'zone', 'temperatureValue', 'temperatureUnit', 'minThreshold', 'maxThreshold', 'targetTemperature', 'readingStatus', 'sensorStatus', 'batteryLevel', 'signalQuality', 'errorCode', 'dataQualityScore'],
+    columns: ['logId', 'timestamp', 'sensorId', 'sensorName', 'sensorType', 'locationId', 'locationName', 'facility', 'zone', 'temperatureValue', 'temperatureUnit', 'temperatureCelsius', 'minThreshold', 'maxThreshold', 'targetTemperature', 'readingStatus', 'sensorStatus', 'batteryLevel', 'signalQuality', 'errorCode', 'dataQualityScore'],
   },
   // Excluded: `macAddress` -- a device network identifier, and the sensor
   // is already identified by sensorId.

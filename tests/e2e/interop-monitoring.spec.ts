@@ -1433,3 +1433,46 @@ test.describe('Telemetry datastream binding (#1317, RF009 AC4) — real backend'
     }
   });
 });
+
+// #1317 (RF009 AC1): the temperature report reads its readings from
+// InfluxDB, both the temperature route's `freezer_temperature` points (unit
+// tag, converted to Celsius) and POST /api/iot/telemetry's `temperature`
+// points (Celsius, no unit tag).
+test.describe('Temperature report reads InfluxDB (#1317, RF009 AC1) — real backend', () => {
+  test('a reading posted on either route shows in the report, with its unit and its Celsius value', async ({ request }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const routeSensorId = `rf009-report-route-${suffix}`;
+    const iotSensorId = `rf009-report-iot-${suffix}`;
+    const now = new Date();
+
+    const routeReading = await request.post(`${apiBaseURL}/api/temperature/reading`, {
+      headers: auth,
+      data: { sensorId: routeSensorId, temperatureValue: 41, temperatureUnit: '°F', timestamp: now.toISOString() },
+    });
+    expect(routeReading.status(), await routeReading.text()).toBe(201);
+    const stored = (await routeReading.json()).data;
+
+    const iotReading = await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+      headers: ingestHeaders(),
+      data: { sensorId: iotSensorId, temperature: 5, timestamp: new Date().toISOString() },
+    });
+    expect(iotReading.status(), await iotReading.text()).toBe(200);
+    const iotBody = await iotReading.json();
+
+    const preview = await request.post(`${apiBaseURL}/api/reports/temperature/preview`, {
+      headers: auth,
+      data: { filters: { startDate: now.toISOString().slice(0, 10) } },
+    });
+    expect(preview.status(), await preview.text()).toBe(200);
+    const temperatures: Array<Record<string, unknown>> = (await preview.json()).data.temperatures;
+
+    const routeRow = temperatures.find((row) => row.sensorId === routeSensorId);
+    expect(routeRow).toMatchObject({ temperatureValue: 41, temperatureUnit: '°F', logId: stored.telemetryReadingId });
+    expect(routeRow?.temperatureCelsius as number).toBeCloseTo(5, 6);
+
+    const iotRow = temperatures.find((row) => row.sensorId === iotSensorId);
+    expect(iotRow).toMatchObject({ temperatureValue: 5, temperatureUnit: '°C', logId: iotBody.telemetryReadingId });
+  });
+});

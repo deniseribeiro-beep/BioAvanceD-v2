@@ -5,6 +5,9 @@ const request = require('supertest');
 const { SYSTEM_REPORT_TEMPLATES } = require('../../src/services/report-template-seed.service');
 const { createCursorMock } = require('../factories/cursor.factory');
 const { sampleOrganizationScopeClause } = require('../../src/services/sampleTenancy.service');
+// RF009 AC1 (#1317): the temperature report reads InfluxDB through this
+// singleton; every case spies it so none reaches a real connection.
+const influxTelemetryReadRepository = require('../../src/infrastructure/persistence/influxdb/InfluxTelemetryReadRepository');
 
 // #1192: the sample scope follows the tenancy key, whatever its clause says.
 const ORG_1_SAMPLE_SCOPE = sampleOrganizationScopeClause({ scope: 'organization', organizationIds: ['org-1'] });
@@ -128,6 +131,7 @@ describe('reports.routes.js gaps', () => {
   // denies when a request carries x-deny-role, so a test can tell which
   // routes the gate is on without re-implementing the hierarchy lookup.
   let requireRoleCalls = [];
+  let temperatureReport;
   // #1266: open unless a request carries x-deny-export, so a test can tell
   // which routes carry the export gate.
   const exportGate = (req, res, next) => (req.headers['x-deny-export'] ? res.status(403).json({ gate: 'export' }) : next());
@@ -139,6 +143,7 @@ describe('reports.routes.js gaps', () => {
   beforeEach(() => {
     requireRoleCalls = [];
     vi.clearAllMocks();
+    temperatureReport = vi.spyOn(influxTelemetryReadRepository, 'temperatureReport').mockResolvedValue({ rows: [], total: 0 });
 
     for (const modulePath of Object.values(modulePaths)) {
       delete require.cache[modulePath];
@@ -151,6 +156,7 @@ describe('reports.routes.js gaps', () => {
   });
 
   afterEach(() => {
+    temperatureReport.mockRestore();
     for (const modulePath of Object.values(modulePaths)) {
       delete require.cache[modulePath];
     }
@@ -458,35 +464,49 @@ describe('reports.routes.js gaps', () => {
     expect(response.body.data.analysis.find((item) => item.sampleID === 'SPEC-1').patientID).toBe('P1');
   });
 
-  it('temperatura: sem filtros de data nem alerta crítico usa query vazia e modo report', async () => {
-    const { db, capturedQueries } = buildCollectionDb({
-      temperature: [{ temperatureValue: '5', readingStatus: 'normal' }],
-    });
+  it('temperatura: sem filtros de data nem alerta crítico lê o InfluxDB sem janela, sem sensores e sem filtro crítico, em modo report', async () => {
+    const { db } = buildCollectionDb({});
     const testApp = appWithDb(db);
 
     const response = await request(testApp).post('/api/reports/temperature/preview').send({ filters: {} });
 
     expect(response.status).toBe(200);
     expect(response.body.data.mode).toBe('report');
-    expect(capturedQueries.temperature).toEqual({});
+    expect(temperatureReport).toHaveBeenCalledWith({ start: null, stop: null, sensorIds: null, critical: null, limit: 100 });
   });
 
-  // #864: handleTemperature's criticalAlertsOnly branch used to build a
-  // 3-leg $or where two legs (readingStatus/severity matching
-  // 'critical|alert') could never match anything -- readingStatus's whole
-  // vocabulary is valid|invalid|suspicious (Temperature.js, import.service.js,
-  // iot-streaming.service.js, mqtt-telemetry.service.js all agree) and no
-  // writer of the temperature collection ever sets `severity`. The fix drops
-  // those two legs, keeps the sensorStatus faulty|maintenance leg, and adds a
-  // non-null-guarded threshold-breach leg. This file's buildCollectionDb mock
-  // doesn't apply the query to filter documents (see cursor.factory.js), so
-  // "IS matched"/"NOT matched" here is pinned on the query object handleTemperature
-  // actually builds, and on statistics.alerts -- computed in plain JS over
-  // whatever documents come back, so it exercises the real predicate logic
-  // even though the mock can't evaluate $expr.
-  describe('criticalAlertsOnly: predicado de threshold/sensorStatus (#864)', () => {
-    it('constrói o $or sem os legs impossíveis de readingStatus/severity, com sensorStatus e limiares com guarda not-null', async () => {
-      const { db, capturedQueries } = buildCollectionDb({ temperature: [] });
+  // RF009 AC1 (#1317): the report reads InfluxDB, whose points carry neither
+  // thresholds nor a sensor status. Thresholds come from the sensor's
+  // temperature policy (sensorMetadata.temperaturePolicy, as TelemetryMonitor
+  // joins them) and the flag from the registered sensor's maintenanceStatus
+  // (maintenance|error). criticalAlertsOnly hands both to the repository,
+  // which filters in Flux; statistics.alerts mirrors that predicate in JS
+  // over the rows returned, comparing in Celsius.
+  describe('criticalAlertsOnly: limiares da política do sensor e sensores sinalizados, em Celsius (#1317)', () => {
+    const reading = (sensorId, temperatureValue, temperatureUnit, temperatureCelsius) => ({
+      logId: `R-${sensorId}-${temperatureValue}`,
+      telemetryReadingId: `R-${sensorId}-${temperatureValue}`,
+      timestamp: new Date('2026-10-01T10:00:00Z'),
+      sensorId,
+      measurement: 'freezer_temperature',
+      temperatureValue,
+      temperatureUnit,
+      temperatureCelsius,
+    });
+    const POLICY_S1 = {
+      sensorMetadata: [{ sensorId: 'S1', temperaturePolicy: 'pol-1' }, { sensorId: 'S4', temperaturePolicy: null }],
+      temperaturePolicies: [{ _id: 'pol-1', minTemp: 2, maxTemp: 8 }],
+    };
+
+    it('criticalAlertsOnly passa os limiares da política e os sensores error/maintenance; um sensor operational não é sinalizado', async () => {
+      const { db } = buildCollectionDb({
+        ...POLICY_S1,
+        sensors: [
+          { sensorId: 'S2', maintenanceStatus: 'error' },
+          { sensorId: 'S3', maintenanceStatus: 'maintenance' },
+          { sensorId: 'S5', maintenanceStatus: 'operational' },
+        ],
+      });
       const testApp = appWithDb(db);
 
       const response = await request(testApp)
@@ -494,23 +514,52 @@ describe('reports.routes.js gaps', () => {
         .send({ filters: { criticalAlertsOnly: 'true' } });
 
       expect(response.status).toBe(200);
-      expect(capturedQueries.temperature.$and).toEqual([
-        {
-          $or: [
-            { sensorStatus: { $regex: 'faulty|maintenance', $options: 'i' } },
-            { $and: [{ minThreshold: { $ne: null } }, { $expr: { $lt: ['$temperatureValue', '$minThreshold'] } }] },
-            { $and: [{ maxThreshold: { $ne: null } }, { $expr: { $gt: ['$temperatureValue', '$maxThreshold'] } }] },
-          ],
-        },
-      ]);
+      const { critical } = temperatureReport.mock.calls[0][0];
+      expect(critical.boundsBySensor).toEqual(new Map([['S1', { min: 2, max: 8 }]]));
+      expect(critical.flaggedSensorIds).toEqual(['S2', 'S3']);
     });
 
-    it('statistics.alerts conta leitura com limiar excedido (minThreshold/maxThreshold definidos e valor fora da faixa)', async () => {
-      const { db } = buildCollectionDb({
-        temperature: [
-          { temperatureValue: 12, minThreshold: 2, maxThreshold: 8 },
-        ],
-      });
+    it('sem criticalAlertsOnly, critical é null', async () => {
+      const { db } = buildCollectionDb({ ...POLICY_S1, sensors: [{ sensorId: 'S2', maintenanceStatus: 'error' }] });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).post('/api/reports/temperature/preview').send({ filters: {} });
+
+      expect(response.status).toBe(200);
+      expect(temperatureReport.mock.calls[0][0].critical).toBeNull();
+    });
+
+    it('statistics.alerts conta uma leitura °F 50 (10 °C) contra limiares 2..8 e não uma °F 41 (5 °C)', async () => {
+      temperatureReport.mockResolvedValue({ rows: [reading('S1', 50, '°F', 10), reading('S1', 41, '°F', 5)], total: 2 });
+      const { db } = buildCollectionDb(POLICY_S1);
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp)
+        .post('/api/reports/temperature/preview')
+        .send({ filters: { criticalAlertsOnly: 'true' } });
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.statistics.alerts).toBe(1);
+      expect(response.body.data.temperatures[0]).toMatchObject({ sensorId: 'S1', minThreshold: 2, maxThreshold: 8 });
+    });
+
+    it('statistics.alerts NÃO conta leitura de sensor sem política, qualquer que seja o valor', async () => {
+      temperatureReport.mockResolvedValue({ rows: [reading('S4', 999, '°C', 999)], total: 1 });
+      const { db } = buildCollectionDb(POLICY_S1);
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp)
+        .post('/api/reports/temperature/preview')
+        .send({ filters: { criticalAlertsOnly: 'true' } });
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.statistics.alerts).toBe(0);
+      expect(response.body.data.temperatures[0]).toMatchObject({ minThreshold: null, maxThreshold: null });
+    });
+
+    it('statistics.alerts conta leitura de um sensor sinalizado (maintenanceStatus error)', async () => {
+      temperatureReport.mockResolvedValue({ rows: [reading('S2', 5, '°C', 5)], total: 1 });
+      const { db } = buildCollectionDb({ ...POLICY_S1, sensors: [{ sensorId: 'S2', maintenanceStatus: 'error' }] });
       const testApp = appWithDb(db);
 
       const response = await request(testApp)
@@ -521,52 +570,15 @@ describe('reports.routes.js gaps', () => {
       expect(response.body.data.statistics.alerts).toBe(1);
     });
 
-    it('statistics.alerts NÃO conta leitura com limiares nulos, qualquer que seja o valor', async () => {
-      const { db } = buildCollectionDb({
-        temperature: [
-          { temperatureValue: 999, minThreshold: null, maxThreshold: null },
-        ],
-      });
+    it('statistics average, min e max são em Celsius', async () => {
+      temperatureReport.mockResolvedValue({ rows: [reading('S1', 41, '°F', 5), reading('S1', 283.15, 'K', 10)], total: 2 });
+      const { db } = buildCollectionDb(POLICY_S1);
       const testApp = appWithDb(db);
 
-      const response = await request(testApp)
-        .post('/api/reports/temperature/preview')
-        .send({ filters: { criticalAlertsOnly: 'true' } });
+      const response = await request(testApp).post('/api/reports/temperature/preview').send({ filters: {} });
 
       expect(response.status).toBe(200);
-      expect(response.body.data.statistics.alerts).toBe(0);
-    });
-
-    it('statistics.alerts conta leitura com sensorStatus faulty', async () => {
-      const { db } = buildCollectionDb({
-        temperature: [
-          { temperatureValue: 5, sensorStatus: 'faulty', minThreshold: null, maxThreshold: null },
-        ],
-      });
-      const testApp = appWithDb(db);
-
-      const response = await request(testApp)
-        .post('/api/reports/temperature/preview')
-        .send({ filters: { criticalAlertsOnly: 'true' } });
-
-      expect(response.status).toBe(200);
-      expect(response.body.data.statistics.alerts).toBe(1);
-    });
-
-    it('statistics.alerts NÃO conta readingStatus "critical" sozinho (leg morto removido)', async () => {
-      const { db } = buildCollectionDb({
-        temperature: [
-          { temperatureValue: 5, readingStatus: 'invalid', sensorStatus: 'normal', minThreshold: null, maxThreshold: null },
-        ],
-      });
-      const testApp = appWithDb(db);
-
-      const response = await request(testApp)
-        .post('/api/reports/temperature/preview')
-        .send({ filters: { criticalAlertsOnly: 'true' } });
-
-      expect(response.status).toBe(200);
-      expect(response.body.data.statistics.alerts).toBe(0);
+      expect(response.body.data.statistics).toMatchObject({ average: 7.5, min: 5, max: 10 });
     });
   });
 
@@ -1215,14 +1227,30 @@ describe('reports.routes.js gaps', () => {
       expect(capturedQueries.equipment).toEqual({ organizationId: { $in: ['org-1'] } });
     });
 
-    it('temperatura: filtra a query por organizationId para um usuário organization-scoped', async () => {
-      const { db, capturedQueries } = buildCollectionDb({ ...ORG_SCOPED_RBAC, temperature: [{ sensorId: 'S1', organizationId: 'org-1' }] });
+    // RF009 AC1 (#1317): a point carries no organizationId, so the scope
+    // reaches the readings through their sensors (a sensor is its
+    // organization's, #634).
+    it('temperatura: restringe a leitura aos sensores das organizações de um usuário organization-scoped', async () => {
+      const { db } = buildCollectionDb({
+        ...ORG_SCOPED_RBAC,
+        sensors: [{ sensorId: 'S1', organizationId: 'org-1' }, { sensorId: 'S2', organizationId: 'org-2' }],
+      });
       const testApp = appWithDb(db);
 
       const response = await request(testApp).post('/api/reports/temperature/preview').send({ filters: {} });
 
       expect(response.status).toBe(200);
-      expect(capturedQueries.temperature).toEqual({ $and: [{ organizationId: { $in: ['org-1'] } }] });
+      expect(temperatureReport.mock.calls[0][0].sensorIds).toEqual(['S1']);
+    });
+
+    it('temperatura: an organization-scoped caller whose organizations hold no sensor gets sensorIds []', async () => {
+      const { db } = buildCollectionDb({ ...ORG_SCOPED_RBAC, sensors: [{ sensorId: 'S2', organizationId: 'org-2' }] });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).post('/api/reports/temperature/preview').send({ filters: {} });
+
+      expect(response.status).toBe(200);
+      expect(temperatureReport.mock.calls[0][0].sensorIds).toEqual([]);
     });
 
     it('paciente: filtra diretamente por clinicalUnitId mesmo sem keyword/orphaCode/matchingPatientIds', async () => {
