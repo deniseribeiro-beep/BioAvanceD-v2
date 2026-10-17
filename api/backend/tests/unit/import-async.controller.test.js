@@ -12,6 +12,7 @@ const controller = require('../../src/controllers/import-async.controller');
 const importAsyncService = require('../../src/services/import-async.service');
 const logger = require('../../src/utils/logger');
 const auditLogger = require('../../src/utils/auditLogger');
+const callerCreateOrganization = require('../../src/services/callerCreateOrganization.service');
 
 const uploadsDir = path.join(__dirname, '../../uploads/temp');
 
@@ -467,6 +468,10 @@ describe('import-async.controller', () => {
           user: { userID: 'u1' },
         };
         const res = createRes();
+        vi.spyOn(callerCreateOrganization, 'resolveCallerCreateOrganization').mockResolvedValue({
+          organizationId: 'org-a',
+          organizationScope: { scope: 'organization', organizationIds: ['org-a'] },
+        });
         vi.spyOn(importAsyncService, 'createImportJob').mockResolvedValue({
           jobID: 'job-map',
         });
@@ -563,6 +568,90 @@ describe('import-async.controller', () => {
       });
     });
 
+    describe('the uploader organization of a samples job (#1376)', () => {
+      it('puts the organizationId and organizationScope the helper resolves into the job options', async () => {
+        const db = {};
+        const file = { path: '/tmp/f.csv', originalname: 'f.csv' };
+        const req = {
+          app: { locals: { db } },
+          body: { dataType: ' Samples ', organizationId: ' org-a ' },
+          file,
+          user: { userID: 'u1' },
+        };
+        const res = createRes();
+        const organizationScope = { scope: 'multi', organizationIds: ['org-a', 'org-b'] };
+        const resolveSpy = vi
+          .spyOn(callerCreateOrganization, 'resolveCallerCreateOrganization')
+          .mockResolvedValue({ organizationId: 'org-a', organizationScope });
+        const createSpy = vi
+          .spyOn(importAsyncService, 'createImportJob')
+          .mockResolvedValue({ jobID: 'job-org' });
+        vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+        vi.spyOn(auditLogger, 'logImport').mockResolvedValue(undefined);
+
+        await controller.createImportJob(req, res);
+
+        expect(resolveSpy).toHaveBeenCalledWith(db, { userId: 'u1', requested: 'org-a' });
+        expect(createSpy).toHaveBeenCalledWith(
+          db,
+          'u1',
+          file,
+          ' Samples ',
+          expect.objectContaining({ organizationId: 'org-a', organizationScope })
+        );
+        expect(res.status).toHaveBeenCalledWith(202);
+      });
+
+      it('does not resolve an organization for a patients job', async () => {
+        const file = { path: '/tmp/f.csv', originalname: 'f.csv' };
+        const req = {
+          app: { locals: { db: {} } },
+          body: { dataType: 'patients', organizationId: 'org-a' },
+          file,
+        };
+        const res = createRes();
+        const resolveSpy = vi.spyOn(callerCreateOrganization, 'resolveCallerCreateOrganization');
+        const createSpy = vi
+          .spyOn(importAsyncService, 'createImportJob')
+          .mockResolvedValue({ jobID: 'job-patients' });
+
+        await controller.createImportJob(req, res);
+
+        expect(resolveSpy).not.toHaveBeenCalled();
+        const options = createSpy.mock.calls[0][4];
+        expect(options).not.toHaveProperty('organizationId');
+        expect(options).not.toHaveProperty('organizationScope');
+      });
+
+      it('returns the helper refusal status, cleans up the file and creates no job', async () => {
+        const file = { path: '/tmp/f.csv', originalname: 'f.csv' };
+        const req = {
+          app: { locals: { db: {} } },
+          body: { dataType: 'samples' },
+          file,
+          user: { userID: 'u1' },
+        };
+        const res = createRes();
+        const refusal = new Error('organizationId obrigatório');
+        refusal.statusCode = 400;
+        vi.spyOn(callerCreateOrganization, 'resolveCallerCreateOrganization').mockRejectedValue(refusal);
+        const cleanupSpy = vi
+          .spyOn(importAsyncService, 'cleanupFile')
+          .mockImplementation(() => {});
+        const createSpy = vi.spyOn(importAsyncService, 'createImportJob');
+
+        await controller.createImportJob(req, res);
+
+        expect(cleanupSpy).toHaveBeenCalledWith(file.path);
+        expect(createSpy).not.toHaveBeenCalled();
+        expect(res.status).toHaveBeenCalledWith(400);
+        expect(res.json).toHaveBeenCalledWith({
+          success: false,
+          error: 'organizationId obrigatório',
+        });
+      });
+    });
+
     it('returns 500 without cleanup call when req.file absent at throw time (defensive)', async () => {
       // dataType present branch requires file, so simulate throw from service with file present,
       // then verify cleanup is only invoked because req.file exists.
@@ -589,6 +678,10 @@ describe('import-async.controller', () => {
         file,
       };
       const res = createRes();
+      const organizationScope = { scope: 'organization', organizationIds: ['org-a'] };
+      const resolveSpy = vi
+        .spyOn(callerCreateOrganization, 'resolveCallerCreateOrganization')
+        .mockResolvedValue({ organizationId: 'org-a', organizationScope });
       const createSpy = vi
         .spyOn(importAsyncService, 'createImportJob')
         .mockResolvedValue({ jobID: 'job-sample' });
@@ -597,12 +690,14 @@ describe('import-async.controller', () => {
 
       expect(req.body.dataType).toBe('samples');
       expect(req.body.extraField).toBe('keep-me');
+      // #1376: the forced samples dataType takes the organization branch.
+      expect(resolveSpy).toHaveBeenCalledTimes(1);
       expect(createSpy).toHaveBeenCalledWith(
         {},
         null,
         file,
         'samples',
-        expect.any(Object)
+        expect.objectContaining({ organizationId: 'org-a', organizationScope })
       );
       expect(res.status).toHaveBeenCalledWith(202);
     });
@@ -611,6 +706,10 @@ describe('import-async.controller', () => {
       const file = { path: '/tmp/f.csv', originalname: 'f.csv' };
       const req = { app: { locals: { db: {} } }, file };
       const res = createRes();
+      vi.spyOn(callerCreateOrganization, 'resolveCallerCreateOrganization').mockResolvedValue({
+        organizationId: null,
+        organizationScope: { scope: 'global' },
+      });
       vi.spyOn(importAsyncService, 'createImportJob').mockResolvedValue({
         jobID: 'job-sample-2',
       });

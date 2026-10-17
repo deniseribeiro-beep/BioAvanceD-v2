@@ -118,3 +118,47 @@ describe('SampleWorker.process — actor attribution and Neo4j lineage threading
     );
   });
 });
+
+describe('SampleWorker.process — the uploader organization reaches importSamples (#1376)', () => {
+  it('forwards organizationId and organizationScope from the job options', async () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(importLGPDService, 'importSamples').mockResolvedValue({
+      total: 0,
+      success: 0,
+      errors: [],
+    });
+
+    const db = makeDb();
+    const organizationScope = { scope: 'organization', organizationIds: ['org-a'] };
+
+    await sampleWorker.process(db, 'job-5', '/tmp/samples.csv', {
+      organizationId: 'org-a',
+      organizationScope,
+    });
+
+    expect(importLGPDService.importSamples).toHaveBeenCalledWith(
+      db,
+      expect.anything(),
+      expect.objectContaining({ organizationId: 'org-a', organizationScope })
+    );
+  });
+
+  it('passes null organizationId and organizationScope when the job options carry none', async () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+    vi.spyOn(importLGPDService, 'importSamples').mockResolvedValue({
+      total: 0,
+      success: 0,
+      errors: [],
+    });
+
+    const db = makeDb();
+
+    await sampleWorker.process(db, 'job-6', '/tmp/samples.csv', {});
+
+    expect(importLGPDService.importSamples).toHaveBeenCalledWith(
+      db,
+      expect.anything(),
+      expect.objectContaining({ organizationId: null, organizationScope: null })
+    );
+  });
+});

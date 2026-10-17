@@ -57,6 +57,9 @@ class SampleWorker {
         groupFields: options.groupFields || {},
         neo4jDriver: options.neo4jDriver || null,
         actor,
+        // #1376: resolved by the controller when the job was created.
+        organizationId: options.organizationId || null,
+        organizationScope: options.organizationScope || null,
       });
 
       const processingTime = (Date.now() - startTime) / 1000;

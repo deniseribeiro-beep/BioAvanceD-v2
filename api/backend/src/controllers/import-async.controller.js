@@ -2,6 +2,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const importAsyncService = require('../services/import-async.service');
+const callerCreateOrganization = require('../services/callerCreateOrganization.service');
 const logger = require('../utils/logger');
 const { parseGroupFields, groupFieldsErrorBody } = require('../utils/importGroupFields');
 const { UPLOADS_BASE } = require('../config/uploadConfig');
@@ -166,6 +167,21 @@ class ImportAsyncController {
         });
       }
 
+      // #1376: a samples job stamps the uploader's organization. It is
+      // resolved here, at upload, because the worker has no request.
+      let organizationOptions = {};
+      if (String(dataType).trim().toLowerCase() === 'samples') {
+        try {
+          organizationOptions = await callerCreateOrganization.resolveCallerCreateOrganization(db, {
+            userId: req.user?.userID,
+            requested: typeof req.body?.organizationId === 'string' ? req.body.organizationId.trim() : undefined
+          });
+        } catch (error) {
+          importAsyncService.cleanupFile(file.path);
+          return res.status(error.statusCode || 403).json({ success: false, error: error.message });
+        }
+      }
+
       if (req.body.groupFields) {
         const parsed = parseGroupFields(req.body.groupFields);
         if (!parsed.ok) {
@@ -188,6 +204,7 @@ class ImportAsyncController {
           autoIncrement: autoIncrement === 'true' || autoIncrement === true,
           groupFields: parsedGroupFields,
           fileName: file.originalname,
+          ...organizationOptions,
         }
       );
 
