@@ -25,6 +25,11 @@ const MINUTES_PER_HOUR = 60;
  * Se a temperatura ficar acima do limite crítico (ex.: -80°C) por > N horas,
  * registra no outbox o comprometimento da amostra raiz, que a projeção
  * propaga para os descendentes no grafo (#1312).
+ *
+ * RF009 AC1 (#1317): as leituras vêm das duas measurements do InfluxDB,
+ * `temperature` (campo `value`, POST /api/iot/telemetry) e
+ * `freezer_temperature` (campo `temperatureValue`, rota de temperatura, MQTT
+ * e fila IoT), com Celsius calculado no Flux para o filtro crítico.
  */
 class TelemetryMonitor {
   constructor(options = {}) {
@@ -116,6 +121,13 @@ class TelemetryMonitor {
   // findSensorsWithMissingReadings uses), which marks where the current
   // above-threshold streak actually began.
   //
+  // RF009 AC1 (#1317): both reading measurements are read, `temperature`
+  // (field `value`) and `freezer_temperature` (field `temperatureValue`).
+  // criticalTemp is Celsius, so the map() converts a `freezer_temperature`
+  // point by its `temperatureUnit` tag ('°F', 'K', else Celsius) into
+  // `_value` before the threshold filter; a `temperature` point has no unit
+  // tag and stays as it is. Everything below `_value` is therefore Celsius.
+  //
   // #688: the excursion threshold itself is per-sensor now -- each sensor's
   // bound TemperaturePolicy.minimumDuration (minutes) governs when present
   // and positive; criticalDurationHours (converted to minutes) is the
@@ -126,8 +138,8 @@ class TelemetryMonitor {
     const queryApi = getInfluxQueryApi();
     const fluxQuery = `from(bucket: \"${getInfluxConfig().bucket}\")
       |> range(start: -${this.lookbackHours}h)
-      |> filter(fn: (r) => r._measurement == \"temperature\")
-      |> filter(fn: (r) => r._field == \"value\")
+      |> filter(fn: (r) => (r._measurement == \"freezer_temperature\" and r._field == \"temperatureValue\") or (r._measurement == \"temperature\" and r._field == \"value\"))
+      |> map(fn: (r) => ({r with _value: if exists r.temperatureUnit and r.temperatureUnit == \"°F\" then (r._value - 32.0) * 5.0 / 9.0 else if exists r.temperatureUnit and r.temperatureUnit == \"K\" then r._value - 273.15 else r._value}))
       |> filter(fn: (r) => r._value > ${this.criticalTemp})
       |> sort(columns: [\"_time\"])`;
     const rows = await queryApi.collectRows(fluxQuery);
@@ -306,6 +318,11 @@ class TelemetryMonitor {
   // iot.controller.js uses either — this file has no existing mongoose
   // wiring). This matches iot.controller.js's own upsertEnvironmentalExcursion,
   // which already reads/writes environmentalExcursions the same raw way.
+  //
+  // RF009 AC1 (#1317): a reading in either measurement, `temperature` or
+  // `freezer_temperature`, counts. last() runs per series, and the two
+  // measurements (and other tags) split one sensor into several series, so
+  // the newest time per sensor is kept in JS, keyed by String(sensorId).
   async findSensorsWithMissingReadings() {
     const sensors = await this.db.collection('sensorMetadata').find({}).toArray();
     if (!sensors.length) {
@@ -322,22 +339,29 @@ class TelemetryMonitor {
     const queryApi = getInfluxQueryApi();
     const fluxQuery = `from(bucket: \"${getInfluxConfig().bucket}\")
       |> range(start: -${this.lookbackHours}h)
-      |> filter(fn: (r) => r._measurement == \"temperature\")
-      |> filter(fn: (r) => r._field == \"value\")
-      |> group(columns: [\"sensorId\"])
-      |> last()`;
+      |> filter(fn: (r) => (r._measurement == \"freezer_temperature\" and r._field == \"temperatureValue\") or (r._measurement == \"temperature\" and r._field == \"value\"))
+      |> last()
+      |> keep(columns: [\"sensorId\", \"_time\"])`;
     const rows = await queryApi.collectRows(fluxQuery);
 
     const lastReadingAtBySensor = new Map();
     for (const row of rows) {
-      lastReadingAtBySensor.set(row.sensorId, new Date(row._time));
+      if (row.sensorId === undefined || row.sensorId === null || row.sensorId === '') continue;
+      const readingAt = new Date(row._time);
+      if (Number.isNaN(readingAt.getTime())) continue;
+
+      const key = String(row.sensorId);
+      const current = lastReadingAtBySensor.get(key);
+      if (!current || readingAt.getTime() > current.getTime()) {
+        lastReadingAtBySensor.set(key, readingAt);
+      }
     }
 
     const thresholdMs = this.expectedReadingIntervalMinutes * 60 * 1000;
     const now = Date.now();
     const missing = [];
     for (const sensor of sensors) {
-      const lastReadingAt = lastReadingAtBySensor.get(sensor.sensorId) || null;
+      const lastReadingAt = lastReadingAtBySensor.get(String(sensor.sensorId)) || null;
       const elapsedMs = lastReadingAt ? now - lastReadingAt.getTime() : Infinity;
       if (elapsedMs > thresholdMs) {
         const device = sensor.device ? deviceById.get(String(sensor.device)) : null;

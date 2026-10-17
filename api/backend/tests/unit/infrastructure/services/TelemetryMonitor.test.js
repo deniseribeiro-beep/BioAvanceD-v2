@@ -399,6 +399,34 @@ describe('TelemetryMonitor', () => {
       expect(result).toEqual([]);
     });
 
+    // RF009 AC1 (#1317): the temperature route, MQTT and the IoT queue write
+    // `freezer_temperature`, POST /api/iot/telemetry writes `temperature`.
+    it('queries both reading measurements (RF009 AC1, #1317)', async () => {
+      const collectRows = vi.fn().mockResolvedValue([]);
+      getInfluxQueryApiSpy.mockReturnValue({ collectRows });
+      const monitor = new TelemetryMonitor({ criticalTemp: -80 });
+
+      await monitor.findCriticalFreezers();
+
+      const query = collectRows.mock.calls[0][0];
+      expect(query).toContain('r._measurement == "freezer_temperature" and r._field == "temperatureValue"');
+      expect(query).toContain('r._measurement == "temperature" and r._field == "value"');
+    });
+
+    it('converts each reading to Celsius before the critical threshold filter (RF009 AC1, #1317)', async () => {
+      const collectRows = vi.fn().mockResolvedValue([]);
+      getInfluxQueryApiSpy.mockReturnValue({ collectRows });
+      const monitor = new TelemetryMonitor({ criticalTemp: -80 });
+
+      await monitor.findCriticalFreezers();
+
+      const query = collectRows.mock.calls[0][0];
+      expect(query).toContain('r.temperatureUnit == "°F"');
+      expect(query).toContain('r.temperatureUnit == "K"');
+      expect(query.indexOf('map(')).toBeGreaterThan(-1);
+      expect(query.indexOf('map(')).toBeLessThan(query.indexOf('r._value > -80'));
+    });
+
     // #688: per-sensor TemperaturePolicy.minimumDuration (minutes) as the
     // excursion threshold, falling back to the global criticalDurationHours
     // (converted to minutes) when the policy is absent/unresolved/unusable.
@@ -566,6 +594,68 @@ describe('TelemetryMonitor', () => {
 
         expect(result).toEqual([]);
       });
+    });
+  });
+
+  // RF009 AC1 (#1317): a reading through either measurement counts as the
+  // sensor reporting; last() runs per series, so the newest time wins in JS.
+  describe('findSensorsWithMissingReadings()', () => {
+    const now = new Date('2026-01-01T06:00:00Z');
+    const minutesAgo = (minutes) => new Date(now.getTime() - minutes * 60 * 1000).toISOString();
+
+    function buildDb(docs) {
+      return { collection: (name) => ({ find: () => ({ toArray: async () => docs[name] || [] }) }) };
+    }
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(now);
+    });
+
+    it('queries both reading measurements without grouping them by sensorId', async () => {
+      const collectRows = vi.fn().mockResolvedValue([]);
+      getInfluxQueryApiSpy.mockReturnValue({ collectRows });
+      const monitor = new TelemetryMonitor({ db: buildDb({ sensorMetadata: [{ sensorId: 'S1' }], devices: [] }) });
+
+      await monitor.findSensorsWithMissingReadings();
+
+      const query = collectRows.mock.calls[0][0];
+      expect(query).toContain('r._measurement == "freezer_temperature" and r._field == "temperatureValue"');
+      expect(query).toContain('r._measurement == "temperature" and r._field == "value"');
+      expect(query).not.toContain('group(columns: ["sensorId"])');
+    });
+
+    it('does not flag a sensor whose newest last() row comes after an older one', async () => {
+      getInfluxQueryApiSpy.mockReturnValue({
+        collectRows: vi.fn().mockResolvedValue([
+          { sensorId: 'S1', _time: minutesAgo(60) },
+          { sensorId: 'S1', _time: minutesAgo(1) }
+        ])
+      });
+      const monitor = new TelemetryMonitor({ db: buildDb({ sensorMetadata: [{ sensorId: 'S1' }], devices: [] }) });
+
+      expect(await monitor.findSensorsWithMissingReadings()).toEqual([]);
+    });
+
+    it('does not flag a sensor whose newest last() row comes before an older one (reversed order)', async () => {
+      getInfluxQueryApiSpy.mockReturnValue({
+        collectRows: vi.fn().mockResolvedValue([
+          { sensorId: 'S1', _time: minutesAgo(1) },
+          { sensorId: 'S1', _time: minutesAgo(60) }
+        ])
+      });
+      const monitor = new TelemetryMonitor({ db: buildDb({ sensorMetadata: [{ sensorId: 'S1' }], devices: [] }) });
+
+      expect(await monitor.findSensorsWithMissingReadings()).toEqual([]);
+    });
+
+    it('matches a numeric sensorId row to the sensorMetadata sensorId string', async () => {
+      getInfluxQueryApiSpy.mockReturnValue({
+        collectRows: vi.fn().mockResolvedValue([{ sensorId: 7, _time: minutesAgo(1) }])
+      });
+      const monitor = new TelemetryMonitor({ db: buildDb({ sensorMetadata: [{ sensorId: '7' }], devices: [] }) });
+
+      expect(await monitor.findSensorsWithMissingReadings()).toEqual([]);
     });
   });
 

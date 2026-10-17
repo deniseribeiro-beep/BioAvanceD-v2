@@ -391,6 +391,36 @@ test.describe('Telemetria e monitoramento ambiental (RF009) — missing-reading 
       await removeSeededSensor(sensor);
     }
   });
+
+  // RF009 AC1 (#1317): the temperature route writes `freezer_temperature`,
+  // which the missing-reading check reads alongside `temperature`.
+  test('a sensor whose fresh reading arrives through the temperature route is not flagged as missing', async ({
+    request,
+  }) => {
+    const sensor = await seedSensorWithPolicy(2, 8);
+    try {
+      const admin = await realLogin(request);
+      const response = await request.post(`${apiBaseURL}/api/temperature/reading`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+        data: { sensorId: sensor.sensorId, temperatureValue: 5, timestamp: new Date().toISOString() },
+      });
+      expect(response.status(), await response.text()).toBe(201);
+
+      await expect
+        .poll(async () => {
+          const points = await queryFreezerReadingIds(sensor.sensorId);
+          return points.length;
+        }, { timeout: 15_000 })
+        .toBeGreaterThan(0);
+
+      await triggerMonitorCycle(request);
+
+      const excursion = await findEnvironmentalExcursion(sensor.deviceId);
+      expect(excursion).toBeNull();
+    } finally {
+      await removeSeededSensor(sensor);
+    }
+  });
 });
 test.describe('Telemetria e monitoramento ambiental (RF009) — real findCriticalFreezers detection (#303)', () => {
   test.afterAll(async () => {
@@ -514,6 +544,51 @@ test.describe('Telemetria e monitoramento ambiental (RF009) — real findCritica
       });
 
       expect(criticalFreezers.find((entry) => entry.freezerKey === sensor.sensorId)).toBeUndefined();
+    } finally {
+      await removeSeededSensor(sensor);
+    }
+  });
+
+  // RF009 AC1 (#1317): the temperature route writes `freezer_temperature`
+  // with its unit tag; the critical check compares it in Celsius.
+  test('a sustained breach reported through the temperature route in °F is detected, in Celsius', async ({
+    request,
+  }) => {
+    const sensor = await seedSensorWithPolicy(2, 8);
+    try {
+      const admin = await realLogin(request);
+      const now = Date.now();
+      const timestamps = [3, 2, 1, 0].map((minutesAgo) => new Date(now - minutesAgo * 60_000));
+      for (const timestamp of timestamps) {
+        // -90 °F is -67.78 °C: above the -80 °C criticalTemp.
+        const response = await request.post(`${apiBaseURL}/api/temperature/reading`, {
+          headers: { Authorization: `Bearer ${admin.token}` },
+          data: {
+            sensorId: sensor.sensorId,
+            temperatureValue: -90,
+            temperatureUnit: '°F',
+            timestamp: timestamp.toISOString(),
+          },
+        });
+        expect(response.status(), await response.text()).toBe(201);
+      }
+
+      await expect
+        .poll(async () => {
+          const points = await queryFreezerReadingIds(sensor.sensorId, 10);
+          return points.length;
+        }, { timeout: 15_000 })
+        .toBeGreaterThanOrEqual(timestamps.length);
+
+      const criticalFreezers = await findCriticalFreezers(request, {
+        // 2 minutes: shorter than the ~3-minute streak just written.
+        criticalDurationHours: 2 / 60,
+        expectedReadingIntervalMinutes: 5,
+      });
+
+      const detected = criticalFreezers.find((entry) => entry.freezerKey === sensor.sensorId);
+      expect(detected).toBeTruthy();
+      expect(detected!.maxObservedTemp).toBeCloseTo(-67.78, 1);
     } finally {
       await removeSeededSensor(sensor);
     }
