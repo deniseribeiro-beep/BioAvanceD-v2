@@ -1100,6 +1100,29 @@ router.post('/register-sample', authenticate, requirePermission('createSample'),
     }
 
     const sampleService = require('../../services/sample.service');
+    const { resolveCallerCreateOrganization } = require('../../services/callerCreateOrganization.service');
+
+    // #1376: this route resolves no scope of its own, so the caller's scope
+    // decides the organization here, by #1071's create rule POST /api/samples
+    // uses -- an organization-scoped caller's own, a global caller's pick
+    // named as collectionSite, or none -- and createSample stamps it as
+    // Sample.organizationId. The collection site the body names (ELM-0128)
+    // is kept; a body naming none gets the stamped organization.
+    let organizationId;
+    try {
+      ({ organizationId } = await resolveCallerCreateOrganization(db, {
+        userId: req.user?.userID,
+        requested: req.body?.collectionSite
+      }));
+    } catch (error) {
+      return res.status(error.statusCode || 403).json({ success: false, error: error.message });
+    }
+    const namesCollectionSite = req.body?.collectionSite !== undefined
+      && req.body?.collectionSite !== null
+      && req.body?.collectionSite !== '';
+    const sampleData = namesCollectionSite || !organizationId
+      ? req.body
+      : { ...req.body, collectionSite: organizationId };
 
     const sampleRepository = {
       // Same contract as POST /api/samples: the use case's options (audit
@@ -1121,7 +1144,8 @@ router.post('/register-sample', authenticate, requirePermission('createSample'),
     });
 
     const result = await registerSampleUseCase.execute({
-      sampleData: req.body,
+      sampleData,
+      options: { organizationId },
       actor: {
         userId: req.user?.id || req.user?._id?.toString() || req.user?.userID || null,
         userName: req.user?.name || req.user?.username || null,

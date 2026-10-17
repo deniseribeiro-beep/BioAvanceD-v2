@@ -35,7 +35,7 @@ describe('POST /api/users/register-sample - paridade de contrato com /api/sample
 
   let patientsCollectionMock;
 
-  function givenAppDbCollections() {
+  function givenAppDbCollections({ rbacUsers = [{ userAccountId: 'qa-user-3', accessType: 2 }], extraRoles = [] } = {}) {
     patientsCollectionMock = createCollectionMock();
     app.locals.db = createDbMock({
       samples: createCollectionMock({
@@ -54,7 +54,7 @@ describe('POST /api/users/register-sample - paridade de contrato com /api/sample
         insertOne: vi.fn().mockResolvedValue({ insertedId: 'log-qa' }),
       }),
       patients: patientsCollectionMock,
-      ...buildRbacCollections([{ userAccountId: 'qa-user-3', accessType: 2 }]),
+      ...buildRbacCollections(rbacUsers, extraRoles),
     });
   }
 
@@ -136,6 +136,50 @@ describe('POST /api/users/register-sample - paridade de contrato com /api/sample
       expect.any(Object),
       expect.objectContaining({ onCreatedInTransaction: expect.any(Function) })
     );
+  });
+
+  it('#1376: stamps the caller\'s organization, and names it as collectionSite when the body named none', async () => {
+    const payload = buildSamplePayload({ linkedProject: 'Projeto QA Rota Usuário', isRareDisease: false, riskScore: 1 });
+    expect(payload.collectionSite).toBeUndefined();
+
+    const response = await whenRegisterSample(payload);
+
+    expect([201, 202]).toContain(response.status);
+    expect(sampleService.createSample).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ collectionSite: 'test-org-default' }),
+      expect.objectContaining({ organizationId: 'test-org-default' })
+    );
+  });
+
+  it('#1376: keeps a named collectionSite and still stamps the caller\'s organization', async () => {
+    const response = await whenRegisterSample(
+      buildSamplePayload({ linkedProject: 'Projeto QA Rota Usuário', isRareDisease: false, riskScore: 1, collectionSite: 'Hospital QA Norte' })
+    );
+
+    expect([201, 202]).toContain(response.status);
+    expect(sampleService.createSample).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ collectionSite: 'Hospital QA Norte' }),
+      expect.objectContaining({ organizationId: 'test-org-default' })
+    );
+  });
+
+  it('#1376: refuses a caller with no organization with a 403 and creates nothing', async () => {
+    // A scope-less additive role is the caller's only assignment, so it
+    // resolves as org-less (rbac.factory's #1073 note).
+    givenAppDbCollections({
+      rbacUsers: [{ userAccountId: 'qa-user-3', roleCodes: ['sample-only'] }],
+      extraRoles: [{ roleCode: 'sample-only', hierarchyLevel: null, permissions: ['createSample'] }],
+    });
+
+    const response = await whenRegisterSample(
+      buildSamplePayload({ linkedProject: 'Projeto QA Rota Usuário', isRareDisease: false, riskScore: 1 })
+    );
+
+    expect(response.status).toBe(403);
+    expect(response.body).toEqual({ success: false, error: 'Sem organização atribuída' });
+    expect(sampleService.createSample).not.toHaveBeenCalled();
   });
 
   it('deve bloquear em STRICT_MODE_BLOCKED na rota alternativa (403)', async () => {
