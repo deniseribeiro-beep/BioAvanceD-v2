@@ -13,11 +13,12 @@ const crypto = require('crypto');
 //   `invalid_value` (a value that is not a physically possible reading),
 //   `unbound_datastream` (no TelemetryDatastream of the sensor valid at
 //   observedAt) and `device_not_registered` (no active DeviceRegistration
-//   for the sensor), RF009 AC4;
+//   for the sensor), RF009 AC4; `device_unusable` (the sensor's Device is
+//   not registered, not homologated or retired), RF017 AC8;
 // - severity: `error`, the dictionary's own value for a clock drift;
 // - disposition: `quarantined` (the reading is kept, flagged by this issue)
 //   and `rejected` (the reading is refused), RF009 AC7's two outcomes.
-const ISSUE_CODE_VALUES = ['clock_drift', 'invalid_value', 'unbound_datastream', 'device_not_registered'];
+const ISSUE_CODE_VALUES = ['clock_drift', 'invalid_value', 'unbound_datastream', 'device_not_registered', 'device_unusable'];
 const SEVERITY_VALUES = ['error'];
 const DISPOSITION_VALUES = ['quarantined', 'rejected'];
 const REQUIRED = ['ingestionEventId', 'issueCode', 'severity', 'details', 'disposition'];

@@ -64,8 +64,9 @@ module.exports = {
   TELEMETRY_MIN_TEMP_ALERT: process.env.TELEMETRY_MIN_TEMP_ALERT,
   TELEMETRY_MAX_TEMP_ALERT: process.env.TELEMETRY_MAX_TEMP_ALERT,
   // RF009 AC4, RF017 AC5: what the ingestion contract does with a reading
-  // whose sensor has no TelemetryDatastream valid at its observedAt, or no
-  // active DeviceRegistration. `record` (the default) accepts it and records
+  // whose sensor has no TelemetryDatastream valid at its observedAt, no
+  // active DeviceRegistration, or whose Device is not registered, homologated
+  // and unretired, RF017 AC8. `record` (the default) accepts it and records
   // a TelemetryValidationIssue; `enforce` refuses it with a 422.
   TELEMETRY_BINDING_MODE: process.env.TELEMETRY_BINDING_MODE || 'record',
 

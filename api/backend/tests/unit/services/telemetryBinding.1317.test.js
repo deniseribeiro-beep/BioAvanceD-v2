@@ -63,6 +63,8 @@ const STREAM = {
   samplingPolicyId: 'sampling-1', thresholdProfileId: 'threshold-1', validityPeriod: { start: START },
 };
 const REGISTRATION = { deviceId: 'sensor-1', communicationProfileId: 'mqtt-profile-1', credentialReference: 'secret-manager:device/sensor-1' };
+// RF017 AC8: the sensor is also a registered, homologated, unretired Device.
+const DEVICE = { deviceId: 'sensor-1', deviceType: 'sensor', qualificationStatus: 'qualified', retiredAt: null };
 
 let previousMode;
 beforeEach(() => { previousMode = env.TELEMETRY_BINDING_MODE; });
@@ -150,6 +152,7 @@ describe('screenReading binds every reading (RF009 AC4)', () => {
     const fake = fakeDb();
     const stream = await binding.createDatastream(fake.db, STREAM);
     await binding.createRegistration(fake.db, REGISTRATION);
+    await fake.collectionOf('devices').insertOne(DEVICE);
     return { ...fake, stream };
   }
 
@@ -178,6 +181,7 @@ describe('screenReading binds every reading (RF009 AC4)', () => {
     env.TELEMETRY_BINDING_MODE = 'enforce';
     const { db, collectionOf } = fakeDb();
     await binding.createDatastream(db, STREAM);
+    await collectionOf('devices').insertOne(DEVICE);
     const { payload, identity } = reading('2026-10-02T00:00:00.000Z');
     await expect(screenReading(db, identity, payload)).rejects.toMatchObject({ statusCode: 422, auditReason: 'device_not_registered' });
     expect(collectionOf('telemetryValidationIssues').docs).toEqual([
@@ -185,13 +189,13 @@ describe('screenReading binds every reading (RF009 AC4)', () => {
     ]);
   });
 
-  it('record (the default): an unbound, unregistered reading is accepted, unstamped, with both issues quarantined', async () => {
+  it('record (the default): an unbound, unregistered reading is accepted, unstamped, with its three issues quarantined', async () => {
     env.TELEMETRY_BINDING_MODE = undefined;
     const { db, collectionOf } = fakeDb();
     const { payload, identity } = reading('2026-10-02T00:00:00.000Z', 'sensor-unbound');
     const issues = await screenReading(db, identity, payload);
     expect(issues.map((issue) => [issue.issueCode, issue.disposition])).toEqual([
-      ['unbound_datastream', 'quarantined'], ['device_not_registered', 'quarantined'],
+      ['unbound_datastream', 'quarantined'], ['device_not_registered', 'quarantined'], ['device_unusable', 'quarantined'],
     ]);
     expect(identity.datastreamId).toBeNull();
     expect(identity.storageLocationId).toBeNull();
@@ -211,6 +215,47 @@ describe('screenReading binds every reading (RF009 AC4)', () => {
     await expect(screenReading(failing, second.identity, second.payload)).resolves.toEqual([]);
     expect(second.identity.datastreamId).toBeNull();
     expect(second.identity.storageLocationId).toBeNull();
+  });
+
+  // RF017 AC8: the sensor's Device must be registered, homologated and unretired.
+  it.each([
+    ['absent', (docs) => { docs.length = 0; }, /não registrado/],
+    ['not homologated', (docs) => { docs[0].qualificationStatus = 'pending'; }, /não homologado/],
+    ['retired', (docs) => { docs[0].retiredAt = new Date(START); }, /retirado/],
+  ])('enforce: a sensor whose Device is %s is a 422 and records a rejected device_unusable', async (_label, alter, details) => {
+    env.TELEMETRY_BINDING_MODE = 'enforce';
+    const { db, collectionOf } = await boundDb();
+    alter(collectionOf('devices').docs);
+    const { payload, identity } = reading('2026-10-02T00:00:00.000Z');
+    await expect(screenReading(db, identity, payload)).rejects.toMatchObject({ statusCode: 422, auditReason: 'device_unusable' });
+    const issues = collectionOf('telemetryValidationIssues').docs;
+    expect(issues).toEqual([expect.objectContaining({ issueCode: 'device_unusable', disposition: 'rejected', fieldPath: 'sensorId' })]);
+    expect(issues[0].details).toMatch(details);
+  });
+
+  it('record: a sensor whose Device is not homologated is accepted, stamped, with device_unusable quarantined', async () => {
+    env.TELEMETRY_BINDING_MODE = 'record';
+    const { db, collectionOf, stream } = await boundDb();
+    collectionOf('devices').docs[0].qualificationStatus = 'pending';
+    const { payload, identity } = reading('2026-10-02T00:00:00.000Z');
+    const issues = await screenReading(db, identity, payload);
+    expect(issues.map((issue) => [issue.issueCode, issue.disposition])).toEqual([['device_unusable', 'quarantined']]);
+    expect(identity.datastreamId).toBe(stream.telemetryDatastreamId);
+  });
+
+  it('enforce: a Device lookup that fails refuses the reading with 503; record lets it through, still stamped', async () => {
+    const error = vi.spyOn(logger, 'error').mockImplementation(() => {});
+    const { db, stream } = await boundDb();
+    const collection = db.collection;
+    db.collection = vi.fn((name) => (name === 'devices' ? { findOne: async () => { throw new Error('mongo down'); } } : collection(name)));
+    env.TELEMETRY_BINDING_MODE = 'enforce';
+    const first = reading('2026-10-02T00:00:00.000Z');
+    await expect(screenReading(db, first.identity, first.payload)).rejects.toMatchObject({ statusCode: 503, code: 'TELEMETRY_BINDING_UNVERIFIABLE' });
+    env.TELEMETRY_BINDING_MODE = 'record';
+    const second = reading('2026-10-02T00:00:00.000Z');
+    await expect(screenReading(db, second.identity, second.payload)).resolves.toEqual([]);
+    expect(second.identity.datastreamId).toBe(stream.telemetryDatastreamId);
+    expect(error).toHaveBeenCalledTimes(2);
   });
 
   it('the InfluxDB point carries the datastream and the location as tags', () => {

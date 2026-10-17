@@ -38,6 +38,7 @@ const { createHash, randomUUID } = require('crypto');
 const { CANONICAL_MODEL_RELEASE_ID } = require('../foundation/readiness');
 const env = require('../config/env');
 const { resolveReadingBinding } = require('./telemetryBinding.service');
+const { deviceUsabilityRefusal } = require('./deviceLifecycle.service');
 const TemperatureModel = require('../models/Temperature');
 const TelemetryIngestionEventModel = require('../models/TelemetryIngestionEvent');
 const TelemetryValidationIssueModel = require('../models/TelemetryValidationIssue');
@@ -213,7 +214,26 @@ function bindingMode() {
  * at observedAt: V2E-0547 is the location monitored at the instant of
  * observation, and that datastream is the one binding of sensor to location
  * over time (V2E-0565, 1..1). A payload's own storageLocationId is never read.
+ *
+ * RF017 AC8: the sensor's Device must also be registered, homologated and
+ * unretired (deviceUsabilityRefusal, as the scan route checks it), else a
+ * `device_unusable` draft under the same mode. Its lookup is separate: when
+ * it fails under `record` the datastream stamp already resolved is kept.
+ * A failed binding lookup under `record` skips this check too.
+ *
+ * [inference] The sensor is checked as a Device under its own sensorId, the
+ * identity resolveReadingBinding already uses for DeviceRegistration
+ * (V2E-0563 and V2E-0619 both reference Device). The AC8 gap is its own
+ * issue code beside `device_not_registered` because the two read different
+ * records, an active DeviceRegistration and the Device lifecycle's
+ * homologation and retirement, so a sensor with neither gets both issues.
  */
+function bindingUnverifiableError() {
+  return Object.assign(new Error('Vínculo da leitura a TelemetryDatastream e DeviceRegistration não verificável'), {
+    statusCode: 503, code: 'TELEMETRY_BINDING_UNVERIFIABLE', auditReason: 'telemetry_binding_unverifiable',
+  });
+}
+
 async function readingBindingOf(storeOf, identity, payload = {}) {
   const mode = bindingMode();
   const sensorId = String(payload.sensorId || payload.sensorID || '').trim();
@@ -224,11 +244,7 @@ async function readingBindingOf(storeOf, identity, payload = {}) {
     });
   } catch (error) {
     logger.error(`[ISO20387][TELEMETRY] Falha ao resolver o TelemetryDatastream da leitura: ${error.message || error}`);
-    if (mode === 'enforce') {
-      throw Object.assign(new Error('Vínculo da leitura a TelemetryDatastream e DeviceRegistration não verificável'), {
-        statusCode: 503, code: 'TELEMETRY_BINDING_UNVERIFIABLE', auditReason: 'telemetry_binding_unverifiable',
-      });
-    }
+    if (mode === 'enforce') throw bindingUnverifiableError();
     return { datastreamId: null, storageLocationId: null, drafts: [] };
   }
 
@@ -251,6 +267,21 @@ async function readingBindingOf(storeOf, identity, payload = {}) {
       details: `Sensor ${sensorId} não tem DeviceRegistration ativo (RF009 AC4)`,
       disposition,
     });
+  }
+  try {
+    const refusal = await deviceUsabilityRefusal(await storeOf(), sensorId);
+    if (refusal) {
+      drafts.push({
+        issueCode: 'device_unusable',
+        severity: 'error',
+        fieldPath: 'sensorId',
+        details: `Sensor ${sensorId}: ${refusal} (RF017 AC8)`,
+        disposition,
+      });
+    }
+  } catch (error) {
+    logger.error(`[ISO20387][TELEMETRY] Falha ao verificar o Device do sensor da leitura: ${error.message || error}`);
+    if (mode === 'enforce') throw bindingUnverifiableError();
   }
   return {
     datastreamId: binding.datastream?.telemetryDatastreamId || null,
@@ -308,8 +339,8 @@ async function screenReading(db, identity, payload = {}) {
 
   if (rejected.length) {
     const error = validationError(rejected.map((issue) => issue.details).join('; '));
-    // The first rejecting issue's code: `invalid_value`, `unbound_datastream`
-    // or `device_not_registered`.
+    // The first rejecting issue's code: `invalid_value`, `unbound_datastream`,
+    // `device_not_registered` or `device_unusable`.
     error.auditReason = rejected[0].issueCode;
     error.details = rejected.map((issue) => issue.details);
     throw error;

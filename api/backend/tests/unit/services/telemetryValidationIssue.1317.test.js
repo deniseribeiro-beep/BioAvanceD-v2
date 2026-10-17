@@ -22,12 +22,14 @@ const SYNCED = new Date(RECEIVED.getTime() - 60 * 1000).toISOString();
 const DRIFTED = new Date(RECEIVED.getTime() - CLOCK_SKEW_TOLERANCE_MS - 1).toISOString();
 
 // Sensor s1 is bound (RF009 AC4): a datastream valid at every reading here
-// and an active registration, so these cases see only the value checks.
+// and an active registration, and it is a homologated, unretired Device
+// (RF017 AC8), so these cases see only the value checks.
 // Binding itself is covered in telemetryBinding.1317.test.js.
 const S1_DATASTREAM = {
   telemetryDatastreamId: 'ds-s1', sensorId: 's1', observedProperty: 'temperature', validityPeriod: { start: new Date('2020-01-01T00:00:00.000Z'), end: null },
 };
 const S1_REGISTRATION = { deviceRegistrationId: 'reg-s1', deviceId: 's1', status: 'active' };
+const S1_DEVICE = { deviceId: 's1', deviceType: 'sensor', qualificationStatus: 'qualified', retiredAt: null };
 
 function fakeDb() {
   const collections = {};
@@ -35,7 +37,7 @@ function fakeDb() {
     collections[name] = collections[name] || {
       collectionName: name,
       createIndex: vi.fn().mockResolvedValue('ok'),
-      findOne: vi.fn().mockResolvedValue(name === 'deviceRegistrations' ? S1_REGISTRATION : null),
+      findOne: vi.fn().mockResolvedValue({ deviceRegistrations: S1_REGISTRATION, devices: S1_DEVICE }[name] || null),
       find: vi.fn(() => ({ toArray: async () => (name === 'telemetryDatastreams' ? [S1_DATASTREAM] : []) })),
       insertOne: vi.fn().mockResolvedValue({ insertedId: `${name}-id` }),
       insertMany: vi.fn().mockResolvedValue({ insertedCount: 1 }),
@@ -93,7 +95,7 @@ describe('screenReading', () => {
   it('a drifted reading records its issue and ingestion event, and is accepted', async () => {
     const { db, collectionOf } = fakeDb();
     const identity = readingIdentityOf({ sensorId: 's1', temperatureValue: 4, timestamp: DRIFTED }, RECEIVED, { ingestionService: 'mqtt' });
-    const issues = await screenReading(db, identity, { temperatureValue: 4 });
+    const issues = await screenReading(db, identity, { sensorId: 's1', temperatureValue: 4 });
 
     const event = collectionOf('telemetryIngestionEvents').insertOne.mock.calls[0][0];
     const written = collectionOf('telemetryValidationIssues').insertMany.mock.calls[0][0];
@@ -114,7 +116,7 @@ describe('screenReading', () => {
   it('an implausible value records its issue, then is rejected with 422 and no reading id', async () => {
     const { db, collectionOf } = fakeDb();
     const identity = readingIdentityOf({ sensorId: 's1', temperatureValue: 900, timestamp: SYNCED }, RECEIVED, { ingestionService: 'iot-api' });
-    await expect(screenReading(db, identity, { temperatureValue: 900 }))
+    await expect(screenReading(db, identity, { sensorId: 's1', temperatureValue: 900 }))
       .rejects.toMatchObject({ statusCode: 422, auditReason: 'invalid_value', details: [expect.stringContaining('temperatureValue')] });
     expect(collectionOf('telemetryValidationIssues').insertMany.mock.calls[0][0]).toEqual([
       expect.objectContaining({ issueCode: 'invalid_value', disposition: 'rejected', fieldPath: 'temperatureValue' }),
@@ -127,7 +129,7 @@ describe('screenReading', () => {
     collectionOf('telemetryIngestionEvents').insertOne.mockRejectedValue(new Error('mongo down'));
     const error = vi.spyOn(logger, 'error').mockImplementation(() => {});
     const identity = readingIdentityOf({ sensorId: 's1', temperatureValue: 4, timestamp: DRIFTED }, RECEIVED);
-    await expect(screenReading(db, identity, { temperatureValue: 4 })).resolves.toHaveLength(1);
+    await expect(screenReading(db, identity, { sensorId: 's1', temperatureValue: 4 })).resolves.toHaveLength(1);
     expect(error).toHaveBeenCalledWith(expect.stringContaining('mongo down'));
   });
 
