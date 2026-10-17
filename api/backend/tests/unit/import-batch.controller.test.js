@@ -6,6 +6,7 @@ const require = createRequire(import.meta.url);
 const controller = require('../../src/controllers/import-batch.controller');
 const stagingImportService = require('../../src/services/staging-import.service');
 const callerCreateOrganization = require('../../src/services/callerCreateOrganization.service');
+const batchValidationEngine = require('../../src/services/batch-validation-engine.service');
 const logger = require('../../src/utils/logger');
 const mongooseConnection = require('../../src/infrastructure/database/mongodb/connection');
 const fs = require('fs');
@@ -562,6 +563,40 @@ describe('import-batch.controller', () => {
         success: false,
         error: 'Erro ao obter status do batch import',
         message: 'db unreachable'
+      });
+    });
+  });
+
+  describe('getQuarantineBatch (#1385)', () => {
+    const ORG_B = { scope: 'organization', organizationIds: ['org-b'] };
+
+    it('forwards req.organizationScope to the service and answers 200', async () => {
+      const req = { app: { locals: { db: 'the-db' } }, params: { id: 'q-1' }, organizationScope: ORG_B };
+      const res = createRes();
+      const spy = vi.spyOn(batchValidationEngine, 'getQuarantineBatch').mockResolvedValue({ batch: { _id: 'q-1' }, records: [] });
+
+      await controller.getQuarantineBatch(req, res);
+
+      expect(spy).toHaveBeenCalledWith('the-db', 'q-1', { organizationScope: ORG_B });
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith({ success: true, batch: { _id: 'q-1' }, records: [] });
+    });
+
+    it("answers the service's out-of-scope refusal as 403", async () => {
+      const req = { app: { locals: { db: 'the-db' } }, params: { id: 'q-2' }, organizationScope: ORG_B };
+      const res = createRes();
+      const refusal = new Error('Lote de quarentena fora do escopo organizacional do usuário.');
+      refusal.statusCode = 403;
+      vi.spyOn(batchValidationEngine, 'getQuarantineBatch').mockRejectedValue(refusal);
+      vi.spyOn(logger, 'error').mockImplementation(() => {});
+
+      await controller.getQuarantineBatch(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(res.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'Erro ao obter lote de quarentena do batch import',
+        message: 'Lote de quarentena fora do escopo organizacional do usuário.'
       });
     });
   });

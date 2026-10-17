@@ -215,7 +215,9 @@ class ImportBatchController {
   async getQuarantineBatch(req, res) {
     try {
       const db = req.app.locals.db;
-      const result = await batchValidationEngine.getQuarantineBatch(db, req.params.id);
+      const result = await batchValidationEngine.getQuarantineBatch(db, req.params.id, {
+        organizationScope: req.organizationScope,
+      });
 
       return res.status(200).json({ success: true, ...result });
     } catch (error) {

@@ -12,6 +12,7 @@ const sampleService = require('./sample.service');
 const biomarkerObservationService = require('./biomarker-observation.service');
 const logger = require('../utils/logger');
 const { sealStagedRecord, revealStagedRecord } = require('../utils/stagedRowCrypto');
+const { isRecordInOrganizationScope } = require('./rbac-assignment.service');
 
 const CHUNK_SIZE = 100;
 
@@ -1015,9 +1016,12 @@ class BatchValidationEngine {
    * e do FHIR filtram por `type` e nao podem passar a listar lotes deste
    * importador por acidente (#799 foi exatamente esse defeito).
    */
-  async quarantineRejectedRows(db, { jobId, dataType, fileName = null, rejected = [], counts = {} } = {}) {
+  async quarantineRejectedRows(db, { jobId, dataType, fileName = null, rejected = [], counts = {}, organizationId = null } = {}) {
     if (!Array.isArray(rejected) || rejected.length === 0) return null;
     if (!db) return null;
+    // #1385: the uploader's organization (#1376), stamped on the batch and
+    // on each row; getQuarantineBatch checks it against the reader's scope.
+    const batchOrganizationId = organizationId == null ? null : String(organizationId);
 
     // #813/#807: todo tipo de dado vai para a quarentena, inclusive
     // pacientes. Uma linha de paciente carrega patientName/birthDate/email, e
@@ -1047,6 +1051,7 @@ class BatchValidationEngine {
           // quarentena pode ser revisado mas nao corrigido e reenviado, que e
           // a razao de existir quarentena em vez de log.
           row: rejection.row ?? null,
+          organizationId: batchOrganizationId,
           createdAt: now,
           updatedAt: now,
         }))
@@ -1061,6 +1066,7 @@ class BatchValidationEngine {
         jobId: jobId ? String(jobId) : null,
         fileName: fileName ? String(fileName) : null,
         dataType,
+        organizationId: batchOrganizationId,
         counts: {
           total: counts.total ?? null,
           success: counts.success ?? null,
@@ -1115,7 +1121,7 @@ class BatchValidationEngine {
    * proprios tipos e descartam (LGPD) ou nunca souberam (FHIR) de
    * `ASYNC_BATCH_IMPORT`.
    */
-  async getQuarantineBatch(db, batchIdRaw) {
+  async getQuarantineBatch(db, batchIdRaw, { organizationScope } = {}) {
     const raw = String(batchIdRaw || '').trim();
     if (!ObjectId.isValid(raw)) {
       const error = new Error('Identificador de lote de importação inválido.');
@@ -1125,6 +1131,15 @@ class BatchValidationEngine {
 
     const batchId = new ObjectId(raw);
     const batch = await this.findAsyncBatchImport(db, batchId);
+    // #1385: a reader with organization scope reaches only a batch stamped
+    // with one of its organizations; an unstamped batch (legacy, or uploaded
+    // by a global caller who named none) only global scope reaches. No scope
+    // passed means an internal caller, which is unfiltered.
+    if (organizationScope && !isRecordInOrganizationScope(batch, organizationScope, 'organizationId')) {
+      const error = new Error('Lote de quarentena fora do escopo organizacional do usuário.');
+      error.statusCode = 403;
+      throw error;
+    }
     const records = await db
       .collection('import_staging_records')
       .find({ batchId })
@@ -1282,6 +1297,7 @@ class BatchValidationEngine {
       fileName,
       rejected: rejectedRows,
       counts: { total: result.totalRows, success: result.validRows },
+      organizationId,
     });
     if (quarantineBatchId) {
       result.quarantineBatchId = String(quarantineBatchId);

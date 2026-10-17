@@ -679,6 +679,31 @@ describe('batch-validation-engine.service processBatchImport', () => {
     expect(persistSpy.mock.calls[0][3]).toEqual({ organizationId: 'org-a' });
   });
 
+  // #1385: the quarantine batch carries the organization staged at upload.
+  it('passes the staged rawData.organizationId to quarantineRejectedRows (#1385)', async () => {
+    const filePath = writeTmpFile('samples-org-quarantine.json', JSON.stringify([
+      { participantId: '87654321', sampleType: '', sampleOrigin: 'Coleta', barcode: 'B-2' },
+    ]));
+
+    vi.spyOn(StagingImport, 'findOne').mockResolvedValue({
+      jobId: 'job-1385',
+      fileName: 'samples-org-quarantine.json',
+      rawData: { storagePath: filePath, organizationId: 'org-a' },
+    });
+    vi.spyOn(StagingImport, 'updateOne').mockResolvedValue({});
+    vi.spyOn(batchValidationEngine, 'persistSample').mockResolvedValue({
+      classification: 'INVALID', errors: ['sampleType é obrigatório'], warnings: [],
+    });
+    const quarantineSpy = vi
+      .spyOn(batchValidationEngine, 'quarantineRejectedRows')
+      .mockResolvedValue('batch-1385');
+
+    await batchValidationEngine.processBatchImport({}, 'job-1385');
+
+    expect(quarantineSpy).toHaveBeenCalledTimes(1);
+    expect(quarantineSpy.mock.calls[0][1].organizationId).toBe('org-a');
+  });
+
   it('does not open a quarantine batch when every row succeeded', async () => {
     const filePath = writeTmpFile('samples-clean.json', JSON.stringify([
       { participantId: '12345678', sampleType: 'Sangue', sampleOrigin: 'Coleta', barcode: 'B-1' },
@@ -925,6 +950,44 @@ describe('#813 quarantine of rejected rows', () => {
     expect(docs[1].row).toEqual({ participantId: '87654321', sampleType: '' });
   });
 
+  // #1385: the batch and each of its rows carry the uploader's organization.
+  it('#1385: stamps organizationId on the batch document and every row', async () => {
+    const { db, importBatches, stagingRecords } = quarantineDb();
+
+    await batchValidationEngine.quarantineRejectedRows(db, {
+      jobId: 'job-1385',
+      dataType: 'samples',
+      fileName: 'amostras.csv',
+      rejected: REJECTED,
+      counts: { total: 10, success: 8 },
+      organizationId: 'org-a',
+    });
+
+    expect(importBatches.insertOne.mock.calls[0][0].organizationId).toBe('org-a');
+    const rows = stagingRecords.insertMany.mock.calls[0][0];
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(row.organizationId).toBe('org-a');
+    }
+  });
+
+  it('#1385: stamps organizationId null when none is given', async () => {
+    const { db, importBatches, stagingRecords } = quarantineDb();
+
+    await batchValidationEngine.quarantineRejectedRows(db, {
+      jobId: 'job-1385',
+      dataType: 'samples',
+      fileName: 'amostras.csv',
+      rejected: REJECTED,
+      counts: { total: 10, success: 8 },
+    });
+
+    expect(importBatches.insertOne.mock.calls[0][0].organizationId).toBeNull();
+    for (const row of stagingRecords.insertMany.mock.calls[0][0]) {
+      expect(row.organizationId).toBeNull();
+    }
+  });
+
   it('writes nothing when no row was rejected', async () => {
     const { db, importBatches, stagingRecords } = quarantineDb();
 
@@ -1126,6 +1189,67 @@ describe('#939 reading a quarantined ASYNC_BATCH_IMPORT batch back', () => {
     expect(records[1].row).toEqual({ participantId: '1' });
   });
 
+  // #1385: an organization scope reaches only a batch stamped with one of
+  // its organizations; an unstamped batch only global scope reaches; no
+  // scope passed is an internal caller.
+  it('#1385: 403s an org-b scope on an org-a batch', async () => {
+    const batchId = new ObjectId();
+    const { db, importStagingRecords } = createReaderDb([
+      { __collection: 'import_batches', _id: batchId, type: 'ASYNC_BATCH_IMPORT', status: 'QUARANTINED', organizationId: 'org-a' },
+    ]);
+
+    await expect(
+      batchValidationEngine.getQuarantineBatch(db, String(batchId), {
+        organizationScope: { scope: 'organization', organizationIds: ['org-b'] },
+      })
+    ).rejects.toMatchObject({ statusCode: 403 });
+    expect(importStagingRecords.find).not.toHaveBeenCalled();
+  });
+
+  it('#1385: 403s an organization scope on an unstamped (legacy) batch', async () => {
+    const batchId = new ObjectId();
+    const { db } = createReaderDb([
+      { __collection: 'import_batches', _id: batchId, type: 'ASYNC_BATCH_IMPORT', status: 'QUARANTINED' },
+    ]);
+
+    await expect(
+      batchValidationEngine.getQuarantineBatch(db, String(batchId), {
+        organizationScope: { scope: 'organization', organizationIds: ['org-a'] },
+      })
+    ).rejects.toMatchObject({ statusCode: 403 });
+  });
+
+  it('#1385: an org-a scope reads its org-a batch, and global and no scope read any batch', async () => {
+    const stampedId = new ObjectId();
+    const legacyId = new ObjectId();
+    const { db } = createReaderDb([
+      { __collection: 'import_batches', _id: stampedId, type: 'ASYNC_BATCH_IMPORT', status: 'QUARANTINED', organizationId: 'org-a' },
+      { __collection: 'import_batches', _id: legacyId, type: 'ASYNC_BATCH_IMPORT', status: 'QUARANTINED' },
+    ]);
+    const orgA = { scope: 'organization', organizationIds: ['org-a'] };
+    const global = { scope: 'global', organizationIds: [] };
+
+    await expect(batchValidationEngine.getQuarantineBatch(db, String(stampedId), { organizationScope: orgA }))
+      .resolves.toMatchObject({ batch: { organizationId: 'org-a' } });
+    await expect(batchValidationEngine.getQuarantineBatch(db, String(legacyId), { organizationScope: global }))
+      .resolves.toMatchObject({ batch: { status: 'QUARANTINED' } });
+    await expect(batchValidationEngine.getQuarantineBatch(db, String(legacyId)))
+      .resolves.toMatchObject({ batch: { status: 'QUARANTINED' } });
+  });
+
+  it('#1385: 404 stays ahead of 403 for a batch of another type', async () => {
+    const batchId = new ObjectId();
+    const { db } = createReaderDb([
+      { __collection: 'import_batches', _id: batchId, type: 'LGPD_SAMPLE_CSV', status: 'QUARANTINED' },
+    ]);
+
+    await expect(
+      batchValidationEngine.getQuarantineBatch(db, String(batchId), {
+        organizationScope: { scope: 'organization', organizationIds: ['org-b'] },
+      })
+    ).rejects.toMatchObject({ statusCode: 404 });
+  });
+
   it('400s on an id that is not a valid ObjectId', async () => {
     const { db } = createReaderDb([]);
 
@@ -1157,8 +1281,9 @@ describe('#939 GET /batch/quarantine/:id route registration', () => {
       (item) => item.route && item.route.path === '/batch/quarantine/:id' && item.route.methods.get
     );
     expect(layer).toBeTruthy();
-    // authenticate, requirePermission('uploadFiles'), the controller handler.
-    expect(layer.route.stack).toHaveLength(3);
+    // authenticate, requirePermission('uploadFiles'), requireOrganizationScope
+    // (#1385), the controller handler.
+    expect(layer.route.stack).toHaveLength(4);
 
     const req = { method: 'GET', user: { userID: 'user-939' }, app: { locals: { db: {} } } };
     const res = { status: vi.fn().mockReturnThis(), json: vi.fn() };

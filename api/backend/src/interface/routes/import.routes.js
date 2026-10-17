@@ -42,12 +42,14 @@ router.get('/status/:jobId',
 router.get('/batch/quarantine/:id',
   authenticate,
   requirePermission('uploadFiles'),
+  requireOrganizationScope,
   importBatchController.getQuarantineBatch.bind(importBatchController)
 );
 
 router.post('/fhir/stage',
   authenticate,
   requirePermission('uploadFiles'),
+  requireOrganizationScope,
   fhirImportStagingController.uploadMiddleware(),
   fhirImportStagingController.stage.bind(fhirImportStagingController)
 );
@@ -55,36 +57,42 @@ router.post('/fhir/stage',
 router.get('/fhir/batches/:id',
   authenticate,
   requirePermission('uploadFiles'),
+  requireOrganizationScope,
   fhirImportStagingController.getBatch.bind(fhirImportStagingController)
 );
 
 router.post('/fhir/batches/:id/validate',
   authenticate,
   requirePermission('uploadFiles'),
+  requireOrganizationScope,
   fhirImportStagingController.validate.bind(fhirImportStagingController)
 );
 
 router.post('/fhir/batches/:id/send-consents',
   authenticate,
   requirePermission('uploadFiles'),
+  requireOrganizationScope,
   fhirImportStagingController.sendConsents.bind(fhirImportStagingController)
 );
 
 router.get('/fhir/batches/:id/consent-status',
   authenticate,
   requirePermission('uploadFiles'),
+  requireOrganizationScope,
   fhirImportStagingController.consentStatus.bind(fhirImportStagingController)
 );
 
 router.post('/fhir/batches/:id/commit',
   authenticate,
   requirePermission('uploadFiles'),
+  requireOrganizationScope,
   fhirImportStagingController.commit.bind(fhirImportStagingController)
 );
 
 router.post('/fhir/batches/:id/records/:recordId/external-document',
   authenticate,
   requirePermission('uploadFiles'),
+  requireOrganizationScope,
   fhirImportStagingController.attachExternalDocument.bind(fhirImportStagingController)
 );
 

@@ -437,6 +437,8 @@ describe('FHIR import staging', () => {
       app: { locals: { db } },
       body: { resourceType: 'Patient', id: 'P-INVALID' },
       user: { id: 'admin' },
+      // #1385: what requireOrganizationScope sets for a global caller.
+      organizationScope: { scope: 'global', organizationIds: [] },
     };
     const res = createJsonRes();
 
@@ -872,6 +874,166 @@ describe('FHIR import staging', () => {
 
   it('getBatch rejeita lote inexistente com 404', async () => {
     await expect(fhirImportStagingService.getBatch(db, 'lote-inexistente')).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  // #1385: a FHIR batch carries the organization it was staged under, and
+  // every read and write of it checks that against the caller's scope. An
+  // unstamped batch (legacy, or staged by a global caller who named none)
+  // only global scope reaches; no scope argument is an internal caller.
+  describe('#1385 organization scope', () => {
+    const ORG_A = { scope: 'organization', organizationIds: ['org-a'] };
+    const ORG_B = { scope: 'organization', organizationIds: ['org-b'] };
+    const GLOBAL = { scope: 'global', organizationIds: [] };
+    const emailBundle = {
+      resourceType: 'Bundle',
+      entry: [
+        {
+          resource: {
+            resourceType: 'Patient',
+            id: 'P-ORG',
+            name: [{ text: 'Paciente Organização' }],
+            identifier: [{ value: 'DOC-ORG' }],
+            telecom: [{ system: 'email', value: 'org@example.org' }],
+          },
+        },
+        { resource: { resourceType: 'Specimen', id: 'S-ORG', subject: { reference: 'Patient/P-ORG' }, type: { text: 'SANGUE' } } },
+      ],
+    };
+
+    function stagingStatuses() {
+      return db.collections.import_staging_records.docs.map((doc) => doc.status);
+    }
+
+    it('#1385: stageBundle stamps the batch and every staged record with its organizationId, and null when none is given', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, signedBundle, { fileName: 'bundle.json', organizationId: 'org-a' });
+
+      expect(staged.batch.organizationId).toBe('org-a');
+      expect(db.collections.import_batches.docs[0].organizationId).toBe('org-a');
+      expect(db.collections.import_staging_records.docs).toHaveLength(2);
+      for (const doc of db.collections.import_staging_records.docs) {
+        expect(doc.organizationId).toBe('org-a');
+      }
+
+      const unstamped = await fhirImportStagingService.stageBundle(db, emailBundle, { fileName: 'bundle.json' });
+      expect(unstamped.batch.organizationId).toBeNull();
+    });
+
+    it('#1385: an org-a scope reads its own org-a batch', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, signedBundle, { fileName: 'bundle.json', organizationId: 'org-a' });
+
+      const result = await fhirImportStagingService.getBatch(db, staged.batch._id, { organizationScope: ORG_A });
+      expect(String(result.batch._id)).toBe(String(staged.batch._id));
+      expect(result.records).toHaveLength(2);
+    });
+
+    it('#1385: getBatch refuses an org-b scope on an org-a batch with 403', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, signedBundle, { fileName: 'bundle.json', organizationId: 'org-a' });
+
+      await expect(
+        fhirImportStagingService.getBatch(db, staged.batch._id, { organizationScope: ORG_B })
+      ).rejects.toMatchObject({ statusCode: 403 });
+    });
+
+    it('#1385: validateBatch refuses an org-b scope with 403 and moves no record', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, emailBundle, { fileName: 'bundle.json', organizationId: 'org-a' });
+      const before = stagingStatuses();
+      db.collections.import_staging_records.updateOne.mockClear();
+
+      await expect(
+        fhirImportStagingService.validateBatch(db, staged.batch._id, { organizationScope: ORG_B })
+      ).rejects.toMatchObject({ statusCode: 403 });
+      expect(db.collections.import_staging_records.updateOne).not.toHaveBeenCalled();
+      expect(stagingStatuses()).toEqual(before);
+    });
+
+    it('#1385: sendConsents refuses an org-b scope with 403 and sends no email', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, emailBundle, { fileName: 'bundle.json', organizationId: 'org-a' });
+      expect(staged.records[0].status).toBe('VALID');
+
+      await expect(
+        fhirImportStagingService.sendConsents(db, staged.batch._id, { userID: 'admin', organizationScope: ORG_B })
+      ).rejects.toMatchObject({ statusCode: 403 });
+      expect(notificationService.sendConsentEmail).not.toHaveBeenCalled();
+    });
+
+    it('#1385: getConsentStatus refuses an org-b scope with 403', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, emailBundle, { fileName: 'bundle.json', organizationId: 'org-a' });
+
+      await expect(
+        fhirImportStagingService.getConsentStatus(db, staged.batch._id, { organizationScope: ORG_B })
+      ).rejects.toMatchObject({ statusCode: 403 });
+    });
+
+    it('#1385: commitBatch refuses an org-b scope with 403, writes no sample and moves no record', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, signedBundle, { fileName: 'bundle.json', organizationId: 'org-a' });
+      expect(staged.records[0].status).toBe('READY_TO_COMMIT');
+      const before = stagingStatuses();
+      db.collections.import_staging_records.updateOne.mockClear();
+
+      await expect(
+        fhirImportStagingService.commitBatch(db, staged.batch._id, { organizationScope: ORG_B })
+      ).rejects.toMatchObject({ statusCode: 403 });
+      expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
+      expect(db.collections.samples.docs).toHaveLength(0);
+      expect(db.collections.patients.updateOne).not.toHaveBeenCalled();
+      expect(db.collections.import_staging_records.updateOne).not.toHaveBeenCalled();
+      expect(stagingStatuses()).toEqual(before);
+    });
+
+    it('#1385: attachExternalDocument refuses an org-b scope with 403 and releases nothing', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, emailBundle, { fileName: 'bundle.json', organizationId: 'org-a' });
+      const recordId = db.collections.import_staging_records.docs[0]._id;
+      db.collections.samples.docs.push({ _id: 'sample-org', specimenId: 'S-ORG' });
+      const before = stagingStatuses();
+      db.collections.import_staging_records.updateOne.mockClear();
+
+      await expect(
+        fhirImportStagingService.attachExternalDocument(db, staged.batch._id, recordId, { userID: 'admin', organizationScope: ORG_B })
+      ).rejects.toMatchObject({ statusCode: 403 });
+      expect(db.collections.import_staging_records.updateOne).not.toHaveBeenCalled();
+      expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
+      expect(stagingStatuses()).toEqual(before);
+    });
+
+    it('#1385: an unstamped (legacy) batch is refused 403 to an organization scope and read by global scope', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, signedBundle, { fileName: 'bundle.json' });
+      delete db.collections.import_batches.docs[0].organizationId;
+
+      await expect(
+        fhirImportStagingService.getBatch(db, staged.batch._id, { organizationScope: ORG_A })
+      ).rejects.toMatchObject({ statusCode: 403 });
+      await expect(
+        fhirImportStagingService.getBatch(db, staged.batch._id, { organizationScope: GLOBAL })
+      ).resolves.toMatchObject({ batch: { _id: staged.batch._id } });
+    });
+
+    it('#1385: with no scope argument the caller is internal and unfiltered', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, signedBundle, { fileName: 'bundle.json', organizationId: 'org-a' });
+
+      await expect(fhirImportStagingService.getBatch(db, staged.batch._id)).resolves.toMatchObject({
+        batch: { _id: staged.batch._id },
+      });
+    });
+
+    it('#1385: validateImportConsentToken still resolves the token of a stamped batch', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, emailBundle, { fileName: 'bundle.json', organizationId: 'org-a' });
+      const consentResult = await fhirImportStagingService.sendConsents(db, staged.batch._id, { userID: 'admin' });
+      const token = consentResult.records[0].consentTracking.token;
+
+      const validated = await fhirImportStagingService.validateImportConsentToken(db, token);
+      expect(validated.batch.organizationId).toBe('org-a');
+      expect(String(validated.record._id)).toBe(String(db.collections.import_staging_records.docs[0]._id));
+    });
+
+    it('#1385: commitBatch gives a new sample the batch organizationId', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, signedBundle, { fileName: 'bundle.json', organizationId: 'org-a' });
+
+      const committed = await fhirImportStagingService.commitBatch(db, staged.batch._id, { organizationScope: ORG_A });
+      expect(committed.committed).toBe(1);
+      const sample = db.collections.samples.docs.find((doc) => doc.specimenId === 'S-001');
+      expect(sample).toBeTruthy();
+      expect(sample.organizationId).toBe('org-a');
+    });
   });
 
   describe('getConsentStatus', () => {

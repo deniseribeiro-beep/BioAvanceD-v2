@@ -13,6 +13,7 @@ const operationalStateDecisionService = require('./operationalStateDecision.serv
 const { withMongoTransaction, isTransactionCapable } = require('../utils/mongoTransaction');
 const rcsAssessmentService = require('./rcs-assessment.service');
 const specimenPreanalyticsService = require('./specimen-preanalytics.service');
+const { isRecordInOrganizationScope } = require('./rbac-assignment.service');
 
 const STATUS = Object.freeze({
   VALID: 'VALID',
@@ -630,6 +631,9 @@ async function stageBundle(db, payload, metadata = {}) {
   }
 
   const now = new Date();
+  // #1385: the organization the controller resolved from the caller's scope
+  // (#1376); null for a global caller who named none.
+  const organizationId = metadata.organizationId == null ? null : String(metadata.organizationId);
   const batchDoc = {
     type: FHIR_BATCH_TYPE,
     status: 'STAGED',
@@ -637,6 +641,7 @@ async function stageBundle(db, payload, metadata = {}) {
     source: 'FHIR',
     counts: summarize(records),
     createdBy: metadata.userID || null,
+    organizationId,
     createdAt: now,
     updatedAt: now,
   };
@@ -646,6 +651,7 @@ async function stageBundle(db, payload, metadata = {}) {
   const docs = records.map((record) => ({
     ...record,
     batchId,
+    organizationId,
     createdAt: now,
     updatedAt: now,
   }));
@@ -664,26 +670,35 @@ async function stageBundle(db, payload, metadata = {}) {
  * 404 rather than 403 deliberately: a FHIR endpoint should not confirm the
  * existence of a batch belonging to the LGPD import path.
  */
-async function findFhirBatch(db, batchId) {
+async function findFhirBatch(db, batchId, organizationScope) {
   const batch = await collection(db, 'import_batches').findOne({ _id: batchId, type: FHIR_BATCH_TYPE });
   if (!batch) {
     const error = new Error('Lote de importação FHIR não encontrado.');
     error.statusCode = 404;
     throw error;
   }
+  // #1385: a caller with organization scope reaches only a batch stamped with
+  // one of its organizations; an unstamped batch (legacy, or staged by a
+  // global caller who named none) only global scope reaches. No scope passed
+  // means an internal caller, which is unfiltered.
+  if (organizationScope && !isRecordInOrganizationScope(batch, organizationScope, 'organizationId')) {
+    const error = new Error('Lote de importação FHIR fora do escopo organizacional do usuário.');
+    error.statusCode = 403;
+    throw error;
+  }
   return batch;
 }
 
-async function getBatch(db, batchIdRaw) {
+async function getBatch(db, batchIdRaw, { organizationScope } = {}) {
   const batchId = toObjectId(batchIdRaw);
-  const batch = await findFhirBatch(db, batchId);
+  const batch = await findFhirBatch(db, batchId, organizationScope);
   const records = await stagingRecords(db).find({ batchId }).sort({ rowNumber: 1 }).toArray();
   return { batch, records };
 }
 
-async function validateBatch(db, batchIdRaw) {
+async function validateBatch(db, batchIdRaw, { organizationScope } = {}) {
   const batchId = toObjectId(batchIdRaw);
-  const { records } = await getBatch(db, batchId);
+  const { records } = await getBatch(db, batchId, { organizationScope });
   const staging = stagingRecords(db);
 
   for (const record of records) {
@@ -720,7 +735,7 @@ async function validateBatch(db, batchIdRaw) {
 
 async function sendConsents(db, batchIdRaw, options = {}) {
   const batchId = toObjectId(batchIdRaw);
-  const { records } = await getBatch(db, batchId);
+  const { records } = await getBatch(db, batchId, { organizationScope: options.organizationScope });
   const staging = stagingRecords(db);
   const results = [];
 
@@ -932,9 +947,9 @@ async function acceptImportConsentToken(db, tokenRaw) {
   return { batch, record: refreshedRecord || updatedRecord, tokenPayload, updated: true };
 }
 
-async function getConsentStatus(db, batchIdRaw) {
+async function getConsentStatus(db, batchIdRaw, { organizationScope } = {}) {
   const batchId = toObjectId(batchIdRaw);
-  const { batch, records } = await getBatch(db, batchId);
+  const { batch, records } = await getBatch(db, batchId, { organizationScope });
   return {
     batch,
     records: records.map((record) => ({
@@ -955,9 +970,9 @@ async function getConsentStatus(db, batchIdRaw) {
   };
 }
 
-async function commitBatch(db, batchIdRaw) {
+async function commitBatch(db, batchIdRaw, { organizationScope } = {}) {
   const batchId = toObjectId(batchIdRaw);
-  const { records } = await validateBatch(db, batchId);
+  const { records } = await validateBatch(db, batchId, { organizationScope });
   const patients = collection(db, 'patients');
   const samples = collection(db, 'samples');
   const staging = stagingRecords(db);
@@ -969,7 +984,7 @@ async function commitBatch(db, batchIdRaw) {
   // through the same discriminated lookup), so this is a latent behaviour
   // change only, chosen to keep a single source for the discriminator
   // instead of duplicating a local not-found guard for no live caller.
-  const batchInfo = await findFhirBatch(db, batchId);
+  const batchInfo = await findFhirBatch(db, batchId, organizationScope);
 
   let committed = 0;
   for (const record of records) {
@@ -1082,6 +1097,9 @@ async function commitBatch(db, batchIdRaw) {
           axis_penalties: normalized.rcsPreview?.axis_penalties || [],
           calculation_trace: normalized.rcsPreview?.calculation_trace || {},
           fhir: record.fhir?.specimen || null,
+          // #1385: a new sample takes the batch's organization; an existing
+          // sample's is not moved.
+          organizationId: batchInfo?.organizationId ?? null,
           createdAt: new Date(),
         },
         $set: {
@@ -1191,7 +1209,7 @@ async function attachExternalDocument(db, batchIdRaw, recordIdRaw, options = {})
   // leave open -- it marks the record RELEASED/AVAILABLE and then writes to
   // `samples` keyed on normalized.specimenId, which an LGPD quarantine record
   // does not carry.
-  await findFhirBatch(db, batchId);
+  await findFhirBatch(db, batchId, options.organizationScope);
 
   const record = await staging.findOne({ _id: recordId, batchId });
   if (!record) {

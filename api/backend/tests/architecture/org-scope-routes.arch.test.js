@@ -85,15 +85,8 @@ const EXEMPT = new Map([
 // stays, with its stale check, as the place the next known gap is recorded.
 // #1353 gated the four LGPD import routes it held and emptied it again.
 // #1384 listed these when it brought import.routes.js into the sweep.
+// #1385 gated the quarantine and FHIR batch routes and emptied it again.
 const TRACKED_UNSCOPED = new Map([
-  ['import.routes.js GET /batch/quarantine/:id', 'batch carries no organization to check (#1385)'],
-  ['import.routes.js POST /fhir/stage', 'batch carries no organization to check (#1385)'],
-  ['import.routes.js GET /fhir/batches/:id', 'batch carries no organization to check (#1385)'],
-  ['import.routes.js POST /fhir/batches/:id/validate', 'batch carries no organization to check (#1385)'],
-  ['import.routes.js POST /fhir/batches/:id/send-consents', 'batch carries no organization to check (#1385)'],
-  ['import.routes.js GET /fhir/batches/:id/consent-status', 'batch carries no organization to check (#1385)'],
-  ['import.routes.js POST /fhir/batches/:id/commit', 'batch carries no organization to check (#1385)'],
-  ['import.routes.js POST /fhir/batches/:id/records/:recordId/external-document', 'batch carries no organization to check (#1385)'],
 ]);
 
 function routeFiles() {
@@ -216,6 +209,29 @@ test('#1211: the eight storage reads carry the organization gate', () => {
     'GET /freezer/:freezerId/tree',
   ]) {
     const key = `storage.routes.js ${route}`;
+    assert.ok(byKey.has(key), `${key} not found by the sweep`);
+    assert.equal(byKey.get(key).gated, true, `${key} is not organization-scoped`);
+    assert.equal(EXEMPT.has(key) || TRACKED_UNSCOPED.has(key), false, `${key} must not be listed as unscoped`);
+  }
+});
+
+// #1385: the FHIR staging batches and the async quarantine batches carry the
+// creator's organizationId, and every route that reads or acts on one checks
+// it against the caller's scope. Pinned by name, as above.
+test('#1385: the quarantine and FHIR batch routes carry the organization gate', () => {
+  const { registrations } = sweep();
+  const byKey = new Map(registrations.map((r) => [r.key, r]));
+  for (const route of [
+    'GET /batch/quarantine/:id',
+    'POST /fhir/stage',
+    'GET /fhir/batches/:id',
+    'POST /fhir/batches/:id/validate',
+    'POST /fhir/batches/:id/send-consents',
+    'GET /fhir/batches/:id/consent-status',
+    'POST /fhir/batches/:id/commit',
+    'POST /fhir/batches/:id/records/:recordId/external-document',
+  ]) {
+    const key = `import.routes.js ${route}`;
     assert.ok(byKey.has(key), `${key} not found by the sweep`);
     assert.equal(byKey.get(key).gated, true, `${key} is not organization-scoped`);
     assert.equal(EXEMPT.has(key) || TRACKED_UNSCOPED.has(key), false, `${key} must not be listed as unscoped`);
