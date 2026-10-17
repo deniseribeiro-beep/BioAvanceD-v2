@@ -5,6 +5,7 @@ const ScanEventModel = require('../models/ScanEvent');
 const IdentificationPolicyModel = require('../models/IdentificationPolicy');
 const physicalChain = require('./physicalChain.service');
 const { ensureLabelIdentifierIndexes, ensureScanEventIndexes } = require('../utils/physicalChainIndexes');
+const { sampleBarcodeWindowOpen } = require('../utils/sampleBarcodeWindow');
 
 // #1314 (RF016 AC6): the resolver captures, decodes, normalizes and
 // resolves, and nothing else. It never authorizes the operation a scan is
@@ -60,8 +61,8 @@ async function registerLabel(db, data, { session, printed = true, provenance } =
 // #1378 (ELM-0116, "retained for migration read compatibility"): a code
 // printed before its label was migrated is still a sample's legacy barcode.
 // Exact match only; an all-digit value also matches its Number, since a
-// legacy barcode may be stored as one. This fallback goes when the
-// migration window closes.
+// legacy barcode may be stored as one. resolveScan reads it only while the
+// migration window is open (SAMPLE_BARCODE_WINDOW_CLOSED unset).
 async function findLegacySample(db, normalizedValue) {
   const samples = await getCollection(db, 'samples');
   const sample = await samples.findOne({ barcode: normalizedValue });
@@ -103,7 +104,7 @@ async function resolveScan(db, scan, { policy = null, retainRawValue = false, in
 
   const label = await (await getCollection(db, 'labelIdentifiers')).findOne({ encodedValue: normalizedValue, status: 'active' });
   if (!label) {
-    const sample = await findLegacySample(db, normalizedValue);
+    const sample = sampleBarcodeWindowOpen() ? await findLegacySample(db, normalizedValue) : null;
     if (!sample) {
       return { resolved: false, reason: 'UNKNOWN_IDENTIFIER', normalizedValue };
     }

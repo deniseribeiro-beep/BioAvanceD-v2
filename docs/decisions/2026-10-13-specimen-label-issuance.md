@@ -15,15 +15,17 @@ The function is `issueSpecimenLabel` in `services/specimenLabel.service.js`. Thi
 5. **The print batch.** `printBatchId` (V2E-0178) is required "quando houve impressão institucional", and RF016 AC4 asks for the batch "somente quando aplicável": a label issued at create or import is unprinted and has none. `LabelIdentifierModel.create` still requires it of an institutional label by default; an unprinted issue says `{ printed: false }`, and `issueSpecimenLabel` issues unprinted unless told otherwise.
 6. **A migrated label keeps its provenance** in a local `migratedFrom: { elementId: 'ELM-0116', sampleId, value }`, written beside the model's fields, not in `fieldsOf`. Its `issuedAt` is the sample's `registeredAt`, else `createdAt`, else the run instant. `Sample.barcode` is kept for read compatibility.
 7. **Sessions.** Every read and write of an issue runs in the caller's session, and with a session no index is built (2026-10-11 item 7). The `uniq_active_label_value` and ScanEvent index specs moved into `utils/physicalChainIndexes.js`, unchanged, and the Foundation job builds them at boot.
+8. **The migration window** (2026-10-16, #1378). The window closes when `SAMPLE_BARCODE_WINDOW_CLOSED` is set (`true` or `1`); it is open by default. Once closed, create and both imports issue the code only as the LabelIdentifier and write no `Sample.barcode`; a PATCH naming `barcode`, with any value, is refused 422 `LEGACY_BARCODE_WRITE_REFUSED`; `resolveScan` stops reading the legacy barcode. Stored `Sample.barcode` values are kept, read only by the legacy readers.
 
 ## Chosen where the sources leave a gap
 
 - **`institution_applied` and `container_side`.** The catalog lists only `manufacturer_applied` for the origin; `institution_applied` is the documented local value `LabelIdentifier.js` already accepts. The side of the tube is where a printed adhesive label goes; the manufacturer's Data Matrix is `container_bottom`.
 - **`migratedFrom` is outside the model's fields.** The dictionary asks to "preserve original provenance" and names no field for it, and the catalog conformance guard diffs `fieldsOf` against the catalog.
 - **The issuer fallback.** V2E-0176 allows an Actor or an Organization; a run with neither (a migration with no user, a sample with no organization) is attributed to `'system'`.
+- **How the window closes.** The dictionary names no date or condition; it is an operator's opt-in, as the repo's other opt-ins are. It is closed only after `npm run migrate:sample-barcode-labels` has run and every reader of `Sample.barcode` (the print and by-barcode routes in `sample.routes.js`, `getSampleByBarcode`) reads the label first, and the code's uniqueness checks (`generateUniqueBarcode`'s yearly counter seed and the given-code duplicate checks in `createSample` and the LGPD import, all reading `samples.barcode` only) also read `labelIdentifiers`, none of which this change does.
 
 ## Not decided here
 
 - Recording the batch at print (LabelPrintEvent).
 - Persisted namespace and template records.
-- Closing the migration window: no `Sample.barcode` write, once every reader reads the label first. This includes `updateSample`, which still accepts a new `barcode` and leaves the issued label on the old value.
+- The readers of `Sample.barcode` and the uniqueness checks reading the label first. While the window is open, `updateSample` still accepts a new `barcode` and leaves the issued label on the old value.

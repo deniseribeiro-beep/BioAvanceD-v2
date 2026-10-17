@@ -4,6 +4,7 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const resolver = require('../../../src/services/labelResolver.service');
 const physicalChain = require('../../../src/services/physicalChain.service');
+const env = require('../../../src/config/env');
 
 // #1314 (RF016 AC6). A query-matching fake, partial unique indexes included.
 function matches(doc, filter) {
@@ -199,6 +200,24 @@ describe('labelResolver.service (RF016 AC6)', () => {
       expect(await resolver.resolveScan(db, { ...legacyScan, rawValue: '20250042' })).toMatchObject({
         resolved: true, source: 'legacy_barcode', specimenId: 'SPC-7',
       });
+    });
+
+    // #1378: once the window is closed, the legacy barcode is not read.
+    it('a legacy-only value is UNKNOWN_IDENTIFIER once the window is closed, and samples is never read', async () => {
+      const db = await seeded();
+      await db.collection('samples').insertOne({ _id: 'oid-1', specimenId: 'SPC-9', barcode: 'BR-2025-001' });
+      const samplesRead = [];
+      const findOne = db.collections.samples.findOne;
+      db.collections.samples.findOne = async (filter) => { samplesRead.push(filter); return findOne(filter); };
+      const saved = env.SAMPLE_BARCODE_WINDOW_CLOSED;
+      env.SAMPLE_BARCODE_WINDOW_CLOSED = true;
+      try {
+        expect(await resolver.resolveScan(db, legacyScan)).toMatchObject({ resolved: false, reason: 'UNKNOWN_IDENTIFIER' });
+      } finally {
+        env.SAMPLE_BARCODE_WINDOW_CLOSED = saved;
+      }
+      expect(samplesRead).toEqual([]);
+      expect(db.collections.scanEvents?.docs ?? []).toHaveLength(0);
     });
   });
 

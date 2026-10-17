@@ -23,6 +23,7 @@ const qualityCompatibility = require('./quality-compatibility.service');
 const rcsAssessmentService = require('./rcs-assessment.service');
 const { insertSampleWithProjection } = require('./graphProjection.service');
 const { issueSpecimenLabel } = require('./specimenLabel.service');
+const { withoutLegacyBarcode } = require('../utils/sampleBarcodeWindow');
 const specimenPreanalyticsService = require('./specimen-preanalytics.service');
 const { generateUniqueSpecimenId } = require('../utils/sampleIDGenerator');
 const { generateUniqueParticipantId } = require('../utils/patientAnonymization');
@@ -584,7 +585,8 @@ class ImportService {
 
             const sample = SampleModel.create(sampleData);
             // #1313 (RF023 AC3): the sample and its SPECIMEN_UPSERTED commit together.
-            const insertResult = await insertSampleWithProjection(db, samplesCollection, sample, { sourceService: 'import.service' });
+            // #1378: after the migration window the inserted sample has no barcode.
+            const insertResult = await insertSampleWithProjection(db, samplesCollection, withoutLegacyBarcode(sample), { sourceService: 'import.service' });
             if (sample.rcsEvaluation) {
               try {
                 const assessment = await rcsAssessmentService.recordAssessment(db, sample.specimenId, sample.rcsEvaluation);
@@ -689,7 +691,8 @@ class ImportService {
 
             const sample = SampleModel.create(sampleData);
             // #1313 (RF023 AC3): the sample and its SPECIMEN_UPSERTED commit together.
-            const insertResult = await insertSampleWithProjection(db, samplesCollection, sample, { sourceService: 'import.service' });
+            // #1378: after the migration window the inserted sample has no barcode.
+            const insertResult = await insertSampleWithProjection(db, samplesCollection, withoutLegacyBarcode(sample), { sourceService: 'import.service' });
             if (sample.rcsEvaluation) {
               try {
                 const assessment = await rcsAssessmentService.recordAssessment(db, sample.specimenId, sample.rcsEvaluation);

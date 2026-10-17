@@ -34,6 +34,7 @@ const patientIdentityService = require('../../src/services/PatientIdentityServic
 const qualityDomain = require('../../src/services/quality-domain.service');
 const DrugService = require('../../src/services/DrugService');
 const { createMatchingCollection } = require('../factories/filter.factory');
+const env = require('../../src/config/env');
 
 const MATCHED_PATIENT = {
   patient: { _id: 'patient-obj-1', participantId: '12345678', patientName: 'Maria Silva' },
@@ -1269,6 +1270,24 @@ describe('ImportLGPDService.processSampleRow (#817)', () => {
 
     expect(outcome).toMatchObject({ ok: false, sampleId: 'sample-id-1' });
     expect(outcome.errors[0]).toMatch(/BC-TAKEN-1 já ativo/);
+  });
+
+  // #1378 (ELM-0116): once the migration window is closed, the row's code is
+  // issued only as the label; the inserted sample carries no Sample.barcode.
+  it('with the barcode window closed, inserts no barcode and issues the label with the code (#1378)', async () => {
+    const saved = env.SAMPLE_BARCODE_WINDOW_CLOSED;
+    env.SAMPLE_BARCODE_WINDOW_CLOSED = true;
+    let outcome;
+    try {
+      outcome = await service.processSampleRow(db, { ...VALID_ROW, barcode: 'BC-CLOSED-1' }, rowContext());
+    } finally {
+      env.SAMPLE_BARCODE_WINDOW_CLOSED = saved;
+    }
+
+    expect(outcome).toEqual({ ok: true, sampleId: 'sample-id-1' });
+    expect(samplesCollection.insertOne).toHaveBeenCalledTimes(1);
+    expect(samplesCollection.insertOne.mock.calls[0][0]).not.toHaveProperty('barcode');
+    expect(physicalChain.labelIdentifiers.docs).toEqual([expect.objectContaining({ encodedValue: 'BC-CLOSED-1', status: 'active' })]);
   });
 
   it('returns the rejection without inserting, for the caller to record', async () => {

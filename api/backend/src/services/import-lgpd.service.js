@@ -32,6 +32,7 @@ const { insertSampleWithProjection } = require('./graphProjection.service');
 const specimenPreanalyticsService = require('./specimen-preanalytics.service');
 const AllocateSampleUseCase = require('../core/use-cases/AllocateSampleUseCase');
 const { issueSpecimenLabel } = require('./specimenLabel.service');
+const { withoutLegacyBarcode } = require('../utils/sampleBarcodeWindow');
 const MongoStorageRepository = require('../infrastructure/persistence/mongo/MongoStorageRepository');
 const MongoAuditRepository = require('../infrastructure/persistence/mongo/MongoAuditRepository');
 const LineageRepository = require('../infrastructure/database/neo4j/LineageRepository');
@@ -1995,7 +1996,8 @@ class ImportLGPDService {
       
       // Insere no banco (sem storageLocation — a amostra entra não alocada)
       // #1313 (RF023 AC3): the sample and its SPECIMEN_UPSERTED commit together.
-      const insertResult = await insertSampleWithProjection(db, samplesCollection, sample, { sourceService: 'import-lgpd.service' });
+      // #1378: after the migration window the inserted sample has no barcode.
+      const insertResult = await insertSampleWithProjection(db, samplesCollection, withoutLegacyBarcode(sample), { sourceService: 'import-lgpd.service' });
       insertedId = insertResult.insertedId;
 
       // #499: mirrors import.service.js's CSV/XLSX branch — records the

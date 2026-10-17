@@ -20,6 +20,11 @@ module.exports = {
   // opt-in, set by the stacks that run the Foundation job first (test,
   // production), so a native `npm start` with no Foundation run still works.
   FOUNDATION_READINESS_REQUIRED: process.env.FOUNDATION_READINESS_REQUIRED === 'true' || process.env.FOUNDATION_READINESS_REQUIRED === '1',
+  // #1378 (ELM-0116, "reject legacy writes after migration window"): closes
+  // the Sample.barcode migration window. An explicit opt-in: unset, create,
+  // both imports and an update still write Sample.barcode, and a scan still
+  // falls back to it.
+  SAMPLE_BARCODE_WINDOW_CLOSED: process.env.SAMPLE_BARCODE_WINDOW_CLOSED === 'true' || process.env.SAMPLE_BARCODE_WINDOW_CLOSED === '1',
   PORT: process.env.PORT || 3000,
 
   // Mongo

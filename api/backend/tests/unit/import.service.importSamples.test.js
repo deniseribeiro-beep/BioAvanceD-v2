@@ -8,6 +8,7 @@ const require2 = createRequire(import.meta.url);
 const importService = require2('../../src/services/import.service');
 const SampleGraphValidator = require2('../../src/services/SampleGraphValidator');
 const { createMatchingCollection } = require2('../factories/filter.factory');
+const env = require2('../../src/config/env');
 
 const tmpFiles = [];
 
@@ -355,6 +356,49 @@ describe('ImportService.importSamples (JSON) LabelIdentifier issue (#1378)', () 
     expect(result.success).toBe(0);
     expect(result.total).toBe(1);
     expect(result.errors).toEqual([{ row: 1, error: expect.stringMatching(/BC-TAKEN-1 já ativo/) }]);
+  });
+});
+
+// #1378 (ELM-0116): once the migration window is closed, a row's code is
+// issued only as the label; the inserted sample carries no Sample.barcode.
+describe('ImportService.importSamples with the barcode window closed (#1378)', () => {
+  let saved;
+  beforeEach(() => {
+    vi.spyOn(SampleGraphValidator.prototype, 'validateSampleCompliance').mockResolvedValue({ suggestedStatus: 'QUARANTINE' });
+    saved = env.SAMPLE_BARCODE_WINDOW_CLOSED;
+    env.SAMPLE_BARCODE_WINDOW_CLOSED = true;
+  });
+  afterEach(() => {
+    env.SAMPLE_BARCODE_WINDOW_CLOSED = saved;
+  });
+
+  it('a JSON row inserts no barcode and is issued the label with its code', async () => {
+    const filePath = writeTmpFile('closed.json', JSON.stringify(validSample({ barcode: 'BC-CLOSED-1' })));
+    const collection = makeSamplesCollection();
+    const db = makeDb(collection);
+
+    const result = await importService.importSamples(db, { path: filePath, originalname: 'closed.json' });
+
+    expect(result).toEqual({ success: 1, errors: [], total: 1 });
+    expect(collection.inserted).toHaveLength(1);
+    expect(collection.inserted[0]).not.toHaveProperty('barcode');
+    expect(db.physicalChain.labelIdentifiers.docs).toEqual([expect.objectContaining({ encodedValue: 'BC-CLOSED-1', status: 'active' })]);
+  });
+
+  it('a CSV row inserts no barcode and is issued the label with its code', async () => {
+    const filePath = writeTmpFile(
+      'closed.csv',
+      'participantId,sampleType,sampleOrigin,extractionProtocol,quantity,quality,linkedProject,registeredAt,barcode\n12345678,PLASMA,VENOUS_BLOOD,TUBE_EDTA,1.5,GOOD,Projeto QA,2026-01-01,BC-CLOSED-2\n',
+    );
+    const collection = makeSamplesCollection();
+    const db = makeDb(collection);
+
+    const result = await importService.importSamples(db, { path: filePath, originalname: 'closed.csv' });
+
+    expect(result).toEqual({ success: 1, errors: [], total: 1 });
+    expect(collection.inserted).toHaveLength(1);
+    expect(collection.inserted[0]).not.toHaveProperty('barcode');
+    expect(db.physicalChain.labelIdentifiers.docs).toEqual([expect.objectContaining({ encodedValue: 'BC-CLOSED-2', status: 'active' })]);
   });
 });
 

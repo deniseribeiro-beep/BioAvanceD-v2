@@ -7,6 +7,18 @@ const sampleService = require('../../src/services/sample.service');
 const qualityDomain = require('../../src/services/quality-domain.service');
 const { sampleOrganizationScopeClause } = require('../../src/services/sampleTenancy.service');
 const { ObjectId, MongoServerError } = require('mongodb');
+const env = require('../../src/config/env');
+
+// #1378 (ELM-0116): runs `body` with the Sample.barcode migration window closed.
+async function withBarcodeWindowClosed(body) {
+  const saved = env.SAMPLE_BARCODE_WINDOW_CLOSED;
+  env.SAMPLE_BARCODE_WINDOW_CLOSED = true;
+  try {
+    return await body();
+  } finally {
+    env.SAMPLE_BARCODE_WINDOW_CLOSED = saved;
+  }
+}
 
 const BOX_ID = new ObjectId();
 const RACK_ID = new ObjectId();
@@ -562,6 +574,22 @@ describe('sample.service', () => {
       expect(db.collections.samples.deleteOne).toHaveBeenCalledWith({ _id: 'generated-id' });
     });
 
+    // #1378: once the migration window is closed, the code is issued only as
+    // the label; the inserted sample carries no Sample.barcode (ELM-0116).
+    it('with the barcode window closed, inserts no barcode while the label and the birth movement carry the code (#1378)', async () => {
+      const db = makeDb();
+      mockOperationalStorage(db);
+
+      await withBarcodeWindowClosed(() => sampleService.createSample(db, validSampleData()));
+
+      const [insertedSample] = db.collections.samples.insertOne.mock.calls[0];
+      expect(insertedSample).not.toHaveProperty('barcode');
+      expect(db.collections.labelIdentifiers.insertOne).toHaveBeenCalledTimes(1);
+      expect(db.collections.labelIdentifiers.insertOne.mock.calls[0][0]).toMatchObject({ encodedValue: 'BR-TEST-001', status: 'active' });
+      const [birthMovement] = db.collections.sample_movements.insertOne.mock.calls[0];
+      expect(birthMovement).toMatchObject({ type: 'create', barcode: 'BR-TEST-001' });
+    });
+
     // RF023 AC3, RNF019 C1: the create's insert, birth movement, allocation,
     // SPECIMEN_UPSERTED and the caller's in-transaction step commit in one
     // transaction where the deployment runs one.
@@ -778,6 +806,20 @@ describe('sample.service', () => {
           issuedBy: 'user-7'
         });
         expect(committed.samples).toEqual([expect.objectContaining({ barcode: 'BR-TEST-001' })]);
+      });
+
+      it('with the barcode window closed, commits a sample with no barcode while the label and the birth movement carry the code (#1378)', async () => {
+        const { db, committed } = makeTransactionalDb();
+
+        await withBarcodeWindowClosed(() => sampleService.createSample(db, validSampleData()));
+
+        expect(committed.samples).toHaveLength(1);
+        expect(committed.samples[0]).not.toHaveProperty('barcode');
+        const labelInserts = db.collections.labelIdentifiers.insertOne.mock.calls;
+        expect(labelInserts).toHaveLength(1);
+        expect(labelInserts[0][0]).toMatchObject({ encodedValue: 'BR-TEST-001', status: 'active' });
+        expect(labelInserts[0][1]).toEqual({ session: db.session });
+        expect(committed.sample_movements[0]).toMatchObject({ type: 'create', barcode: 'BR-TEST-001' });
       });
 
       it('a code already active as a label aborts the create with 409: nothing committed, no compensating delete (#1378)', async () => {
@@ -1892,6 +1934,33 @@ describe('sample.service', () => {
         statusCode: 422, code: 'SPECIMEN_STATUS_WRITE_REFUSED', message: expect.stringMatching(message),
       });
       expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
+    });
+
+    // #1378 (ELM-0116): once the migration window is closed, an update naming
+    // barcode, with any value, is refused and writes nothing.
+    it.each([
+      ['a new value', { barcode: 'BR-NEW-1' }],
+      ['null', { barcode: null }],
+    ])('with the barcode window closed, refuses a barcode write of %s (422)', async (_label, body) => {
+      const db = makeDb();
+      db.collections.samples.findOne.mockResolvedValue({ _id: 'sample-1', specimenId: 'SPC-B', initialQuantity: 10, currentQuantity: 10, specimenStatus: 'available' });
+
+      await withBarcodeWindowClosed(() => expect(sampleService.updateSample(db, 'SPC-B', { ...body, notes: 'x' })).rejects.toMatchObject({
+        statusCode: 422, code: 'LEGACY_BARCODE_WRITE_REFUSED', message: expect.stringMatching(/ELM-0116/),
+      }));
+      expect(db.collections.samples.updateOne).not.toHaveBeenCalled();
+    });
+
+    it('with the barcode window closed, accepts an update that names no barcode (#1378)', async () => {
+      const db = makeDb();
+      const existing = { _id: 'sample-1', specimenId: 'SPC-B', initialQuantity: 10, currentQuantity: 10, specimenStatus: 'available' };
+      db.collections.samples.findOne.mockResolvedValue(existing);
+
+      const result = await withBarcodeWindowClosed(() => sampleService.updateSample(db, 'SPC-B', { notes: 'x' }));
+
+      expect(result).toMatchObject({ specimenId: 'SPC-B' });
+      expect(db.collections.samples.updateOne).toHaveBeenCalledTimes(1);
+      expect(db.collections.samples.updateOne.mock.calls[0][1].$set.notes).toBe('x');
     });
 
     // #540: sample.service.js#updateSample used the raw MongoDB driver and

@@ -2538,6 +2538,24 @@ describe('sample.routes', () => {
       expect(res.body).toMatchObject({ success: false, error: 'SPECIMEN_STATUS_WRITE_REFUSED', message: 'quantityStatus é derivado' });
     });
 
+    // #1378 (ELM-0116): a barcode write refused after the migration window answers 422 with its code.
+    it('answers 422 LEGACY_BARCODE_WRITE_REFUSED when the service refuses a barcode write', async () => {
+      const refusal = Object.assign(new Error('Sample.barcode (ELM-0116) não é mais gravado'), { statusCode: 422, code: 'LEGACY_BARCODE_WRITE_REFUSED' });
+      const updateSample = vi.fn().mockRejectedValue(refusal);
+      const getSample = vi.fn().mockResolvedValue(null);
+      const { router } = loadRoute({ sampleServiceOverrides: { updateSample, getSample } });
+
+      const res = await request(buildApp(router, {})).put('/api/samples/SPC-1').send({ barcode: 'BR-NEW-1' });
+
+      expect(res.status).toBe(422);
+      expect(res.body).toEqual({
+        success: false,
+        error: 'LEGACY_BARCODE_WRITE_REFUSED',
+        message: 'Sample.barcode (ELM-0116) não é mais gravado',
+        details: ['Sample.barcode (ELM-0116) não é mais gravado'],
+      });
+    });
+
     // RF026 AC7 (dictionary RULE-006): POST /:id/close.
     describe('POST /:id/close', () => {
       it('closes through the service and audits it with the decision', async () => {

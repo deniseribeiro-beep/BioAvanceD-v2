@@ -23,6 +23,7 @@ const operationalStateDecisionService = require('./operationalStateDecision.serv
 const { applySampleOrganizationScope } = require('./sampleTenancy.service');
 const participantIdentityService = require('./participantIdentity.service');
 const { issueSpecimenLabel } = require('./specimenLabel.service');
+const { withoutLegacyBarcode, assertLegacyBarcodeWritable } = require('../utils/sampleBarcodeWindow');
 const AllocateSampleUseCase = require('../core/use-cases/AllocateSampleUseCase');
 const MongoStorageRepository = require('../infrastructure/persistence/mongo/MongoStorageRepository');
 const MongoAuditRepository = require('../infrastructure/persistence/mongo/MongoAuditRepository');
@@ -434,7 +435,8 @@ class SampleService {
       };
       // #1378: the sample's code is issued as a LabelIdentifier (V2E-0169)
       // on the container the allocation has just loaded it into.
-      // Sample.barcode (ELM-0116) is still written for read compatibility.
+      // Sample.barcode (ELM-0116) is still written for read compatibility
+      // until the migration window closes; the insert then drops it.
       const labelIssuedAt = new Date();
       const issueLabel = (insertedId, session) => issueSpecimenLabel(db, { ...sample, _id: insertedId }, {
         code: sample.barcode,
@@ -461,7 +463,7 @@ class SampleService {
       // LINEAGE_REGISTERED are logged rather than thrown.
       const result = await withTransactionWhereSupported(db, async (session) => {
         if (!session) {
-          const insertResult = await samplesCollection.insertOne(sample);
+          const insertResult = await samplesCollection.insertOne(withoutLegacyBarcode(sample));
 
           const createMovementID = await SampleMovementModel.generateMovementID(db);
           try {
@@ -498,7 +500,7 @@ class SampleService {
           return insertResult;
         }
 
-        const insertResult = await samplesCollection.insertOne(sample, { session });
+        const insertResult = await samplesCollection.insertOne(withoutLegacyBarcode(sample), { session });
 
         const createMovementID = await SampleMovementModel.generateMovementID(db, session);
         try {
@@ -856,6 +858,8 @@ class SampleService {
       if (Object.prototype.hasOwnProperty.call(updateData, 'quantityStatus')) {
         throw createStatusWriteRefusal('quantityStatus é derivado de initialQuantity e currentQuantity e não pode ser editado');
       }
+      // #1378 (ELM-0116): after the migration window, barcode is not written.
+      assertLegacyBarcodeWritable(updateData);
       if (requestedStatus) {
         // RF026 AC7: closed only by POST /api/samples/:id/close (validated
         // total consumption) or an executed disposition, never by an edit.

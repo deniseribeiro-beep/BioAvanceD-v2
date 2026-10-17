@@ -1236,6 +1236,15 @@ router.put('/:id', authenticate, requirePermission('editSample'), requireOrganiz
         details: [error.message]
       });
     }
+    // #1378 (ELM-0116): a barcode write after the migration window answers 422.
+    if (error.code === 'LEGACY_BARCODE_WRITE_REFUSED') {
+      return res.status(422).json({
+        success: false,
+        error: 'LEGACY_BARCODE_WRITE_REFUSED',
+        message: error.message,
+        details: [error.message]
+      });
+    }
     return res.status(400).json({
       success: false,
       error: 'Erro ao atualizar amostra',
