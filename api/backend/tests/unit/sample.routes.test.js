@@ -554,20 +554,90 @@ describe('sample.routes', () => {
 
         expect(res.status).toBe(201);
         expect(executeMock.mock.calls[0][0].options.organizationId).toBe('org-mine');
+        expect(executeMock.mock.calls[0][0].sampleData).not.toHaveProperty('organizationId');
       });
 
-      it('CONTROL: a global scope keeps the body collectionSite and stamps it', async () => {
+      // #1376: the global pick moved from collectionSite to organizationId.
+      it('CONTROL: a global scope stamps the organizationId it names and keeps the body collectionSite', async () => {
         const executeMock = created();
+        const findOne = vi.fn().mockResolvedValue({ organizationId: 'org-other' });
         const { router } = loadRoute({ registerSampleUseCaseExecute: executeMock });
+        const app = buildApp(router, { collection: vi.fn(() => ({ findOne })) });
+
+        const res = await request(app).post('/api/samples').send({ ...VALID_PAYLOAD, organizationId: 'org-other', collectionSite: 'site-x' });
+
+        expect(res.status).toBe(201);
+        expect(findOne).toHaveBeenCalledWith({ organizationId: 'org-other' });
+        expect(executeMock).toHaveBeenCalledWith(expect.objectContaining({
+          sampleData: expect.objectContaining({ collectionSite: 'site-x' }),
+          options: { organizationId: 'org-other' },
+        }));
+      });
+    });
+
+    // #1376: the organization a create stamps is named in the body's own
+    // organizationId field, so a caller can name a partner collection site
+    // (ELM-0128) and its own organization at once. collectionSite is data.
+    describe('#1376: the body names the organization in organizationId, apart from collectionSite', () => {
+      const created = () => vi.fn().mockResolvedValue({
+        sample: { _id: { toString: () => 's1' }, participantId: '12345678' },
+        strictMode: true,
+        topology: {},
+      });
+      const multiOrg = (req, res, next) => {
+        req.organizationScope = { scope: 'organization', organizationIds: ['org-a', 'org-b'] };
+        next();
+      };
+
+      it('stamps a multi-organization caller\'s organizationId and keeps its partner collectionSite', async () => {
+        const executeMock = created();
+        const { router } = loadRoute({ registerSampleUseCaseExecute: executeMock, requireOrganizationScopeImpl: multiOrg });
         const app = buildApp(router, {});
 
-        const res = await request(app).post('/api/samples').send({ ...VALID_PAYLOAD, collectionSite: 'org-other' });
+        const res = await request(app).post('/api/samples').send({ ...VALID_PAYLOAD, organizationId: 'org-a', collectionSite: 'partner-x' });
 
         expect(res.status).toBe(201);
         expect(executeMock).toHaveBeenCalledWith(expect.objectContaining({
-          sampleData: expect.objectContaining({ collectionSite: 'org-other' }),
-          options: { organizationId: 'org-other' },
+          sampleData: expect.objectContaining({ collectionSite: 'partner-x' }),
+          options: { organizationId: 'org-a' },
         }));
+        expect(executeMock.mock.calls[0][0].sampleData).not.toHaveProperty('organizationId');
+      });
+
+      it('returns 400 for a multi-organization caller naming only collectionSite, even one of its own', async () => {
+        const executeMock = created();
+        const { router } = loadRoute({ registerSampleUseCaseExecute: executeMock, requireOrganizationScopeImpl: multiOrg });
+        const app = buildApp(router, {});
+
+        const res = await request(app).post('/api/samples').send({ ...VALID_PAYLOAD, collectionSite: 'org-a' });
+
+        expect(res.status).toBe(400);
+        expect(res.body.message).toMatch(/Informe organizationId/);
+        expect(executeMock).not.toHaveBeenCalled();
+      });
+
+      it('returns 400 for a multi-organization caller naming a foreign organizationId', async () => {
+        const executeMock = created();
+        const { router } = loadRoute({ registerSampleUseCaseExecute: executeMock, requireOrganizationScopeImpl: multiOrg });
+        const app = buildApp(router, {});
+
+        const res = await request(app).post('/api/samples').send({ ...VALID_PAYLOAD, organizationId: 'org-z' });
+
+        expect(res.status).toBe(400);
+        expect(executeMock).not.toHaveBeenCalled();
+      });
+
+      it('returns 404 for a global caller naming an organizationId that does not exist', async () => {
+        const executeMock = created();
+        const findOne = vi.fn().mockResolvedValue(null);
+        const { router } = loadRoute({ registerSampleUseCaseExecute: executeMock });
+        const app = buildApp(router, { collection: vi.fn(() => ({ findOne })) });
+
+        const res = await request(app).post('/api/samples').send({ ...VALID_PAYLOAD, organizationId: 'org-missing' });
+
+        expect(res.status).toBe(404);
+        expect(findOne).toHaveBeenCalledWith({ organizationId: 'org-missing' });
+        expect(executeMock).not.toHaveBeenCalled();
       });
     });
 

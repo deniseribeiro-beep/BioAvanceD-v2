@@ -62,3 +62,19 @@ describe('canonical.v1.intake specimen.parentSpecimenIds (dict-02 ELM-0120, #137
     expect(errors.some((error) => error.instancePath.startsWith('/specimen/parentSpecimenIds'))).toBe(true);
   });
 });
+
+describe('canonical.v1.intake organizationId (#1376)', () => {
+  it('accepts a top-level organizationId string, the organization the intake stamps', () => {
+    const { valid, errors } = validate('canonical.v1.intake', { ...baseIntake, organizationId: 'org-a' });
+
+    expect(errors).toEqual([]);
+    expect(valid).toBe(true);
+  });
+
+  it('rejects a non-string organizationId', () => {
+    const { valid, errors } = validate('canonical.v1.intake', { ...baseIntake, organizationId: 42 });
+
+    expect(valid).toBe(false);
+    expect(errors.some((error) => error.instancePath === '/organizationId')).toBe(true);
+  });
+});

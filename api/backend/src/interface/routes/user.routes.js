@@ -1104,25 +1104,32 @@ router.post('/register-sample', authenticate, requirePermission('createSample'),
 
     // #1376: this route resolves no scope of its own, so the caller's scope
     // decides the organization here, by #1071's create rule POST /api/samples
-    // uses -- an organization-scoped caller's own, a global caller's pick
-    // named as collectionSite, or none -- and createSample stamps it as
-    // Sample.organizationId. The collection site the body names (ELM-0128)
-    // is kept; a body naming none gets the stamped organization.
+    // uses -- a single-organization caller's own, a multi-organization
+    // caller's pick among its own, a global caller's pick of any existing
+    // organization, or none -- named in the body's own organizationId field,
+    // and createSample stamps it as Sample.organizationId. The body's
+    // organizationId is never passed on. The collection site the body names
+    // (ELM-0128) is data and is kept; a body naming none gets the stamped
+    // organization.
+    const requestedOrganizationId = typeof req.body?.organizationId === 'string' && req.body.organizationId.trim() !== ''
+      ? req.body.organizationId.trim()
+      : undefined;
     let organizationId;
     try {
       ({ organizationId } = await resolveCallerCreateOrganization(db, {
         userId: req.user?.userID,
-        requested: req.body?.collectionSite
+        requested: requestedOrganizationId
       }));
     } catch (error) {
       return res.status(error.statusCode || 403).json({ success: false, error: error.message });
     }
-    const namesCollectionSite = req.body?.collectionSite !== undefined
-      && req.body?.collectionSite !== null
-      && req.body?.collectionSite !== '';
+    const { organizationId: _bodyOrganizationId, ...body } = req.body || {};
+    const namesCollectionSite = body.collectionSite !== undefined
+      && body.collectionSite !== null
+      && body.collectionSite !== '';
     const sampleData = namesCollectionSite || !organizationId
-      ? req.body
-      : { ...req.body, collectionSite: organizationId };
+      ? body
+      : { ...body, collectionSite: organizationId };
 
     const sampleRepository = {
       // Same contract as POST /api/samples: the use case's options (audit

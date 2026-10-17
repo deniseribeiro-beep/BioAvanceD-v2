@@ -165,6 +165,45 @@ describe('POST /api/users/register-sample - paridade de contrato com /api/sample
     );
   });
 
+  // #1376: the body names the organization in its own organizationId field;
+  // collectionSite (ELM-0128) is data and no longer picks.
+  function givenMultiOrganizationCaller() {
+    givenAppDbCollections({
+      rbacUsers: [
+        { userAccountId: 'qa-user-3', accessType: 2, organizationId: 'org-a' },
+        { userAccountId: 'qa-user-3', accessType: 2, organizationId: 'org-b' },
+      ],
+    });
+  }
+
+  it('#1376: takes the body\'s organizationId as the pick, keeps the named collectionSite and passes no organizationId on', async () => {
+    givenMultiOrganizationCaller();
+
+    const response = await whenRegisterSample(
+      buildSamplePayload({ linkedProject: 'Projeto QA Rota Usuário', isRareDisease: false, riskScore: 1, organizationId: 'org-b', collectionSite: 'Hospital QA Norte' })
+    );
+
+    expect([201, 202]).toContain(response.status);
+    expect(sampleService.createSample).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ collectionSite: 'Hospital QA Norte' }),
+      expect.objectContaining({ organizationId: 'org-b' })
+    );
+    expect(sampleService.createSample.mock.calls[0][1]).not.toHaveProperty('organizationId');
+  });
+
+  it('#1376: no longer picks by a collectionSite alone, refusing a multi-organization caller with a 400', async () => {
+    givenMultiOrganizationCaller();
+
+    const response = await whenRegisterSample(
+      buildSamplePayload({ linkedProject: 'Projeto QA Rota Usuário', isRareDisease: false, riskScore: 1, collectionSite: 'org-b' })
+    );
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toMatch(/Informe organizationId/);
+    expect(sampleService.createSample).not.toHaveBeenCalled();
+  });
+
   it('#1376: refuses a caller with no organization with a 403 and creates nothing', async () => {
     // A scope-less additive role is the caller's only assignment, so it
     // resolves as org-less (rbac.factory's #1073 note).

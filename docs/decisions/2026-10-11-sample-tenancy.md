@@ -24,11 +24,12 @@ Issue #1192.
 3. **Behaviour, as the later slices of #1192 land:**
    - readers resolve the key as `organizationId ?? collectionSite` until the backfill has run (`services/sampleTenancy.service.js`);
    - every create stamps `organizationId`;
-   - the key is server-stamped only: no request body or import file sets it. `SampleModel.create()` stores `null`, and the create paths stamp it after: `createSample` from its `organizationId` option (POST /api/samples, the intake wizard) and the LGPD sample import from its resolved organization;
-   - `collectionSite` (ELM-0128) keeps the site the caller names. When the caller names none, the create fills it with the stamped organization, as before #1192. The LGPD sample import names no site (its row parser maps none), so its samples get the organization as their site;
+   - a request names the organization only in a field of its own, `organizationId` (#1376): the body's `organizationId` on POST /api/samples and POST /api/users/register-sample, the intake's top-level `organizationId`, and the `organizationId` form field of the generic and LGPD imports. It is resolved against the caller's scope (`services/callerCreateOrganization.service.js`): a single-organization caller always gets its own; a multi-organization caller must name one of its own (400 otherwise); a global caller may name any existing organization (404 otherwise) or none, which stamps `null`. The named value is never written raw: `SampleModel.create()` stores `null`, and the create paths stamp the resolved organization after, `createSample` from its `organizationId` option and the LGPD sample import from its resolved organization. One transitional fallback remains: an intake naming no `organizationId` picks by `specimen.collectionSite`, because the wizard still sends its pick there. It goes once the wizard sends `organizationId`;
+   - `collectionSite` (ELM-0128) is data on every path: a named site is kept as named. The LGPD sample import maps a `collectionSite` column, which must name a registered Organization or the row is rejected. A row or body naming none gets the stamped organization as its site, as before #1192;
    - PUT cannot write it (it is not in `ALLOWED_UPDATE_FIELDS`). PUT refuses moving `collectionSite` to another organization only while the sample has no `organizationId`, because until then `collectionSite` is still its tenancy key. Once `organizationId` is set, editing `collectionSite` is editing data;
    - custody keeps governing `/api/physical-chain`.
 4. **The backfill** `npm run migrate:sample-organization` (`scripts/migrateSampleOrganization.js`) copies `collectionSite` into `organizationId` wherever `organizationId` is unset. It writes no other field and is idempotent.
+5. **A participant's tenancy key stays `Patient.clinicalUnitId`.** This is an inference of 2026-10-17 (#1376, box 4). The dictionary types `ParticipantIdentity.clinicalUnitId` (P1X-0356) as Reference(Organization), the one organization reference a participant carries. So it is a tenancy key by type, not a site stored as data, which was Sample's conflation of `collectionSite` with its tenancy. A match outside the caller's scope is already handled by [2026-10-13-participant-cross-organization-link.md](2026-10-13-participant-cross-organization-link.md): it is linked, never written. The owner may reverse this; a participant needing both a tenancy organization and a separate clinical unit would reopen it.
 
 ## Chosen where the sources leave a gap
 
@@ -39,10 +40,9 @@ Issue #1192.
 
 The foundation added the field on the model and its create mapping, the helper, the backfill script and this record. The reader slices moved every sample reader onto the helper. The create slice stamps `organizationId` on POST /api/samples, the intake wizard and the LGPD sample import, and stops them from overwriting a named `collectionSite`. The migration has not been run.
 
-**Not stamped:** `POST /api/users/register-sample`, the batch-validation import (`batch-validation-engine.service.js`) and `import.service.js` carry no organization scope today. Their samples keep `organizationId` null and fall back to `collectionSite`.
+**Stamped by #1376:** `POST /api/users/register-sample`; the synchronous `/api/import/upload` samples import; the `/api/import/batch` batch import, whose organization is resolved at upload and carried on the staging record; and the async `/api/import/import/samples` job. All of them resolve the caller's organization through `services/callerCreateOrganization.service.js`.
 
 ## Not decided here
 
 - **A custody handover:** whether a new CustodianshipAssignment moves `organizationId`.
 - **Removing the `collectionSite` fallback,** once every stored sample has an `organizationId`.
-- **`Patient.clinicalUnitId`:** whether the patient side needs the same separation.

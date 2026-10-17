@@ -491,6 +491,8 @@ const intakeSchema = {
     },
     consent: { $ref: 'canonical.v1.consent' },
     specimen: { $ref: 'canonical.v1.specimen' },
+    // The organization the intake stamps as Sample.organizationId (#1376).
+    organizationId: { type: 'string', minLength: 1 },
     diagnosis: {
       anyOf: [
         { type: 'null' },

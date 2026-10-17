@@ -8,7 +8,8 @@ const { requireOrganizationScope, requireRole } = require('../../infrastructure/
 const quarantineReleaseService = require('../../services/quarantine-release.service');
 // #1266: lgpd.allowDataExport switches the HL7/FHIR/CDA file exports off.
 const { requireDataExportAllowed } = require('../../infrastructure/middleware/lgpdExportGate');
-const { assertOrganizationFieldNotReparented, resolveOrganizationIdForCreate } = require('../../services/rbac-assignment.service');
+const { assertOrganizationFieldNotReparented } = require('../../services/rbac-assignment.service');
+const { resolveCallerCreateOrganization } = require('../../services/callerCreateOrganization.service');
 // #1192: a sample is scoped by organizationId, falling back to collectionSite.
 const { isSampleInOrganizationScope, applySampleOrganizationScope } = require('../../services/sampleTenancy.service');
 // const { authenticate } = require('../../infrastructure/middleware/auth');
@@ -386,18 +387,28 @@ router.post('/',
         quarantineService: req.app.locals.neo4jQuarantineService || req.app.locals.topologicalQuarantine || null
       });
 
-      // #1185, #1192: #1071's create rule decides the organization the sample
-      // belongs to -- an organization-scoped caller's own, a global caller's
-      // pick named as collectionSite, or none -- and createSample stamps it as
-      // Sample.organizationId. The collection site the body names (ELM-0128)
-      // is kept; a body naming none gets the stamped organization, as before.
-      const organizationId = resolveOrganizationIdForCreate(req.organizationScope, req.body?.collectionSite);
-      const namesCollectionSite = req.body?.collectionSite !== undefined
-        && req.body?.collectionSite !== null
-        && req.body?.collectionSite !== '';
+      // #1185, #1192, #1376: #1071's create rule decides the organization the
+      // sample belongs to -- a single-organization caller's own, a
+      // multi-organization caller's pick among its own, a global caller's
+      // pick of any existing organization, or none -- named in the body's own
+      // organizationId field, and createSample stamps it as
+      // Sample.organizationId. The body's organizationId is never passed on.
+      // The collection site the body names (ELM-0128) is data and is kept; a
+      // body naming none gets the stamped organization, as before.
+      const requestedOrganizationId = typeof req.body?.organizationId === 'string' && req.body.organizationId.trim() !== ''
+        ? req.body.organizationId.trim()
+        : undefined;
+      const { organizationId } = await resolveCallerCreateOrganization(db, {
+        organizationScope: req.organizationScope,
+        requested: requestedOrganizationId
+      });
+      const { organizationId: _bodyOrganizationId, ...body } = req.body || {};
+      const namesCollectionSite = body.collectionSite !== undefined
+        && body.collectionSite !== null
+        && body.collectionSite !== '';
       const sampleData = namesCollectionSite || !organizationId
-        ? req.body
-        : { ...req.body, collectionSite: organizationId };
+        ? body
+        : { ...body, collectionSite: organizationId };
 
       const result = await registerSampleUseCase.execute({
         sampleData,

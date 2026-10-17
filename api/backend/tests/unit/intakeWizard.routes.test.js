@@ -402,6 +402,53 @@ describe('intakeWizard routes', () => {
         expect(patientIdentityServiceModule.matchOrUpsertParticipant).not.toHaveBeenCalled();
         expect(sampleServiceModule.createSample).not.toHaveBeenCalled();
       });
+
+      // #1376: the organization is named in the intake's top-level
+      // organizationId; specimen.collectionSite (ELM-0128) is data. With no
+      // organizationId named, the site still picks, while the wizard sends
+      // its pick there.
+      async function postMultiOrganization(payload) {
+        const getCollectionImpl = vi.fn(async (_db, key) => ({
+          samples: { findOne: vi.fn().mockResolvedValue({ _id: 'sample-1', participantId: '12345678' }), updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) },
+          patients: { updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) },
+          consents: { findOne: vi.fn().mockResolvedValue(null) },
+        })[key]);
+        const { router } = loadRoute({ getCollectionImpl });
+        const sampleServiceModule = require(sampleServicePath);
+        vi.spyOn(sampleServiceModule, 'createSample').mockResolvedValue({ _id: 'sample-1', participantId: '12345678' });
+        const res = await request(scopedApp(router, placementDb(), { scope: 'organization', organizationIds: ['org-a', 'org-b'] }))
+          .post('/api/intake-wizard').send(payload);
+        return { res, createSample: sampleServiceModule.createSample };
+      }
+
+      it('takes a top-level organizationId as the pick (#1376)', async () => {
+        const { res, createSample } = await postMultiOrganization({ ...VALID_PAYLOAD, organizationId: 'org-b' });
+
+        expect(res.status).toBe(200);
+        expect(createSample.mock.calls[0][2].organizationId).toBe('org-b');
+        expect(createSample.mock.calls[0][1].collectionSite).toBe('org-b');
+      });
+
+      it('still picks by specimen.collectionSite when no organizationId is named (#1376)', async () => {
+        const { res, createSample } = await postMultiOrganization({ ...VALID_PAYLOAD, specimen: { ...VALID_PAYLOAD.specimen, collectionSite: 'org-b' } });
+
+        expect(res.status).toBe(200);
+        expect(createSample.mock.calls[0][2].organizationId).toBe('org-b');
+        expect(createSample.mock.calls[0][1].collectionSite).toBe('org-b');
+      });
+
+      it('lets organizationId win over specimen.collectionSite and keeps the site (#1376)', async () => {
+        const { res, createSample } = await postMultiOrganization({
+          ...VALID_PAYLOAD,
+          organizationId: 'org-a',
+          specimen: { ...VALID_PAYLOAD.specimen, collectionSite: 'partner-x' },
+        });
+
+        expect(res.status).toBe(200);
+        expect(createSample.mock.calls[0][2].organizationId).toBe('org-a');
+        expect(createSample.mock.calls[0][1].collectionSite).toBe('partner-x');
+        expect(createSample.mock.calls[0][1]).not.toHaveProperty('organizationId');
+      });
     });
 
     // #1332: the consent decision names one consent; with several, it must

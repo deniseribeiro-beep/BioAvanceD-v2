@@ -21,7 +21,8 @@ const clinicalOutcomeService = require('../services/clinical-outcome.service');
 const derivedScoreService = require('../services/derived-score.service');
 const { computeCharlsonScore, ALGORITHM_VERSION: CCI_ALGORITHM_VERSION, SCORE_TYPE: CCI_SCORE_TYPE } = require('../services/charlsonComorbidityIndex');
 const logger = require('../utils/logger');
-const { resolveOrganizationIdForCreate, isRecordInOrganizationScope } = require('../services/rbac-assignment.service');
+const { isRecordInOrganizationScope } = require('../services/rbac-assignment.service');
+const { resolveCallerCreateOrganization } = require('../services/callerCreateOrganization.service');
 const { validate } = require('../contracts/canonical/v1');
 
 // #693 (RF005 clinical-data slice 5/5): systemUri constants matching this
@@ -823,13 +824,23 @@ async function handleIntakeWizard(req, res) {
       });
     }
 
-    // #1355: the organization the intake stamps, by the rule POST /api/samples
-    // uses (#1185): a single-organization caller's own, a multi-organization
-    // caller's pick named as specimen.collectionSite (ELM-0128), or a global
-    // caller's pick or none. Resolved before anything is written.
+    // #1355, #1376: the organization the intake stamps, by the rule POST
+    // /api/samples uses (#1185): a single-organization caller's own, a
+    // multi-organization caller's pick among its own, or a global caller's
+    // pick of any existing organization or none. The pick is the top-level
+    // organizationId. Transitional (#1376): with none named, the pick falls
+    // back to specimen.collectionSite (ELM-0128), because the wizard still
+    // sends it there; the fallback goes once the wizard sends organizationId.
+    // Resolved before anything is written.
+    const requestedOrganizationId = typeof data.organizationId === 'string' && data.organizationId.trim() !== ''
+      ? data.organizationId.trim()
+      : data?.specimen?.collectionSite;
     let organizationId;
     try {
-      organizationId = resolveOrganizationIdForCreate(req.organizationScope, data?.specimen?.collectionSite);
+      ({ organizationId } = await resolveCallerCreateOrganization(db, {
+        organizationScope: req.organizationScope,
+        requested: requestedOrganizationId
+      }));
     } catch (scopeError) {
       return res.status(scopeError.statusCode || 403).json({ success: false, error: scopeError.message });
     }

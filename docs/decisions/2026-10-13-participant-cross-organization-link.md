@@ -34,4 +34,4 @@ Recorded here, not changed by #1356:
 
 ## Not decided here
 
-- **`Patient.clinicalUnitId`** as both a recorded fact (P1X-0356) and the participant's tenancy key (#1376).
+- **`Patient.clinicalUnitId`** as both a recorded fact (P1X-0356) and the participant's tenancy key (#1376) is now decided: it stays the tenancy key, item 5 of [2026-10-11-sample-tenancy.md](2026-10-11-sample-tenancy.md).
