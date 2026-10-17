@@ -235,6 +235,59 @@ async function recordRevocation(db, consent, request = {}, actor, session = null
   return { consent: updated, revocation, event };
 }
 
+/** Newest first, the order `getPatientConsent` reads a participant's consents in. */
+function isNewerConsent(candidate, current) {
+  const timeOf = (value) => (value ? new Date(value).getTime() : 0);
+  const bySigned = timeOf(candidate.signedAt) - timeOf(current.signedAt);
+  if (bySigned !== 0) return bySigned > 0;
+  return timeOf(candidate.createdAt) > timeOf(current.createdAt);
+}
+
+function groupByConsentId(rows) {
+  const groups = new Map();
+  for (const row of rows) {
+    if (!groups.has(row.consentId)) groups.set(row.consentId, []);
+    groups.get(row.consentId).push(row);
+  }
+  return groups;
+}
+
+/**
+ * #1383 (RF010 AC5): the derived state of each participant's newest consent,
+ * keyed by participantId. A participant with no consent has no entry. Three
+ * reads for any number of participants, none per participant.
+ */
+async function consentStatesOf(db, participantIds = []) {
+  const ids = [...new Set(participantIds
+    .filter((id) => id !== undefined && id !== null)
+    .map((id) => String(id))
+    .filter((id) => id !== ''))];
+  const states = new Map();
+  if (ids.length === 0) return states;
+
+  const consents = await (await getCollection(db, 'consents'))
+    .find({ participantId: { $in: ids } }).toArray();
+  const newest = new Map();
+  for (const consent of consents) {
+    const id = String(consent.participantId);
+    const current = newest.get(id);
+    if (!current || isNewerConsent(consent, current)) newest.set(id, consent);
+  }
+  if (newest.size === 0) return states;
+
+  const keys = [...newest.values()].map(consentKeyOf);
+  const events = groupByConsentId(await (await getCollection(db, 'consentDecisionEvents'))
+    .find({ consentId: { $in: keys } }).toArray());
+  const revocations = groupByConsentId(await (await getCollection(db, 'consentRevocations'))
+    .find({ consentId: { $in: keys } }).toArray());
+
+  for (const [id, consent] of newest) {
+    const key = consentKeyOf(consent);
+    states.set(id, deriveConsentState(consent, events.get(key) || [], revocations.get(key) || []).currentStateDerived);
+  }
+  return states;
+}
+
 /** The consent's history, oldest first, for a reader. */
 async function getHistory(db, consent) {
   return readHistory(db, consentKeyOf(consent));
@@ -243,6 +296,7 @@ async function getHistory(db, consent) {
 module.exports = {
   CONSENT_STATES,
   consentKeyOf,
+  consentStatesOf,
   deriveConsentState,
   effectivePermissionsOf,
   recomputeConsentState,

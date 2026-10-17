@@ -11,6 +11,7 @@ const securityService = require('../../src/services/security.service');
 const sampleComplianceSync = require('../../src/services/sampleComplianceSync.service');
 const { createDbMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
+const { createMatchingCollection } = require('../factories/filter.factory');
 
 const controllerPath = require.resolve('../../src/controllers/paciente.controller');
 
@@ -47,6 +48,38 @@ function createReq(overrides = {}) {
     // exercising org-scope enforcement itself override this explicitly.
     organizationScope: { scope: 'global', organizationIds: [] },
     ...overrides
+  };
+}
+
+// #1383 (RF010 AC5): consent histories for four participants -- one revoked
+// whole, one revoked by permission, one whose older consent was revoked but
+// whose newer consent stands, and one with no consent at all.
+function consentStatusCollections() {
+  const anHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+  const responses = { storage: true, contact: true };
+  const consent = (consentId, participantId, signedAt) => ({
+    consentId, participantId, status: 'ACTIVE', responses, signedAt: new Date(signedAt), createdAt: new Date(signedAt)
+  });
+  const revocation = (consentId, scope) => ({ consentId, scope, effectiveAt: anHourAgo });
+  return {
+    patients: createMatchingCollection([
+      { participantId: '10000001', status: 'ACTIVE' },
+      { participantId: '10000002', status: 'ACTIVE' },
+      { participantId: '10000003', status: 'ACTIVE' },
+      { participantId: '10000004', status: 'PENDING_CONSENT' }
+    ]),
+    patientConsents: createMatchingCollection([
+      consent('c-p1', '10000001', '2026-01-01T00:00:00Z'),
+      consent('c-p2', '10000002', '2026-01-01T00:00:00Z'),
+      consent('c-p3-old', '10000003', '2025-01-01T00:00:00Z'),
+      consent('c-p3-new', '10000003', '2026-02-01T00:00:00Z')
+    ]),
+    consentDecisionEvents: createMatchingCollection([]),
+    consentRevocations: createMatchingCollection([
+      revocation('c-p1', ['all']),
+      revocation('c-p2', ['contact']),
+      revocation('c-p3-old', ['all'])
+    ])
   };
 }
 
@@ -275,7 +308,7 @@ describe('paciente.controller', () => {
           success: true,
           data: expect.objectContaining({
             total: 1,
-            patients: [{ participantId: '12345678', status: 'ACTIVE', consentNotifiedAt: null, consentTokenExpiresAt: null }]
+            patients: [{ participantId: '12345678', status: 'ACTIVE', consentNotifiedAt: null, consentTokenExpiresAt: null, consentStatus: null }]
           })
         })
       );
@@ -301,10 +334,33 @@ describe('paciente.controller', () => {
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
-            patients: [{ participantId: '12345678', status: 'PENDING_CONSENT', consentNotifiedAt: null, consentTokenExpiresAt: null }]
+            patients: [{ participantId: '12345678', status: 'PENDING_CONSENT', consentNotifiedAt: null, consentTokenExpiresAt: null, consentStatus: null }]
           })
         })
       );
+    });
+
+    it('derives each operational row consentStatus from the newest consent history in one batched read (#1383)', async () => {
+      const collections = consentStatusCollections();
+      const db = createDbMock(collections);
+      vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+      vi.spyOn(auditLogger, 'log').mockResolvedValue();
+      const req = createReq({ app: { locals: { db } }, user: { accessType: 1, userID: 'operational-user' } });
+      const res = createRes();
+
+      await controller.listar(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      const rows = res.json.mock.calls[0][0].data.patients;
+      expect(rows.map((row) => [row.participantId, row.status, row.consentStatus])).toEqual([
+        ['10000001', 'ACTIVE', 'revoked'],
+        ['10000002', 'ACTIVE', 'partially_revoked'],
+        ['10000003', 'ACTIVE', 'active'],
+        ['10000004', 'PENDING_CONSENT', null]
+      ]);
+      expect(collections.patientConsents.find).toHaveBeenCalledTimes(1);
+      expect(collections.consentDecisionEvents.find).toHaveBeenCalledTimes(1);
+      expect(collections.consentRevocations.find).toHaveBeenCalledTimes(1);
     });
 
     it('returns full patient data for cadastro role (has createPatient permission)', async () => {
@@ -936,6 +992,23 @@ describe('paciente.controller', () => {
 
       expect(patientService.searchPatients).toHaveBeenCalledWith(req.app.locals.db, 'Foo', req.organizationScope);
       expect(res.status).toHaveBeenCalledWith(200);
+    });
+
+    it('gives a revoked participant found by search consentStatus revoked (#1383)', async () => {
+      vi.spyOn(patientService, 'searchPatients').mockResolvedValue({ patients: [{ participantId: '10000001', status: 'ACTIVE' }], total: 1 });
+      vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
+      vi.spyOn(auditLogger, 'log').mockResolvedValue();
+      const db = createDbMock(consentStatusCollections());
+      const req = createReq({ app: { locals: { db } }, query: { q: '10000001' } });
+      const res = createRes();
+
+      await controller.search(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith({
+        success: true,
+        data: { patients: [{ participantId: '10000001', status: 'ACTIVE', consentStatus: 'revoked' }], total: 1 }
+      });
     });
 
     it('returns 500 and logs error when user is set and service fails', async () => {

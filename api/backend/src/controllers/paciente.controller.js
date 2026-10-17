@@ -1,4 +1,5 @@
 const patientService = require('../services/patient.service');
+const consentHistory = require('../services/consentHistory.service');
 const biomarkerObservationService = require('../services/biomarker-observation.service');
 const logService = require('../services/log.service');
 const logger = require('../utils/logger');
@@ -172,6 +173,16 @@ class PacienteController {
     }
   }
 
+  /** #1383 (RF010 AC5): each listed patient with its newest consent's derived state. */
+  async withConsentStatus(db, result) {
+    const patients = (result && result.patients) || [];
+    const consentStates = await consentHistory.consentStatesOf(db, patients.map((p) => p.participantId));
+    return {
+      ...result,
+      patients: patients.map((p) => ({ ...p, consentStatus: consentStates.get(String(p.participantId)) || null }))
+    };
+  }
+
   async listar(req, res) {
     try {
       const db = req.app.locals.db;
@@ -212,6 +223,9 @@ class PacienteController {
           .toArray();
 
         const total = await patientsCollection.countDocuments(scopeQuery);
+        // #1383 (RF010 AC5): the consent state shown is derived from the
+        // consent's history; Patient.status is the participant gate's field.
+        const consentStates = await consentHistory.consentStatesOf(db, patients.map((p) => p.participantId));
 
         // Registra log de consulta (módulo operacional - apenas IDs + status)
         const auditLogger = require('../utils/auditLogger');
@@ -230,7 +244,7 @@ class PacienteController {
         return res.status(200).json({
           success: true,
           data: {
-            patients: patients.map(p => ({ participantId: p.participantId, status: p.status || 'PENDING_CONSENT', consentNotifiedAt: p.consentNotifiedAt || null, consentTokenExpiresAt: p.consentTokenExpiresAt || null })),
+            patients: patients.map(p => ({ participantId: p.participantId, status: p.status || 'PENDING_CONSENT', consentNotifiedAt: p.consentNotifiedAt || null, consentTokenExpiresAt: p.consentTokenExpiresAt || null, consentStatus: consentStates.get(String(p.participantId)) || null })),
             total,
             limit: filters.limit,
             skip: filters.skip
@@ -247,6 +261,7 @@ class PacienteController {
         };
 
         const result = await patientService.listPatients(db, filters);
+        const withConsentStatus = await this.withConsentStatus(db, result);
 
         // Registra log de consulta (módulo de cadastro - dados completos)
         const auditLogger = require('../utils/auditLogger');
@@ -264,7 +279,7 @@ class PacienteController {
 
         return res.status(200).json({
           success: true,
-          data: result
+          data: withConsentStatus
         });
       }
     } catch (error) {
@@ -950,7 +965,10 @@ class PacienteController {
         });
       }
 
-      const result = await patientService.searchPatients(db, searchTerm, req.organizationScope);
+      const result = await this.withConsentStatus(
+        db,
+        await patientService.searchPatients(db, searchTerm, req.organizationScope)
+      );
 
       // Registra log de busca (sanitizado)
       const auditLogger = require('../utils/auditLogger');
