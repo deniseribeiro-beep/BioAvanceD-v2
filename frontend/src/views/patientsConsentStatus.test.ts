@@ -27,6 +27,21 @@ describe('normalizeConsentStatus', () => {
     expect(normalizeConsentStatus('REVOKED')).toBe('REVOKED');
   });
 
+  // #1383: the derived consent states RF010 AC5 sends as consentStatus.
+  it('maps partially_revoked to PARTIALLY_REVOKED', () => {
+    expect(normalizeConsentStatus('partially_revoked')).toBe('PARTIALLY_REVOKED');
+    expect(normalizeConsentStatus('PARTIALLY_REVOKED')).toBe('PARTIALLY_REVOKED');
+  });
+
+  it('maps superseded to SUPERSEDED', () => {
+    expect(normalizeConsentStatus('superseded')).toBe('SUPERSEDED');
+  });
+
+  it('maps the derived active and revoked to GRANTED and REVOKED', () => {
+    expect(normalizeConsentStatus('active')).toBe('GRANTED');
+    expect(normalizeConsentStatus('revoked')).toBe('REVOKED');
+  });
+
   it('maps PENDING to PENDING', () => {
     expect(normalizeConsentStatus('PENDING')).toBe('PENDING');
   });

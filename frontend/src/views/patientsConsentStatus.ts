@@ -6,6 +6,10 @@ import type { ConsentStatus } from '../components/Consent/StatusBadge';
 // which used to hard-code 'EXPIRED'. That made a just-accepted TCLE render
 // as "Expirado" with "Coletar Assinatura" still offered.
 //
+// #1383: the backend sends consentStatus as the state RF010 AC5 derives
+// (active, partially_revoked, revoked, superseded), and the badge reads it:
+// partially_revoked and superseded each have their own value and label.
+//
 // Extracted out of PatientsPage.tsx so this mapping can be unit-tested
 // directly (see patientsConsentStatus.test.ts), matching this repo's
 // convention of testing pure exported helpers rather than rendering
@@ -15,6 +19,8 @@ export function normalizeConsentStatus(value?: string): ConsentStatus {
   if (normalized === 'GRANTED' || normalized === 'SIGNED' || normalized === 'ACTIVE' || normalized === 'CONSENTED') {
     return 'GRANTED';
   }
+  if (normalized === 'PARTIALLY_REVOKED') return 'PARTIALLY_REVOKED';
+  if (normalized === 'SUPERSEDED') return 'SUPERSEDED';
   if (normalized === 'REVOKED') return 'REVOKED';
   if (normalized === 'PENDING' || normalized === 'PENDING_CONSENT') return 'PENDING';
   if (normalized === 'EXPIRED') return 'EXPIRED';
@@ -23,15 +29,16 @@ export function normalizeConsentStatus(value?: string): ConsentStatus {
   return 'UNKNOWN';
 }
 
-// #1375: the consent states RF010 AC5 derives that the badge has no value
-// for; normalizeConsentStatus reads them as UNKNOWN.
-const DERIVED_CONSENT_STATES = new Set(['PARTIALLY_REVOKED', 'SUPERSEDED']);
-
 // True when the status names a consent that exists, so its history can be
 // read. A pending or empty status, and a patient's own status with no
 // consent meaning (INACTIVE, or anything unrecognised), name none.
 export function hasConsentRecord(value?: string): boolean {
-  if (DERIVED_CONSENT_STATES.has((value || '').trim().toUpperCase())) return true;
   const status = normalizeConsentStatus(value);
-  return status === 'GRANTED' || status === 'REVOKED' || status === 'EXPIRED';
+  return (
+    status === 'GRANTED' ||
+    status === 'PARTIALLY_REVOKED' ||
+    status === 'REVOKED' ||
+    status === 'SUPERSEDED' ||
+    status === 'EXPIRED'
+  );
 }
