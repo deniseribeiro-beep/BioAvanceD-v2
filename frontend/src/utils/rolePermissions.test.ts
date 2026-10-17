@@ -40,6 +40,14 @@ describe('canRoleAccessRoute — the restrictive blocks still hold', () => {
     }
   });
 
+  // #1375: the consent revocation screen matches the backend's requireRole(3, 4).
+  it('grants /consents to Administrador and Coordenador only', () => {
+    expect(canRoleAccessRoute('Administrador', '/consents')).toBe(true);
+    expect(canRoleAccessRoute('Coordenador', '/consents')).toBe(true);
+    expect(canRoleAccessRoute('Técnico', '/consents')).toBe(false);
+    expect(canRoleAccessRoute('Usuário Externo', '/consents')).toBe(false);
+  });
+
   // #1239: /logs follows the backend's audit-reader rule, which is not a base
   // role, so the role map defers to ProtectedRoute's requireAuditReader.
   it('defers /logs to the audit-reader guard rather than a base role', () => {

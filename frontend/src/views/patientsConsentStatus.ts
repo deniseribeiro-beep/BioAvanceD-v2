@@ -22,3 +22,16 @@ export function normalizeConsentStatus(value?: string): ConsentStatus {
   // value should never assert a specific (and possibly wrong) consent claim.
   return 'UNKNOWN';
 }
+
+// #1375: the consent states RF010 AC5 derives that the badge has no value
+// for; normalizeConsentStatus reads them as UNKNOWN.
+const DERIVED_CONSENT_STATES = new Set(['PARTIALLY_REVOKED', 'SUPERSEDED']);
+
+// True when the status names a consent that exists, so its history can be
+// read. A pending or empty status, and a patient's own status with no
+// consent meaning (INACTIVE, or anything unrecognised), name none.
+export function hasConsentRecord(value?: string): boolean {
+  if (DERIVED_CONSENT_STATES.has((value || '').trim().toUpperCase())) return true;
+  const status = normalizeConsentStatus(value);
+  return status === 'GRANTED' || status === 'REVOKED' || status === 'EXPIRED';
+}

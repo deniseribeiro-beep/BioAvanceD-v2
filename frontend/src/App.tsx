@@ -43,6 +43,7 @@ const SettingsParametersPage = lazy(() => import('./views/SettingsParametersPage
 const DataDictionaryPage = lazy(() => import('./views/DataDictionaryPage'));
 const TcleBuilderPage = lazy(() => import('./views/TcleBuilderPage'));
 const AccessRequestsPage = lazy(() => import('./views/AccessRequestsPage'));
+const ConsentHistoryPage = lazy(() => import('./views/ConsentHistoryPage'));
 const FoundationApp = lazy(() => import('./foundation/FoundationApp'));
 const IntakeWizardPage = lazy(() => import('./pages/v2/intake/IntakeWizardPage'));
 
@@ -174,6 +175,7 @@ function App() {
                   />
                   {/* RF024 (#1350): the backend gates every access-request route on manageAccessRequests, which only Administrador holds. */}
                   <Route path="/access-requests" element={<ProtectedRoute requiredRole="Administrador"><AccessRequestsPage /></ProtectedRoute>} />
+                  <Route path="/consents" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><ConsentHistoryPage /></ProtectedRoute>} />
                   <Route path="/admin/tcle/new" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><TcleBuilderPage /></ProtectedRoute>} />
                   <Route path="/admin/tcle/edit/:templateId" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><TcleBuilderPage /></ProtectedRoute>} />
                   <Route path="/backup" element={<ProtectedRoute requiredRole="Administrador"><BackupPage /></ProtectedRoute>} />

@@ -482,6 +482,50 @@ export interface PatientConsent {
   ipAddress?: string;
   userAgent?: string;
   responses: Record<string, boolean>;
+  consentId?: string;
+  // RF010 AC5: the state derived from the consent's decision events and
+  // revocations, and what it still permits.
+  currentStateDerived?: ConsentStateDerived;
+  effectivePermissions?: Record<string, boolean>;
+  withdrawalScope?: string[];
+}
+
+export type ConsentStateDerived = 'active' | 'partially_revoked' | 'revoked' | 'superseded';
+
+export interface ConsentPermissionRow {
+  permissionCode: string;
+  purpose?: { code?: string; display?: string };
+  decision?: 'permit' | 'deny';
+}
+
+export interface ConsentDecisionEvent {
+  consentDecisionEventId: string;
+  decision: string;
+  occurredAt: Date | string;
+  channel: string;
+  signerRole: string;
+  signerId?: string | null;
+  authenticationLevel?: string | null;
+}
+
+export interface ConsentRevocationRecord {
+  consentRevocationId: string;
+  scope: string[];
+  reason: string | null;
+  effectiveAt: Date | string;
+  priorUseDisposition?: string | null;
+}
+
+/** GET /api/e-consent/consents/:id/history (RF010 AC5). */
+export interface ConsentHistory {
+  consentId: string;
+  permissions: ConsentPermissionRow[];
+  participantId: string | null;
+  currentStateDerived: ConsentStateDerived;
+  supersededByConsentId: string | null;
+  supersedesConsentId: string | null;
+  decisionEvents: ConsentDecisionEvent[];
+  revocations: ConsentRevocationRecord[];
 }
 
 export enum FileType {

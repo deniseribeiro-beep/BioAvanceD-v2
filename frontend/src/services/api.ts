@@ -6,6 +6,7 @@ import {
   ConsentTemplate,
   PurposeCode,
   PatientConsent,
+  ConsentHistory,
   Equipment,
   Temperature,
   Sensor,
@@ -945,7 +946,12 @@ export const consentService = {
     signatureImageBase64?: string;
     signatureMimeType?: string;
   }) => api.post<PatientConsent>('/e-consent/consents', data),
-  revokeConsent: (consentId: string) => api.post(`/e-consent/consents/${consentId}/revoke`),
+  // RF010 AC6 (#1375): `consentId` is the consent's Mongo _id. No scope means
+  // the whole consent; a scope names the permission codes to withdraw.
+  revokeConsent: (consentId: string, request: { scope?: string[]; reason?: string } = {}) =>
+    api.post<{ success: boolean; data: PatientConsent }>(`/e-consent/consents/${consentId}/revoke`, request),
+  getConsentHistory: (consentId: string) =>
+    api.get<{ success: boolean; data: ConsentHistory }>(`/e-consent/consents/${consentId}/history`),
   getPatientConsent: (participantId: string) => api.get<{ success: boolean; data: PatientConsent }>(`/patients/${participantId}/consent`)
 };
 

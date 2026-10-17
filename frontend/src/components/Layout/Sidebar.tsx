@@ -102,6 +102,8 @@ export default function Sidebar() {
     // RF024 (#1350): access and distribution requests.
     { path: '/access-requests', icon: Shield, label: t('navigation.accessRequests', 'Solicitações de Acesso'), roles: ['Administrador'] },
     { path: '/admin/tcle/new', icon: FileText, label: t('navigation.tcleBuilder', 'Construtor de TCLE'), roles: ['Administrador', 'Coordenador'] },
+    // RF010 AC5/AC6 (#1375): a consent's revocation and its history.
+    { path: '/consents', icon: FileText, label: t('navigation.consentHistory', 'Consentimentos (TCLE)'), roles: ['Administrador', 'Coordenador'] },
     { path: '/user/security', icon: Shield, label: t('navigation.userSecurity'), roles: ['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo'] },
     { path: '/reports', icon: BarChart3, label: t('navigation.reports'), roles: ['Administrador', 'Coordenador', 'Usuário Externo'] },
     { path: '/reports/templates', icon: FileText, label: t('navigation.reportTemplates'), roles: ['Administrador', 'Coordenador'] },

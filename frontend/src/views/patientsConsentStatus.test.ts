@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeConsentStatus } from './patientsConsentStatus';
+import { hasConsentRecord, normalizeConsentStatus } from './patientsConsentStatus';
 
 // #1044: the RF010 accept-consent path writes status: 'ACTIVE', which used
 // to fall through to a hard-coded 'EXPIRED' in the patients-directory
@@ -61,5 +61,18 @@ describe('normalizeConsentStatus', () => {
   it('is whitespace-insensitive', () => {
     expect(normalizeConsentStatus('  ACTIVE  ')).toBe('GRANTED');
     expect(normalizeConsentStatus('  pending_consent \n')).toBe('PENDING');
+  });
+});
+
+// #1375: the patients directory offers a consent's history only when a
+// consent stands behind the status.
+describe('hasConsentRecord', () => {
+  it('is true for every consent state and false for pending, empty and a patient-only status', () => {
+    for (const value of ['active', 'ACTIVE', 'partially_revoked', 'superseded', 'revoked', 'REVOKED']) {
+      expect(hasConsentRecord(value)).toBe(true);
+    }
+    for (const value of ['PENDING', 'PENDING_CONSENT', '', undefined, 'INACTIVE']) {
+      expect(hasConsentRecord(value)).toBe(false);
+    }
   });
 });

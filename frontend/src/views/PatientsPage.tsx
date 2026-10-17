@@ -14,7 +14,7 @@ import { dataImportService, patientService } from '../services/api';
 import { useLanguage } from '../contexts/LanguageContext';
 import ImportResultSummary, { type ImportResultSummaryData } from '../components/ImportResultSummary';
 import { convertExcelFileToFhirBundle, downloadFhirExcelTemplate } from '../utils/fhirExcelImport';
-import { normalizeConsentStatus } from './patientsConsentStatus';
+import { hasConsentRecord, normalizeConsentStatus } from './patientsConsentStatus';
 import './PatientsPage.css';
 
 const styles: Record<string, CSSProperties> = {
@@ -622,6 +622,17 @@ export default function PatientsPage() {
                             {resendingConsentFor === participantId
                               ? getPatientsActionLabel('patients.resending', 'Resending...', 'Reenviando...')
                               : getPatientsActionLabel('patients.resendNotifications', 'Resend Notifications', 'Reenviar notificaciones')}
+                          </Button>
+                        )}
+                        {hasConsentRecord(String(rawConsentStatus || '')) && (
+                          <Button
+                            data-testid={`consent-history-button-${participantId}`}
+                            variant="secondary"
+                            onClick={() => navigate(`/consents?participantId=${encodeURIComponent(participantId)}`)}
+                            style={styles.consentActionButton}
+                            className="consent-action-button"
+                          >
+                            Histórico do TCLE
                           </Button>
                         )}
                         <div className="table-actions">
