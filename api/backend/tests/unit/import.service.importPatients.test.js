@@ -219,6 +219,30 @@ describe('ImportService.importPatients (JSON)', () => {
     });
   });
 
+  // #1386: a record the merge's upsert inserts gets its own id and a status
+  // (P1X-0348, P1X-0361), on insert only, so a matched record keeps its own.
+  it('#1386: the merge\'s identity upsert sets participantIdentityId and identityStatus on insert only', async () => {
+    const filePath = writeTmpFile('merge-1386.json', JSON.stringify(validPatient()));
+    const patients = makeCollection({
+      existing: { _id: 'existing-1', participantId: '10203040', identityDocument: '12345678900', birthDate: '1985-05-20' },
+    });
+    const participantIdentities = makeCollection({
+      existing: { participantId: '10203040', identityDocument: '12345678900' },
+    });
+
+    const result = await importService.importPatients(makeDb({ patients, participantIdentities }), { path: filePath, originalname: 'merge-1386.json' });
+
+    expect(result.success).toBe(1);
+    expect(participantIdentities.updates).toHaveLength(1);
+    const { update } = participantIdentities.updates[0];
+    expect(update.$setOnInsert).toEqual({
+      participantIdentityId: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i),
+      identityStatus: 'active',
+    });
+    expect(update.$set).not.toHaveProperty('participantIdentityId');
+    expect(update.$set).not.toHaveProperty('identityStatus');
+  });
+
   it('dedups via identityDocumentHash (RF005/RNF007 #574), matching a record with no plaintext-queryable identityDocument left', async () => {
     const filePath = writeTmpFile('hash-match.json', JSON.stringify(validPatient()));
     const expectedHash = participantIdentityService.computeBlindIndex('identityDocument', '12345678900');

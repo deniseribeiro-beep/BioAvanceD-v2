@@ -450,7 +450,11 @@ class ImportService {
             const identityCollection = getCollection(db, 'participantIdentities');
             await identityCollection.updateOne(
               { participantId: merged.participantId },
-              { $set: participantIdentityService.encryptIdentityFields(identityUpdate) },
+              {
+                $set: participantIdentityService.encryptIdentityFields(identityUpdate),
+                // #1386: a merged participant with no identity record gets one here.
+                $setOnInsert: ParticipantIdentityModel.onInsertFields(),
+              },
               { upsert: true }
             );
           }

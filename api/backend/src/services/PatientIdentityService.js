@@ -4,6 +4,7 @@ const { generateUniqueParticipantId } = require('../utils/patientAnonymization')
 // below (a pre-existing, unrelated same-name collision between the two
 // files -- see participantIdentity.service.js's own top-of-file comment).
 const identityCryptoService = require('./participantIdentity.service');
+const ParticipantIdentityModel = require('../models/ParticipantIdentity');
 
 function normalizeString(value) {
   return String(value || '').trim();
@@ -167,6 +168,8 @@ class participantIdentityService {
             ...encryptedIdentityValues,
             updatedAt: update.updatedAt,
           },
+          // #1386: a participant matched without an identity record gets one here.
+          $setOnInsert: ParticipantIdentityModel.onInsertFields(),
         },
         { upsert: true }
       );
@@ -208,6 +211,7 @@ class participantIdentityService {
           ...encryptedIdentityValues,
           updatedAt: toInsert.updatedAt,
         },
+        $setOnInsert: ParticipantIdentityModel.onInsertFields(),
       },
       { upsert: true }
     );

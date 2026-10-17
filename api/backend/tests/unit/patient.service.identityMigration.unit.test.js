@@ -420,6 +420,25 @@ describe('patient.service.js identity resolution migrated to ParticipantIdentity
     expect(participantIdentityService.decryptIdentity(identity).identityDocument).toBe('11144477735');
   });
 
+  // #1386: a record the sync's upsert inserts gets its own id and a status
+  // (P1X-0348, P1X-0361), on insert only, so a matched record keeps its own.
+  it('#1386: updatePatient\'s identity upsert sets participantIdentityId and identityStatus on insert only', async () => {
+    const patients = makeInMemoryCollection([{ participantId: '22222222' }]);
+    const participantIdentities = makeInMemoryCollection([]);
+    const db = makeDb({ patients, participantIdentities });
+
+    await patientService.updatePatient(db, '22222222', { patientName: 'New Name' });
+
+    const [, update, options] = participantIdentities.updateOne.mock.calls[0];
+    expect(options).toEqual({ upsert: true });
+    expect(update.$setOnInsert).toEqual({
+      participantIdentityId: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i),
+      identityStatus: 'active',
+    });
+    expect(update.$set).not.toHaveProperty('participantIdentityId');
+    expect(update.$set).not.toHaveProperty('identityStatus');
+  });
+
   // updatePatient's identity sync is a participantIdentities WRITER, and it
   // was the one writer that never went through encryptIdentityFields: an
   // edit wrote raw plaintext beside the ciphertext and hash it left stale.

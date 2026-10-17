@@ -48,6 +48,7 @@
     "migrate:facilities-rooms-to-locations": "node src/scripts/migrateFacilitiesRoomsToLocations.js",
     "migrate:sample-barcode-labels": "node src/scripts/migrateSampleBarcodeLabels.js",
     "migrate:auth-canonical-names": "node src/scripts/migrateAuthCanonicalNames.js",
+    "migrate:participant-identity-ids": "node src/scripts/migrateParticipantIdentityIds.js",
     "encryption:rewrite": "node src/scripts/rewriteEncryptedFields.js",
     "iot:simulate": "node scripts/iot-simulator.js",
     "seed:essential:list": "node scripts/seed-essential-reference-data.js --list",

@@ -124,6 +124,9 @@ describe('fhir-import-staging.service#commitBatch — ParticipantIdentity dual-w
     expect(identity.birthDate).toBeNull();
     expect(identity.birthDateEncrypted).toBeTruthy();
     expect(identity.birthDateHash).toBeTruthy();
+    // #1386: the inserted record's own id (P1X-0348), not fieldsOf's null.
+    expect(identity.participantIdentityId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+    expect(identity.identityStatus).toBe('active');
   });
 
   // #1171: every later consent path (/generate-link, resend, the publication

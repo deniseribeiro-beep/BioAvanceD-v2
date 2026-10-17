@@ -1061,7 +1061,9 @@ async function commitBatch(db, batchIdRaw, { organizationScope } = {}) {
     await identities.updateOne(
       { participantId: normalized.participantId },
       {
-        $setOnInsert: { ...identityFields, createdAt: new Date() },
+        // #1386: identityFields carries participantIdentityId null; the
+        // inserted record's own id must win.
+        $setOnInsert: { ...identityFields, ...ParticipantIdentityModel.onInsertFields(), createdAt: new Date() },
         $set: { updatedAt: new Date() },
       },
       { upsert: true }

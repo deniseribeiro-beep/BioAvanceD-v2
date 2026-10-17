@@ -1187,7 +1187,11 @@ class PatientService {
         const identityCollection = await this.getIdentityCollection(db);
         await identityCollection.updateOne(
           { participantId: updatedPatient.participantId },
-          { $set: encryptedIdentityUpdate },
+          {
+            $set: encryptedIdentityUpdate,
+            // #1386: a patient with no identity record gets one here.
+            $setOnInsert: ParticipantIdentityModel.onInsertFields(),
+          },
           { upsert: true }
         );
       }
