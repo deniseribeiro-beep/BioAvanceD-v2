@@ -23,15 +23,15 @@ describe('ParticipantIdentityService.getEncryptedFieldMap', () => {
   it('returns map for the three civil-identity fields plus the contact and the representative (RF005/RNF007, dict-07 row 1, #566, #1166, #1168)', () => {
     const map = participantIdentityService.getEncryptedFieldMap();
     expect(map).toEqual({
-      patientName: 'patientNameEncrypted',
-      birthDate: 'birthDateEncrypted',
-      identityDocument: 'identityDocumentEncrypted',
-      email: 'emailEncrypted',
-      phone: 'phoneEncrypted',
-      representativeName: 'representativeNameEncrypted',
-      representativeEmail: 'representativeEmailEncrypted',
-      representativeIdentityDocument: 'representativeIdentityDocumentEncrypted',
-      representativePhone: 'representativePhoneEncrypted'
+      patientName: 'patientNameCiphertext',
+      birthDate: 'birthDateCiphertext',
+      identityDocument: 'identityDocumentCiphertext',
+      email: 'emailCiphertext',
+      phone: 'phoneCiphertext',
+      representativeName: 'representativeNameCiphertext',
+      representativeEmail: 'representativeEmailCiphertext',
+      representativeIdentityDocument: 'representativeIdentityDocumentCiphertext',
+      representativePhone: 'representativePhoneCiphertext'
     });
   });
 });
@@ -162,11 +162,11 @@ describe('ParticipantIdentityService.encryptIdentityFields', () => {
     const result = participantIdentityService.encryptIdentityFields(fields);
 
     // Ciphertext must not contain the plaintext value anywhere in its encoding.
-    expect(JSON.stringify(result.patientNameEncrypted)).not.toContain('Paciente QA Teste');
-    expect(JSON.stringify(result.identityDocumentEncrypted)).not.toContain('11144477735');
-    expect(result.patientNameEncrypted).toMatchObject({ alg: 'aes-256-gcm', keyId: 'test-key-1' });
-    expect(result.birthDateEncrypted).toMatchObject({ alg: 'aes-256-gcm', keyId: 'test-key-1' });
-    expect(result.identityDocumentEncrypted).toMatchObject({ alg: 'aes-256-gcm', keyId: 'test-key-1' });
+    expect(JSON.stringify(result.patientNameCiphertext)).not.toContain('Paciente QA Teste');
+    expect(JSON.stringify(result.identityDocumentCiphertext)).not.toContain('11144477735');
+    expect(result.patientNameCiphertext).toMatchObject({ alg: 'aes-256-gcm', keyId: 'test-key-1' });
+    expect(result.birthDateCiphertext).toMatchObject({ alg: 'aes-256-gcm', keyId: 'test-key-1' });
+    expect(result.identityDocumentCiphertext).toMatchObject({ alg: 'aes-256-gcm', keyId: 'test-key-1' });
 
     // #1104: dict-07 row 1 ("cifrar") -- a field encrypted beside its own
     // plaintext copy is not encrypted at rest, and decryptIdentity prefers
@@ -199,7 +199,7 @@ describe('ParticipantIdentityService.encryptIdentityFields', () => {
     // through the ciphertext.
     expect(participantIdentityService.decryptIdentity(result).identityDocument).toBe('11144477735');
     expect(result.identityDocumentHash).toBe(participantIdentityService.computeBlindIndex('identityDocument', '11144477735'));
-    expect(JSON.stringify(result.identityDocumentEncrypted)).not.toContain('111.444.777-35');
+    expect(JSON.stringify(result.identityDocumentCiphertext)).not.toContain('111.444.777-35');
   });
 
   // #1109 control: a document with no punctuation is untouched, so a red
@@ -216,12 +216,12 @@ describe('ParticipantIdentityService.encryptIdentityFields', () => {
   it('does not mutate the input object', () => {
     const fields = { participantId: '1', patientName: 'Ana' };
     participantIdentityService.encryptIdentityFields(fields);
-    expect(Object.keys(fields)).not.toContain('patientNameEncrypted');
+    expect(Object.keys(fields)).not.toContain('patientNameCiphertext');
   });
 
   it('skips fields that are null/undefined/absent', () => {
     const result = participantIdentityService.encryptIdentityFields({ participantId: '1', patientName: null });
-    expect(result.patientNameEncrypted).toBeUndefined();
+    expect(result.patientNameCiphertext).toBeUndefined();
     expect(result.encryptionKeyVersion).toBeUndefined();
   });
 });
@@ -243,7 +243,7 @@ describe('ParticipantIdentityService.encryptIdentityFields -- birthDate cipherte
     });
 
     expect(result.birthDate).toBeNull();
-    expect(result.birthDateEncrypted).toMatchObject({ alg: 'aes-256-gcm', keyId: 'test-key-1' });
+    expect(result.birthDateCiphertext).toMatchObject({ alg: 'aes-256-gcm', keyId: 'test-key-1' });
     expect(result.birthDateHash).toBe(
       participantIdentityService.computeBlindIndex('birthDate', new Date(1990, 0, 20))
     );
@@ -280,7 +280,7 @@ describe('ParticipantIdentityService.encryptIdentityFields -- birthDate cipherte
       birthDate: new Date(1990, 0, 20),
     });
 
-    expect(result.birthDateEncrypted).toBeUndefined();
+    expect(result.birthDateCiphertext).toBeUndefined();
     expect(result.birthDate).toBeInstanceOf(Date);
     expect(result.birthDate.getFullYear()).toBe(1990);
   });
@@ -297,8 +297,8 @@ describe('ParticipantIdentityService.encryptIdentityFields -- birthDate cipherte
 
     expect(result.patientName).toBeNull();
     expect(result.identityDocument).toBeNull();
-    expect(result.patientNameEncrypted).toMatchObject({ alg: 'aes-256-gcm', keyId: 'test-key-1' });
-    expect(result.identityDocumentEncrypted).toMatchObject({ alg: 'aes-256-gcm', keyId: 'test-key-1' });
+    expect(result.patientNameCiphertext).toMatchObject({ alg: 'aes-256-gcm', keyId: 'test-key-1' });
+    expect(result.identityDocumentCiphertext).toMatchObject({ alg: 'aes-256-gcm', keyId: 'test-key-1' });
 
     const decrypted = participantIdentityService.decryptIdentity(result);
     expect(decrypted.patientName).toBe('Paciente QA Teste');
@@ -315,7 +315,7 @@ describe('ParticipantIdentityService.encryptIdentityFields -- birthDate cipherte
       identityDocument: '111.444.777-35',
     });
 
-    expect(result.patientNameEncrypted).toBeUndefined();
+    expect(result.patientNameCiphertext).toBeUndefined();
     expect(result.patientName).toBe('Paciente QA Teste');
     expect(result.identityDocument).toBe('11144477735');
   });
@@ -377,9 +377,9 @@ describe('ParticipantIdentityService -- contact fields encrypted at rest (#1166)
       phone: '11987654321',
     });
 
-    expect(result.emailEncrypted).toBeTruthy();
-    expect(result.phoneEncrypted).toBeTruthy();
-    expect(JSON.stringify(result.emailEncrypted)).not.toContain('maria@example.com');
+    expect(result.emailCiphertext).toBeTruthy();
+    expect(result.phoneCiphertext).toBeTruthy();
+    expect(JSON.stringify(result.emailCiphertext)).not.toContain('maria@example.com');
     expect(result.email).toBeNull();
     expect(result.phone).toBeNull();
   });
@@ -390,7 +390,7 @@ describe('ParticipantIdentityService -- contact fields encrypted at rest (#1166)
     const result = participantIdentityService.encryptIdentityFields({ participantId: '12345678', ...{ representativeName: 'Rep Legal', representativeEmail: 'rep@example.com', representativeIdentityDocument: '98765432100', representativePhone: '11955554444' } });
 
     for (const field of ['representativeName', 'representativeEmail', 'representativeIdentityDocument', 'representativePhone']) {
-      expect(result[`${field}Encrypted`]).toBeTruthy();
+      expect(result[`${field}Ciphertext`]).toBeTruthy();
       expect(result[field]).toBeNull();
     }
     const decrypted = participantIdentityService.decryptIdentity(result);

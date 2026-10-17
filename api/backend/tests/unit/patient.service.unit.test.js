@@ -197,7 +197,7 @@ describe('PatientService.createPatient', () => {
     expect(insertedDoc).not.toHaveProperty('representativeIdentityDocumentEncrypted');
     const identityDoc = identitiesCollection.insertOne.mock.calls[0][0];
     expect(identityDoc.representativeIdentityDocument).toBeNull();
-    expect(identityDoc.representativeIdentityDocumentEncrypted).toBeDefined();
+    expect(identityDoc.representativeIdentityDocumentCiphertext).toMatchObject({ alg: 'aes-256-gcm' });
 
     encryptSpy.mockRestore();
   });

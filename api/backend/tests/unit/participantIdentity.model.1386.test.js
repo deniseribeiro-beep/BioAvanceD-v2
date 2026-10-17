@@ -39,4 +39,11 @@ describe('ParticipantIdentityModel (#1386)', () => {
       expect.arrayContaining(['participantIdentityId', 'identityStatus', 'encryptionKeyVersion'])
     );
   });
+
+  it('fieldsOf() declares identityDocumentCiphertext and representativeIdentityDocumentCiphertext (P1X-0354, P1X-0359)', () => {
+    const fields = ParticipantIdentityModel.fieldsOf({ participantId: '1', identityDocument: '11144477735' });
+
+    expect(fields).toHaveProperty('identityDocumentCiphertext', null);
+    expect(fields).toHaveProperty('representativeIdentityDocumentCiphertext', null);
+  });
 });

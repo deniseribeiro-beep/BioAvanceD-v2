@@ -40,8 +40,10 @@ class ConsentController {
             .project({
               participantId: 1,
               patientName: 1,
+              patientNameCiphertext: 1,
               patientNameEncrypted: 1,
               email: 1,
+              emailCiphertext: 1,
               emailEncrypted: 1,
             }).toArray()
           : [];

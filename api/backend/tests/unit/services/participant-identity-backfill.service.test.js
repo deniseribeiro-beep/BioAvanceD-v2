@@ -103,7 +103,7 @@ describe('participant-identity-backfill.service#backfillParticipantIdentities', 
     expect(created.patientName).toBeNull();
     expect(identityCrypto.decryptIdentity(created).patientName).toBe('Paciente Legado');
     // Backfilled records go through the same #566 encryption as new ones.
-    expect(created.identityDocumentEncrypted).toMatchObject({ alg: 'aes-256-gcm' });
+    expect(created.identityDocumentCiphertext).toMatchObject({ alg: 'aes-256-gcm' });
   });
 
   it('is a no-op for a Patient that already has a matching ParticipantIdentity (safe to run more than once)', async () => {
@@ -319,8 +319,8 @@ describe('participant-identity-backfill.service#moveParticipantContactToIdentity
     expect(patient).not.toHaveProperty('email');
     expect(patient).not.toHaveProperty('phone');
     const identity = db.collections.participantIdentities.docs[0];
-    expect(identity.emailEncrypted).toBeTruthy();
-    expect(identity.phoneEncrypted).toBeTruthy();
+    expect(identity.emailCiphertext).toBeTruthy();
+    expect(identity.phoneCiphertext).toBeTruthy();
     expect(identity.phoneHash).toBe(participantIdentityService.computeBlindIndex('phone', '11988887777'));
     const decrypted = participantIdentityService.decryptIdentity(identity);
     expect(decrypted.email).toBe('contato@example.com');
@@ -375,7 +375,7 @@ describe('participant-identity-backfill.service#moveParticipantContactToIdentity
 
     const identity = db.collections.participantIdentities.docs[0];
     expect(identity.phoneHash).toBe(participantIdentityService.computeBlindIndex('phone', '11966665555'));
-    expect(identity.phoneEncrypted).toBeTruthy();
+    expect(identity.phoneCiphertext).toBeTruthy();
     expect(summary.identitiesRehashed).toBe(1);
   });
 

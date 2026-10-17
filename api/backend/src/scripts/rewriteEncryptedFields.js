@@ -14,6 +14,14 @@
  *     no keyId and a rotation leaves those under the old key too;
  *   - updates the entry's key-version field (encryptionKeyVersion).
  *
+ * An entry's `legacyFields` (#1386) are covered too, until the migration has
+ * moved every document onto the new names: otherwise the verdict could call
+ * the previous slot safe while envelopes under an old name still use it.
+ * Each envelope is re-encrypted under the name it is stored under; moving it
+ * to the new name is the migration's job. A legacy value feeds the blind
+ * indexes only where the new name is absent, so a field a write cleared
+ * (new name null, old envelope stale) keeps its hash.
+ *
  * A document none of the registered keys opens is counted `unreadable` and
  * left untouched. Each update is guarded on the envelopes it read (their
  * `iv`), so a write that landed in between is counted `changedMeanwhile`
@@ -82,7 +90,8 @@ function blindIndexUpdates(entry, doc, plain) {
 
 async function rewriteEntry(db, entry, { apply, all, activeKeyId }) {
   const collection = await collectionFor(db, entry);
-  const cipherFields = Object.values(entry.fields);
+  const legacyFields = entry.legacyFields || {};
+  const cipherFields = [...Object.values(entry.fields), ...Object.values(legacyFields)];
   const docs = await collection.find(buildEncryptionWorklistQuery(cipherFields, activeKeyId, all)).toArray();
   const summary = { candidates: docs.length, rewritten: 0, unreadable: 0, changedMeanwhile: 0 };
 
@@ -92,7 +101,11 @@ async function rewriteEntry(db, entry, { apply, all, activeKeyId }) {
     const plain = {};
     let unreadable = false;
 
-    for (const [plainField, cipherField] of Object.entries(entry.fields)) {
+    const pairs = [
+      ...Object.entries(entry.fields).map(([plainField, cipherField]) => [plainField, cipherField, true]),
+      ...Object.entries(legacyFields).map(([plainField, cipherField]) => [plainField, cipherField, doc[entry.fields[plainField]] === undefined]),
+    ];
+    for (const [plainField, cipherField, feedsPlain] of pairs) {
       const envelope = doc[cipherField];
       if (!isEnvelope(envelope)) continue;
 
@@ -101,7 +114,7 @@ async function rewriteEntry(db, entry, { apply, all, activeKeyId }) {
         unreadable = true;
         break;
       }
-      plain[plainField] = value;
+      if (feedsPlain) plain[plainField] = value;
 
       if (all || envelope.keyId !== activeKeyId) {
         set[cipherField] = encryptValue(value);

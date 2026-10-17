@@ -10,6 +10,12 @@ class ParticipantIdentityModel {
   // a column of that name must not choose a record's id or status.
   // encryptIdentityFields overwrites encryptionKeyVersion whenever it
   // enciphers a field.
+  //
+  // P1X-0354 and P1X-0359 are declared under their ciphertext names (item 5
+  // of the decision record). identityDocument and representativeIdentityDocument
+  // are the plaintext input encryptIdentityFields enciphers into them and then
+  // nulls. Every caller passes this through it, which fills the ciphertext
+  // whenever there is a value to encipher.
   static fieldsOf(data = {}) {
     return {
       participantIdentityId: null,
@@ -17,11 +23,13 @@ class ParticipantIdentityModel {
       patientName: data.patientName ? String(data.patientName).trim() : null,
       birthDate: data.birthDate ? new Date(data.birthDate) : null,
       identityDocument: data.identityDocument ? String(data.identityDocument).trim() : null,
+      identityDocumentCiphertext: null,
       email: data.email ? String(data.email).trim().toLowerCase() : null,
       phone: data.phone || null,
       representativeName: data.representativeName || null,
       representativeEmail: data.representativeEmail || null,
       representativeIdentityDocument: data.representativeIdentityDocument || null,
+      representativeIdentityDocumentCiphertext: null,
       representativePhone: data.representativePhone || null,
       identityStatus: 'active',
       encryptionKeyVersion: null,

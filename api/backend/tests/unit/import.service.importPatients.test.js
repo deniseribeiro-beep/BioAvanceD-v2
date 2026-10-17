@@ -151,7 +151,7 @@ describe('ImportService.importPatients (JSON)', () => {
     expect(patients.updates[0].update.$set).not.toHaveProperty('email');
     expect(patients.updates[0].update.$set).not.toHaveProperty('phone');
     const identitySet = participantIdentities.updates[0].update.$set;
-    expect(identitySet.emailEncrypted).toBeTruthy();
+    expect(identitySet.emailCiphertext).toBeTruthy();
     expect(identitySet.phoneHash).toBeTruthy();
   });
 
@@ -171,8 +171,8 @@ describe('ImportService.importPatients (JSON)', () => {
     expect(patients.updates[0].update.$set).not.toHaveProperty('representativeName');
     expect(patients.updates[0].update.$set).not.toHaveProperty('representativeEmail');
     const identitySet = participantIdentities.updates[0].update.$set;
-    expect(identitySet.representativeNameEncrypted).toBeTruthy();
-    expect(identitySet.representativeEmailEncrypted).toBeTruthy();
+    expect(identitySet.representativeNameCiphertext).toBeTruthy();
+    expect(identitySet.representativeEmailCiphertext).toBeTruthy();
   });
 
   it('swallows notification errors and still counts the patient as successfully imported', async () => {

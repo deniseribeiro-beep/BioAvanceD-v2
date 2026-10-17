@@ -122,7 +122,7 @@ describe('fhir-import-staging.service#commitBatch — ParticipantIdentity dual-w
       identityDocument: '12345678900',
     });
     expect(identity.birthDate).toBeNull();
-    expect(identity.birthDateEncrypted).toBeTruthy();
+    expect(identity.birthDateCiphertext).toBeTruthy();
     expect(identity.birthDateHash).toBeTruthy();
     // #1386: the inserted record's own id (P1X-0348), not fieldsOf's null.
     expect(identity.participantIdentityId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
@@ -139,7 +139,7 @@ describe('fhir-import-staging.service#commitBatch — ParticipantIdentity dual-w
     await fhirImportStagingService.commitBatch(db, batchId);
 
     const identity = db.collections.participantIdentities.docs.find((doc) => doc.participantId === 'PART-563');
-    expect(identity.emailEncrypted).toBeTruthy();
+    expect(identity.emailCiphertext).toBeTruthy();
     expect(identity.phoneHash).toBe(participantIdentityService.computeBlindIndex('phone', '11977776666'));
     const decrypted = participantIdentityService.decryptIdentity(identity);
     expect(decrypted.email).toBe('maria@example.com');

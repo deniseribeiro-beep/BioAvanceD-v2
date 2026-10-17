@@ -125,8 +125,8 @@ describe('🔐 Reidentificação de participante - Testes de Integracao', () => 
       const encrypted = participantIdentityService.encryptIdentityFields(plainIdentity);
       const storedIdentity = { ...encrypted, patientName: null, birthDate: null, identityDocument: null };
 
-      expect(JSON.stringify(storedIdentity.patientNameEncrypted)).not.toContain('Paciente QA Teste');
-      expect(JSON.stringify(storedIdentity.identityDocumentEncrypted)).not.toContain('11144477735');
+      expect(JSON.stringify(storedIdentity.patientNameCiphertext)).not.toContain('Paciente QA Teste');
+      expect(JSON.stringify(storedIdentity.identityDocumentCiphertext)).not.toContain('11144477735');
 
       const patientsCollection = { findOne: vi.fn().mockResolvedValue(patient) };
       const participantIdentitiesCollection = { findOne: vi.fn().mockResolvedValue(storedIdentity) };

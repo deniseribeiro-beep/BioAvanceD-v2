@@ -1,6 +1,6 @@
 const { getCollection } = require('../utils/collectionResolver');
 const { encryptValue, decryptValue, hmacBlindIndex, hmacBlindIndexCandidates } = require('../utils/fieldEncryption');
-const { fieldMapFor } = require('../utils/encryptedFieldRegistry');
+const { fieldMapFor, legacyFieldMapFor } = require('../utils/encryptedFieldRegistry');
 const logger = require('../utils/logger');
 
 // RF005/RNF007 (#560): read access to ParticipantIdentity, the segregated
@@ -34,6 +34,28 @@ class ParticipantIdentityService {
   // inventory of encrypted fields, which the key-rotation rewrite reads too.
   getEncryptedFieldMap() {
     return fieldMapFor('services/participantIdentity.service.js');
+  }
+
+  // #1386: the <field>Encrypted names the ciphertext was stored under before
+  // it moved to <field>Ciphertext. Read as a fallback until the migration
+  // has moved every record.
+  getLegacyCiphertextFieldMap() {
+    return legacyFieldMapFor('services/participantIdentity.service.js');
+  }
+
+  // #1386: the $unset that goes with an update's $set, so a record rewritten
+  // under a new ciphertext name keeps no stale envelope under the old one.
+  // A new name set to null counts: a clearing write leaves the old envelope
+  // stale too.
+  legacyCiphertextUnset(setDoc = {}) {
+    const legacyFieldMap = this.getLegacyCiphertextFieldMap();
+    const unset = {};
+    for (const [plainField, encryptedField] of Object.entries(this.getEncryptedFieldMap())) {
+      if (legacyFieldMap[plainField] && Object.prototype.hasOwnProperty.call(setDoc, encryptedField)) {
+        unset[legacyFieldMap[plainField]] = '';
+      }
+    }
+    return unset;
   }
 
   encryptIdentityFields(fields = {}) {
@@ -244,13 +266,16 @@ class ParticipantIdentityService {
 
     const doc = { ...identity };
     const encryptedFieldMap = this.getEncryptedFieldMap();
+    const legacyFieldMap = this.getLegacyCiphertextFieldMap();
 
     for (const [plainField, encryptedField] of Object.entries(encryptedFieldMap)) {
       if (doc[plainField] !== undefined && doc[plainField] !== null && doc[plainField] !== '') {
         continue;
       }
 
-      const payload = doc[encryptedField];
+      // #1386: the old name only where the new one is absent, so a new name
+      // a clearing write set to null stays null.
+      const payload = doc[encryptedField] !== undefined ? doc[encryptedField] : doc[legacyFieldMap[plainField]];
       if (!payload) {
         continue;
       }

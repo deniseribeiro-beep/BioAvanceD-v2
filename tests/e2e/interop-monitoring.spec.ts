@@ -772,7 +772,7 @@ test.describe('Interoperabilidade HL7 FHIR R4 (RF011) — real backend, staging 
       // re-identification path, which decrypts.
       const committedIdentity = await findCommittedParticipantIdentity(patientId);
       expect(committedIdentity?.patientName ?? null).toBeNull();
-      expect(committedIdentity?.patientNameEncrypted).toBeTruthy();
+      expect(committedIdentity?.patientNameCiphertext).toBeTruthy();
       const reidentifyResponse = await request.post(`${apiBaseURL}/api/patients/${patientId}/reidentify`, {
         headers: { Authorization: `Bearer ${token}` },
         data: { reason: 'RF011 e2e: confirm the committed participant name' },

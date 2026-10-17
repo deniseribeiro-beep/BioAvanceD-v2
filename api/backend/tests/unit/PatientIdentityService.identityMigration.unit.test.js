@@ -168,7 +168,7 @@ describe('PatientIdentityService (import-time matching) resolves via Participant
     expect(patients.insertOne.mock.calls[0][0]).not.toHaveProperty('email');
     expect(patients.insertOne.mock.calls[0][0]).not.toHaveProperty('phone');
     const identity = participantIdentities._docs.find((doc) => doc.participantId === result.patient.participantId);
-    expect(identity.emailEncrypted).toBeTruthy();
+    expect(identity.emailCiphertext).toBeTruthy();
     expect(identity.phoneHash).toBeTruthy();
   });
 

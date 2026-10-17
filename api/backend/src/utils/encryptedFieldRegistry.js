@@ -22,6 +22,11 @@
  * also keeps its dict-02 `encryptionKeyVersion` (P1X-0362), which the rewrite
  * updates with the envelopes.
  *
+ * Legacy names (#1386): `legacyFields` lists the ciphertext names an entry
+ * wrote before its fields were renamed. Until the migration has moved every
+ * document onto the new names, readers fall back to the legacy name where
+ * the new one is absent, and the rewrite re-encrypts envelopes under either.
+ *
  * Blind indexes: hmacBlindIndex stores a bare hash with no keyId, so a
  * rotation leaves the hashes under the old key too. They are re-derived from
  * the decrypted values when their document is rewritten. `blindIndexes`
@@ -33,7 +38,21 @@ const ENCRYPTED_FIELD_REGISTRY = [
     // RF005/RNF007 (#566, #1166, #1168): civil identity and contact.
     collectionKey: 'participantIdentities',
     writer: 'services/participantIdentity.service.js',
+    // #1386: stored as <field>Ciphertext, the dictionary's suffix
+    // (docs/decisions/2026-10-17-participant-identity-names-and-fields.md,
+    // item 1). legacyFields are the names written before it.
     fields: {
+      patientName: 'patientNameCiphertext',
+      birthDate: 'birthDateCiphertext',
+      identityDocument: 'identityDocumentCiphertext',
+      email: 'emailCiphertext',
+      phone: 'phoneCiphertext',
+      representativeName: 'representativeNameCiphertext',
+      representativeEmail: 'representativeEmailCiphertext',
+      representativeIdentityDocument: 'representativeIdentityDocumentCiphertext',
+      representativePhone: 'representativePhoneCiphertext',
+    },
+    legacyFields: {
       patientName: 'patientNameEncrypted',
       birthDate: 'birthDateEncrypted',
       identityDocument: 'identityDocumentEncrypted',
@@ -85,4 +104,9 @@ function fieldMapFor(writer) {
   return { ...entryFor(writer).fields };
 }
 
-module.exports = { ENCRYPTED_FIELD_REGISTRY, fieldMapFor };
+/** A copy of a writer's plaintext -> legacy ciphertext field map, or {}. */
+function legacyFieldMapFor(writer) {
+  return { ...(entryFor(writer).legacyFields || {}) };
+}
+
+module.exports = { ENCRYPTED_FIELD_REGISTRY, fieldMapFor, legacyFieldMapFor };

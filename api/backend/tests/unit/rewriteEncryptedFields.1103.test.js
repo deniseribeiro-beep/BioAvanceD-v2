@@ -136,7 +136,7 @@ describe('rewriteEncryptedFields (#1103)', () => {
     expect(applied.fields.participantIdentities.rewritten).toBe(1);
 
     const identity = db.store.participantIdentities.docs[0];
-    expect(identity.identityDocumentEncrypted.keyId).toBe('key-2026');
+    expect(identity.identityDocumentCiphertext.keyId).toBe('key-2026');
     expect(identity.encryptionKeyVersion).toBe('key-2026');
     expect(identity.identityDocumentHash).not.toBe(oldHash);
     expect(identity.identityDocumentHash).toBe(participantIdentityService.computeBlindIndex('identityDocument', IDENTITY.identityDocument));
@@ -217,6 +217,58 @@ describe('rewriteEncryptedFields (#1103)', () => {
 
     expect(applied.fields.users).toMatchObject({ rewritten: 0, changedMeanwhile: 1 });
     expect(decryptValue(users.docs[0].mfaSecretCiphertext)).toBe('NEW-FROM-ENROLMENT');
+  });
+
+  // #1386: a record written before the move to <field>Ciphertext holds its
+  // envelopes under <field>Encrypted. The rewrite covers those names until
+  // the migration moves them, or the verdict would call the old slot safe.
+  it('an identity holding only the old *Encrypted names is rewritten in place and blocks the verdict until then', async () => {
+    const db = createFakeDb();
+    useKeys('chave-antiga', 'key-2025');
+    const written = participantIdentityService.encryptIdentityFields({ participantId: 'P-1', ...IDENTITY });
+    const legacy = {};
+    for (const [key, value] of Object.entries(written)) {
+      legacy[key.endsWith('Ciphertext') ? key.replace(/Ciphertext$/, 'Encrypted') : key] = value;
+    }
+    db.collection('participantIdentities').docs.push({ _id: 'pi-legacy', ...legacy });
+    useKeys('chave-nova', 'key-2026', 'chave-antiga', 'key-2025');
+
+    const dryRun = await rewriteEncryptedFields(db);
+    expect(dryRun.fields.participantIdentities.candidates).toBe(1);
+    expect(dryRun.safeToEmptyPreviousSlot).toBe(false);
+
+    await rewriteEncryptedFields(db, { apply: true });
+
+    const identity = db.store.participantIdentities.docs[0];
+    for (const field of ['patientNameEncrypted', 'identityDocumentEncrypted', 'birthDateEncrypted', 'phoneEncrypted']) {
+      expect(identity[field].keyId).toBe('key-2026');
+    }
+    expect(identity).not.toHaveProperty('patientNameCiphertext');
+    useKeys('chave-nova', 'key-2026');
+    const decrypted = participantIdentityService.decryptIdentity(identity);
+    expect(decrypted.patientName).toBe(IDENTITY.patientName);
+    expect(decrypted.phone).toBe(IDENTITY.phone);
+    expect((await rewriteEncryptedFields(db)).safeToEmptyPreviousSlot).toBe(true);
+  });
+
+  it('a stale old-name envelope beside a cleared new name is re-encrypted but derives no blind index', async () => {
+    const db = createFakeDb();
+    useKeys('chave-antiga', 'key-2025');
+    db.collection('participantIdentities').docs.push({
+      _id: 'pi-cleared',
+      participantId: 'P-2',
+      patientName: null,
+      patientNameCiphertext: null,
+      patientNameEncrypted: encryptValue('Nome Antigo'),
+      patientNameHash: null,
+    });
+    useKeys('chave-nova', 'key-2026', 'chave-antiga', 'key-2025');
+
+    await rewriteEncryptedFields(db, { apply: true });
+
+    const identity = db.store.participantIdentities.docs[0];
+    expect(identity.patientNameEncrypted.keyId).toBe('key-2026');
+    expect(identity.patientNameHash).toBeNull();
   });
 
   it('refuses to run with no active key', async () => {

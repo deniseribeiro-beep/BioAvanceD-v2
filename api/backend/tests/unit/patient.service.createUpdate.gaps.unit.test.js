@@ -222,8 +222,8 @@ describe('PatientService.createPatient additional branches', () => {
     expect(patientRow).not.toHaveProperty('email');
     expect(patientRow).not.toHaveProperty('phone');
     const identityRow = identitiesCollection.insertOne.mock.calls[0][0];
-    expect(identityRow.emailEncrypted).toBeTruthy();
-    expect(identityRow.phoneEncrypted).toBeTruthy();
+    expect(identityRow.emailCiphertext).toBeTruthy();
+    expect(identityRow.phoneCiphertext).toBeTruthy();
     expect(identityRow.phoneHash).toBeTruthy();
   });
 
@@ -252,8 +252,8 @@ describe('PatientService.createPatient additional branches', () => {
     }
     expect(patientRow.isDeceased).toBe(true);
     const identityRow = identitiesCollection.insertOne.mock.calls[0][0];
-    expect(identityRow.representativeNameEncrypted).toBeTruthy();
-    expect(identityRow.representativeIdentityDocumentEncrypted).toBeTruthy();
+    expect(identityRow.representativeNameCiphertext).toBeTruthy();
+    expect(identityRow.representativeIdentityDocumentCiphertext).toBeTruthy();
     expect(identityRow.representativeIdentityDocument).toBeNull();
   });
 });

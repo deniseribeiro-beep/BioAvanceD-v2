@@ -132,7 +132,7 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
       expect(identityDoc.patientName).toBeNull();
       expect(identityCryptoService.decryptIdentity(identityDoc).patientName).toBe('Novo Paciente');
       expect(identityDoc.birthDate).toBeNull();
-      expect(identityDoc.birthDateEncrypted).toBeTruthy();
+      expect(identityDoc.birthDateCiphertext).toBeTruthy();
       expect(identityDoc.birthDateHash).toBeTruthy();
     });
   });
@@ -269,9 +269,9 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
       });
 
       const identitySet = identitiesCollection.updateOne.mock.calls[0][1].$set;
-      expect(identitySet.patientNameEncrypted).toBeTruthy();
-      expect(identitySet.birthDateEncrypted).toBeTruthy();
-      expect(identitySet.identityDocumentEncrypted).toBeTruthy();
+      expect(identitySet.patientNameCiphertext).toBeTruthy();
+      expect(identitySet.birthDateCiphertext).toBeTruthy();
+      expect(identitySet.identityDocumentCiphertext).toBeTruthy();
       expect(identitySet.identityDocumentHash).toBeTruthy();
       expect(identitySet.birthDateHash).toBeTruthy();
     });
@@ -287,9 +287,9 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
       });
 
       const identitySet = identitiesCollection.updateOne.mock.calls[0][1].$set;
-      expect(identitySet.patientNameEncrypted).toBeTruthy();
-      expect(identitySet.birthDateEncrypted).toBeTruthy();
-      expect(identitySet.identityDocumentEncrypted).toBeTruthy();
+      expect(identitySet.patientNameCiphertext).toBeTruthy();
+      expect(identitySet.birthDateCiphertext).toBeTruthy();
+      expect(identitySet.identityDocumentCiphertext).toBeTruthy();
       expect(identitySet.identityDocumentHash).toBeTruthy();
       expect(identitySet.birthDateHash).toBeTruthy();
     });
@@ -333,7 +333,7 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
         patientName: 'Paciente QA',
         identityDocument: '11144477735',
       });
-      expect(identitySet.birthDateEncrypted).toBeTruthy();
+      expect(identitySet.birthDateCiphertext).toBeTruthy();
       expect(identitySet.birthDateHash).toBeTruthy();
       expect(identitySet.patientNameHash).toBe(identityCryptoService.computeBlindIndex('patientName', 'Paciente QA'));
     });
@@ -351,7 +351,7 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
       const identitySet = identitiesCollection.updateOne.mock.calls[0][1].$set;
       const decrypted = identityCryptoService.decryptIdentity(identitySet);
       for (const field of ['patientName', 'identityDocument']) {
-        expect(identitySet[`${field}Encrypted`]).toBeTruthy();
+        expect(identitySet[`${field}Ciphertext`]).toBeTruthy();
         expect(decrypted[field]).not.toBeNull();
         expect(decrypted[field]).not.toBeUndefined();
       }
