@@ -101,12 +101,16 @@ function createResponse() {
   return response;
 }
 
-function createRequest({ body = {}, params = {}, query = {}, user = { userID: '507f1f77bcf86cd799439011', accessType: 4, roleName: 'Administrador' } } = {}) {
+// #1384: getHandler calls the handler with no middleware, so the scope
+// requireOrganizationScope would attach is set here; global by default, as
+// the Administrador callers below resolve.
+function createRequest({ body = {}, params = {}, query = {}, user = { userID: '507f1f77bcf86cd799439011', accessType: 4, roleName: 'Administrador' }, organizationScope = { scope: 'global', organizationIds: [] } } = {}) {
   return {
     body,
     params,
     query,
     user,
+    organizationScope,
     t: (key) => key,
     app: {
       locals: {

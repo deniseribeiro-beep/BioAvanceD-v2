@@ -71,6 +71,9 @@ const EXEMPT = new Map([
   ['import.routes.js GET /job/:jobID', 'self route: the controller refuses a job whose userID is not the caller\'s (#1384)'],
   ['import.routes.js POST /job/:jobID/cancel', 'self route: the controller refuses a job whose userID is not the caller\'s (#1384)'],
   ['import.routes.js GET /job/:jobID/report', 'self route: the controller refuses a job whose userID is not the caller\'s (#1384)'],
+  // The RNF009 audit trail, gated on isAuditReader in the handler (#1241).
+  // An auditor reads it across organizations, the same rule /api/logs keeps.
+  ['user.routes.js GET /logs', 'audit trail: isAuditReader reads it across organizations, as /api/logs does (#1384)'],
 ]);
 
 // NOT exemptions: routes that DO need the gate and do not have it yet, each
@@ -253,6 +256,40 @@ test('#1384: the import creates and staging-batch reads carry the organization g
     'GET /status/:jobId',
   ]) {
     const key = `import.routes.js ${route}`;
+    assert.ok(byKey.has(key), `${key} not found by the sweep`);
+    assert.equal(byKey.get(key).gated, true, `${key} is not organization-scoped`);
+    assert.equal(EXEMPT.has(key) || TRACKED_UNSCOPED.has(key), false, `${key} must not be listed as unscoped`);
+  }
+});
+
+// #1384: user management is limited to the caller's organizations. Every
+// user route but the audit trail runs the gate and checks the target user's
+// organizations against it. Pinned by name, as above.
+test('#1384: every user.routes.js registration but GET /logs carries the organization gate', () => {
+  const { registrations } = sweep();
+  const byKey = new Map(registrations.map((r) => [r.key, r]));
+  for (const route of [
+    'POST /register',
+    'GET /',
+    'GET /:id',
+    'PUT /:id',
+    'GET /:id/organizations',
+    'POST /:id/organizations',
+    'DELETE /:id/organizations/:organizationId',
+    'DELETE /:id',
+    'GET /:id/validate-status',
+    'POST /register-patient',
+    'POST /register-sample',
+    'POST /record-withdrawal',
+    'POST /generate-report',
+    'POST /register-sensor',
+    'POST /:id/reset-mfa',
+    'POST /:id/revoke-sessions',
+    'POST /:id/force-password-reset',
+    'POST /:id/set-password',
+    'POST /:id/disable-mfa',
+  ]) {
+    const key = `user.routes.js ${route}`;
     assert.ok(byKey.has(key), `${key} not found by the sweep`);
     assert.equal(byKey.get(key).gated, true, `${key} is not organization-scoped`);
     assert.equal(EXEMPT.has(key) || TRACKED_UNSCOPED.has(key), false, `${key} must not be listed as unscoped`);

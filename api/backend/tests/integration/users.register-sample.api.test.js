@@ -216,8 +216,14 @@ describe('POST /api/users/register-sample - paridade de contrato com /api/sample
       buildSamplePayload({ linkedProject: 'Projeto QA Rota Usuário', isRareDisease: false, riskScore: 1 })
     );
 
+    // #1384: the route now runs requireOrganizationScope, so the refusal is
+    // the gate's, before the handler's own resolve.
     expect(response.status).toBe(403);
-    expect(response.body).toEqual({ success: false, error: 'Sem organização atribuída' });
+    expect(response.body).toEqual({
+      success: false,
+      error: 'Sem organização atribuída',
+      message: 'Seu usuário não possui organização atribuída para acessar este recurso'
+    });
     expect(sampleService.createSample).not.toHaveBeenCalled();
   });
 

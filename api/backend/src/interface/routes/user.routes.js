@@ -2,7 +2,9 @@ const express = require('express');
 const router = express.Router();
 const authService = require('../../services/auth.service');
 const { authenticate } = require('../../infrastructure/middleware/auth');
-const { requirePermission } = require('../../infrastructure/middleware/rbac');
+const { requirePermission, requireOrganizationScope } = require('../../infrastructure/middleware/rbac');
+const { resolveUserOrganizationScope, resolveOrganizationIdForCreate } = require('../../services/rbac-assignment.service');
+const { isSampleInOrganizationScope } = require('../../services/sampleTenancy.service');
 const logger = require('../../utils/logger');
 const consentValidator = require('../../services/consent.validator');
 const RegisterSampleUseCase = require('../../core/use-cases/RegisterSampleUseCase');
@@ -75,6 +77,46 @@ async function writeMfaResetAudit(db, req, targetUser, { operation, enrolmentPre
   });
 }
 
+// #1384: an organization-scoped caller manages the users of its own
+// organizations only; the Administrador (global) manages every user. A
+// user's organizations are its active UserRoleAssignment scope ids, the
+// tenancy key (User.organizationId is profile data). A target is in reach
+// when it shares one organization with the caller, the overlap
+// isRecordInOrganizationScope applies to an array field. A global or
+// org-less target is out of reach of every non-global caller. See
+// docs/decisions/2026-10-17-org-scoped-user-management.md.
+//
+// Defined above the first registration: the org-scope sweep reads the text
+// from one registration to the next, so a helper between two would count
+// as the gate of the one above it.
+async function isUserInCallerScope(db, organizationScope, userAccountId) {
+  // Fail closed, as resolveOrganizationIdForCreate does: no scope means
+  // requireOrganizationScope is not on the route.
+  if (!organizationScope) return false;
+  if (organizationScope.scope === 'global') return true;
+  const targetScope = await resolveUserOrganizationScope(db, String(userAccountId));
+  if (targetScope.scope !== 'organization') return false;
+  const callerIds = organizationScope.organizationIds || [];
+  return targetScope.organizationIds.some((id) => callerIds.includes(id));
+}
+
+// An out-of-scope existing record answers 403, not 404 (the precedent
+// isRecordInOrganizationScope's comment states).
+function refuseOutOfScopeUser(res) {
+  return res.status(403).json({
+    success: false,
+    error: 'Acesso negado',
+    message: 'Este usuário pertence a outra organização'
+  });
+}
+
+// #1384: a non-global caller grants, revokes or moves a user only into one
+// of its own organizations.
+function isOrganizationInCallerScope(organizationScope, organizationId) {
+  if (organizationScope?.scope === 'global') return true;
+  return Boolean(organizationId) && (organizationScope?.organizationIds || []).includes(organizationId);
+}
+
 // RF003 - Cadastro de usuário
 //
 // #1008: every registration grants a role (registerUser falls back to
@@ -84,6 +126,7 @@ router.post('/register',
   authenticate,
   requirePermission('createUser'),
   requirePermission('assignRole'),
+  requireOrganizationScope,
   async (req, res) => {
     try {
       const db = req.app.locals.db;
@@ -118,6 +161,13 @@ router.post('/register',
         } else if (req.body.organizationId === '') {
           req.body.organizationId = null;
         }
+      }
+
+      // #1384: #1071's create rule, as the patient controller applies it. An
+      // organization-scoped caller registers into its own organization; its
+      // 403/400 throws reach the catch below.
+      if (req.organizationScope.scope !== 'global') {
+        req.body.organizationId = resolveOrganizationIdForCreate(req.organizationScope, req.body.organizationId);
       }
 
       // #617: quando informado, organizationId deve resolver a uma
@@ -178,7 +228,7 @@ router.post('/register',
 // RF002 - Somente Coordenador/Administrador podem listar usuários (o backend
 // deve validar a permissão independentemente da ocultação da função no
 // frontend) — mesma permissão já aplicada a PUT/DELETE deste recurso.
-router.get('/', authenticate, requirePermission('createUser'), async (req, res) => {
+router.get('/', authenticate, requirePermission('createUser'), requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -189,7 +239,13 @@ router.get('/', authenticate, requirePermission('createUser'), async (req, res) 
     }
 
     const usersCollection = db.collection('users');
-    const users = await usersCollection.find({}).toArray();
+    let users = await usersCollection.find({}).toArray();
+    // #1384: an organization-scoped caller lists the users of its own
+    // organizations only.
+    if (req.organizationScope.scope !== 'global') {
+      const inScope = await Promise.all(users.map((user) => isUserInCallerScope(db, req.organizationScope, user._id)));
+      users = users.filter((_user, index) => inScope[index]);
+    }
     const UserModel = require('../../models/User');
     const { resolveRoleDisplayName, getActiveRoleCodes } = require('../../services/rbac-assignment.service');
 
@@ -278,7 +334,7 @@ router.get('/logs', authenticate, async (req, res) => {
 
 // #1241: gated like GET / above. With authenticate alone any account could
 // read any other user's record (email, phone, organization, status, roles).
-router.get('/:id', authenticate, requirePermission('createUser'), async (req, res) => {
+router.get('/:id', authenticate, requirePermission('createUser'), requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -298,6 +354,7 @@ router.get('/:id', authenticate, requirePermission('createUser'), async (req, re
         error: req.t('users.notFound')
       });
     }
+    if (!(await isUserInCallerScope(db, req.organizationScope, user._id))) return refuseOutOfScopeUser(res);
 
     const UserModel = require('../../models/User');
     // #1068: strips mfaSecretCiphertext and passwordResetTokenHash too -- see
@@ -327,7 +384,7 @@ router.get('/:id', authenticate, requirePermission('createUser'), async (req, re
   }
 });
 
-router.put('/:id', authenticate, requirePermission('createUser'), async (req, res) => {
+router.put('/:id', authenticate, requirePermission('createUser'), requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -349,6 +406,7 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
         error: req.t('users.notFound')
       });
     }
+    if (!(await isUserInCallerScope(db, req.organizationScope, targetUser._id))) return refuseOutOfScopeUser(res);
 
     // Remove campos que não devem ser atualizados
     delete req.body._id;
@@ -427,6 +485,24 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
       } else if (req.body.organizationId === '') {
         req.body.organizationId = null;
       }
+    }
+
+    // #1384: a change of home organization moves the assignment scope
+    // (updateAssignmentScope below), so a non-global caller may move a user
+    // only into one of its own organizations, and never out of all of them.
+    // The old home must be one of the caller's too: updateAssignmentScope
+    // revokes the old home's assignment, so moving a user that also holds
+    // the caller's organization would take away one the caller does not hold.
+    if (req.organizationScope.scope !== 'global'
+      && req.body.organizationId !== undefined
+      && req.body.organizationId !== (targetUser.organizationId ?? null)
+      && (!isOrganizationInCallerScope(req.organizationScope, req.body.organizationId)
+        || !isOrganizationInCallerScope(req.organizationScope, targetUser.organizationId ?? null))) {
+      return res.status(403).json({
+        success: false,
+        error: 'Acesso negado',
+        message: 'Não é permitido mover o usuário para outra organização'
+      });
     }
 
     // #617: quando informado, organizationId deve resolver a uma
@@ -861,6 +937,10 @@ async function findUserForScopeRoute(req, res) {
     res.status(404).json({ success: false, error: req.t('users.notFound') });
     return null;
   }
+  if (!(await isUserInCallerScope(db, req.organizationScope, user._id))) {
+    refuseOutOfScopeUser(res);
+    return null;
+  }
   return { db, user };
 }
 
@@ -877,7 +957,7 @@ async function sendOrganizationScopes(res, db, user, status = 200) {
   });
 }
 
-router.get('/:id/organizations', authenticate, requirePermission('createUser'), async (req, res) => {
+router.get('/:id/organizations', authenticate, requirePermission('createUser'), requireOrganizationScope, async (req, res) => {
   try {
     const found = await findUserForScopeRoute(req, res);
     if (!found) return undefined;
@@ -889,11 +969,16 @@ router.get('/:id/organizations', authenticate, requirePermission('createUser'), 
 });
 
 // Granting a scope is a role assignment (#1008), so assignRole gates it too.
-router.post('/:id/organizations', authenticate, requirePermission('createUser'), requirePermission('assignRole'), async (req, res) => {
+router.post('/:id/organizations', authenticate, requirePermission('createUser'), requirePermission('assignRole'), requireOrganizationScope, async (req, res) => {
   try {
     const found = await findUserForScopeRoute(req, res);
     if (!found) return undefined;
     const { db, user } = found;
+    // #1384: a non-global caller grants only one of its own organizations.
+    const requestedOrganizationId = typeof req.body?.organizationId === 'string' ? req.body.organizationId.trim() : req.body?.organizationId;
+    if (!isOrganizationInCallerScope(req.organizationScope, requestedOrganizationId)) {
+      return res.status(403).json({ success: false, error: 'Acesso negado', message: 'Este usuário pertence a outra organização' });
+    }
     const { grantOrganizationScope } = require('../../services/rbac-assignment.service');
     const { created } = await grantOrganizationScope(db, {
       userAccountId: user._id.toString(),
@@ -917,12 +1002,16 @@ router.post('/:id/organizations', authenticate, requirePermission('createUser'),
 
 // assignRole allows CREATE and UPDATE; a removal revokes an assignment, an
 // UPDATE of it, as the revoke-sessions route passes its own action.
-router.delete('/:id/organizations/:organizationId', authenticate, requirePermission('createUser'), requirePermission('assignRole', 'UPDATE'), async (req, res) => {
+router.delete('/:id/organizations/:organizationId', authenticate, requirePermission('createUser'), requirePermission('assignRole', 'UPDATE'), requireOrganizationScope, async (req, res) => {
   try {
     const found = await findUserForScopeRoute(req, res);
     if (!found) return undefined;
     const { db, user } = found;
     const organizationId = String(req.params.organizationId);
+    // #1384: a non-global caller revokes only one of its own organizations.
+    if (!isOrganizationInCallerScope(req.organizationScope, organizationId)) {
+      return res.status(403).json({ success: false, error: 'Acesso negado', message: 'Este usuário pertence a outra organização' });
+    }
     if (organizationId === (user.organizationId ?? null)) {
       return res.status(409).json({
         success: false,
@@ -951,7 +1040,7 @@ router.delete('/:id/organizations/:organizationId', authenticate, requirePermiss
   }
 });
 
-router.delete('/:id', authenticate, requirePermission('createUser'), async (req, res) => {
+router.delete('/:id', authenticate, requirePermission('createUser'), requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -975,6 +1064,7 @@ router.delete('/:id', authenticate, requirePermission('createUser'), async (req,
         error: 'Usuário não encontrado'
       });
     }
+    if (!(await isUserInCallerScope(db, req.organizationScope, targetUser._id))) return refuseOutOfScopeUser(res);
     const { resolveUserHierarchyLevel } = require('../../services/rbac-assignment.service');
     const [targetLevel, callerLevel] = await Promise.all([
       resolveUserHierarchyLevel(db, targetUser._id.toString()),
@@ -1021,7 +1111,7 @@ router.delete('/:id', authenticate, requirePermission('createUser'), async (req,
 
 // #1241: gated like GET /:id. With authenticate alone it told any account
 // whether an id existed and whether it was active.
-router.get('/:id/validate-status', authenticate, requirePermission('createUser'), async (req, res) => {
+router.get('/:id/validate-status', authenticate, requirePermission('createUser'), requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -1041,6 +1131,7 @@ router.get('/:id/validate-status', authenticate, requirePermission('createUser')
         error: req.t('users.notFound')
       });
     }
+    if (!(await isUserInCallerScope(db, req.organizationScope, user._id))) return refuseOutOfScopeUser(res);
 
     const UserModel = require('../../models/User');
     return res.status(200).json({
@@ -1060,7 +1151,7 @@ router.get('/:id/validate-status', authenticate, requirePermission('createUser')
 });
 
 // Endpoints adicionais do User (conforme diagrama UML)
-router.post('/register-patient', authenticate, requirePermission('createPatient'), async (req, res) => {
+router.post('/register-patient', authenticate, requirePermission('createPatient'), requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -1068,6 +1159,11 @@ router.post('/register-patient', authenticate, requirePermission('createPatient'
         success: false,
         error: 'Banco de dados não disponível'
       });
+    }
+
+    // #1384: #1071's create rule, as paciente.controller.js applies it.
+    if (req.organizationScope.scope !== 'global') {
+      req.body.clinicalUnitId = resolveOrganizationIdForCreate(req.organizationScope, req.body?.clinicalUnitId);
     }
 
     const patientService = require('../../services/patient.service');
@@ -1080,6 +1176,9 @@ router.post('/register-patient', authenticate, requirePermission('createPatient'
     });
   } catch (error) {
     logger.error('Erro ao registrar paciente:', error.message);
+    if (error.statusCode === 403) {
+      return res.status(403).json({ success: false, error: req.t('errors.forbidden'), message: error.message });
+    }
     return res.status(error.statusCode === 422 ? 422 : 400).json({
       success: false,
       error: req.t('users.registerPatientError'),
@@ -1089,7 +1188,7 @@ router.post('/register-patient', authenticate, requirePermission('createPatient'
   }
 });
 
-router.post('/register-sample', authenticate, requirePermission('createSample'), async (req, res) => {
+router.post('/register-sample', authenticate, requirePermission('createSample'), requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -1116,8 +1215,10 @@ router.post('/register-sample', authenticate, requirePermission('createSample'),
       : undefined;
     let organizationId;
     try {
+      // #1384: the gate's scope, as import.routes.js's creates pass it.
       ({ organizationId } = await resolveCallerCreateOrganization(db, {
         userId: req.user?.userID,
+        organizationScope: req.organizationScope,
         requested: requestedOrganizationId
       }));
     } catch (error) {
@@ -1201,7 +1302,7 @@ router.post('/register-sample', authenticate, requirePermission('createSample'),
   }
 });
 
-router.post('/record-withdrawal', authenticate, requirePermission('withdrawSample', 'UPDATE'), async (req, res) => {
+router.post('/record-withdrawal', authenticate, requirePermission('withdrawSample', 'UPDATE'), requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -1209,6 +1310,20 @@ router.post('/record-withdrawal', authenticate, requirePermission('withdrawSampl
         success: false,
         error: 'Banco de dados não disponível'
       });
+    }
+
+    // #1384: the scope check of sample.routes.js's POST /:id/withdraw, before
+    // the consent check and the mutation.
+    if (req.body?.sampleID) {
+      const sampleService = require('../../services/sample.service');
+      const sampleForScope = await sampleService.getSample(db, req.body.sampleID);
+      if (sampleForScope && !isSampleInOrganizationScope(sampleForScope, req.organizationScope)) {
+        return res.status(403).json({
+          success: false,
+          error: 'Acesso negado',
+          message: 'Esta amostra pertence a outra organização'
+        });
+      }
     }
 
     consentValidator.init(db);
@@ -1244,7 +1359,7 @@ router.post('/record-withdrawal', authenticate, requirePermission('withdrawSampl
   }
 });
 
-router.post('/generate-report', authenticate, requirePermission('viewReports'), async (req, res) => {
+router.post('/generate-report', authenticate, requirePermission('viewReports'), requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -1262,7 +1377,9 @@ router.post('/generate-report', authenticate, requirePermission('viewReports'), 
       reportType,
       filters: filters || {},
       generatedBy: req.user?.userID || null,
-      status: 'pending'
+      status: 'pending',
+      // #1384: the organizationIds stamp reports.routes.js's generate writes.
+      organizationIds: req.organizationScope.scope === 'organization' ? req.organizationScope.organizationIds : []
     });
 
     const result = await reportsCollection.insertOne(report);
@@ -1285,7 +1402,7 @@ router.post('/generate-report', authenticate, requirePermission('viewReports'), 
 // #1073: registering a sensor is a device-lifecycle CREATE, and it was
 // gated on 'viewTemperature' -- the same read permission the sensor router's
 // own writes carried. Moved to 'manageSensor' with them.
-router.post('/register-sensor', authenticate, requirePermission('manageSensor'), async (req, res) => {
+router.post('/register-sensor', authenticate, requirePermission('manageSensor'), requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -1295,8 +1412,10 @@ router.post('/register-sensor', authenticate, requirePermission('manageSensor'),
       });
     }
 
+    // #1384: #1071's create rule, as sensor.controller.js's create applies it.
+    const organizationId = resolveOrganizationIdForCreate(req.organizationScope, req.body?.organizationId);
     const sensorService = require('../../services/sensor.service');
-    const sensor = await sensorService.createSensor(db, req.body);
+    const sensor = await sensorService.createSensor(db, { ...req.body, organizationId });
 
     return res.status(201).json({
       success: true,
@@ -1305,6 +1424,9 @@ router.post('/register-sensor', authenticate, requirePermission('manageSensor'),
     });
   } catch (error) {
     logger.error('Erro ao registrar sensor:', error.message);
+    if (error.statusCode === 403) {
+      return res.status(403).json({ success: false, error: req.t('errors.forbidden'), message: error.message });
+    }
     return res.status(error.statusCode === 422 ? 422 : 400).json({
       success: false,
       error: req.t('users.registerSensorError'),
@@ -1315,7 +1437,7 @@ router.post('/register-sensor', authenticate, requirePermission('manageSensor'),
 });
 
 // Reset MFA - apenas usuários com a permissão resetMFA
-router.post('/:id/reset-mfa', authenticate, requirePermission('resetMFA', 'UPDATE'), async (req, res) => {
+router.post('/:id/reset-mfa', authenticate, requirePermission('resetMFA', 'UPDATE'), requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -1340,6 +1462,7 @@ router.post('/:id/reset-mfa', authenticate, requirePermission('resetMFA', 'UPDAT
         error: 'Usuário não encontrado'
       });
     }
+    if (!(await isUserInCallerScope(db, req.organizationScope, targetUser._id))) return refuseOutOfScopeUser(res);
 
     // #933: um alvo Administrador tem o CADASTRO do segundo fator preservado,
     // mas o BLOQUEIO liberado -- antes disto a rota recusava a operação
@@ -1471,7 +1594,7 @@ router.post('/:id/reset-mfa', authenticate, requirePermission('resetMFA', 'UPDAT
 // nothing and the target signs in again. A compromised administrator account
 // is the case reason 'risk' exists for, and a floor would leave no other
 // administrator able to cut it off.
-router.post('/:id/revoke-sessions', authenticate, requirePermission('revokeSessions', 'UPDATE'), async (req, res) => {
+router.post('/:id/revoke-sessions', authenticate, requirePermission('revokeSessions', 'UPDATE'), requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -1493,6 +1616,7 @@ router.post('/:id/revoke-sessions', authenticate, requirePermission('revokeSessi
     if (!targetUser) {
       return res.status(404).json({ success: false, error: 'Usuário não encontrado' });
     }
+    if (!(await isUserInCallerScope(db, req.organizationScope, targetUser._id))) return refuseOutOfScopeUser(res);
 
     const sessionService = require('../../services/session.service');
     const revoked = await sessionService.invalidateUserSessions(
@@ -1509,7 +1633,7 @@ router.post('/:id/revoke-sessions', authenticate, requirePermission('revokeSessi
 // Forçar redefinição de senha - RF014 AC#4 (#648): flags the target user's
 // account so their next login requires setting a new password before
 // proceeding (auth.service.js#processLogin gates on this flag).
-router.post('/:id/force-password-reset', authenticate, requirePermission('forcePasswordReset', 'UPDATE'), async (req, res) => {
+router.post('/:id/force-password-reset', authenticate, requirePermission('forcePasswordReset', 'UPDATE'), requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -1530,6 +1654,7 @@ router.post('/:id/force-password-reset', authenticate, requirePermission('forceP
         error: 'Usuário não encontrado'
       });
     }
+    if (!(await isUserInCallerScope(db, req.organizationScope, targetUser._id))) return refuseOutOfScopeUser(res);
 
     const UserModel = require('../../models/User');
     await usersCollection.updateOne(
@@ -1595,7 +1720,7 @@ router.post('/:id/force-password-reset', authenticate, requirePermission('forceP
 // set, so the caller can only get in by replacing the password again. That
 // locks the real owner out, visibly, and leaves this route's warning row, the
 // admin_action revocation and a password_change revocation on the trail.
-router.post('/:id/set-password', authenticate, requirePermission('setUserPassword', 'UPDATE'), async (req, res) => {
+router.post('/:id/set-password', authenticate, requirePermission('setUserPassword', 'UPDATE'), requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -1608,6 +1733,7 @@ router.post('/:id/set-password', authenticate, requirePermission('setUserPasswor
     if (!targetUser) {
       return res.status(404).json({ success: false, error: 'Usuário não encontrado' });
     }
+    if (!(await isUserInCallerScope(db, req.organizationScope, targetUser._id))) return refuseOutOfScopeUser(res);
 
     const newPassword = req.body?.password;
     const passwordService = require('../../services/password.service');
@@ -1668,7 +1794,7 @@ router.post('/:id/set-password', authenticate, requirePermission('setUserPasswor
 // The explicit 'UPDATE' is required, not decorative: METHOD_TO_ACTION derives
 // CREATE from POST (#631), so omitting it would 403 every administrator --
 // the trap #959 item 1 hit.
-router.post('/:id/disable-mfa', authenticate, requirePermission('disableMFA', 'UPDATE'), async (req, res) => {
+router.post('/:id/disable-mfa', authenticate, requirePermission('disableMFA', 'UPDATE'), requireOrganizationScope, async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -1703,6 +1829,7 @@ router.post('/:id/disable-mfa', authenticate, requirePermission('disableMFA', 'U
         error: 'Usuário não encontrado'
       });
     }
+    if (!(await isUserInCallerScope(db, req.organizationScope, targetUser._id))) return refuseOutOfScopeUser(res);
 
     // Verifica se o usuário alvo é administrador
     // Este endpoint permite desativar MFA apenas de outros administradores

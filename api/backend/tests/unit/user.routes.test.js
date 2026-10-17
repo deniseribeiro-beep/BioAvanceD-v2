@@ -1,6 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createRequire } from 'module';
-import fs from 'fs';
 import express from 'express';
 import request from 'supertest';
 
@@ -41,6 +40,16 @@ const rbacModule = require(rbacPath);
 // the exact args that specific route registered with.
 rbacModule.requirePermission = (...args) => (req, res, next) =>
   currentRequirePermission(...args)(req, res, next);
+// #1384: requireOrganizationScope is a plain middleware, destructured at
+// require-time like requirePermission, so it is proxied the same way. The
+// default resolves a global scope, so every handler below runs as the
+// Administrador it runs as today.
+let currentRequireOrganizationScope = defaultRequireOrganizationScope;
+function defaultRequireOrganizationScope(req, res, next) {
+  req.organizationScope = { scope: 'global', organizationIds: [] };
+  next();
+}
+rbacModule.requireOrganizationScope = (req, res, next) => currentRequireOrganizationScope(req, res, next);
 
 // Required exactly once - see comments above. Every requirePermission-gated
 // route's own handler body (db access, service calls, etc.) is never
@@ -215,14 +224,16 @@ describe('user.routes authorization gates (issue #921)', () => {
     });
   });
 
-  it('does not apply requireOrganizationScope anywhere on this router (confirmed absent)', () => {
-    // user.routes.js has no `requireOrganizationScope` seam at all -- unlike
-    // patient.routes.js, there is nothing to proxy or deny. The only way to
-    // pin "not applied anywhere" honestly is to assert its absence from the
-    // route module's own source, so this test fails the moment someone
-    // wires the middleware in without a corresponding update here.
-    const source = fs.readFileSync(routePath, 'utf8');
-    expect(source).not.toMatch(/requireOrganizationScope/);
+  // #1384: this pinned the gate's absence until user.routes.js joined the
+  // organization-scope sweep. Every registration but GET /logs (the audit
+  // trail, read across organizations as /api/logs reads it) now carries it.
+  it('applies requireOrganizationScope on every registration but GET /logs (#1384)', () => {
+    const gated = (layer) => layer.route.stack.some((entry) => entry.handle === rbacModule.requireOrganizationScope);
+    const routes = router.stack.filter((layer) => layer.route);
+    const key = (layer) => `${Object.keys(layer.route.methods)[0].toUpperCase()} ${layer.route.path}`;
+
+    expect(routes).toHaveLength(20);
+    expect(routes.filter((layer) => !gated(layer)).map(key)).toEqual(['GET /logs']);
   });
 
   // GET /logs (user.routes.js:823) is registered AFTER GET /:id

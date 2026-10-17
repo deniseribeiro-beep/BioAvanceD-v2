@@ -229,13 +229,17 @@ describe('resetMFA permission enforcement (#632)', () => {
       permissionCode,
       ...entry,
     }));
+    // #1384: user.routes.js runs requireOrganizationScope, so the operator
+    // and its target share an organization, as the route now requires.
     return {
       roles: queryableCollectionMock([
         { roleId: 'role-mfa-operator', roleCode: 'mfa_operator', hierarchyLevel: null, roleStatus: 'active', permissionIds: ['perm-resetMFA'] },
+        { roleId: 'role-technician', roleCode: 'technician', hierarchyLevel: 2, roleStatus: 'active', permissionIds: [] },
       ]),
       permissions: queryableCollectionMock(permissionDocs),
       userRoleAssignments: queryableCollectionMock([
-        { userAccountId: 'qa-mfa-operator', roleId: 'role-mfa-operator', assignmentStatus: 'active', validUntil: null },
+        { userAccountId: 'qa-mfa-operator', roleId: 'role-mfa-operator', assignmentStatus: 'active', validUntil: null, scopeType: 'organization', scopeId: 'org-a' },
+        { userAccountId: 'user-target-1', roleId: 'role-technician', assignmentStatus: 'active', validUntil: null, scopeType: 'organization', scopeId: 'org-a' },
       ]),
     };
   }
