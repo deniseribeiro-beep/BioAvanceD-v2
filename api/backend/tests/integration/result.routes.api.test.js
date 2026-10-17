@@ -1032,11 +1032,12 @@ describe('GET /api/results organization scoping (#910)', () => {
 
   // Evaluates the `{ $and: [{ $or: [...] }] }` shape the tenancy helper
   // builds: each $or branch is field equality, `{ $in }`, or `null`
-  // (which also matches a missing field).
+  // (which also matches a missing field). As in Mongo, a `$in` list that
+  // contains `null` also matches a missing field (#1381).
   function matchesClause(doc, clause) {
     return clause.$or.some((branch) => Object.entries(branch).every(([key, cond]) => {
       if (cond === null) return doc[key] === undefined || doc[key] === null;
-      if (cond && Array.isArray(cond.$in)) return cond.$in.includes(doc[key]);
+      if (cond && Array.isArray(cond.$in)) return cond.$in.includes(doc[key]) || (cond.$in.includes(null) && (doc[key] === undefined || doc[key] === null));
       return doc[key] === cond;
     }));
   }
@@ -1054,6 +1055,15 @@ describe('GET /api/results organization scoping (#910)', () => {
       findOne: vi.fn(async (query = {}) => SAMPLES.find((d) => d.specimenId === query.specimenId) || null),
     });
   }
+
+  it('the samples double matches $in with null against a missing field as Mongo does (#1381)', () => {
+    const withNull = { $or: [{ organizationId: { $in: [null, ''] } }] };
+    expect(matchesClause({}, withNull)).toBe(true);
+    expect(matchesClause({ organizationId: null }, withNull)).toBe(true);
+    expect(matchesClause({ organizationId: '' }, withNull)).toBe(true);
+    expect(matchesClause({ organizationId: 'x' }, withNull)).toBe(false);
+    expect(matchesClause({}, { $or: [{ organizationId: { $in: ['x'] } }] })).toBe(false);
+  });
 
   it('narrows the list query to the specimenIds of in-scope samples', async () => {
     const findSpy = vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) });
