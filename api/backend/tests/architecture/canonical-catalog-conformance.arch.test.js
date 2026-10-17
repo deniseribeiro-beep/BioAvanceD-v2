@@ -240,8 +240,8 @@ const KNOWN_DRIFT = {
       { key: 'roleValidFrom', note: 'Deliberate local extension: RF003 AC3 role validity, set by PUT /api/users/:id; no UserAccount row (UserRoleAssignment.validFrom is the assignment-level field).' },
       { key: 'roleValidUntil', note: 'Deliberate local extension: RF003 AC3 role validity, set by PUT /api/users/:id and enforced by the authenticate middleware on every request; no UserAccount row (UserRoleAssignment.validUntil is the assignment-level field).' },
       { key: 'organizationIds', note: 'Deliberate local extension: RF003 AC3 role scope on the user document, set by PUT /api/users/:id and read by the organization reference check; no UserAccount row (UserRoleAssignment.scopeId is the assignment-level field).' },
-      { key: 'createdAt', note: 'TODO(#1330): record timestamp with no UserAccount row.' },
-      { key: 'updatedAt', note: 'TODO(#1330): record timestamp with no UserAccount row.' }
+      { key: 'createdAt', note: "Deliberate local extension: BaseRecord's creation instant (ELM-0006), which UserAccount's rows do not repeat; create() stamps it, and password.service.js's expiry anchor falls back to it after passwordChangedAt and lastPasswordChange." },
+      { key: 'updatedAt', note: "Deliberate local extension: BaseRecord's last-update instant (ELM-0008), which UserAccount's rows do not repeat; the user writes in auth.service.js and user-security.service.js stamp it." }
     ]
   },
   AccessGrant: {
