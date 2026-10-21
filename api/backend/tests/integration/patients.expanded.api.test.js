@@ -242,17 +242,30 @@ describe('📦 Pacientes e Observacoes de Biomarcadores - Testes de Integracao',
     });
 
     it('Given: CPF já cadastrado | When: tenta registrar novo paciente com mesmo CPF | Then: retorna 409', async () => {
-      const existingPatient = { participantId: '12345678', identityDocument: '12345678901' };
+      // #561/#1386: the CPF conflict check reads ParticipantIdentity (identityDocumentHash),
+      // so the duplicate sits there; the Patient holds no identity data.
+      const existingIdentity = { participantId: '12345678' };
       const patientsCollection = {
-        findOne: vi.fn().mockResolvedValueOnce(existingPatient),
+        findOne: vi.fn().mockResolvedValue(null),
         countDocuments: vi.fn().mockResolvedValue(1),
+      };
+      const participantIdentitiesCollection = {
+        findOne: vi.fn().mockImplementation(async (query) => (
+          query?.$or?.some((clause) => clause.identityDocumentHash) ? existingIdentity : null
+        )),
+        find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) }),
       };
 
       const consentTemplatesCollection = {
         findOne: vi.fn().mockResolvedValue({ _id: '60b8d295f1bfdc3b8c8f9b01' }),
       };
 
-      app.locals.db = dbWithRbac({ patients: patientsCollection, consentTemplates: consentTemplatesCollection, consent_templates: consentTemplatesCollection });
+      app.locals.db = dbWithRbac({
+        patients: patientsCollection,
+        participantIdentities: participantIdentitiesCollection,
+        consentTemplates: consentTemplatesCollection,
+        consent_templates: consentTemplatesCollection,
+      });
 
       const response = await request(app)
         .post('/api/patients')
