@@ -50,6 +50,7 @@
     "migrate:auth-canonical-names": "node src/scripts/migrateAuthCanonicalNames.js",
     "migrate:participant-identity-ids": "node src/scripts/migrateParticipantIdentityIds.js",
     "migrate:participant-identity-ciphertext-names": "node src/scripts/migrateParticipantIdentityCiphertextNames.js",
+    "migrate:sensor-metadata-to-datastreams": "node src/scripts/migrateSensorMetadataToDatastreams.js",
     "migrate:participant-record-numbers": "node src/scripts/migrateParticipantRecordNumbers.js",
     "encryption:rewrite": "node src/scripts/rewriteEncryptedFields.js",
     "iot:simulate": "node scripts/iot-simulator.js",

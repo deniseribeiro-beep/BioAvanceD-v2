@@ -32,6 +32,7 @@ const WIRED = [
   ['migrate:facilities-rooms-to-locations', 'migrateFacilitiesRoomsToLocations.js'],
   ['migrate:sample-barcode-labels', 'migrateSampleBarcodeLabels.js'],
   ['migrate:auth-canonical-names', 'migrateAuthCanonicalNames.js'],
+  ['migrate:sensor-metadata-to-datastreams', 'migrateSensorMetadataToDatastreams.js'],
   ['encryption:rewrite', 'rewriteEncryptedFields.js'],
   ['seed:disease-validation-rules', 'seedDiseaseValidationRules.js'],
 
