@@ -6,6 +6,7 @@ const logger = require('../../../src/utils/logger');
 const {
   TEMPERATURE_PROPERTY,
   currentDatastreamsBySensor,
+  datastreamEquipmentIdsBySensor,
   policiesByProfileId,
   freezerContainerIdOf,
 } = require('../../../src/services/sensorDatastream.service');
@@ -113,6 +114,47 @@ describe('currentDatastreamsBySensor (#1392)', () => {
 
     expect(result.size).toBe(0);
     expect(warn).toHaveBeenCalled();
+  });
+});
+
+describe('datastreamEquipmentIdsBySensor (#1392)', () => {
+  it('maps a sensor to the equipmentId of its datastream valid now (#1392)', async () => {
+    const db = fakeDb({ telemetryDatastreams: [stream({ equipmentId: 'equip-ds' })] });
+
+    const result = await datastreamEquipmentIdsBySensor(db, ['sensor-A'], NOW);
+
+    expect([...result.entries()]).toEqual([['sensor-A', 'equip-ds']]);
+  });
+
+  it('skips a datastream with a null or empty equipmentId (#1392)', async () => {
+    const db = fakeDb({
+      telemetryDatastreams: [
+        stream({ equipmentId: null }),
+        stream({ telemetryDatastreamId: 'ds-2', sensorId: 'sensor-B', equipmentId: '' }),
+        stream({ telemetryDatastreamId: 'ds-3', sensorId: 'sensor-C', equipmentId: undefined }),
+      ],
+    });
+
+    const result = await datastreamEquipmentIdsBySensor(db, ['sensor-A', 'sensor-B', 'sensor-C'], NOW);
+
+    expect(result.size).toBe(0);
+  });
+
+  it('skips an ended datastream (#1392)', async () => {
+    const db = fakeDb({
+      telemetryDatastreams: [
+        stream({ validityPeriod: { start: new Date('2026-10-20T00:00:00Z'), end: new Date('2026-10-21T11:00:00Z') } }),
+      ],
+    });
+
+    expect((await datastreamEquipmentIdsBySensor(db, ['sensor-A'], NOW)).size).toBe(0);
+  });
+
+  it('gives an empty Map when the lookup throws (#1392)', async () => {
+    vi.spyOn(logger, 'warn').mockImplementation(() => {});
+    const db = fakeDb({}, { throwOn: ['telemetryDatastreams'] });
+
+    expect((await datastreamEquipmentIdsBySensor(db, ['sensor-A'], NOW)).size).toBe(0);
   });
 });
 

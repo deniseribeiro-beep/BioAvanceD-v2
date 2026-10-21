@@ -1,5 +1,13 @@
-import { test, expect } from '@playwright/test';
-import { seedSensorWithPolicy, removeSeededSensor, closeSeedSensorDb } from './helpers/seedSensor';
+import { test, expect, type APIRequestContext } from '@playwright/test';
+import {
+  seedSensorWithPolicy,
+  removeSeededSensor,
+  closeSeedSensorDb,
+  findTemperatureIncident,
+  findEnvironmentalExcursion,
+  removeEnvironmentalExcursions,
+  type SeededSensor,
+} from './helpers/seedSensor';
 import { realLogin } from './helpers/realAuth';
 
 // Real backend only — see backend-integration.spec.ts for the same skip
@@ -61,6 +69,76 @@ test.describe('Sensor readers take the TelemetryDatastream first (#1392) — rea
       await removeSeededSensor(bound);
       await removeSeededSensor(profile);
       await removeSeededSensor(control);
+    }
+  });
+
+  // #1392: an EnvironmentalExcursion is keyed by the equipmentId of the
+  // sensor's datastream valid now, not by its SensorMetadata device.
+  async function createDatastream(request: APIRequestContext, token: string, sensor: SeededSensor): Promise<string> {
+    const equipmentId = `${sensor.sensorId}-freezer`;
+    const created = await request.post(`${apiBaseURL}/api/telemetry-datastreams`, {
+      headers: { Authorization: `Bearer ${token}` },
+      data: {
+        sensorId: sensor.sensorId, equipmentId, storageLocationId: `${sensor.sensorId}-loc`,
+        observedProperty: 'temperature', unit: 'Cel', samplingPolicyId: 'sampling-e2e', thresholdProfileId: sensor.policyId,
+        validityPeriod: { start: new Date(Date.now() - 60 * 60 * 1000).toISOString() },
+      },
+    });
+    expect(created.status(), await created.text()).toBe(201);
+    return equipmentId;
+  }
+
+  test('a bound sensor opens its excursion under its datastream equipmentId, and resolving its incident closes it (#1392)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const sensor = await seedSensorWithPolicy(2, 8, { datastream: false });
+    let equipmentId: string | null = null;
+    try {
+      equipmentId = await createDatastream(request, admin.token, sensor);
+
+      const reading = await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+        headers: ingestHeaders(),
+        data: { sensorId: sensor.sensorId, temperature: 25, timestamp: new Date().toISOString() },
+      });
+      expect(reading.status(), await reading.text()).toBe(200);
+
+      await expect.poll(async () => findEnvironmentalExcursion(equipmentId!), { timeout: 15_000 }).toBeTruthy();
+      expect(await findEnvironmentalExcursion(sensor.deviceId)).toBeNull();
+      await expect.poll(async () => findTemperatureIncident(sensor.sensorId), { timeout: 15_000 }).toBeTruthy();
+
+      const incident = await findTemperatureIncident(sensor.sensorId);
+      const resolved = await request.put(`${apiBaseURL}/api/incidents/${incident._id}/resolve`, {
+        headers: { Authorization: `Bearer ${admin.token}` },
+        data: { userId: admin.user._id, notes: '#1392 e2e close' },
+      });
+      expect(resolved.ok(), await resolved.text()).toBeTruthy();
+
+      await expect
+        .poll(async () => (await findEnvironmentalExcursion(equipmentId!))?.excursionStatus, { timeout: 15_000 })
+        .toBe('resolved');
+    } finally {
+      await removeSeededSensor(sensor);
+      if (equipmentId) await removeEnvironmentalExcursions(equipmentId);
+    }
+  });
+
+  test('a bound sensor that never reported has its missing_reading excursion under its datastream equipmentId (#1392)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const sensor = await seedSensorWithPolicy(2, 8, { datastream: false });
+    let equipmentId: string | null = null;
+    try {
+      equipmentId = await createDatastream(request, admin.token, sensor);
+
+      const cycle = await request.post(`${apiBaseURL}/api/iot/telemetry-monitor/run-cycle`, {
+        headers: { 'x-test-support-secret': process.env.TEST_SUPPORT_SECRET ?? '' },
+      });
+      expect(cycle.status(), await cycle.text()).toBe(200);
+
+      const excursion = await findEnvironmentalExcursion(equipmentId);
+      expect(excursion).toMatchObject({ equipmentId, excursionType: 'missing_reading', excursionStatus: 'open' });
+      expect(await findEnvironmentalExcursion(sensor.deviceId)).toBeNull();
+    } finally {
+      await removeSeededSensor(sensor);
+      if (equipmentId) await removeEnvironmentalExcursions(equipmentId);
     }
   });
 });

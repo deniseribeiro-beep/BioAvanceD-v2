@@ -6,7 +6,8 @@ const { LOCATION_CODE_PREFIX } = require('./legacyPlacementChain.service');
 // #1392: a sensor's current TelemetryDatastream, its threshold profile's
 // TemperaturePolicy and its freezer, for the readers that took these only
 // from SensorMetadata (TelemetryMonitor, the temperature report, the
-// cold-chain quarantine). The decisions are recorded in
+// cold-chain quarantine, the EnvironmentalExcursion's equipment key). The
+// decisions are recorded in
 // docs/decisions/2026-10-21-sensor-readers-from-datastream.md.
 //
 // Every lookup degrades to "nothing found" on an error, so the caller falls
@@ -44,6 +45,21 @@ async function currentDatastreamsBySensor(db, sensorIds = null, at = new Date())
     return new Map();
   }
   return streamsBySensor;
+}
+
+// #1392: the equipment key an EnvironmentalExcursion of each sensor is opened
+// and closed under, keyed by String(sensorId): the equipmentId of the
+// temperature datastream valid at `at`, only where it names one. A sensor
+// missing from the Map falls back to its SensorMetadata device
+// (docs/decisions/2026-10-21-sensor-readers-from-datastream.md, decision 5).
+async function datastreamEquipmentIdsBySensor(db, sensorIds, at = new Date()) {
+  const equipmentIds = new Map();
+  for (const [sensorId, stream] of await currentDatastreamsBySensor(db, sensorIds, at)) {
+    const equipmentId = stream.equipmentId;
+    if (equipmentId === undefined || equipmentId === null || String(equipmentId) === '') continue;
+    equipmentIds.set(sensorId, String(equipmentId));
+  }
+  return equipmentIds;
 }
 
 // The temperaturePolicies documents the given threshold profiles name, keyed
@@ -95,6 +111,7 @@ async function freezerContainerIdOf(db, storageLocationId) {
 module.exports = {
   TEMPERATURE_PROPERTY,
   currentDatastreamsBySensor,
+  datastreamEquipmentIdsBySensor,
   policiesByProfileId,
   freezerContainerIdOf,
 };

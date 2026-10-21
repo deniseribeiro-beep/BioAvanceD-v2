@@ -37,6 +37,7 @@ export interface BindOptions {
   registration?: boolean;
   device?: boolean;
   thresholdProfileId?: string;
+  equipmentId?: string;
   validFrom?: Date;
 }
 
@@ -52,7 +53,10 @@ export interface BindOptions {
  * freezer, so TelemetryMonitor and the quarantine keep reading the
  * SensorMetadata freezer (sensorDatastream.service.js freezerContainerIdOf).
  * A thresholdProfileId that names no temperaturePolicies _id falls back to
- * the SensorMetadata policy.
+ * the SensorMetadata policy. The datastream's equipmentId, which keys the
+ * sensor's EnvironmentalExcursions (decision 5 of the 2026-10-21 record), is
+ * `${sensorId}-equipment` unless `equipmentId` is given; the seeders below
+ * pass their Device's deviceId, so excursions stay keyed by it.
  */
 export async function bindSensor(sensorId: string, options: BindOptions = {}): Promise<void> {
   const db = await getDb();
@@ -62,7 +66,7 @@ export async function bindSensor(sensorId: string, options: BindOptions = {}): P
     await db.collection('telemetryDatastreams').insertOne({
       telemetryDatastreamId: crypto.randomUUID(),
       sensorId,
-      equipmentId: `${sensorId}-equipment`,
+      equipmentId: options.equipmentId ?? `${sensorId}-equipment`,
       storageLocationId: `${sensorId}-loc`,
       observedProperty: 'temperature',
       unit: 'Cel',
@@ -115,6 +119,12 @@ export async function unbindSensor(sensorId: string): Promise<void> {
     db.collection('deviceRegistrations').deleteMany({ deviceId: sensorId }),
     db.collection('devices').deleteMany({ deviceId: sensorId }),
   ]);
+}
+
+/** #1392: deletes the EnvironmentalExcursions keyed by a datastream's `equipmentId`, which removeSeededSensor (keyed by deviceId) leaves. */
+export async function removeEnvironmentalExcursions(equipmentId: string): Promise<void> {
+  const db = await getDb();
+  await db.collection('environmentalExcursions').deleteMany({ equipmentId });
 }
 
 export interface SeededSensor {
@@ -187,7 +197,7 @@ export async function seedSensorWithPolicy(
     updatedAt: new Date(),
   });
 
-  await bindSensor(sensorId, { thresholdProfileId: policyResult.insertedId.toString(), ...bind });
+  await bindSensor(sensorId, { thresholdProfileId: policyResult.insertedId.toString(), equipmentId: deviceId, ...bind });
 
   return { sensorId, policyId: policyResult.insertedId.toString(), minTemp, maxTemp, deviceId };
 }
@@ -346,7 +356,7 @@ export async function seedSensorWithFreezerSample(
     updatedAt: new Date(),
   });
 
-  await bindSensor(sensorId, { thresholdProfileId: policyResult.insertedId.toString(), ...bind });
+  await bindSensor(sensorId, { thresholdProfileId: policyResult.insertedId.toString(), equipmentId: deviceId, ...bind });
 
   return {
     sensorId,
@@ -424,7 +434,7 @@ export async function seedSensorOnFreezer(
     updatedAt: new Date(),
   });
 
-  await bindSensor(sensorId, { thresholdProfileId: policyResult.insertedId.toString(), ...bind });
+  await bindSensor(sensorId, { thresholdProfileId: policyResult.insertedId.toString(), equipmentId: deviceId, ...bind });
 
   return { sensorId, deviceId, policyId: policyResult.insertedId.toString(), freezerId };
 }

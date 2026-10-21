@@ -10,7 +10,7 @@ const {
 } = require('../database/influxdb/connection');
 const EnvironmentalExcursionModel = require('../../models/EnvironmentalExcursion');
 const { quarantineByColdChainIncident } = require('../../services/equipment-sensor-quarantine.service');
-const { currentDatastreamsBySensor, policiesByProfileId, freezerContainerIdOf } = require('../../services/sensorDatastream.service');
+const { currentDatastreamsBySensor, datastreamEquipmentIdsBySensor, policiesByProfileId, freezerContainerIdOf } = require('../../services/sensorDatastream.service');
 const { GraphProjectionService } = require('../../services/graphProjection.service');
 const { withTransactionWhereSupported } = require('../../utils/mongoTransaction');
 
@@ -366,6 +366,9 @@ class TelemetryMonitor {
       ? await this.db.collection('devices').find({ _id: { $in: deviceIds } }).toArray()
       : [];
     const deviceById = new Map(devices.map(d => [String(d._id), d]));
+    // #1392: the excursion key is the equipmentId of the sensor's temperature
+    // datastream valid now, the device's deviceId the fallback.
+    const equipmentIdBySensor = await datastreamEquipmentIdsBySensor(this.db, sensors.map(s => s.sensorId));
 
     await connectInfluxDB();
     const queryApi = getInfluxQueryApi();
@@ -397,7 +400,9 @@ class TelemetryMonitor {
       const elapsedMs = lastReadingAt ? now - lastReadingAt.getTime() : Infinity;
       if (elapsedMs > thresholdMs) {
         const device = sensor.device ? deviceById.get(String(sensor.device)) : null;
-        missing.push({ sensorId: sensor.sensorId, deviceId: device?.deviceId || null, lastReadingAt });
+        const deviceId = device?.deviceId || null;
+        const equipmentId = equipmentIdBySensor.get(String(sensor.sensorId)) || deviceId;
+        missing.push({ sensorId: sensor.sensorId, deviceId, equipmentId, lastReadingAt });
       }
     }
     return missing;
@@ -406,10 +411,10 @@ class TelemetryMonitor {
   // Same open/widen pattern as iot.controller.js's upsertEnvironmentalExcursion,
   // scoped to excursionType 'missing_reading' so it never collides with an
   // in-flight temperature_out_of_range excursion on the same device.
-  async upsertMissingReadingExcursion({ sensorId, deviceId, lastReadingAt }) {
+  async upsertMissingReadingExcursion({ sensorId, equipmentId, lastReadingAt }) {
     const ExcursionCollection = this.db.collection('environmentalExcursions');
     const existingExcursion = await ExcursionCollection.findOne({
-      equipmentId: deviceId,
+      equipmentId,
       excursionType: 'missing_reading',
       excursionStatus: { $in: ['open', 'under_assessment'] }
     });
@@ -418,7 +423,7 @@ class TelemetryMonitor {
       await ExcursionCollection.updateOne({ _id: existingExcursion._id }, { $set: { updatedAt: new Date() } });
     } else {
       const excursion = EnvironmentalExcursionModel.create({
-        equipmentId: deviceId,
+        equipmentId,
         startDateTime: lastReadingAt || new Date(),
         excursionStatus: 'open',
         excursionType: 'missing_reading',
@@ -443,7 +448,7 @@ class TelemetryMonitor {
   async checkMissingReadings() {
     const missingSensors = await this.findSensorsWithMissingReadings();
     for (const missing of missingSensors) {
-      if (!missing.deviceId) {
+      if (!missing.equipmentId) {
         continue;
       }
       await this.upsertMissingReadingExcursion(missing);

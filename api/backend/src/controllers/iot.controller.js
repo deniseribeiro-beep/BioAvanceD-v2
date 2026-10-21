@@ -15,6 +15,7 @@ require('../models/Device.schema');
 const { saveTelemetryPoint } = require('../services/saveTelemetryPoint');
 const { readingIdentityOf, screenReading } = require('../services/telemetryReadingContract');
 const { getDatastream } = require('../services/telemetryBinding.service');
+const { datastreamEquipmentIdsBySensor } = require('../services/sensorDatastream.service');
 const { findCompletedIdempotentResult, recordCompletedIdempotentResult } = require('../ingestion/idempotency');
 const { sendCriticalAlertEmail } = require('../services/sendCriticalAlertEmail');
 const TemperatureIncidentModel = require('../models/TemperatureIncident');
@@ -215,10 +216,16 @@ async function stopExcursionClock(policyData, normalizedSensorId) {
 async function upsertEnvironmentalExcursion(policyData, temperaturePolicy, normalizedSensorId, normalizedTemperature, normalizedTimestamp, quarantine) {
   const db = policyData?.db || await connectMongoDB();
   const ExcursionCollection = db.collection('environmentalExcursions');
-  const deviceId = policyData?.sensorMetadata?.device?.deviceId || null;
+  const legacyDeviceId = policyData?.sensorMetadata?.device?.deviceId || null;
+  // #1392: the excursion is keyed by the equipment the sensor's temperature
+  // datastream valid now monitors, the SensorMetadata device the fallback
+  // (docs/decisions/2026-10-21-sensor-readers-from-datastream.md, decision
+  // 5). The stream valid now, not the reading's, so this and
+  // incident.controller's closeEnvironmentalExcursion read the same key.
+  const equipmentId = (await datastreamEquipmentIdsBySensor(db, [normalizedSensorId])).get(String(normalizedSensorId)) || legacyDeviceId;
 
   const existingExcursion = await ExcursionCollection.findOne({
-    equipmentId: deviceId,
+    equipmentId,
     excursionStatus: { $in: ['open', 'under_assessment'] }
   });
 
@@ -235,7 +242,7 @@ async function upsertEnvironmentalExcursion(policyData, temperaturePolicy, norma
     excursionId = existingExcursion._id;
   } else {
     const excursion = EnvironmentalExcursionModel.create({
-      equipmentId: deviceId,
+      equipmentId,
       startDateTime: normalizedTimestamp,
       minimumValue: normalizedTemperature,
       maximumValue: normalizedTemperature,
@@ -258,7 +265,8 @@ async function upsertEnvironmentalExcursion(policyData, temperaturePolicy, norma
     payload: {
       sensorId: normalizedSensorId,
       temperatureValue: normalizedTemperature,
-      deviceId
+      deviceId: legacyDeviceId,
+      equipmentId
     }
   }).catch((error) => {
     logger.error('[NOTIFICATION_DISPATCH] Falha ao disparar notificação baseada em regra:', error.message || error);

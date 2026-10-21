@@ -112,6 +112,8 @@ describe('iot.controller', () => {
   // #1317: null unless a case binds the reading to a datastream.
   let datastreamsCollection;
   let temperaturePoliciesCollection;
+  // #1392: null unless a case reads the excursion's equipment key.
+  let excursionsCollection;
 
   beforeEach(async () => {
     vi.resetModules();
@@ -161,6 +163,7 @@ describe('iot.controller', () => {
     idempotencyKeysCollection = createFakeCollection([]);
     datastreamsCollection = null;
     temperaturePoliciesCollection = null;
+    excursionsCollection = null;
 
     const fakeConnection = {
       collection: vi.fn().mockImplementation((name) => {
@@ -171,6 +174,7 @@ describe('iot.controller', () => {
         if (name === 'userRoleAssignments') return assignmentsCollection;
         if (name === 'telemetryDatastreams' && datastreamsCollection) return datastreamsCollection;
         if (name === 'temperaturePolicies' && temperaturePoliciesCollection) return temperaturePoliciesCollection;
+        if (name === 'environmentalExcursions' && excursionsCollection) return excursionsCollection;
         return {
           findOne: vi.fn().mockResolvedValue(null),
           updateOne: vi.fn().mockResolvedValue({ modifiedCount: 1 }),
@@ -1161,6 +1165,87 @@ describe('iot.controller', () => {
 
       expect(sensorMetadataFindOneMock).toHaveBeenCalledTimes(1);
       expect(sendCriticalAlertEmailMock).toHaveBeenCalledWith('sensor-2', 12.5, 8, 'alerts@example.test');
+    }, 15000);
+  });
+
+  // #1392: the excursion is keyed by the equipmentId of the sensor's
+  // temperature datastream valid now; SensorMetadata's device is the
+  // fallback for an unbound sensor.
+  describe('#1392: the excursion equipment key', () => {
+    beforeEach(() => {
+      sensorMetadataLeanMock.mockResolvedValue({
+        sensorId: 'sensor-2',
+        alertEmail: 'alerts@example.test',
+        sensorName: 'sensor-2',
+        device: { _id: 'device-oid-1', deviceId: 'device-1' },
+        temperaturePolicy: { _id: 'policy-1', minTemp: 2, maxTemp: 8 },
+      });
+      excursionsCollection = {
+        findOne: vi.fn().mockResolvedValue(null),
+        updateOne: vi.fn().mockResolvedValue({ modifiedCount: 1 }),
+        insertOne: vi.fn().mockResolvedValue({ insertedId: 'excursion-1' }),
+      };
+    });
+
+    it('a bound sensor opens its excursion under the equipmentId of its datastream (#1392)', async () => {
+      const stream = {
+        telemetryDatastreamId: 'ds-1',
+        sensorId: 'sensor-2',
+        equipmentId: 'equip-ds',
+        observedProperty: 'temperature',
+        storageLocationId: 'loc-1',
+        validityPeriod: { start: new Date('2026-01-01'), end: null },
+        thresholdProfileId: 'policy-ds',
+      };
+      datastreamsCollection = {
+        find: vi.fn(() => ({ toArray: async () => [stream] })),
+        findOne: vi.fn(async (filter) => (filter.telemetryDatastreamId === stream.telemetryDatastreamId ? stream : null)),
+      };
+      temperaturePoliciesCollection = {
+        findOne: vi.fn(async (filter) => (filter._id === 'policy-ds' ? { _id: 'policy-ds', minTemp: 2, maxTemp: 8 } : null)),
+      };
+
+      await ingestTelemetry({ body: { sensorId: 'sensor-2', temperature: 12.5 } }, createResponse());
+
+      await vi.waitFor(() => {
+        expect(excursionsCollection.insertOne).toHaveBeenCalled();
+      });
+      expect(excursionsCollection.findOne).toHaveBeenCalledWith({
+        equipmentId: 'equip-ds',
+        excursionStatus: { $in: ['open', 'under_assessment'] },
+      });
+      expect(excursionsCollection.insertOne.mock.calls[0][0].equipmentId).toBe('equip-ds');
+      await vi.waitFor(() => {
+        expect(dispatchNotificationMock).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({
+            eventType: 'environmental_excursion',
+            payload: expect.objectContaining({ sensorId: 'sensor-2', equipmentId: 'equip-ds', deviceId: 'device-1' }),
+          })
+        );
+      });
+    }, 15000);
+
+    it('an unbound sensor keeps the deviceId of its SensorMetadata device as the key (#1392)', async () => {
+      const warnSpy = vi.spyOn(require('../../src/utils/logger'), 'warn').mockImplementation(() => undefined);
+
+      await ingestTelemetry({ body: { sensorId: 'sensor-2', temperature: 12.5 } }, createResponse());
+
+      await vi.waitFor(() => {
+        expect(excursionsCollection.insertOne).toHaveBeenCalled();
+      });
+      expect(excursionsCollection.findOne).toHaveBeenCalledWith({
+        equipmentId: 'device-1',
+        excursionStatus: { $in: ['open', 'under_assessment'] },
+      });
+      expect(excursionsCollection.insertOne.mock.calls[0][0].equipmentId).toBe('device-1');
+      await vi.waitFor(() => {
+        expect(dispatchNotificationMock).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({ payload: expect.objectContaining({ equipmentId: 'device-1', deviceId: 'device-1' }) })
+        );
+      });
+      warnSpy.mockRestore();
     }, 15000);
   });
 });

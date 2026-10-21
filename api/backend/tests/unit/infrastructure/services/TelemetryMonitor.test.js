@@ -718,6 +718,61 @@ describe('TelemetryMonitor', () => {
 
       expect(await monitor.findSensorsWithMissingReadings()).toEqual([]);
     });
+
+    // #1392: the excursion key is the equipmentId of the sensor's temperature
+    // datastream valid now, the SensorMetadata device's deviceId the fallback.
+    function withDatastreams(streams) {
+      getCollectionSpy.mockImplementation((db, key) => {
+        if (key === 'telemetryDatastreams') return { find: vi.fn(() => ({ toArray: async () => streams })) };
+        throw new Error(`unexpected getCollection key: ${key}`);
+      });
+    }
+
+    function streamFor(sensorId, equipmentId) {
+      return {
+        sensorId,
+        equipmentId,
+        observedProperty: 'temperature',
+        validityPeriod: { start: new Date('2026-01-01T00:00:00Z'), end: null }
+      };
+    }
+
+    it('gives a missing bound sensor the equipmentId of its datastream as the key (#1392)', async () => {
+      withDatastreams([streamFor('S1', 'equip-ds')]);
+      const monitor = new TelemetryMonitor({
+        db: buildDb({ sensorMetadata: [{ sensorId: 'S1', device: 'device-oid-1' }], devices: [{ _id: 'device-oid-1', deviceId: 'device-1' }] })
+      });
+
+      expect(await monitor.findSensorsWithMissingReadings()).toEqual([
+        { sensorId: 'S1', deviceId: 'device-1', equipmentId: 'equip-ds', lastReadingAt: null }
+      ]);
+    });
+
+    it('gives a missing unbound sensor the deviceId of its device as the key (#1392)', async () => {
+      withDatastreams([]);
+      const monitor = new TelemetryMonitor({
+        db: buildDb({ sensorMetadata: [{ sensorId: 'S1', device: 'device-oid-1' }], devices: [{ _id: 'device-oid-1', deviceId: 'device-1' }] })
+      });
+
+      expect(await monitor.findSensorsWithMissingReadings()).toEqual([
+        { sensorId: 'S1', deviceId: 'device-1', equipmentId: 'device-1', lastReadingAt: null }
+      ]);
+    });
+
+    it('checkMissingReadings opens a bound sensor\'s excursion and skips a sensor with neither key (#1392)', async () => {
+      withDatastreams([streamFor('S1', 'equip-ds')]);
+      const monitor = new TelemetryMonitor({
+        db: buildDb({ sensorMetadata: [{ sensorId: 'S1' }, { sensorId: 'S3' }], devices: [] })
+      });
+      monitor.upsertMissingReadingExcursion = vi.fn().mockResolvedValue(undefined);
+
+      await monitor.checkMissingReadings();
+
+      expect(monitor.upsertMissingReadingExcursion).toHaveBeenCalledTimes(1);
+      expect(monitor.upsertMissingReadingExcursion).toHaveBeenCalledWith(
+        { sensorId: 'S1', deviceId: null, equipmentId: 'equip-ds', lastReadingAt: null }
+      );
+    });
   });
 
   describe('resolveRootSamples()', () => {
