@@ -4,7 +4,12 @@ const env = require('../config/env');
 const backupService = require('./backup.service');
 const retentionSweepService = require('./retentionSweep.service');
 const backupPolicyService = require('./backup-policy.service');
-const { ALERT_TYPES, resolveActiveAlert, ensureActiveAlert } = require('./alertLifecycle.service');
+const {
+  ALERT_TYPES,
+  resolveActiveAlert,
+  resolveActiveAlertsOfType,
+  ensureActiveAlert
+} = require('./alertLifecycle.service');
 const influxTelemetryReadRepository = require('../infrastructure/persistence/influxdb/InfluxTelemetryReadRepository');
 
 const DEFAULT_STALE_MINUTES = 20;
@@ -32,9 +37,32 @@ async function checkStaleTemperatureReadings(db) {
   }
 
   // RF009 AC1 (#1317): the last reading comes from InfluxDB, one query per
-  // run. A query failure propagates before any alert is written or resolved,
-  // so an outage neither raises missing_reading nor closes open episodes.
-  const lastReadingAtBySensor = await influxTelemetryReadRepository.lastReadingAtBySensor();
+  // run. A query failure raises telemetry_store_unavailable per sensor (#1388)
+  // and rethrows, still writing or resolving no stale/missing alert; a
+  // successful run resolves those episodes.
+  let lastReadingAtBySensor;
+  try {
+    lastReadingAtBySensor = await influxTelemetryReadRepository.lastReadingAtBySensor();
+  } catch (error) {
+    for (const sensor of sensors) {
+      const sensorId = sensor.sensorId || sensor.sensorID;
+      if (!sensorId) continue;
+
+      await ensureActiveAlert(alertsCollection, {
+        sensorId,
+        organizationId: sensor.organizationId || null,
+        type: ALERT_TYPES.TELEMETRY_STORE_UNAVAILABLE,
+        message: 'Armazenamento de telemetria indisponível; leituras do sensor não verificadas',
+        severity: 'critical',
+        status: 'active',
+        timestamp: new Date(),
+        createdAt: new Date()
+      });
+    }
+    throw error;
+  }
+
+  await resolveActiveAlertsOfType(alertsCollection, ALERT_TYPES.TELEMETRY_STORE_UNAVAILABLE);
 
   const now = Date.now();
   const staleMinutes = Number(env.TEMP_STALE_MINUTES || DEFAULT_STALE_MINUTES);

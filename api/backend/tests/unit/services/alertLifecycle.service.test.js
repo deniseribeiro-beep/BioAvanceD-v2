@@ -7,6 +7,7 @@ const require = createRequire(import.meta.url);
 const {
   ALERT_TYPES,
   resolveActiveAlert,
+  resolveActiveAlertsOfType,
   ensureActiveAlert
 } = require('../../../src/services/alertLifecycle.service');
 
@@ -44,6 +45,20 @@ describe('alertLifecycle.service (#1142)', () => {
       EPISODE,
       { $set: { status: 'resolved', resolvedAt: expect.any(Date) } }
     );
+  });
+
+  // #1388: a reading-store outage is not one sensor's condition, so its
+  // episodes close store-wide, with no sensorId in the filter.
+  it('resolveActiveAlertsOfType closes every active episode of the type', async () => {
+    const alerts = { updateMany: vi.fn().mockResolvedValue({ modifiedCount: 2 }) };
+
+    await resolveActiveAlertsOfType(alerts, ALERT_TYPES.TELEMETRY_STORE_UNAVAILABLE);
+
+    expect(alerts.updateMany).toHaveBeenCalledTimes(1);
+    const [filter, update] = alerts.updateMany.mock.calls[0];
+    expect(filter).toEqual({ type: 'telemetry_store_unavailable', status: 'active' });
+    expect(update.$set.status).toBe('resolved');
+    expect(update.$set.resolvedAt).toBeInstanceOf(Date);
   });
 
   // The defect #1079 was filed for came from two copies of this predicate.

@@ -56,6 +56,17 @@ function makeDb({ sensors = [], lastReadingBySensor = {}, existingAlert = null }
   };
 }
 
+// #1388: every successful run closes the store-wide telemetry_store_unavailable
+// episodes once, before the per-sensor loop.
+const STORE_UNAVAILABLE_RESOLVE = { type: 'telemetry_store_unavailable', status: 'active' };
+
+function expectStoreUnavailableResolved(updateMany) {
+  expect(updateMany).toHaveBeenCalledWith(
+    STORE_UNAVAILABLE_RESOLVE,
+    expect.objectContaining({ $set: expect.objectContaining({ status: 'resolved' }) })
+  );
+}
+
 describe('scheduler.service - checkStaleTemperatureReadings', () => {
   let lastReadingAtBySensorSpy;
 
@@ -169,7 +180,8 @@ describe('scheduler.service - checkStaleTemperatureReadings', () => {
       // 25 minutes old with a 30 minute threshold => not stale, resolves any prior alerts.
       expect(result).toEqual({ sensors: 1, alerts: 0 });
       expect(db.__collections.alerts.insertOne).not.toHaveBeenCalled();
-      expect(db.__collections.alerts.updateMany).toHaveBeenCalledTimes(2);
+      expect(db.__collections.alerts.updateMany).toHaveBeenCalledTimes(3);
+      expectStoreUnavailableResolved(db.__collections.alerts.updateMany);
     } finally {
       env.TEMP_STALE_MINUTES = originalStaleMinutes;
     }
@@ -186,7 +198,8 @@ describe('scheduler.service - checkStaleTemperatureReadings', () => {
 
     expect(result).toEqual({ sensors: 1, alerts: 0 });
     expect(db.__collections.alerts.insertOne).not.toHaveBeenCalled();
-    expect(db.__collections.alerts.updateMany).toHaveBeenCalledTimes(2);
+    expect(db.__collections.alerts.updateMany).toHaveBeenCalledTimes(3);
+    expectStoreUnavailableResolved(db.__collections.alerts.updateMany);
     expect(db.__collections.alerts.updateMany).toHaveBeenCalledWith(
       { sensorId: 'S1', type: 'stale_reading', status: 'active' },
       expect.objectContaining({ $set: expect.objectContaining({ status: 'resolved' }) })
@@ -207,7 +220,9 @@ describe('scheduler.service - checkStaleTemperatureReadings', () => {
 
     expect(result).toEqual({ sensors: 1, alerts: 0 });
     expect(db.__collections.alerts.insertOne).not.toHaveBeenCalled();
-    expect(db.__collections.alerts.updateMany).not.toHaveBeenCalled();
+    // Only the store-wide resolve: no per-sensor stale/missing resolve.
+    expect(db.__collections.alerts.updateMany).toHaveBeenCalledTimes(1);
+    expectStoreUnavailableResolved(db.__collections.alerts.updateMany);
   });
 
   it('falls back to sensorID field when sensorId is absent', async () => {
@@ -233,7 +248,9 @@ describe('scheduler.service - checkStaleTemperatureReadings', () => {
 
     expect(result).toEqual({ sensors: 1, alerts: 0 });
     expect(db.__collections.alerts.insertOne).not.toHaveBeenCalled();
-    expect(db.__collections.alerts.updateMany).not.toHaveBeenCalled();
+    // Only the store-wide resolve: no per-sensor stale/missing resolve.
+    expect(db.__collections.alerts.updateMany).toHaveBeenCalledTimes(1);
+    expectStoreUnavailableResolved(db.__collections.alerts.updateMany);
   });
 
   it('reads no Mongo temperatures collection', async () => {
@@ -258,16 +275,60 @@ describe('scheduler.service - checkStaleTemperatureReadings', () => {
     expect(lastReadingAtBySensorSpy).toHaveBeenCalledTimes(1);
   });
 
-  // An InfluxDB outage must neither raise missing_reading for every sensor
-  // nor resolve open episodes, so the failure propagates before any alert.
-  it('an InfluxDB query failure rejects and writes or resolves no alert', async () => {
+  // #1388: an InfluxDB outage must not silence the check. It raises
+  // telemetry_store_unavailable per sensor, org-scoped like every alert
+  // (#1062), and still neither raises missing_reading nor resolves open
+  // episodes; the failure is rethrown so the cron callback logs it.
+  it('an InfluxDB query failure raises telemetry_store_unavailable per sensor and rejects', async () => {
     lastReadingAtBySensorSpy.mockRejectedValue(new Error('influx down'));
-    const db = makeDb({ sensors: [{ sensorId: 'S1' }, { sensorId: 'S2' }] });
+    const db = makeDb({
+      sensors: [{ sensorId: 'S1', organizationId: 'org-a' }, { sensorID: 'S2' }, { name: 'no-id' }]
+    });
+
+    await expect(scheduler.checkStaleTemperatureReadings(db)).rejects.toThrow('influx down');
+
+    const { insertOne, updateMany } = db.__collections.alerts;
+    expect(insertOne).toHaveBeenCalledTimes(2);
+    expect(insertOne.mock.calls[0][0]).toMatchObject({
+      sensorId: 'S1',
+      organizationId: 'org-a',
+      type: 'telemetry_store_unavailable',
+      status: 'active'
+    });
+    expect(insertOne.mock.calls[1][0]).toMatchObject({
+      sensorId: 'S2',
+      organizationId: null,
+      type: 'telemetry_store_unavailable',
+      status: 'active'
+    });
+    expect(updateMany).not.toHaveBeenCalled();
+  });
+
+  it('an InfluxDB query failure does not duplicate an active telemetry_store_unavailable alert', async () => {
+    lastReadingAtBySensorSpy.mockRejectedValue(new Error('influx down'));
+    const db = makeDb({
+      sensors: [{ sensorId: 'S1', organizationId: 'org-a' }],
+      existingAlert: { _id: 'open-id', sensorId: 'S1', type: 'telemetry_store_unavailable', status: 'active' }
+    });
 
     await expect(scheduler.checkStaleTemperatureReadings(db)).rejects.toThrow('influx down');
 
     expect(db.__collections.alerts.insertOne).not.toHaveBeenCalled();
-    expect(db.__collections.alerts.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('a successful run resolves telemetry_store_unavailable episodes once', async () => {
+    const db = makeDb({
+      sensors: [{ sensorId: 'S1' }, { sensorId: 'S2' }],
+      lastReadingBySensor: { S1: { timestamp: new Date() } }
+    });
+
+    await scheduler.checkStaleTemperatureReadings(db);
+
+    const storeWideCalls = db.__collections.alerts.updateMany.mock.calls
+      .filter(([filter]) => filter.type === 'telemetry_store_unavailable');
+    expect(storeWideCalls).toHaveLength(1);
+    expect(storeWideCalls[0][0]).toEqual(STORE_UNAVAILABLE_RESOLVE);
+    expect(storeWideCalls[0][1].$set.status).toBe('resolved');
   });
 });
 

@@ -14,6 +14,7 @@ const ALERT_TYPES = Object.freeze({
   // scheduler.service.js#checkStaleTemperatureReadings
   MISSING_READING: 'missing_reading',
   STALE_READING: 'stale_reading',
+  TELEMETRY_STORE_UNAVAILABLE: 'telemetry_store_unavailable',
   // temperature.service.js#checkTemperaturePolicy
   THRESHOLD_BREACH: 'threshold_breach'
 });
@@ -23,6 +24,15 @@ const ALERT_TYPES = Object.freeze({
 async function resolveActiveAlert(alertsCollection, sensorId, type) {
   await alertsCollection.updateMany(
     { sensorId, type, status: 'active' },
+    { $set: { status: 'resolved', resolvedAt: new Date() } }
+  );
+}
+
+// The store-wide twin of resolveActiveAlert: an outage of the reading store is
+// not one sensor's condition, so its episodes close together.
+async function resolveActiveAlertsOfType(alertsCollection, type) {
+  await alertsCollection.updateMany(
+    { type, status: 'active' },
     { $set: { status: 'resolved', resolvedAt: new Date() } }
   );
 }
@@ -49,5 +59,6 @@ async function ensureActiveAlert(alertsCollection, payload) {
 module.exports = {
   ALERT_TYPES,
   resolveActiveAlert,
+  resolveActiveAlertsOfType,
   ensureActiveAlert
 };
