@@ -10,6 +10,7 @@ const {
 } = require('../database/influxdb/connection');
 const EnvironmentalExcursionModel = require('../../models/EnvironmentalExcursion');
 const { quarantineByColdChainIncident } = require('../../services/equipment-sensor-quarantine.service');
+const { currentDatastreamsBySensor, policiesByProfileId, freezerContainerIdOf } = require('../../services/sensorDatastream.service');
 const { GraphProjectionService } = require('../../services/graphProjection.service');
 const { withTransactionWhereSupported } = require('../../utils/mongoTransaction');
 
@@ -209,6 +210,12 @@ class TelemetryMonitor {
   // -- this is what keeps the seeded `minimumDuration: null` default
   // behaving exactly as it did before #688.
   //
+  // #1392: the temperature datastream valid now is read first. A sensor
+  // whose datastream's thresholdProfileId names a policy takes that
+  // policy's minimumDuration; every other sensor (unbound, or a profile
+  // naming no policy) goes through sensorMetadata as before. The
+  // usable-value rule applies to both sources.
+  //
   // Guarded on `this.db` so it degrades to "every sensor gets the global
   // default" instead of throwing when findCriticalFreezers() is exercised
   // without a Mongo db wired up (production always has one by the time
@@ -224,8 +231,28 @@ class TelemetryMonitor {
       return durationMinutesBySensor;
     }
 
+    const usableMinutes = (minimumDuration) => (
+      typeof minimumDuration === 'number' && minimumDuration > 0 ? minimumDuration : defaultMinutes
+    );
+
+    const streams = await currentDatastreamsBySensor(this.db, sensorIds);
+    const streamPolicies = await policiesByProfileId(this.db, [...streams.values()].map((stream) => stream.thresholdProfileId));
+    const legacySensorIds = [];
+    for (const sensorId of sensorIds) {
+      const stream = streams.get(String(sensorId));
+      const policy = stream?.thresholdProfileId ? streamPolicies.get(String(stream.thresholdProfileId)) : null;
+      if (policy) {
+        durationMinutesBySensor.set(sensorId, usableMinutes(policy.minimumDuration));
+      } else {
+        legacySensorIds.push(sensorId);
+      }
+    }
+    if (legacySensorIds.length === 0) {
+      return durationMinutesBySensor;
+    }
+
     const sensors = await this.db.collection('sensorMetadata')
-      .find({ sensorId: { $in: sensorIds } })
+      .find({ sensorId: { $in: legacySensorIds } })
       .toArray();
 
     const policyIdBySensorId = new Map();
@@ -241,14 +268,10 @@ class TelemetryMonitor {
       : [];
     const policyById = new Map(policies.map((policy) => [String(policy._id), policy]));
 
-    for (const sensorId of sensorIds) {
+    for (const sensorId of legacySensorIds) {
       const policyId = policyIdBySensorId.get(sensorId);
       const policy = policyId ? policyById.get(String(policyId)) : null;
-      const minimumDuration = policy?.minimumDuration;
-      durationMinutesBySensor.set(
-        sensorId,
-        typeof minimumDuration === 'number' && minimumDuration > 0 ? minimumDuration : defaultMinutes
-      );
+      durationMinutesBySensor.set(sensorId, usableMinutes(policy?.minimumDuration));
     }
 
     return durationMinutesBySensor;
@@ -264,13 +287,22 @@ class TelemetryMonitor {
   // findSensorsWithMissingReadings()'s existing pattern for sensorMetadata
   // (not in getCollection()'s canonical-name whitelist); storageContainers/
   // storageBoxes aren't in that whitelist either.
+  //
+  // #1392: the temperature datastream valid now is read first. When its
+  // storageLocationId is a mirrored freezer's location, that freezer is
+  // walked; otherwise SensorMetadata.storageContainer is, as before.
   async resolveRootSamples(freezerKey) {
-    const sensor = await this.db.collection('sensorMetadata').findOne({ sensorId: freezerKey });
-    if (!sensor?.storageContainer) {
+    const stream = (await currentDatastreamsBySensor(this.db, [freezerKey])).get(String(freezerKey));
+    let freezerContainerId = stream ? await freezerContainerIdOf(this.db, stream.storageLocationId) : null;
+    if (!freezerContainerId) {
+      const sensor = await this.db.collection('sensorMetadata').findOne({ sensorId: freezerKey });
+      freezerContainerId = sensor?.storageContainer || null;
+    }
+    if (!freezerContainerId) {
       return [];
     }
 
-    const boxIds = await this.resolveBoxIdsUnderFreezer(sensor.storageContainer);
+    const boxIds = await this.resolveBoxIdsUnderFreezer(freezerContainerId);
     if (boxIds.length === 0) {
       return [];
     }

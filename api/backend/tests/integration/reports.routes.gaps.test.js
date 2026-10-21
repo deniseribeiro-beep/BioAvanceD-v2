@@ -570,6 +570,33 @@ describe('reports.routes.js gaps', () => {
       expect(response.body.data.statistics.alerts).toBe(1);
     });
 
+    // #1392: the bounds come from the policy of the temperature datastream
+    // valid now; SensorMetadata is the fallback.
+    it('os limiares vêm da política do TelemetryDatastream válido agora, e SensorMetadata vale para um sensor sem datastream (#1392)', async () => {
+      temperatureReport.mockResolvedValue({ rows: [reading('S-DS', -70, '°C', -70), reading('S1', 5, '°C', 5)], total: 2 });
+      const { db } = buildCollectionDb({
+        sensorMetadata: [{ sensorId: 'S-DS', temperaturePolicy: 'pol-1' }, { sensorId: 'S1', temperaturePolicy: 'pol-1' }],
+        temperaturePolicies: [{ _id: 'pol-1', minTemp: 2, maxTemp: 8 }, { _id: 'pol-ultra', minTemp: -90, maxTemp: -60 }],
+        telemetryDatastreams: [{
+          sensorId: 'S-DS',
+          observedProperty: 'temperature',
+          thresholdProfileId: 'pol-ultra',
+          storageLocationId: 'loc-1',
+          validityPeriod: { start: new Date(Date.now() - 60 * 60 * 1000), end: null },
+        }],
+      });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp)
+        .post('/api/reports/temperature/preview')
+        .send({ filters: { criticalAlertsOnly: 'true' } });
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.temperatures[0]).toMatchObject({ sensorId: 'S-DS', minThreshold: -90, maxThreshold: -60 });
+      expect(response.body.data.temperatures[1]).toMatchObject({ sensorId: 'S1', minThreshold: 2, maxThreshold: 8 });
+      expect(response.body.data.statistics.alerts).toBe(0);
+    });
+
     it('statistics average, min e max são em Celsius', async () => {
       temperatureReport.mockResolvedValue({ rows: [reading('S1', 41, '°F', 5), reading('S1', 283.15, 'K', 10)], total: 2 });
       const { db } = buildCollectionDb(POLICY_S1);

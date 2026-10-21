@@ -19,6 +19,7 @@ const { resolveReportGrantScope, allowsReport, allowsReportType, reportIdFilter 
 const { sampleOrganizationScopeClause } = require('../../services/sampleTenancy.service');
 // RF009 AC1 (#1317): required as a module object, so a test spy reaches it.
 const influxTelemetryReadRepository = require('../../infrastructure/persistence/influxdb/InfluxTelemetryReadRepository');
+const { currentDatastreamsBySensor, policiesByProfileId } = require('../../services/sensorDatastream.service');
 
 function normalizeReport(report) {
   return {
@@ -666,9 +667,10 @@ async function handleTemperature(db, filters, handlerOptions = {}) {
   // - scope: an org-scoped caller sees the readings of their organizations'
   //   sensors (a sensor is its organization's, #634, #1071); a caller whose
   //   organizations hold no sensor sees nothing;
-  // - thresholds: the sensor's temperature policy, joined as
-  //   TelemetryMonitor joins it (sensorMetadata.temperaturePolicy), in
-  //   Celsius;
+  // - thresholds: in Celsius, from the TemperaturePolicy that the
+  //   thresholdProfileId of the sensor's temperature datastream valid now
+  //   names (#1392); SensorMetadata.temperaturePolicy is the fallback, for
+  //   an unbound sensor or a profile that names no policy;
   // - the sensor flag: sensors.maintenanceStatus maintenance|error, where the
   //   copy's sensorStatus faulty|maintenance stood.
   // The fakes these handlers are tested with do not apply queries, so each
@@ -698,13 +700,27 @@ async function handleTemperature(db, filters, handlerOptions = {}) {
       ? await db.collection('temperaturePolicies').find({ _id: { $in: metas.map((meta) => meta.temperaturePolicy) } }).toArray()
       : [];
     const policyById = new Map(policies.map((policy) => [String(policy._id), policy]));
-    for (const meta of metas) {
-      const policy = policyById.get(String(meta.temperaturePolicy));
-      if (!policy) continue;
+    const boundsOf = (policy) => {
       const bounds = {};
       if (Number.isFinite(Number(policy.minTemp)) && policy.minTemp !== null) bounds.min = Number(policy.minTemp);
       if (Number.isFinite(Number(policy.maxTemp)) && policy.maxTemp !== null) bounds.max = Number(policy.maxTemp);
-      boundsBySensor.set(String(meta.sensorId), bounds);
+      return bounds;
+    };
+    for (const meta of metas) {
+      const policy = policyById.get(String(meta.temperaturePolicy));
+      if (!policy) continue;
+      boundsBySensor.set(String(meta.sensorId), boundsOf(policy));
+    }
+
+    // #1392: a datastream whose profile names a policy overwrites the
+    // SensorMetadata bounds.
+    const streams = [...(await currentDatastreamsBySensor(db, sensorIds)).values()]
+      .filter((stream) => inScope(stream.sensorId));
+    const streamPolicies = await policiesByProfileId(db, streams.map((stream) => stream.thresholdProfileId));
+    for (const stream of streams) {
+      const policy = stream.thresholdProfileId ? streamPolicies.get(String(stream.thresholdProfileId)) : null;
+      if (!policy) continue;
+      boundsBySensor.set(String(stream.sensorId), boundsOf(policy));
     }
 
     const flaggedStatuses = ['maintenance', 'error'];

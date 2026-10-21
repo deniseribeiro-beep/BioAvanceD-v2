@@ -594,6 +594,67 @@ describe('TelemetryMonitor', () => {
 
         expect(result).toEqual([]);
       });
+
+      // #1392: the temperature datastream valid now is read first.
+      function datastreamFor(sensorId, thresholdProfileId) {
+        return {
+          sensorId,
+          observedProperty: 'temperature',
+          thresholdProfileId,
+          storageLocationId: 'loc-1',
+          validityPeriod: { start: new Date('2026-01-01T00:00:00Z'), end: null }
+        };
+      }
+
+      function withDatastreams(streams) {
+        getCollectionSpy.mockImplementation((db, key) => {
+          if (key === 'telemetryDatastreams') return { find: vi.fn(() => ({ toArray: async () => streams })) };
+          throw new Error(`unexpected getCollection key: ${key}`);
+        });
+      }
+
+      it('takes minimumDuration from the policy of the datastream over the SensorMetadata policy (#1392)', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-01-01T02:00:00Z'));
+
+        withDatastreams([datastreamFor('sensor-D', 'policy-ds')]);
+        const db = buildPolicyDb({
+          sensors: [{ sensorId: 'sensor-D', temperaturePolicy: 'policy-meta' }],
+          policies: [{ _id: 'policy-ds', minimumDuration: 30 }, { _id: 'policy-meta', minimumDuration: 90 }]
+        });
+        const monitor = new TelemetryMonitor({ db, criticalTemp: -80, criticalDurationHours: 2, expectedReadingIntervalMinutes: 15 });
+        monitor.resolveRootSamples = vi.fn().mockResolvedValue([]);
+
+        expect((await monitor.resolveCriticalDurationMinutesBySensor(['sensor-D'])).get('sensor-D')).toBe(30);
+
+        // A 60-minute streak: past the datastream's 30 minutes, short of
+        // SensorMetadata's 90.
+        getInfluxQueryApiSpy.mockReturnValue({
+          collectRows: vi.fn().mockResolvedValue([
+            rowAt('sensor-D', '2026-01-01T01:00:00Z', -70),
+            rowAt('sensor-D', '2026-01-01T01:05:00Z', -65)
+          ])
+        });
+
+        const result = await monitor.findCriticalFreezers();
+
+        expect(result).toHaveLength(1);
+        expect(result[0].freezerKey).toBe('sensor-D');
+      });
+
+      it('falls back to the SensorMetadata policy when the profile of the datastream names no policy (#1392)', async () => {
+        withDatastreams([datastreamFor('sensor-F', 'policy-missing')]);
+        const db = buildPolicyDb({
+          sensors: [{ sensorId: 'sensor-F', temperaturePolicy: 'policy-meta' }],
+          policies: [{ _id: 'policy-meta', minimumDuration: 90 }]
+        });
+        const monitor = new TelemetryMonitor({ db, criticalTemp: -80, criticalDurationHours: 2 });
+
+        const minutes = await monitor.resolveCriticalDurationMinutesBySensor(['sensor-F']);
+
+        expect(minutes.get('sensor-F')).toBe(90);
+        expect(db.sensorMetadata.find).toHaveBeenCalledWith({ sensorId: { $in: ['sensor-F'] } });
+      });
     });
   });
 
@@ -664,9 +725,10 @@ describe('TelemetryMonitor', () => {
       return { find: vi.fn((query) => ({ toArray: async () => docsByFind(query) })) };
     }
 
-    function buildDb({ sensor, shelves = [], racks = [], boxes = [] }) {
+    function buildDb({ sensor, freezers = [], shelves = [], racks = [], boxes = [] }) {
       const sensorMetadata = { findOne: vi.fn().mockResolvedValue(sensor) };
       const storageContainers = fakeCollection((query) => {
+        if (query.containerType === 'FREEZER') return freezers;
         if (query.containerType === 'SHELF') return shelves;
         if (query.containerType === 'RACK') return racks;
         return [];
@@ -733,6 +795,60 @@ describe('TelemetryMonitor', () => {
       expect(db.storageBoxes.find).toHaveBeenCalledWith({ parent_id: { $in: ['rack-1'] } });
       expect(getCollectionSpy).toHaveBeenCalledWith(db, 'samples');
       expect(result).toEqual(['sample-1', 'sample-2']);
+    });
+
+    // #1392: the datastream valid now names a mirrored freezer's location.
+    function withChain({ streams = [], locations = [] } = {}) {
+      getCollectionSpy.mockImplementation((db, key) => {
+        if (key === 'telemetryDatastreams') return { find: vi.fn(() => ({ toArray: async () => streams })) };
+        if (key === 'storageLocations') {
+          return { findOne: vi.fn(async (query) => locations.find((loc) => loc.storageLocationId === query.storageLocationId) || null) };
+        }
+        if (key === 'samples') return { find: vi.fn(() => ({ toArray: async () => [{ _id: 'sample-1' }] })) };
+        throw new Error(`unexpected getCollection key: ${key}`);
+      });
+    }
+
+    const streamAt = (storageLocationId) => ({
+      sensorId: 'sensor-A',
+      observedProperty: 'temperature',
+      storageLocationId,
+      validityPeriod: { start: new Date(Date.now() - 60 * 60 * 1000), end: null }
+    });
+
+    it('walks the freezer that the location of the datastream mirrors, not SensorMetadata.storageContainer (#1392)', async () => {
+      withChain({
+        streams: [streamAt('loc-ds')],
+        locations: [{ storageLocationId: 'loc-ds', code: 'legacy-storage-container:freezer-ds' }]
+      });
+      const db = buildDb({
+        sensor: { sensorId: 'sensor-A', storageContainer: 'freezer-legacy' },
+        freezers: [{ _id: 'freezer-ds', containerType: 'FREEZER' }],
+        shelves: [{ _id: 'shelf-1' }],
+        racks: [{ _id: 'rack-1' }],
+        boxes: [{ _id: 'box-1' }]
+      });
+
+      const result = await new TelemetryMonitor({ db }).resolveRootSamples('sensor-A');
+
+      expect(db.storageContainers.find).toHaveBeenCalledWith({ parent_id: 'freezer-ds', containerType: 'SHELF' });
+      expect(db.storageContainers.find).not.toHaveBeenCalledWith({ parent_id: 'freezer-legacy', containerType: 'SHELF' });
+      expect(result).toEqual(['sample-1']);
+    });
+
+    it('walks SensorMetadata.storageContainer when the sensor has no datastream (#1392)', async () => {
+      withChain({ streams: [] });
+      const db = buildDb({
+        sensor: { sensorId: 'sensor-A', storageContainer: 'freezer-legacy' },
+        shelves: [{ _id: 'shelf-1' }],
+        racks: [{ _id: 'rack-1' }],
+        boxes: [{ _id: 'box-1' }]
+      });
+
+      const result = await new TelemetryMonitor({ db }).resolveRootSamples('sensor-A');
+
+      expect(db.storageContainers.find).toHaveBeenCalledWith({ parent_id: 'freezer-legacy', containerType: 'SHELF' });
+      expect(result).toEqual(['sample-1']);
     });
   });
 

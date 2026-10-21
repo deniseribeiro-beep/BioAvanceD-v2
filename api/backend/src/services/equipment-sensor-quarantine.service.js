@@ -6,6 +6,7 @@ const { ensureStorageContainerIndexes, ensureStorageBoxIndexes } = require('../u
 const quarantineActionService = require('./quarantine-action.service');
 const operationalStateDecisionService = require('./operationalStateDecision.service');
 const logger = require('../utils/logger');
+const { currentDatastreamsBySensor, freezerContainerIdOf } = require('./sensorDatastream.service');
 
 // #883: routine "Maintenance"/"Inactive" states are deliberately excluded
 // here. A sample-bearing freezer taken out of service for routine
@@ -339,6 +340,31 @@ async function findBoxIdsBySensorKey(db, sensorKey, options = {}) {
     }
   } catch (error) {
     logger.warn('[QUARANTINE][COLD_CHAIN] Não foi possível consultar sensorMetadata para incidente', { sensorKey: rawSensorKey, error: error.message });
+  }
+
+  // #1392: the sensor's temperature datastream valid now adds its mirrored
+  // freezer's boxes and its equipment's, to the union above. The lookup
+  // takes no session; it only reads.
+  try {
+    const stream = (await currentDatastreamsBySensor(db, [rawSensorKey])).get(rawSensorKey);
+    if (stream) {
+      const freezerId = await freezerContainerIdOf(db, stream.storageLocationId);
+      if (freezerId) {
+        boxIds.push(...await findBoxIdsUnderFreezer(db, freezerId, options));
+      }
+
+      const freezersFromStream = await resolveFreezersByEquipmentIdentifiers(db, collectIdentifierValues(stream.equipmentId), options);
+      for (const freezer of freezersFromStream) {
+        boxIds.push(...await findBoxIdsUnderFreezer(db, freezer._id, options));
+      }
+
+      const equipment = await findEquipmentByMetadata(db, { equipmentId: stream.equipmentId }, options);
+      if (equipment) {
+        boxIds.push(...await findBoxIdsByEquipment(db, equipment, options));
+      }
+    }
+  } catch (error) {
+    logger.warn('[QUARANTINE][COLD_CHAIN] Não foi possível consultar TelemetryDatastream para incidente', { sensorKey: rawSensorKey, error: error.message });
   }
 
   return dedupeIds(boxIds);

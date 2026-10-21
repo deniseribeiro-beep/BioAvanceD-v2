@@ -272,6 +272,55 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
     expect(collections.samples.updateOne).toHaveBeenCalledTimes(1);
   });
 
+  it('#1392: encontra amostra por TelemetryDatastream -> StorageLocation espelhada -> freezer -> box, sem sensorMetadata', async () => {
+    const collections = {
+      sensors: makeCollection([]),
+      sensorMetadata: makeCollection([]),
+      sampleMovements: makeCollection([]),
+      sample_movements: makeCollection([]),
+      counters: makeCollection([]),
+    };
+    const { freezerId, boxId } = seedStorageHierarchy(collections, undefined);
+    collections.storageLocations = makeCollection([
+      { storageLocationId: 'loc-freezer-004', code: `legacy-storage-container:${String(freezerId)}` },
+    ]);
+    // The matcher has no $lte, so this collection returns its documents
+    // unfiltered; the service filters them again by sensor, property and
+    // validity.
+    collections.telemetryDatastreams = {
+      find: vi.fn(() => makeCursor([{
+        sensorId: 'sensor-freezer-004',
+        observedProperty: 'temperature',
+        equipmentId: 'eq-unregistered',
+        storageLocationId: 'loc-freezer-004',
+        thresholdProfileId: 'pol-1',
+        validityPeriod: { start: new Date(Date.now() - 60 * 60 * 1000), end: null },
+      }])),
+    };
+    collections.samples = makeCollection([{
+      _id: new ObjectId(),
+      sampleID: 'BIO-SAMPLE-004',
+      barcode: 'BC-COLD-004',
+      storageLocation: { boxId, position: 'A1' },
+      status: 'AVAILABLE',
+      currentStatus: 'Available',
+      quantity: 1,
+      unit: 'mL',
+    }]);
+    const db = buildDb(collections);
+
+    const result = await quarantineService.quarantineByColdChainIncident(db, {
+      _id: new ObjectId(),
+      sensorKey: 'sensor-freezer-004',
+      status: 'open',
+      currentTemperature: -40,
+    });
+
+    expect(result.boxIds.map(String)).toEqual([String(boxId)]);
+    expect(result.matched).toBe(1);
+    expect(result.quarantined).toBe(1);
+  });
+
   it('incidente resolvido mantém amostras para revisão e não libera automaticamente', async () => {
     const incidentId = new ObjectId();
     const sampleId = new ObjectId();
