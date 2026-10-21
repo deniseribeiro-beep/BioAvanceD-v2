@@ -10,13 +10,18 @@ const { applyOrganizationScopeFilter } = require('./rbac-assignment.service');
 // scheduler owns missing/stale readings; this module owns the threshold
 // breach.
 const { ALERT_TYPES, resolveActiveAlert, ensureActiveAlert } = require('./alertLifecycle.service');
-const { readingIdentityOf, screenReading, ensureTemperatureIndexes, clientReplayFilterOf } = require('./telemetryReadingContract');
+const { readingIdentityOf, screenReading, findClientReplay, recordClientReplay } = require('./telemetryReadingContract');
 
-// RF009 AC7 (#1317): a replayed reading names its datastream datastreamId
-// (V2E-0546); one stored before that name carries it as
-// telemetryDatastreamId. Its other keys are returned as stored.
-function replayOf(stored) {
-  return { ...stored, datastreamId: stored.datastreamId ?? stored.telemetryDatastreamId ?? null, replayed: true };
+// RF009 AC7 (#1317, #1391): a replay answers the first reading's resultRef
+// from RF029's key store, which holds identifiers and times, never the value.
+function replayOf(resultRef, temperatureData, identity) {
+  return {
+    ...resultRef,
+    sensorId: temperatureData.sensorId ?? temperatureData.sensorID,
+    idempotencyKey: identity.idempotencyKey,
+    idempotencyKeySource: 'client',
+    replayed: true
+  };
 }
 
 // A point carries no organizationId, so an org-scoped caller is scoped to
@@ -72,15 +77,11 @@ class TemperatureService {
       const identity = readingIdentityOf(temperatureData);
       await assertOrganizationIdResolves(db, temperatureData.organizationId);
 
-      const temperaturesCollection = db.collection('temperatures');
-      // RF009 AC7 (#1317): a client key already stored for this sensor is a
-      // replay; it returns the stored reading and writes nothing.
-      const replayFilter = clientReplayFilterOf(identity, temperatureData);
-      if (replayFilter) {
-        await ensureTemperatureIndexes(temperaturesCollection);
-        const stored = await temperaturesCollection.findOne(replayFilter);
-        if (stored) return replayOf(stored);
-      }
+      // RF009 AC7 (#1317, #1391): a client key already recorded for this
+      // sensor in RF029's key store is a replay; it returns the first
+      // reading's resultRef and writes nothing.
+      const prior = await findClientReplay(db, identity, temperatureData);
+      if (prior) return replayOf(prior, temperatureData, identity);
 
       // RF009 AC7 (#1317): a clock drift or an implausible value is recorded
       // as a TelemetryValidationIssue; an implausible value is a 422 with
@@ -112,15 +113,13 @@ class TemperatureService {
       }
       if (notPersisted) throw notPersisted;
 
-      let result;
-      try {
-        result = await temperaturesCollection.insertOne(temperature);
-      } catch (error) {
-        // Two concurrent sends of one key: the unique index lets one in.
-        const stored = replayFilter && error?.code === 11000 ? await temperaturesCollection.findOne(replayFilter) : null;
-        if (stored) return replayOf(stored);
-        throw error;
-      }
+      // RF009 AC7 (#1391): persisted, so the client key now replays this
+      // reading. A concurrent send that recorded the key first wins: this one
+      // stores no copy and answers the winner's reading.
+      const winner = await recordClientReplay(db, identity, temperatureData, temperature.persistedAt);
+      if (winner) return replayOf(winner, temperatureData, identity);
+
+      const result = await db.collection('temperatures').insertOne(temperature);
 
       logger.info('Leitura de temperatura registrada:', { logID: result.insertedId });
 

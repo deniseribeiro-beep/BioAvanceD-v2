@@ -318,7 +318,7 @@ describe('mqtt-telemetry.service', () => {
       const stored = temperatures.insertOne.mock.calls[0][0];
       expect(stored[field] ?? null).not.toEqual(extra[field]);
       expect(stored.idempotencyKeySource).toBe('derived');
-      expect(auditSpy).toHaveBeenCalledWith(storeDb, expect.objectContaining({ status: 'processed', temperatureDataId: 'stored-id' }));
+      expect(auditSpy).toHaveBeenCalledWith(storeDb, expect.objectContaining({ status: 'processed', temperatureDataId: stored.telemetryReadingId }));
     });
 
     it('control: a payload without them, or with a null idempotencyKey, passes neither key on', async () => {

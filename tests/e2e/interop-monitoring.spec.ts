@@ -1416,7 +1416,12 @@ test.describe('Telemetry reading identity and replay (#1317, RF009) — real bac
     expect(replay.status(), await replay.text()).toBe(200);
     const replayed = (await replay.json()).data;
     expect(replayed.telemetryReadingId).toBe(stored.telemetryReadingId);
-    expect(replayed.temperatureValue).toBe(4.5);
+    expect(replayed.replayed).toBe(true);
+    // #1391: the replay answers from the key store, which holds no value, and
+    // InfluxDB still holds the single first point.
+    expect(replayed).not.toHaveProperty('temperatureValue');
+    expect((await queryFreezerReadingIds(sensorId)).map((p) => ({ time: new Date(p.time).toISOString(), id: p.telemetryReadingId })))
+      .toEqual([{ time: timestamp, id: stored.telemetryReadingId }]);
 
     // Control: another key is a new reading, and no device time is unknown.
     const other = await send({ idempotencyKey: `${sensorId}-k2` });

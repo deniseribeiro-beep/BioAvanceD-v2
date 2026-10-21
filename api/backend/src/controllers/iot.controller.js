@@ -305,8 +305,10 @@ async function ingestTelemetry(req, res) {
     // for the retry. `[inference]` a failed lookup or record is logged and the
     // reading goes on, since cold-chain availability wins (the Axis E
     // decision on the audit below). So two concurrent first sends can both be
-    // written: that collection has no unique index, and adding one is out of
-    // this change's scope.
+    // written to InfluxDB; the collection's unique { idempotencyKey, scope }
+    // index ingestion_idempotency_key_scope_unique_v1, which
+    // ensureIdempotencyKeyIndex creates when a key is recorded, keeps one key
+    // row (#1391).
     let replayScope = null;
     if (identity.idempotencyKeySource === 'client') {
       replayScope = `TelemetryReading:${normalizedSensorId}`;

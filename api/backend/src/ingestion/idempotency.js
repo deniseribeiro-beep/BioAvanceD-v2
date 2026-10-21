@@ -11,6 +11,23 @@
  * entity kinds.
  */
 const { CANONICAL_COLLECTIONS } = require('../config/collections');
+const logger = require('../utils/logger');
+
+// V2E-0554 (#1391): an idempotency key is unique in its ingestion scope.
+// Latched per collection name before the await, like the custody indexes: a
+// persistent failure is logged once, and the upsert still runs without it.
+const idempotencyKeyIndexed = new Set();
+async function ensureIdempotencyKeyIndex(db) {
+  const keys = db.collection(CANONICAL_COLLECTIONS.ingestionIdempotencyKeys);
+  const name = keys?.collectionName || CANONICAL_COLLECTIONS.ingestionIdempotencyKeys;
+  if (typeof keys?.createIndex !== 'function' || idempotencyKeyIndexed.has(name)) return;
+  idempotencyKeyIndexed.add(name);
+  try {
+    await keys.createIndex({ idempotencyKey: 1, scope: 1 }, { unique: true, name: 'ingestion_idempotency_key_scope_unique_v1' });
+  } catch (error) {
+    logger.warn(`[INGESTION] Falha ao criar índice de idempotencyKey: ${error.message}`);
+  }
+}
 
 /**
  * Atomically claims (idempotencyKey, scope) via an upsert — the
@@ -83,28 +100,40 @@ async function findCompletedIdempotentResult(db, { idempotencyKey, scope }) {
   return existing ? existing.resultRef : null;
 }
 
-/** Records (idempotencyKey, scope) completed with its resultRef in one upsert; the first record wins and is never overwritten. */
+/**
+ * Records (idempotencyKey, scope) completed with its resultRef in one upsert;
+ * the first record wins and is never overwritten. Returns the first record's
+ * resultRef, so a caller that lost a concurrent race learns the winner's.
+ */
 async function recordCompletedIdempotentResult(db, { idempotencyKey, scope, resultRef = null }) {
   if (!idempotencyKey || !scope) {
     throw new Error('recordCompletedIdempotentResult: idempotencyKey e scope são obrigatórios');
   }
 
+  await ensureIdempotencyKeyIndex(db);
   const keys = db.collection(CANONICAL_COLLECTIONS.ingestionIdempotencyKeys);
   const now = new Date();
-  await keys.updateOne(
-    { idempotencyKey, scope },
-    {
-      $setOnInsert: {
-        idempotencyKey,
-        scope,
-        status: 'completed',
-        resultRef,
-        claimedAt: now,
-        completedAt: now,
+  try {
+    await keys.updateOne(
+      { idempotencyKey, scope },
+      {
+        $setOnInsert: {
+          idempotencyKey,
+          scope,
+          status: 'completed',
+          resultRef,
+          claimedAt: now,
+          completedAt: now,
+        },
       },
-    },
-    { upsert: true },
-  );
+      { upsert: true },
+    );
+  } catch (error) {
+    // Two concurrent upserts of one key: the unique index lets one insert,
+    // and the other reads the winner's record below.
+    if (error?.code !== 11000) throw error;
+  }
+  return (await keys.findOne({ idempotencyKey, scope }))?.resultRef ?? null;
 }
 
 module.exports = {
@@ -112,4 +141,5 @@ module.exports = {
   recordIdempotentResult,
   findCompletedIdempotentResult,
   recordCompletedIdempotentResult,
+  ensureIdempotencyKeyIndex,
 };

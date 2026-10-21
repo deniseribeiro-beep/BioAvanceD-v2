@@ -43,6 +43,7 @@ const TemperatureModel = require('../models/Temperature');
 const TelemetryIngestionEventModel = require('../models/TelemetryIngestionEvent');
 const TelemetryValidationIssueModel = require('../models/TelemetryValidationIssue');
 const logger = require('../utils/logger');
+const { findCompletedIdempotentResult, recordCompletedIdempotentResult } = require('../ingestion/idempotency');
 
 const CLOCK_SKEW_TOLERANCE_MS = 5 * 60 * 1000;
 // RF009 AC7: a temperature outside this range, in Celsius, is not a
@@ -145,36 +146,68 @@ function readingIdentityOf(payload, receivedAt = new Date(), { ingestionService 
   };
 }
 
-// #1317: a client idempotencyKey is unique per sensor. Latched per collection
-// name before the await, like the custody indexes: a persistent failure is
-// logged once, and the replay lookup still runs without it.
-const temperatureIndexed = new Set();
-async function ensureTemperatureIndexes(collection) {
-  const name = collection?.collectionName || 'temperatures';
-  if (typeof collection?.createIndex !== 'function' || temperatureIndexed.has(name)) return;
-  temperatureIndexed.add(name);
+/**
+ * RF009 AC7 (#1317, #1391): the RF029 key-store scope a client key replays
+ * from, or null for a derived key, which never dedupes. It is
+ * `POST /api/iot/telemetry`'s scope for the same sensor, trimmed and as
+ * text, so one client key per sensor replays across the temperature route,
+ * MQTT, the queue and that route, and a numeric 101 and "101" share it
+ * (RULE-024, V2E-0554). The sensor is the one the reading is stored under,
+ * Temperature's `sensorId || sensorID`. `[inference]` the key goes in RF029's
+ * ingestionIdempotencyKeys, not in a reading copy, as that route already
+ * does: InfluxDB has no unique constraint, and the resultRef holds
+ * identifiers and times only, never the value.
+ */
+function clientReplayScopeOf(identity, payload) {
+  if (identity.idempotencyKeySource !== 'client') return null;
+  const sensorId = String(payload.sensorId || payload.sensorID || '').trim();
+  return sensorId ? `TelemetryReading:${sensorId}` : null;
+}
+
+/**
+ * RF009 AC7 (#1391): the resultRef a client key already recorded for this
+ * sensor, or null. `[inference]` a failed lookup is logged and the reading
+ * goes on, since cold-chain availability wins (the ingest audit's Axis E
+ * decision).
+ */
+async function findClientReplay(db, identity, payload) {
+  const scope = clientReplayScopeOf(identity, payload);
+  if (!scope) return null;
   try {
-    await collection.createIndex(
-      { sensorId: 1, idempotencyKey: 1 },
-      { unique: true, name: 'temperatures_client_idempotencyKey_v1', partialFilterExpression: { idempotencyKeySource: 'client' } }
-    );
+    return await findCompletedIdempotentResult(db, { idempotencyKey: identity.idempotencyKey, scope });
   } catch (error) {
-    logger.warn(`[TEMPERATURE] Falha ao criar índice de idempotencyKey: ${error.message}`);
+    logger.error('[ISO20387][TELEMETRY] Falha ao consultar idempotencyKey da telemetria:', error.message || error);
+    return null;
   }
 }
 
 /**
- * RF009 AC7 (#1317): the `temperatures` filter a client key replays from, or
- * null for a derived key, which never dedupes. `[inference]` the temperature
- * route, MQTT and the queue all store into `temperatures` behind its
- * per-sensor unique client-key index, so one client key replays across the
- * three paths: they share one reading contract. The sensorId is the value
- * every path stores (Temperature's `sensorId || sensorID`), uncoerced, since
- * Mongo matches type-strictly: a numeric one stays a number.
+ * RF009 AC7 (#1391): records a persisted reading's client key with
+ * `POST /api/iot/telemetry`'s resultRef. Returns the stored resultRef when
+ * a concurrent send of the same key recorded first (this send then stores
+ * no copy and answers the winner's reading), else null. A failed record is
+ * logged and the reading goes on, as a failed lookup does.
  */
-function clientReplayFilterOf(identity, payload) {
-  if (identity.idempotencyKeySource !== 'client') return null;
-  return { sensorId: payload.sensorId || payload.sensorID, idempotencyKey: identity.idempotencyKey, idempotencyKeySource: 'client' };
+async function recordClientReplay(db, identity, payload, persistedAt) {
+  const scope = clientReplayScopeOf(identity, payload);
+  if (!scope) return null;
+  try {
+    const stored = await recordCompletedIdempotentResult(db, {
+      idempotencyKey: identity.idempotencyKey,
+      scope,
+      resultRef: {
+        telemetryReadingId: identity.telemetryReadingId,
+        observedAt: identity.observedAt,
+        receivedAt: identity.receivedAt,
+        persistedAt,
+        clockStatus: identity.clockStatus,
+      },
+    });
+    return stored && stored.telemetryReadingId !== identity.telemetryReadingId ? stored : null;
+  } catch (error) {
+    logger.error('[ISO20387][TELEMETRY] Falha ao registrar idempotencyKey da telemetria:', error.message || error);
+    return null;
+  }
 }
 
 const CLIENT_TEXT_FIELDS = ['idempotencyKey', 'sourceEventId', 'deviceMessageId', 'traceId'];
@@ -415,8 +448,9 @@ async function screenReading(db, identity, payload = {}) {
 
 module.exports = {
   readingIdentityOf,
-  ensureTemperatureIndexes,
-  clientReplayFilterOf,
+  clientReplayScopeOf,
+  findClientReplay,
+  recordClientReplay,
   clientContractFieldsOf,
   validationIssuesOf,
   screenReading,

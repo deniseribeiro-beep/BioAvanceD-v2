@@ -4,8 +4,8 @@ const influxTelemetryWriteRepository = require('../infrastructure/persistence/in
 const {
   readingIdentityOf,
   screenReading,
-  ensureTemperatureIndexes,
-  clientReplayFilterOf,
+  findClientReplay,
+  recordClientReplay,
   clientContractFieldsOf,
 } = require('./telemetryReadingContract');
 
@@ -183,27 +183,21 @@ class IoTStreamingService {
    */
   async processTemperatureData(db, temperatureData) {
     try {
-      const temperaturesCollection = db.collection('temperatures');
-
       // #1317 (RF009 AC1-AC3): the same reading contract as the temperature
       // route. The fields the server adds are not part of the received
       // payload's hash; InfluxDB is written and confirmed before the Mongo
       // copy, and a failed write throws with nothing stored.
       const { source: _source, createdAt: _createdAt, updatedAt: _updatedAt, ...received } = temperatureData;
       const identity = readingIdentityOf(received, new Date(), { ingestionService: temperatureData.source === 'mqtt' ? 'mqtt' : 'iot-queue' });
-      // RF009 AC7 (#1317): a client key already stored for this sensor is a
-      // replay, as on the temperature route; it returns the stored id and
-      // writes nothing. `[inference]` the queue and MQTT store into the
-      // temperature route's collection and use its per-sensor unique
-      // client-key index, so one key replays across all three paths.
-      const replayFilter = clientReplayFilterOf(identity, received);
-      if (replayFilter) {
-        await ensureTemperatureIndexes(temperaturesCollection);
-        const stored = await temperaturesCollection.findOne(replayFilter);
-        if (stored) {
-          logger.debug(`♻️ Leitura já registrada com este idempotencyKey: ${stored._id}`);
-          return stored._id;
-        }
+      // RF009 AC7 (#1317, #1391): a client key already recorded for this
+      // sensor in RF029's key store is a replay, as on the temperature route;
+      // it returns the first reading's telemetryReadingId and writes nothing.
+      // The scope is the one the temperature route and POST
+      // /api/iot/telemetry use, so one key replays across all four paths.
+      const prior = await findClientReplay(db, identity, received);
+      if (prior) {
+        logger.debug(`♻️ Leitura já registrada com este idempotencyKey: ${prior.telemetryReadingId}`);
+        return prior.telemetryReadingId;
       }
       // RF009 AC7: a drift or an implausible value is recorded as a
       // TelemetryValidationIssue; an implausible value throws a 422 here.
@@ -211,18 +205,16 @@ class IoTStreamingService {
       const reading = { ...temperatureData, ...identity, timestamp: identity.observedAt };
       reading.persistedAt = await influxTelemetryWriteRepository.writeTemperatureReadingNow(reading);
 
-      let result;
-      try {
-        result = await temperaturesCollection.insertOne(reading);
-      } catch (error) {
-        // Two concurrent sends of one key: the unique index lets one in.
-        const winner = replayFilter && error?.code === 11000 ? await temperaturesCollection.findOne(replayFilter) : null;
-        if (winner) return winner._id;
-        throw error;
-      }
+      // RF009 AC7 (#1391): a concurrent send that recorded the key first
+      // wins; this one stores no copy and returns the winner's id.
+      const winner = await recordClientReplay(db, identity, received, reading.persistedAt);
+      if (winner) return winner.telemetryReadingId;
+
+      const result = await db.collection('temperatures').insertOne(reading);
 
       logger.debug(`✅ Dados de temperatura processados: ${result.insertedId}`);
-      return result.insertedId;
+      // #1391: the reading's id, never the Mongo copy's _id.
+      return identity.telemetryReadingId;
     } catch (error) {
       logger.error('Erro ao processar dados de temperatura:', error);
       throw error;
