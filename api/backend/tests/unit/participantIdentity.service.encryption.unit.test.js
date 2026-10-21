@@ -20,7 +20,7 @@ function makeFakeDb(collectionsByName = {}) {
 }
 
 describe('ParticipantIdentityService.getEncryptedFieldMap', () => {
-  it('returns map for the three civil-identity fields plus the contact and the representative (RF005/RNF007, dict-07 row 1, #566, #1166, #1168)', () => {
+  it('returns map for the three civil-identity fields plus the contact, the representative and the record number (RF005/RNF007, dict-07 row 1, #566, #1166, #1168, #1386)', () => {
     const map = participantIdentityService.getEncryptedFieldMap();
     expect(map).toEqual({
       patientName: 'patientNameCiphertext',
@@ -31,18 +31,20 @@ describe('ParticipantIdentityService.getEncryptedFieldMap', () => {
       representativeName: 'representativeNameCiphertext',
       representativeEmail: 'representativeEmailCiphertext',
       representativeIdentityDocument: 'representativeIdentityDocumentCiphertext',
-      representativePhone: 'representativePhoneCiphertext'
+      representativePhone: 'representativePhoneCiphertext',
+      recordNumber: 'recordNumberCiphertext'
     });
   });
 });
 
 describe('ParticipantIdentityService.getHashFieldMap', () => {
-  it('returns map for the fields queried by exact/range match (RF005/RNF007, #574, #1104) plus phone uniqueness (#1166)', () => {
+  it('returns map for the fields queried by exact/range match (RF005/RNF007, #574, #1104, #1386) plus phone uniqueness (#1166)', () => {
     expect(participantIdentityService.getHashFieldMap()).toEqual({
       patientName: 'patientNameHash',
       identityDocument: 'identityDocumentHash',
       birthDate: 'birthDateHash',
-      phone: 'phoneHash'
+      phone: 'phoneHash',
+      recordNumber: 'recordNumberHash'
     });
   });
 });

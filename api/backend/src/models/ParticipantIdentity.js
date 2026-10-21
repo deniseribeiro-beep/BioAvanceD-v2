@@ -16,6 +16,13 @@ class ParticipantIdentityModel {
   // are the plaintext input encryptIdentityFields enciphers into them and then
   // nulls. Every caller passes this through it, which fills the ciphertext
   // whenever there is a value to encipher.
+  //
+  // #1386: P1X-0355 is declared under its ciphertext name too,
+  // recordNumberCiphertext; recordNumber is the plaintext input
+  // encryptIdentityFields enciphers and then nulls. create() leaves both keys
+  // out when there is no number, so only a writer that set or cleared the
+  // number makes it present, and a reader falls back to a legacy
+  // patients.recordNumber only where it is absent.
   static fieldsOf(data = {}) {
     return {
       participantIdentityId: null,
@@ -31,6 +38,10 @@ class ParticipantIdentityModel {
       representativeIdentityDocument: data.representativeIdentityDocument || null,
       representativeIdentityDocumentCiphertext: null,
       representativePhone: data.representativePhone || null,
+      recordNumber: data.recordNumber !== undefined && data.recordNumber !== null && String(data.recordNumber).trim() !== ''
+        ? String(data.recordNumber).trim()
+        : null,
+      recordNumberCiphertext: null,
       identityStatus: 'active',
       encryptionKeyVersion: null,
     };
@@ -46,6 +57,10 @@ class ParticipantIdentityModel {
     const fields = this.fieldsOf(data);
     if (!fields.participantId) {
       throw new Error('participantId é obrigatório para ParticipantIdentity');
+    }
+    if (fields.recordNumber === null) {
+      delete fields.recordNumber;
+      delete fields.recordNumberCiphertext;
     }
     const now = new Date();
     return { ...fields, ...this.onInsertFields(), createdAt: now, updatedAt: now };

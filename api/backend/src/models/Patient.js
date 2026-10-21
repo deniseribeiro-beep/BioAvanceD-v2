@@ -7,7 +7,9 @@
 // #1166 slice 4: 'email' and 'phone' stay on this list as accepted, validated
 // INPUT only. create() no longer emits them: the contact is written to
 // ParticipantIdentity alone (dict-02 P1X-0352/P1X-0353). #1168: likewise the
-// four representative* fields (dict-02 P1X-0357..0360).
+// four representative* fields (dict-02 P1X-0357..0360). #1386: and
+// 'recordNumber', the hospital record number (dict-02 P1X-0355), which is
+// stored enciphered on ParticipantIdentity as recordNumberCiphertext.
 const CANONICAL_FIELDS = [
   'participantId','sex','email','phone','recordNumber','clinicalUnitId','clinicalUnit','unitAcronym','isDeceased','representativeName','representativeEmail','representativeIdentityDocument','representativePhone','consentTemplateId','status','consentTokenHash','consentTokenCreatedAt','consentTokenExpiresAt','consentNotifiedAt','consentAcceptedAt','createdAt','updatedAt','anamneseGeral','dadosEspecificos','studyId'
 ];
@@ -68,7 +70,6 @@ class ParticipantModel {
     const normalized = {
       participantId: String(data.participantId || '').trim(),
       sex: String(data.sex || '').trim(),
-      recordNumber: data.recordNumber ? String(data.recordNumber).trim() : null,
       clinicalUnitId: data.clinicalUnitId || null,
       clinicalUnit: data.clinicalUnit || null,
       unitAcronym: data.unitAcronym || null,

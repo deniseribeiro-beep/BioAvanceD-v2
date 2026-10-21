@@ -268,6 +268,13 @@ describe('PatientModel.create', () => {
     expect(() => PatientModel.create({ ...baseData, representativeEmail: 'bad-email' })).toThrow('representativeEmail inválido');
   });
 
+  // #1386: the hospital record number is identity data too (dict-02
+  // P1X-0355, ParticipantIdentity only, as recordNumberCiphertext).
+  it('#1386: does not emit recordNumber, given one or not', () => {
+    expect(PatientModel.create({ ...baseData, recordNumber: 'PRONT-1' })).not.toHaveProperty('recordNumber');
+    expect(PatientModel.create(baseData)).not.toHaveProperty('recordNumber');
+  });
+
   it('defaults status to PENDING_CONSENT', () => {
     const result = PatientModel.create(baseData);
     expect(result.status).toBe('PENDING_CONSENT');
@@ -299,7 +306,6 @@ describe('PatientModel.create', () => {
 
   it('defaults optional fields to null when absent', () => {
     const result = PatientModel.create(baseData);
-    expect(result.recordNumber).toBeNull();
     expect(result.clinicalUnitId).toBeNull();
     expect(result.clinicalUnit).toBeNull();
     expect(result.unitAcronym).toBeNull();

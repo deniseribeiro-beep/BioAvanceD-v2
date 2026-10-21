@@ -74,6 +74,14 @@ class ParticipantIdentityService {
       doc.identityDocument = canonicalDocument;
     }
 
+    // #1386: the same for recordNumber, so an import's numeric 4512 is
+    // stored and hashed as '4512'. Only where the caller passed it: a key
+    // added here would mark the number present (cleared) on a record whose
+    // update never touched it.
+    if (Object.prototype.hasOwnProperty.call(doc, 'recordNumber')) {
+      doc.recordNumber = this.normalizeRecordNumber(doc.recordNumber);
+    }
+
     const encryptedFieldMap = this.getEncryptedFieldMap();
     let keyVersion = null;
     // #1104: which fields THIS call actually enciphered. Tracked rather than
@@ -152,7 +160,9 @@ class ParticipantIdentityService {
   // $or plaintext arms became hash-only. #1166 slice 4: email and phone have
   // no plaintext query anywhere (phone uniqueness is phoneHash), and every
   // reader decrypts. #1168: nor do the representative fields, whose one
-  // reader (updatePatient) decrypts.
+  // reader (updatePatient) decrypts. #1386: recordNumber (P1X-0355) is
+  // matched only on recordNumberHash, and its one reader (by-barcode)
+  // decrypts.
   getCiphertextOnlyFields() {
     return [
       'patientName',
@@ -163,7 +173,8 @@ class ParticipantIdentityService {
       'representativeName',
       'representativeEmail',
       'representativeIdentityDocument',
-      'representativePhone'
+      'representativePhone',
+      'recordNumber'
     ];
   }
 
@@ -172,13 +183,39 @@ class ParticipantIdentityService {
   // #1104: patientNameHash serves listPatients' name filter, which is an
   // EXACT match on the normalized full name -- a blind index cannot serve a
   // substring search, and no screen sent that filter.
+  // #1386: recordNumberHash serves the record-number matchers (conflict
+  // check, search, import and batch linkage), each an exact match.
   getHashFieldMap() {
     return {
       patientName: 'patientNameHash',
       identityDocument: 'identityDocumentHash',
       birthDate: 'birthDateHash',
-      phone: 'phoneHash'
+      phone: 'phoneHash',
+      recordNumber: 'recordNumberHash'
     };
+  }
+
+  // #1386: the one canonical spelling of a hospital record number -- the
+  // trimmed string, or null when nothing is left. patient.service.js
+  // #normalizeRecordNumber delegates here.
+  normalizeRecordNumber(value) {
+    if (value === null || value === undefined) return null;
+    const normalized = String(value).trim();
+    return normalized || null;
+  }
+
+  // #1386: the participantIdentities filter for a record number, matched on
+  // recordNumberHash under every registered key (#1099), or on the plaintext
+  // on a keyless stack (#1083). null when the number normalizes to nothing:
+  // `{ recordNumber: null }` would match every identity, whose plaintext
+  // encryptIdentityFields nulls, so a blank number must run no query at all.
+  recordNumberIdentityQuery(value) {
+    const normalized = this.normalizeRecordNumber(value);
+    if (normalized === null) return null;
+    const recordNumberHashes = this.computeBlindIndexCandidates('recordNumber', normalized);
+    return recordNumberHashes.length
+      ? { recordNumberHash: { $in: recordNumberHashes } }
+      : { recordNumber: normalized };
   }
 
   // #1109: the one canonical spelling of identityDocument -- digits only.
@@ -230,6 +267,10 @@ class ParticipantIdentityService {
     if (field === 'phone') {
       const digits = String(value).replace(/\D/g, '');
       return digits || null;
+    }
+
+    if (field === 'recordNumber') {
+      return this.normalizeRecordNumber(value);
     }
 
     if (field === 'birthDate') {

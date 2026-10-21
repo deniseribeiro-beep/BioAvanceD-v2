@@ -26,9 +26,17 @@ const PARTICIPANT_REPRESENTATIVE_FIELDS = [
   'representativePhone',
 ];
 
+// #1386: and the hospital record number (dict-02 P1X-0355,
+// ParticipantIdentity only, as recordNumberCiphertext).
+const PARTICIPANT_RECORD_FIELDS = ['recordNumber'];
+
 // Every field PatientModel accepts as input but that lives on
 // ParticipantIdentity alone.
-const PARTICIPANT_IDENTITY_ONLY_FIELDS = [...PARTICIPANT_CONTACT_FIELDS, ...PARTICIPANT_REPRESENTATIVE_FIELDS];
+const PARTICIPANT_IDENTITY_ONLY_FIELDS = [
+  ...PARTICIPANT_CONTACT_FIELDS,
+  ...PARTICIPANT_REPRESENTATIVE_FIELDS,
+  ...PARTICIPANT_RECORD_FIELDS,
+];
 
 function omitParticipantIdentityOnlyFields(data = {}) {
   const result = { ...data };
@@ -41,6 +49,7 @@ module.exports = {
   omitLegacyIdentityFields,
   PARTICIPANT_CONTACT_FIELDS,
   PARTICIPANT_REPRESENTATIVE_FIELDS,
+  PARTICIPANT_RECORD_FIELDS,
   PARTICIPANT_IDENTITY_ONLY_FIELDS,
   omitParticipantIdentityOnlyFields,
 };

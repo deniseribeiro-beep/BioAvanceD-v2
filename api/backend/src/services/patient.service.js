@@ -404,10 +404,10 @@ class PatientService {
     return participantIdentityService.normalizeIdentityDocument(identityDocument);
   }
 
+  // #1386: delegates, as normalizeidentityDocument does, so the matchers and
+  // the identity writer canonicalize the record number alike.
   normalizeRecordNumber(recordNumber) {
-    if (recordNumber === undefined || recordNumber === null) return null;
-    const normalized = String(recordNumber).trim();
-    return normalized || null;
+    return participantIdentityService.normalizeRecordNumber(recordNumber);
   }
 
   async checkIdentifierConflict(db, patientData) {
@@ -415,8 +415,9 @@ class PatientService {
     const normalizedRecordNumber = this.normalizeRecordNumber(patientData?.recordNumber);
 
     // RF005/RNF007 (#561): identityDocument is civil identity — resolved via
-    // ParticipantIdentity, not Patient. recordNumber is a hospital record
-    // number, not civil identity, so it stays checked against Patient.
+    // ParticipantIdentity, not Patient. #1386: so is recordNumber now
+    // (P1X-0355, recordNumberHash); the legacy patients.recordNumber is still
+    // checked until the migration has moved every number off Patient.
     if (normalizedidentityDocument) {
       const identityCollection = await this.getIdentityCollection(db);
       // RF005/RNF007 (#1104): fifth participantIdentities matching site. Was a
@@ -440,6 +441,15 @@ class PatientService {
     }
 
     if (normalizedRecordNumber) {
+      // #1386: the identity holding this number (P1X-0355) first.
+      const recordNumberQuery = participantIdentityService.recordNumberIdentityQuery(normalizedRecordNumber);
+      const existingIdentity = recordNumberQuery
+        ? await (await this.getIdentityCollection(db)).findOne(recordNumberQuery)
+        : null;
+      if (existingIdentity) {
+        return { field: 'recordNumber', value: normalizedRecordNumber, existing: existingIdentity };
+      }
+
       const patientsCollection = await this.getPatientsCollection(db);
       const existingPatient = await patientsCollection.findOne({ recordNumber: normalizedRecordNumber });
       if (existingPatient) {
@@ -923,6 +933,20 @@ class PatientService {
         }
       }
 
+      // #1386: a number moved to ParticipantIdentity (P1X-0355) is matched on
+      // recordNumberHash, so this arm is an EXACT match on the normalized
+      // number -- a blind index cannot serve a substring search, the #1104
+      // precedent for patientName. The two recordNumber arms above serve the
+      // legacy patients.recordNumber until the migration has moved every
+      // number.
+      const recordNumberQuery = participantIdentityService.recordNumberIdentityQuery(term);
+      const recordNumberIdentities = recordNumberQuery
+        ? await (await this.getIdentityCollection(db)).find(recordNumberQuery).toArray()
+        : [];
+      if (recordNumberIdentities.length > 0) {
+        query.$or.push({ participantId: { $in: recordNumberIdentities.map((identity) => identity.participantId) } });
+      }
+
       // Busca por unidade clínica
       query.$or.push({ clinicalUnit: { $regex: term, $options: 'i' } });
 
@@ -1125,9 +1149,16 @@ class PatientService {
         await this.assertPhoneAvailable(db, patientsCollection, query, identityOnlyFieldsFromUpdate.phone);
       }
 
+      // #1386: the record number now lives on ParticipantIdentity alone, so
+      // an update that carries it also removes the stale Patient copy.
       const result = await patientsCollection.updateOne(
         query,
-        { $set: updateData }
+        {
+          $set: updateData,
+          ...(Object.prototype.hasOwnProperty.call(identityOnlyFieldsFromUpdate, 'recordNumber')
+            ? { $unset: { recordNumber: '' } }
+            : {}),
+        }
       );
 
       if (result.matchedCount === 0) {
@@ -1160,6 +1191,11 @@ class PatientService {
         }
         if (Object.prototype.hasOwnProperty.call(identityFieldsFromUpdate, 'identityDocument')) {
           identityUpdate.identityDocument = identityFieldsFromUpdate.identityDocument;
+        }
+        // #1386: canonicalized here, so a whitespace-only number is a clear
+        // below and its old ciphertext and hash go with it.
+        if (Object.prototype.hasOwnProperty.call(identityUpdate, 'recordNumber')) {
+          identityUpdate.recordNumber = participantIdentityService.normalizeRecordNumber(identityUpdate.recordNumber);
         }
 
         // RF005/RNF007 (#1104, #1109): this sync is a participantIdentities

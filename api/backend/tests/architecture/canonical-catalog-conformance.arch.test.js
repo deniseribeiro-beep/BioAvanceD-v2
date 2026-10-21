@@ -144,7 +144,6 @@ const KNOWN_DRIFT = {
   },
   ParticipantIdentity: {
     absent: [
-      { elementId: 'P1X-0355', field: 'recordNumberCiphertext', note: 'TODO(#1330): 0..1 Condicional -- not emitted.' },
       { elementId: 'P1X-0356', field: 'clinicalUnitId', note: 'Deliberate absence: 0..1 Condicional -- the clinical unit is Patient.clinicalUnitId, the tenancy key patient routes scope on; a copy here would go stale at a reparent. See docs/decisions/2026-10-17-participant-identity-names-and-fields.md.' },
       { elementId: 'P1X-0363', field: 'lastVerifiedAt', note: 'Deliberate absence: 0..1 Condicional -- its condition never holds: no flow verifies an identity, and re-identification only reads and audits it. See docs/decisions/2026-10-17-participant-identity-names-and-fields.md.' },
       { elementId: 'P1X-0364', field: 'verifiedBy', note: 'Deliberate absence: 0..1 Condicional -- its condition never holds: no flow verifies an identity, and no Actor entity exists to reference. See docs/decisions/2026-10-17-participant-identity-names-and-fields.md.' }
@@ -157,6 +156,10 @@ const KNOWN_DRIFT = {
       {
         key: 'representativeIdentityDocument',
         note: 'Deliberate: the plaintext input that encryptIdentityFields enciphers into representativeIdentityDocumentCiphertext (P1X-0359) and then nulls, so no stored record holds a value here. See docs/decisions/2026-10-17-participant-identity-names-and-fields.md, item 5.'
+      },
+      {
+        key: 'recordNumber',
+        note: 'Deliberate: the plaintext input that encryptIdentityFields enciphers into recordNumberCiphertext (P1X-0355) and then nulls, so no stored record holds a value here. See docs/decisions/2026-10-17-participant-identity-names-and-fields.md, item 6.'
       }
     ]
   },

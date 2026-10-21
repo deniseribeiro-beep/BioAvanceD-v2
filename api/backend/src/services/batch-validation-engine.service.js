@@ -8,6 +8,7 @@ const { ObjectId } = require('mongodb');
 const StagingImport = require('./stagingImport.store');
 const importLGPDService = require('./import-lgpd.service');
 const patientService = require('./patient.service');
+const participantIdentityService = require('./participantIdentity.service');
 const sampleService = require('./sample.service');
 const biomarkerObservationService = require('./biomarker-observation.service');
 const logger = require('../utils/logger');
@@ -542,11 +543,32 @@ class BatchValidationEngine {
     return criteria;
   }
 
+  // #1386: a blank number runs no identity query.
+  async findPatientByIdentityRecordNumber(db, patientsCollection, recordNumber) {
+    const recordNumberQuery = participantIdentityService.recordNumberIdentityQuery(recordNumber);
+    if (!recordNumberQuery) return null;
+    const identity = await db.collection('participantIdentities').findOne(recordNumberQuery);
+    return identity ? patientsCollection.findOne({ participantId: identity.participantId }) : null;
+  }
+
   async findLinkedPatient(db, rawRow = {}, patientData = {}) {
     const patientsCollection = db.collection('patients');
     const criteria = this.buildPatientLinkageQuery(rawRow, patientData);
 
+    let identityRecordNumberTried = false;
     for (const filter of criteria) {
+      // #1386: a record number moved to ParticipantIdentity (P1X-0355) is
+      // matched on recordNumberHash once, ahead of the legacy
+      // patients.recordNumber criteria.
+      if (!identityRecordNumberTried && Object.prototype.hasOwnProperty.call(filter, 'recordNumber')) {
+        identityRecordNumberTried = true;
+        // eslint-disable-next-line no-await-in-loop
+        const identityLinked = await this.findPatientByIdentityRecordNumber(db, patientsCollection, filter.recordNumber);
+        if (identityLinked) {
+          return identityLinked;
+        }
+      }
+
       // Prioriza a igualdade exata para manter o record linkage previsível.
       // A ordem dos critérios é significativa: patientID, CPF, prontuário e, por fim, _id.
       // eslint-disable-next-line no-await-in-loop

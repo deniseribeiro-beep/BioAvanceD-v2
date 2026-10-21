@@ -33,12 +33,12 @@ describe('#1102 ensureParticipantIdentityIndexes', () => {
     vi.restoreAllMocks();
   });
 
-  it('creates exactly the three blind-index siblings, participantId, and the phoneHash unique index', async () => {
+  it('creates exactly the four blind-index siblings, participantId, and the phoneHash unique index', async () => {
     const collection = makeCollection();
 
     await ensureParticipantIdentityIndexes(collection);
 
-    expect(collection.createIndex).toHaveBeenCalledTimes(5);
+    expect(collection.createIndex).toHaveBeenCalledTimes(6);
     const byName = Object.fromEntries(
       collection.createIndex.mock.calls.map(([keys, options]) => [options.name, keys])
     );
@@ -47,6 +47,8 @@ describe('#1102 ensureParticipantIdentityIndexes', () => {
       // #1104: listPatients' exact name filter.
       participant_identities_patient_name_hash_idx_v1: { patientNameHash: 1 },
       participant_identities_birth_date_hash_idx_v1: { birthDateHash: 1 },
+      // #1386: the record-number matchers (P1X-0355).
+      participant_identities_record_number_hash_idx_v1: { recordNumberHash: 1 },
       participant_identities_participant_id_idx_v1: { participantId: 1 },
       participant_identities_phone_hash_unique_v1: { phoneHash: 1 }
     });
@@ -59,13 +61,13 @@ describe('#1102 ensureParticipantIdentityIndexes', () => {
   // storageContainers.containerID) there is no collision for a partial
   // filter to avoid, so one would only risk the planner declining the index
   // and leaving the very scans this removes.
-  it('creates the four lookup indexes NON-unique and with no partial filter', async () => {
+  it('creates the five lookup indexes NON-unique and with no partial filter', async () => {
     const collection = makeCollection();
 
     await ensureParticipantIdentityIndexes(collection);
 
     const lookupCalls = collection.createIndex.mock.calls.filter(([keys]) => !keys.phoneHash);
-    expect(lookupCalls).toHaveLength(4);
+    expect(lookupCalls).toHaveLength(5);
     for (const [, options] of lookupCalls) {
       expect(options.unique).toBeUndefined();
       expect(options.sparse).toBeUndefined();
@@ -107,7 +109,7 @@ describe('#1102 ensureParticipantIdentityIndexes', () => {
 
     ensureParticipantIdentityIndexes(collection);
 
-    expect(collection.createIndex).toHaveBeenCalledTimes(5);
+    expect(collection.createIndex).toHaveBeenCalledTimes(6);
   });
 
   // One catch PER index, per docs/historical/create-db.js:119 (#1027): a single failure must
@@ -123,7 +125,7 @@ describe('#1102 ensureParticipantIdentityIndexes', () => {
 
     await expect(ensureParticipantIdentityIndexes(collection)).resolves.toBeUndefined();
 
-    expect(collection.createIndex).toHaveBeenCalledTimes(5);
+    expect(collection.createIndex).toHaveBeenCalledTimes(6);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0][0]).toContain('participant_identities_birth_date_hash_idx_v1');
     expect(warn.mock.calls[0][0]).toContain('#1102');
@@ -158,7 +160,8 @@ describe('#1102 collectionResolver wiring', () => {
     // collection (eConsent.js:131, consent.service.js:552,
     // patient.service.js:588, getIdentityByParticipantId) queries by.
     // #1166: plus the phoneHash unique index. #1104: plus patientNameHash.
-    expect(collection.createIndex).toHaveBeenCalledTimes(5);
+    // #1386: plus recordNumberHash.
+    expect(collection.createIndex).toHaveBeenCalledTimes(6);
 
     // ...and not one more on the next two, which is the latch. Asserting
     // only the total after three resolutions would not discriminate: 3 is
@@ -166,7 +169,7 @@ describe('#1102 collectionResolver wiring', () => {
     getCollection(db, 'participantIdentities');
     getCollection(db, 'participantIdentities');
 
-    expect(collection.createIndex).toHaveBeenCalledTimes(5);
+    expect(collection.createIndex).toHaveBeenCalledTimes(6);
   });
 
   // CONTROL (#695): same expectation before and after the fix, so a red here

@@ -113,6 +113,8 @@ const PARTICIPANT_IDENTITY_INDEXES = [
   [{ identityDocumentHash: 1 }, { name: 'participant_identities_identity_document_hash_idx_v1' }],
   [{ patientNameHash: 1 }, { name: 'participant_identities_patient_name_hash_idx_v1' }],
   [{ birthDateHash: 1 }, { name: 'participant_identities_birth_date_hash_idx_v1' }],
+  // #1386: P1X-0355's matchers; not unique, the create-time conflict check is.
+  [{ recordNumberHash: 1 }, { name: 'participant_identities_record_number_hash_idx_v1' }],
   [{ participantId: 1 }, { name: 'participant_identities_participant_id_idx_v1' }],
   [
     { phoneHash: 1 },

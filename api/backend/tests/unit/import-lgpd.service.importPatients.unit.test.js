@@ -24,6 +24,7 @@ const service = require('../../src/services/import-lgpd.service');
 const notificationService = require('../../src/services/notification.service');
 const patientService = require('../../src/services/patient.service');
 const PatientModel = require('../../src/models/Patient');
+const participantIdentityService = require('../../src/services/participantIdentity.service');
 const { hashConsentToken } = require('../../src/utils/consentTokenHash');
 
 const VALID_ROW = {
@@ -310,10 +311,14 @@ describe('ImportLGPDService.importPatients', () => {
     expect(result.errors[0].errors[0]).toMatch(/Sexo .* obrigatório/);
   });
 
-  // Pinned to current behavior: PatientModel.create() always stringifies
-  // recordNumber (`String(data.recordNumber).trim()`), regardless of what
-  // type importPatients parsed it to upstream — so a numeric-string input
-  // round-trips back to a string, not a number.
+  // #1386: the record number is stored on ParticipantIdentity alone
+  // (P1X-0355), as a string whatever type importPatients parsed it to
+  // upstream, so a numeric-string input round-trips back to a string. A
+  // blanked one leaves the identity with no number at all.
+  const insertedRecordNumbers = () => participantIdentitiesCollection.insertOne.mock.calls.map(
+    ([identity]) => participantIdentityService.decryptIdentity(identity).recordNumber
+  );
+
   it('normalizes a numeric-string recordNumber to a string, and blanks an empty/placeholder one to null', async () => {
     vi.spyOn(service, 'readFile').mockResolvedValue([
       { ...VALID_ROW, recordNumber: '123' },
@@ -322,9 +327,11 @@ describe('ImportLGPDService.importPatients', () => {
     const result = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' });
 
     expect(result.success).toBe(2);
-    const [first, second] = patientsCollection.insertOne.mock.calls;
-    expect(first[0].recordNumber).toBe('123');
-    expect(second[0].recordNumber).toBeNull();
+    for (const [patient] of patientsCollection.insertOne.mock.calls) {
+      expect(patient).not.toHaveProperty('recordNumber');
+    }
+    expect(insertedRecordNumbers()).toEqual(['123', undefined]);
+    expect(participantIdentitiesCollection.insertOne.mock.calls[1][0]).not.toHaveProperty('recordNumberCiphertext');
   });
 
   it('blanks "undefined" and "NaN" placeholder recordNumber strings to null (same branch as the "null" placeholder)', async () => {
@@ -335,9 +342,10 @@ describe('ImportLGPDService.importPatients', () => {
     const result = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' });
 
     expect(result.success).toBe(2);
-    const [first, second] = patientsCollection.insertOne.mock.calls;
-    expect(first[0].recordNumber).toBeNull();
-    expect(second[0].recordNumber).toBeNull();
+    expect(insertedRecordNumbers()).toEqual([undefined, undefined]);
+    for (const [identity] of participantIdentitiesCollection.insertOne.mock.calls) {
+      expect(identity).not.toHaveProperty('recordNumberCiphertext');
+    }
   });
 
   it('keeps a non-numeric recordNumber string as-is', async () => {
@@ -345,7 +353,8 @@ describe('ImportLGPDService.importPatients', () => {
     const result = await service.importPatients(db, { path: '/x.csv', originalname: 'x.csv' });
 
     expect(result.success).toBe(1);
-    expect(patientsCollection.insertOne.mock.calls[0][0].recordNumber).toBe('ABC-1');
+    expect(patientsCollection.insertOne.mock.calls[0][0]).not.toHaveProperty('recordNumber');
+    expect(insertedRecordNumbers()).toEqual(['ABC-1']);
   });
 
   // #1353: the tenancy key the scoped participant readers filter on.

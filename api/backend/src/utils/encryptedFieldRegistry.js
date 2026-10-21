@@ -51,6 +51,9 @@ const ENCRYPTED_FIELD_REGISTRY = [
       representativeEmail: 'representativeEmailCiphertext',
       representativeIdentityDocument: 'representativeIdentityDocumentCiphertext',
       representativePhone: 'representativePhoneCiphertext',
+      // #1386, dict-02 P1X-0355: moved off the Patient document, so its legacy
+      // home is patients.recordNumber, not an old ciphertext name here.
+      recordNumber: 'recordNumberCiphertext',
     },
     legacyFields: {
       patientName: 'patientNameEncrypted',
