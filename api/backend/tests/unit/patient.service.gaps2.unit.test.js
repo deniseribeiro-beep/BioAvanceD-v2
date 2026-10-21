@@ -7,6 +7,7 @@ process.env.ENCRYPTION_KEY = 'dGVzdGtleXRlc3RrZXl0ZXN0a2V5dGVzdGtleXQ=';
 process.env.ENCRYPTION_KEY_ID = 'test-key-1';
 
 const patientService = require('../../src/services/patient.service');
+const logger = require('../../src/utils/logger');
 const { ObjectId } = require('mongodb');
 
 function makeFakeCollection(overrides = {}) {
@@ -152,19 +153,21 @@ describe('PatientService.ensurePatientIndexes', () => {
 
   // RF005/RNF007 (#575): patients_name_document_text_v1/patients_name_idx_v1
   // are dropped, not created. #1166 slice 4: so is the phone index, whose
-  // column is gone -- only the recordNumber index is createIndex'd now.
-  it('creates the one remaining index, drops the four legacy names, and memoizes so a second call is a no-op', async () => {
+  // column is gone. #1386: and the recordNumber index, whose arms are gone,
+  // so no index is createIndex'd now.
+  it('creates no index, drops the five legacy names, and memoizes so a second call is a no-op', async () => {
     const collection = makeFakeCollection();
     const collectionName = `patients_test_${Date.now()}`;
 
     await patientService.ensurePatientIndexes(collection, collectionName);
-    expect(collection.createIndex).toHaveBeenCalledTimes(1);
+    expect(collection.createIndex).not.toHaveBeenCalled();
     expect(collection.dropIndex).toHaveBeenCalledWith('patients_name_document_text_v1');
     expect(collection.dropIndex).toHaveBeenCalledWith('patients_name_idx_v1');
+    expect(collection.dropIndex).toHaveBeenCalledWith('patients_record_number_idx_v1');
 
     await patientService.ensurePatientIndexes(collection, collectionName);
-    expect(collection.createIndex).toHaveBeenCalledTimes(1);
-    expect(collection.dropIndex).toHaveBeenCalledTimes(4);
+    expect(collection.createIndex).not.toHaveBeenCalled();
+    expect(collection.dropIndex).toHaveBeenCalledTimes(5);
   });
 
   // #1165: the v1 spec filtered on `{ $type: 'string', $ne: '' }`, and `$ne`
@@ -196,14 +199,23 @@ describe('PatientService.ensurePatientIndexes', () => {
     expect(collection.dropIndex).toHaveBeenCalledWith('patients_phone_unique_sanitized_v1');
   });
 
-  it('logs a warning and continues when an index creation fails', async () => {
+  it('logs a warning and continues when a legacy index drop fails with anything but IndexNotFound', async () => {
+    const dropError = new Error('not authorized');
     const collection = makeFakeCollection({
-      createIndex: vi.fn().mockRejectedValue(new Error('index conflict'))
+      dropIndex: vi.fn()
+        .mockResolvedValue(undefined)
+        .mockRejectedValueOnce(dropError)
     });
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
     const collectionName = `patients_test_fail_${Date.now()}`;
 
-    await expect(patientService.ensurePatientIndexes(collection, collectionName)).resolves.toBeUndefined();
-    expect(collection.createIndex).toHaveBeenCalledTimes(1);
+    try {
+      await expect(patientService.ensurePatientIndexes(collection, collectionName)).resolves.toBeUndefined();
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(collection.dropIndex).toHaveBeenCalledTimes(5);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 
@@ -233,11 +245,13 @@ describe('PatientService.checkIdentifierConflict', () => {
   });
 
   it('flags recordNumber conflict when identityDocument does not match but recordNumber does', async () => {
-    const participantIdentitiesCollection = makeFakeCollection({ findOne: vi.fn().mockResolvedValue(null) });
-    const patientsCollection = makeFakeCollection({
-      findOne: vi.fn().mockResolvedValue({ identityDocument: '00000000000', recordNumber: 'RN-1' })
+    // #1386: both lookups run on ParticipantIdentity -- the document first, then the number.
+    const participantIdentitiesCollection = makeFakeCollection({
+      findOne: vi.fn()
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ participantId: 'P-1' })
     });
-    const db = makeFakeDb({ patients: patientsCollection, participantIdentities: participantIdentitiesCollection });
+    const db = makeFakeDb({ participantIdentities: participantIdentitiesCollection });
 
     const result = await patientService.checkIdentifierConflict(db, {
       identityDocument: '52998224725',
@@ -423,7 +437,8 @@ describe('PatientService.searchPatients — date-search branches', () => {
     expect(passedQuery.$or.some((clause) => clause.birthDate)).toBe(false);
   });
 
-  it('adds a numeric recordNumber clause when the term parses as a number', async () => {
+  // #1386: the record number is matched on ParticipantIdentity only.
+  it('adds no patients.recordNumber clause, string or numeric, when the term parses as a number', async () => {
     const findMock = findWithResults([]);
     const patientsCollection = makeFakeCollection({ find: findMock, countDocuments: vi.fn().mockResolvedValue(0) });
     const db = makeFakeDb({ patients: patientsCollection });
@@ -431,7 +446,7 @@ describe('PatientService.searchPatients — date-search branches', () => {
     await patientService.searchPatients(db, '42');
 
     const passedQuery = findMock.mock.calls[0][0];
-    expect(passedQuery.$or).toEqual(expect.arrayContaining([{ recordNumber: 42 }]));
+    expect(passedQuery.$or.some((clause) => 'recordNumber' in clause)).toBe(false);
   });
 
   it('logs and rethrows when the collection lookup throws', async () => {

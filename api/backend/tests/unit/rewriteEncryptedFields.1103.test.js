@@ -245,9 +245,9 @@ describe('rewriteEncryptedFields (#1103)', () => {
     }
     expect(identity).not.toHaveProperty('patientNameCiphertext');
     useKeys('chave-nova', 'key-2026');
-    const decrypted = participantIdentityService.decryptIdentity(identity);
-    expect(decrypted.patientName).toBe(IDENTITY.patientName);
-    expect(decrypted.phone).toBe(IDENTITY.phone);
+    // #1386: no reader falls back to the old names, so the envelopes are read directly.
+    expect(decryptValue(identity.patientNameEncrypted)).toBe(IDENTITY.patientName);
+    expect(decryptValue(identity.phoneEncrypted)).toBe(IDENTITY.phone);
     expect((await rewriteEncryptedFields(db)).safeToEmptyPreviousSlot).toBe(true);
   });
 

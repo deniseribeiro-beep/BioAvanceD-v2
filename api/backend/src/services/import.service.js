@@ -310,9 +310,8 @@ class ImportService {
       //
       // RF005/RNF007 (#563): identityDocument is civil identity — resolved
       // via ParticipantIdentity, same as patient.service.js#checkIdentifierConflict
-      // (#561). #1386: so is recordNumber now (P1X-0355, recordNumberHash),
-      // with the legacy patients.recordNumber checked where no identity
-      // holds it, until the migration has moved every number off Patient.
+      // (#561). #1386: so is recordNumber now (P1X-0355, recordNumberHash);
+      // a number held only on the legacy patients.recordNumber is not matched.
       // RF005/RNF007 (#575): patientName/birthDate were previously enforced
       // as required by PatientModel.validate() (they were in its
       // requiredText list). Now that they're civil identity — segregated to
@@ -362,7 +361,7 @@ class ImportService {
             existing = await patientsCollection.findOne({ participantId: existingIdentity.participantId });
           }
         } else if (patientData.recordNumber) {
-          // #1386: the identity holding this number (P1X-0355) first. A
+          // #1386: the identity holding this number (P1X-0355). A
           // blank number runs no identity query, and the row still imports
           // as a new participant, as it did before the move.
           const recordNumberQuery = participantIdentityService.recordNumberIdentityQuery(patientData.recordNumber);
@@ -371,9 +370,6 @@ class ImportService {
             : null;
           if (existingIdentity) {
             existing = await patientsCollection.findOne({ participantId: existingIdentity.participantId });
-          }
-          if (!existing) {
-            existing = await patientsCollection.findOne({ recordNumber: patientData.recordNumber });
           }
         } else {
           return { existing: null, error: 'Sem identificador único (Documento de identidade ou Prontuário)' };

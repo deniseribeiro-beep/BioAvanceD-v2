@@ -37,8 +37,8 @@ class ParticipantIdentityService {
   }
 
   // #1386: the <field>Encrypted names the ciphertext was stored under before
-  // it moved to <field>Ciphertext. Read as a fallback until the migration
-  // has moved every record.
+  // it moved to <field>Ciphertext. No reader falls back to them: they name
+  // what the migration moves and what writers $unset.
   getLegacyCiphertextFieldMap() {
     return legacyFieldMapFor('services/participantIdentity.service.js');
   }
@@ -307,16 +307,13 @@ class ParticipantIdentityService {
 
     const doc = { ...identity };
     const encryptedFieldMap = this.getEncryptedFieldMap();
-    const legacyFieldMap = this.getLegacyCiphertextFieldMap();
 
     for (const [plainField, encryptedField] of Object.entries(encryptedFieldMap)) {
       if (doc[plainField] !== undefined && doc[plainField] !== null && doc[plainField] !== '') {
         continue;
       }
 
-      // #1386: the old name only where the new one is absent, so a new name
-      // a clearing write set to null stays null.
-      const payload = doc[encryptedField] !== undefined ? doc[encryptedField] : doc[legacyFieldMap[plainField]];
+      const payload = doc[encryptedField];
       if (!payload) {
         continue;
       }

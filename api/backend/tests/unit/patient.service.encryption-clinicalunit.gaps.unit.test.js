@@ -139,9 +139,10 @@ describe('PatientService.getPatientsCollection', () => {
     expect(db.collection).toHaveBeenCalledWith('patients');
     expect(result).toBe(patientsCollection);
     // RF005/RNF007 (#575): the two patientName/identityDocument indexes are
-    // dropped, not created. #1166 slice 4: so is the phone index -- only
-    // recordNumber's is created now.
-    expect(patientsCollection.createIndex).toHaveBeenCalledTimes(1);
+    // dropped, not created. #1166 slice 4: so is the phone index. #1386: and
+    // recordNumber's, so none is created now.
+    expect(patientsCollection.createIndex).not.toHaveBeenCalled();
+    expect(patientsCollection.dropIndex).toHaveBeenCalledWith('patients_record_number_idx_v1');
   });
 
   it('falls back to the literal "patients" name when the collection has no collectionName property', async () => {
@@ -151,7 +152,7 @@ describe('PatientService.getPatientsCollection', () => {
     const result = await patientService.getPatientsCollection(db);
 
     expect(result).toBe(patientsCollection);
-    // Falling back to the 'patients' literal still lets indexes be created normally.
-    expect(patientsCollection.createIndex).toHaveBeenCalledTimes(1);
+    // Falling back to the 'patients' literal still lets the legacy indexes be dropped normally.
+    expect(patientsCollection.dropIndex).toHaveBeenCalledWith('patients_record_number_idx_v1');
   });
 });

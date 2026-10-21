@@ -298,6 +298,8 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
   // #1386: an update writer removes the old <field>Encrypted envelope of
   // every ciphertext it sets, and sends no $unset when it sets none.
   describe('#1386: a rewrite removes the old <field>Encrypted names', () => {
+    // A stray old-name envelope beside each new name: no reader falls back to
+    // the old names any more (#1386), so the match branch decrypts the new ones.
     function legacyIdentity(participantId) {
       const stored = identityCryptoService.encryptIdentityFields({
         participantId,
@@ -307,7 +309,6 @@ describe('PatientIdentityService - Heuristic Patient Matching', () => {
       });
       for (const field of ['patientName', 'birthDate', 'identityDocument']) {
         stored[`${field}Encrypted`] = stored[`${field}Ciphertext`];
-        delete stored[`${field}Ciphertext`];
       }
       return stored;
     }

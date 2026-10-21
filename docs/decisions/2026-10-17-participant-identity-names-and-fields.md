@@ -52,9 +52,9 @@ No decision below is new policy: each is the repo's own inference from a choice 
    - The export already treats it as canonically `recordNumberCiphertext` and leaves it out (`interface/routes/reports.routes.js:1042-1046`).
    - The move follows #575, which took `patientName`, `birthDate` and `identityDocument` off Patient (`models/Patient.js:1-2`) after #565's backfill.
    - Its readers (the patient service, the import paths and the frontend's patient search) make it a change of its own.
-   - Built so far: the identity stores `recordNumberCiphertext` and a `recordNumberHash` blind index, under the non-unique index `participant_identities_record_number_hash_idx_v1`. The dictionary row infers no new uniqueness, so uniqueness stays the create-time check. Every writer stops writing the number on Patient and `$unset`s the Patient copy. The readers (the conflict check, the search, the import lookup, batch linkage and the by-barcode read) match the identity first. They fall back to `patients.recordNumber` until `npm run migrate:participant-record-numbers` reports `remaining: 0`.
-   - The search now matches a record number held on the identity exactly, on the normalized number. A blind index cannot serve a substring search; this is #1104's precedent for `patientName`. Only the legacy `patients.recordNumber` arms still match a substring, and only until the migration.
-   - Patient reads (`getPatient`, `listPatients`, the search results) stop carrying the number, and nothing adds the identity's back. This is an inference from the repo's pattern: the contact (#1166 slice 4) and the representative (#1168) were removed from Patient reads in the same way, and the export already leaves `recordNumberCiphertext` out (`interface/routes/reports.routes.js:1069-1074`). A Patient not yet migrated still shows its legacy number.
+   - Built so far: the identity stores `recordNumberCiphertext` and a `recordNumberHash` blind index, under the non-unique index `participant_identities_record_number_hash_idx_v1`. The dictionary row infers no new uniqueness, so uniqueness stays the create-time check. Every writer stops writing the number on Patient and `$unset`s the Patient copy. The readers (the conflict check, the search, the import lookup, batch linkage and the by-barcode read) match the identity only. Their fallback to `patients.recordNumber` is removed (item 9).
+   - The search now matches a record number held on the identity exactly, on the normalized number. A blind index cannot serve a substring search; this is #1104's precedent for `patientName`. No arm matches `patients.recordNumber` any more, so no search matches a record number by substring.
+   - Patient reads (`getPatient`, `listPatients`, the search results) stop carrying the number, and nothing adds the identity's back. This is an inference from the repo's pattern: the contact (#1166 slice 4) and the representative (#1168) were removed from Patient reads in the same way, and the export already leaves `recordNumberCiphertext` out (`interface/routes/reports.routes.js:1069-1074`). A Patient's own legacy number is not read either (item 9).
 7. **P1X-0356 `clinicalUnitId` (Reference(Organization), 0..1 Condicional): absent from the identity record.**
    - The participant's clinical unit is `Patient.clinicalUnitId`, a Reference(Organization) since #352 (`scripts/migrateClinicalUnitOrganizations.js:1-5`).
    - It is the tenancy key every patient route scopes on: `controllers/paciente.controller.js:215` filters on it. The re-identification route checks it at `:457` before the identity is read at `:466`.
@@ -64,6 +64,10 @@ No decision below is new policy: each is the repo's own inference from a choice 
    - No flow verifies an identity. The re-identification route (`controllers/paciente.controller.js:424`, #560) reads the identity and audits the read, and it verifies nothing.
    - `verifiedBy` is a Reference(Actor), and no Actor entity exists (`2026-10-17-user-account-absent-elements.md`, item 2).
    - Both are built with a verification flow.
+9. **The read fallbacks to the old `<field>Encrypted` names and to `patients.recordNumber` are removed.**
+   - `decryptIdentity` reads only the `<field>Ciphertext` names. The conflict check, the search, the import lookup, batch linkage and the by-barcode read match a record number on the identity only, and the `patients_record_number_idx_v1` index that served the legacy arms is dropped.
+   - Why: the condition this record set holds. No deployed database exists (Dennis, 2026-10-21). On the only database, the Docker test stack, `npm run migrate:participant-identity-ciphertext-names` reported 0 remaining, and `npm run migrate:participant-record-numbers` 0 candidates, 0 conflicts and 0 remaining, on 2026-10-21.
+   - The registry's `legacyFields` stay: writers still `$unset` the old names, and `npm run encryption:rewrite` still re-encrypts any envelope under one. The migration scripts stay too, for a database restored from older data; run them on it before it is served.
 
 Paths starting `services/`, `models/`, `controllers/`, `utils/`, `scripts/` or `interface/` are under `api/backend/src/`.
 
@@ -72,5 +76,4 @@ Made by the 2026-10-17 coordinator sitting on #1386, by inference from the repo'
 ## Not decided here
 
 - **The `patients` collection's own `representativeIdentityDocumentEncrypted`.** It is the registry's `patients` entry (`utils/encryptedFieldRegistry.js:50-56`), and this record does not rename it.
-- **Removing the old-name fallbacks.** They go once the migration reports nothing left on every deployment.
 - **The dictionary side.** Whether dict-02 should type the seven fields as ciphertext, or drop `clinicalUnitId` from ParticipantIdentity, is the owner's question.

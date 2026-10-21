@@ -159,17 +159,6 @@ class PatientService {
     // #1166 slice 4: no phone index any more. `patients` no longer carries the
     // contact, and phone uniqueness is participant_identities_phone_hash_unique_v1
     // (participantIdentityIndexes.js), checked ahead of the write in updatePatient.
-    const indexDefinitions = [
-      [{ recordNumber: 1 }, { name: 'patients_record_number_idx_v1' }]
-    ];
-
-    for (const [keys, options] of indexDefinitions) {
-      try {
-        await collection.createIndex(keys, options);
-      } catch (error) {
-        logger.warn(`Não foi possível criar índice ${options.name} em ${collectionName}: ${error.message}`);
-      }
-    }
 
     // RF005/RNF007 (#575): patientName/identityDocument no longer live on
     // Patient — drop the indexes built on them from already-deployed
@@ -183,7 +172,9 @@ class PatientService {
       'patients_name_document_text_v1',
       'patients_name_idx_v1',
       'patients_phone_unique_sanitized_v1',
-      'patients_phone_unique_sanitized_v2'
+      'patients_phone_unique_sanitized_v2',
+      // #1386: the record number moved to the identity (P1X-0355), and no reader matches patients.recordNumber.
+      'patients_record_number_idx_v1'
     ];
     for (const indexName of legacyIndexNames) {
       try {
@@ -416,8 +407,8 @@ class PatientService {
 
     // RF005/RNF007 (#561): identityDocument is civil identity — resolved via
     // ParticipantIdentity, not Patient. #1386: so is recordNumber now
-    // (P1X-0355, recordNumberHash); the legacy patients.recordNumber is still
-    // checked until the migration has moved every number off Patient.
+    // (P1X-0355, recordNumberHash); a number held only on the legacy
+    // patients.recordNumber is not a conflict.
     if (normalizedidentityDocument) {
       const identityCollection = await this.getIdentityCollection(db);
       // RF005/RNF007 (#1104): fifth participantIdentities matching site. Was a
@@ -441,19 +432,13 @@ class PatientService {
     }
 
     if (normalizedRecordNumber) {
-      // #1386: the identity holding this number (P1X-0355) first.
+      // #1386: the identity holding this number (P1X-0355).
       const recordNumberQuery = participantIdentityService.recordNumberIdentityQuery(normalizedRecordNumber);
       const existingIdentity = recordNumberQuery
         ? await (await this.getIdentityCollection(db)).findOne(recordNumberQuery)
         : null;
       if (existingIdentity) {
         return { field: 'recordNumber', value: normalizedRecordNumber, existing: existingIdentity };
-      }
-
-      const patientsCollection = await this.getPatientsCollection(db);
-      const existingPatient = await patientsCollection.findOne({ recordNumber: normalizedRecordNumber });
-      if (existingPatient) {
-        return { field: 'recordNumber', value: normalizedRecordNumber, existing: existingPatient };
       }
     }
 
@@ -849,6 +834,7 @@ class PatientService {
   /**
    * Busca pacientes por múltiplos critérios (exceto nome e histórico clínico)
    * Permite busca por: participantId, recordNumber, birthDate, clinicalUnit, unitAcronym, icdCode, etc.
+   * recordNumber é correspondência exata, via ParticipantIdentity (#1386).
    */
   async searchPatients(db, searchTerm, organizationScope = null) {
     try {
@@ -864,15 +850,6 @@ class PatientService {
       // Busca por participantId (8 dígitos)
       if (/^\d{8}$/.test(term)) {
         query.$or.push({ participantId: term });
-      }
-
-      // Busca por recordNumber (número ou string)
-      query.$or.push({ recordNumber: { $regex: term, $options: 'i' } });
-      
-      // Tenta como número também
-      const numTerm = parseInt(term, 10);
-      if (!isNaN(numTerm)) {
-        query.$or.push({ recordNumber: numTerm });
       }
 
       // Busca por data de nascimento (formato DD/MM/YYYY ou YYYY-MM-DD)
@@ -936,9 +913,7 @@ class PatientService {
       // #1386: a number moved to ParticipantIdentity (P1X-0355) is matched on
       // recordNumberHash, so this arm is an EXACT match on the normalized
       // number -- a blind index cannot serve a substring search, the #1104
-      // precedent for patientName. The two recordNumber arms above serve the
-      // legacy patients.recordNumber until the migration has moved every
-      // number.
+      // precedent for patientName.
       const recordNumberQuery = participantIdentityService.recordNumberIdentityQuery(term);
       const recordNumberIdentities = recordNumberQuery
         ? await (await this.getIdentityCollection(db)).find(recordNumberQuery).toArray()

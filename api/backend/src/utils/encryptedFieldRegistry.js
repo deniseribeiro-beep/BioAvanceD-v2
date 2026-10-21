@@ -23,9 +23,10 @@
  * updates with the envelopes.
  *
  * Legacy names (#1386): `legacyFields` lists the ciphertext names an entry
- * wrote before its fields were renamed. Until the migration has moved every
- * document onto the new names, readers fall back to the legacy name where
- * the new one is absent, and the rewrite re-encrypts envelopes under either.
+ * wrote before its fields were renamed. Readers no longer fall back to them.
+ * They serve the migration that moves a document onto the new names, the
+ * writers' `$unset` of the old names, and the rewrite, which re-encrypts any
+ * envelope still stored under either.
  *
  * Blind indexes: hmacBlindIndex stores a bare hash with no keyId, so a
  * rotation leaves the hashes under the old key too. They are re-derived from
@@ -40,7 +41,9 @@ const ENCRYPTED_FIELD_REGISTRY = [
     writer: 'services/participantIdentity.service.js',
     // #1386: stored as <field>Ciphertext, the dictionary's suffix
     // (docs/decisions/2026-10-17-participant-identity-names-and-fields.md,
-    // item 1). legacyFields are the names written before it.
+    // item 1). legacyFields are the names written before it, kept for the
+    // migration, the writers' $unset and the rotation rewrite; no reader
+    // falls back to them.
     fields: {
       patientName: 'patientNameCiphertext',
       birthDate: 'birthDateCiphertext',

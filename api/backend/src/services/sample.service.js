@@ -1072,15 +1072,12 @@ class SampleService {
             if (parts.length === 1) return parts[0].charAt(0) + '***';
             return parts[0].charAt(0) + '. ' + parts[parts.length - 1].charAt(0) + '.';
           };
-          // #1386: the record number is the identity's (P1X-0355) wherever
-          // the identity holds it, a cleared null included; the legacy
-          // Patient copy only where the identity has no number at all.
-          const identityHoldsRecordNumber = rawIdentity
-            && (rawIdentity.recordNumberCiphertext !== undefined || rawIdentity.recordNumber !== undefined);
+          // #1386: the record number is the identity's (P1X-0355); a Patient's
+          // own legacy recordNumber is not read.
           participant = {
             participantId: participant.participantId,
             patientName: anonymizeName(identity?.patientName),
-            recordNumber: identityHoldsRecordNumber ? (identity.recordNumber ?? null) : (participant.recordNumber ?? null)
+            recordNumber: identity?.recordNumber ?? null
           };
         }
       }

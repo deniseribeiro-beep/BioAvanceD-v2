@@ -198,7 +198,9 @@ describe('patient.service.js identity resolution migrated to ParticipantIdentity
     expect(conflict).toBeNull();
   });
 
-  it('checkIdentifierConflict still checks recordNumber against Patient (not a civil-identity field)', async () => {
+  // #1386: the record number moved to ParticipantIdentity (P1X-0355), and the
+  // read fallback to patients.recordNumber is removed.
+  it('checkIdentifierConflict no longer checks recordNumber against Patient', async () => {
     const patients = makeInMemoryCollection([
       { participantId: '11111111', recordNumber: 'PRONT-1' },
     ]);
@@ -207,7 +209,7 @@ describe('patient.service.js identity resolution migrated to ParticipantIdentity
 
     const conflict = await patientService.checkIdentifierConflict(db, { recordNumber: 'PRONT-1' });
 
-    expect(conflict).toMatchObject({ field: 'recordNumber', value: 'PRONT-1' });
+    expect(conflict).toBeNull();
   });
 
   it('checkDuplicatePatient finds a name+birthDate duplicate via ParticipantIdentity even when the Patient document carries a different name', async () => {

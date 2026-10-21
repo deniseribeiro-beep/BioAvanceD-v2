@@ -8,9 +8,8 @@ const { encryptValue } = require('../../src/utils/fieldEncryption');
 
 // #1386: ParticipantIdentity's ciphertext is stored as <field>Ciphertext
 // (docs/decisions/2026-10-17-participant-identity-names-and-fields.md,
-// item 1). A record written before the move holds <field>Encrypted, and a
-// reader falls back to it only where the new name is absent, so a new name a
-// clearing write set to null stays null.
+// item 1). A record written before the move holds <field>Encrypted, which no
+// reader falls back to (item 9): the migration moves it, and writers $unset it.
 
 const PLAINTEXT = {
   patientName: 'Maria da Silva',
@@ -34,21 +33,13 @@ describe('ParticipantIdentity ciphertext names (#1386)', () => {
     expect(Object.keys(result).filter((key) => key.endsWith('Encrypted'))).toEqual([]);
   });
 
-  it('decryptIdentity reads a record holding only the old *Encrypted names', () => {
-    const legacy = { participantId: '1' };
-    for (const [field, value] of Object.entries(PLAINTEXT)) {
-      legacy[field] = null;
-      legacy[`${field}Encrypted`] = encryptValue(value);
-    }
+  it('decryptIdentity of a record holding only patientNameEncrypted leaves patientName unset', () => {
+    const identity = participantIdentityService.decryptIdentity({
+      participantId: '1',
+      patientNameEncrypted: encryptValue(PLAINTEXT.patientName),
+    });
 
-    const identity = participantIdentityService.decryptIdentity(legacy);
-
-    for (const [field, value] of Object.entries(PLAINTEXT)) {
-      if (field === 'birthDate') continue;
-      expect(identity[field]).toBe(value);
-    }
-    expect(identity.birthDate).toBeInstanceOf(Date);
-    expect(identity.birthDate.toISOString()).toBe(PLAINTEXT.birthDate);
+    expect(identity).not.toHaveProperty('patientName');
   });
 
   it('a new name holding null stays null, whatever the old name holds', () => {

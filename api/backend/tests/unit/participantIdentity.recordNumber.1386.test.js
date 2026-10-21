@@ -17,9 +17,9 @@ const { encryptValue, decryptValue } = require2('../../src/utils/fieldEncryption
 // #1386, dict-02 P1X-0355: the hospital record number lives on
 // ParticipantIdentity as recordNumberCiphertext (with recordNumberHash), and
 // no longer on the pseudonymous Patient document. Writers $unset the Patient
-// copy; readers match the identity first and fall back to the legacy
-// patients.recordNumber only where the identity holds no number
-// (docs/decisions/2026-10-17-participant-identity-names-and-fields.md, item 6).
+// copy; readers match the identity only, and a number held only on the
+// legacy patients.recordNumber is read by none of them
+// (docs/decisions/2026-10-17-participant-identity-names-and-fields.md, items 6 and 9).
 
 function matches(doc, query = {}) {
   return Object.entries(query).every(([key, expected]) => {
@@ -155,7 +155,7 @@ describe('ParticipantIdentity.recordNumberCiphertext (#1386, P1X-0355)', () => {
     expect(identity.recordNumberHash).toBe(participantIdentityService.computeBlindIndex('recordNumber', '4512'));
   });
 
-  it('ParticipantIdentityModel.create with no number holds no recordNumber or recordNumberCiphertext key, so by-barcode reads the legacy Patient number', async () => {
+  it('ParticipantIdentityModel.create with no number holds no recordNumber or recordNumberCiphertext key, and by-barcode returns null, not the Patient\'s legacy number', async () => {
     const created = ParticipantIdentityModel.create({ participantId: '12345678' });
     expect(created).not.toHaveProperty('recordNumber');
     expect(created).not.toHaveProperty('recordNumberCiphertext');
@@ -167,7 +167,7 @@ describe('ParticipantIdentity.recordNumberCiphertext (#1386, P1X-0355)', () => {
     });
 
     const { participant } = await sampleService.getSampleByBarcode(db, 'BR-1');
-    expect(participant.recordNumber).toBe('LEGACY-1');
+    expect(participant.recordNumber).toBeNull();
   });
 
   it('updatePatient with recordNumber sets the identity ciphertext and $unsets patients.recordNumber', async () => {
@@ -215,36 +215,19 @@ describe('ParticipantIdentity.recordNumberCiphertext (#1386, P1X-0355)', () => {
     expect(conflict).toMatchObject({ field: 'recordNumber', value: 'PRONT-5', existing: { participantId: '11111111' } });
   });
 
-  it('checkIdentifierConflict still finds a number held only on a legacy Patient', async () => {
+  it('searchPatients finds a participant by an identity-stored number', async () => {
     const db = makeDb({
-      patients: makeCollection([{ participantId: '22222222', recordNumber: 'LEGACY-5' }]),
-      participantIdentities: makeCollection([{ participantId: '22222222' }]),
-    });
-
-    const conflict = await patientService.checkIdentifierConflict(db, { recordNumber: 'LEGACY-5' });
-
-    expect(conflict).toMatchObject({ field: 'recordNumber', value: 'LEGACY-5', existing: { participantId: '22222222' } });
-  });
-
-  it('searchPatients finds a participant by an identity-stored number and by a legacy one', async () => {
-    const db = makeDb({
-      patients: makeCollection([
-        { participantId: '11111111' },
-        { participantId: '22222222', recordNumber: 'LEGACY-7' },
-      ]),
-      participantIdentities: makeCollection([identityWithNumber('11111111', 'PRONT-7'), { participantId: '22222222' }]),
+      patients: makeCollection([{ participantId: '11111111' }]),
+      participantIdentities: makeCollection([identityWithNumber('11111111', 'PRONT-7')]),
     });
 
     const byIdentity = await patientService.searchPatients(db, 'PRONT-7');
     expect(byIdentity.patients.map((patient) => patient.participantId)).toEqual(['11111111']);
-
-    const byLegacy = await patientService.searchPatients(db, 'LEGACY-7');
-    expect(byLegacy.patients.map((patient) => patient.participantId)).toEqual(['22222222']);
   });
 
-  it('the import merge moves an existing Patient\'s recordNumber to the identity and unsets it', async () => {
+  it('the import merge writes the number to the identity and unsets a stray copy on the existing Patient', async () => {
     const patients = makeCollection([{ _id: 'existing-1', participantId: '33333333', recordNumber: 'LEGACY-3', sex: 'F' }]);
-    const participantIdentities = makeCollection([{ participantId: '33333333' }]);
+    const participantIdentities = makeCollection([identityWithNumber('33333333', 'LEGACY-3')]);
     const filePath = 'merge-1386-record.json';
     const readFileSync = fs.readFileSync;
     vi.spyOn(fs, 'readFileSync').mockImplementation((file, ...rest) => (
@@ -303,17 +286,6 @@ describe('ParticipantIdentity.recordNumberCiphertext (#1386, P1X-0355)', () => {
     expect(participant.recordNumber).toBe('PRONT-1');
   });
 
-  it('by-barcode returns the legacy number where the identity has no recordNumberCiphertext', async () => {
-    const db = makeDb({
-      samples: makeCollection([{ _id: 's1', barcode: 'BR-1', participantId: '12345678' }]),
-      patients: makeCollection([{ participantId: '12345678', recordNumber: 'LEGACY-1' }]),
-      participantIdentities: makeCollection([{ participantId: '12345678', patientNameCiphertext: encryptValue('Maria Silva') }]),
-    });
-
-    const { participant } = await sampleService.getSampleByBarcode(db, 'BR-1');
-    expect(participant.recordNumber).toBe('LEGACY-1');
-  });
-
   it('by-barcode returns null, not the legacy number, where the identity holds a cleared number', async () => {
     const db = makeDb({
       samples: makeCollection([{ _id: 's1', barcode: 'BR-1', participantId: '12345678' }]),
@@ -323,6 +295,69 @@ describe('ParticipantIdentity.recordNumberCiphertext (#1386, P1X-0355)', () => {
 
     const { participant } = await sampleService.getSampleByBarcode(db, 'BR-1');
     expect(participant.recordNumber).toBeNull();
+  });
+
+  // #1386 (decision item 9): the read fallback to patients.recordNumber is
+  // removed, so a number held only there is a number no reader sees.
+  describe('a number held only on patients.recordNumber is read by no reader', () => {
+    const legacyPatients = () => makeCollection([{ _id: 'legacy-1', participantId: '22222222', recordNumber: 'LEGACY-5', sex: 'F' }]);
+    const numberlessIdentities = () => makeCollection([{ participantId: '22222222' }]);
+
+    it('checkIdentifierConflict does not find it', async () => {
+      const db = makeDb({ patients: legacyPatients(), participantIdentities: numberlessIdentities() });
+
+      expect(await patientService.checkIdentifierConflict(db, { recordNumber: 'LEGACY-5' })).toBeNull();
+    });
+
+    it('searchPatients does not match it, as a string or as a number', async () => {
+      const db = makeDb({
+        patients: makeCollection([
+          { participantId: '22222222', recordNumber: 'LEGACY-7' },
+          { participantId: '33333333', recordNumber: 4512 },
+        ]),
+        participantIdentities: makeCollection([{ participantId: '22222222' }, { participantId: '33333333' }]),
+      });
+
+      expect((await patientService.searchPatients(db, 'LEGACY-7')).patients).toEqual([]);
+      expect((await patientService.searchPatients(db, '4512')).patients).toEqual([]);
+    });
+
+    it('the import lookup does not merge into its Patient, and imports the row as a new participant', async () => {
+      const patients = legacyPatients();
+      const participantIdentities = numberlessIdentities();
+      const filePath = 'legacy-only-1386.json';
+      const readFileSync = fs.readFileSync;
+      vi.spyOn(fs, 'readFileSync').mockImplementation((file, ...rest) => (
+        file === filePath
+          ? JSON.stringify({ patientName: 'Ana Souza', birthDate: '1985-05-20', sex: 'F', consentTemplateId: 'tcle-1', recordNumber: 'LEGACY-5' })
+          : readFileSync(file, ...rest)
+      ));
+      vi.spyOn(require2('../../src/services/notification.service'), 'enqueueConsentNotification').mockResolvedValue(undefined);
+
+      const result = await importService.importPatients(makeDb({ patients, participantIdentities }), { path: filePath, originalname: filePath });
+
+      expect(result.success).toBe(1);
+      expect(patients.updates.filter(({ query }) => query._id === 'legacy-1' || query.participantId === '22222222')).toEqual([]);
+      expect(patients.docs).toHaveLength(2);
+      expect(patients.docs[1].participantId).not.toBe('22222222');
+    });
+
+    it('findLinkedPatient does not link it', async () => {
+      const db = makeDb({ patients: legacyPatients(), participantIdentities: numberlessIdentities() });
+
+      expect(await batchValidationEngine.findLinkedPatient(db, { recordNumber: 'LEGACY-5' })).toBeNull();
+    });
+
+    it('by-barcode returns recordNumber: null for it', async () => {
+      const db = makeDb({
+        samples: makeCollection([{ _id: 's1', barcode: 'BR-1', participantId: '22222222' }]),
+        patients: legacyPatients(),
+        participantIdentities: makeCollection([{ participantId: '22222222', patientNameCiphertext: encryptValue('Maria Silva') }]),
+      });
+
+      const { participant } = await sampleService.getSampleByBarcode(db, 'BR-1');
+      expect(participant.recordNumber).toBeNull();
+    });
   });
 
   // #1386: a blank number normalizes to null, and `{ recordNumber: null }`

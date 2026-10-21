@@ -557,9 +557,10 @@ class BatchValidationEngine {
 
     let identityRecordNumberTried = false;
     for (const filter of criteria) {
-      // #1386: a record number moved to ParticipantIdentity (P1X-0355) is
-      // matched on recordNumberHash once, ahead of the legacy
-      // patients.recordNumber criteria.
+      // #1386: a record number is ParticipantIdentity's (P1X-0355), matched
+      // on recordNumberHash once. No recordNumber criterion is matched on
+      // patients, so a number held only on the legacy patients.recordNumber
+      // links nothing.
       if (!identityRecordNumberTried && Object.prototype.hasOwnProperty.call(filter, 'recordNumber')) {
         identityRecordNumberTried = true;
         // eslint-disable-next-line no-await-in-loop
@@ -568,6 +569,7 @@ class BatchValidationEngine {
           return identityLinked;
         }
       }
+      if (Object.prototype.hasOwnProperty.call(filter, 'recordNumber')) continue;
 
       // Prioriza a igualdade exata para manter o record linkage previsível.
       // A ordem dos critérios é significativa: patientID, CPF, prontuário e, por fim, _id.

@@ -269,11 +269,13 @@ describe('PatientService.checkIdentifierConflict', () => {
   });
 
   it('reports a recordNumber conflict when the existing record matches on recordNumber only', async () => {
-    const participantIdentitiesCollection = makeFakeCollection({ findOne: vi.fn().mockResolvedValue(null) });
-    const patientsCollection = makeFakeCollection({
-      findOne: vi.fn().mockResolvedValue({ identityDocument: 'DIFFERENT', recordNumber: 'REC-1' })
+    // #1386: both lookups run on ParticipantIdentity -- the document first, then the number.
+    const participantIdentitiesCollection = makeFakeCollection({
+      findOne: vi.fn()
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ participantId: 'P-1' })
     });
-    const db = makeFakeDb({ patients: patientsCollection, participantIdentities: participantIdentitiesCollection });
+    const db = makeFakeDb({ participantIdentities: participantIdentitiesCollection });
 
     const result = await patientService.checkIdentifierConflict(db, {
       identityDocument: '52998224725',
@@ -295,6 +297,8 @@ describe('PatientService.checkIdentifierConflict', () => {
     });
     const hashOf = (doc) =>
       participantIdentityService.computeBlindIndexCandidates('identityDocument', doc)[0];
+    const recordNumberHashOf = (recordNumber) =>
+      participantIdentityService.computeBlindIndexCandidates('recordNumber', recordNumber)[0];
 
     it('finds the identity holding the document by its blind index, not a plaintext copy', async () => {
       const plaintextOnly = { participantId: 'P-plain', identityDocument: '52998224725' };
@@ -322,11 +326,12 @@ describe('PatientService.checkIdentifierConflict', () => {
       expect(result).toBeNull();
     });
 
-    it('finds the patient holding the record number, trimmed', async () => {
-      const holder = { participantId: 'P-holder', recordNumber: 'REC-1' };
+    // #1386: the number is the identity's (P1X-0355); the Patient copy beside it is not read.
+    it('finds the identity holding the record number by its blind index, trimmed', async () => {
+      const holder = { participantId: 'P-holder', recordNumberHash: recordNumberHashOf('REC-1') };
       const db = makeFakeDb({
-        participantIdentities: seeded([]),
-        patients: seeded([{ participantId: 'P-other', recordNumber: 'REC-0' }, holder])
+        participantIdentities: seeded([{ participantId: 'P-other', recordNumberHash: recordNumberHashOf('REC-0') }, holder]),
+        patients: seeded([{ participantId: 'P-legacy', recordNumber: 'REC-1' }])
       });
 
       const result = await patientService.checkIdentifierConflict(db, { recordNumber: '  REC-1 ' });
@@ -481,10 +486,11 @@ describe('PatientService.createPatient identifier-conflict handling', () => {
     const consentTemplatesCollection = makeFakeCollection({
       findOne: vi.fn().mockResolvedValue({ _id: '507f1f77bcf86cd799439011' })
     });
-    const patientsCollection = makeFakeCollection({
-      findOne: vi.fn().mockResolvedValue({ identityDocument: 'DIFFERENT', recordNumber: 'REC-1' })
+    // #1386: the number is held on an identity (recordNumberHash), not on a Patient.
+    const participantIdentitiesCollection = makeFakeCollection({
+      findOne: vi.fn((query = {}) => Promise.resolve(query.recordNumberHash ? { participantId: 'P-1' } : null))
     });
-    const db = makeFakeDb({ patients: patientsCollection, consent_templates: consentTemplatesCollection });
+    const db = makeFakeDb({ participantIdentities: participantIdentitiesCollection, consent_templates: consentTemplatesCollection });
 
     await expect(
       patientService.createPatient(db, validPatientData({ recordNumber: 'REC-1' }), {
@@ -499,7 +505,7 @@ describe('PatientService.createPatient identifier-conflict handling', () => {
 
   // #561: checkIdentifierConflict no longer builds a combined $or across
   // both fields on one collection — identityDocument (ParticipantIdentity)
-  // and recordNumber (Patient) are each queried by their own exact field,
+  // and recordNumber (ParticipantIdentity too since #1386) are each queried by their own exact field,
   // so a match is always specifically one or the other. The generic
   // "identifier" fallback this used to cover is no longer a reachable
   // code path.
