@@ -56,6 +56,14 @@ describe('Foundation index builds', () => {
     }
   });
 
+  // #1392 (RF009 AC5/AC6): a stored exposure summary is unique by its id.
+  it('builds the TelemetryExposureSummary unique id index by name', async () => {
+    const builds = await buildFoundationIndexes(createFakeDb());
+    expect(builds.find((build) => build.name === 'uniq_telemetryExposureSummaryId')).toMatchObject({
+      collection: CANONICAL_COLLECTIONS.telemetryExposureSummaries, unique: true, ok: true,
+    });
+  });
+
   it('reports a build whose index is gone on read-back', async () => {
     const db = createFakeDb();
     const builds = [{ collection: 'facilities', keys: { name: 1 }, name: 'facilities_name_idx_v1', unique: false, ok: true }];

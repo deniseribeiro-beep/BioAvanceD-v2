@@ -8,6 +8,7 @@ module.exports = {
     { method: 'POST', path: '/custody/:custodianshipAssignmentId/end', permission: 'manageCustody' },
     { method: 'GET', path: '/specimens/:specimenId/custody', permission: 'viewStorageTopology' },
     { method: 'GET', path: '/specimens/:specimenId/location', permission: 'viewStorageTopology' },
+    { method: 'POST', path: '/specimens/:specimenId/telemetry-exposure-summaries', permission: 'viewStorageTopology' },
     { method: 'POST', path: '/containers', permission: 'manageStorageTopology' },
     { method: 'POST', path: '/containers/:containerId/specimens', permission: 'manageStorageAllocation' },
     { method: 'POST', path: '/specimen-assignments/:specimenContainerAssignmentId/unload', permission: 'manageStorageAllocation' },

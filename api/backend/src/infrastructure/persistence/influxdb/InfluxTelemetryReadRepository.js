@@ -49,6 +49,9 @@ class InfluxTelemetryReadRepository {
   // query through the `flux` template, never by concatenation. The
   // temperature history also reads through it, with `critical: null`.
   // readingById reads one reading by its telemetryReadingId the same way (#1391).
+  // readingsAtLocation reads every reading bound to one storage location over
+  // [start, stop), oldest first and unlimited, for the exposure summary
+  // (RF009 AC5/AC6, #1392): Flux's range is start-inclusive and stop-exclusive.
   async lastReadingAtBySensor() {
     await influxConnection.connectInfluxDB();
     const queryApi = influxConnection.getInfluxQueryApi();
@@ -144,6 +147,30 @@ class InfluxTelemetryReadRepository {
       |> group()
       |> limit(n: 1)`);
     return rows.length > 0 ? mapReportRow(rows[0]) : null;
+  }
+
+  async readingsAtLocation({ storageLocationId, start, stop } = {}) {
+    if (storageLocationId === undefined || storageLocationId === null || String(storageLocationId) === '') return [];
+    if (!start || !stop || new Date(start).getTime() >= new Date(stop).getTime()) return [];
+
+    await influxConnection.connectInfluxDB();
+    const queryApi = influxConnection.getInfluxQueryApi();
+    const rawRows = await queryApi.collectRows(flux`from(bucket: ${influxConnection.getInfluxConfig().bucket})
+      |> range(start: ${new Date(start)}, stop: ${new Date(stop)})
+      |> filter(fn: (r) => r._measurement == "freezer_temperature" or r._measurement == "temperature")
+      |> filter(fn: (r) => r._field == "temperatureValue" or r._field == "value" or r._field == "telemetryReadingId")
+      |> filter(fn: (r) => r.storageLocationId == ${String(storageLocationId)})
+      |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
+      |> map(fn: (r) => ({r with reading: if exists r.temperatureValue then r.temperatureValue else r.value}))
+      |> filter(fn: (r) => exists r.reading)
+      |> map(fn: (r) => ({r with celsius: if exists r.temperatureUnit and r.temperatureUnit == "°F" then (r.reading - 32.0) * 5.0 / 9.0 else if exists r.temperatureUnit and r.temperatureUnit == "K" then r.reading - 273.15 else r.reading}))
+      |> group()
+      |> sort(columns: ["_time"])`);
+
+    const rows = rawRows.map(mapReportRow);
+    rows.sort((a, b) => (a.timestamp.getTime() - b.timestamp.getTime())
+      || String(a.telemetryReadingId ?? '').localeCompare(String(b.telemetryReadingId ?? '')));
+    return rows;
   }
 }
 

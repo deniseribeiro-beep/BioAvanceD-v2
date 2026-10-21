@@ -9,6 +9,7 @@ const physicalChain = require('../../services/physicalChain.service');
 const custodianship = require('../../services/custodianship.service');
 const labelResolver = require('../../services/labelResolver.service');
 const scope = require('../../services/physicalChainScope.service');
+const telemetryExposure = require('../../services/telemetryExposure.service');
 const storageLocations = require('../../services/storageLocation.service');
 const legalHolds = require('../../services/legalHold.service');
 const { findSampleByAnyId } = require('../../utils/sampleLookup');
@@ -204,6 +205,27 @@ router.get('/specimens/:specimenId/location', requirePermission('viewStorageTopo
     const at = instantOf(req);
     await scope.assertSpecimenInScope(db, req.params.specimenId, req.organizationScope, at);
     return res.json({ success: true, data: await physicalChain.resolveSpecimenLocation(db, req.params.specimenId, at) });
+  } catch (error) {
+    return sendError(res, error);
+  }
+});
+
+/**
+ * POST /api/physical-chain/specimens/:specimenId/telemetry-exposure-summaries  Body: { windowStart?, windowEnd? }
+ * 201 { data: [TelemetryExposureSummary] }; 400; 422 EXPOSURE_PATH_EMPTY, EXPOSURE_NOT_REPRODUCIBLE (RF009 AC5/AC6, #1392).
+ * A read of the chain and its readings, so READ under viewStorageTopology (#631's explicit action for a POST).
+ */
+router.post('/specimens/:specimenId/telemetry-exposure-summaries', requirePermission('viewStorageTopology', 'READ'), requireOrganizationScope, async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    const specimenId = String(req.params.specimenId);
+    await scope.assertSpecimenInScope(db, specimenId, req.organizationScope);
+    const { windowStart, windowEnd } = req.body || {};
+    const summaries = await telemetryExposure.summarizeExposure(db, { specimenId, windowStart, windowEnd });
+    for (const summary of summaries) {
+      await audit(req, 'TelemetryExposureSummary', summary.telemetryExposureSummaryId, { specimenId, exposurePathHash: summary.exposurePathHash });
+    }
+    return res.status(201).json({ success: true, data: summaries });
   } catch (error) {
     return sendError(res, error);
   }

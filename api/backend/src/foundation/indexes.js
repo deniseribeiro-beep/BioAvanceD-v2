@@ -30,6 +30,7 @@ const { ensureParticipantIdentityIndexes } = require('../utils/participantIdenti
 const { ensureSampleIndexes } = require('../utils/sampleIndexes');
 const { ensureSessionIndexes } = require('../utils/sessionIndexes');
 const { ensureStagingImportIndexes } = require('../utils/stagingImportIndexes');
+const { ensureTelemetryExposureSummaryIndexes } = require('../utils/telemetryExposureSummaryIndexes');
 const {
   ensureStorageContainerIndexes,
   ensureStorageBoxIndexes,
@@ -56,6 +57,7 @@ const INDEX_TARGETS = [
   { collection: CANONICAL_COLLECTIONS.storageLocations, ensure: ensureStorageLocationIndexes },
   { collection: CANONICAL_COLLECTIONS.labelIdentifiers, ensure: ensureLabelIdentifierIndexes },
   { collection: CANONICAL_COLLECTIONS.scanEvents, ensure: ensureScanEventIndexes },
+  { collection: CANONICAL_COLLECTIONS.telemetryExposureSummaries, ensure: ensureTelemetryExposureSummaryIndexes },
 ];
 
 function recordingCollection(collection, builds, collectionName) {

@@ -310,3 +310,65 @@ describe('InfluxTelemetryReadRepository - readingById (RF009 AC1, #1391)', () =>
     await expect(repository.readingById('R-1')).rejects.toThrow('influx down');
   });
 });
+
+describe('InfluxTelemetryReadRepository - readingsAtLocation (RF009 AC5/AC6, #1392)', () => {
+  let collectRows;
+
+  beforeEach(() => {
+    collectRows = vi.fn().mockResolvedValue([]);
+    vi.spyOn(influxConnection, 'connectInfluxDB').mockResolvedValue(undefined);
+    vi.spyOn(influxConnection, 'getInfluxConfig').mockReturnValue({ bucket: 'test-bucket' });
+    vi.spyOn(influxConnection, 'getInfluxQueryApi').mockReturnValue({ collectRows });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const queryAt = (index) => String(collectRows.mock.calls[index][0]);
+  const window = { start: new Date('2026-09-01T00:00:00.000Z'), stop: new Date('2026-09-02T00:00:00.000Z') };
+
+  it('readingsAtLocation filters by the storage location and bounds the range by the half-open window', async () => {
+    await repository.readingsAtLocation({ storageLocationId: 'loc-1', ...window });
+
+    expect(collectRows).toHaveBeenCalledTimes(1);
+    const query = queryAt(0);
+    expect(query).toContain('from(bucket: "test-bucket")');
+    expect(query).toContain('r._measurement == "freezer_temperature" or r._measurement == "temperature"');
+    expect(query).toContain('filter(fn: (r) => r.storageLocationId == "loc-1")');
+    expect(query).toContain('range(start: 2026-09-01T00:00:00.000Z, stop: 2026-09-02T00:00:00.000Z)');
+    expect(query.indexOf('r.storageLocationId ==')).toBeLessThan(query.indexOf('pivot('));
+  });
+
+  it('readingsAtLocation sorts ascending and sets no limit', async () => {
+    await repository.readingsAtLocation({ storageLocationId: 'loc-1', ...window });
+
+    const query = queryAt(0);
+    expect(query).toContain('sort(columns: ["_time"])');
+    expect(query).not.toContain('desc: true');
+    expect(query).not.toContain('limit(');
+  });
+
+  it('readingsAtLocation queries nothing for an empty location or an empty window', async () => {
+    await expect(repository.readingsAtLocation({ storageLocationId: '', ...window })).resolves.toEqual([]);
+    await expect(repository.readingsAtLocation({ storageLocationId: null, ...window })).resolves.toEqual([]);
+    await expect(repository.readingsAtLocation({ storageLocationId: 'loc-1', start: window.stop, stop: window.stop })).resolves.toEqual([]);
+    await expect(repository.readingsAtLocation({ storageLocationId: 'loc-1', start: window.stop, stop: window.start })).resolves.toEqual([]);
+    expect(collectRows).not.toHaveBeenCalled();
+  });
+
+  it('readingsAtLocation maps each row, keeps its datastream and location, and orders by time then reading id', async () => {
+    collectRows.mockResolvedValue([
+      { _time: '2026-09-01T10:00:00Z', _measurement: 'temperature', sensorId: 'S1', reading: -80, telemetryReadingId: 'R-2', datastreamId: 'ds-1', storageLocationId: 'loc-1' },
+      { _time: '2026-09-01T09:00:00Z', _measurement: 'freezer_temperature', sensorId: 'S1', temperatureUnit: 'K', reading: 193.15, telemetryReadingId: 'R-1', datastreamId: 'ds-1', storageLocationId: 'loc-1' },
+      { _time: '2026-09-01T10:00:00Z', _measurement: 'temperature', sensorId: 'S1', reading: -79, telemetryReadingId: 'R-0', datastreamId: 'ds-1', storageLocationId: 'loc-1' },
+    ]);
+
+    const rows = await repository.readingsAtLocation({ storageLocationId: 'loc-1', ...window });
+
+    expect(rows.map((row) => row.telemetryReadingId)).toEqual(['R-1', 'R-0', 'R-2']);
+    expect(rows[0]).toMatchObject({ datastreamId: 'ds-1', storageLocationId: 'loc-1', timestamp: new Date('2026-09-01T09:00:00Z') });
+    expect(rows[0].temperatureCelsius).toBeCloseTo(-80, 6);
+    expect(rows[2].temperatureCelsius).toBe(-80);
+  });
+});

@@ -8,6 +8,8 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
 
 const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
+const influxRead = require('../../src/infrastructure/persistence/influxdb/InfluxTelemetryReadRepository');
+const sensorDatastream = require('../../src/services/sensorDatastream.service');
 const auditLogger = require('../../src/utils/auditLogger');
 const { createDbMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
@@ -49,7 +51,7 @@ function fakeCollection() {
 const DOMAIN = [
   'samples', 'collections', 'organizations', 'collectionGovernanceApprovals', 'custodianshipAssignments',
   'containers', 'specimenContainerAssignments', 'containerPositionAssignments', 'rackLocationAssignments',
-  'labelIdentifiers', 'scanEvents', 'devices', 'storageLocations', 'legalHolds',
+  'labelIdentifiers', 'scanEvents', 'devices', 'storageLocations', 'legalHolds', 'telemetryDatastreams', 'telemetryExposureSummaries',
 ];
 
 // Users: Coordenador and Técnico in org-A, the same pair in org-B, and an
@@ -244,6 +246,60 @@ describe('physical-chain routes (#1314, RF016 AC3/AC6, RF017 AC3/AC4)', () => {
     expect(res.body.data).toMatchObject({ resolved: true, specimenId: 'SPC-1', containerId: 'CT-1' });
     expect(domain.scanEvents.docs).toHaveLength(1);
     expect(domain.scanEvents.docs[0]).toMatchObject({ actorId: 'tech-a', targetId: 'SPC-1' });
+  });
+});
+
+describe('telemetry exposure summaries (#1392, RF009 AC5/AC6)', () => {
+  const at = (iso) => `2026-02-0${iso}Z`;
+  const exposure = (specimenId, user, body = { windowStart: at('1T00:00:00'), windowEnd: at('5T00:00:00') }) => (
+    post(`/specimens/${specimenId}/telemetry-exposure-summaries`, user, body)
+  );
+
+  beforeEach(async () => {
+    await domain.telemetryDatastreams.insertOne({
+      telemetryDatastreamId: 'ds-1', sensorId: 'S1', storageLocationId: 'loc-1', observedProperty: 'temperature',
+      thresholdProfileId: 'pol-1', validityPeriod: { start: new Date('2026-01-01T00:00:00Z'), end: null },
+    });
+    const reading = (iso, celsius) => ({
+      timestamp: new Date(at(iso)), telemetryReadingId: `R-${iso}`, datastreamId: 'ds-1', storageLocationId: 'loc-1', temperatureCelsius: celsius,
+    });
+    vi.spyOn(influxRead, 'readingsAtLocation').mockResolvedValue([
+      reading('2T12:00:00', -20), reading('3T00:00:00', -80), reading('4T00:00:00', -82), reading('5T00:00:00', -20),
+    ]);
+    vi.spyOn(sensorDatastream, 'policiesByProfileId').mockResolvedValue(new Map([['pol-1', { _id: 'pol-1', minTemp: -90, maxTemp: -70 }]]));
+  });
+
+  it("summarizes a chained specimen over its path's interval only, for its custodian's organization, and audits it", async () => {
+    await withCustodyAndContainer();
+    expect((await post('/containers/CT-1/specimens', 'tech-a', { specimenId: 'SPC-1', loadedAt: at('1T00:00:00') })).status).toBe(201);
+    expect((await post('/containers/CT-1/position', 'tech-a', { storagePositionId: 'rack-96-001:A01', placedAt: at('2T00:00:00') })).status).toBe(201);
+    expect((await post('/locations', 'coord-a', locationBody())).status).toBe(201);
+    expect((await post('/racks/rack-96-001/location', 'coord-a', { storageLocationId: 'loc-1', placedAt: at('3T00:00:00') })).status).toBe(201);
+
+    expect((await exposure('SPC-1', 'tech-b')).status).toBe(403);
+    const res = await exposure('SPC-1', 'tech-a');
+
+    expect(res.status).toBe(201);
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0]).toMatchObject({
+      specimenId: 'SPC-1', storageAssignmentId: null, datastreamIds: ['ds-1'],
+      windowStart: '2026-02-03T00:00:00.000Z', windowEnd: '2026-02-05T00:00:00.000Z',
+      observationCount: 2, minimumValue: -82, maximumValue: -80, excursionCount: 0,
+    });
+    expect(domain.telemetryExposureSummaries.docs).toHaveLength(1);
+    expect(auditLogger.log).toHaveBeenCalledWith(expect.objectContaining({
+      resourceType: 'TelemetryExposureSummary', resourceId: res.body.data[0].telemetryExposureSummaryId,
+    }));
+  });
+
+  it('answers a specimen in custody but never loaded with 422 EXPOSURE_PATH_EMPTY and a details list', async () => {
+    expect((await post('/custody', 'coord-a', custody())).status).toBe(201);
+
+    const res = await exposure('SPC-1', 'tech-a');
+
+    expect(res.status).toBe(422);
+    expect(res.body).toMatchObject({ error: 'EXPOSURE_PATH_EMPTY', details: [expect.any(String)] });
+    expect(domain.telemetryExposureSummaries.docs).toHaveLength(0);
   });
 });
 

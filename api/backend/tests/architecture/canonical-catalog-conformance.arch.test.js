@@ -85,6 +85,7 @@ const ENTITY_TARGETS = {
   SpecimenContainerAssignment: () => require('../../src/models/SpecimenContainerAssignment').fieldsOf(),
   ContainerPositionAssignment: () => require('../../src/models/ContainerPositionAssignment').fieldsOf(),
   RackLocationAssignment: () => require('../../src/models/RackLocationAssignment').fieldsOf(),
+  TelemetryExposureSummary: () => require('../../src/models/TelemetryExposureSummary').fieldsOf(),
   StorageLocation: () => require('../../src/models/StorageLocation').fieldsOf(),
   OperationalStateDecision: () => require('../../src/models/OperationalStateDecision').fieldsOf(),
   StorageRack: () => require('../../src/models/StorageRack').fieldsOf(),
