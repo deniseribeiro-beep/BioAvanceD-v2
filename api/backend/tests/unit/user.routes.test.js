@@ -58,6 +58,14 @@ rbacModule.requireOrganizationScope = (req, res, next) => currentRequireOrganiza
 // patient.routes.test.js, no controller/service stubbing is needed here.
 const router = require(routePath);
 
+// #1389: the first require of log.service costs about half a second
+// synchronously (exceljs, audit-v2.service, ...), so it is loaded here, at
+// import time, rather than inside a case's timeout. The GET /logs route reads
+// getLogs and isAuditReader off these exports at request time, so a per-case
+// vi.spyOn on them is still observed.
+const rbacService = require(require.resolve('../../src/services/rbac-assignment.service'));
+const logService = require(require.resolve('../../src/services/log.service'));
+
 function loadRoute({ authImpl, requirePermissionImpl } = {}) {
   currentAuth = authImpl || defaultAuth;
   currentRequirePermission = requirePermissionImpl || (() => (req, res, next) => next());
@@ -273,12 +281,7 @@ describe('user.routes authorization gates (issue #921)', () => {
   // collection -- the RNF009 audit trail -- to any authenticated account,
   // while /api/logs gates the same collection on isAuditReader (#1056).
   describe('GET /logs follows the audit-reader rule (#1241)', () => {
-    const rbacServicePath = require.resolve('../../src/services/rbac-assignment.service');
-    const logServicePath = require.resolve('../../src/services/log.service');
-
     async function getLogsAs(auditReader) {
-      const rbacService = require(rbacServicePath);
-      const logService = require(logServicePath);
       const readerSpy = vi.spyOn(rbacService, 'isAuditReader').mockResolvedValue(auditReader);
       const logsSpy = vi.spyOn(logService, 'getLogs').mockResolvedValue({ logs: [], total: 0 });
       try {
