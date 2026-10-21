@@ -2,6 +2,14 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 
+// #1394: the first require of the route's module tree costs over a second, so
+// it is paid here, at import time, rather than inside the first case's
+// timeout. The three entries loadDictionaryRouter() stubs are cleared again.
+require('../../src/routes/dictionary');
+delete require.cache[require.resolve('../../src/routes/dictionary')];
+delete require.cache[require.resolve('../../src/database/neo4j')];
+delete require.cache[require.resolve('redis')];
+
 function cursor(rows) {
   return {
     limit: vi.fn().mockReturnThis(),

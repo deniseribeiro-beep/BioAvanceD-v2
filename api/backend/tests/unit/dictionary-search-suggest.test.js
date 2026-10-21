@@ -9,6 +9,13 @@ const neo4jModulePath = require.resolve('../../src/database/neo4j');
 const redisModulePath = require.resolve('redis');
 const dictionaryRoutePath = require.resolve('../../src/routes/dictionary');
 
+// #1394: the first require of the route's module tree costs seconds, so it is
+// paid here, at import time, rather than inside the first case's timeout.
+// The route and neo4j entries are cleared again, as afterEach does.
+require(dictionaryRoutePath);
+delete require.cache[neo4jModulePath];
+delete require.cache[dictionaryRoutePath];
+
 // dictionary.js destructures `getNeo4jDriver` from ../database/neo4j at
 // require-time, so vi.spyOn on the already-required module has no effect
 // (see hpo.routes.test.js / testing-conventions' cjs-mocking reference).

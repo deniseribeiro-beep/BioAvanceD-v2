@@ -5,6 +5,10 @@ import request from 'supertest';
 
 const require = createRequire(import.meta.url);
 
+// #1394: the first require of the route's module tree costs seconds, so it is
+// paid here, at import time, rather than inside the first case's timeout.
+require('../../src/interface/routes/dictionary.routes');
+
 // #1301: /api/dictionary was mounted with no authentication. The mount
 // module app.js uses now runs `authenticate` ahead of every dictionary route,
 // so an anonymous request is refused before the route (and its Neo4j, Redis

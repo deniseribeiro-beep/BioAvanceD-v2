@@ -3,6 +3,12 @@ import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 
+// #1394: the first require of the router's module tree costs over a second, so
+// it is paid here, at import time, rather than inside the first case's
+// timeout. Each case still clears and re-requires the router itself.
+require('../../src/routes/eConsent.js');
+delete require.cache[require.resolve('../../src/routes/eConsent.js')];
+
 // #1097: eConsent.js read CONSENT_SECRET at MODULE SCOPE and threw there when
 // it was missing. Because server.js:3 does `require("./app")` and app.js
 // mounts this router, that throw landed BEFORE server.js:40 installs the

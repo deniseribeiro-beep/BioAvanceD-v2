@@ -11,6 +11,11 @@ const patientModelPath = require.resolve('../../src/models/Patient');
 const authPath = require.resolve('../../src/infrastructure/middleware/auth');
 const rbacPath = require.resolve('../../src/infrastructure/middleware/rbac');
 
+// #1394: the first require of the route's module tree costs seconds, so it is
+// paid here, at import time, rather than inside the first case's timeout.
+// loadRouter() still clears and stubs its five paths for every case.
+require(routePath);
+
 function loadRouter() {
   delete require.cache[routePath];
   delete require.cache[notificationPath];
