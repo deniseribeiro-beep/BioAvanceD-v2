@@ -39,9 +39,9 @@ const user = (extra = {}) => ({
   _id: { toString: () => 'user-1268' },
   username: 'tecnico1268',
   email: 'tecnico1268@example.com',
-  password: HASH,
-  status: 'active',
-  lastLogin: null,
+  passwordHash: HASH,
+  accountStatus: 'active',
+  lastLoginAt: null,
   ...extra,
 });
 
