@@ -307,15 +307,17 @@ describe('mqtt-telemetry.service', () => {
       vi.spyOn(logger, 'warn').mockImplementation(() => {});
       const auditSpy = vi.spyOn(mqttIngestionAuditService, 'append').mockResolvedValue();
       vi.spyOn(mqttSignatureService, 'hashPayload').mockReturnValue('hash123');
-      vi.spyOn(influxTelemetryWriteRepository, 'writeTemperatureReadingNow').mockResolvedValue(new Date());
-      const temperatures = { insertOne: vi.fn().mockResolvedValue({ insertedId: 'stored-id' }) };
-      const storeDb = { collection: vi.fn(() => temperatures) };
+      const write = vi.spyOn(influxTelemetryWriteRepository, 'writeTemperatureReadingNow').mockResolvedValue(new Date());
+      const others = { insertOne: vi.fn().mockResolvedValue({ insertedId: 'other-id' }) };
+      const storeDb = { collection: vi.fn(() => others) };
 
       const payload = { sensorId: 'S1', temperatureValue: 4.5, ...extra };
       await mqttTelemetryService.handleMessage(storeDb, 'topic', Buffer.from(JSON.stringify(payload), 'utf8'), false);
 
-      expect(temperatures.insertOne).toHaveBeenCalledTimes(1);
-      const stored = temperatures.insertOne.mock.calls[0][0];
+      // #1391 (RF009 AC1): InfluxDB is the reading's only store.
+      expect(write).toHaveBeenCalledTimes(1);
+      expect(storeDb.collection).not.toHaveBeenCalledWith('temperatures');
+      const stored = write.mock.calls[0][0];
       expect(stored[field] ?? null).not.toEqual(extra[field]);
       expect(stored.idempotencyKeySource).toBe('derived');
       expect(auditSpy).toHaveBeenCalledWith(storeDb, expect.objectContaining({ status: 'processed', temperatureDataId: stored.telemetryReadingId }));

@@ -16,5 +16,5 @@ Decided by inference in the #1391 work; each point names the pattern it is read 
 
 ## Not decided here
 
-- **Removing the `temperatures` copy, its inserts and its index** is #1391's own next step. Until then, a database that still holds `temperatures_client_idempotencyKey_v1` refuses the copy of a resend of such an old key with E11000, after its InfluxDB write.
-- **Two truly concurrent first sends** can still each write an InfluxDB point before one records the key, as before this change; only one key row and one copy are kept.
+- **Removing the `temperatures` copy** is decided in 2026-10-21-telemetry-temperatures-copy-retired.md.
+- **Two truly concurrent first sends** can still each write an InfluxDB point before one records the key, as before this change; only one key row is kept.

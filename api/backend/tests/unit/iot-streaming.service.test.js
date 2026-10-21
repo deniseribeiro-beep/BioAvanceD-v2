@@ -4,7 +4,7 @@ const service = require('../../src/services/iot-streaming.service');
 const queueConfig = require('../../src/config/queue');
 const influxTelemetryWriteRepository = require('../../src/infrastructure/persistence/influxdb/InfluxTelemetryWriteRepository');
 const logger = require('../../src/utils/logger');
-const { createFakeCollection, createFakeDb } = require('./ingestion/testHelpers');
+const { createFakeDb } = require('./ingestion/testHelpers');
 
 function makeSocket(id = 'sock1') {
   return { id, emit: vi.fn(), join: vi.fn() };
@@ -141,9 +141,9 @@ describe('iot-streaming.service', () => {
       const addMock = vi.fn().mockResolvedValue({ id: 'job1' });
       vi.spyOn(freshQueueConfig, 'getQueue').mockReturnValue({ add: addMock });
       const freshService = require('../../src/services/iot-streaming.service');
-      vi.spyOn(influxTelemetryWriteRepository, 'writeTemperatureReadingNow').mockResolvedValue(new Date());
-      const temperatures = { insertOne: vi.fn().mockResolvedValue({ insertedId: 'temp-id-1' }) };
-      const db = { collection: vi.fn(() => temperatures) };
+      const write = vi.spyOn(influxTelemetryWriteRepository, 'writeTemperatureReadingNow').mockResolvedValue(new Date());
+      const fake = createFakeDb();
+      const db = { collection: vi.fn((name) => fake.collection(name)) };
 
       const socket = makeSocket('sock1');
       await freshService.handleDeviceRegistration(socket, { deviceId: 'd1', sensorId: 's1', locationId: 'loc1' });
@@ -151,11 +151,12 @@ describe('iot-streaming.service', () => {
 
       const { temperatureData } = addMock.mock.calls[0][1];
       const readingId = await freshService.processTemperatureData(db, temperatureData);
-      const stored = temperatures.insertOne.mock.calls[0][0];
+      const stored = write.mock.calls[0][0];
       expect(readingId).toBe(stored.telemetryReadingId);
       expect(stored.idempotencyKeySource).toBe('derived');
       expect(stored.deviceMessageId).toBeNull();
       expect(stored.sequenceNumber).toBeNull();
+      expect(db.collection).not.toHaveBeenCalledWith('temperatures');
     });
 
     it('emits error when the queue rejects', async () => {
@@ -194,24 +195,19 @@ describe('iot-streaming.service', () => {
   });
 
   describe('processTemperatureData', () => {
-    // The Mongo copy, and RF029's key store as the shared query-matching
-    // fake (#1391); any other collection is unexpected here.
+    // RF029's key store as the shared query-matching fake (#1391); any other
+    // collection is unexpected here, the retired `temperatures` copy
+    // included: InfluxDB is the reading's only store (RF009 AC1).
     function makeDb(keyRows = []) {
-      const temperaturesCollection = {
-        collectionName: 'temperatures',
-        findOne: vi.fn().mockResolvedValue(null),
-        insertOne: vi.fn().mockResolvedValue({ insertedId: 'temp-id-1' }),
-      };
       const fake = createFakeDb({ ingestionIdempotencyKeys: keyRows });
       const keys = fake.collections.ingestionIdempotencyKeys;
       const db = {
         collection: vi.fn((name) => {
-          if (name === 'temperatures') return temperaturesCollection;
           if (name === 'ingestionIdempotencyKeys') return keys;
           throw new Error(`unexpected collection ${name}`);
         }),
       };
-      return { db, temperaturesCollection, keys };
+      return { db, keys };
     }
 
     function completedKey(idempotencyKey, telemetryReadingId, sensorId = 'sensor-1') {
@@ -237,18 +233,16 @@ describe('iot-streaming.service', () => {
       vi.spyOn(influxTelemetryWriteRepository, 'writeTemperatureReadingNow').mockResolvedValue(persistedAt);
     });
 
+    const written = () => influxTelemetryWriteRepository.writeTemperatureReadingNow.mock.calls.map(([reading]) => reading);
+
     // #1317 (RF009 AC1-AC3): the temperature route's reading contract.
-    it('writes InfluxDB first, then inserts the reading with its identity and persistedAt, without any FHIR conversion or device collection access', async () => {
-      const { db, temperaturesCollection } = makeDb();
-      const order = [];
-      influxTelemetryWriteRepository.writeTemperatureReadingNow.mockImplementation(async () => { order.push('influx'); return persistedAt; });
-      temperaturesCollection.insertOne.mockImplementation(async () => { order.push('mongo'); return { insertedId: 'temp-id-1' }; });
+    it('writes the reading with its identity to InfluxDB, without any FHIR conversion or device collection access', async () => {
+      const { db } = makeDb();
 
       const readingId = await service.processTemperatureData(db, baseTemperatureData);
 
-      expect(order).toEqual(['influx', 'mongo']);
-      const stored = temperaturesCollection.insertOne.mock.calls[0][0];
-      // #1391: the reading's id, never the Mongo copy's _id.
+      const [stored] = written();
+      // #1391: the reading's id, never a Mongo _id.
       expect(readingId).toBe(stored.telemetryReadingId);
       expect(stored).toMatchObject({ ...baseTemperatureData, clockStatus: 'synchronized', persistedAt });
       expect(stored.telemetryReadingId).toBeTruthy();
@@ -256,26 +250,45 @@ describe('iot-streaming.service', () => {
       expect(db.collection).not.toHaveBeenCalledWith('devices');
     });
 
+    it('writes no Mongo temperatures copy', async () => {
+      const { db } = makeDb();
+      await service.processTemperatureData(db, baseTemperatureData);
+      expect(db.collection).not.toHaveBeenCalledWith('temperatures');
+    });
+
+    it('a client key is recorded after the confirmed InfluxDB write', async () => {
+      const { db, keys } = makeDb();
+      const order = [];
+      influxTelemetryWriteRepository.writeTemperatureReadingNow.mockImplementation(async () => { order.push('influx'); return persistedAt; });
+      const upsert = keys.updateOne;
+      keys.updateOne = async (filter, update, options) => { order.push('key store'); return upsert(filter, update, options); };
+
+      await service.processTemperatureData(db, { ...baseTemperatureData, idempotencyKey: 'k-order' });
+
+      expect(order).toEqual(['influx', 'key store']);
+      expect(db.collection).not.toHaveBeenCalledWith('temperatures');
+    });
+
     it('a reading with no device time is stored at its receipt time with clockStatus unknown', async () => {
-      const { db, temperaturesCollection } = makeDb();
+      const { db } = makeDb();
       await service.processTemperatureData(db, { ...baseTemperatureData, timestamp: null, source: 'mqtt', createdAt: new Date() });
-      const stored = temperaturesCollection.insertOne.mock.calls[0][0];
+      const [stored] = written();
       expect(stored.clockStatus).toBe('unknown');
       expect(stored.timestamp).toBe(stored.receivedAt);
       expect(stored.ingestionService).toBe('mqtt');
     });
 
     it('control: a queued reading names the queue as its ingestion service', async () => {
-      const { db, temperaturesCollection } = makeDb();
+      const { db } = makeDb();
       await service.processTemperatureData(db, baseTemperatureData);
-      expect(temperaturesCollection.insertOne.mock.calls[0][0].ingestionService).toBe('iot-queue');
+      expect(written()[0].ingestionService).toBe('iot-queue');
     });
 
     it('the server-added fields are not part of the payload hash', async () => {
-      const { db, temperaturesCollection } = makeDb();
+      const { db } = makeDb();
       await service.processTemperatureData(db, { ...baseTemperatureData, source: 'mqtt', createdAt: new Date(1), updatedAt: new Date(1) });
       await service.processTemperatureData(db, { ...baseTemperatureData, source: 'mqtt', createdAt: new Date(2), updatedAt: new Date(2) });
-      const [first, second] = temperaturesCollection.insertOne.mock.calls.map(([doc]) => doc.payloadHash);
+      const [first, second] = written().map((reading) => reading.payloadHash);
       expect(first).toBe(second);
     });
 
@@ -283,47 +296,39 @@ describe('iot-streaming.service', () => {
     // the binding, never from the payload; this db has no datastreams, so the
     // reading is unbound.
     it('a payload naming its own datastreamId and storageLocationId is stored with both null', async () => {
-      const { db, temperaturesCollection } = makeDb();
+      const { db } = makeDb();
       await service.processTemperatureData(db, { ...baseTemperatureData, datastreamId: 'spoofed', storageLocationId: 'spoofed' });
-      const stored = temperaturesCollection.insertOne.mock.calls[0][0];
+      const [stored] = written();
       expect(stored.datastreamId).toBeNull();
       expect(stored.storageLocationId).toBeNull();
     });
 
-    it('a failed InfluxDB write throws and stores nothing', async () => {
-      const { db, temperaturesCollection } = makeDb();
+    it('a failed InfluxDB write throws and records no client key', async () => {
+      const { db, keys } = makeDb();
       influxTelemetryWriteRepository.writeTemperatureReadingNow.mockRejectedValue(new Error('influx down'));
-      await expect(service.processTemperatureData(db, baseTemperatureData)).rejects.toThrow('influx down');
-      expect(temperaturesCollection.insertOne).not.toHaveBeenCalled();
-    });
-
-    it('logs and re-throws when insertOne rejects', async () => {
-      const { db, temperaturesCollection } = makeDb();
-      temperaturesCollection.insertOne.mockRejectedValue(new Error('insert failed'));
-
-      await expect(service.processTemperatureData(db, baseTemperatureData)).rejects.toThrow('insert failed');
+      await expect(service.processTemperatureData(db, { ...baseTemperatureData, idempotencyKey: 'k-down' })).rejects.toThrow('influx down');
+      expect(keys.docs).toHaveLength(0);
+      expect(db.collection).not.toHaveBeenCalledWith('temperatures');
     });
 
     // RF009 AC7 (#1317, #1391): a client idempotencyKey replays here as on
     // the temperature route, from RF029's key store under the same scope.
     it('a completed client key for the sensor returns its telemetryReadingId and writes nothing', async () => {
-      const { db, temperaturesCollection } = makeDb([completedKey('k-1', 'r-first')]);
+      const { db } = makeDb([completedKey('k-1', 'r-first')]);
 
       const readingId = await service.processTemperatureData(db, { ...baseTemperatureData, idempotencyKey: 'k-1' });
 
       expect(readingId).toBe('r-first');
-      expect(temperaturesCollection.findOne).not.toHaveBeenCalled();
       expect(influxTelemetryWriteRepository.writeTemperatureReadingNow).not.toHaveBeenCalled();
-      expect(temperaturesCollection.insertOne).not.toHaveBeenCalled();
     });
 
-    it('control: a new client key records one key row with the five resultRef keys, and is inserted once', async () => {
-      const { db, temperaturesCollection, keys } = makeDb();
+    it('control: a new client key records one key row with the five resultRef keys, and is written once', async () => {
+      const { db, keys } = makeDb();
 
       const readingId = await service.processTemperatureData(db, { ...baseTemperatureData, idempotencyKey: 'k-2' });
 
-      expect(temperaturesCollection.insertOne).toHaveBeenCalledTimes(1);
-      const stored = temperaturesCollection.insertOne.mock.calls[0][0];
+      expect(influxTelemetryWriteRepository.writeTemperatureReadingNow).toHaveBeenCalledTimes(1);
+      const [stored] = written();
       expect(stored).toMatchObject({ idempotencyKey: 'k-2', idempotencyKeySource: 'client' });
       expect(readingId).toBe(stored.telemetryReadingId);
       expect(keys.docs).toHaveLength(1);
@@ -333,8 +338,8 @@ describe('iot-streaming.service', () => {
       expect(keys.docs[0].resultRef).not.toHaveProperty('temperatureValue');
     });
 
-    it("a concurrent send that loses the key-store race returns the winner's id and stores no copy", async () => {
-      const { db, temperaturesCollection, keys } = makeDb();
+    it("a concurrent send that loses the key-store race returns the winner's id", async () => {
+      const { db, keys } = makeDb();
       // The winner records the same key between this send's lookup and record.
       const upsert = keys.updateOne;
       keys.updateOne = async (filter, update, options) => {
@@ -343,47 +348,43 @@ describe('iot-streaming.service', () => {
       };
 
       await expect(service.processTemperatureData(db, { ...baseTemperatureData, idempotencyKey: 'k-3' })).resolves.toBe('r-winner');
-      expect(temperaturesCollection.insertOne).not.toHaveBeenCalled();
       expect(keys.docs).toHaveLength(1);
+      expect(db.collection).not.toHaveBeenCalledWith('temperatures');
     });
 
     it('a failing key-store lookup is logged without the key, and the reading is stored', async () => {
-      const { db, temperaturesCollection, keys } = makeDb();
+      const { db, keys } = makeDb();
       keys.findOne = vi.fn().mockRejectedValue(new Error('key store down'));
 
       const readingId = await service.processTemperatureData(db, { ...baseTemperatureData, idempotencyKey: 'k-secret-5' });
 
-      expect(temperaturesCollection.insertOne).toHaveBeenCalledTimes(1);
-      expect(readingId).toBe(temperaturesCollection.insertOne.mock.calls[0][0].telemetryReadingId);
+      expect(influxTelemetryWriteRepository.writeTemperatureReadingNow).toHaveBeenCalledTimes(1);
+      expect(readingId).toBe(written()[0].telemetryReadingId);
       expect(logger.error).toHaveBeenCalled();
       expect(logger.error.mock.calls.map((args) => args.join(' ')).join(' ')).not.toContain('k-secret-5');
     });
 
     // The scope is the sensorId as text, so a numeric sensorId replays too.
     it('a numeric sensorId resent under one client key writes InfluxDB once and replays the first reading', async () => {
-      const temperatures = createFakeCollection([]);
-      const insert = temperatures.insertOne;
-      temperatures.insertOne = (doc) => insert({ ...doc, _id: `temp-id-${temperatures.docs.length + 1}` });
-      const others = createFakeCollection([]);
-      const db = { collection: vi.fn((name) => (name === 'temperatures' ? temperatures : others)) };
+      const fake = createFakeDb();
+      const db = { collection: vi.fn((name) => fake.collection(name)) };
       const reading = { ...baseTemperatureData, sensorId: 101, idempotencyKey: 'k-num', source: 'mqtt' };
 
       const first = await service.processTemperatureData(db, reading);
       const second = await service.processTemperatureData(db, { ...reading });
 
       expect(second).toBe(first);
-      expect(first).toBe(temperatures.docs[0].telemetryReadingId);
-      expect(temperatures.docs).toHaveLength(1);
-      expect(others.docs.filter((doc) => doc.scope)).toMatchObject([{ idempotencyKey: 'k-num', scope: 'TelemetryReading:101' }]);
+      expect(first).toBe(written()[0].telemetryReadingId);
       expect(influxTelemetryWriteRepository.writeTemperatureReadingNow).toHaveBeenCalledTimes(1);
+      expect(fake.collections.ingestionIdempotencyKeys.docs).toMatchObject([{ idempotencyKey: 'k-num', scope: 'TelemetryReading:101' }]);
+      expect(db.collection).not.toHaveBeenCalledWith('temperatures');
     });
 
-    it('control: a derived key never touches the key store, and an insert error still throws', async () => {
-      const { db, temperaturesCollection } = makeDb();
-      temperaturesCollection.insertOne.mockRejectedValue(Object.assign(new Error('E11000 duplicate key'), { code: 11000 }));
+    it('control: a derived key never touches the key store', async () => {
+      const { db } = makeDb();
 
-      await expect(service.processTemperatureData(db, baseTemperatureData)).rejects.toThrow(/E11000/);
-      expect(temperaturesCollection.findOne).not.toHaveBeenCalled();
+      await service.processTemperatureData(db, baseTemperatureData);
+
       expect(db.collection).not.toHaveBeenCalledWith('ingestionIdempotencyKeys');
     });
   });

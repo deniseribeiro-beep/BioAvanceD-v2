@@ -297,7 +297,7 @@ describe('POST /api/temperature/reading stamps organizationId from the caller sc
   it('ignores a body organizationId naming another organization', async () => {
     givenScopedCaller('org-a');
     const create = vi.spyOn(temperatureService, 'createTemperatureReading')
-      .mockResolvedValue({ _id: { toString: () => 't1' }, temperatureValue: -80, temperatureUnit: 'C' });
+      .mockResolvedValue({ telemetryReadingId: 't1', temperatureValue: -80, temperatureUnit: 'C' });
 
     const res = await request(app)
       .post('/api/temperature/reading')
@@ -322,7 +322,7 @@ describe('POST /api/temperature/reading stamps organizationId from the caller sc
       organizations: createCollectionMock({ findOne: vi.fn().mockResolvedValue({ organizationId: 'org-real' }) })
     });
     return vi.spyOn(temperatureService, 'createTemperatureReading')
-      .mockResolvedValue({ _id: { toString: () => 't2' }, temperatureValue: -70, temperatureUnit: 'C' });
+      .mockResolvedValue({ telemetryReadingId: 't2', temperatureValue: -70, temperatureUnit: 'C' });
   }
 
   it('#1080: the machine-ingest route derives organizationId from the sensor, not the body', async () => {

@@ -40,11 +40,12 @@ describe('temperatureService.createTemperatureReading', () => {
     ).rejects.toThrow('sensorId é obrigatório, temperatureValue é obrigatório e deve ser number');
   });
 
+  // #1391 (RF009 AC1): InfluxDB is the reading's only store, so a created
+  // reading is the InfluxDB write's point and no Mongo copy is written.
   it('does not call checkPolicyAndAlert when no policyId/policyID present', async () => {
-    const insertOne = vi.fn().mockResolvedValue({ insertedId: 'abc123' });
-    const db = makeDb({ temperatures: { insertOne } });
+    const db = makeDb();
     const checkSpy = vi.spyOn(temperatureService, 'checkPolicyAndAlert').mockResolvedValue(undefined);
-    vi.spyOn(influxTelemetryWriteRepository, 'writeTemperatureReadingNow').mockResolvedValue(new Date('2026-10-10T12:00:01.000Z'));
+    const write = vi.spyOn(influxTelemetryWriteRepository, 'writeTemperatureReadingNow').mockResolvedValue(new Date('2026-10-10T12:00:01.000Z'));
 
     const result = await temperatureService.createTemperatureReading(db, {
       sensorId: 's1',
@@ -52,13 +53,13 @@ describe('temperatureService.createTemperatureReading', () => {
     });
 
     expect(checkSpy).not.toHaveBeenCalled();
-    expect(insertOne).toHaveBeenCalled();
-    expect(result._id).toBe('abc123');
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(result.telemetryReadingId).toBeTruthy();
+    expect(result.telemetryReadingId).toBe(write.mock.calls[0][0].telemetryReadingId);
   });
 
   it('calls checkPolicyAndAlert when policyId is present', async () => {
-    const insertOne = vi.fn().mockResolvedValue({ insertedId: 'id1' });
-    const db = makeDb({ temperatures: { insertOne } });
+    const db = makeDb();
     const checkSpy = vi.spyOn(temperatureService, 'checkPolicyAndAlert').mockResolvedValue(undefined);
     vi.spyOn(influxTelemetryWriteRepository, 'writeTemperatureReadingNow').mockResolvedValue(new Date('2026-10-10T12:00:01.000Z'));
 
@@ -72,8 +73,7 @@ describe('temperatureService.createTemperatureReading', () => {
   });
 
   it('calls checkPolicyAndAlert when policyID (alternate casing) is present', async () => {
-    const insertOne = vi.fn().mockResolvedValue({ insertedId: 'id2' });
-    const db = makeDb({ temperatures: { insertOne } });
+    const db = makeDb();
     const checkSpy = vi.spyOn(temperatureService, 'checkPolicyAndAlert').mockResolvedValue(undefined);
     vi.spyOn(influxTelemetryWriteRepository, 'writeTemperatureReadingNow').mockResolvedValue(new Date('2026-10-10T12:00:01.000Z'));
 
@@ -86,30 +86,42 @@ describe('temperatureService.createTemperatureReading', () => {
     expect(checkSpy).toHaveBeenCalledTimes(1);
   });
 
-  // #1317 (RF009 AC1, RNF016 C3): InfluxDB is the authority, written and
-  // confirmed before the Mongo copy; its confirmation is persistedAt.
-  it('writes the point to InfluxDB before the Mongo copy, and stamps persistedAt from it', async () => {
-    const order = [];
+  // #1317 (RF009 AC1, RNF016 C3): InfluxDB is the authority; its
+  // confirmation is persistedAt.
+  it('writes the point to InfluxDB and stamps persistedAt from it', async () => {
     const persisted = new Date('2026-10-10T12:00:01.000Z');
-    const insertOne = vi.fn(async () => { order.push('mongo'); return { insertedId: 'influx-id' }; });
-    const db = makeDb({ temperatures: { insertOne } });
-    const writeSpy = vi.spyOn(influxTelemetryWriteRepository, 'writeTemperatureReadingNow')
-      .mockImplementation(async () => { order.push('influx'); return persisted; });
+    const db = makeDb();
+    const write = vi.spyOn(influxTelemetryWriteRepository, 'writeTemperatureReadingNow').mockResolvedValue(persisted);
 
     const result = await temperatureService.createTemperatureReading(db, {
       sensorId: 'sensor-x',
       temperatureValue: 3.5
     });
 
-    expect(order).toEqual(['influx', 'mongo']);
-    expect(writeSpy.mock.calls[0][0]).toMatchObject({ sensorId: 'sensor-x', temperatureValue: 3.5 });
-    expect(insertOne.mock.calls[0][0].persistedAt).toBe(persisted);
+    const stored = write.mock.calls[0][0];
+    expect(stored).toMatchObject({ sensorId: 'sensor-x', temperatureValue: 3.5 });
+    expect(stored.persistedAt).toBe(persisted);
     expect(result.persistedAt).toBe(persisted);
+    expect(result.telemetryReadingId).toBe(stored.telemetryReadingId);
+  });
+
+  it('writes no Mongo temperatures copy', async () => {
+    const insertOne = vi.fn().mockResolvedValue({ insertedId: 'copy-id' });
+    const db = makeDb({ temperatures: { insertOne } });
+    vi.spyOn(influxTelemetryWriteRepository, 'writeTemperatureReadingNow').mockResolvedValue(new Date('2026-10-10T12:00:01.000Z'));
+
+    const result = await temperatureService.createTemperatureReading(db, {
+      sensorId: 'sensor-x',
+      temperatureValue: 3.5
+    });
+
+    expect(db.collection).not.toHaveBeenCalledWith('temperatures');
+    expect(insertOne).not.toHaveBeenCalled();
+    expect(result).not.toHaveProperty('_id');
   });
 
   it('a failed InfluxDB write stores nothing and answers 503, but still checks the alert policy', async () => {
-    const insertOne = vi.fn();
-    const db = makeDb({ temperatures: { insertOne } });
+    const db = makeDb();
     vi.spyOn(logger, 'error').mockImplementation(() => {});
     vi.spyOn(influxTelemetryWriteRepository, 'writeTemperatureReadingNow').mockRejectedValue(new Error('influx down'));
     const checkSpy = vi.spyOn(temperatureService, 'checkPolicyAndAlert').mockResolvedValue(undefined);
@@ -121,7 +133,7 @@ describe('temperatureService.createTemperatureReading', () => {
     }).catch((e) => e);
 
     expect(err).toMatchObject({ statusCode: 503, code: 'TELEMETRY_NOT_PERSISTED' });
-    expect(insertOne).not.toHaveBeenCalled();
+    expect(db.collection).not.toHaveBeenCalledWith('temperatures');
     expect(checkSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -129,8 +141,8 @@ describe('temperatureService.createTemperatureReading', () => {
   // Organization -- same write-time validation shape #634/#635 used.
   it('throws a 404 when organizationId does not resolve to a real Organization', async () => {
     const organizations = { findOne: vi.fn().mockResolvedValue(null) };
-    const insertOne = vi.fn();
-    const db = makeDb({ temperatures: { insertOne }, organizations });
+    const db = makeDb({ organizations });
+    const write = vi.spyOn(influxTelemetryWriteRepository, 'writeTemperatureReadingNow');
 
     const err = await temperatureService.createTemperatureReading(db, {
       sensorId: 's1',
@@ -142,13 +154,12 @@ describe('temperatureService.createTemperatureReading', () => {
     expect(err.message).toContain('org-inexistente');
     expect(err.statusCode).toBe(404);
     expect(organizations.findOne).toHaveBeenCalledWith({ organizationId: 'org-inexistente' });
-    expect(insertOne).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
   });
 
   it('creates a reading with organizationId when it resolves to a real Organization', async () => {
     const organizations = { findOne: vi.fn().mockResolvedValue({ organizationId: 'org-1' }) };
-    const insertOne = vi.fn().mockResolvedValue({ insertedId: 'abc123' });
-    const db = makeDb({ temperatures: { insertOne }, organizations });
+    const db = makeDb({ organizations });
     vi.spyOn(influxTelemetryWriteRepository, 'writeTemperatureReadingNow').mockResolvedValue(new Date('2026-10-10T12:00:01.000Z'));
 
     const result = await temperatureService.createTemperatureReading(db, {
@@ -161,8 +172,7 @@ describe('temperatureService.createTemperatureReading', () => {
   });
 
   it('leaves organizationId null when not provided (no backfill, unscoped/legacy by default)', async () => {
-    const insertOne = vi.fn().mockResolvedValue({ insertedId: 'abc123' });
-    const db = makeDb({ temperatures: { insertOne } });
+    const db = makeDb();
     vi.spyOn(influxTelemetryWriteRepository, 'writeTemperatureReadingNow').mockResolvedValue(new Date('2026-10-10T12:00:01.000Z'));
 
     const result = await temperatureService.createTemperatureReading(db, {
@@ -173,20 +183,28 @@ describe('temperatureService.createTemperatureReading', () => {
     expect(result.organizationId).toBeNull();
   });
 
-  it('propagates (rejects) when insertOne throws, and logs the error', async () => {
-    const insertOne = vi.fn().mockRejectedValue(new Error('mongo down'));
-    const db = makeDb({ temperatures: { insertOne } });
+  // RF009 AC7 (#1391): recordClientReplay logs a failed key-store record and
+  // the persisted reading goes on, as a failed lookup does.
+  it('logs a failed key-store record and still returns the persisted reading', async () => {
+    const ingestionIdempotencyKeys = {
+      findOne: vi.fn().mockResolvedValue(null),
+      createIndex: vi.fn().mockResolvedValue('ok'),
+      updateOne: vi.fn().mockRejectedValue(new Error('key store down'))
+    };
+    const db = makeDb({ ingestionIdempotencyKeys });
     const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
-    vi.spyOn(influxTelemetryWriteRepository, 'writeTemperatureReadingNow').mockResolvedValue(new Date());
+    const write = vi.spyOn(influxTelemetryWriteRepository, 'writeTemperatureReadingNow').mockResolvedValue(new Date());
 
-    await expect(
-      temperatureService.createTemperatureReading(db, {
-        sensorId: 's1',
-        temperatureValue: 1
-      })
-    ).rejects.toThrow('mongo down');
+    const result = await temperatureService.createTemperatureReading(db, {
+      sensorId: 's1',
+      temperatureValue: 1,
+      idempotencyKey: 'client-key-1'
+    });
 
+    expect(ingestionIdempotencyKeys.updateOne).toHaveBeenCalledTimes(1);
     expect(errorSpy).toHaveBeenCalled();
+    expect(result.telemetryReadingId).toBe(write.mock.calls[0][0].telemetryReadingId);
+    expect(db.collection).not.toHaveBeenCalledWith('temperatures');
   });
 });
 

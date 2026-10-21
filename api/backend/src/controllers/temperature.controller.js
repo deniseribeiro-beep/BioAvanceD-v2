@@ -104,7 +104,7 @@ class TemperatureController {
       await auditLogger.log({
         action: 'CREATE',
         resourceType: 'Temperature',
-        resourceId: temperature._id.toString(),
+        resourceId: temperature.telemetryReadingId,
         status: 'success',
         severity: 'info',
         message: `Leitura de temperatura registrada: ${temperature.temperatureValue}${temperature.temperatureUnit}`,

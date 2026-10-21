@@ -62,7 +62,6 @@ test.describe('Async importers persist a valid row (RF029) -- real backend', () 
         await db.collection('stagingImports').deleteOne({ jobId });
       }
       // The InfluxDB point stays: no e2e spec deletes points.
-      await db.collection('temperatures').deleteMany({ sensorId: { $regex: '^rf009-import-' } });
       await client.close();
       client = null;
     }
@@ -228,5 +227,7 @@ test.describe('Async importers persist a valid row (RF029) -- real backend', () 
     const page = (await history.json()).data;
     expect(page.total).toBe(1);
     expect(page.temperatures[0]).toMatchObject({ sensorId, temperatureValue: -20, temperatureUnit: '°C' });
+    // #1391: InfluxDB is the reading's only store.
+    expect(await db.collection('temperatures').countDocuments({ sensorId })).toBe(0);
   });
 });

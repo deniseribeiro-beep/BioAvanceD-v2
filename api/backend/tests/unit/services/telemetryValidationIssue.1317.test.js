@@ -153,7 +153,11 @@ describe('the ingestion paths screen every reading', () => {
       const { db, collectionOf } = fakeDb();
       const result = await temperatureService.createTemperatureReading(db, { sensorId: 's1', temperatureValue: 4, timestamp: DRIFTED });
       expect(write).toHaveBeenCalledTimes(1);
-      expect(result).toMatchObject({ clockStatus: 'drift', _id: 'temperatures-id' });
+      expect(result).toMatchObject({ clockStatus: 'drift' });
+      expect(result.telemetryReadingId).toBeTruthy();
+      // #1391 (RF009 AC1): InfluxDB is the reading's only store.
+      expect(result).not.toHaveProperty('_id');
+      expect(db.collection).not.toHaveBeenCalledWith('temperatures');
       expect(collectionOf('telemetryValidationIssues').insertMany.mock.calls[0][0]).toEqual([expect.objectContaining({ issueCode: 'clock_drift' })]);
       expect(collectionOf('telemetryIngestionEvents').insertOne.mock.calls[0][0].telemetryReadingId).toBe(result.telemetryReadingId);
     } finally {
@@ -168,7 +172,7 @@ describe('the ingestion paths screen every reading', () => {
     await expect(temperatureService.createTemperatureReading(db, { sensorId: 's1', temperatureValue: 900 }))
       .rejects.toMatchObject({ statusCode: 422, auditReason: 'invalid_value' });
     expect(write).not.toHaveBeenCalled();
-    expect(collectionOf('temperatures').insertOne).not.toHaveBeenCalled();
+    expect(db.collection).not.toHaveBeenCalledWith('temperatures');
     expect(collectionOf('telemetryValidationIssues').insertMany).toHaveBeenCalledTimes(1);
   });
 

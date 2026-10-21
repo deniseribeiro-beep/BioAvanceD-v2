@@ -817,7 +817,6 @@ class ImportService {
    */
   async importTemperature(db, file) {
     try {
-      const temperaturesCollection = db.collection('temperatures');
       const results = { success: 0, errors: [], total: 0 };
 
       const rows = [];
@@ -842,9 +841,9 @@ class ImportService {
             });
           } else {
             // RF009 AC1-AC3, AC7 (#1317): an imported reading takes the same reading
-            // contract and confirmed InfluxDB write as the other ingestion paths. The
-            // Mongo document is the queryable copy and is written only after InfluxDB
-            // confirms the point; a failed write stores nothing for that row.
+            // contract and confirmed InfluxDB write as the other ingestion paths.
+            // InfluxDB is the reading's only store (#1391): a row counts as imported
+            // once InfluxDB confirms the point, and a failed write is that row's error.
             const identity = readingIdentityOf(tempData, new Date(), { ingestionService: 'temperature-import' });
             // [inference] the import time says nothing about the device's clock, since
             // a file carries readings taken long before it was uploaded, so the clock is
@@ -857,7 +856,6 @@ class ImportService {
             } catch (error) {
               throw new Error(`Leitura não persistida no InfluxDB: ${error.message || error}`);
             }
-            await temperaturesCollection.insertOne(temperature);
             results.success++;
           }
         } catch (error) {

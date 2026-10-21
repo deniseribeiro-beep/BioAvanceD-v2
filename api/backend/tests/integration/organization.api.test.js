@@ -477,4 +477,27 @@ describe('DELETE /api/organizations/:id', () => {
     expect(coll.deleteOne).not.toHaveBeenCalled();
     expect(alerts.countDocuments).toHaveBeenCalledWith({ organizationId: 'org-uuid-1' }, { limit: 1 });
   });
+
+  // #1391 (RF009 AC1): InfluxDB is a reading's only store, so a leftover
+  // document of the retired `temperatures` copy references nothing.
+  it('deletes an organization referenced only by old temperatures copy documents', async () => {
+    const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue({ _id: 'mongo-org-1', organizationId: 'org-uuid-1' }),
+      deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 }),
+    });
+    const temperatures = createCollectionMock({ countDocuments: vi.fn().mockResolvedValue(1) });
+    app.locals.db = createDbMock({
+      organizations: coll,
+      temperatures,
+      ...buildRbacCollections([{ userAccountId: 'qa-admin-1', accessType: 4 }]),
+    });
+
+    const res = await request(app)
+      .delete('/api/organizations/mongo-org-1')
+      .set('Authorization', `Bearer ${makeToken(4)}`);
+
+    expect(res.status).toBe(200);
+    expect(coll.deleteOne).toHaveBeenCalledWith({ _id: 'mongo-org-1' });
+    expect(temperatures.countDocuments).not.toHaveBeenCalled();
+  });
 });

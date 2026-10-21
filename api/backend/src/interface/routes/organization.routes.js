@@ -169,7 +169,6 @@ function buildIdQuery(rawId) {
 const ORGANIZATION_REFERENCES = [
   { label: 'equipment', name: 'equipment', filter: (id) => ({ organizationId: id }) },
   { label: 'sensors', name: 'sensors', filter: (id) => ({ organizationId: id }) },
-  { label: 'temperatures', name: 'temperatures', filter: (id) => ({ organizationId: id }) },
   // A sensor's delete is a hard delete that leaves its alerts, and the alert
   // read is scoped by this organizationId, so alerts outlive their sensor.
   { label: 'alerts', name: 'alerts', filter: (id) => ({ organizationId: id }) },

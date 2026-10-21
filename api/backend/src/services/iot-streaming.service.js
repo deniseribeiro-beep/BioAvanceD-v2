@@ -185,8 +185,8 @@ class IoTStreamingService {
     try {
       // #1317 (RF009 AC1-AC3): the same reading contract as the temperature
       // route. The fields the server adds are not part of the received
-      // payload's hash; InfluxDB is written and confirmed before the Mongo
-      // copy, and a failed write throws with nothing stored.
+      // payload's hash; InfluxDB is the reading's only store (#1391), and a
+      // failed write throws with nothing stored.
       const { source: _source, createdAt: _createdAt, updatedAt: _updatedAt, ...received } = temperatureData;
       const identity = readingIdentityOf(received, new Date(), { ingestionService: temperatureData.source === 'mqtt' ? 'mqtt' : 'iot-queue' });
       // RF009 AC7 (#1317, #1391): a client key already recorded for this
@@ -206,14 +206,12 @@ class IoTStreamingService {
       reading.persistedAt = await influxTelemetryWriteRepository.writeTemperatureReadingNow(reading);
 
       // RF009 AC7 (#1391): a concurrent send that recorded the key first
-      // wins; this one stores no copy and returns the winner's id.
+      // wins; this one returns the winner's id. InfluxDB, the reading's only
+      // store, already holds this send's point.
       const winner = await recordClientReplay(db, identity, received, reading.persistedAt);
       if (winner) return winner.telemetryReadingId;
 
-      const result = await db.collection('temperatures').insertOne(reading);
-
-      logger.debug(`✅ Dados de temperatura processados: ${result.insertedId}`);
-      // #1391: the reading's id, never the Mongo copy's _id.
+      logger.debug(`✅ Dados de temperatura processados: ${identity.telemetryReadingId}`);
       return identity.telemetryReadingId;
     } catch (error) {
       logger.error('Erro ao processar dados de temperatura:', error);

@@ -90,10 +90,9 @@ class TemperatureService {
 
       const temperature = { ...TemperatureModel.create(temperatureData), ...identity };
 
-      // RF009 AC1, RNF016 C3 (#1317): InfluxDB is the authority, so the point
-      // is written first and its confirmation is persistedAt (V2E-0550). A
-      // failed write stores nothing and answers 503; the Mongo document below
-      // is the queryable copy. The alert check runs either way: cold-chain
+      // RF009 AC1, RNF016 C3 (#1317, #1391): InfluxDB is the reading's only
+      // store, and its confirmation is persistedAt (V2E-0550). A failed write
+      // stores nothing and answers 503. The alert check runs either way: cold-chain
       // availability wins over refusing a reading (the ingest audit's Axis E
       // decision), so an InfluxDB outage never silences an excursion.
       let notPersisted = null;
@@ -115,18 +114,13 @@ class TemperatureService {
 
       // RF009 AC7 (#1391): persisted, so the client key now replays this
       // reading. A concurrent send that recorded the key first wins: this one
-      // stores no copy and answers the winner's reading.
+      // answers the winner's reading.
       const winner = await recordClientReplay(db, identity, temperatureData, temperature.persistedAt);
       if (winner) return replayOf(winner, temperatureData, identity);
 
-      const result = await db.collection('temperatures').insertOne(temperature);
+      logger.info('Leitura de temperatura registrada:', { telemetryReadingId: temperature.telemetryReadingId });
 
-      logger.info('Leitura de temperatura registrada:', { logID: result.insertedId });
-
-      return {
-        _id: result.insertedId,
-        ...temperature
-      };
+      return temperature;
     } catch (error) {
       logger.error('Erro ao criar leitura de temperatura:', error.message);
       throw error;

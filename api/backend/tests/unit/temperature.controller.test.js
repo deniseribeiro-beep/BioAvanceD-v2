@@ -28,7 +28,7 @@ describe('temperature.controller.createReading', () => {
   });
 
   it('creates a reading and returns 201, without auditing when req.user is absent', async () => {
-    const fakeReading = { _id: { toString: () => 'r1' }, temperatureValue: 4.2, temperatureUnit: 'C' };
+    const fakeReading = { telemetryReadingId: 'r1', temperatureValue: 4.2, temperatureUnit: 'C' };
     vi.spyOn(temperatureService, 'createTemperatureReading').mockResolvedValue(fakeReading);
     const req = { app: { locals: { db: {} } }, body: { value: 4.2 } };
     const res = buildRes();
@@ -45,7 +45,7 @@ describe('temperature.controller.createReading', () => {
 
   // #1317 (RF009 AC7): a replayed idempotencyKey wrote nothing.
   it('answers 200 with the stored reading for a replayed idempotencyKey, and records no CREATE', async () => {
-    const stored = { _id: { toString: () => 'r0' }, temperatureValue: 4.2, replayed: true };
+    const stored = { telemetryReadingId: 'r0', temperatureValue: 4.2, replayed: true };
     vi.spyOn(temperatureService, 'createTemperatureReading').mockResolvedValue(stored);
     const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
     const req = { app: { locals: { db: {} } }, body: { idempotencyKey: 'k-1' }, organizationScope: { scope: 'global' } };
@@ -107,7 +107,7 @@ describe('temperature.controller.createReading', () => {
   // The organization is now derived from the sensor instead, which is where the
   // dictionary hangs organizational custody (TelemetryReading.sensorId, 1..1).
   function machineIngestSetup(sensorDoc, body) {
-    const fakeReading = { _id: { toString: () => 'r1' }, temperatureValue: 4.2, temperatureUnit: 'C' };
+    const fakeReading = { telemetryReadingId: 'r1', temperatureValue: 4.2, temperatureUnit: 'C' };
     const create = vi.spyOn(temperatureService, 'createTemperatureReading').mockResolvedValue(fakeReading);
     const findOne = vi.fn().mockResolvedValue(sensorDoc);
     const db = { collection: vi.fn().mockReturnValue({ findOne }) };
@@ -167,13 +167,16 @@ describe('temperature.controller.createReading', () => {
     const entry = logSpy.mock.calls[0][0];
     expect(entry.action).toBe('CREATE');
     expect(entry.resourceType).toBe('Temperature');
+    // #1391: the reading's id, since no Mongo copy carries an _id.
+    expect(entry.resourceId).toBe('r1');
+    expect(res.status).toHaveBeenCalledWith(201);
   });
 
   // CONTROL: the authenticated path behaves identically before and after
   // #1080, so a red here in the pre-fix run means the setup is wrong rather
   // than the bug being present.
   it('CONTROL: the authenticated path stamps from the caller scope and looks up no sensor', async () => {
-    const fakeReading = { _id: { toString: () => 'r1' }, temperatureValue: 4.2, temperatureUnit: 'C' };
+    const fakeReading = { telemetryReadingId: 'r1', temperatureValue: 4.2, temperatureUnit: 'C' };
     const create = vi.spyOn(temperatureService, 'createTemperatureReading').mockResolvedValue(fakeReading);
     const db = { collection: vi.fn() };
     vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
