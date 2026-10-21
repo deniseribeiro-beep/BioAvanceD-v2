@@ -121,9 +121,20 @@ describe('portManager', () => {
   });
 
   describe('getProcessUsingPort', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+      delete require.cache[portManagerPath];
+    });
+
     it('returns null when nothing is listening on the port', async () => {
-      const port = await getFreePort();
-      const result = await portManager.getProcessUsingPort(port);
+      // findstr (and lsof) exit 1 with no hit; no real port is used, so another
+      // process taking a just-released port cannot turn this red (#1390).
+      vi.spyOn(childProcess, 'exec').mockImplementation((cmd, cb) => {
+        cb(Object.assign(new Error('Command failed'), { code: 1 }));
+      });
+
+      const pm = freshPortManagerWithMockedExec();
+      const result = await pm.getProcessUsingPort(5040);
       expect(result).toBeNull();
     });
 
@@ -295,7 +306,7 @@ describe('portManager', () => {
 
     it('returns just the pid when tasklist fails to resolve the process name', async () => {
       vi.spyOn(childProcess, 'exec').mockImplementation((cmd, cb) => {
-        if (cmd.startsWith('netstat')) cb(null, { stdout: 'TCP 0.0.0.0:9999 LISTENING 4242\n', stderr: '' });
+        if (cmd.startsWith('netstat')) cb(null, { stdout: 'TCP 0.0.0.0:9999 0.0.0.0:0 LISTENING 4242\n', stderr: '' });
         else cb(new Error('tasklist failed'));
       });
 
@@ -303,6 +314,51 @@ describe('portManager', () => {
       const result = await pm._getProcessUsingPortWindows(9999);
 
       expect(result).toEqual({ pid: '4242' });
+    });
+
+    // The mock answers every netstat filter with the same text, as findstr :<port>
+    // would when the port is a substring of each line (#1390).
+    function mockNetstat(netstatStdout) {
+      vi.spyOn(childProcess, 'exec').mockImplementation((cmd, cb) => {
+        if (cmd.startsWith('netstat')) cb(null, { stdout: netstatStdout, stderr: '' });
+        else cb(null, { stdout: '"svchost.exe","888","Services","0","1.234 K"\r\n', stderr: '' });
+      });
+      return freshPortManagerWithMockedExec();
+    }
+
+    it('returns null when only a longer port contains the requested port', async () => {
+      const pm = mockNetstat('  TCP    0.0.0.0:50400          0.0.0.0:0              LISTENING       777\r\n');
+
+      expect(await pm._getProcessUsingPortWindows(5040)).toBeNull();
+    });
+
+    it('skips a longer-port line listed first and returns the exact-port listener', async () => {
+      const pm = mockNetstat(
+        '  TCP    0.0.0.0:50400          0.0.0.0:0              LISTENING       777\r\n' +
+          '  TCP    0.0.0.0:5040           0.0.0.0:0              LISTENING       888\r\n'
+      );
+
+      expect(await pm._getProcessUsingPortWindows(5040)).toEqual({ pid: '888', processName: 'svchost.exe' });
+    });
+
+    it('returns null when the port only appears in the foreign address column', async () => {
+      const pm = mockNetstat('TCP 127.0.0.1:61000 127.0.0.1:5040 ESTABLISHED 999\n');
+
+      expect(await pm._getProcessUsingPortWindows(5040)).toBeNull();
+    });
+
+    it('returns null for an outbound socket on the local port that is not listening', async () => {
+      const pm = mockNetstat('TCP 10.0.0.2:5040 20.1.1.1:443 ESTABLISHED 19408\n');
+
+      expect(await pm._getProcessUsingPortWindows(5040)).toBeNull();
+    });
+
+    it('returns the pid of an IPv6 listener on the exact port', async () => {
+      const pm = mockNetstat('TCP [::]:5040 [::]:0 LISTENING 888\n');
+
+      const result = await pm._getProcessUsingPortWindows(5040);
+
+      expect(result.pid).toBe('888');
     });
   });
 
