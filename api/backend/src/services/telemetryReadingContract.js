@@ -184,8 +184,8 @@ async function findClientReplay(db, identity, payload) {
 /**
  * RF009 AC7 (#1391): records a persisted reading's client key with
  * `POST /api/iot/telemetry`'s resultRef. Returns the stored resultRef when
- * a concurrent send of the same key recorded first (this send then stores
- * no copy and answers the winner's reading), else null. A failed record is
+ * a concurrent send of the same key recorded first (this send then answers
+ * the winner's reading), else null. A failed record is
  * logged and the reading goes on, as a failed lookup does.
  */
 async function recordClientReplay(db, identity, payload, persistedAt) {

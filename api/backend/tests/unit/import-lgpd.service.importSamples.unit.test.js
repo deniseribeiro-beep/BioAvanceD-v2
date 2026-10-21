@@ -496,8 +496,9 @@ describe('ImportLGPDService.importSamples', () => {
   });
 
   // #1353, #1192: the resolved organization is the tenancy key, stamped as
-  // organizationId. The import names no collection site (parseSampleRow maps
-  // none), so the unnamed site is filled with the organization, as before.
+  // organizationId. parseSampleRow maps a collectionSite column (ELM-0128,
+  // #1376), but VALID_ROW leaves it out, so the unnamed site is filled with
+  // the organization, as before.
   it('stores the stamped organizationId on an imported row and fills its unnamed collectionSite with it (#1353, #1192)', async () => {
     vi.spyOn(service, 'readFile').mockResolvedValue([VALID_ROW]);
 
