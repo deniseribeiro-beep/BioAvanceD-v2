@@ -125,19 +125,19 @@ describe('validateReuse', () => {
 
   it('does not throw when new password not in history', async () => {
     const hash = await bcrypt.hash('OldPass1!', 10);
-    const user = { password: hash };
+    const user = { passwordHash: hash };
     await expect(validateReuse('NewPass2!', user)).resolves.toBeUndefined();
   });
 
   it('throws when new password matches current password', async () => {
     const hash = await bcrypt.hash('CurrentPass1!', 10);
-    const user = { password: hash };
+    const user = { passwordHash: hash };
     await expect(validateReuse('CurrentPass1!', user)).rejects.toThrow('utilizada recentemente');
   });
 
   it('throws when new password matches a history entry', async () => {
     const oldHash = await bcrypt.hash('OldPass1!', 10);
-    const user = { passwordHistory: [oldHash] };
+    const user = { passwordHistoryHashes: [oldHash] };
     await expect(validateReuse('OldPass1!', user)).rejects.toThrow('utilizada recentemente');
   });
 
@@ -147,20 +147,20 @@ describe('validateReuse', () => {
   }
 
   it('#1244: checks the default depth of 5 history entries when no policy is passed', async () => {
-    const user = { passwordHistory: await historyOf(6) };
+    const user = { passwordHistoryHashes: await historyOf(6) };
     await expect(validateReuse('Pass5!Aa', user)).rejects.toThrow('utilizada recentemente');
     await expect(validateReuse('Pass6!Aa', user)).resolves.toBeUndefined();
   });
 
   it('#1244: checks exactly maxReuseHistory entries', async () => {
-    const user = { passwordHistory: await historyOf(3) };
+    const user = { passwordHistoryHashes: await historyOf(3) };
     const policy = { preventReuse: true, maxReuseHistory: 2 };
     await expect(validateReuse('Pass2!Aa', user, policy)).rejects.toThrow('utilizada recentemente');
     await expect(validateReuse('Pass3!Aa', user, policy)).resolves.toBeUndefined();
   });
 
   it('#1244: still refuses the current password at depth 1', async () => {
-    const user = { password: await bcrypt.hash('Current1!', 4), passwordHistory: await historyOf(2) };
+    const user = { passwordHash: await bcrypt.hash('Current1!', 4), passwordHistoryHashes: await historyOf(2) };
     const policy = { preventReuse: true, maxReuseHistory: 1 };
     await expect(validateReuse('Current1!', user, policy)).rejects.toThrow('utilizada recentemente');
     await expect(validateReuse('Pass2!Aa', user, policy)).resolves.toBeUndefined();
@@ -169,14 +169,14 @@ describe('validateReuse', () => {
   // #1253: preventReuse governs the history; the current password always
   // counts, or a forced or expired change could keep the same secret.
   it('#1244/#1253: preventReuse false skips the history but still refuses the current password', async () => {
-    const user = { password: await bcrypt.hash('Current1!', 4), passwordHistory: await historyOf(1) };
+    const user = { passwordHash: await bcrypt.hash('Current1!', 4), passwordHistoryHashes: await historyOf(1) };
     const policy = { preventReuse: false, maxReuseHistory: 5 };
     await expect(validateReuse('Current1!', user, policy)).rejects.toThrow('utilizada recentemente');
     await expect(validateReuse('Pass1!Aa', user, policy)).resolves.toBeUndefined();
   });
 
   it('#1244: an out-of-range depth falls back to the default 5', async () => {
-    const user = { passwordHistory: await historyOf(6) };
+    const user = { passwordHistoryHashes: await historyOf(6) };
     await expect(validateReuse('Pass5!Aa', user, { preventReuse: true, maxReuseHistory: 0 })).rejects.toThrow();
     await expect(validateReuse('Pass5!Aa', user, { preventReuse: true, maxReuseHistory: 'x' })).rejects.toThrow();
     await expect(validateReuse('Pass6!Aa', user, { preventReuse: true, maxReuseHistory: 99 })).resolves.toBeUndefined();
@@ -185,18 +185,18 @@ describe('validateReuse', () => {
 
 describe('#1244 nextPasswordHistory', () => {
   it('prepends the current hash and keeps the policy depth', () => {
-    const user = { password: 'cur', passwordHistory: ['h1', 'h2', 'h3'] };
+    const user = { passwordHash: 'cur', passwordHistoryHashes: ['h1', 'h2', 'h3'] };
     expect(nextPasswordHistory(user, { preventReuse: true, maxReuseHistory: 2 })).toEqual(['cur', 'h1']);
     expect(nextPasswordHistory(user, { preventReuse: true, maxReuseHistory: 5 })).toEqual(['cur', 'h1', 'h2', 'h3']);
   });
 
   it('keeps the depth while preventReuse is off, so re-enabling finds a history', () => {
-    const user = { password: 'cur', passwordHistory: ['h1'] };
+    const user = { passwordHash: 'cur', passwordHistoryHashes: ['h1'] };
     expect(nextPasswordHistory(user, { preventReuse: false, maxReuseHistory: 5 })).toEqual(['cur', 'h1']);
   });
 
   it('defaults to depth 5 and tolerates a user with no password or history', () => {
-    const user = { password: 'cur', passwordHistory: ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'] };
+    const user = { passwordHash: 'cur', passwordHistoryHashes: ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'] };
     expect(nextPasswordHistory(user)).toEqual(['cur', 'h1', 'h2', 'h3', 'h4']);
     expect(nextPasswordHistory({})).toEqual([]);
   });

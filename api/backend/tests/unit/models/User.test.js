@@ -371,7 +371,8 @@ describe('UserModel - Unit Tests', () => {
   });
 
   // #1330: stored documents use the dict-02 names; documents written before
-  // them carry the legacy ones until a write moves them.
+  // them carry the legacy ones until the migration or a write moves them.
+  // #1386: readers no longer fall back to a legacy name.
   describe('#1330 stored names', () => {
     const legacyUser = () => ({
       _id: 'u1',
@@ -385,29 +386,30 @@ describe('UserModel - Unit Tests', () => {
       passwordResetExpires: new Date('2026-02-01T00:00:00Z')
     });
 
-    it('the accessors read a legacy document through its old names', () => {
-      const user = legacyUser();
-      expect(UserModel.displayNameOf(user)).toBe('Legado');
-      expect(UserModel.passwordHashOf(user)).toBe('$2a$10$legacyhash');
-      expect(UserModel.accountStatusOf(user)).toBe('blocked');
-      expect(UserModel.mfaSetupAtOf(user)).toEqual(new Date('2026-01-01T00:00:00Z'));
-      expect(UserModel.lastLoginAtOf(user)).toBeNull();
-      expect(UserModel.passwordHistoryOf(user)).toEqual(['$2a$10$older']);
-      expect(UserModel.forcePasswordResetOf(user)).toBe(true);
-      expect(UserModel.passwordResetExpiresAtOf(user)).toEqual(new Date('2026-02-01T00:00:00Z'));
+    it('#1386: storedValueOf does not read a legacy name', () => {
+      expect(UserModel.storedValueOf({ name: 'Old' }, 'displayName')).toBeUndefined();
     });
 
-    it('a canonical value wins, and a canonical null is not read through to the legacy name', () => {
+    it('#1386: the accessors do not read a legacy document through its old names', () => {
+      const user = legacyUser();
+      expect(UserModel.displayNameOf(user)).toBeUndefined();
+      expect(UserModel.passwordHashOf(user)).toBeUndefined();
+      expect(UserModel.accountStatusOf(user)).toBeUndefined();
+      expect(UserModel.mfaSetupAtOf(user)).toBeUndefined();
+      expect(UserModel.passwordHistoryOf(user)).toBeUndefined();
+      expect(UserModel.forcePasswordResetOf(user)).toBeUndefined();
+      expect(UserModel.passwordResetExpiresAtOf(user)).toBeUndefined();
+    });
+
+    it('a canonical value is read beside a legacy one, and a canonical null stays null', () => {
       const user = { ...legacyUser(), accountStatus: 'active', lastLoginAt: null, lastLogin: new Date() };
       expect(UserModel.accountStatusOf(user)).toBe('active');
       expect(UserModel.lastLoginAtOf(user)).toBeNull();
       expect(UserModel.accountStatusOf({})).toBeUndefined();
     });
 
-    it('accountStatusFilter reads the legacy status only on a document without accountStatus', () => {
-      expect(UserModel.accountStatusFilter('active')).toEqual({
-        $or: [{ accountStatus: 'active' }, { accountStatus: { $exists: false }, status: 'active' }]
-      });
+    it('#1386: accountStatusFilter matches the canonical accountStatus only', () => {
+      expect(UserModel.accountStatusFilter('active')).toEqual({ accountStatus: 'active' });
     });
 
     it('storedUpdateOf writes canonical names and unsets the legacy name of each field it touches', () => {

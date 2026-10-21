@@ -221,20 +221,6 @@ describe('SessionModel - Unit Tests', () => {
       expect(isActive).toBe(true);
     });
 
-    it('#1330: judges a legacy-named document by lastActivity and inactiveTimeout', () => {
-      const legacy = {
-        isActive: true,
-        isRevoked: false,
-        expiresAt: new Date(Date.now() + 60 * 1000),
-        refreshExpiresAt: new Date(Date.now() + 60 * 1000),
-        lastActivity: new Date(Date.now() - 11 * 60 * 1000),
-        inactiveTimeout: 10 * 60 * 1000
-      };
-
-      expect(SessionModel.isSessionActive(legacy)).toBe(false);
-      expect(SessionModel.isSessionActive({ ...legacy, inactiveTimeout: 12 * 60 * 1000 })).toBe(true);
-    });
-
     it('deve retornar false para null session', () => {
       const isActive = SessionModel.isSessionActive(null);
 
@@ -245,6 +231,21 @@ describe('SessionModel - Unit Tests', () => {
       const isActive = SessionModel.isSessionActive(undefined);
 
       expect(isActive).toBe(false);
+    });
+  });
+
+  // #1386: readers and filters use the canonical names only.
+  describe('canonical-only readers and filters (#1386)', () => {
+    it('ownerOf does not read the legacy userID', () => {
+      expect(SessionModel.ownerOf({ userID: 'u' })).toBeUndefined();
+    });
+
+    it('idFilter matches the canonical sessionId only', () => {
+      expect(SessionModel.idFilter('s')).toEqual({ sessionId: 's' });
+    });
+
+    it('notAccessTokenHash excludes by the canonical accessTokenHash only', () => {
+      expect(SessionModel.notAccessTokenHash('h')).toEqual([{ accessTokenHash: { $ne: 'h' } }]);
     });
   });
 

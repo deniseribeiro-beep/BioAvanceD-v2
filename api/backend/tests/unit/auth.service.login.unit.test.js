@@ -95,10 +95,10 @@ function makeUser(overrides = {}) {
     _id: { toString: () => 'user-1' },
     email: 'user@test.com',
     username: 'user1',
-    name: 'User One',
-    password: HASHED,
-    status: 'active',
-    lastLogin: new Date('2020-01-01'), // not first login -> skips mandatory MFA-setup branch
+    displayName: 'User One',
+    passwordHash: HASHED,
+    accountStatus: 'active',
+    lastLoginAt: new Date('2020-01-01'), // not first login -> skips mandatory MFA-setup branch
     mfaEnabled: false,
     ...overrides,
   };
@@ -300,7 +300,7 @@ describe('AuthService.login -- #1052 no account identifiers in the application l
     const lines = captureLogs();
     // A password field too short to be a bcrypt hash drives processLogin's
     // "campo de senha ausente ou inválido" branch, which logged the pair.
-    const user = makeUser({ email: SECRET_EMAIL, username: SECRET_USERNAME, password: 'short' });
+    const user = makeUser({ email: SECRET_EMAIL, username: SECRET_USERNAME, passwordHash: 'short' });
     const db = makeLoginDb(vi.fn().mockResolvedValue(user));
 
     await expect(
@@ -364,7 +364,7 @@ describe('AuthService.login -- #914 authentication.requireMFA', () => {
   }
 
   function firstLoginUser() {
-    return makeUser({ lastLogin: null, mfaEnabled: false });
+    return makeUser({ lastLoginAt: null, mfaEnabled: false });
   }
 
   it('requireMFA: false lets a non-admin first login through without the enrolment step', async () => {

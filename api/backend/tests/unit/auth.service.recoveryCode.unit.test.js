@@ -75,10 +75,10 @@ async function enrolledUser(extra = {}) {
     _id: OWNER,
     email: 'user@test.com',
     username: 'user1',
-    name: 'User One',
-    password: await bcrypt.hash(PASSWORD, 4),
-    status: 'active',
-    lastLogin: new Date('2020-01-01'),
+    displayName: 'User One',
+    passwordHash: await bcrypt.hash(PASSWORD, 4),
+    accountStatus: 'active',
+    lastLoginAt: new Date('2020-01-01'),
     mfaEnabled: true,
     mfaSecretCiphertext: encryptValue('SECRET'),
     mfaFailedAttempts: 0,
@@ -227,7 +227,7 @@ describe('processLogin with a recovery code (#1331)', () => {
       const codes = recoveryCodesDouble(await canonicalSet(['ABCD2345']));
       const db = makeDb(codes);
 
-      const result = await login(db, await enrolledUser({ forceReset: true }), 'ABCD2345');
+      const result = await login(db, await enrolledUser({ forcePasswordReset: true }), 'ABCD2345');
 
       expect(result.requiresPasswordChange).toBe(true);
       expect(codes.updateOne).not.toHaveBeenCalled();
@@ -237,7 +237,7 @@ describe('processLogin with a recovery code (#1331)', () => {
       const codes = recoveryCodesDouble(await canonicalSet(['ABCD2345']));
       const db = makeDb(codes);
 
-      await expect(login(db, await enrolledUser({ forceReset: true }), 'ABCD2345', 'weak')).rejects.toThrow();
+      await expect(login(db, await enrolledUser({ forcePasswordReset: true }), 'ABCD2345', 'weak')).rejects.toThrow();
       expect(codes.updateOne).not.toHaveBeenCalled();
     });
 
@@ -246,7 +246,7 @@ describe('processLogin with a recovery code (#1331)', () => {
       const codes = recoveryCodesDouble(await canonicalSet(['ABCD2345']));
       const db = makeDb(codes);
 
-      const result = await login(db, await enrolledUser({ forceReset: true }), 'ABCD2345', 'NewStrongPass1!');
+      const result = await login(db, await enrolledUser({ forcePasswordReset: true }), 'ABCD2345', 'NewStrongPass1!');
 
       expect(result.token).toBeTruthy();
       expect(codes.state.doc.remainingCount).toBe(0);

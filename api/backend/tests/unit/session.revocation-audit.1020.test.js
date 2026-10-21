@@ -103,10 +103,8 @@ describe('session revocation audit rows (#1020)', () => {
     expect(logSpy.mock.calls[0][0].message).toBe('Sessão revogada: motivo expiration; sessões afetadas 3');
   });
 
-  // #1330: a session stored before the canonical names carries its owner as
-  // userID, and the audit row still names that owner.
   it('invalidateSession (logout): owner read back from the stored session, reason user_request, severity info', async () => {
-    const { db } = makeDb({ sessionDoc: { userID: 'owner-2' } });
+    const { db } = makeDb({ sessionDoc: { userAccountId: 'owner-2' } });
     await sessionService.invalidateSession(db, 'sess-2', 'user_request', 'owner-2');
     expect(logSpy).toHaveBeenCalledTimes(1);
     expect(logSpy.mock.calls[0][0]).toMatchObject({

@@ -40,9 +40,9 @@ const enrollingUser = (extra = {}) => ({
   _id: { toString: () => 'user-1258' },
   username: 'tecnico1258',
   email: 'tecnico1258@example.com',
-  password: HASH,
-  status: 'active',
-  lastLogin: null,
+  passwordHash: HASH,
+  accountStatus: 'active',
+  lastLoginAt: null,
   mfaEnabled: false,
   mfaSecretCiphertext: encryptValue('JBSWY3DPEHPK3PXP'),
   passwordChangedAt: new Date(),
@@ -72,7 +72,7 @@ describe('#1258 item 5: account status at the first-login endpoints', () => {
 
   for (const [status, message] of [['inactive', 'Usuário inativo'], ['suspended', 'Usuário suspenso'], ['blocked', 'Usuário bloqueado'], ['Suspenso', 'Usuário suspenso']]) {
     it(`enable-first-login refuses a ${status} account and issues no session`, async () => {
-      const db = makeDb(enrollingUser({ status }));
+      const db = makeDb(enrollingUser({ accountStatus: status }));
       await expect(enable(db)).rejects.toThrow(message);
       expect(issue).not.toHaveBeenCalled();
       expect(db.users.updateOne).not.toHaveBeenCalled();
@@ -80,20 +80,20 @@ describe('#1258 item 5: account status at the first-login endpoints', () => {
   }
 
   it('qr-first-login refuses a suspended account and stores no secret', async () => {
-    const db = makeDb(enrollingUser({ status: 'suspended', mfaSecretCiphertext: null }));
+    const db = makeDb(enrollingUser({ accountStatus: 'suspended', mfaSecretCiphertext: null }));
     await expect(setup(db)).rejects.toThrow('Usuário suspenso');
     expect(db.users.updateOne).not.toHaveBeenCalled();
   });
 
   it('the status is checked only after the password, so a wrong password still reads as generic', async () => {
-    const db = makeDb(enrollingUser({ status: 'blocked' }));
+    const db = makeDb(enrollingUser({ accountStatus: 'blocked' }));
     await expect(authService.enableMFAFirstLogin(db, { username: 'tecnico1258', password: 'wrong' }, '123456', {})).rejects.toThrow('Credenciais inválidas');
   });
 
   // #1270 item 1: the same at qr-first-login, for every non-active status.
   for (const status of ['inactive', 'suspended', 'blocked']) {
     it(`qr-first-login answers a wrong password on a ${status} account with the generic message`, async () => {
-      const db = makeDb(enrollingUser({ status, mfaSecretCiphertext: null }));
+      const db = makeDb(enrollingUser({ accountStatus: status, mfaSecretCiphertext: null }));
       await expect(authService.setupMFAFirstLogin(db, { username: 'tecnico1258', password: 'wrong' }, {})).rejects.toThrow(/^Credenciais inválidas$/);
       expect(db.users.updateOne).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ $set: expect.objectContaining({ mfaSecretCiphertext: expect.anything() }) }));
     });
@@ -131,21 +131,21 @@ describe('#1270 item 2: the authenticated enrolment (enableMFA) completes a firs
   });
 
   it('forceReset withholds the session with its own message and no reason', async () => {
-    const result = await authService.enableMFA(byId(enrollingUser({ forceReset: true })), USER_ID, '123456');
+    const result = await authService.enableMFA(byId(enrollingUser({ forcePasswordReset: true })), USER_ID, '123456');
     expect(result.requiresPasswordChange).toBe(true);
     expect(result.reason).toBeUndefined();
     expect(issue).not.toHaveBeenCalled();
   });
 
   it('a suspended account is refused and nothing is written', async () => {
-    const db = byId(enrollingUser({ status: 'suspended' }));
+    const db = byId(enrollingUser({ accountStatus: 'suspended' }));
     await expect(authService.enableMFA(db, USER_ID, '123456')).rejects.toThrow('Usuário suspenso');
     expect(issue).not.toHaveBeenCalled();
     expect(db.users.updateOne).not.toHaveBeenCalled();
   });
 
   it('control: an enrolled account enabling again (not a first login) is untouched by the gates', async () => {
-    const db = byId(enrollingUser({ lastLogin: new Date(), passwordChangedAt: new Date(Date.now() - 200 * DAY), forceReset: true }), policy);
+    const db = byId(enrollingUser({ lastLoginAt: new Date(), passwordChangedAt: new Date(Date.now() - 200 * DAY), forcePasswordReset: true }), policy);
     expect(await authService.enableMFA(db, USER_ID, '123456')).toEqual({ success: true });
     expect(issue).not.toHaveBeenCalled();
   });
@@ -169,7 +169,7 @@ describe('#1258 item 5: an expired password at enable-first-login (#1251)', () =
   });
 
   it('forceReset keeps its own message and no reason', async () => {
-    const result = await enable(makeDb(enrollingUser({ forceReset: true })));
+    const result = await enable(makeDb(enrollingUser({ forcePasswordReset: true })));
     expect(result.requiresPasswordChange).toBe(true);
     expect(result.reason).toBeUndefined();
     expect(issue).not.toHaveBeenCalled();

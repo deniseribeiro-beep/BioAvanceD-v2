@@ -29,7 +29,7 @@ describe('SampleWorker.process — actor attribution and Neo4j lineage threading
     });
 
     const userId = '507f1f77bcf86cd799439011';
-    const db = makeDb({ _id: userId, name: 'Dennis Pedersen', email: 'dennis@example.com', role: 'admin' });
+    const db = makeDb({ _id: userId, displayName: 'Dennis Pedersen', email: 'dennis@example.com', role: 'admin' });
     const neo4jDriver = { marker: 'fake-driver' };
 
     await sampleWorker.process(db, 'job-1', '/tmp/samples.csv', {

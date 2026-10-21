@@ -5,10 +5,10 @@
  * Stored `users` documents use the dict-02 UserAccount names (P1X-0182..0208).
  * RENAMED maps each canonical name to the name documents carried before it.
  * New documents and every write use the canonical names only. A reader goes
- * through the accessors below, which fall back to the legacy name; a writer
- * builds its update with storedUpdateOf, which $unsets the legacy name of each
- * field it sets; canonicalMoveOf moves the remaining legacy names of a document
- * in one guarded update.
+ * through the accessors below, which read the canonical name only: the legacy
+ * names were moved by `npm run migrate:auth-canonical-names` (canonicalMoveOf,
+ * one guarded update per document), and a writer builds its update with
+ * storedUpdateOf, which $unsets the legacy name of each field it sets.
  *
  * The API keeps the old names: request bodies arrive under them (validate()
  * reads them, storedNamesOf renames them for storage) and responses leave
@@ -209,12 +209,12 @@ class UserModel {
     };
   }
 
-  // A renamed field of a stored or cached user, canonical name first, then
-  // the legacy one. A canonical null is returned as null: only an absent
-  // canonical name (undefined) falls back. Undefined when neither is present.
+  // A renamed field of a stored or cached user, under its canonical name
+  // only. A legacy name a document still carries is not read: the migration
+  // moves it and every write removes it. Undefined for no user.
   static storedValueOf(user, field) {
     if (!user) return undefined;
-    return user[field] !== undefined ? user[field] : user[RENAMED[field]];
+    return user[field];
   }
 
   static displayNameOf(user) {
@@ -250,11 +250,10 @@ class UserModel {
   }
 
   // Matches users whose account status is `value` (a value or an operator
-  // object) under either name. The legacy branch applies only to a document
-  // without accountStatus, so a stale legacy value can never outvote the
-  // canonical one.
+  // object), under the canonical name only: a legacy `status` is moved by the
+  // migration, never matched.
   static accountStatusFilter(value) {
-    return { $or: [{ accountStatus: value }, { accountStatus: { $exists: false }, status: value }] };
+    return { accountStatus: value };
   }
 
   /**

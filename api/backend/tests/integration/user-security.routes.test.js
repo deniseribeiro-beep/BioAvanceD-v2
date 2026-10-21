@@ -188,7 +188,7 @@ describe('User security routes', () => {
     usersCollection.findOne.mockResolvedValue({
       _id: '507f1f77bcf86cd799439011',
       mfaEnabled: true,
-      password: hashedPassword,
+      passwordHash: hashedPassword,
       passwordChangedAt: new Date('2024-01-01T00:00:00.000Z'),
     });
     const res = createResponse();
@@ -222,7 +222,7 @@ describe('User security routes', () => {
     req.app.locals.db = db;
     usersCollection.findOne.mockResolvedValue({
       _id: '507f1f77bcf86cd799439011',
-      password: hashedPassword,
+      passwordHash: hashedPassword,
       passwordChangedAt: new Date('2024-01-01T00:00:00.000Z'),
     });
     const res = createResponse();
@@ -262,7 +262,7 @@ describe('User security routes', () => {
     req.app.locals.db = db;
     usersCollection.findOne.mockResolvedValue({
       _id: '507f1f77bcf86cd799439011',
-      password: hashedPassword,
+      passwordHash: hashedPassword,
     });
     const res = createResponse();
 
@@ -331,7 +331,7 @@ describe('User security routes', () => {
     req.app.locals.db = db;
     usersCollection.findOne.mockResolvedValue({
       _id: '507f1f77bcf86cd799439011',
-      password: hashedPassword,
+      passwordHash: hashedPassword,
     });
     const res = createResponse();
 

@@ -620,7 +620,7 @@ describe('AuthController.changePassword', () => {
   });
 
   it('returns 400 when the old password does not match', async () => {
-    const user = { _id: 'u1', password: 'hashed-old', passwordHistory: [] };
+    const user = { _id: 'u1', passwordHash: 'hashed-old', passwordHistoryHashes: [] };
     const usersCollection = createUsersCollection(user);
     const db = { collection: vi.fn().mockReturnValue(usersCollection) };
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(false);
@@ -646,7 +646,7 @@ describe('AuthController.changePassword', () => {
   // covered the other three with auth.service's shared helpers and this one was
   // not reachable from them, because the helpers were module-private.
   it('counts a wrong old password toward the account lockout', async () => {
-    const user = { _id: 'u1', password: 'hashed-old', passwordHistory: [], failedLoginAttempts: 1 };
+    const user = { _id: 'u1', passwordHash: 'hashed-old', passwordHistoryHashes: [], failedLoginAttempts: 1 };
     const usersCollection = createUsersCollection(user);
     const db = { collection: vi.fn().mockReturnValue(usersCollection) };
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(false);
@@ -672,7 +672,7 @@ describe('AuthController.changePassword', () => {
   // one still burns a round.
   it('refuses a locked account before verifying the old password', async () => {
     const lockedUntil = new Date(Date.now() + 10 * 60 * 1000);
-    const user = { _id: 'u1', password: 'hashed-old', passwordHistory: [], accountLockedUntil: lockedUntil };
+    const user = { _id: 'u1', passwordHash: 'hashed-old', passwordHistoryHashes: [], accountLockedUntil: lockedUntil };
     const usersCollection = createUsersCollection(user);
     const db = { collection: vi.fn().mockReturnValue(usersCollection) };
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
@@ -695,7 +695,7 @@ describe('AuthController.changePassword', () => {
   // pair cannot tell a working gate from one that refuses unconditionally.
   it('allows the change when a previous lock has already expired', async () => {
     const expired = new Date(Date.now() - 60 * 1000);
-    const user = { _id: 'u1', password: 'hashed-old', passwordHistory: [], accountLockedUntil: expired };
+    const user = { _id: 'u1', passwordHash: 'hashed-old', passwordHistoryHashes: [], accountLockedUntil: expired };
     const usersCollection = createUsersCollection(user);
     const sessionsCollection = { updateMany: vi.fn().mockResolvedValue({ modifiedCount: 0 }) };
     const db = { collection: vi.fn((name) => (name === 'sessions' ? sessionsCollection : usersCollection)) };
@@ -717,7 +717,7 @@ describe('AuthController.changePassword', () => {
   });
 
   it('#1244: stores passwordHistory to the policy depth from security_config', async () => {
-    const user = { _id: 'u1', password: 'hashed-old', passwordHistory: ['h1', 'h2'] };
+    const user = { _id: 'u1', passwordHash: 'hashed-old', passwordHistoryHashes: ['h1', 'h2'] };
     const usersCollection = createUsersCollection(user);
     const sessionsCollection = { updateMany: vi.fn().mockResolvedValue({ modifiedCount: 0 }) };
     const policy = { _id: 'main', passwordRules: { preventReuse: true, maxReuseHistory: 2 } };
@@ -747,7 +747,7 @@ describe('AuthController.changePassword', () => {
   });
 
   it('updates the password and returns 200 on success', async () => {
-    const user = { _id: 'u1', password: 'hashed-old', passwordHistory: ['hashed-oldest'] };
+    const user = { _id: 'u1', passwordHash: 'hashed-old', passwordHistoryHashes: ['hashed-oldest'] };
     const usersCollection = createUsersCollection(user);
     // #958: a named sessions collection, not the one-collection-for-every-name
     // stub this file used -- a password change now revokes the user's OTHER
@@ -802,7 +802,7 @@ describe('AuthController.changePassword', () => {
     // BOTH the old and the new password, so it is not an affected session.
     expect(sessionsCollection.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        $or: [{ userAccountId: '507f1f77bcf86cd799439011' }, { userID: '507f1f77bcf86cd799439011' }],
+        userAccountId: '507f1f77bcf86cd799439011',
         isActive: true
       }),
       expect.objectContaining({
@@ -838,7 +838,7 @@ describe('AuthController.changePassword', () => {
   });
 
   it('returns 400 when passwordService.validateStrength throws', async () => {
-    const user = { _id: 'u1', password: 'hashed-old', passwordHistory: [] };
+    const user = { _id: 'u1', passwordHash: 'hashed-old', passwordHistoryHashes: [] };
     const usersCollection = createUsersCollection(user);
     const db = { collection: vi.fn().mockReturnValue(usersCollection) };
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);

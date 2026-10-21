@@ -1,9 +1,9 @@
 // #1330: users documents are stored under the dict-02 UserAccount names
-// (P1X-0182..0208). A document written before the rename carries the legacy
-// names (name, password, status, mfaActivationDate, lastLogin,
-// passwordHistory, forceReset, passwordResetExpires): it must still sign in,
-// change and reset its password against its own history, and be moved to the
-// canonical names, with the legacy ones $unset, by those writes.
+// (P1X-0182..0208). #1386: readers no longer fall back to the legacy names
+// (name, password, status, mfaActivationDate, lastLogin, passwordHistory,
+// forceReset, passwordResetExpires), so a legacy value is not read; a write
+// to a document still carrying one moves the rest to the canonical names and
+// $unsets the legacy ones.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 
 const bcrypt = require('bcryptjs');
@@ -67,18 +67,20 @@ function makeDb(users) {
   return { collection: vi.fn((name) => (name === 'users' ? users : other)) };
 }
 
+// Canonical password, status and last login, so it signs in as a returning
+// user; the other renamed fields still under their legacy names.
 function legacyUser(overrides = {}) {
   return {
     _id: USER_ID,
     name: 'Conta Legada',
     email: 'legada@bioavanced.test',
     username: 'legada',
-    password: CURRENT_HASH,
-    status: 'active',
+    passwordHash: CURRENT_HASH,
+    accountStatus: 'active',
     mfaEnabled: false,
     mfaSecretCiphertext: null,
     mfaActivationDate: null,
-    lastLogin: new Date('2026-01-01T00:00:00Z'),
+    lastLoginAt: new Date('2026-01-01T00:00:00Z'),
     passwordHistory: [OLD_HASH],
     passwordChangedAt: new Date(),
     forceReset: false,
@@ -93,7 +95,7 @@ function expectOnlyCanonicalNames(doc) {
   }
 }
 
-describe('#1330: a legacy-named user', () => {
+describe('#1330/#1386: a user still carrying legacy names', () => {
   it('signs in, and the sign-in moves the document to the canonical names with the legacy ones $unset', async () => {
     const users = usersStore([legacyUser()]);
     const db = makeDb(users);
@@ -101,7 +103,6 @@ describe('#1330: a legacy-named user', () => {
     const result = await authService.processLogin(db, await users.findOne({ _id: USER_ID }), PASSWORD, null, users, {});
 
     expect(result.token).toBeTruthy();
-    expect(result.user.name).toBe('Conta Legada');
     for (const key of ['password', 'passwordHash', 'passwordHistory', 'passwordHistoryHashes']) {
       expect(result.user).not.toHaveProperty(key);
     }
@@ -118,8 +119,8 @@ describe('#1330: a legacy-named user', () => {
     });
     expect(stored.lastLoginAt).toBeInstanceOf(Date);
 
-    const move = users.updateOne.mock.calls.find(([, update]) => update.$unset && update.$unset.status === '');
-    expect(move[0]).toMatchObject({ _id: USER_ID, accountStatus: { $exists: false }, status: { $exists: true } });
+    const move = users.updateOne.mock.calls.find(([, update]) => update.$unset && update.$unset.name === '');
+    expect(move[0]).toMatchObject({ _id: USER_ID, displayName: { $exists: false }, name: { $exists: true } });
   });
 
   it('signs in again after the move, now through the canonical names', async () => {
@@ -135,29 +136,33 @@ describe('#1330: a legacy-named user', () => {
     expect(users.updateOne.mock.calls.length - writesBefore).toBe(1);
   });
 
-  it('a move from a stale copy does not undo a status written since: an account blocked meanwhile stays blocked', async () => {
+  it('a move from a stale copy does not undo a value written since: a name set meanwhile stays', async () => {
     const users = usersStore([legacyUser()]);
     const db = makeDb(users);
     const staleCopy = await users.findOne({ _id: USER_ID });
-    // An administrator blocks the account after the sign-in read it.
-    await users.updateOne({ _id: USER_ID }, UserModel.storedUpdateOf({ accountStatus: 'blocked' }));
+    // An administrator renames the account after the sign-in read it.
+    await users.updateOne({ _id: USER_ID }, UserModel.storedUpdateOf({ displayName: 'Renomeada' }));
 
     await authService.processLogin(db, staleCopy, PASSWORD, null, users, {});
 
     const [stored] = users.docs;
-    expect(stored.accountStatus).toBe('blocked');
-    expect(stored).not.toHaveProperty('status');
+    expect(stored.displayName).toBe('Renomeada');
+    expect(stored).not.toHaveProperty('name');
     // The whole move was skipped; the next write moves the rest.
-    expect(stored.name).toBe('Conta Legada');
+    expect(stored.passwordHistory).toEqual([OLD_HASH]);
   });
 
-  it('changes its password: the legacy history is checked, then carried into passwordHistoryHashes', async () => {
+  it('is not signed in through a legacy password hash alone', async () => {
+    const users = usersStore([legacyUser({ passwordHash: undefined, password: CURRENT_HASH })]);
+    await expect(
+      authService.processLogin(makeDb(users), await users.findOne({ _id: USER_ID }), PASSWORD, null, users, {})
+    ).rejects.toThrow();
+    expect(users.docs[0].lastLoginAt).toEqual(new Date('2026-01-01T00:00:00Z'));
+  });
+
+  it('changes its password: the legacy history is not read, and the write removes it', async () => {
     const users = usersStore([legacyUser()]);
     const db = makeDb(users);
-
-    await expect(userSecurityService.updatePassword(db, USER_ID, PASSWORD, OLD_PASSWORD))
-      .rejects.toThrow('reutilizar');
-    expect(users.docs[0].password).toBe(CURRENT_HASH);
 
     const NEW_PASSWORD = 'Brand@New-Password-2026';
     await userSecurityService.updatePassword(db, USER_ID, PASSWORD, NEW_PASSWORD);
@@ -165,11 +170,11 @@ describe('#1330: a legacy-named user', () => {
     const [stored] = users.docs;
     expectOnlyCanonicalNames(stored);
     expect(await bcrypt.compare(NEW_PASSWORD, stored.passwordHash)).toBe(true);
-    expect(stored.passwordHistoryHashes).toEqual([CURRENT_HASH, OLD_HASH]);
+    expect(stored.passwordHistoryHashes).toEqual([CURRENT_HASH]);
     expect(stored).toMatchObject({ displayName: 'Conta Legada', accountStatus: 'active', forcePasswordReset: false });
   });
 
-  it('resets its password through a reset window opened before the rename (legacy passwordResetExpires)', async () => {
+  it('refuses a reset whose window is stored only under the legacy passwordResetExpires', async () => {
     vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'password-reset', userID: USER_ID });
     const users = usersStore([legacyUser({
       passwordResetTokenHash: hashToken('reset-token'),
@@ -177,18 +182,8 @@ describe('#1330: a legacy-named user', () => {
     })]);
     const db = makeDb(users);
 
-    await expect(authService.resetPassword(db, 'reset-token', OLD_PASSWORD, {})).rejects.toThrow('utilizada recentemente');
-
-    const result = await authService.resetPassword(db, 'reset-token', 'Reset@Password-2026x', {});
-
-    expect(result.success).toBe(true);
-    const [stored] = users.docs;
-    expectOnlyCanonicalNames(stored);
-    expect(stored).not.toHaveProperty('passwordResetTokenHash');
-    expect(stored).not.toHaveProperty('passwordResetExpiresAt');
-    expect(await bcrypt.compare('Reset@Password-2026x', stored.passwordHash)).toBe(true);
-    expect(stored.passwordHistoryHashes).toEqual([CURRENT_HASH, OLD_HASH]);
-    expect(stored.displayName).toBe('Conta Legada');
+    await expect(authService.resetPassword(db, 'reset-token', 'Reset@Password-2026x', {})).rejects.toThrow('expirado');
+    expect(users.docs[0].passwordHash).toBe(CURRENT_HASH);
   });
 });
 

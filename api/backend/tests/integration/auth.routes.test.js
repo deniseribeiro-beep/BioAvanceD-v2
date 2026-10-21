@@ -128,8 +128,8 @@ describe('auth.routes.js (integration, real router mounted)', () => {
   // nothing.
   describe('POST /register (deleted, #1057)', () => {
     beforeEach(() => {
-      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
-      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's1' });
     });
 
     function rbacDb(users) {
@@ -196,8 +196,8 @@ describe('auth.routes.js (integration, real router mounted)', () => {
     });
 
     it('delegates to authController.changePassword when authenticated', async () => {
-      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
-      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's1' });
       const spy = vi.spyOn(authController, 'changePassword').mockImplementation(async (req, res) => {
         res.status(200).json({ success: true });
       });
@@ -276,8 +276,8 @@ describe('auth.routes.js (integration, real router mounted)', () => {
     });
 
     it('responds 501 once authenticate can validate the session', async () => {
-      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
-      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's1' });
       const authRoutes = loadAuthRoutes();
       const app = buildApp(authRoutes, makeDb({}));
       const token = signAccessToken();
@@ -293,8 +293,8 @@ describe('auth.routes.js (integration, real router mounted)', () => {
 
   describe('GET /two-factor/status', () => {
     it('returns 503 when there is no db on app.locals', async () => {
-      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
-      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's1' });
       const authRoutes = loadAuthRoutes();
       const app = buildApp(authRoutes, undefined);
       const token = signAccessToken();
@@ -307,8 +307,8 @@ describe('auth.routes.js (integration, real router mounted)', () => {
     });
 
     it('returns 404 when the authenticated user is not found in the db', async () => {
-      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
-      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's1' });
       const authRoutes = loadAuthRoutes();
       const app = buildApp(authRoutes, makeDb(null));
       const token = signAccessToken();
@@ -321,8 +321,8 @@ describe('auth.routes.js (integration, real router mounted)', () => {
     });
 
     it('returns 200 with mfaEnabled/mfaLocked flags on success', async () => {
-      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
-      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's1' });
       const authRoutes = loadAuthRoutes();
       const app = buildApp(authRoutes, makeDb({ mfaEnabled: true, mfaLocked: false }));
       const token = signAccessToken();
@@ -340,10 +340,10 @@ describe('auth.routes.js (integration, real router mounted)', () => {
     it.each(['inactive', 'blocked', 'suspended'])(
       'authenticate refuses a live session whose account is %s',
       async (status) => {
-        vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
-        vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+        vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 's1' } });
+        vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's1' });
         const authRoutes = loadAuthRoutes();
-        const app = buildApp(authRoutes, makeDb({ status, mfaEnabled: true, mfaLocked: false }));
+        const app = buildApp(authRoutes, makeDb({ accountStatus: status, mfaEnabled: true, mfaLocked: false }));
 
         const res = await request(app)
           .get('/api/auth/two-factor/status')
@@ -355,10 +355,10 @@ describe('auth.routes.js (integration, real router mounted)', () => {
     );
 
     it('CONTROL: authenticate admits an active account, and one stored before status existed', async () => {
-      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
-      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's1' });
       const authRoutes = loadAuthRoutes();
-      for (const doc of [{ status: 'active' }, { status: 'Ativo' }, {}]) {
+      for (const doc of [{ accountStatus: 'active' }, { accountStatus: 'Ativo' }, {}]) {
         const app = buildApp(authRoutes, makeDb({ ...doc, mfaEnabled: false, mfaLocked: false }));
         const res = await request(app)
           .get('/api/auth/two-factor/status')
@@ -368,8 +368,8 @@ describe('auth.routes.js (integration, real router mounted)', () => {
     });
 
     it('returns 500 when the db lookup throws', async () => {
-      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
-      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's1' });
       const authRoutes = loadAuthRoutes();
       // First findOne is authenticate's own roleValidUntil lookup (must succeed so the
       // request reaches the route); the route's own lookup on the 2nd call is what throws.
@@ -479,11 +479,11 @@ describe('auth.routes.js (integration, real router mounted)', () => {
       expect(res.headers['set-cookie']?.some((c) => c.startsWith('refresh_token=;'))).toBe(true);
     });
 
-    // #1330: a session stored before the canonical names is ended by its
-    // legacy sessionID, attributed to its legacy userID.
-    it('invalidates a session stored under the legacy names', async () => {
-      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's-legacy', userID: 'u-legacy' } });
-      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's-legacy' });
+    // #1330: the session is ended by its sessionId, attributed to its
+    // userAccountId.
+    it('invalidates the session by its sessionId, attributed to its owner', async () => {
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 's-canon', userAccountId: 'u-canon' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's-canon' });
       const invalidateSpy = vi.spyOn(sessionService, 'invalidateSession').mockResolvedValue(true);
       vi.spyOn(auditLogger, 'logLogout').mockResolvedValue(undefined);
       const app = buildApp(loadAuthRoutes(), makeDb({}));
@@ -493,14 +493,14 @@ describe('auth.routes.js (integration, real router mounted)', () => {
         .set('Authorization', `Bearer ${signAccessToken()}`);
 
       expect(res.status).toBe(200);
-      expect(invalidateSpy).toHaveBeenCalledWith(expect.anything(), 's-legacy', 'user_request', 'u-legacy', { req: expect.anything() });
+      expect(invalidateSpy).toHaveBeenCalledWith(expect.anything(), 's-canon', 'user_request', 'u-canon', { req: expect.anything() });
     });
 
     it('still returns 200 and still logs the logout when sessionService.verifySession throws', async () => {
       vi.spyOn(sessionService, 'verifySession')
-        .mockResolvedValueOnce({ valid: true, session: { sessionID: 's1' } }) // for authenticate()
+        .mockResolvedValueOnce({ valid: true, session: { sessionId: 's1' } }) // for authenticate()
         .mockRejectedValueOnce(new Error('verify-boom')); // for the logout handler itself
-      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's1' });
       const logLogoutSpy = vi.spyOn(auditLogger, 'logLogout').mockResolvedValue(undefined);
       const authRoutes = loadAuthRoutes();
       const app = buildApp(authRoutes, makeDb({}));
@@ -518,8 +518,8 @@ describe('auth.routes.js (integration, real router mounted)', () => {
 
   describe('GET /verify', () => {
     it('returns 503 when there is no db', async () => {
-      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
-      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's1' });
       const authRoutes = loadAuthRoutes();
       const app = buildApp(authRoutes, undefined);
       const token = signAccessToken();
@@ -529,8 +529,8 @@ describe('auth.routes.js (integration, real router mounted)', () => {
     });
 
     it('returns 404 and logs TOKEN_VERIFY_FAILED when the user is not found', async () => {
-      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
-      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's1' });
       const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
       const authRoutes = loadAuthRoutes();
       const app = buildApp(authRoutes, makeDb(null));
@@ -545,8 +545,8 @@ describe('auth.routes.js (integration, real router mounted)', () => {
       [1, 'Usuário Externo'],
       [3, 'Coordenador']
     ])('resolves accessType %s to roleName "%s" via the active RBAC role assignment', async (accessType, expectedRole) => {
-      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
-      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's1' });
       const authRoutes = loadAuthRoutes();
       const userID = makeUserId();
       const app = buildApp(
@@ -563,8 +563,8 @@ describe('auth.routes.js (integration, real router mounted)', () => {
     });
 
     it('returns 500 when the db lookup throws', async () => {
-      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
-      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's1' });
       const authRoutes = loadAuthRoutes();
       // First findOne is authenticate's own roleValidUntil lookup (must succeed so the
       // request reaches the route); the route's own lookup on the 2nd call is what throws.
@@ -589,8 +589,8 @@ describe('auth.routes.js (integration, real router mounted)', () => {
 
   describe('GET /sessions', () => {
     it('returns the sessions list from session.service.listUserSessions', async () => {
-      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
-      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's1' });
       vi.spyOn(sessionService, 'listUserSessions').mockResolvedValue([{ sessionID: 'x1' }]);
       const authRoutes = loadAuthRoutes();
       const app = buildApp(authRoutes, makeDb({}));
@@ -602,8 +602,8 @@ describe('auth.routes.js (integration, real router mounted)', () => {
     });
 
     it('returns 500 when session.service.listUserSessions throws', async () => {
-      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
-      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's1' });
       vi.spyOn(sessionService, 'listUserSessions').mockRejectedValue(new Error('list-boom'));
       const authRoutes = loadAuthRoutes();
       const app = buildApp(authRoutes, makeDb({}));
@@ -616,8 +616,8 @@ describe('auth.routes.js (integration, real router mounted)', () => {
 
   describe('DELETE /sessions/all-others', () => {
     it('revokes other sessions and returns 200', async () => {
-      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
-      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's1' });
       const revokeSpy = vi.spyOn(sessionService, 'revokeAllOtherSessions').mockResolvedValue(true);
       const authRoutes = loadAuthRoutes();
       const app = buildApp(authRoutes, makeDb({}));
@@ -631,8 +631,8 @@ describe('auth.routes.js (integration, real router mounted)', () => {
 
   describe('DELETE /sessions/:sessionId', () => {
     it('returns 404 when revokeSessionById resolves falsy', async () => {
-      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
-      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 's1' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's1' });
       vi.spyOn(sessionService, 'revokeSessionById').mockResolvedValue(false);
       const authRoutes = loadAuthRoutes();
       const app = buildApp(authRoutes, makeDb({}));
@@ -643,8 +643,8 @@ describe('auth.routes.js (integration, real router mounted)', () => {
     });
 
     it('revokes the specified session and returns 200', async () => {
-      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 'other-session' } });
-      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 'other-session' });
+      vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 'other-session' } });
+      vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 'other-session' });
       vi.spyOn(sessionService, 'revokeSessionById').mockResolvedValue(true);
       const authRoutes = loadAuthRoutes();
       const app = buildApp(authRoutes, makeDb({}));
@@ -741,11 +741,11 @@ describe('auth.routes.js (integration, real router mounted)', () => {
       expect(res.headers['set-cookie']?.some((c) => c.startsWith('refresh_token=;'))).toBe(true);
     });
 
-    // #1330: a session stored before the canonical names still refreshes,
-    // its owner read from userID and its id from sessionID.
-    it('rotates a session stored under the legacy names', async () => {
+    // #1330: the refresh reads the owner from userAccountId and the id from
+    // sessionId, and hands the stored copy to the rotation.
+    it('rotates the session by its sessionId, passing the stored copy', async () => {
       const userId = new ObjectId();
-      const stored = { userID: userId.toString(), sessionID: 's-legacy' };
+      const stored = { userAccountId: userId.toString(), sessionId: 's-canon' };
       vi.spyOn(sessionService, 'getSessionByRefreshToken').mockResolvedValue(stored);
       const rotateSpy = vi.spyOn(sessionService, 'rotateSessionTokens').mockResolvedValue(true);
       const db = makeDbWithRbac(
@@ -759,7 +759,7 @@ describe('auth.routes.js (integration, real router mounted)', () => {
         .set('Cookie', `refresh_token=${refreshToken}`);
 
       expect(res.status).toBe(200);
-      expect(rotateSpy).toHaveBeenCalledWith(expect.anything(), 's-legacy', expect.any(String), expect.any(String), stored);
+      expect(rotateSpy).toHaveBeenCalledWith(expect.anything(), 's-canon', expect.any(String), expect.any(String), stored);
     });
 
     it('rotates tokens and returns a new access token on the happy path', async () => {
@@ -797,7 +797,7 @@ describe('auth.routes.js (integration, real router mounted)', () => {
         const rotateSpy = vi.spyOn(sessionService, 'rotateSessionTokens').mockResolvedValue(true);
         const invalidateSpy = vi.spyOn(sessionService, 'invalidateSession').mockResolvedValue(undefined);
         const db = makeDbWithRbac(
-          { _id: userId, email: 'a@b.com', username: 'u', name: 'A', status },
+          { _id: userId, email: 'a@b.com', username: 'u', displayName: 'A', accountStatus: status },
           [{ userAccountId: userId.toString(), accessType: 2 }]
         );
         const app = appWithDb(db);

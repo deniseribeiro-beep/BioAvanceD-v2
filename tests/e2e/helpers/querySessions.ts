@@ -37,15 +37,14 @@ export async function listSessionIndexNames(): Promise<string[]> {
 
 /**
  * The user's most recently created session, or null. #1330: sessions are
- * stored under userAccountId and sessionStartedAt (dict-02 Session); a
- * document written before that carries userID and createdAt instead.
+ * stored under userAccountId and sessionStartedAt (dict-02 Session).
  */
 export async function findLatestSession(userID: string) {
   const db = await getDb();
   const owner = String(userID);
   return db.collection('sessions').findOne(
-    { $or: [{ userAccountId: owner }, { userID: owner }] },
-    { sort: { sessionStartedAt: -1, createdAt: -1 } }
+    { userAccountId: owner },
+    { sort: { sessionStartedAt: -1 } }
   );
 }
 

@@ -357,7 +357,7 @@ test.describe('Foundation Data Pipeline bootstrap (RF022) — real backend', () 
     expect(constraints.evidence.built).toBeGreaterThan(0);
     expect(constraints.evidence.failed).toEqual([]);
     expect(await indexNamesOf('samples')).toContain('samples_barcode_unique_v2');
-    expect(await indexNamesOf('sessions')).toContain('sessions_tokenHash_v1');
+    expect(await indexNamesOf('sessions')).toContain('sessions_accessTokenHash_v1');
   });
 });
 

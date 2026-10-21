@@ -669,15 +669,13 @@ test.describe('User management (RF003) — real backend', () => {
     expect(riskAudit!.message).toContain('sessões afetadas 1');
 
     // The lookup indexes are built on the live collection, the per-request
-    // token-hash lookup's included under both its canonical and its legacy
-    // name (ensured un-awaited, so polled).
+    // token-hash lookup's included, each keyed by its canonical name
+    // (ensured un-awaited, so polled).
     await expect
       .poll(async () => listSessionIndexNames(), { timeout: 10_000 })
       .toEqual(expect.arrayContaining([
         'sessions_accessTokenHash_v1',
-        'sessions_tokenHash_v1',
         'sessions_revocationReason_sessionStartedAt_v1',
-        'sessions_revocationReason_createdAt_v1',
       ]));
     await closeSessionsDb();
   });

@@ -5,8 +5,10 @@
  * LEGACY_FIELDS are the names documents carried before them: sessionID,
  * userID, tokenHash, lastActivity, createdAt and inactiveTimeout. New
  * documents are written under the canonical names only. A reader goes through
- * the accessors and filters below, which fall back to the legacy name, and a
- * rewrite of an existing document removes the legacy names (canonicalIdentity).
+ * the accessors and filters below, which read the canonical name only: the
+ * legacy names were moved by `npm run migrate:auth-canonical-names`
+ * (canonicalMoveOf), and a rewrite of an existing document still removes any
+ * legacy name (canonicalIdentity).
  */
 const LEGACY_FIELDS = ['sessionID', 'userID', 'tokenHash', 'lastActivity', 'createdAt', 'inactiveTimeout'];
 
@@ -80,49 +82,48 @@ class SessionModel {
     };
   }
 
-  // Readers of a stored or cached session, canonical name first, then the
-  // legacy one. Each returns undefined when the document carries neither.
+  // Readers of a stored or cached session, under the canonical name only.
+  // Each returns undefined when the document does not carry it.
   static sessionIdOf(session) {
-    return session?.sessionId ?? session?.sessionID;
+    return session?.sessionId;
   }
 
   static ownerOf(session) {
-    return session?.userAccountId ?? session?.userID;
+    return session?.userAccountId;
   }
 
   static accessTokenHashOf(session) {
-    return session?.accessTokenHash ?? session?.tokenHash;
+    return session?.accessTokenHash;
   }
 
   static lastActivityOf(session) {
-    return session?.lastActivityAt ?? session?.lastActivity;
+    return session?.lastActivityAt;
   }
 
   static startedAtOf(session) {
-    return session?.sessionStartedAt ?? session?.createdAt;
+    return session?.sessionStartedAt;
   }
 
   static inactivityTimeoutOf(session) {
-    return session?.inactivityTimeoutMs ?? session?.inactiveTimeout;
+    return session?.inactivityTimeoutMs;
   }
 
-  // Filters that find a session under either name.
+  // Filters that find a session under its canonical name.
   static idFilter(sessionId) {
-    return { $or: [{ sessionId }, { sessionID: sessionId }] };
+    return { sessionId };
   }
 
   static ownerFilter(userAccountId) {
-    return { $or: [{ userAccountId }, { userID: userAccountId }] };
+    return { userAccountId };
   }
 
   static accessTokenHashFilter(accessTokenHash) {
-    return { $or: [{ accessTokenHash }, { tokenHash: accessTokenHash }] };
+    return { accessTokenHash };
   }
 
-  // Clauses that exclude the session holding `accessTokenHash` under either
-  // name; a document lacking a name satisfies that name's $ne.
+  // Clauses that exclude the session holding `accessTokenHash`.
   static notAccessTokenHash(accessTokenHash) {
-    return [{ accessTokenHash: { $ne: accessTokenHash } }, { tokenHash: { $ne: accessTokenHash } }];
+    return [{ accessTokenHash: { $ne: accessTokenHash } }];
   }
 
   /**
@@ -131,7 +132,8 @@ class SessionModel {
    * inactivityTimeoutMs. These never change after a session is created, so a
    * rewrite may carry them from any copy of the document, cached or read. A
    * value the document never had is not written, so a document without
-   * inactiveTimeout does not gain a null one.
+   * inactivityTimeoutMs does not gain a null one. The legacy names are still
+   * removed, for a document restored from data older than the migration.
    *
    * lastActivity and tokenHash change while a session lives. The writer that
    * sets lastActivityAt or accessTokenHash removes the legacy name itself,
@@ -156,8 +158,8 @@ class SessionModel {
    * Moves the legacy names a session document still carries to the canonical
    * names, as a { filter, update } pair, or null when it carries none.
    *
-   * The readers use `??`, so a canonical name that is null or absent falls
-   * back to the legacy value: that value is moved, and the filter requires
+   * A canonical name that is null or absent takes the legacy value: that
+   * value is moved, and the filter requires
    * the canonical name to be still null or absent and the legacy one present.
    * Every live writer sets the canonical name and removes the legacy one, so
    * a document written since `session` was read fails the filter and the

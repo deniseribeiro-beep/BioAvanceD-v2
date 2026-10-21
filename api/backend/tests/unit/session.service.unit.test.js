@@ -30,9 +30,32 @@ function liveSession(overrides = {}) {
   };
 }
 
-// #1330: an active session document written before the canonical names,
-// carrying all six legacy ones.
-function legacySession(overrides = {}) {
+// #1330: an active session document under the canonical names that still
+// carries all six legacy ones beside them, as one restored from data older
+// than the migration would. #1386: only the canonical names are read; a write
+// removes the legacy ones.
+function sessionWithLegacyNames({ sessionId, userAccountId, accessTokenHash, ...overrides }) {
+  const startedAt = new Date(Date.now() - 60 * 1000);
+  const lastActivityAt = new Date();
+  return liveSession({
+    sessionId,
+    userAccountId,
+    accessTokenHash,
+    lastActivityAt,
+    sessionStartedAt: startedAt,
+    inactivityTimeoutMs: 20 * 60 * 1000,
+    sessionID: sessionId,
+    userID: userAccountId,
+    tokenHash: accessTokenHash,
+    lastActivity: lastActivityAt,
+    createdAt: startedAt,
+    inactiveTimeout: 20 * 60 * 1000,
+    ...overrides
+  });
+}
+
+// #1386: an active session document carrying the legacy names only.
+function legacyOnlySession(overrides = {}) {
   return {
     isActive: true,
     isRevoked: false,
@@ -45,10 +68,10 @@ function legacySession(overrides = {}) {
   };
 }
 
-// The filter that finds a session by id under either name.
-const byId = (sessionId) => ({ $or: [{ sessionId }, { sessionID: sessionId }] });
-const byOwner = (userAccountId) => ({ $or: [{ userAccountId }, { userID: userAccountId }] });
-const byAccessHash = (hash) => ({ $or: [{ accessTokenHash: hash }, { tokenHash: hash }] });
+// The filters that find a session under its canonical names.
+const byId = (sessionId) => ({ sessionId });
+const byOwner = (userAccountId) => ({ userAccountId });
+const byAccessHash = (hash) => ({ accessTokenHash: hash });
 
 describe('SessionService.getTokenHash', () => {
   it('returns 64-char hex string', () => {
@@ -236,11 +259,10 @@ describe('#914: session.timeoutMinutes drives inactivityTimeoutMs', () => {
     // 30-minute literal that ignored the per-session field entirely, so the sweep
     // would evict a session whose configured timeout was 45 minutes.
     expect(inactivityClause).toBeDefined();
-    // #1330: the canonical names first, then the legacy ones for a document
-    // written before them.
-    expect(inactivityClause.$expr.$lt[0]).toEqual({ $ifNull: ['$lastActivityAt', '$lastActivity'] });
+    // #1386: the canonical names only.
+    expect(inactivityClause.$expr.$lt[0]).toEqual('$lastActivityAt');
     expect(inactivityClause.$expr.$lt[1].$subtract[1]).toEqual({
-      $ifNull: ['$inactivityTimeoutMs', { $ifNull: ['$inactiveTimeout', 30 * 60 * 1000] }]
+      $ifNull: ['$inactivityTimeoutMs', 30 * 60 * 1000]
     });
   });
 });
@@ -392,7 +414,7 @@ describe('SessionService.createSession', () => {
       expect(sessions.countDocuments).toHaveBeenCalledWith({
         ...byOwner('user-1'),
         isActive: true,
-        $and: [{ accessTokenHash: { $ne: accessHash } }, { tokenHash: { $ne: accessHash } }],
+        $and: [{ accessTokenHash: { $ne: accessHash } }],
       });
       expect(revoke).toHaveBeenCalledWith(db, 'user-1', 'access-tok', 'admin_action', 'system', { req: null });
       expect(sessions.insertOne.mock.invocationCallOrder[0]).toBeLessThan(revoke.mock.invocationCallOrder[0]);
@@ -458,13 +480,13 @@ describe('SessionService.updateActivity', () => {
     expect(collection.updateOne).toHaveBeenCalled();
   });
 
-  // #1330: a session stored before the canonical names is still found by its
-  // token hash, and the activity write moves it to the canonical names. The
-  // token hash itself moves at the next rotation, which computes it.
-  it('#1330: finds a session stored under the legacy names and rewrites it under the canonical ones', async () => {
+  // #1330: the activity write removes the legacy names a document still
+  // carries beside the canonical ones. tokenHash goes at the next rotation,
+  // which computes the new hash.
+  it('#1330: rewrites a session under the canonical names and $unsets the legacy ones it still carries', async () => {
     const decoy = liveSession({ sessionId: 'sess-decoy', userAccountId: 'u0', accessTokenHash: sessionService.getTokenHash('decoy-token') });
-    const stored = legacySession({ sessionID: 'sess-legacy-names', userID: 'u1', tokenHash: sessionService.getTokenHash('legacy-names-token') });
-    const startedAt = stored.createdAt;
+    const stored = sessionWithLegacyNames({ sessionId: 'sess-legacy-names', userAccountId: 'u1', accessTokenHash: sessionService.getTokenHash('legacy-names-token') });
+    const startedAt = stored.sessionStartedAt;
     const collection = createMatchingCollection([decoy, stored]);
 
     const result = await sessionService.updateActivity(makeDb(collection), 'legacy-names-token');
@@ -489,8 +511,16 @@ describe('SessionService.updateActivity', () => {
     expect(sessionService.sessions.get('sess-legacy-names')).not.toHaveProperty('userID');
   });
 
-  it('#1330: a legacy document without inactiveTimeout does not gain a null timeout', async () => {
-    const { inactiveTimeout, ...stored } = legacySession({ sessionID: 'sess-no-timeout', userID: 'u1', tokenHash: sessionService.getTokenHash('no-timeout-token') });
+  it('#1386: does not find a session stored only under the legacy names', async () => {
+    const stored = legacyOnlySession({ sessionID: 'sess-legacy-only', userID: 'u1', tokenHash: sessionService.getTokenHash('legacy-only-token') });
+    const collection = createMatchingCollection([stored]);
+
+    expect(await sessionService.updateActivity(makeDb(collection), 'legacy-only-token')).toBeNull();
+    expect(collection.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('#1330: a document without inactivityTimeoutMs does not gain a null timeout', async () => {
+    const { inactivityTimeoutMs, ...stored } = liveSession({ sessionId: 'sess-no-timeout', userAccountId: 'u1', accessTokenHash: sessionService.getTokenHash('no-timeout-token') });
     const collection = createMatchingCollection([stored]);
 
     await sessionService.updateActivity(makeDb(collection), 'no-timeout-token');
@@ -653,35 +683,16 @@ describe('SessionService.verifySession', () => {
     expect(sessionService.sessions.get('sess-db')).toBe(session);
   });
 
-  // #1330: the per-request lookup still finds, and still judges, a session
-  // stored under the legacy names.
-  it('#1330: resolves an uncached session stored under the legacy names', async () => {
+  // #1386: the per-request lookup reads the canonical accessTokenHash only.
+  it('#1386: does not resolve a session stored only under the legacy names', async () => {
     const decoy = liveSession({ sessionId: 'sess-decoy', accessTokenHash: sessionService.getTokenHash('decoy-token') });
-    const session = legacySession({ sessionID: 'sess-legacy-names', userID: 'u1', tokenHash: sessionService.getTokenHash('legacy-names-token') });
+    const session = legacyOnlySession({ sessionID: 'sess-legacy-only', userID: 'u1', tokenHash: sessionService.getTokenHash('legacy-only-token') });
     const collection = createMatchingCollection([decoy, session]);
 
-    const result = await sessionService.verifySession(makeDb(collection), 'legacy-names-token');
+    const result = await sessionService.verifySession(makeDb(collection), 'legacy-only-token');
 
-    expect(result).toEqual({ valid: true, session });
-    expect(sessionService.sessions.get('sess-legacy-names')).toBe(session);
-  });
-
-  it('#1330: expires a legacy-named session by its own lastActivity and inactiveTimeout', async () => {
-    const session = legacySession({
-      sessionID: 'sess-legacy-idle',
-      userID: 'u1',
-      tokenHash: sessionService.getTokenHash('legacy-idle-token'),
-      lastActivity: new Date(Date.now() - 21 * 60 * 1000)
-    });
-    const collection = createMatchingCollection([session]);
-
-    const result = await sessionService.verifySession(makeDb(collection), 'legacy-idle-token');
-
-    expect(result).toEqual({ valid: false, reason: 'session_expired' });
-    expect(collection.updateOne).toHaveBeenCalledWith(
-      byId('sess-legacy-idle'),
-      expect.objectContaining({ $set: expect.objectContaining({ isRevoked: true, revocationReason: 'expiration' }) })
-    );
+    expect(result.valid).toBe(false);
+    expect(sessionService.sessions.has('sess-legacy-only')).toBe(false);
   });
 
   it('falls back to a legacy plain-text token for an uncached session', async () => {
@@ -782,8 +793,6 @@ describe('SessionService.invalidateUserSessions', () => {
   it('removes only the matching user sessions from cache and updates db', async () => {
     sessionService.sessions.set('s1', { sessionId: 's1', userAccountId: 'u1' });
     sessionService.sessions.set('s2', { sessionId: 's2', userAccountId: 'u2' });
-    // #1330: a cached copy of a legacy document is matched by its legacy owner.
-    sessionService.sessions.set('s3', { sessionID: 's3', userID: 'u1' });
     const collection = makeCollection();
     const db = makeDb(collection);
 
@@ -791,7 +800,6 @@ describe('SessionService.invalidateUserSessions', () => {
 
     expect(sessionService.sessions.has('s1')).toBe(false);
     expect(sessionService.sessions.has('s2')).toBe(true);
-    expect(sessionService.sessions.has('s3')).toBe(false);
     expect(collection.updateMany).toHaveBeenCalledWith(
       { ...byOwner('u1'), isActive: true },
       expect.objectContaining({ $set: expect.objectContaining({ isActive: false }) })
@@ -916,9 +924,8 @@ describe('SessionService.listUserSessions', () => {
     expect(result[1].createdAt).toBe(now);
   });
 
-  // #1330: the response keeps its keys (id, lastAccess, createdAt) whichever
-  // names the document was stored under.
-  it('#1330: lists a legacy-named session with the same response keys', async () => {
+  // #1386: the owner filter reads the canonical userAccountId only.
+  it('#1386: does not list a session stored only under the legacy names', async () => {
     const started = new Date('2026-10-01T10:00:00Z');
     const active = new Date('2026-10-01T11:00:00Z');
     const collection = createMatchingCollection([
@@ -928,8 +935,7 @@ describe('SessionService.listUserSessions', () => {
 
     const result = await sessionService.listUserSessions(makeDb(collection), 'u1', 'current-tok');
 
-    expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({ id: 'legacy-1', lastAccess: active, createdAt: started, isCurrent: true });
+    expect(result).toEqual([]);
   });
 
   it('marks nothing current when no currentAccessToken given', async () => {
@@ -975,17 +981,13 @@ describe('SessionService.revokeSessionById', () => {
     );
   });
 
-  it('#1330: revokes a legacy-named session, and only its own owner\'s', async () => {
+  it('#1386: does not revoke a session stored only under the legacy names', async () => {
     const collection = createMatchingCollection([
-      { sessionID: 'sess-legacy', userID: 'u2', isActive: true },
       { sessionID: 'sess-legacy', userID: 'u1', isActive: true }
     ]);
 
-    expect(await sessionService.revokeSessionById(makeDb(collection), 'u1', 'sess-legacy', 'user_request', 'u1')).toBe(true);
-
-    // The audit row lands in the same mock collection; only sessions are read.
-    expect(collection.docs.filter((doc) => doc.sessionID).map((doc) => [doc.userID, doc.isRevoked === true]))
-      .toEqual([['u2', false], ['u1', true]]);
+    expect(await sessionService.revokeSessionById(makeDb(collection), 'u1', 'sess-legacy', 'user_request', 'u1')).toBe(false);
+    expect(collection.docs[0].isRevoked).toBeUndefined();
   });
 
   it('#974: default-argument call still writes revocationReason and revokedBy as null', async () => {
@@ -1022,12 +1024,12 @@ describe('SessionService.revokeAllOtherSessions', () => {
     expect(sessionService.sessions.has('s-otheruser')).toBe(true);
   });
 
-  // #1330: the caller's own session is spared under either hash name, and a
-  // legacy-named session of the same owner is revoked.
-  it('#1330: spares the current session and revokes the others, canonical or legacy', async () => {
+  // #1386: the caller's own session is spared by its accessTokenHash, and a
+  // session stored only under the legacy names is not matched.
+  it('#1386: spares the current session and revokes the other canonical ones only', async () => {
     const currentHash = sessionService.getTokenHash('current-tok');
     const collection = createMatchingCollection([
-      { sessionID: 'legacy-current', userID: 'u1', tokenHash: currentHash, isActive: true },
+      { sessionId: 'canonical-current', userAccountId: 'u1', accessTokenHash: currentHash, isActive: true },
       { sessionID: 'legacy-other', userID: 'u1', tokenHash: 'other-hash', isActive: true },
       { sessionId: 'canonical-other', userAccountId: 'u1', accessTokenHash: 'other-hash-2', isActive: true },
       { sessionId: 'someone-else', userAccountId: 'u2', accessTokenHash: 'other-hash-3', isActive: true }
@@ -1036,7 +1038,7 @@ describe('SessionService.revokeAllOtherSessions', () => {
     await sessionService.revokeAllOtherSessions(makeDb(collection), 'u1', 'current-tok');
 
     expect(collection.docs.filter((doc) => doc.isRevoked === true).map((doc) => doc.sessionId || doc.sessionID))
-      .toEqual(['legacy-other', 'canonical-other']);
+      .toEqual(['canonical-other']);
   });
 
   it('#974: writes revocationReason "user_request" and revokedBy as the acting user', async () => {
@@ -1101,11 +1103,11 @@ describe('SessionService.rotateSessionTokens', () => {
     expect(cached.accessTokenHash).toBe(sessionService.getTokenHash('new-access'));
   });
 
-  // #1330: a refresh of a session stored under the legacy names rewrites it
-  // under the canonical ones alone, the token hash included.
-  it('#1330: rotating a legacy-named session moves every field to its canonical name', async () => {
+  // #1330: a refresh of a session still carrying legacy names rewrites it
+  // under the canonical ones alone and removes every legacy name.
+  it('#1330: rotating a session $unsets every legacy name it still carries', async () => {
     const startedAt = new Date(Date.now() - 60 * 1000);
-    const stored = legacySession({ sessionID: 'sess-legacy', userID: 'u1', tokenHash: 'old-hash', createdAt: startedAt });
+    const stored = sessionWithLegacyNames({ sessionId: 'sess-legacy', userAccountId: 'u1', accessTokenHash: 'old-hash', sessionStartedAt: startedAt, createdAt: startedAt });
     const collection = makeCollection();
 
     await sessionService.rotateSessionTokens(makeDb(collection), 'sess-legacy', 'new-access', 'new-refresh', stored);

@@ -113,8 +113,7 @@ class UserSecurityService {
 
       return {
         primaryEnabled: user.mfaEnabled || false,
-        // dict-02 P1X-0198 mfaSetupAt, or the legacy mfaActivationDate of a
-        // document written before the rename (#1330).
+        // dict-02 P1X-0198 mfaSetupAt (#1330).
         primarySetupDate: UserModel.mfaSetupAtOf(user) || null,
         recoveryCodes: {
           remaining: RecoveryCodeSetModel.remainingOf(recoveryCodes),
@@ -207,13 +206,10 @@ class UserSecurityService {
       const sessionsCollection = db.collection('sessions');
       
       // Busca sessões no banco
-      // A session matches under its canonical owner name or the legacy one;
-      // a legacy document has no lastActivityAt and sorts after the canonical
-      // ones, by lastActivity.
       const dbSessions = await sessionsCollection.find({
         ...SessionModel.ownerFilter(userID.toString()),
         isActive: true
-      }).sort({ lastActivityAt: -1, lastActivity: -1 }).toArray();
+      }).sort({ lastActivityAt: -1 }).toArray();
 
       // Se não houver sessões no banco, tenta buscar do cache do sessionService
       let sessions = dbSessions;
@@ -591,9 +587,9 @@ class UserSecurityService {
       const sessionsCollection = db.collection('sessions');
       const { ObjectId } = require('mongodb');
 
-      // Suporta documentos que usam sessionId, o nome legado sessionID, ou
-      // apenas _id; o dono casa sob userAccountId ou o legado userID.
-      const idClauses = [...SessionModel.idFilter(sessionId).$or];
+      // Suporta documentos que usam sessionId ou apenas _id; o dono casa sob
+      // userAccountId.
+      const idClauses = [SessionModel.idFilter(sessionId)];
       if (ObjectId.isValid(sessionId)) {
         idClauses.push({ _id: new ObjectId(sessionId) });
       }

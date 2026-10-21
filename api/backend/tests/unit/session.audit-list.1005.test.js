@@ -70,8 +70,8 @@ describe('sessionService.listSessionsForAudit (#1005)', () => {
     const result = await sessionService.listSessionsForAudit(db, {});
     expect(calls.query).toEqual({});
     expect(calls.countQuery).toEqual({});
-    // #1330: the canonical start first, then the legacy createdAt.
-    expect(calls.sort).toEqual({ sessionStartedAt: -1, createdAt: -1 });
+    // #1386: the canonical start only.
+    expect(calls.sort).toEqual({ sessionStartedAt: -1 });
     expect(calls.skip).toBe(0);
     expect(calls.limit).toBe(50);
     expect(calls.options.projection).toMatchObject({
@@ -91,24 +91,24 @@ describe('sessionService.listSessionsForAudit (#1005)', () => {
       to: '2026-09-30T00:00:00Z',
     });
     const range = { $gte: new Date('2026-09-01T00:00:00Z'), $lte: new Date('2026-09-30T00:00:00Z') };
-    // #1330: owner and range each match the canonical or the legacy name.
+    // #1386: owner and range each match the canonical name only.
     const expected = {
       revocationReason: 'admin_action',
       isRevoked: true,
       isActive: false,
       $and: [
-        { $or: [{ userAccountId: 'user-9' }, { userID: 'user-9' }] },
-        { $or: [{ sessionStartedAt: range }, { createdAt: range }] },
+        { userAccountId: 'user-9' },
+        { sessionStartedAt: range },
       ],
     };
     expect(calls.query).toEqual(expected);
     expect(calls.countQuery).toEqual(expected);
   });
 
-  it('sortBy=lastActivity orders on lastActivityAt, then the legacy lastActivity', async () => {
+  it('sortBy=lastActivity orders on lastActivityAt', async () => {
     const { db, calls } = makeDb();
     const result = await sessionService.listSessionsForAudit(db, { sortBy: 'lastActivity', sortOrder: 'asc' });
-    expect(calls.sort).toEqual({ lastActivityAt: 1, lastActivity: 1 });
+    expect(calls.sort).toEqual({ lastActivityAt: 1 });
     expect(result.sortBy).toBe('lastActivity');
   });
 
@@ -156,8 +156,8 @@ describe('sessionService.listSessionsForAudit (#1005)', () => {
 
   it('pseudonymises owner and revoking admin, keeps system literal, masks the IP, and emits no token field', async () => {
     const revokedAt = new Date('2026-09-29T10:00:00Z');
-    // #1330: one row stored under the canonical names and one under the
-    // legacy ones; both present the same response keys.
+    // Two rows under the canonical names; the response keeps its API keys
+    // (createdAt, lastActivity).
     const rows = [
       {
         _id: 'oid-1', sessionId: 'session_user-1_1', userAccountId: 'user-1', ipAddress: '10.1.2.3', userAgent: 'Mozilla/5.0 Chrome/120',
@@ -167,8 +167,8 @@ describe('sessionService.listSessionsForAudit (#1005)', () => {
         revokedAt, revokedBy: 'admin-7', revocationReason: 'admin_action',
       },
       {
-        _id: 'oid-2', sessionID: 'session_user-1_2', userID: 'user-1', ipAddress: '10.1.2.4',
-        createdAt: new Date('2026-09-28T09:00:00Z'), lastActivity: new Date('2026-09-28T09:30:00Z'),
+        _id: 'oid-2', sessionId: 'session_user-1_2', userAccountId: 'user-1', ipAddress: '10.1.2.4',
+        sessionStartedAt: new Date('2026-09-28T09:00:00Z'), lastActivityAt: new Date('2026-09-28T09:30:00Z'),
         isActive: false, isRevoked: true,
         revokedAt, revokedBy: 'system', revocationReason: 'expiration',
       },
@@ -225,7 +225,7 @@ describe('ensureSessionIndexes (#1005)', () => {
     const collection = {
       collectionName: `sessions_latch_${++collectionSeq}`,
       createIndex: vi.fn(async (_keys, { name }) => {
-        if (name === 'sessions_tokenHash_v1') throw new Error('index build failed');
+        if (name === 'sessions_accessTokenHash_v1') throw new Error('index build failed');
         return name;
       }),
     };
@@ -234,24 +234,27 @@ describe('ensureSessionIndexes (#1005)', () => {
     expect(collection.createIndex).toHaveBeenCalledTimes(SESSION_LOOKUP_INDEXES.length);
   });
 
-  it('builds the hot-path tokenHash index', () => {
-    expect(SESSION_LOOKUP_INDEXES).toContainEqual([{ tokenHash: 1 }, 'sessions_tokenHash_v1']);
+  it('builds the hot-path accessTokenHash index', () => {
+    expect(SESSION_LOOKUP_INDEXES).toContainEqual([{ accessTokenHash: 1 }, 'sessions_accessTokenHash_v1']);
   });
 
-  // #1330: an $or is index-served only when every branch is, so each index
-  // on a renamed field has a canonical twin beside the legacy one.
-  it('builds a canonical twin beside each legacy index on a renamed field', () => {
+  // #1386: readers use the canonical names only, so every index is keyed by
+  // them and none by a legacy name.
+  it('builds each index on the canonical names, none on a legacy one', () => {
     const keys = SESSION_LOOKUP_INDEXES.map(([spec]) => spec);
-    for (const [legacy, canonical] of [
-      [{ tokenHash: 1 }, { accessTokenHash: 1 }],
-      [{ sessionID: 1 }, { sessionId: 1 }],
-      [{ userID: 1, isActive: 1 }, { userAccountId: 1, isActive: 1 }],
-      [{ userID: 1, createdAt: -1 }, { userAccountId: 1, sessionStartedAt: -1 }],
-      [{ createdAt: -1 }, { sessionStartedAt: -1, createdAt: -1 }],
-      [{ revocationReason: 1, createdAt: -1 }, { revocationReason: 1, sessionStartedAt: -1 }],
+    for (const canonical of [
+      { accessTokenHash: 1 },
+      { sessionId: 1 },
+      { userAccountId: 1, isActive: 1 },
+      { userAccountId: 1, sessionStartedAt: -1 },
+      { sessionStartedAt: -1 },
+      { revocationReason: 1, sessionStartedAt: -1 },
     ]) {
-      expect(keys).toContainEqual(legacy);
       expect(keys).toContainEqual(canonical);
+    }
+    const legacy = ['sessionID', 'userID', 'tokenHash', 'lastActivity', 'createdAt', 'inactiveTimeout'];
+    for (const spec of keys) {
+      for (const field of Object.keys(spec)) expect(legacy).not.toContain(field);
     }
   });
 

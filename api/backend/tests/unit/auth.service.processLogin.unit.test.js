@@ -65,20 +65,20 @@ const BASE_USER = {
   _id: { toString: () => 'user-1' },
   email: 'user@test.com',
   username: 'user1',
-  name: 'User One',
-  password: HASHED,
+  displayName: 'User One',
+  passwordHash: HASHED,
   accessType: 2,
-  status: 'active',
-  lastLogin: new Date('2020-01-01'),
+  accountStatus: 'active',
+  lastLoginAt: new Date('2020-01-01'),
   mfaEnabled: false,
   mfaSecretCiphertext: null,
 };
 
 describe('AuthService.processLogin', () => {
   it('rejects when password field is missing/invalid', async () => {
-    const db = makeDb({ findOne: vi.fn().mockResolvedValue({ ...BASE_USER, password: 'short' }) });
+    const db = makeDb({ findOne: vi.fn().mockResolvedValue({ ...BASE_USER, passwordHash: 'short' }) });
     await expect(
-      authService.processLogin(db, { ...BASE_USER, password: 'short' }, 'pw-of-at-least-15', null, db.collection(), {})
+      authService.processLogin(db, { ...BASE_USER, passwordHash: 'short' }, 'pw-of-at-least-15', null, db.collection(), {})
     ).rejects.toThrow('Credenciais inválidas');
   });
 
@@ -102,14 +102,14 @@ describe('AuthService.processLogin', () => {
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
     const db = makeDb();
     await expect(
-      authService.processLogin(db, { ...BASE_USER, status: 'suspended' }, 'pw-of-at-least-15', null, db.collection(), {})
+      authService.processLogin(db, { ...BASE_USER, accountStatus: 'suspended' }, 'pw-of-at-least-15', null, db.collection(), {})
     ).rejects.toThrow('Usuário suspenso');
   });
 
   it('requires MFA setup on first login for non-admin', async () => {
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
     const db = makeDb();
-    const user = { ...BASE_USER, lastLogin: null, mfaEnabled: false };
+    const user = { ...BASE_USER, lastLoginAt: null, mfaEnabled: false };
     const result = await authService.processLogin(db, user, 'pw-of-at-least-15', null, db.collection(), {});
     expect(result.requiresMFASetup).toBe(true);
     expect(result.tempToken).toBeTruthy();
@@ -126,7 +126,7 @@ describe('AuthService.processLogin', () => {
       if (name === 'userRoleAssignments') return { findOne: vi.fn(), find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([{ userAccountId: 'user-1', roleId: 'role-x', assignmentStatus: 'active', validUntil: null }]) }) };
       return db._collectionApi;
     });
-    const user = { ...BASE_USER, accessType: 2, lastLogin: null, mfaEnabled: false };
+    const user = { ...BASE_USER, accessType: 2, lastLoginAt: null, mfaEnabled: false };
     const result = await authService.processLogin(db, user, 'pw-of-at-least-15', null, db.collection(), {});
     expect(result.requiresMFASetup).toBe(true);
     const decoded = jwt.decode(result.tempToken);
@@ -146,7 +146,7 @@ describe('AuthService.processLogin', () => {
       if (name === 'userRoleAssignments') return { findOne: vi.fn(), find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([{ userAccountId: 'user-1', roleId: 'role-x', assignmentStatus: 'active', validUntil: null }]) }) };
       return db._collectionApi;
     });
-    const user = { ...BASE_USER, accessType: 2, lastLogin: null, mfaEnabled: false };
+    const user = { ...BASE_USER, accessType: 2, lastLoginAt: null, mfaEnabled: false };
     const result = await authService.processLogin(db, user, 'pw-of-at-least-15', null, db.collection(), {});
     expect(result.requiresMFASetup).toBe(true);
     expect(result.user.accessType).toBe(3);
@@ -169,7 +169,7 @@ describe('AuthService.processLogin', () => {
       if (name === 'userRoleAssignments') return { findOne: vi.fn(), find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue(assignments) }) };
       return db._collectionApi;
     });
-    const user = { ...BASE_USER, lastLogin: null, mfaEnabled: false };
+    const user = { ...BASE_USER, lastLoginAt: null, mfaEnabled: false };
     const result = await authService.processLogin(db, user, 'pw-of-at-least-15', null, db.collection(), {});
     expect(result.user.isAuditReader).toBe(expected);
   });
@@ -182,7 +182,7 @@ describe('AuthService.processLogin', () => {
       if (name === 'userRoleAssignments') return { findOne: vi.fn(), find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([{ userAccountId: 'user-1', roleId: 'role-admin', assignmentStatus: 'active', validUntil: null }]) }) };
       return db._collectionApi;
     });
-    const user = { ...BASE_USER, lastLogin: null, accessType: 4, roleName: 'Administrador', mfaEnabled: false };
+    const user = { ...BASE_USER, lastLoginAt: null, accessType: 4, roleName: 'Administrador', mfaEnabled: false };
     const result = await authService.processLogin(db, user, 'pw-of-at-least-15', null, db.collection(), {});
     expect(result.requiresMFASetup).toBeUndefined();
     expect(result.token).toBeTruthy();
@@ -221,7 +221,7 @@ describe('AuthService.processLogin', () => {
     it('leaves the Administrador optional while the mode is off, whatever requireMFAForAll says', async () => {
       vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
       const db = dbWithMode({ enabled: false, requireMFAForAll: true }, { admin: true });
-      const result = await authService.processLogin(db, { ...ADMIN, lastLogin: null }, 'pw-of-at-least-15', null, db.collection(), {});
+      const result = await authService.processLogin(db, { ...ADMIN, lastLoginAt: null }, 'pw-of-at-least-15', null, db.collection(), {});
       expect(result.requiresMFASetup).toBeUndefined();
       expect(result.token).toBeTruthy();
     });
@@ -458,7 +458,7 @@ describe('AuthService.processLogin', () => {
   it('returns requiresPasswordChange without issuing a token when forceReset is set and no newPassword given', async () => {
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
     const db = makeDb();
-    const user = { ...BASE_USER, forceReset: true };
+    const user = { ...BASE_USER, forcePasswordReset: true };
     const result = await authService.processLogin(db, user, 'pw-of-at-least-15', null, db.collection(), {});
     expect(result.requiresPasswordChange).toBe(true);
     expect(result.token).toBeUndefined();
@@ -467,7 +467,7 @@ describe('AuthService.processLogin', () => {
   it('rejects a newPassword that fails strength validation when forceReset is set', async () => {
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
     const db = makeDb();
-    const user = { ...BASE_USER, forceReset: true };
+    const user = { ...BASE_USER, forcePasswordReset: true };
     await expect(
       authService.processLogin(db, user, 'pw-of-at-least-15', null, db.collection(), {}, 'weak')
     ).rejects.toThrow();
@@ -481,7 +481,7 @@ describe('AuthService.processLogin', () => {
     const OLD_PASSWORD = 'OldStrongPass1!';
     vi.spyOn(bcrypt, 'compare').mockImplementation(async (candidate) => candidate === OLD_PASSWORD);
     const db = makeDb();
-    const user = { ...BASE_USER, forceReset: true };
+    const user = { ...BASE_USER, forcePasswordReset: true };
     await expect(
       authService.processLogin(db, user, OLD_PASSWORD, null, db.collection(), {}, OLD_PASSWORD)
     ).rejects.toThrow('já utilizada recentemente');
@@ -491,7 +491,7 @@ describe('AuthService.processLogin', () => {
     vi.spyOn(bcrypt, 'compare').mockImplementation(async (candidate) => candidate === 'pw-of-at-least-15');
     const collectionApi = { findOne: vi.fn(), updateOne: vi.fn().mockResolvedValue({}), find: vi.fn(), insertOne: vi.fn().mockResolvedValue({ insertedId: { toString: () => 'sess-1' } }) };
     const db = makeDb(collectionApi);
-    const user = { ...BASE_USER, forceReset: true };
+    const user = { ...BASE_USER, forcePasswordReset: true };
     const result = await authService.processLogin(db, user, 'pw-of-at-least-15', null, db.collection(), {}, 'NewStrongPass1!');
     expect(result.token).toBeTruthy();
     expect(result.requiresPasswordChange).toBeUndefined();
@@ -669,7 +669,7 @@ describe('AuthService.setupMFAFirstLogin', () => {
     // updateOne (to persist mfaSecretCiphertext) on the same collection, and
     // capturedFilters records only the most recent filter per collection --
     // that write would otherwise clobber the findOne filter we care about.
-    const usersMock = createMatchingCollection([{ ...BASE_USER, lastLogin: null }]);
+    const usersMock = createMatchingCollection([{ ...BASE_USER, lastLoginAt: null }]);
     const db = makeDb(usersMock);
     const result = await authService.setupMFAFirstLogin(db, { username: 'user1', password: 'pw-of-at-least-15' });
     expect(result.secret).toBeTruthy();
@@ -682,7 +682,7 @@ describe('AuthService.setupMFAFirstLogin', () => {
   it('throws when QRCode generation fails', async () => {
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
     vi.spyOn(QRCode, 'toDataURL').mockRejectedValue(new Error('qr fail'));
-    const db = makeDb(createMatchingCollection([{ ...BASE_USER, lastLogin: null }]));
+    const db = makeDb(createMatchingCollection([{ ...BASE_USER, lastLoginAt: null }]));
     await expect(
       authService.setupMFAFirstLogin(db, { username: 'user1', password: 'pw-of-at-least-15' })
     ).rejects.toThrow('Erro ao gerar QR Code');
@@ -782,7 +782,7 @@ describe('AuthService.enableMFAFirstLogin', () => {
     vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
     vi.spyOn(speakeasy.totp, 'verify').mockReturnValue(true);
     const issue = vi.spyOn(authService, 'issueSessionTokens');
-    const usersMock = createMatchingCollection([{ ...BASE_USER, forceReset: true, mfaSecretCiphertext: encryptValue('SECRET') }]);
+    const usersMock = createMatchingCollection([{ ...BASE_USER, forcePasswordReset: true, mfaSecretCiphertext: encryptValue('SECRET') }]);
     const db = makeDb(usersMock);
 
     const result = await authService.enableMFAFirstLogin(db, { username: 'user1', password: 'pw-of-at-least-15' }, '123456', {});
@@ -825,14 +825,14 @@ describe('AuthService.enableMFA', () => {
 
   it('activates MFA without issuing tokens when not first login', async () => {
     vi.spyOn(speakeasy.totp, 'verify').mockReturnValue(true);
-    const db = makeDb({ findOne: vi.fn().mockResolvedValue({ ...BASE_USER, mfaSecretCiphertext: encryptValue('SECRET'), lastLogin: new Date() }) });
+    const db = makeDb({ findOne: vi.fn().mockResolvedValue({ ...BASE_USER, mfaSecretCiphertext: encryptValue('SECRET'), lastLoginAt: new Date() }) });
     const result = await authService.enableMFA(db, '507f1f77bcf86cd799439011', '123456');
     expect(result).toEqual({ success: true });
   });
 
   it('issues session tokens when this was the first login', async () => {
     vi.spyOn(speakeasy.totp, 'verify').mockReturnValue(true);
-    const db = makeDb({ findOne: vi.fn().mockResolvedValue({ ...BASE_USER, mfaSecretCiphertext: encryptValue('SECRET'), lastLogin: null }) });
+    const db = makeDb({ findOne: vi.fn().mockResolvedValue({ ...BASE_USER, mfaSecretCiphertext: encryptValue('SECRET'), lastLoginAt: null }) });
     const result = await authService.enableMFA(db, '507f1f77bcf86cd799439011', '123456');
     expect(result.success).toBe(true);
     expect(result.token).toBeTruthy();
@@ -843,7 +843,7 @@ describe('AuthService.enableMFA', () => {
   // (#427).
   it('resolves the first-login response body accessType from the live RBAC assignment, not stale user.accessType', async () => {
     vi.spyOn(speakeasy.totp, 'verify').mockReturnValue(true);
-    const db = makeDb({ findOne: vi.fn().mockResolvedValue({ ...BASE_USER, accessType: 2, mfaSecretCiphertext: encryptValue('SECRET'), lastLogin: null }) });
+    const db = makeDb({ findOne: vi.fn().mockResolvedValue({ ...BASE_USER, accessType: 2, mfaSecretCiphertext: encryptValue('SECRET'), lastLoginAt: null }) });
     db.collection.mockImplementation((name) => {
       if (name === 'roles') return { findOne: vi.fn(), find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([{ roleId: 'role-x', roleCode: 'gestor', roleStatus: 'active', hierarchyLevel: 3 }]) }) };
       if (name === 'userRoleAssignments') return { findOne: vi.fn(), find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([{ userAccountId: 'user-1', roleId: 'role-x', assignmentStatus: 'active', validUntil: null }]) }) };
@@ -917,7 +917,7 @@ describe('#1072: the MFA seed is encrypted at rest', () => {
     it('setupMFAFirstLogin writes ciphertext too, not the raw base32', async () => {
       vi.spyOn(bcrypt, 'compare').mockResolvedValue(true);
       vi.spyOn(QRCode, 'toDataURL').mockResolvedValue('data:image/png;base64,xyz');
-      const usersMock = createMatchingCollection([{ ...BASE_USER, lastLogin: null }]);
+      const usersMock = createMatchingCollection([{ ...BASE_USER, lastLoginAt: null }]);
       const db = makeDb(usersMock);
 
       const result = await authService.setupMFAFirstLogin(db, { username: 'user1', password: 'pw-of-at-least-15' });
@@ -948,7 +948,7 @@ describe('#1072: the MFA seed is encrypted at rest', () => {
         findOne: vi.fn().mockResolvedValue({
           ...BASE_USER,
           mfaSecretCiphertext: encryptValue('SEEDBASE32'),
-          lastLogin: new Date(),
+          lastLoginAt: new Date(),
         }),
       });
 
@@ -964,7 +964,7 @@ describe('#1072: the MFA seed is encrypted at rest', () => {
         findOne: vi.fn().mockResolvedValue({
           ...BASE_USER,
           mfaSecretCiphertext: undecryptableEnvelope('SEEDBASE32'),
-          lastLogin: new Date(),
+          lastLoginAt: new Date(),
         }),
       });
 
@@ -981,7 +981,7 @@ describe('#1072: the MFA seed is encrypted at rest', () => {
       const usersMock = createMatchingCollection([
         {
           ...BASE_USER,
-          lastLogin: new Date('2020-01-01'),
+          lastLoginAt: new Date('2020-01-01'),
           mfaEnabled: true,
           mfaSecretCiphertext: undecryptableEnvelope('SEEDBASE32'),
         },
@@ -1000,7 +1000,7 @@ describe('#1072: the MFA seed is encrypted at rest', () => {
       const usersMock = createMatchingCollection([
         {
           ...BASE_USER,
-          lastLogin: new Date('2020-01-01'),
+          lastLoginAt: new Date('2020-01-01'),
           mfaEnabled: true,
           mfaSecretCiphertext: undecryptableEnvelope('SEEDBASE32'),
         },
@@ -1022,7 +1022,7 @@ describe('#1072: the MFA seed is encrypted at rest', () => {
       const usersMock = createMatchingCollection([
         {
           ...BASE_USER,
-          lastLogin: null,
+          lastLoginAt: null,
           mfaEnabled: true,
           mfaSecretCiphertext: encryptValue('SEEDBASE32'),
         },
@@ -1093,7 +1093,7 @@ describe('AuthService.requestPasswordReset', () => {
   });
 
   it('returns generic success for inactive user without generating a token', async () => {
-    const db = makeDb(createMatchingCollection([{ ...BASE_USER, status: 'inactive' }]));
+    const db = makeDb(createMatchingCollection([{ ...BASE_USER, accountStatus: 'inactive' }]));
     const result = await authService.requestPasswordReset(db, 'user@test.com', {});
     expect(result.success).toBe(true);
   });
@@ -1152,7 +1152,7 @@ describe('AuthService.requestPasswordReset', () => {
       const sendSpy = vi.spyOn(notificationService, 'sendPasswordReset').mockResolvedValue({ success: true });
       await authService.requestPasswordReset(makeDb(createMatchingCollection([])), 'nobody@test.com', {});
       await authService.requestPasswordReset(
-        makeDb(createMatchingCollection([{ ...BASE_USER, status: 'inactive' }])), 'user@test.com', {}
+        makeDb(createMatchingCollection([{ ...BASE_USER, accountStatus: 'inactive' }])), 'user@test.com', {}
       );
       await new Promise((resolve) => setImmediate(resolve));
       expect(sendSpy).not.toHaveBeenCalled();
@@ -1295,7 +1295,7 @@ describe('AuthService.resetPassword', () => {
       findOne: vi.fn().mockResolvedValue({
         ...BASE_USER,
         passwordResetTokenHash: hashToken('tok'),
-        passwordResetExpires: new Date(Date.now() + 100000),
+        passwordResetExpiresAt: new Date(Date.now() + 100000),
       }),
       updateOne: vi.fn().mockResolvedValue({}),
       find: vi.fn(),
@@ -1320,7 +1320,7 @@ describe('AuthService.resetPassword', () => {
         failedLoginAttempts: 5,
         accountLockedUntil: new Date(Date.now() + 30 * 60 * 1000),
         passwordResetTokenHash: hashToken('tok'),
-        passwordResetExpires: new Date(Date.now() + 100000),
+        passwordResetExpiresAt: new Date(Date.now() + 100000),
       }),
       updateOne: vi.fn().mockResolvedValue({}),
       find: vi.fn(),
@@ -1351,7 +1351,7 @@ describe('AuthService.resetPassword', () => {
       findOne: vi.fn().mockResolvedValue({
         ...BASE_USER,
         passwordResetTokenHash: hashToken('tok'),
-        passwordResetExpires: new Date(Date.now() + 100000),
+        passwordResetExpiresAt: new Date(Date.now() + 100000),
       }),
       updateOne: vi.fn().mockResolvedValue({}),
       find: vi.fn(),
@@ -1380,7 +1380,7 @@ describe('AuthService.resetPassword', () => {
       findOne: vi.fn().mockResolvedValue({
         ...BASE_USER,
         passwordResetToken: 'tok',
-        passwordResetExpires: new Date(Date.now() + 100000),
+        passwordResetExpiresAt: new Date(Date.now() + 100000),
       }),
       updateOne: vi.fn().mockResolvedValue({}),
       find: vi.fn(),
@@ -1400,7 +1400,7 @@ describe('AuthService.resetPassword', () => {
       findOne: vi.fn().mockResolvedValue({
         ...BASE_USER,
         passwordResetTokenHash: hashToken('tok'),
-        passwordResetExpires: new Date(Date.now() - 1000),
+        passwordResetExpiresAt: new Date(Date.now() - 1000),
       }),
     });
     await expect(
@@ -1414,7 +1414,7 @@ describe('AuthService.resetPassword', () => {
       findOne: vi.fn().mockResolvedValue({
         ...BASE_USER,
         passwordResetTokenHash: hashToken('tok'),
-        passwordResetExpires: new Date(Date.now() + 100000),
+        passwordResetExpiresAt: new Date(Date.now() + 100000),
       }),
       updateOne: vi.fn().mockResolvedValue({}),
       find: vi.fn(),
@@ -1444,7 +1444,7 @@ describe('AuthService.resetPassword', () => {
       findOne: vi.fn().mockResolvedValue({
         ...user,
         passwordResetTokenHash: hashToken('tok'),
-        passwordResetExpires: new Date(Date.now() + 100000),
+        passwordResetExpiresAt: new Date(Date.now() + 100000),
       }),
       updateOne: vi.fn().mockResolvedValue({}),
     };
@@ -1467,7 +1467,7 @@ describe('AuthService.resetPassword', () => {
   it('#1244: records the replaced password in passwordHistory, to the policy depth', async () => {
     vi.spyOn(jwt, 'verify').mockReturnValue({ type: 'password-reset', userID: '507f1f77bcf86cd799439011' });
     const { db, usersApi } = resetDb(
-      { ...BASE_USER, passwordHistory: ['h1', 'h2', 'h3'] },
+      { ...BASE_USER, passwordHistoryHashes: ['h1', 'h2', 'h3'] },
       { _id: 'main', passwordRules: { preventReuse: true, maxReuseHistory: 2 } },
     );
     await authService.resetPassword(db, 'tok', 'NewPass123!@#long', {});
@@ -1486,7 +1486,7 @@ describe('AuthService.resetPassword', () => {
     const result = await authService.resetPassword(db, 'tok', 'NewPass123!@#long', {});
     expect(result.success).toBe(true);
     expect(compare).toHaveBeenCalledTimes(1);
-    expect(compare).toHaveBeenCalledWith('NewPass123!@#long', BASE_USER.password);
+    expect(compare).toHaveBeenCalledWith('NewPass123!@#long', BASE_USER.passwordHash);
     expect(usersApi.updateOne).toHaveBeenCalled();
   });
 
@@ -1525,7 +1525,7 @@ describe('#958: password changes revoke sessions', () => {
       findOne: vi.fn().mockResolvedValue({
         ...BASE_USER,
         passwordResetTokenHash: hashToken('tok'),
-        passwordResetExpires: new Date(Date.now() + 100000),
+        passwordResetExpiresAt: new Date(Date.now() + 100000),
       }),
       updateOne: vi.fn().mockResolvedValue({}),
     });
@@ -1534,7 +1534,7 @@ describe('#958: password changes revoke sessions', () => {
     await authService.resetPassword(db, 'tok', 'NewPass123!@#long', {});
 
     expect(sessionsCollection.updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({ $or: [{ userAccountId: 'user-1' }, { userID: 'user-1' }], isActive: true }),
+      expect.objectContaining({ userAccountId: 'user-1', isActive: true }),
       expect.objectContaining({
         $set: expect.objectContaining({
           isRevoked: true, revocationReason: 'password_change', revokedBy: 'system',
@@ -1641,7 +1641,7 @@ describe('#952: password lockout (RF001 AC#2)', () => {
 // plus a valid TOTP issued real session tokens through an unauthenticated
 // endpoint -- a complete alternate login path the lockout could not reach.
 describe('#986: the two unauthenticated first-login endpoints respect the account lockout', () => {
-  const ENROLLED = { ...BASE_USER, lastLogin: new Date('2020-01-01'), mfaEnabled: true, mfaSecretCiphertext: encryptValue('SECRET') };
+  const ENROLLED = { ...BASE_USER, lastLoginAt: new Date('2020-01-01'), mfaEnabled: true, mfaSecretCiphertext: encryptValue('SECRET') };
 
   it('setupMFAFirstLogin refuses an enrolled account BEFORE bcrypt.compare -- closes the oracle', async () => {
     const compare = vi.spyOn(bcrypt, 'compare').mockResolvedValue(false);
@@ -1766,7 +1766,7 @@ describe('#986: the two unauthenticated first-login endpoints respect the accoun
 // reads `data.error || data.message || ...`, so `message` was unreachable in
 // the UI on this path. Nothing in frontend/src matched the literal.
 describe('#1032: the first-login MFA endpoints disclose no enrolment state to an unauthenticated caller', () => {
-  const ENROLLED = { ...BASE_USER, lastLogin: new Date('2020-01-01'), mfaEnabled: true, mfaSecretCiphertext: encryptValue('SECRET') };
+  const ENROLLED = { ...BASE_USER, lastLoginAt: new Date('2020-01-01'), mfaEnabled: true, mfaSecretCiphertext: encryptValue('SECRET') };
 
   const messageOf = async (promise) => {
     try {
@@ -1836,7 +1836,7 @@ describe('#1032: the first-login MFA endpoints disclose no enrolment state to an
 // whatsoever, so "this username exists and is not yet enrolled" was separable
 // from a single request, not from a statistical attack.
 describe('#1036: the guard branches that skip the real compare are latency-equalized', () => {
-  const ENROLLED = { ...BASE_USER, lastLogin: new Date('2020-01-01'), mfaEnabled: true, mfaSecretCiphertext: encryptValue('SECRET') };
+  const ENROLLED = { ...BASE_USER, lastLoginAt: new Date('2020-01-01'), mfaEnabled: true, mfaSecretCiphertext: encryptValue('SECRET') };
 
   it('setupMFAFirstLogin burns a comparison for an UNKNOWN username', async () => {
     const compare = vi.spyOn(bcrypt, 'compare').mockResolvedValue(false);

@@ -40,9 +40,9 @@ const activeUser = (extra = {}) => ({
   _id: { toString: () => 'user-1255' },
   username: 'tecnico1255',
   email: 'tecnico1255@example.com',
-  password: HASH,
-  status: 'active',
-  lastLogin: new Date(),
+  passwordHash: HASH,
+  accountStatus: 'active',
+  lastLoginAt: new Date(),
   ...extra,
 });
 
@@ -70,14 +70,14 @@ describe('#1255 the source gate', () => {
 
   it('setupMFAFirstLogin refuses a blocked source before the lookup', async () => {
     blocked.mockResolvedValue(true);
-    const db = makeDb(activeUser({ lastLogin: null }));
+    const db = makeDb(activeUser({ lastLoginAt: null }));
     await expect(authService.setupMFAFirstLogin(db, { username: 'tecnico1255', password: PASSWORD }, req)).rejects.toThrow('Credenciais inválidas');
     expect(db._api.findOne).not.toHaveBeenCalled();
   });
 
   it('enableMFAFirstLogin refuses a blocked source before the lookup', async () => {
     blocked.mockResolvedValue(true);
-    const db = makeDb(activeUser({ lastLogin: null }));
+    const db = makeDb(activeUser({ lastLoginAt: null }));
     await expect(authService.enableMFAFirstLogin(db, { username: 'tecnico1255', password: PASSWORD }, '123456', req)).rejects.toThrow('Credenciais inválidas');
     expect(db._api.findOne).not.toHaveBeenCalled();
   });
@@ -113,7 +113,7 @@ describe('#1255 every failure kind counts against the source', () => {
   });
 
   it('a wrong password and an unknown name at setupMFAFirstLogin', async () => {
-    const user = activeUser({ lastLogin: null });
+    const user = activeUser({ lastLoginAt: null });
     await expect(authService.setupMFAFirstLogin(makeDb(user), { username: 'tecnico1255', password: 'wrong' }, req)).rejects.toThrow('Credenciais inválidas');
     expect(record).toHaveBeenLastCalledWith(expect.anything(), req, 'id:user-1255');
     await expect(authService.setupMFAFirstLogin(makeDb(null), { username: 'nobody', password: 'wrong' }, req)).rejects.toThrow('Credenciais inválidas');
@@ -121,7 +121,7 @@ describe('#1255 every failure kind counts against the source', () => {
   });
 
   it('a wrong password and a wrong enrolment code at enableMFAFirstLogin', async () => {
-    const user = activeUser({ lastLogin: null, mfaSecretCiphertext: encryptValue('JBSWY3DPEHPK3PXP') });
+    const user = activeUser({ lastLoginAt: null, mfaSecretCiphertext: encryptValue('JBSWY3DPEHPK3PXP') });
     await expect(authService.enableMFAFirstLogin(makeDb(user), { username: 'tecnico1255', password: 'wrong' }, '000000', req)).rejects.toThrow('Credenciais inválidas');
     expect(record).toHaveBeenCalledTimes(1);
     vi.spyOn(speakeasy.totp, 'verify').mockReturnValue(false);

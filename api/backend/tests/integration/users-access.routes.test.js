@@ -598,7 +598,7 @@ describe('Users and Access routes', () => {
     // nothing, throws nothing and still returns 200 -- a silent no-op.
     // #1330: the owner matches under userAccountId or the legacy userID.
     expect(sessionsCollection.updateMany).toHaveBeenCalledWith(
-      { $or: [{ userAccountId: 'user-target-1' }, { userID: 'user-target-1' }], isActive: true },
+      { userAccountId: 'user-target-1', isActive: true },
       expect.objectContaining({
         $set: expect.objectContaining({ isActive: false, isRevoked: true }),
       })
@@ -1103,12 +1103,12 @@ describe('Users and Access routes', () => {
     function seedTarget(overrides = {}) {
       const targetUser = {
         _id: 'user-target-1013',
-        name: 'Alvo 1013',
+        displayName: 'Alvo 1013',
         email: 'alvo-1013@bioavanced.com.br',
         username: 'alvo1013',
-        status: 'active',
-        password: bcrypt.hashSync('Atual@2026x', 4),
-        passwordHistory: [],
+        accountStatus: 'active',
+        passwordHash: bcrypt.hashSync('Atual@2026x', 4),
+        passwordHistoryHashes: [],
         ...overrides,
       };
       usersCollection.findOne.mockResolvedValue(targetUser);
@@ -1132,18 +1132,18 @@ describe('Users and Access routes', () => {
 
       expect(res.statusCode).toBe(200);
       expect(usersCollection.updateOne).toHaveBeenCalledTimes(1);
-      // #1330: the legacy-named target is written under the canonical names,
-      // its legacy history carried over, and the legacy names removed.
+      // #1330: the target is written under the canonical names, its old hash
+      // kept in history, and any legacy name removed.
       const setPayload = usersCollection.updateOne.mock.calls[0][1].$set;
       expect(bcrypt.compareSync('NovaSenh@2026-forte', setPayload.passwordHash)).toBe(true);
-      expect(setPayload.passwordHistoryHashes).toEqual([target.password]);
+      expect(setPayload.passwordHistoryHashes).toEqual([target.passwordHash]);
       expect(setPayload.passwordChangedAt).toBeInstanceOf(Date);
       expect(usersCollection.updateOne.mock.calls[0][1].$unset).toEqual({ password: '', passwordHistory: '', forceReset: '' });
       // The administrator knows this password; the owner must replace it.
       expect(setPayload.forcePasswordReset).toBe(true);
       expect(res.payload.data).toEqual({ forceReset: true });
       expect(sessionsCollection.updateMany).toHaveBeenCalledWith(
-        { $or: [{ userAccountId: 'user-target-1013' }, { userID: 'user-target-1013' }], isActive: true },
+        { userAccountId: 'user-target-1013', isActive: true },
         expect.objectContaining({
           $set: expect.objectContaining({
             isRevoked: true,
@@ -1160,7 +1160,7 @@ describe('Users and Access routes', () => {
     });
 
     it('refuses a password in the target\'s recent history, writing nothing', async () => {
-      seedTarget({ passwordHistory: [bcrypt.hashSync('Antiga@2025x-forte', 4)] });
+      seedTarget({ passwordHistoryHashes: [bcrypt.hashSync('Antiga@2025x-forte', 4)] });
 
       const res = await post({ password: 'Antiga@2025x-forte' });
 
@@ -1267,7 +1267,7 @@ describe('Users and Access routes', () => {
     }
 
     const revokedAsAdminAction = () => expect(sessionsCollection.updateMany).toHaveBeenCalledWith(
-      { $or: [{ userAccountId: 'user-target-1306' }, { userID: 'user-target-1306' }], isActive: true },
+      { userAccountId: 'user-target-1306', isActive: true },
       expect.objectContaining({
         $set: expect.objectContaining({ isRevoked: true, revocationReason: 'admin_action', revokedBy: '507f1f77bcf86cd799439011' }),
       })
@@ -2192,7 +2192,7 @@ describe('Users and Access routes', () => {
         { $set: expect.objectContaining({ accountStatus: 'inactive' }), $unset: { status: '' } }
       );
       expect(sessionsCollection.updateMany).toHaveBeenCalledWith(
-        { $or: [{ userAccountId: 'tec-target-1008' }, { userID: 'tec-target-1008' }], isActive: true },
+        { userAccountId: 'tec-target-1008', isActive: true },
         expect.objectContaining({ $set: expect.objectContaining({ revocationReason: 'admin_action', revokedBy: COORD.userID }) })
       );
     });

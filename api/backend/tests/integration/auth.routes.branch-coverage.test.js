@@ -77,8 +77,8 @@ afterEach(() => {
 
 describe('auth.routes.js branch coverage - req.t translation truthy branches', () => {
   it('POST /two-factor/disable uses req.t for the not-implemented error', async () => {
-    vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
-    vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+    vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 's1' } });
+    vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's1' });
     const authRoutes = loadAuthRoutes();
     const app = buildApp(authRoutes, makeDb({}), { withT: true });
     const token = signAccessToken();
@@ -89,8 +89,8 @@ describe('auth.routes.js branch coverage - req.t translation truthy branches', (
   });
 
   it('GET /two-factor/status uses req.t for not-found and catch-error messages', async () => {
-    vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
-    vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+    vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 's1' } });
+    vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's1' });
     const authRoutes = loadAuthRoutes();
     const token = signAccessToken();
 
@@ -118,7 +118,7 @@ describe('auth.routes.js branch coverage - req.t translation truthy branches', (
   });
 
   it('POST /keepalive uses req.t for db-unavailable, session-expired, success, and catch-error messages', async () => {
-    vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
+    vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 's1' } });
     const token = signAccessToken();
 
     vi.spyOn(sessionService, 'updateActivity').mockResolvedValueOnce(null);
@@ -147,8 +147,8 @@ describe('auth.routes.js branch coverage - req.t translation truthy branches', (
   });
 
   it('POST /logout uses req.t for the success message', async () => {
-    vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
-    vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+    vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 's1' } });
+    vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's1' });
     vi.spyOn(sessionService, 'invalidateSession').mockResolvedValue(true);
     vi.spyOn(auditLogger, 'logLogout').mockResolvedValue(undefined);
     const authRoutes = loadAuthRoutes();
@@ -161,8 +161,8 @@ describe('auth.routes.js branch coverage - req.t translation truthy branches', (
   });
 
   it('GET /verify uses req.t for not-found (with audit message/module) and catch-error, and resolves roleName from the RBAC assignment', async () => {
-    vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 's1' } });
-    vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 's1' });
+    vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 's1' } });
+    vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 's1' });
     const token = signAccessToken();
 
     const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
@@ -230,8 +230,8 @@ describe('auth.routes.js branch coverage - real logic branches', () => {
   });
 
   it('DELETE /sessions/:sessionId clears the refresh cookie when the current session matches the requested sessionId', async () => {
-    vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionID: 'session-xyz' } });
-    vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionID: 'session-xyz' });
+    vi.spyOn(sessionService, 'verifySession').mockResolvedValue({ valid: true, session: { sessionId: 'session-xyz' } });
+    vi.spyOn(sessionService, 'updateActivity').mockResolvedValue({ sessionId: 'session-xyz' });
     vi.spyOn(sessionService, 'revokeSessionById').mockResolvedValue(true);
     const authRoutes = loadAuthRoutes();
     const app = buildApp(authRoutes, makeDb({}));

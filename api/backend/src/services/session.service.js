@@ -16,8 +16,7 @@ const REVOCATION_REASONS = ['user_request', 'admin_action', 'password_change', '
 // the wrong page with a 200. createdAt is the default and the one every audit
 // filter is index-served under (utils/sessionIndexes.js). These are the API's
 // sortBy values, which keep their names: 'createdAt' orders on
-// sessionStartedAt and 'lastActivity' on lastActivityAt, each with the legacy
-// stored name as the second key.
+// sessionStartedAt and 'lastActivity' on lastActivityAt.
 const AUDIT_SORTABLE_SESSION_FIELDS = new Set(['createdAt', 'revokedAt', 'lastActivity']);
 const AUDIT_SESSION_MAX_LIMIT = 200;
 
@@ -296,9 +295,10 @@ class SessionService {
         return null;
       }
 
-      // Atualiza última atividade. The same write moves a document stored
-      // under the legacy names to the canonical ones; tokenHash moves at the
-      // next token rotation, which computes the new hash itself.
+      // Atualiza última atividade. The same write rewrites the identity
+      // fields under their canonical names and removes any legacy name a
+      // document restored from older data still carries; tokenHash goes at
+      // the next token rotation.
       const lastActivityAt = new Date();
       const { set: identity, unset } = SessionModel.canonicalIdentity(session);
       Object.assign(session, identity, { lastActivityAt, isActive: true });
@@ -452,7 +452,7 @@ class SessionService {
           const ownerID = cachedOwner
             ?? SessionModel.ownerOf(await sessionsCollection.findOne(
               SessionModel.idFilter(sessionID),
-              { projection: { userAccountId: 1, userID: 1 } }
+              { projection: { userAccountId: 1 } }
             ));
           await this.recordRevocationAudit(db, { reason, revokedBy, ownerID, count: 1, req });
         }
@@ -532,17 +532,15 @@ class SessionService {
               // #914: compare against each session's OWN inactivityTimeoutMs. This was a
               // global 30-minute literal, so the maintenance sweep contradicted any
               // configured timeout -- a 45-minute policy still had its sessions evicted
-              // at 30. Each value is read under its canonical name, then its legacy
-              // one; the innermost $ifNull covers documents written before the
-              // timeout field existed under either name.
+              // at 30. The $ifNull covers a document without inactivityTimeoutMs.
               {
                 $expr: {
                   $lt: [
-                    { $ifNull: ['$lastActivityAt', '$lastActivity'] },
+                    '$lastActivityAt',
                     {
                       $subtract: [
                         now,
-                        { $ifNull: ['$inactivityTimeoutMs', { $ifNull: ['$inactiveTimeout', DEFAULT_INACTIVE_TIMEOUT_MS] }] }
+                        { $ifNull: ['$inactivityTimeoutMs', DEFAULT_INACTIVE_TIMEOUT_MS] }
                       ]
                     }
                   ]
@@ -569,17 +567,13 @@ class SessionService {
     const sessionsCollection = db.collection('sessions');
     const currentHash = currentAccessToken ? hashToken(currentAccessToken) : null;
 
-    // A legacy document has no lastActivityAt, so it sorts after every
-    // canonical one, by lastActivity. Any activity since the rename wrote
-    // lastActivityAt, so a legacy-only document's last activity is older than
-    // every canonical one and the order is exact.
     const sessions = await sessionsCollection
       .find({
         ...SessionModel.ownerFilter(String(userID)),
         isActive: true,
         isRevoked: { $ne: true }
       })
-      .sort({ lastActivityAt: -1, lastActivity: -1 })
+      .sort({ lastActivityAt: -1 })
       .toArray();
 
     // The response keeps its keys (id, lastAccess, createdAt); only the
@@ -739,7 +733,7 @@ class SessionService {
    * stays literal, as it names a process, not a person.
    *
    * Filters: userId, revocationReason, isRevoked, isActive, from/to on
-   * sessionStartedAt (createdAt on a legacy document). Throws a 422-shaped
+   * sessionStartedAt. Throws a 422-shaped
    * error on an invalid one.
    */
   async listSessionsForAudit(db, filters = {}) {
@@ -756,8 +750,7 @@ class SessionService {
     // the controller keeps "em ambiente controlado e seguro". Pulling one
     // named account's sessions is what an audit of that account is.
     // log.service#getLogs takes the same raw filter for GET /api/logs.
-    // Owner and date range each match the canonical or the legacy stored
-    // name, so each is an $or; they are ANDed here.
+    // Owner and date range are ANDed here.
     const clauses = [];
     const userId = filters.userId || filters.userID;
     if (userId) clauses.push(SessionModel.ownerFilter(String(userId)));
@@ -788,7 +781,7 @@ class SessionService {
       range[op] = date;
     }
     if (Object.keys(range).length) {
-      clauses.push({ $or: [{ sessionStartedAt: range }, { createdAt: range }] });
+      clauses.push({ sessionStartedAt: range });
     }
     if (clauses.length) query.$and = clauses;
 
@@ -808,15 +801,10 @@ class SessionService {
         .find(query, { projection: { accessTokenHash: 0, tokenHash: 0, refreshTokenHash: 0, token: 0, refreshToken: 0, sessionId: 0, sessionID: 0 } })
         // One literal per allow-listed key, so the sort-keys guard can follow
         // every branch. No _id tiebreak: the default spec is served by an
-        // index with exactly its keys. The canonical name leads and the legacy one
-        // follows: a document carries one of the two, and a legacy-only
-        // document sorts as missing on the first key, which puts it below
-        // every canonical one. Every legacy-only document predates the rename,
-        // so the order holds across it, except that a session open at the
-        // rename keeps its pre-rename start in sessionStartedAt.
+        // index with exactly its keys.
         .sort(sortField === 'revokedAt' ? { revokedAt: sortOrder }
-          : sortField === 'lastActivity' ? { lastActivityAt: sortOrder, lastActivity: sortOrder }
-            : { sessionStartedAt: sortOrder, createdAt: sortOrder })
+          : sortField === 'lastActivity' ? { lastActivityAt: sortOrder }
+            : { sessionStartedAt: sortOrder })
         .skip(skip)
         .limit(limit)
         .toArray(),
