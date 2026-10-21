@@ -1582,3 +1582,27 @@ test.describe('Temperature history reads InfluxDB (#1317, RF009 AC1) — real ba
     expect(skippedPage.total).toBe(1);
   });
 });
+
+// #1391 (RF009 AC1): a reading lives in InfluxDB only, so GET
+// /api/temperature/:id reads it there by its telemetryReadingId.
+test.describe('GET /api/temperature/:id reads InfluxDB (#1391, RF009 AC1) — real backend', () => {
+  test('a reading posted to /api/iot/telemetry is read back by its telemetryReadingId, and an unknown id is 404', async ({ request }) => {
+    const admin = await realLogin(request);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+    const sensorId = `rf009-by-id-iot-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    const reading = await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+      headers: ingestHeaders(),
+      data: { sensorId, temperature: 5, timestamp: new Date().toISOString() },
+    });
+    expect(reading.status(), await reading.text()).toBe(200);
+    const { telemetryReadingId } = await reading.json();
+
+    const found = await request.get(`${apiBaseURL}/api/temperature/${telemetryReadingId}`, { headers: auth });
+    expect(found.status(), await found.text()).toBe(200);
+    expect((await found.json()).data).toMatchObject({ telemetryReadingId, sensorId, temperatureValue: 5, temperatureUnit: '°C' });
+
+    const missing = await request.get(`${apiBaseURL}/api/temperature/${crypto.randomUUID()}`, { headers: auth });
+    expect(missing.status(), await missing.text()).toBe(404);
+  });
+});

@@ -719,6 +719,84 @@ describe('temperatureService.getTemperatureHistory', () => {
   });
 });
 
+// #1391 (RF009 AC1): a reading is read from InfluxDB by its
+// telemetryReadingId. A point carries no organizationId, so an org-scoped
+// caller is scoped to their organizations' sensors.
+describe('temperatureService.getReadingById', () => {
+  const READING_ID = '0b6f7e2c-4a1d-4c3e-9f0a-1b2c3d4e5f60';
+  const ORG_SCOPE = { scope: 'organization', organizationIds: ['org-1'] };
+
+  function givenReading(reading) {
+    return vi.spyOn(influxTelemetryReadRepository, 'readingById').mockResolvedValue(reading);
+  }
+
+  function sensorsCollection(sensors) {
+    const toArray = vi.fn().mockResolvedValue(sensors);
+    return { find: vi.fn().mockReturnValue({ toArray }) };
+  }
+
+  it('answers null when InfluxDB holds no reading with that id', async () => {
+    const byId = givenReading(null);
+    const db = makeDb({});
+
+    const result = await temperatureService.getReadingById(db, READING_ID, ORG_SCOPE);
+
+    expect(result).toBeNull();
+    expect(byId).toHaveBeenCalledWith(READING_ID);
+  });
+
+  it('puts the reading in scope for a global-scope caller without reading sensors', async () => {
+    const reading = { telemetryReadingId: READING_ID, sensorId: 'S-other' };
+    givenReading(reading);
+    const db = makeDb({});
+
+    const result = await temperatureService.getReadingById(db, READING_ID, { scope: 'global' });
+
+    expect(result).toEqual({ reading, inScope: true });
+    expect(db.collection).not.toHaveBeenCalledWith('sensors');
+  });
+
+  it('puts the reading in scope for an org-scoped caller whose organization holds its sensor', async () => {
+    const reading = { telemetryReadingId: READING_ID, sensorId: 'S-org1' };
+    givenReading(reading);
+    const db = makeDb({ sensors: sensorsCollection([{ sensorId: 'S-org1', organizationId: 'org-1' }]) });
+
+    const result = await temperatureService.getReadingById(db, READING_ID, ORG_SCOPE);
+
+    expect(result).toEqual({ reading, inScope: true });
+  });
+
+  it('puts a reading of another organization\'s sensor out of scope for an org-scoped caller', async () => {
+    givenReading({ telemetryReadingId: READING_ID, sensorId: 'S-org2' });
+    const db = makeDb({
+      sensors: sensorsCollection([
+        { sensorId: 'S-org1', organizationId: 'org-1' },
+        { sensorId: 'S-org2', organizationId: 'org-2' },
+      ]),
+    });
+
+    const result = await temperatureService.getReadingById(db, READING_ID, ORG_SCOPE);
+
+    expect(result.inScope).toBe(false);
+  });
+
+  it('puts a reading with no sensorId out of scope for an org-scoped caller', async () => {
+    givenReading({ telemetryReadingId: READING_ID, sensorId: null });
+    const db = makeDb({ sensors: sensorsCollection([{ sensorId: 'S-org1', organizationId: 'org-1' }]) });
+
+    const result = await temperatureService.getReadingById(db, READING_ID, ORG_SCOPE);
+
+    expect(result.inScope).toBe(false);
+  });
+
+  it('rejects when the InfluxDB read fails, rather than answering no reading', async () => {
+    vi.spyOn(influxTelemetryReadRepository, 'readingById').mockRejectedValue(new Error('influx down'));
+    const db = makeDb({});
+
+    await expect(temperatureService.getReadingById(db, READING_ID, ORG_SCOPE)).rejects.toThrow('influx down');
+  });
+});
+
 describe('temperatureService.getActiveAlerts', () => {
   it('returns [] immediately without calling .collection when db is falsy', async () => {
     const result = await temperatureService.getActiveAlerts(null);

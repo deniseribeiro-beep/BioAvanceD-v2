@@ -1,8 +1,9 @@
 const temperatureService = require('../services/temperature.service');
 const logService = require('../services/log.service');
 const logger = require('../utils/logger');
-const { isRecordInOrganizationScope } = require('../services/rbac-assignment.service');
 const { resolveOrganizationIdForCreate } = require('../services/rbac-assignment.service');
+
+const READING_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // #1080: organization resolution for the machine-ingest path.
 //
@@ -263,11 +264,14 @@ class TemperatureController {
         });
       }
 
-      const { ObjectId } = require('mongodb');
-      const temperaturesCollection = db.collection('temperatures');
-      const reading = await temperaturesCollection.findOne({ _id: new ObjectId(req.params.id) });
+      // RF009 AC1 (#1391): a reading lives in InfluxDB and is read by its
+      // telemetryReadingId, a uuid. Any other id (an old Mongo ObjectId, a
+      // shadowed `control`) names no reading, so it answers 404 unread.
+      const found = READING_ID_PATTERN.test(req.params.id)
+        ? await temperatureService.getReadingById(db, req.params.id, req.organizationScope)
+        : null;
 
-      if (!reading) {
+      if (!found) {
         return res.status(404).json({
           success: false,
           error: 'Leitura não encontrada'
@@ -275,9 +279,10 @@ class TemperatureController {
       }
 
       // #636 (F3-G09): mirrors sensor.controller.js's own out-of-scope
-      // 403 pattern -- a null organizationId (unscoped/legacy reading) is
-      // out of scope for anyone but a global caller.
-      if (req.organizationScope && !isRecordInOrganizationScope(reading, req.organizationScope, 'organizationId')) {
+      // 403 pattern. A point carries no organizationId, so the scope is by
+      // sensor: a reading of another organization's sensor, or with no
+      // sensorId, is out of scope for anyone but a global caller.
+      if (!found.inScope) {
         return res.status(403).json({
           success: false,
           error: 'Acesso negado',
@@ -287,7 +292,7 @@ class TemperatureController {
 
       return res.status(200).json({
         success: true,
-        data: reading
+        data: found.reading
       });
     } catch (error) {
       logger.error('Erro ao buscar leitura:', error.message);

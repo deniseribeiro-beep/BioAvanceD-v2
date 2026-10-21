@@ -534,7 +534,8 @@ export const temperatureService = {
   // `data` (`data: { temperatures, total, limit, skip }`, temperature.
   // service.js:226) -- `data` is never Temperature[] directly.
   getAll: () => api.get<ApiEnvelope<{ temperatures: Temperature[]; total: number; limit: number; skip: number }>>('/temperature'),
-  getById: (id: string) => api.get<Temperature>(`/temperature/${id}`),
+  // #1391 (RF009 AC1): a reading is read from InfluxDB by its telemetryReadingId.
+  getById: (telemetryReadingId: string) => api.get<ApiEnvelope<Temperature>>(`/temperature/${encodeURIComponent(telemetryReadingId)}`),
   viewControl: (sensorID?: string, policyID?: string) => 
     api.get<any>('/temperature/control', { 
       params: { sensorID, policyID } 

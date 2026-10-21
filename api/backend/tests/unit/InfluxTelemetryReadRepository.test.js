@@ -244,3 +244,69 @@ describe('InfluxTelemetryReadRepository - temperatureReport (RF009 AC1, #1317)',
     await expect(repository.temperatureReport()).rejects.toThrow('influx down');
   });
 });
+
+describe('InfluxTelemetryReadRepository - readingById (RF009 AC1, #1391)', () => {
+  let collectRows;
+
+  beforeEach(() => {
+    collectRows = vi.fn().mockResolvedValue([]);
+    vi.spyOn(influxConnection, 'connectInfluxDB').mockResolvedValue(undefined);
+    vi.spyOn(influxConnection, 'getInfluxConfig').mockReturnValue({ bucket: 'test-bucket' });
+    vi.spyOn(influxConnection, 'getInfluxQueryApi').mockReturnValue({ collectRows });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const queryAt = (index) => String(collectRows.mock.calls[index][0]);
+
+  it('readingById reads both reading measurements of the configured bucket up to the far future, filtered on the id, one row', async () => {
+    await repository.readingById('0b6f7e2c-4a1d-4c3e-9f0a-1b2c3d4e5f60');
+
+    expect(collectRows).toHaveBeenCalledTimes(1);
+    const query = queryAt(0);
+    expect(query).toContain('from(bucket: "test-bucket")');
+    expect(query).toContain('range(start: 1970-01-01T00:00:00.000Z, stop: 2262-01-01T00:00:00.000Z)');
+    expect(query).toContain('r._measurement == "freezer_temperature" or r._measurement == "temperature"');
+    expect(query).toContain('pivot(rowKey: ["_time"]');
+    expect(query).toContain('filter(fn: (r) => r.telemetryReadingId == "0b6f7e2c-4a1d-4c3e-9f0a-1b2c3d4e5f60")');
+    expect(query.trimEnd().endsWith('limit(n: 1)')).toBe(true);
+  });
+
+  it('readingById escapes the id through the flux template', async () => {
+    await repository.readingById('R"1');
+
+    expect(queryAt(0)).toContain('r.telemetryReadingId == "R\\"1"');
+  });
+
+  it('readingById maps a row to the temperatureReport row shape, in Celsius', async () => {
+    collectRows.mockResolvedValue([
+      { _time: '2026-10-01T10:04:00Z', _measurement: 'freezer_temperature', sensorId: 'S1', temperatureUnit: '°F', reading: 41, telemetryReadingId: 'R-1', zone: 'Z1' },
+    ]);
+
+    const reading = await repository.readingById('R-1');
+
+    expect(reading).toMatchObject({
+      logId: 'R-1',
+      telemetryReadingId: 'R-1',
+      timestamp: new Date('2026-10-01T10:04:00Z'),
+      sensorId: 'S1',
+      measurement: 'freezer_temperature',
+      temperatureValue: 41,
+      temperatureUnit: '°F',
+      zone: 'Z1',
+    });
+    expect(reading.temperatureCelsius).toBeCloseTo(5, 6);
+  });
+
+  it('readingById answers null when no row matches', async () => {
+    await expect(repository.readingById('R-missing')).resolves.toBeNull();
+  });
+
+  it('readingById rejects when collectRows rejects', async () => {
+    collectRows.mockRejectedValue(new Error('influx down'));
+
+    await expect(repository.readingById('R-1')).rejects.toThrow('influx down');
+  });
+});

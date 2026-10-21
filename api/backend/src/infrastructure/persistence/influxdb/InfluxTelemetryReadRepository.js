@@ -10,6 +10,25 @@ const REPORT_UNBOUNDED_STOP = new Date('2262-01-01T00:00:00Z');
 
 const OPTIONAL_REPORT_TAGS =['locationId', 'facility', 'zone', 'clockStatus', 'datastreamId', 'storageLocationId'];
 
+function mapReportRow(row) {
+  const unit = row.temperatureUnit || '°C';
+  const value = Number(row.reading);
+  const mapped = {
+    logId: row.telemetryReadingId ?? null,
+    telemetryReadingId: row.telemetryReadingId ?? null,
+    timestamp: new Date(row._time),
+    sensorId: row.sensorId ?? null,
+    measurement: row._measurement,
+    temperatureValue: value,
+    temperatureUnit: unit,
+    temperatureCelsius: TemperatureModel.toCelsius(value, unit),
+  };
+  for (const tag of OPTIONAL_REPORT_TAGS) {
+    if (row[tag] !== undefined && row[tag] !== null && row[tag] !== '') mapped[tag] = row[tag];
+  }
+  return mapped;
+}
+
 class InfluxTelemetryReadRepository {
   // RF009 AC1 (#1317): a reading lives in InfluxDB, so its readers query
   // InfluxDB. Two measurements carry readings: POST /api/iot/telemetry writes
@@ -29,6 +48,7 @@ class InfluxTelemetryReadRepository {
   // TemperatureModel.toCelsius for the rows returned. Every value enters the
   // query through the `flux` template, never by concatenation. The
   // temperature history also reads through it, with `critical: null`.
+  // readingById reads one reading by its telemetryReadingId the same way (#1391).
   async lastReadingAtBySensor() {
     await influxConnection.connectInfluxDB();
     const queryApi = influxConnection.getInfluxQueryApi();
@@ -103,27 +123,27 @@ class InfluxTelemetryReadRepository {
     const countRows = await queryApi.collectRows(flux`${pipeline}
       |> count(column: "celsius")`);
 
-    const rows = rawRows.map((row) => {
-      const unit = row.temperatureUnit || '°C';
-      const value = Number(row.reading);
-      const mapped = {
-        logId: row.telemetryReadingId ?? null,
-        telemetryReadingId: row.telemetryReadingId ?? null,
-        timestamp: new Date(row._time),
-        sensorId: row.sensorId ?? null,
-        measurement: row._measurement,
-        temperatureValue: value,
-        temperatureUnit: unit,
-        temperatureCelsius: TemperatureModel.toCelsius(value, unit),
-      };
-      for (const tag of OPTIONAL_REPORT_TAGS) {
-        if (row[tag] !== undefined && row[tag] !== null && row[tag] !== '') mapped[tag] = row[tag];
-      }
-      return mapped;
-    });
+    const rows = rawRows.map(mapReportRow);
     rows.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
 
     return { rows, total: Number(countRows[0]?.celsius ?? 0) };
+  }
+
+  async readingById(telemetryReadingId) {
+    await influxConnection.connectInfluxDB();
+    const queryApi = influxConnection.getInfluxQueryApi();
+    const rows = await queryApi.collectRows(flux`from(bucket: ${influxConnection.getInfluxConfig().bucket})
+      |> range(start: ${new Date(0)}, stop: ${REPORT_UNBOUNDED_STOP})
+      |> filter(fn: (r) => r._measurement == "freezer_temperature" or r._measurement == "temperature")
+      |> filter(fn: (r) => r._field == "temperatureValue" or r._field == "value" or r._field == "telemetryReadingId")
+      |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
+      |> map(fn: (r) => ({r with reading: if exists r.temperatureValue then r.temperatureValue else r.value}))
+      |> filter(fn: (r) => exists r.reading)
+      |> map(fn: (r) => ({r with celsius: if exists r.temperatureUnit and r.temperatureUnit == "°F" then (r.reading - 32.0) * 5.0 / 9.0 else if exists r.temperatureUnit and r.temperatureUnit == "K" then r.reading - 273.15 else r.reading}))
+      |> filter(fn: (r) => r.telemetryReadingId == ${String(telemetryReadingId)})
+      |> group()
+      |> limit(n: 1)`);
+    return rows.length > 0 ? mapReportRow(rows[0]) : null;
   }
 }
 

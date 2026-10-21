@@ -19,6 +19,17 @@ function replayOf(stored) {
   return { ...stored, datastreamId: stored.datastreamId ?? stored.telemetryDatastreamId ?? null, replayed: true };
 }
 
+// A point carries no organizationId, so an org-scoped caller is scoped to
+// their organizations' sensors: null (unscoped) unless the scope is
+// 'organization', else the sensorIds of those organizations' sensors.
+async function scopedSensorIdsOf(db, organizationScope) {
+  if (organizationScope?.scope !== 'organization') return null;
+  const orgIds = organizationScope.organizationIds || [];
+  const sensors = (await db.collection('sensors').find({ organizationId: { $in: orgIds } }).toArray())
+    .filter((sensor) => orgIds.includes(sensor.organizationId));
+  return [...new Set(sensors.map((sensor) => sensor.sensorId).filter(Boolean).map(String))];
+}
+
 function createTemperatureValidationError(message, statusCode = 422) {
   const error = new Error(message);
   error.statusCode = statusCode;
@@ -282,13 +293,7 @@ class TemperatureService {
         return { temperatures: [], total: 0, limit, skip };
       }
 
-      let sensorIds = null;
-      if (filters.organizationScope?.scope === 'organization') {
-        const orgIds = filters.organizationScope.organizationIds || [];
-        const sensors = (await db.collection('sensors').find({ organizationId: { $in: orgIds } }).toArray())
-          .filter((sensor) => orgIds.includes(sensor.organizationId));
-        sensorIds = [...new Set(sensors.map((sensor) => sensor.sensorId).filter(Boolean).map(String))];
-      }
+      let sensorIds = await scopedSensorIdsOf(db, filters.organizationScope);
 
       // #917: `filters.sensorID` is a live input alias (the frontend's api.ts
       // sends it as a query param), so the coalesce stays.
@@ -306,6 +311,20 @@ class TemperatureService {
       logger.error('Erro ao buscar histórico de temperatura:', error.message);
       throw error;
     }
+  }
+
+  // RF009 AC1 (#1391): a reading lives in InfluxDB, so it is read there by
+  // its telemetryReadingId. inScope is false for an org-scoped caller unless
+  // the reading's sensor is one of their organizations' (a reading with no
+  // sensorId is out of scope). An InfluxDB outage rejects.
+  async getReadingById(db, telemetryReadingId, organizationScope) {
+    const reading = await influxTelemetryReadRepository.readingById(telemetryReadingId);
+    if (!reading) return null;
+    const sensorIds = await scopedSensorIdsOf(db, organizationScope);
+    return {
+      reading,
+      inScope: sensorIds === null || (reading.sensorId != null && sensorIds.includes(String(reading.sensorId)))
+    };
   }
 
   async getActiveAlerts(db, filters = {}) {

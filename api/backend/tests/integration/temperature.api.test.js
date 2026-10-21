@@ -89,6 +89,56 @@ describe('GET /api/temperature/history', () => {
   });
 });
 
+// #1391 (RF009 AC1): a reading is read from InfluxDB by its
+// telemetryReadingId, scoped to the caller's organizations' sensors.
+describe('GET /api/temperature/:id', () => {
+  const READING_ID = '0b6f7e2c-4a1d-4c3e-9f0a-1b2c3d4e5f60';
+
+  beforeEach(() => { givenSession(); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  function givenOwnSensorAndReading(reading) {
+    givenOwnSensorAndReadings();
+    return vi.spyOn(influxTelemetryReadRepository, 'readingById').mockResolvedValue(reading);
+  }
+
+  it('answers the InfluxDB reading of an own sensor under data', async () => {
+    const byId = givenOwnSensorAndReading({ telemetryReadingId: READING_ID, sensorId: 's1', temperatureValue: 4.2 });
+
+    const response = await request(app)
+      .get(`/api/temperature/${READING_ID}`)
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.success).toBe(true);
+    expect(response.body.data).toMatchObject({ telemetryReadingId: READING_ID, sensorId: 's1' });
+    expect(byId).toHaveBeenCalledWith(READING_ID);
+  });
+
+  it('answers 403 for a reading of another organization\'s sensor', async () => {
+    givenOwnSensorAndReading({ telemetryReadingId: READING_ID, sensorId: 's-foreign', temperatureValue: 4.2 });
+
+    const response = await request(app)
+      .get(`/api/temperature/${READING_ID}`)
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+
+    expect(response.status).toBe(403);
+    expect(response.body.error).toBe('Acesso negado');
+  });
+
+  it('answers 404 for a Mongo ObjectId, which is no reading id, without reading InfluxDB', async () => {
+    const byId = givenOwnSensorAndReading(null);
+
+    const response = await request(app)
+      .get('/api/temperature/507f1f77bcf86cd799439011')
+      .set('Authorization', `Bearer ${makeToken(2)}`);
+
+    expect(response.status).toBe(404);
+    expect(response.body).toEqual({ success: false, error: 'Leitura não encontrada' });
+    expect(byId).not.toHaveBeenCalled();
+  });
+});
+
 describe('GET /api/temperature/control', () => {
   beforeEach(() => { givenSession(); });
   afterEach(() => { vi.restoreAllMocks(); });
@@ -111,7 +161,7 @@ describe('GET /api/temperature/control', () => {
       .get('/api/temperature/control')
       .set('Authorization', `Bearer ${makeToken(2)}`);
 
-    // GET /:id would try `new ObjectId('control')`, which throws and 500s.
+    // GET /:id would answer 404 for `control`, not a reading id.
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ success: true, data: [] });
   });

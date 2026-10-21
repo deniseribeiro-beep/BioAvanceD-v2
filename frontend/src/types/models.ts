@@ -728,6 +728,7 @@ export interface Reports {
 export interface Temperature {
   _id?: string; // MongoDB ID
   logID: string;
+  telemetryReadingId?: string;
   timestamp?: Date | string;
   temperatureValue: number;
   temperatureUnit?: string;
