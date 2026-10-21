@@ -10,6 +10,7 @@ function matches(doc, filter) {
   return Object.entries(filter).every(([key, value]) => {
     if (key === '$or') return value.some((branch) => matches(doc, branch));
     if (value && typeof value === 'object' && Array.isArray(value.$in)) return value.$in.includes(doc[key]);
+    if (value && typeof value === 'object' && typeof value.$regex === 'string') return typeof doc[key] === 'string' && new RegExp(value.$regex).test(doc[key]);
     return doc[key] === value;
   });
 }
@@ -278,5 +279,94 @@ describe('physicalChain.service: a caller\'s session (#1314)', () => {
     expect(findOne).toHaveBeenCalledWith({ specimenId: 'SPC-1', assignmentStatus: 'active' }, { session });
     expect(await service.openPositionAssignment(db, 'CT-1', session)).toMatchObject({ storagePositionId: 'rack-1:A01' });
     expect(await service.openSpecimenAssignment(db, 'SPC-404', session)).toBeNull();
+  });
+});
+
+describe('specimenIdsAtLocation (#1392)', () => {
+  const FROM = T(3);
+  const TO = T(5);
+
+  // One specimen in one container at one position of one rack at one location.
+  function seedChain(db, { specimenId = 'SPC-1', containerId = 'CT-1', storagePositionId = 'rack-1:A01', storageRackId = 'rack-1', storageLocationId = 'loc-1', sca = {}, cpa = {}, rla = {} } = {}) {
+    db.collection('specimenContainerAssignments').docs.push({ specimenId, containerId, loadedAt: T(1), unloadedAt: null, ...sca });
+    db.collection('containerPositionAssignments').docs.push({ containerId, storagePositionId, placedAt: T(1), removedAt: null, ...cpa });
+    db.collection('rackLocationAssignments').docs.push({ storageRackId, storageLocationId, placedAt: T(1), removedAt: null, ...rla });
+  }
+
+  it('returns a specimen whose three intervals overlap the window at the location, and not at another', async () => {
+    const db = createFakeDb();
+    seedChain(db, { sca: { loadedAt: T(2) }, cpa: { placedAt: T(1), removedAt: T(4) }, rla: { placedAt: T(1) } });
+
+    expect(await service.specimenIdsAtLocation(db, 'loc-1', { from: FROM, to: TO })).toEqual(['SPC-1']);
+    expect(await service.specimenIdsAtLocation(db, 'loc-2', { from: FROM, to: TO })).toEqual([]);
+  });
+
+  it('reads each interval half-open and the window closed: removedAt === from is out, placedAt === to is in', async () => {
+    const removed = createFakeDb();
+    seedChain(removed, { cpa: { removedAt: FROM } });
+    expect(await service.specimenIdsAtLocation(removed, 'loc-1', { from: FROM, to: TO })).toEqual([]);
+
+    const placed = createFakeDb();
+    seedChain(placed, { cpa: { placedAt: TO } });
+    expect(await service.specimenIdsAtLocation(placed, 'loc-1', { from: FROM, to: TO })).toEqual(['SPC-1']);
+  });
+
+  it('from === to inside a piece returns it', async () => {
+    const db = createFakeDb();
+    seedChain(db);
+    expect(await service.specimenIdsAtLocation(db, 'loc-1', { from: T(4), to: T(4) })).toEqual(['SPC-1']);
+  });
+
+  it('a rack moved from loc-1 to loc-2 before from is not returned for loc-1', async () => {
+    const db = createFakeDb();
+    seedChain(db, { rla: { removedAt: T(2) } });
+    db.collection('rackLocationAssignments').docs.push({ storageRackId: 'rack-1', storageLocationId: 'loc-2', placedAt: T(2), removedAt: null });
+
+    expect(await service.specimenIdsAtLocation(db, 'loc-1', { from: FROM, to: TO })).toEqual([]);
+    expect(await service.specimenIdsAtLocation(db, 'loc-2', { from: FROM, to: TO })).toEqual(['SPC-1']);
+  });
+
+  it('a specimen unloaded before from is not returned', async () => {
+    const db = createFakeDb();
+    seedChain(db, { sca: { unloadedAt: T(2) } });
+    expect(await service.specimenIdsAtLocation(db, 'loc-1', { from: FROM, to: TO })).toEqual([]);
+  });
+
+  it('rack-1 at loc-1 does not return a container at rack-10:A01', async () => {
+    const db = createFakeDb();
+    seedChain(db, { storagePositionId: 'rack-10:A01' });
+    expect(await service.specimenIdsAtLocation(db, 'loc-1', { from: FROM, to: TO })).toEqual([]);
+  });
+
+  it('rack.1 at loc-1 does not return a container at rackX1:A01', async () => {
+    const db = createFakeDb();
+    seedChain(db, { storageRackId: 'rack.1', storagePositionId: 'rackX1:A01' });
+    expect(await service.specimenIdsAtLocation(db, 'loc-1', { from: FROM, to: TO })).toEqual([]);
+  });
+
+  it('a position id without a separator adds nothing', async () => {
+    const db = createFakeDb();
+    seedChain(db, { storageRackId: 'rack-1', storagePositionId: 'rack-1' });
+    expect(await service.specimenIdsAtLocation(db, 'loc-1', { from: FROM, to: TO })).toEqual([]);
+  });
+
+  it('two pieces of one specimen return it once', async () => {
+    const db = createFakeDb();
+    seedChain(db, { cpa: { removedAt: T(4) } });
+    db.collection('containerPositionAssignments').docs.push({ containerId: 'CT-1', storagePositionId: 'rack-1:B02', placedAt: T(4), removedAt: null });
+    expect(await service.specimenIdsAtLocation(db, 'loc-1', { from: FROM, to: TO })).toEqual(['SPC-1']);
+  });
+
+  it('an empty location or an invalid date returns [] and calls no find', async () => {
+    const db = createFakeDb();
+    seedChain(db);
+    const finds = ['specimenContainerAssignments', 'containerPositionAssignments', 'rackLocationAssignments']
+      .map((name) => vi.spyOn(db.collection(name), 'find'));
+
+    expect(await service.specimenIdsAtLocation(db, '', { from: FROM, to: TO })).toEqual([]);
+    expect(await service.specimenIdsAtLocation(db, null, { from: FROM, to: TO })).toEqual([]);
+    expect(await service.specimenIdsAtLocation(db, 'loc-1', { from: 'not-a-date', to: TO })).toEqual([]);
+    expect(await service.specimenIdsAtLocation(db, 'loc-1', { from: FROM, to: undefined })).toEqual([]);
+    for (const find of finds) expect(find).not.toHaveBeenCalled();
   });
 });

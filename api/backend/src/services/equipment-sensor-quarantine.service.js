@@ -6,7 +6,8 @@ const { ensureStorageContainerIndexes, ensureStorageBoxIndexes } = require('../u
 const quarantineActionService = require('./quarantine-action.service');
 const operationalStateDecisionService = require('./operationalStateDecision.service');
 const logger = require('../utils/logger');
-const { currentDatastreamsBySensor, freezerContainerIdOf } = require('./sensorDatastream.service');
+const { currentDatastreamsBySensor, freezerContainerIdOf, TEMPERATURE_PROPERTY } = require('./sensorDatastream.service');
+const physicalChain = require('./physicalChain.service');
 
 // #883: routine "Maintenance"/"Inactive" states are deliberately excluded
 // here. A sample-bearing freezer taken out of service for routine
@@ -370,12 +371,71 @@ async function findBoxIdsBySensorKey(db, sensorKey, options = {}) {
   return dedupeIds(boxIds);
 }
 
+function validDate(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+// #1392 (RF009 AC5): the specimens the physical chain puts, during the
+// window, at the location of a temperature datastream of the sensor valid
+// then. The lookup takes no session; it only reads. On an error it finds
+// nothing, and the box paths still apply: cold-chain availability wins.
+async function findChainSpecimenIdsBySensorKey(db, sensorKey, { from, to } = {}) {
+  const rawSensorKey = normalizeString(sensorKey);
+  if (!rawSensorKey) return [];
+
+  try {
+    const fromTime = new Date(from).getTime();
+    const toTime = new Date(to).getTime();
+    const streams = (await (await getCollection(db, 'telemetryDatastreams')).find({
+      sensorId: rawSensorKey,
+      observedProperty: TEMPERATURE_PROPERTY,
+    }).toArray()).filter((stream) => {
+      if (!stream || String(stream.sensorId) !== rawSensorKey || stream.observedProperty !== TEMPERATURE_PROPERTY) return false;
+      const start = validDate(stream.validityPeriod?.start);
+      if (!start || start.getTime() > toTime) return false;
+      const end = validDate(stream.validityPeriod?.end);
+      return !end || fromTime < end.getTime();
+    });
+
+    const locationIds = [...new Set(streams.map((stream) => normalizeString(stream.storageLocationId)).filter(Boolean))];
+    const specimenIds = new Set();
+    for (const storageLocationId of locationIds) {
+      for (const specimenId of await physicalChain.specimenIdsAtLocation(db, storageLocationId, { from, to })) {
+        specimenIds.add(String(specimenId));
+      }
+    }
+    return [...specimenIds].sort();
+  } catch (error) {
+    logger.warn('[QUARANTINE][COLD_CHAIN] Não foi possível consultar a cadeia física para incidente', { sensorKey: rawSensorKey, error: error.message });
+    return [];
+  }
+}
+
 function buildSampleFilterFromBoxIds(boxIds = []) {
   if (!Array.isArray(boxIds) || boxIds.length === 0) {
     return null;
   }
 
   return { 'storageLocation.boxId': { $in: dedupeIds(boxIds) } };
+}
+
+// #1392: the box paths' filter, or its union with the chain's specimens. A
+// legacy sample's chain key is its _id (#1314), compared via $toString for
+// #912's handle-agnostic reason.
+function buildColdChainSampleFilter(boxIds = [], specimenIds = []) {
+  if (!Array.isArray(specimenIds) || specimenIds.length === 0) {
+    return buildSampleFilterFromBoxIds(boxIds);
+  }
+
+  const branches = [];
+  if (Array.isArray(boxIds) && boxIds.length > 0) {
+    branches.push({ 'storageLocation.boxId': { $in: dedupeIds(boxIds) } });
+  }
+  branches.push({ specimenId: { $in: specimenIds } });
+  branches.push({ $expr: { $in: [{ $toString: '$_id' }, specimenIds] } });
+  return { $or: branches };
 }
 
 // The rule a quarantine applied, named on its ledger movement and its
@@ -627,7 +687,13 @@ async function quarantineByColdChainIncident(db, incident = {}, options = {}) {
   }
 
   const boxIds = await findBoxIdsBySensorKey(db, sensorKey, options);
-  const filter = buildSampleFilterFromBoxIds(boxIds);
+  // #1392: the excursion's window, from its clock (#1207), else the
+  // incident's opening, to now.
+  const to = options.now ? new Date(options.now) : new Date();
+  let from = validDate(incident.excursionStartedAt) || validDate(incident.openedAt) || to;
+  if (from > to) from = to;
+  const specimenIds = await findChainSpecimenIdsBySensorKey(db, sensorKey, { from, to });
+  const filter = buildColdChainSampleFilter(boxIds, specimenIds);
   const incidentId = incident?._id ? String(incident._id) : sensorKey;
   const reason = buildColdChainIncidentReason(incident);
 
@@ -646,7 +712,8 @@ async function quarantineByColdChainIncident(db, incident = {}, options = {}) {
     matched: result.matched,
     quarantined: result.quarantined,
     movements: result.movements,
-    boxIds
+    boxIds,
+    specimenIds
   });
 
   return {
@@ -654,6 +721,7 @@ async function quarantineByColdChainIncident(db, incident = {}, options = {}) {
     ...result,
     reason,
     boxIds,
+    specimenIds,
     incidentId,
     sensorKey
   };
@@ -735,6 +803,7 @@ module.exports = {
   quarantineByColdChainIncident,
   markColdChainIncidentSamplesForReview,
   findBoxIdsBySensorKey,
+  findChainSpecimenIdsBySensorKey,
   // #1163: exported so their index wiring can be pinned directly.
   resolveFreezersByEquipmentIdentifiers,
   findBoxIdsUnderFreezer

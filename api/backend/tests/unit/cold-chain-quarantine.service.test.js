@@ -1,7 +1,8 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 const { ObjectId } = require('mongodb');
 
 const quarantineService = require('../../src/services/equipment-sensor-quarantine.service');
+const physicalChain = require('../../src/services/physicalChain.service');
 const { matchesFilter } = require('../factories/filter.factory');
 const { createForeignBsonGuardCollectionMock } = require('../factories/db.factory');
 
@@ -14,9 +15,12 @@ const { createForeignBsonGuardCollectionMock } = require('../factories/db.factor
  * ObjectId variants, so the two pinned `_id`-branch tests below need this
  * matcher to understand that shape to keep passing -- their assertions are
  * unchanged, only what the mock understands is extended.
+ *
+ * #1392: also `{ $in: [{ $toString: '$_id' }, [...]] }`, the cold-chain
+ * quarantine's match of a legacy sample whose chain key is its `_id`.
  */
-function evalExprToStringEq(doc, expr) {
-  if (!expr || !Array.isArray(expr.$eq)) return false;
+function evalExprToString(doc, expr) {
+  if (!expr || !(Array.isArray(expr.$eq) || Array.isArray(expr.$in))) return false;
   const resolve = (side) => {
     if (side && typeof side === 'object' && typeof side.$toString === 'string') {
       const path = side.$toString.replace(/^\$/, '');
@@ -25,6 +29,10 @@ function evalExprToStringEq(doc, expr) {
     }
     return side;
   };
+  if (Array.isArray(expr.$in)) {
+    const [needle, haystack] = expr.$in;
+    return Array.isArray(haystack) && haystack.includes(resolve(needle));
+  }
   const [left, right] = expr.$eq;
   return resolve(left) === resolve(right);
 }
@@ -38,7 +46,7 @@ function matchesFilterWithExpr(doc, filter = {}) {
       return Array.isArray(condition) && condition.every((entry) => matchesFilterWithExpr(doc, entry));
     }
     if (key === '$expr') {
-      return evalExprToStringEq(doc, condition);
+      return evalExprToString(doc, condition);
     }
     return matchesFilter(doc, { [key]: condition });
   });
@@ -630,5 +638,165 @@ describe('equipment-sensor-quarantine.service cold-chain quarantine', () => {
 
     await expect(quarantineService.findBoxIdsBySensorKey(db, 'sensor-guard')).resolves.toEqual([]);
     expect(equipmentGuard.findOne).toHaveBeenCalled();
+  });
+});
+
+describe('#1392: cold-chain quarantine through the physical chain (RF009 AC5)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const NOW = new Date();
+  const HOUR = 60 * 60 * 1000;
+
+  // The matcher has no $lte, so these collections return their documents
+  // unfiltered, as in the #1392 datastream case above; the services filter
+  // them again.
+  function unfiltered(docs) {
+    return { docs, find: vi.fn(() => makeCursor(docs)) };
+  }
+
+  function stream(overrides = {}) {
+    return {
+      sensorId: 'sensor-chain-001',
+      observedProperty: 'temperature',
+      storageLocationId: 'loc-X',
+      validityPeriod: { start: new Date(NOW.getTime() - HOUR), end: null },
+      ...overrides,
+    };
+  }
+
+  function chainCollections({ streams = [stream()], samples = [], sensors = [] } = {}) {
+    return {
+      sensors: makeCollection(sensors),
+      sensorMetadata: makeCollection([]),
+      sampleMovements: makeCollection([]),
+      sample_movements: makeCollection([]),
+      counters: makeCollection([]),
+      telemetryDatastreams: unfiltered(streams),
+      samples: makeCollection(samples),
+    };
+  }
+
+  function incident(overrides = {}) {
+    return { _id: new ObjectId(), sensorKey: 'sensor-chain-001', status: 'open', currentTemperature: -40, ...overrides };
+  }
+
+  it('(a) quarantines a specimen the chain puts at the stream location, with no box path, over [excursionStartedAt, now]', async () => {
+    const collections = chainCollections({ samples: [{ _id: new ObjectId(), specimenId: 'SPC-CHAIN', quantity: 1 }] });
+    const db = buildDb(collections);
+    const spy = vi.spyOn(physicalChain, 'specimenIdsAtLocation').mockResolvedValue(['SPC-CHAIN']);
+    const excursionStartedAt = new Date(NOW.getTime() - HOUR / 2);
+
+    const result = await quarantineService.quarantineByColdChainIncident(db, incident({ excursionStartedAt }), { now: NOW });
+
+    expect(result.boxIds).toEqual([]);
+    expect(result.specimenIds).toEqual(['SPC-CHAIN']);
+    expect(result.matched).toBe(1);
+    expect(result.quarantined).toBe(1);
+    expect(spy).toHaveBeenCalledWith(db, 'loc-X', { from: excursionStartedAt, to: NOW });
+  });
+
+  it('(b) the window falls back to openedAt, then to the instant now', async () => {
+    const spy = vi.spyOn(physicalChain, 'specimenIdsAtLocation').mockResolvedValue([]);
+    const openedAt = new Date(NOW.getTime() - HOUR / 4);
+
+    await quarantineService.quarantineByColdChainIncident(buildDb(chainCollections()), incident({ openedAt }), { now: NOW });
+    expect(spy).toHaveBeenLastCalledWith(expect.anything(), 'loc-X', { from: openedAt, to: NOW });
+
+    await quarantineService.quarantineByColdChainIncident(buildDb(chainCollections()), incident(), { now: NOW });
+    expect(spy).toHaveBeenLastCalledWith(expect.anything(), 'loc-X', { from: NOW, to: NOW });
+  });
+
+  it('(c) quarantines a legacy sample with no specimenId whose String(_id) the chain returns', async () => {
+    const legacyId = new ObjectId();
+    const collections = chainCollections({ samples: [{ _id: legacyId, sampleID: 'BIO-LEGACY', quantity: 1 }] });
+    vi.spyOn(physicalChain, 'specimenIdsAtLocation').mockResolvedValue([String(legacyId)]);
+
+    const result = await quarantineService.quarantineByColdChainIncident(buildDb(collections), incident(), { now: NOW });
+
+    expect(result.matched).toBe(1);
+    expect(result.quarantined).toBe(1);
+  });
+
+  it('(d) takes the union of the box path and the chain', async () => {
+    const collections = chainCollections({ sensors: [{ sensorId: 'sensor-chain-001', locationID: 9101 }] });
+    const { boxId } = seedStorageHierarchy(collections, 9101);
+    collections.samples = makeCollection([
+      { _id: new ObjectId(), specimenId: 'SPC-BOX', storageLocation: { boxId, position: 'A1' }, quantity: 1 },
+      { _id: new ObjectId(), specimenId: 'SPC-CHAIN', quantity: 1 },
+      { _id: new ObjectId(), specimenId: 'SPC-ELSEWHERE', quantity: 1 },
+    ]);
+    vi.spyOn(physicalChain, 'specimenIdsAtLocation').mockResolvedValue(['SPC-CHAIN']);
+
+    const result = await quarantineService.quarantineByColdChainIncident(buildDb(collections), incident(), { now: NOW });
+
+    expect(result.boxIds.map(String)).toEqual([String(boxId)]);
+    expect(result.matched).toBe(2);
+    expect(result.quarantined).toBe(2);
+  });
+
+  it('(e) a stream whose validity ended before the window reads no chain and quarantines nothing', async () => {
+    const collections = chainCollections({
+      streams: [stream({ validityPeriod: { start: new Date(NOW.getTime() - 3 * HOUR), end: new Date(NOW.getTime() - 2 * HOUR) } })],
+      samples: [{ _id: new ObjectId(), specimenId: 'SPC-CHAIN', quantity: 1 }],
+    });
+    const spy = vi.spyOn(physicalChain, 'specimenIdsAtLocation').mockResolvedValue(['SPC-CHAIN']);
+
+    const result = await quarantineService.quarantineByColdChainIncident(
+      buildDb(collections), incident({ excursionStartedAt: new Date(NOW.getTime() - HOUR) }), { now: NOW },
+    );
+
+    expect(spy).not.toHaveBeenCalled();
+    expect(result.specimenIds).toEqual([]);
+    expect(result.matched).toBe(0);
+    expect(result.quarantined).toBe(0);
+  });
+
+  it('(f) a failed chain lookup still quarantines the box sample', async () => {
+    const collections = chainCollections({ sensors: [{ sensorId: 'sensor-chain-001', locationID: 9102 }] });
+    const { boxId } = seedStorageHierarchy(collections, 9102);
+    collections.samples = makeCollection([
+      { _id: new ObjectId(), specimenId: 'SPC-BOX', storageLocation: { boxId, position: 'A1' }, quantity: 1 },
+    ]);
+    vi.spyOn(physicalChain, 'specimenIdsAtLocation').mockRejectedValue(new Error('chain down'));
+
+    const result = await quarantineService.quarantineByColdChainIncident(buildDb(collections), incident(), { now: NOW });
+
+    expect(result.specimenIds).toEqual([]);
+    expect(result.matched).toBe(1);
+    expect(result.quarantined).toBe(1);
+  });
+
+  it('(g) reads the seeded SCA -> CPA -> RLA chain and quarantines the chained sample', async () => {
+    const collections = chainCollections({
+      samples: [
+        { _id: new ObjectId(), specimenId: 'SPC-CHAINED', quantity: 1 },
+        { _id: new ObjectId(), specimenId: 'SPC-OTHER', quantity: 1 },
+      ],
+    });
+    const placedAt = new Date(NOW.getTime() - 2 * HOUR);
+    collections.rackLocationAssignments = unfiltered([
+      { storageRackId: 'rack-X', storageLocationId: 'loc-X', placedAt, removedAt: null },
+      { storageRackId: 'rack-Y', storageLocationId: 'loc-Y', placedAt, removedAt: null },
+    ]);
+    collections.containerPositionAssignments = unfiltered([
+      { containerId: 'CT-X', storagePositionId: 'rack-X:A01', placedAt, removedAt: null },
+      { containerId: 'CT-Y', storagePositionId: 'rack-Y:A01', placedAt, removedAt: null },
+    ]);
+    collections.specimenContainerAssignments = unfiltered([
+      { specimenId: 'SPC-CHAINED', containerId: 'CT-X', loadedAt: placedAt, unloadedAt: null },
+      { specimenId: 'SPC-OTHER', containerId: 'CT-Y', loadedAt: placedAt, unloadedAt: null },
+    ]);
+
+    const result = await quarantineService.quarantineByColdChainIncident(
+      buildDb(collections), incident({ excursionStartedAt: new Date(NOW.getTime() - HOUR) }), { now: NOW },
+    );
+
+    expect(result.specimenIds).toEqual(['SPC-CHAINED']);
+    expect(result.matched).toBe(1);
+    expect(result.quarantined).toBe(1);
+    expect(collections.samples.docs.find((doc) => doc.specimenId === 'SPC-CHAINED').specimenStatus).toBe('quarantined');
+    expect(collections.samples.docs.find((doc) => doc.specimenId === 'SPC-OTHER').specimenStatus).toBeUndefined();
   });
 });

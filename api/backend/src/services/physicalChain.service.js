@@ -1,6 +1,7 @@
 const { getCollection } = require('../utils/collectionResolver');
 const { withTransactionWhereSupported } = require('../utils/mongoTransaction');
 const logger = require('../utils/logger');
+const { escapeRegex } = require('../utils/escapeRegex');
 const ContainerModel = require('../models/Container');
 const SpecimenContainerAssignmentModel = require('../models/SpecimenContainerAssignment');
 const ContainerPositionAssignmentModel = require('../models/ContainerPositionAssignment');
@@ -288,6 +289,66 @@ async function resolveSpecimenLocation(db, specimenId, at = new Date()) {
   return result;
 }
 
+function validTime(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const time = new Date(value).getTime();
+  return Number.isNaN(time) ? null : time;
+}
+
+function endTime(value) {
+  return validTime(value) ?? Infinity;
+}
+
+// #1392 (RF009 AC5): the specimens whose chain puts them at a location at
+// some instant of the closed window [from, to], read backward from the
+// location through its racks, their positions and the containers there.
+async function specimenIdsAtLocation(db, storageLocationId, { from, to } = {}) {
+  const locationId = storageLocationId === undefined || storageLocationId === null ? '' : String(storageLocationId);
+  let fromTime = validTime(from);
+  const toTime = validTime(to);
+  if (!locationId || fromTime === null || toTime === null) return [];
+  if (fromTime > toTime) fromTime = toTime;
+
+  const rlas = (await (await getCollection(db, 'rackLocationAssignments')).find({ storageLocationId: locationId }).toArray())
+    .filter((rla) => rla && String(rla.storageLocationId) === locationId);
+  const rlasByRack = new Map();
+  for (const rla of rlas) {
+    const rackId = String(rla.storageRackId || '');
+    if (!rackId) continue;
+    if (!rlasByRack.has(rackId)) rlasByRack.set(rackId, []);
+    rlasByRack.get(rackId).push(rla);
+  }
+
+  const cpaCollection = await getCollection(db, 'containerPositionAssignments');
+  const scaCollection = await getCollection(db, 'specimenContainerAssignments');
+  const scasByContainer = new Map();
+  const specimenIds = new Set();
+  for (const [rackId, rackRlas] of rlasByRack) {
+    // A position id is `<storageRackId>:<position>`, read as resolveSpecimenLocation reads it.
+    const cpas = (await cpaCollection.find({ storagePositionId: { $regex: '^' + escapeRegex(rackId) + ':[^:]+$' } }).toArray())
+      .filter((cpa) => {
+        const positionId = String(cpa?.storagePositionId || '');
+        const separator = positionId.lastIndexOf(':');
+        return separator > 0 && positionId.slice(0, separator) === rackId;
+      });
+    for (const cpa of cpas) {
+      const containerId = cpa.containerId;
+      if (!scasByContainer.has(containerId)) {
+        scasByContainer.set(containerId, (await scaCollection.find({ containerId }).toArray())
+          .filter((sca) => sca && sca.containerId === containerId));
+      }
+      for (const sca of scasByContainer.get(containerId)) {
+        for (const rla of rackRlas) {
+          const start = Math.max(validTime(sca.loadedAt) ?? -Infinity, validTime(cpa.placedAt) ?? -Infinity, validTime(rla.placedAt) ?? -Infinity);
+          const end = Math.min(endTime(sca.unloadedAt), endTime(cpa.removedAt), endTime(rla.removedAt));
+          if (start < end && start <= toTime && fromTime < end && sca.specimenId) specimenIds.add(String(sca.specimenId));
+        }
+      }
+    }
+  }
+  return [...specimenIds].sort();
+}
+
 module.exports = {
   PhysicalChainError,
   ensurePhysicalChainIndexes,
@@ -301,4 +362,5 @@ module.exports = {
   openSpecimenAssignment,
   openPositionAssignment,
   resolveSpecimenLocation,
+  specimenIdsAtLocation,
 };
