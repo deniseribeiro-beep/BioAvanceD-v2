@@ -294,7 +294,7 @@ function validationIssuesOf(identity, payload = {}) {
 }
 
 function bindingMode() {
-  return String(env.TELEMETRY_BINDING_MODE || 'record').toLowerCase() === 'enforce' ? 'enforce' : 'record';
+  return String(env.TELEMETRY_BINDING_MODE || 'enforce').toLowerCase() === 'record' ? 'record' : 'enforce';
 }
 
 /**
@@ -303,7 +303,7 @@ function bindingMode() {
  * DeviceRegistration. Returns the reading's datastreamId (V2E-0546) and
  * storageLocationId (V2E-0547), both null without a datastream, and the
  * issue drafts for what is missing: under TELEMETRY_BINDING_MODE `enforce`
- * they reject the reading, under `record` (the default) they quarantine it,
+ * (the default) they reject the reading, under `record` they quarantine it,
  * so it is stored and flagged. A lookup that fails is logged; under
  * `enforce` it refuses the reading with a 503, since the binding cannot be
  * shown, and under `record` the reading goes on unbound and unflagged.

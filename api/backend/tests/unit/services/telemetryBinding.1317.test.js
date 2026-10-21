@@ -9,8 +9,8 @@ const logger = require('../../../src/utils/logger');
 // #1317, RF009 AC4 and RF017 AC5: a reading is bound to the
 // TelemetryDatastream of its sensor valid at its observedAt, over [start,
 // end), and its sensor must hold an active DeviceRegistration. Under
-// TELEMETRY_BINDING_MODE `enforce` a reading missing either is refused with
-// 422; under `record`, the default, it is stored and the gap recorded.
+// TELEMETRY_BINDING_MODE `enforce`, the default, a reading missing either is
+// refused with 422; under `record` it is stored and the gap recorded.
 
 function valueAt(doc, path) {
   return path.split('.').reduce((value, key) => (value == null ? undefined : value[key]), doc);
@@ -189,19 +189,24 @@ describe('screenReading binds every reading (RF009 AC4)', () => {
     ]);
   });
 
-  it('record (the default): an unbound, unregistered reading is accepted, unstamped, with its three issues quarantined', async () => {
+  it('enforce (the default): an unset mode refuses an unbound, unregistered reading with 422 and records its three issues rejected', async () => {
     env.TELEMETRY_BINDING_MODE = undefined;
     const { db, collectionOf } = fakeDb();
     const { payload, identity } = reading('2026-10-02T00:00:00.000Z', 'sensor-unbound');
-    const issues = await screenReading(db, identity, payload);
-    expect(issues.map((issue) => [issue.issueCode, issue.disposition])).toEqual([
-      ['unbound_datastream', 'quarantined'], ['device_not_registered', 'quarantined'], ['device_unusable', 'quarantined'],
+    await expect(screenReading(db, identity, payload)).rejects.toMatchObject({ statusCode: 422 });
+    expect(collectionOf('telemetryValidationIssues').docs.map((issue) => [issue.issueCode, issue.disposition])).toEqual([
+      ['unbound_datastream', 'rejected'], ['device_not_registered', 'rejected'], ['device_unusable', 'rejected'],
     ]);
     expect(identity.datastreamId).toBeNull();
     expect(identity.storageLocationId).toBeNull();
-    expect(collectionOf('telemetryIngestionEvents').docs).toEqual([
-      expect.objectContaining({ validationStatus: 'quarantined', telemetryReadingId: identity.telemetryReadingId }),
-    ]);
+    expect(collectionOf('telemetryIngestionEvents').docs).toEqual([expect.objectContaining({ validationStatus: 'rejected', telemetryReadingId: null })]);
+  });
+
+  it('an unknown mode value is enforce', async () => {
+    env.TELEMETRY_BINDING_MODE = 'enforced';
+    const { db } = fakeDb();
+    const { payload, identity } = reading('2026-10-02T00:00:00.000Z', 'sensor-unbound');
+    await expect(screenReading(db, identity, payload)).rejects.toMatchObject({ statusCode: 422 });
   });
 
   it('enforce: a binding lookup that fails refuses the reading with 503; record lets it through', async () => {

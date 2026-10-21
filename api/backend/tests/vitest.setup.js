@@ -19,6 +19,10 @@ process.env.ENCRYPTION_KEY_ID = process.env.ENCRYPTION_KEY_ID || 'vitest-key-001
 // iot.api.test.js's test-support describe block needs the routes actually
 // registered at module-load time to exercise them at all.
 process.env.ENABLE_TEST_SUPPORT_ROUTES = process.env.ENABLE_TEST_SUPPORT_ROUTES || 'true';
+// #1392: the unit fixtures post readings for unbound sensors, which the
+// native suite accepts as `record`. The binding cases set the mode
+// themselves, and the e2e stack proves `enforce`, the code default.
+process.env.TELEMETRY_BINDING_MODE = process.env.TELEMETRY_BINDING_MODE || 'record';
 
 function createMockSession() {
   return {

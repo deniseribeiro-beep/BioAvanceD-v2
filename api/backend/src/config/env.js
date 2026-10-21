@@ -66,9 +66,11 @@ module.exports = {
   // RF009 AC4, RF017 AC5: what the ingestion contract does with a reading
   // whose sensor has no TelemetryDatastream valid at its observedAt, no
   // active DeviceRegistration, or whose Device is not registered, homologated
-  // and unretired, RF017 AC8. `record` (the default) accepts it and records
-  // a TelemetryValidationIssue; `enforce` refuses it with a 422.
-  TELEMETRY_BINDING_MODE: process.env.TELEMETRY_BINDING_MODE || 'record',
+  // and unretired, RF017 AC8. `enforce` (the default) refuses it with a 422;
+  // `record`, the opt-out, accepts it and records a TelemetryValidationIssue.
+  // `enforce` became the default on 2026-10-21 (#1392) because no deployment
+  // holds unbound sensors.
+  TELEMETRY_BINDING_MODE: process.env.TELEMETRY_BINDING_MODE || 'enforce',
 
   // MQTT telemetry ingestion
   MQTT_ENABLED: process.env.MQTT_ENABLED === 'true' || process.env.MQTT_ENABLED === '1',

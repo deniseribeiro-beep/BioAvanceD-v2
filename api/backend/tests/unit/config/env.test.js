@@ -62,3 +62,21 @@ describe('config/env - schedule cron overrides (#749)', () => {
     });
   });
 });
+
+describe('config/env - telemetry binding mode (#1392)', () => {
+  // tests/vitest.setup.js pins TELEMETRY_BINDING_MODE to `record` for the
+  // native suite, so this case unsets it to read the code default.
+  const original = process.env.TELEMETRY_BINDING_MODE;
+
+  afterEach(() => {
+    if (original === undefined) delete process.env.TELEMETRY_BINDING_MODE;
+    else process.env.TELEMETRY_BINDING_MODE = original;
+    delete require.cache[envPath];
+  });
+
+  it('defaults TELEMETRY_BINDING_MODE to enforce (#1392)', () => {
+    delete process.env.TELEMETRY_BINDING_MODE;
+
+    expect(freshEnv().TELEMETRY_BINDING_MODE).toBe('enforce');
+  });
+});
