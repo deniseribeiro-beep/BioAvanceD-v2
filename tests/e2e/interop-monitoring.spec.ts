@@ -1493,7 +1493,8 @@ test.describe('Telemetry datastream binding (#1317, RF009 AC4) — real backend'
       // reading outside every datastream validity, so it reaches no InfluxDB.
       const after = await send(end);
       expect(after.status(), await after.text()).toBe(422);
-      expect((await queryFreezerReadingIds(sensorId)).map((p) => p.telemetryReadingId)).toEqual([insideReading.telemetryReadingId]);
+      // The inside reading is stamped about 59 minutes ago, so the lookback is 90.
+      expect((await queryFreezerReadingIds(sensorId, 90)).map((p) => p.telemetryReadingId)).toEqual([insideReading.telemetryReadingId]);
     } finally {
       await unbindSensor(sensorId);
     }
