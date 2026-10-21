@@ -9,6 +9,7 @@ import {
   closeSeedDb,
   type SeededStorageBox,
 } from './helpers/seedParticipant';
+import { bindSensor, unbindSensor, closeSeedSensorDb } from './helpers/seedSensor';
 
 // The happy path of the two async importers, against the real stack: a valid
 // row goes through the queue and the worker and is persisted.
@@ -40,6 +41,7 @@ let db: Db;
 const seededBoxes: SeededStorageBox[] = [];
 const createdImportJobIds: string[] = [];
 const createdBatchJobIds: string[] = [];
+const boundSensorIds: string[] = [];
 
 test.describe('Async importers persist a valid row (RF029) -- real backend', () => {
   // API -> BullMQ -> worker -> Mongo; async-import-quarantine.spec.ts gives
@@ -67,6 +69,10 @@ test.describe('Async importers persist a valid row (RF029) -- real backend', () 
     }
     await Promise.all(seededBoxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {})));
     await closeSeedDb();
+    for (const sensorId of boundSensorIds) {
+      await unbindSensor(sensorId);
+    }
+    await closeSeedSensorDb();
   });
 
   test('POST /api/import/batch persists a valid sample row, keeping the file\'s id in sourceRecordId (#1335)', async ({ request }) => {
@@ -194,6 +200,8 @@ test.describe('Async importers persist a valid row (RF029) -- real backend', () 
   test('POST /api/import/import with dataType=temperature writes the reading to InfluxDB, so the temperature history shows it (#1317, RF009 AC1)', async ({ request }) => {
     const admin = await realLogin(request);
     const sensorId = `rf009-import-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    await bindSensor(sensorId);
+    boundSensorIds.push(sensorId);
     const csv = `sensorId,temperatureValue,temperatureUnit,timestamp\n${sensorId},-20,°C,${new Date().toISOString()}`;
 
     const upload = await request.post(`${apiBaseURL}/api/import/import`, {

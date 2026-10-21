@@ -14,18 +14,19 @@ const ingestHeaders = () => ({ 'x-telemetry-ingest-secret': process.env.TELEMETR
 test.skip(!apiBaseURL, 'PLAYWRIGHT_API_BASE_URL not set — run via npm run test:e2e:docker');
 
 // #1392: the SensorMetadata readers read the sensor's temperature
-// datastream valid now first; SensorMetadata is the fallback.
+// datastream valid now first; SensorMetadata is the fallback when that
+// datastream names no policy.
 test.describe('Sensor readers take the TelemetryDatastream first (#1392) — real backend', () => {
   test.afterAll(async () => {
     await closeSeedSensorDb();
   });
 
-  test('the temperature report bounds a bound sensor by its datastream policy and an unbound one by SensorMetadata', async ({ request }) => {
+  test('the temperature report bounds a bound sensor by its datastream policy and one whose datastream names no policy by SensorMetadata', async ({ request }) => {
     const admin = await realLogin(request);
     const auth = { Authorization: `Bearer ${admin.token}` };
-    const bound = await seedSensorWithPolicy(2, 8);
+    const bound = await seedSensorWithPolicy(2, 8, { datastream: false });
     const profile = await seedSensorWithPolicy(-90, -60);
-    const control = await seedSensorWithPolicy(2, 8);
+    const control = await seedSensorWithPolicy(2, 8, { thresholdProfileId: 'threshold-e2e' });
     const now = new Date();
     try {
       const created = await request.post(`${apiBaseURL}/api/telemetry-datastreams`, {

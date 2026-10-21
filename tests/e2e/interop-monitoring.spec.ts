@@ -9,6 +9,8 @@ import {
   seedSensorWithFreezerSample,
   removeSeededFreezerSample,
   findFreezerSample,
+  bindSensor,
+  unbindSensor,
 } from './helpers/seedSensor';
 import { queryTemperaturePoints, queryFreezerReadingIds } from './helpers/queryInflux';
 import { realLogin } from './helpers/realAuth';
@@ -1386,6 +1388,10 @@ test.describe('Alertas e notificações (RF015) — real backend', () => {
 // #1317 (RF009 AC2/AC3/AC7): a reading carries its TelemetryReading identity
 // and time, and a replayed idempotencyKey returns the stored reading.
 test.describe('Telemetry reading identity and replay (#1317, RF009) — real backend', () => {
+  test.afterAll(async () => {
+    await closeSeedSensorDb();
+  });
+
   test('a reading carries identity and time, and a replayed idempotencyKey writes nothing', async ({ request }) => {
     const admin = await realLogin(request);
     const auth = { Authorization: `Bearer ${admin.token}` };
@@ -1394,90 +1400,103 @@ test.describe('Telemetry reading identity and replay (#1317, RF009) — real bac
     const send = (data: Record<string, unknown>) =>
       request.post(`${apiBaseURL}/api/temperature/reading`, { headers: auth, data: { sensorId, temperatureValue: 4.5, ...data } });
 
-    const first = await send({ timestamp, idempotencyKey: `${sensorId}-k1` });
-    expect(first.status(), await first.text()).toBe(201);
-    const stored = (await first.json()).data;
-    expect(stored).toMatchObject({ clockStatus: 'synchronized', idempotencyKeySource: 'client', idempotencyKey: `${sensorId}-k1` });
-    expect(new Date(stored.observedAt).toISOString()).toBe(timestamp);
-    expect(stored.telemetryReadingId).toMatch(/^[0-9a-f-]{36}$/);
-    expect(stored.receivedAt).toBeTruthy();
-    expect(stored.payloadHash).toMatch(/^[0-9a-f]{64}$/);
-    // RF009 AC2: provenance.
-    expect(stored).toMatchObject({ schemaVersion: 'telemetry.reading.v1', ingestionService: 'temperature-api', sourceEventId: stored.telemetryReadingId });
-    expect(stored.canonicalModelReleaseId).toMatch(/^release-/);
-    expect(stored.traceId).toBeTruthy();
-    // RF009 AC1: acknowledged only after InfluxDB holds the point, at observedAt.
-    expect(stored.persistedAt).toBeTruthy();
-    const points = await queryFreezerReadingIds(sensorId);
-    expect(points.map((p) => ({ time: new Date(p.time).toISOString(), id: p.telemetryReadingId })))
-      .toEqual([{ time: timestamp, id: stored.telemetryReadingId }]);
+    await bindSensor(sensorId);
+    try {
+      const first = await send({ timestamp, idempotencyKey: `${sensorId}-k1` });
+      expect(first.status(), await first.text()).toBe(201);
+      const stored = (await first.json()).data;
+      expect(stored).toMatchObject({ clockStatus: 'synchronized', idempotencyKeySource: 'client', idempotencyKey: `${sensorId}-k1` });
+      expect(new Date(stored.observedAt).toISOString()).toBe(timestamp);
+      expect(stored.telemetryReadingId).toMatch(/^[0-9a-f-]{36}$/);
+      expect(stored.receivedAt).toBeTruthy();
+      expect(stored.payloadHash).toMatch(/^[0-9a-f]{64}$/);
+      // RF009 AC2: provenance.
+      expect(stored).toMatchObject({ schemaVersion: 'telemetry.reading.v1', ingestionService: 'temperature-api', sourceEventId: stored.telemetryReadingId });
+      expect(stored.canonicalModelReleaseId).toMatch(/^release-/);
+      expect(stored.traceId).toBeTruthy();
+      // RF009 AC1: acknowledged only after InfluxDB holds the point, at observedAt.
+      expect(stored.persistedAt).toBeTruthy();
+      const points = await queryFreezerReadingIds(sensorId);
+      expect(points.map((p) => ({ time: new Date(p.time).toISOString(), id: p.telemetryReadingId })))
+        .toEqual([{ time: timestamp, id: stored.telemetryReadingId }]);
 
-    const replay = await send({ timestamp, idempotencyKey: `${sensorId}-k1`, temperatureValue: 9 });
-    expect(replay.status(), await replay.text()).toBe(200);
-    const replayed = (await replay.json()).data;
-    expect(replayed.telemetryReadingId).toBe(stored.telemetryReadingId);
-    expect(replayed.replayed).toBe(true);
-    // #1391: the replay answers from the key store, which holds no value, and
-    // InfluxDB still holds the single first point.
-    expect(replayed).not.toHaveProperty('temperatureValue');
-    expect((await queryFreezerReadingIds(sensorId)).map((p) => ({ time: new Date(p.time).toISOString(), id: p.telemetryReadingId })))
-      .toEqual([{ time: timestamp, id: stored.telemetryReadingId }]);
+      const replay = await send({ timestamp, idempotencyKey: `${sensorId}-k1`, temperatureValue: 9 });
+      expect(replay.status(), await replay.text()).toBe(200);
+      const replayed = (await replay.json()).data;
+      expect(replayed.telemetryReadingId).toBe(stored.telemetryReadingId);
+      expect(replayed.replayed).toBe(true);
+      // #1391: the replay answers from the key store, which holds no value, and
+      // InfluxDB still holds the single first point.
+      expect(replayed).not.toHaveProperty('temperatureValue');
+      expect((await queryFreezerReadingIds(sensorId)).map((p) => ({ time: new Date(p.time).toISOString(), id: p.telemetryReadingId })))
+        .toEqual([{ time: timestamp, id: stored.telemetryReadingId }]);
 
-    // Control: another key is a new reading, and no device time is unknown.
-    const other = await send({ idempotencyKey: `${sensorId}-k2` });
-    expect(other.status(), await other.text()).toBe(201);
-    const otherBody = (await other.json()).data;
-    expect(otherBody.telemetryReadingId).not.toBe(stored.telemetryReadingId);
-    expect(otherBody.clockStatus).toBe('unknown');
+      // Control: another key is a new reading, and no device time is unknown.
+      const other = await send({ idempotencyKey: `${sensorId}-k2` });
+      expect(other.status(), await other.text()).toBe(201);
+      const otherBody = (await other.json()).data;
+      expect(otherBody.telemetryReadingId).not.toBe(stored.telemetryReadingId);
+      expect(otherBody.clockStatus).toBe('unknown');
 
-    const invalid = await send({ timestamp: 'not-a-date' });
-    expect(invalid.status(), await invalid.text()).toBe(422);
+      const invalid = await send({ timestamp: 'not-a-date' });
+      expect(invalid.status(), await invalid.text()).toBe(422);
+    } finally {
+      await unbindSensor(sensorId);
+    }
   });
 });
 
 // #1317 (RF009 AC4, RF017 AC5): a reading is bound to the TelemetryDatastream
 // of its sensor valid at its observedAt, created through the route.
 test.describe('Telemetry datastream binding (#1317, RF009 AC4) — real backend', () => {
-  test('a reading inside a datastream validity carries its id and location; one after the end carries neither', async ({ request }) => {
+  test.afterAll(async () => {
+    await closeSeedSensorDb();
+  });
+
+  test('a reading inside a datastream validity carries its id and location; one after the end is refused (422)', async ({ request }) => {
     const admin = await realLogin(request);
     const auth = { Authorization: `Bearer ${admin.token}` };
     const sensorId = `rf009-bind-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const start = new Date(Date.now() - 60 * 60 * 1000);
     const end = new Date(Date.now() - 30 * 60 * 1000);
 
-    const created = await request.post(`${apiBaseURL}/api/telemetry-datastreams`, {
-      headers: auth,
-      data: {
-        sensorId, equipmentId: `${sensorId}-freezer`, storageLocationId: `${sensorId}-loc`, observedProperty: 'temperature', unit: 'Cel',
-        samplingPolicyId: 'sampling-e2e', thresholdProfileId: 'threshold-e2e', validityPeriod: { start: start.toISOString() },
-      },
-    });
-    expect(created.status(), await created.text()).toBe(201);
-    const stream = (await created.json()).data;
-    const registered = await request.post(`${apiBaseURL}/api/device-registrations`, {
-      headers: auth,
-      data: { deviceId: sensorId, communicationProfileId: 'https-e2e', credentialReference: `secret-manager:device/${sensorId}` },
-    });
-    expect(registered.status(), await registered.text()).toBe(201);
-    const ended = await request.post(`${apiBaseURL}/api/telemetry-datastreams/${stream.telemetryDatastreamId}/end`, {
-      headers: auth, data: { end: end.toISOString() },
-    });
-    expect(ended.status(), await ended.text()).toBe(200);
+    await bindSensor(sensorId, { datastream: false, registration: false });
+    try {
+      const created = await request.post(`${apiBaseURL}/api/telemetry-datastreams`, {
+        headers: auth,
+        data: {
+          sensorId, equipmentId: `${sensorId}-freezer`, storageLocationId: `${sensorId}-loc`, observedProperty: 'temperature', unit: 'Cel',
+          samplingPolicyId: 'sampling-e2e', thresholdProfileId: 'threshold-e2e', validityPeriod: { start: start.toISOString() },
+        },
+      });
+      expect(created.status(), await created.text()).toBe(201);
+      const stream = (await created.json()).data;
+      const registered = await request.post(`${apiBaseURL}/api/device-registrations`, {
+        headers: auth,
+        data: { deviceId: sensorId, communicationProfileId: 'https-e2e', credentialReference: `secret-manager:device/${sensorId}` },
+      });
+      expect(registered.status(), await registered.text()).toBe(201);
+      const ended = await request.post(`${apiBaseURL}/api/telemetry-datastreams/${stream.telemetryDatastreamId}/end`, {
+        headers: auth, data: { end: end.toISOString() },
+      });
+      expect(ended.status(), await ended.text()).toBe(200);
 
-    const send = (timestamp: Date) =>
-      request.post(`${apiBaseURL}/api/temperature/reading`, { headers: auth, data: { sensorId, temperatureValue: -80, timestamp: timestamp.toISOString() } });
-    const inside = await send(new Date(start.getTime() + 60 * 1000));
-    expect(inside.status(), await inside.text()).toBe(201);
-    const insideReading = (await inside.json()).data;
-    expect(insideReading.datastreamId).toBe(stream.telemetryDatastreamId);
-    expect(insideReading.storageLocationId).toBe(`${sensorId}-loc`);
+      const send = (timestamp: Date) =>
+        request.post(`${apiBaseURL}/api/temperature/reading`, { headers: auth, data: { sensorId, temperatureValue: -80, timestamp: timestamp.toISOString() } });
+      const inside = await send(new Date(start.getTime() + 60 * 1000));
+      expect(inside.status(), await inside.text()).toBe(201);
+      const insideReading = (await inside.json()).data;
+      expect(insideReading.datastreamId).toBe(stream.telemetryDatastreamId);
+      expect(insideReading.storageLocationId).toBe(`${sensorId}-loc`);
 
-    // The default mode records the gap and still stores the reading.
-    const after = await send(end);
-    expect(after.status(), await after.text()).toBe(201);
-    const afterReading = (await after.json()).data;
-    expect(afterReading.datastreamId).toBeNull();
-    expect(afterReading.storageLocationId).toBeNull();
+      // compose.test.yml sets TELEMETRY_BINDING_MODE=enforce, which refuses a
+      // reading outside every datastream validity, so it reaches no InfluxDB.
+      const after = await send(end);
+      expect(after.status(), await after.text()).toBe(422);
+      expect((await queryFreezerReadingIds(sensorId)).map((p) => p.telemetryReadingId)).toEqual([insideReading.telemetryReadingId]);
+    } finally {
+      await unbindSensor(sensorId);
+    }
   });
 
   // V2E-0569: the reading is judged against its datastream's threshold
@@ -1485,7 +1504,7 @@ test.describe('Telemetry datastream binding (#1317, RF009 AC4) — real backend'
   test('a reading on POST /api/iot/telemetry opens an incident against its datastream threshold profile', async ({ request }) => {
     const admin = await realLogin(request);
     const auth = { Authorization: `Bearer ${admin.token}` };
-    const sensor = await seedSensorWithPolicy(-100, 100);
+    const sensor = await seedSensorWithPolicy(-100, 100, { datastream: false });
     const profile = await seedSensorWithPolicy(2, 8);
     try {
       const created = await request.post(`${apiBaseURL}/api/telemetry-datastreams`, {
@@ -1519,6 +1538,10 @@ test.describe('Telemetry datastream binding (#1317, RF009 AC4) — real backend'
 // tag, converted to Celsius) and POST /api/iot/telemetry's `temperature`
 // points (Celsius, no unit tag).
 test.describe('Temperature report reads InfluxDB (#1317, RF009 AC1) — real backend', () => {
+  test.afterAll(async () => {
+    await closeSeedSensorDb();
+  });
+
   test('a reading posted on either route shows in the report, with its unit and its Celsius value', async ({ request }) => {
     const admin = await realLogin(request);
     const auth = { Authorization: `Bearer ${admin.token}` };
@@ -1527,33 +1550,40 @@ test.describe('Temperature report reads InfluxDB (#1317, RF009 AC1) — real bac
     const iotSensorId = `rf009-report-iot-${suffix}`;
     const now = new Date();
 
-    const routeReading = await request.post(`${apiBaseURL}/api/temperature/reading`, {
-      headers: auth,
-      data: { sensorId: routeSensorId, temperatureValue: 41, temperatureUnit: '°F', timestamp: now.toISOString() },
-    });
-    expect(routeReading.status(), await routeReading.text()).toBe(201);
-    const stored = (await routeReading.json()).data;
+    await bindSensor(routeSensorId);
+    await bindSensor(iotSensorId);
+    try {
+      const routeReading = await request.post(`${apiBaseURL}/api/temperature/reading`, {
+        headers: auth,
+        data: { sensorId: routeSensorId, temperatureValue: 41, temperatureUnit: '°F', timestamp: now.toISOString() },
+      });
+      expect(routeReading.status(), await routeReading.text()).toBe(201);
+      const stored = (await routeReading.json()).data;
 
-    const iotReading = await request.post(`${apiBaseURL}/api/iot/telemetry`, {
-      headers: ingestHeaders(),
-      data: { sensorId: iotSensorId, temperature: 5, timestamp: new Date().toISOString() },
-    });
-    expect(iotReading.status(), await iotReading.text()).toBe(200);
-    const iotBody = await iotReading.json();
+      const iotReading = await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+        headers: ingestHeaders(),
+        data: { sensorId: iotSensorId, temperature: 5, timestamp: new Date().toISOString() },
+      });
+      expect(iotReading.status(), await iotReading.text()).toBe(200);
+      const iotBody = await iotReading.json();
 
-    const preview = await request.post(`${apiBaseURL}/api/reports/temperature/preview`, {
-      headers: auth,
-      data: { filters: { startDate: now.toISOString().slice(0, 10) } },
-    });
-    expect(preview.status(), await preview.text()).toBe(200);
-    const temperatures: Array<Record<string, unknown>> = (await preview.json()).data.temperatures;
+      const preview = await request.post(`${apiBaseURL}/api/reports/temperature/preview`, {
+        headers: auth,
+        data: { filters: { startDate: now.toISOString().slice(0, 10) } },
+      });
+      expect(preview.status(), await preview.text()).toBe(200);
+      const temperatures: Array<Record<string, unknown>> = (await preview.json()).data.temperatures;
 
-    const routeRow = temperatures.find((row) => row.sensorId === routeSensorId);
-    expect(routeRow).toMatchObject({ temperatureValue: 41, temperatureUnit: '°F', logId: stored.telemetryReadingId });
-    expect(routeRow?.temperatureCelsius as number).toBeCloseTo(5, 6);
+      const routeRow = temperatures.find((row) => row.sensorId === routeSensorId);
+      expect(routeRow).toMatchObject({ temperatureValue: 41, temperatureUnit: '°F', logId: stored.telemetryReadingId });
+      expect(routeRow?.temperatureCelsius as number).toBeCloseTo(5, 6);
 
-    const iotRow = temperatures.find((row) => row.sensorId === iotSensorId);
-    expect(iotRow).toMatchObject({ temperatureValue: 5, temperatureUnit: '°C', logId: iotBody.telemetryReadingId });
+      const iotRow = temperatures.find((row) => row.sensorId === iotSensorId);
+      expect(iotRow).toMatchObject({ temperatureValue: 5, temperatureUnit: '°C', logId: iotBody.telemetryReadingId });
+    } finally {
+      await unbindSensor(routeSensorId);
+      await unbindSensor(iotSensorId);
+    }
   });
 });
 
@@ -1561,53 +1591,71 @@ test.describe('Temperature report reads InfluxDB (#1317, RF009 AC1) — real bac
 // InfluxDB, so a POST /api/iot/telemetry reading (InfluxDB only) shows in it,
 // and skip pages through it.
 test.describe('Temperature history reads InfluxDB (#1317, RF009 AC1) — real backend', () => {
+  test.afterAll(async () => {
+    await closeSeedSensorDb();
+  });
+
   test('a reading posted to /api/iot/telemetry shows in the history, and skip pages past it', async ({ request }) => {
     const admin = await realLogin(request);
     const auth = { Authorization: `Bearer ${admin.token}` };
     const sensorId = `rf009-history-iot-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-    const reading = await request.post(`${apiBaseURL}/api/iot/telemetry`, {
-      headers: ingestHeaders(),
-      data: { sensorId, temperature: 5, timestamp: new Date().toISOString() },
-    });
-    expect(reading.status(), await reading.text()).toBe(200);
-    const readingBody = await reading.json();
+    await bindSensor(sensorId);
+    try {
+      const reading = await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+        headers: ingestHeaders(),
+        data: { sensorId, temperature: 5, timestamp: new Date().toISOString() },
+      });
+      expect(reading.status(), await reading.text()).toBe(200);
+      const readingBody = await reading.json();
 
-    const history = await request.get(`${apiBaseURL}/api/temperature/history?sensorId=${encodeURIComponent(sensorId)}`, { headers: auth });
-    expect(history.status(), await history.text()).toBe(200);
-    const page = (await history.json()).data;
-    expect(page.total).toBe(1);
-    expect(page.temperatures).toHaveLength(1);
-    expect(page.temperatures[0]).toMatchObject({ logId: readingBody.telemetryReadingId, temperatureValue: 5, temperatureUnit: '°C' });
+      const history = await request.get(`${apiBaseURL}/api/temperature/history?sensorId=${encodeURIComponent(sensorId)}`, { headers: auth });
+      expect(history.status(), await history.text()).toBe(200);
+      const page = (await history.json()).data;
+      expect(page.total).toBe(1);
+      expect(page.temperatures).toHaveLength(1);
+      expect(page.temperatures[0]).toMatchObject({ logId: readingBody.telemetryReadingId, temperatureValue: 5, temperatureUnit: '°C' });
 
-    const skipped = await request.get(`${apiBaseURL}/api/temperature/history?sensorId=${encodeURIComponent(sensorId)}&skip=1`, { headers: auth });
-    expect(skipped.status(), await skipped.text()).toBe(200);
-    const skippedPage = (await skipped.json()).data;
-    expect(skippedPage.temperatures).toEqual([]);
-    expect(skippedPage.total).toBe(1);
+      const skipped = await request.get(`${apiBaseURL}/api/temperature/history?sensorId=${encodeURIComponent(sensorId)}&skip=1`, { headers: auth });
+      expect(skipped.status(), await skipped.text()).toBe(200);
+      const skippedPage = (await skipped.json()).data;
+      expect(skippedPage.temperatures).toEqual([]);
+      expect(skippedPage.total).toBe(1);
+    } finally {
+      await unbindSensor(sensorId);
+    }
   });
 });
 
 // #1391 (RF009 AC1): a reading lives in InfluxDB only, so GET
 // /api/temperature/:id reads it there by its telemetryReadingId.
 test.describe('GET /api/temperature/:id reads InfluxDB (#1391, RF009 AC1) — real backend', () => {
+  test.afterAll(async () => {
+    await closeSeedSensorDb();
+  });
+
   test('a reading posted to /api/iot/telemetry is read back by its telemetryReadingId, and an unknown id is 404', async ({ request }) => {
     const admin = await realLogin(request);
     const auth = { Authorization: `Bearer ${admin.token}` };
     const sensorId = `rf009-by-id-iot-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-    const reading = await request.post(`${apiBaseURL}/api/iot/telemetry`, {
-      headers: ingestHeaders(),
-      data: { sensorId, temperature: 5, timestamp: new Date().toISOString() },
-    });
-    expect(reading.status(), await reading.text()).toBe(200);
-    const { telemetryReadingId } = await reading.json();
+    await bindSensor(sensorId);
+    try {
+      const reading = await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+        headers: ingestHeaders(),
+        data: { sensorId, temperature: 5, timestamp: new Date().toISOString() },
+      });
+      expect(reading.status(), await reading.text()).toBe(200);
+      const { telemetryReadingId } = await reading.json();
 
-    const found = await request.get(`${apiBaseURL}/api/temperature/${telemetryReadingId}`, { headers: auth });
-    expect(found.status(), await found.text()).toBe(200);
-    expect((await found.json()).data).toMatchObject({ telemetryReadingId, sensorId, temperatureValue: 5, temperatureUnit: '°C' });
+      const found = await request.get(`${apiBaseURL}/api/temperature/${telemetryReadingId}`, { headers: auth });
+      expect(found.status(), await found.text()).toBe(200);
+      expect((await found.json()).data).toMatchObject({ telemetryReadingId, sensorId, temperatureValue: 5, temperatureUnit: '°C' });
 
-    const missing = await request.get(`${apiBaseURL}/api/temperature/${crypto.randomUUID()}`, { headers: auth });
-    expect(missing.status(), await missing.text()).toBe(404);
+      const missing = await request.get(`${apiBaseURL}/api/temperature/${crypto.randomUUID()}`, { headers: auth });
+      expect(missing.status(), await missing.text()).toBe(404);
+    } finally {
+      await unbindSensor(sensorId);
+    }
   });
 });

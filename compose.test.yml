@@ -346,6 +346,9 @@ services:
     environment:
       <<: *test-env
       RUN_SERVER_IN_TEST: "1"
+      # #1392: the e2e stack proves enforce; every e2e sensor is bound by tests/e2e/helpers/seedSensor.ts.
+      # The code default stays `record` until npm run migrate:sensor-metadata-to-datastreams has run on a deployment.
+      TELEMETRY_BINDING_MODE: enforce
       # #1263: trust X-Forwarded-For only from loopback, which in this
       # container's network namespace is trusted-hop-test below and nothing
       # else. The runner, the frontend and the host's published 3000 all
@@ -764,6 +767,8 @@ services:
       dockerfile: Dockerfile.dev
     environment:
       <<: *test-env
+      # #1392: the import worker writes temperature readings, so it binds them as backend-app-test does.
+      TELEMETRY_BINDING_MODE: enforce
     command: ["npm", "run", "worker"]
     # #828: same volume as backend-app-test -- this is the reading half.
     volumes:
