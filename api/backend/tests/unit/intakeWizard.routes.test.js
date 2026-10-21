@@ -43,6 +43,14 @@ function clearCache() {
   for (const p of allPaths) delete require.cache[p];
 }
 
+// #1394: the first require of these modules' trees costs seconds under load
+// (the route's services, and notification.service's, which the route does
+// not reach), so it is paid here, at import time, as #1389 did, rather than
+// inside the first case's timeout. clearCache() drops only allPaths, so each
+// loadRoute() re-requires just those ten.
+for (const p of allPaths) require(p);
+clearCache();
+
 function loadRoute({
   buildConsentMetadata,
   buildConsentLink,
