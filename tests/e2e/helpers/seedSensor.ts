@@ -39,6 +39,7 @@ export interface BindOptions {
   thresholdProfileId?: string;
   equipmentId?: string;
   validFrom?: Date;
+  storageLocationId?: string;
 }
 
 /**
@@ -57,6 +58,11 @@ export interface BindOptions {
  * sensor's EnvironmentalExcursions (decision 5 of the 2026-10-21 record), is
  * `${sensorId}-equipment` unless `equipmentId` is given; the seeders below
  * pass their Device's deviceId, so excursions stay keyed by it.
+ * `storageLocationId` places the datastream at a real StorageLocation, as
+ * the exposure summary reads it (#1392); a location created through
+ * `/api/physical-chain/locations` has no `legacy-storage-container:` code,
+ * so TelemetryMonitor and the quarantine still read the SensorMetadata
+ * freezer.
  */
 export async function bindSensor(sensorId: string, options: BindOptions = {}): Promise<void> {
   const db = await getDb();
@@ -67,7 +73,7 @@ export async function bindSensor(sensorId: string, options: BindOptions = {}): P
       telemetryDatastreamId: crypto.randomUUID(),
       sensorId,
       equipmentId: options.equipmentId ?? `${sensorId}-equipment`,
-      storageLocationId: `${sensorId}-loc`,
+      storageLocationId: options.storageLocationId ?? `${sensorId}-loc`,
       observedProperty: 'temperature',
       unit: 'Cel',
       samplingPolicyId: 'sampling-e2e',

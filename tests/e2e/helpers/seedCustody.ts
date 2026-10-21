@@ -87,5 +87,12 @@ export async function cleanupCustodyFixture(fixture: CustodyFixture, containerId
     db.collection('deviceLifecycleEvents').deleteMany({ deviceId: { $in: deviceIds } }),
     db.collection('storageLocations').deleteMany({ storageLocationId: { $in: locationIds } }),
     db.collection('legalHolds').deleteMany({ targetEntityIds: fixture.specimenId }),
+    db.collection('telemetryExposureSummaries').deleteMany({ specimenId: fixture.specimenId }),
   ]);
+}
+
+/** #1392: the TelemetryExposureSummaries stored for a specimen, oldest window first. */
+export async function findExposureSummaries(specimenId: string): Promise<any[]> {
+  const db = await getDb();
+  return db.collection('telemetryExposureSummaries').find({ specimenId }).sort({ windowStart: 1 }).toArray();
 }
