@@ -9,6 +9,8 @@ const {
   datastreamEquipmentIdsBySensor,
   policiesByProfileId,
   freezerContainerIdOf,
+  resolveTemperatureBinding,
+  assertStoredSamplingPolicy,
 } = require('../../../src/services/sensorDatastream.service');
 
 // #1392: the fakes apply no query, so each case proves the JS re-filter.
@@ -232,5 +234,71 @@ describe('freezerContainerIdOf (#1392)', () => {
 
     expect(await freezerContainerIdOf(db, 'loc-1')).toBeNull();
     expect(db.calls.some((call) => call.name === 'storageContainers')).toBe(false);
+  });
+});
+
+describe('resolveTemperatureBinding (#1392)', () => {
+  const FREEZER = objectIdLike('64e000000000000000000001');
+  function topology({ containerID = 4201 } = {}) {
+    return {
+      storageContainers: [{ _id: FREEZER, containerType: 'FREEZER', containerID }],
+      storageLocations: [{ storageLocationId: 'loc-1', code: 'legacy-storage-container:64e000000000000000000001' }],
+    };
+  }
+
+  it('resolves the freezer Equipment, its mirrored location and the policy', async () => {
+    const db = fakeDb(topology());
+
+    const binding = await resolveTemperatureBinding(db, { storageContainer: '64e000000000000000000001', equipment: null, temperaturePolicy: 'policy-1' });
+
+    expect(binding).toEqual({ ok: true, equipmentId: '4201', storageLocationId: 'loc-1', thresholdProfileId: 'policy-1' });
+  });
+
+  it('falls back to `equipment` when the freezer has no containerID', async () => {
+    const db = fakeDb(topology({ containerID: '' }));
+
+    const binding = await resolveTemperatureBinding(db, { storageContainer: FREEZER, equipment: 'eq-9', temperaturePolicy: 'policy-1' });
+
+    expect(binding).toMatchObject({ ok: true, equipmentId: 'eq-9' });
+  });
+
+  it('is freezer_not_located for an unmirrored freezer or none, before any other check', async () => {
+    const unmirrored = fakeDb({ ...topology(), storageLocations: [] });
+
+    expect(await resolveTemperatureBinding(unmirrored, { storageContainer: FREEZER, temperaturePolicy: null }))
+      .toEqual({ ok: false, reason: 'freezer_not_located' });
+    expect(await resolveTemperatureBinding(fakeDb(topology()), { storageContainer: null, temperaturePolicy: 'policy-1' }))
+      .toEqual({ ok: false, reason: 'freezer_not_located' });
+  });
+
+  it('is no_equipment when neither the freezer nor `equipment` names one, before the policy', async () => {
+    const db = fakeDb(topology({ containerID: null }));
+
+    expect(await resolveTemperatureBinding(db, { storageContainer: FREEZER, equipment: null, temperaturePolicy: null }))
+      .toEqual({ ok: false, reason: 'no_equipment' });
+  });
+
+  it('is no_policy when the freezer resolves and no policy is bound', async () => {
+    const db = fakeDb(topology());
+
+    expect(await resolveTemperatureBinding(db, { storageContainer: FREEZER, temperaturePolicy: null }))
+      .toEqual({ ok: false, reason: 'no_policy' });
+  });
+
+  it('does not swallow a DB error, unlike the readers', async () => {
+    const db = fakeDb(topology(), { throwOn: ['storageContainers'] });
+
+    await expect(resolveTemperatureBinding(db, { storageContainer: FREEZER, temperaturePolicy: 'policy-1' }))
+      .rejects.toThrow('storageContainers down');
+  });
+});
+
+describe('assertStoredSamplingPolicy (#1392)', () => {
+  it('gives the id of a stored ConfigurationProfile, null when absent, and throws for an unstored one', async () => {
+    const db = fakeDb({ configurationProfiles: [{ profileId: 'sampling-1' }] });
+
+    expect(await assertStoredSamplingPolicy(db, 'sampling-1')).toBe('sampling-1');
+    expect(await assertStoredSamplingPolicy(db, null)).toBeNull();
+    await expect(assertStoredSamplingPolicy(db, 'nope')).rejects.toThrow('ConfigurationProfile nope não encontrado');
   });
 });

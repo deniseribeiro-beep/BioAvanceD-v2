@@ -4,6 +4,10 @@ import {
   findSensorMetadata,
   removeSensorRegistration,
   removeTemperaturePolicy,
+  seedDatastreamBinding,
+  removeDatastreamBinding,
+  findTemperatureDatastreams,
+  findSensor,
   closeSeedSensorDb,
 } from './helpers/seedSensor';
 import { realLogin, seedRealAuth } from './helpers/realAuth';
@@ -301,6 +305,73 @@ test.describe('Sensor registration links SensorMetadata (#311)', () => {
       await expect(page.getByTitle('Coletar Leitura')).toHaveCount(0);
     } finally {
       await removeSensorRegistration(sensorId, freezerId);
+    }
+  });
+
+  // #1392: the readers take the temperature TelemetryDatastream valid now
+  // first, so a registration naming a stored samplingPolicyId writes one from
+  // the freezer and policy it binds on SensorMetadata. An unstored one is a
+  // 422 that writes nothing.
+  test('POST /api/sensors with a samplingPolicyId writes the sensor\'s temperature datastream (#1392)', async ({ request }) => {
+    const binding = await seedDatastreamBinding();
+    const suffix = Date.now();
+    const sensorId = `rf009-datastream-e2e-${suffix}`;
+    const refusedSensorId = `rf009-datastream-refused-e2e-${suffix}`;
+    const macSuffix = suffix.toString(16).padStart(4, '0').slice(-4);
+
+    try {
+      let session;
+      try {
+        session = await realLogin(request);
+      } catch (err: any) {
+        console.warn(`realLogin failed -- DB may not be seeded with an admin user yet: ${err.message}`);
+        return;
+      }
+      const headers = { Authorization: `Bearer ${session.token}` };
+
+      const createResponse = await request.post(`${apiBaseURL}/api/sensors`, {
+        headers,
+        data: {
+          sensorId,
+          sensorType: 'temperature',
+          macAddress: `AA:BB:CC:77:${macSuffix.slice(0, 2)}:${macSuffix.slice(2, 4)}`,
+          storageContainer: binding.freezerId,
+          temperaturePolicy: binding.policyId,
+          samplingPolicyId: binding.samplingPolicyId,
+        },
+      });
+      expect(createResponse.status()).toBe(201);
+      const created = await createResponse.json();
+      expect(created.data.datastreamBound).toBe(true);
+
+      const streams = await findTemperatureDatastreams(sensorId);
+      expect(streams).toHaveLength(1);
+      expect(streams[0]).toMatchObject({
+        telemetryDatastreamId: created.data.telemetryDatastreamId,
+        equipmentId: binding.equipmentId,
+        storageLocationId: binding.storageLocationId,
+        unit: 'Cel',
+        samplingPolicyId: binding.samplingPolicyId,
+        thresholdProfileId: binding.policyId,
+        status: 'active',
+      });
+      expect(streams[0].validityPeriod.end).toBeNull();
+
+      const refusedResponse = await request.post(`${apiBaseURL}/api/sensors`, {
+        headers,
+        data: {
+          sensorId: refusedSensorId,
+          sensorType: 'temperature',
+          macAddress: `AA:BB:CC:78:${macSuffix.slice(0, 2)}:${macSuffix.slice(2, 4)}`,
+          storageContainer: binding.freezerId,
+          temperaturePolicy: binding.policyId,
+          samplingPolicyId: `${binding.samplingPolicyId}-unstored`,
+        },
+      });
+      expect(refusedResponse.status()).toBe(422);
+      expect(await findSensor(refusedSensorId)).toBeNull();
+    } finally {
+      await removeDatastreamBinding(binding, [sensorId, refusedSensorId]);
     }
   });
 });

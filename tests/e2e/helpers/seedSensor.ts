@@ -237,6 +237,93 @@ export async function seedFreezerContainer(): Promise<string> {
   return result.insertedId.toString();
 }
 
+export interface SeededDatastreamBinding {
+  freezerId: string;
+  equipmentId: string;
+  storageLocationId: string;
+  policyId: string;
+  samplingPolicyId: string;
+}
+
+/**
+ * #1392: what a registration needs to write its temperature
+ * TelemetryDatastream (sensorDatastream.service.js resolveTemperatureBinding):
+ * a FREEZER whose containerID is its Equipment, the freezer's mirrored
+ * storageLocations row (#1379), a temperaturePolicies row and a sampling
+ * ConfigurationProfile. Remove with removeDatastreamBinding.
+ */
+export async function seedDatastreamBinding(): Promise<SeededDatastreamBinding> {
+  const db = await getDb();
+  const suffix = `${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
+  const equipmentId = `rf009-e2e-equipment-${suffix}`;
+  const freezer = await db.collection('storageContainers').insertOne({
+    name: `RF009 e2e datastream freezer ${suffix}`,
+    containerType: 'FREEZER',
+    containerID: equipmentId,
+    parent_id: null,
+    temperature: -80,
+    temperatureUnit: 'CELSIUS',
+    status: 'OPERATIONAL',
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    deletedAt: null,
+  });
+  const freezerId = freezer.insertedId.toString();
+  const storageLocationId = `rf009-e2e-location-${suffix}`;
+  await db.collection('storageLocations').insertOne({
+    storageLocationId,
+    code: `legacy-storage-container:${freezerId}`,
+    name: `RF009 e2e datastream freezer ${suffix}`,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+  const policy = await db.collection('temperaturePolicies').insertOne({
+    name: `RF009 e2e datastream policy ${suffix}`,
+    minTemp: -90,
+    maxTemp: -60,
+    hysteresis: 0.5,
+    metricType: 'temperature',
+    ruleVersion: '1.0.0',
+    effectivePeriod: { start: new Date(), end: null },
+    minimumDuration: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+  const samplingPolicyId = `rf009-e2e-sampling-${suffix}`;
+  await db.collection('configurationProfiles').insertOne({ profileId: samplingPolicyId, createdAt: new Date() });
+  return { freezerId, equipmentId, storageLocationId, policyId: policy.insertedId.toString(), samplingPolicyId };
+}
+
+/** Deletes each row seedDatastreamBinding wrote and, per sensorId, its sensors, sensorMetadata and (through unbindSensor) telemetryDatastreams docs. */
+export async function removeDatastreamBinding(binding: SeededDatastreamBinding, sensorIds: string[]): Promise<void> {
+  const db = await getDb();
+  for (const sensorId of sensorIds) {
+    await unbindSensor(sensorId);
+    await Promise.all([
+      db.collection('sensors').deleteMany({ sensorId }),
+      db.collection('sensorMetadata').deleteMany({ sensorId }),
+    ]);
+  }
+  await Promise.all([
+    db.collection('storageContainers').deleteOne({ _id: new ObjectId(binding.freezerId) }),
+    db.collection('storageLocations').deleteOne({ storageLocationId: binding.storageLocationId }),
+    db.collection('temperaturePolicies').deleteOne({ _id: new ObjectId(binding.policyId) }),
+    db.collection('configurationProfiles').deleteOne({ profileId: binding.samplingPolicyId }),
+  ]);
+}
+
+/** Reads back a sensor's temperature telemetryDatastreams docs (raw, no Mongoose). */
+export async function findTemperatureDatastreams(sensorId: string): Promise<any[]> {
+  const db = await getDb();
+  return db.collection('telemetryDatastreams').find({ sensorId, observedProperty: 'temperature' }).toArray();
+}
+
+/** Reads back a sensors doc by sensorId (raw, no Mongoose). */
+export async function findSensor(sensorId: string): Promise<any | null> {
+  const db = await getDb();
+  return db.collection('sensors').findOne({ sensorId });
+}
+
 /** Reads back a sensorMetadata doc by sensorId (raw, no Mongoose) for assertions against a real API-created sensor. */
 export async function findSensorMetadata(sensorId: string): Promise<any | null> {
   const db = await getDb();

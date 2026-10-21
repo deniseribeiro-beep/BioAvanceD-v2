@@ -1,7 +1,7 @@
 const { getCollection } = require('../utils/collectionResolver');
 const TelemetryDatastreamModel = require('../models/TelemetryDatastream');
 const { createDatastream } = require('./telemetryBinding.service');
-const { LOCATION_CODE_PREFIX } = require('./legacyPlacementChain.service');
+const { resolveTemperatureBinding, assertStoredSamplingPolicy } = require('./sensorDatastream.service');
 
 // #1392, RF017 AC5: each SensorMetadata row's binding moved onto a
 // temperature TelemetryDatastream (V2E-0562..0571). Additive: sensorMetadata,
@@ -21,25 +21,6 @@ const { LOCATION_CODE_PREFIX } = require('./legacyPlacementChain.service');
 
 const OBSERVED_PROPERTY = 'temperature';
 const UNIT = 'Cel';
-
-async function assertStoredSamplingPolicy(db, samplingPolicyId) {
-  if (!samplingPolicyId) return null;
-  const id = String(samplingPolicyId);
-  const profile = await (await getCollection(db, 'configurationProfiles')).findOne({ profileId: id });
-  if (!profile) throw new Error(`ConfigurationProfile ${id} não encontrado`);
-  return id;
-}
-
-// storageContainers is raw: a string and an ObjectId _id both match, and no
-// ObjectId is constructed (#912).
-async function findContainer(db, containerId) {
-  if (containerId === null || containerId === undefined) return null;
-  const id = String(containerId);
-  const rows = await db.collection('storageContainers')
-    .find({ $expr: { $eq: [{ $toString: '$_id' }, id] } })
-    .toArray();
-  return rows.find((row) => String(row._id) === id) || null;
-}
 
 async function isBound(db, sensorId, now) {
   const streams = await (await getCollection(db, 'telemetryDatastreams'))
@@ -70,26 +51,9 @@ async function migrateSensorMetadataToDatastreams(db, { dryRun = false, sampling
       continue;
     }
 
-    const container = await findContainer(db, row.storageContainer);
-    const location = container
-      ? await (await getCollection(db, 'storageLocations')).findOne({ code: LOCATION_CODE_PREFIX + String(container._id) })
-      : null;
-    if (!location) {
-      summary.unresolved.push({ sensorId, reason: 'freezer_not_located' });
-      continue;
-    }
-    let equipmentId = null;
-    if (container.containerID !== undefined && container.containerID !== null && container.containerID !== '') {
-      equipmentId = String(container.containerID);
-    } else if (row.equipment) {
-      equipmentId = String(row.equipment);
-    }
-    if (!equipmentId) {
-      summary.unresolved.push({ sensorId, reason: 'no_equipment' });
-      continue;
-    }
-    if (!row.temperaturePolicy) {
-      summary.unresolved.push({ sensorId, reason: 'no_policy' });
+    const binding = await resolveTemperatureBinding(db, row);
+    if (!binding.ok) {
+      summary.unresolved.push({ sensorId, reason: binding.reason });
       continue;
     }
 
@@ -101,12 +65,12 @@ async function migrateSensorMetadataToDatastreams(db, { dryRun = false, sampling
     try {
       await createDatastream(db, {
         sensorId,
-        equipmentId,
-        storageLocationId: String(location.storageLocationId),
+        equipmentId: binding.equipmentId,
+        storageLocationId: binding.storageLocationId,
         observedProperty: OBSERVED_PROPERTY,
         unit: UNIT,
         samplingPolicyId: policyId,
-        thresholdProfileId: String(row.temperaturePolicy),
+        thresholdProfileId: binding.thresholdProfileId,
         validityPeriod: { start: now },
       });
       summary.created += 1;

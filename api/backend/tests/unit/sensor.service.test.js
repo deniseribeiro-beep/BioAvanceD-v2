@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
@@ -864,6 +864,275 @@ describe('sensor.service (non-quarantine paths)', () => {
       );
       expect(quarantineBySensorStatus.mock.calls[0][3]).not.toHaveProperty('session');
       expect(result.quarantine.triggered).toBe(true);
+    });
+  });
+});
+
+// #1392: registration and edit write the sensor's temperature
+// TelemetryDatastream, which the readers take first. A query-matching fake,
+// as in sensorMetadataDatastreamMigration.service.test.js: equality (ObjectIds
+// by hex), dotted paths, `null` as missing-or-null, $or, and the
+// `$expr: { $eq: [{ $toString: '$_id' }, id] }` the container lookup sends.
+describe('sensor.service temperature TelemetryDatastream (#1392)', () => {
+  const { ObjectId } = require('mongodb');
+  const TelemetryDatastreamModel = require('../../src/models/TelemetryDatastream');
+
+  const NOW = new Date('2026-10-21T12:00:00.000Z');
+  const FREEZER_ID = new ObjectId('64e000000000000000000001');
+  const POLICY_A = new ObjectId('64f000000000000000000001');
+  const POLICY_B = new ObjectId('64f000000000000000000002');
+
+  const pathOf = (doc, path) => path.split('.').reduce((value, key) => (value == null ? undefined : value[key]), doc);
+  function same(a, b) {
+    if (a === b) return true;
+    if (a instanceof Date || b instanceof Date) return a != null && b != null && new Date(a).getTime() === new Date(b).getTime();
+    if (a && b && typeof a === 'object' && typeof b === 'object') return String(a) === String(b);
+    return false;
+  }
+  function matches(doc, filter = {}) {
+    return Object.entries(filter).every(([key, value]) => {
+      if (key === '$expr') return String(doc._id) === value.$eq[1];
+      if (key === '$or') return value.some((branch) => matches(doc, branch));
+      const actual = pathOf(doc, key);
+      if (value === null) return actual === null || actual === undefined;
+      return same(actual, value);
+    });
+  }
+  function setPath(doc, path, value) {
+    const keys = path.split('.');
+    let target = doc;
+    for (const key of keys.slice(0, -1)) target = target[key] = target[key] || {};
+    target[keys[keys.length - 1]] = value;
+  }
+
+  function createFakeDb(seed = {}) {
+    const collections = {};
+    const collection = (name) => {
+      if (collections[name]) return collections[name];
+      const docs = [];
+      collections[name] = {
+        docs,
+        collectionName: name,
+        async createIndex() {},
+        async insertOne(doc) { docs.push({ ...doc }); return { insertedId: `${name}-${docs.length}` }; },
+        async findOne(filter) { return docs.find((doc) => matches(doc, filter)) || null; },
+        find(filter) { return { toArray: async () => docs.filter((doc) => matches(doc, filter)) }; },
+        async updateOne(filter, update = {}, options = {}) {
+          let doc = docs.find((candidate) => matches(candidate, filter));
+          if (!doc) {
+            if (!options.upsert) return { matchedCount: 0 };
+            doc = { ...filter, ...(update.$setOnInsert || {}) };
+            docs.push(doc);
+          }
+          for (const [path, value] of Object.entries(update.$set || {})) setPath(doc, path, value);
+          return { matchedCount: 1 };
+        }
+      };
+      return collections[name];
+    };
+    for (const [name, docs] of Object.entries(seed)) collection(name).docs.push(...docs.map((doc) => ({ ...doc })));
+    return { collection: vi.fn(collection) };
+  }
+
+  const streamsOf = (db) => db.collection('telemetryDatastreams').docs;
+
+  // A FREEZER mirrored to loc-1 whose Equipment is 4201, two policies and a
+  // stored sampling ConfigurationProfile.
+  function topology(overrides = {}) {
+    return {
+      configurationProfiles: [{ profileId: 'sampling-1' }],
+      temperaturePolicies: [{ _id: POLICY_A }, { _id: POLICY_B }],
+      storageContainers: [{ _id: FREEZER_ID, containerType: 'FREEZER', containerID: 4201 }],
+      storageLocations: [{ storageLocationId: 'loc-1', code: `legacy-storage-container:${FREEZER_ID}` }],
+      ...overrides
+    };
+  }
+
+  function registration(overrides = {}) {
+    return {
+      sensorId: 'S-1',
+      sensorType: 'temperature',
+      macAddress: 'AA:BB:CC:00:00:01',
+      storageContainer: String(FREEZER_ID),
+      temperaturePolicy: String(POLICY_A),
+      samplingPolicyId: 'sampling-1',
+      ...overrides
+    };
+  }
+
+  beforeEach(() => {
+    sensorService.setQuarantineService({
+      isQuarantineTriggerStatus: vi.fn(() => false),
+      quarantineBySensorStatus: vi.fn()
+    });
+  });
+
+  describe('createSensor', () => {
+    it('inserts one telemetryDatastreams doc for a stored samplingPolicyId, a mirrored freezer and a policy', async () => {
+      const db = createFakeDb(topology());
+
+      const result = await sensorService.createSensor(db, registration());
+
+      expect(streamsOf(db)).toHaveLength(1);
+      const [stream] = streamsOf(db);
+      expect(stream).toMatchObject({
+        sensorId: 'S-1',
+        equipmentId: '4201',
+        storageLocationId: 'loc-1',
+        observedProperty: 'temperature',
+        unit: 'Cel',
+        samplingPolicyId: 'sampling-1',
+        thresholdProfileId: String(POLICY_A),
+        status: 'active'
+      });
+      expect(stream.validityPeriod.start).toBeInstanceOf(Date);
+      expect(stream.validityPeriod.end).toBeNull();
+      expect(result.datastreamBound).toBe(true);
+      expect(result.telemetryDatastreamId).toBe(stream.telemetryDatastreamId);
+      expect(result.metadataLinked).toBe(true);
+    });
+
+    it('refuses an unstored samplingPolicyId with a 422, inserting nothing', async () => {
+      const db = createFakeDb(topology({ configurationProfiles: [] }));
+
+      const error = await sensorService.createSensor(db, registration({ samplingPolicyId: 'nope' })).catch((e) => e);
+
+      expect(error).toBeInstanceOf(Error);
+      expect(error.statusCode).toBe(422);
+      expect(error.message).toBe('samplingPolicyId nope não encontrado');
+      expect(db.collection('sensors').docs).toHaveLength(0);
+      expect(db.collection('sensorMetadata').docs).toHaveLength(0);
+      expect(streamsOf(db)).toHaveLength(0);
+    });
+
+    it('reports freezer_not_located for an unmirrored freezer, with the sensor and SensorMetadata written', async () => {
+      const db = createFakeDb(topology({ storageLocations: [] }));
+
+      const result = await sensorService.createSensor(db, registration());
+
+      expect(result.datastreamBound).toBe(false);
+      expect(result.datastreamUnresolved).toBe('freezer_not_located');
+      expect(result).not.toHaveProperty('telemetryDatastreamId');
+      expect(db.collection('sensors').docs).toHaveLength(1);
+      expect(db.collection('sensorMetadata').docs).toHaveLength(1);
+      expect(streamsOf(db)).toHaveLength(0);
+    });
+
+    it('reports an overlapping datastream without throwing, the sensor already created (#313)', async () => {
+      const db = createFakeDb(topology({
+        telemetryDatastreams: [{ telemetryDatastreamId: 'open', sensorId: 'S-1', observedProperty: 'temperature', validityPeriod: { start: new Date('2026-01-01T00:00:00Z'), end: null } }]
+      }));
+
+      const result = await sensorService.createSensor(db, registration());
+
+      expect(result.datastreamBound).toBe(false);
+      expect(result.datastreamUnresolved).toMatch(/já tem datastream de temperature/);
+      expect(db.collection('sensors').docs).toHaveLength(1);
+      expect(streamsOf(db)).toHaveLength(1);
+    });
+
+    it('CONTROL: writes no datastream and no datastreamBound key without a samplingPolicyId', async () => {
+      const db = createFakeDb(topology());
+
+      const result = await sensorService.createSensor(db, registration({ samplingPolicyId: undefined }));
+
+      expect(streamsOf(db)).toHaveLength(0);
+      expect(result).not.toHaveProperty('datastreamBound');
+      expect(result).not.toHaveProperty('datastreamUnresolved');
+      expect(db.collection('sensorMetadata').docs).toHaveLength(1);
+    });
+  });
+
+  describe('updateSensor rebind', () => {
+    const START = new Date('2026-10-20T00:00:00.000Z');
+
+    function boundTopology() {
+      return topology({
+        sensors: [{ sensorId: 'S-1', maintenanceStatus: 'operational' }],
+        sensorMetadata: [{ sensorId: 'S-1', macAddress: 'AA:BB:CC:00:00:01', equipment: null, storageContainer: FREEZER_ID, temperaturePolicy: POLICY_A }],
+        telemetryDatastreams: [{
+          telemetryDatastreamId: 'ds-old',
+          sensorId: 'S-1',
+          equipmentId: '4201',
+          storageLocationId: 'loc-1',
+          observedProperty: 'temperature',
+          unit: 'Cel',
+          samplingPolicyId: 'sampling-1',
+          thresholdProfileId: String(POLICY_A),
+          validityPeriod: { start: START, end: null },
+          status: 'active'
+        }]
+      });
+    }
+
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(NOW);
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('a changed temperaturePolicy ends the old stream at now and starts one with the new thresholdProfileId', async () => {
+      const db = createFakeDb(boundTopology());
+
+      const result = await sensorService.updateSensor(db, 'S-1', { temperaturePolicy: String(POLICY_B) });
+
+      const [old, current] = streamsOf(db);
+      expect(streamsOf(db)).toHaveLength(2);
+      expect(old.validityPeriod.end.getTime()).toBe(NOW.getTime());
+      expect(old.status).toBe('retired');
+      expect(current).toMatchObject({
+        sensorId: 'S-1',
+        equipmentId: '4201',
+        storageLocationId: 'loc-1',
+        unit: 'Cel',
+        samplingPolicyId: 'sampling-1',
+        thresholdProfileId: String(POLICY_B)
+      });
+      expect(current.validityPeriod.start.getTime()).toBe(NOW.getTime());
+      expect(() => TelemetryDatastreamModel.assertNoOverlap(current, [old])).not.toThrow();
+      expect(result.datastream).toEqual({ ended: true, rebound: true });
+    });
+
+    it('a cleared storageContainer only ends the stream, so SensorMetadata is the fallback', async () => {
+      const db = createFakeDb(boundTopology());
+
+      const result = await sensorService.updateSensor(db, 'S-1', { storageContainer: '' });
+
+      expect(streamsOf(db)).toHaveLength(1);
+      expect(streamsOf(db)[0].validityPeriod.end.getTime()).toBe(NOW.getTime());
+      expect(db.collection('sensorMetadata').docs[0].storageContainer).toBeNull();
+      expect(result.datastream).toEqual({ ended: true, rebound: false, reason: 'freezer_not_located' });
+    });
+
+    it('an edit with the same binding writes no datastream', async () => {
+      const db = createFakeDb(boundTopology());
+
+      const result = await sensorService.updateSensor(db, 'S-1', { storageContainer: String(FREEZER_ID), temperaturePolicy: String(POLICY_A) });
+
+      expect(streamsOf(db)).toHaveLength(1);
+      expect(streamsOf(db)[0].validityPeriod.end).toBeNull();
+      expect(result.datastream).toEqual({ ended: false, rebound: false });
+    });
+
+    it('CONTROL: a sensor with no datastream gets none on edit', async () => {
+      const db = createFakeDb({ ...boundTopology(), telemetryDatastreams: [] });
+
+      await sensorService.updateSensor(db, 'S-1', { temperaturePolicy: String(POLICY_B) });
+
+      expect(streamsOf(db)).toHaveLength(0);
+      expect(db.collection('sensorMetadata').docs[0].temperaturePolicy.toString()).toBe(String(POLICY_B));
+    });
+
+    it('CONTROL: an edit naming neither field leaves the result and the stream unchanged', async () => {
+      const db = createFakeDb(boundTopology());
+
+      const result = await sensorService.updateSensor(db, 'S-1', { sensorModel: 'm2' });
+
+      expect(result).toEqual({ success: true, quarantine: { triggered: false } });
+      expect(streamsOf(db)[0].validityPeriod.end).toBeNull();
     });
   });
 });

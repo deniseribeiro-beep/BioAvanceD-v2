@@ -108,10 +108,63 @@ async function freezerContainerIdOf(db, storageLocationId) {
   }
 }
 
+// #1392: a SensorMetadata-shaped binding resolved to a temperature
+// datastream's ids, the rules
+// docs/decisions/2026-10-21-sensor-metadata-to-datastream-migration.md
+// records, shared by the migration and by sensor registration and edit.
+// The equipment is the freezer's Equipment (containerID === equipmentID),
+// else `equipment`; the location is the freezer's mirrored location (#1379),
+// and none is created. Unlike the readers above, a DB error is NOT
+// swallowed: a writer must not record a binding it could not check.
+async function resolveTemperatureBinding(db, { storageContainer, equipment, temperaturePolicy } = {}) {
+  const container = await findContainer(db, storageContainer);
+  const location = container
+    ? await (await getCollection(db, 'storageLocations')).findOne({ code: LOCATION_CODE_PREFIX + String(container._id) })
+    : null;
+  if (!location) return { ok: false, reason: 'freezer_not_located' };
+  let equipmentId = null;
+  if (container.containerID !== undefined && container.containerID !== null && container.containerID !== '') {
+    equipmentId = String(container.containerID);
+  } else if (equipment) {
+    equipmentId = String(equipment);
+  }
+  if (!equipmentId) return { ok: false, reason: 'no_equipment' };
+  if (!temperaturePolicy) return { ok: false, reason: 'no_policy' };
+  return {
+    ok: true,
+    equipmentId,
+    storageLocationId: String(location.storageLocationId),
+    thresholdProfileId: String(temperaturePolicy),
+  };
+}
+
+// A datastream's samplingPolicyId (V2E-0568, 1..1) names a stored
+// ConfigurationProfile. Throws when it does not; absent returns null.
+async function assertStoredSamplingPolicy(db, samplingPolicyId) {
+  if (!samplingPolicyId) return null;
+  const id = String(samplingPolicyId);
+  const profile = await (await getCollection(db, 'configurationProfiles')).findOne({ profileId: id });
+  if (!profile) throw new Error(`ConfigurationProfile ${id} não encontrado`);
+  return id;
+}
+
+// storageContainers is raw: a string and an ObjectId _id both match, and no
+// ObjectId is constructed (#912).
+async function findContainer(db, containerId) {
+  if (containerId === null || containerId === undefined) return null;
+  const id = String(containerId);
+  const rows = await db.collection('storageContainers')
+    .find({ $expr: { $eq: [{ $toString: '$_id' }, id] } })
+    .toArray();
+  return rows.find((row) => String(row._id) === id) || null;
+}
+
 module.exports = {
   TEMPERATURE_PROPERTY,
   currentDatastreamsBySensor,
   datastreamEquipmentIdsBySensor,
   policiesByProfileId,
   freezerContainerIdOf,
+  resolveTemperatureBinding,
+  assertStoredSamplingPolicy,
 };

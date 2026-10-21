@@ -5,6 +5,12 @@ const defaultQuarantineService = require('./equipment-sensor-quarantine.service'
 const { applyOrganizationScopeFilter } = require('./rbac-assignment.service');
 const { isTransactionCapable } = require('../utils/mongoTransaction');
 const { ensureSensorMetadataIndexes } = require('../utils/storageIndexes');
+const TelemetryDatastreamModel = require('../models/TelemetryDatastream');
+const { createDatastream, listDatastreams, endDatastreamValidity } = require('./telemetryBinding.service');
+const { TEMPERATURE_PROPERTY, resolveTemperatureBinding, assertStoredSamplingPolicy } = require('./sensorDatastream.service');
+
+// #1392: the UCUM unit of a temperature datastream, as the migration writes it.
+const TEMPERATURE_UNIT = 'Cel';
 
 function createSensorValidationError(message, statusCode = 422) {
   const error = new Error(message);
@@ -51,6 +57,7 @@ class SensorService {
       }
       await assertOrganizationIdResolves(db, sensorData.organizationId);
       await this.assertTemperaturePolicyExists(db, sensorData.temperaturePolicy);
+      const samplingPolicyId = await this.assertSamplingPolicyExists(db, sensorData.samplingPolicyId);
 
       const sensorsCollection = db.collection('sensors');
       const sensor = SensorModel.create(sensorData);
@@ -64,10 +71,15 @@ class SensorService {
         metadataLinked = await this.linkSensorMetadata(db, sensor.sensorId, sensor.macAddress, sensorData.storageContainer, sensorData.temperaturePolicy);
       }
 
+      const datastream = samplingPolicyId
+        ? await this.bindTemperatureDatastream(db, sensor.sensorId, samplingPolicyId, sensorData)
+        : undefined;
+
       return {
         _id: result.insertedId,
         ...sensor,
-        ...(metadataLinked !== undefined && { metadataLinked })
+        ...(metadataLinked !== undefined && { metadataLinked }),
+        ...datastream
       };
     } catch (error) {
       logger.error('Erro ao criar sensor:', error.message);
@@ -156,6 +168,111 @@ class SensorService {
     const policy = await db.collection('temperaturePolicies').findOne(filter, { projection: { _id: 1 } });
     if (!policy) {
       throw new Error(`temperaturePolicy não encontrada: ${temperaturePolicyId}`);
+    }
+  }
+
+  /**
+   * #1392: a samplingPolicyId (V2E-0568) must name a stored
+   * ConfigurationProfile, checked before anything is written. Absent/empty
+   * means "no datastream at registration": the sensor is bound by a later
+   * run of the migration (docs/decisions/2026-10-21-sensor-registration-writes-datastream.md).
+   */
+  async assertSamplingPolicyExists(db, samplingPolicyId) {
+    if (samplingPolicyId === undefined || samplingPolicyId === null || String(samplingPolicyId) === '') return null;
+    try {
+      return await assertStoredSamplingPolicy(db, samplingPolicyId);
+    } catch (error) {
+      // Only the missing profile is the caller's 422; a DB error keeps its own.
+      if (error.message !== `ConfigurationProfile ${String(samplingPolicyId)} não encontrado`) throw error;
+      throw createSensorValidationError(`samplingPolicyId ${samplingPolicyId} não encontrado`, 422);
+    }
+  }
+
+  /**
+   * #1392: writes the just-created sensor's temperature TelemetryDatastream
+   * from the same freezer and policy linkSensorMetadata bound, so the
+   * readers, which take the datastream first, see the registration. Never
+   * throws: the sensor is already created (#313), so a binding that does not
+   * resolve or cannot be written is reported, as metadataLinked is, and
+   * SensorMetadata stays the readers' fallback.
+   */
+  async bindTemperatureDatastream(db, sensorId, samplingPolicyId, sensorData) {
+    try {
+      const binding = await resolveTemperatureBinding(db, {
+        storageContainer: sensorData.storageContainer,
+        equipment: null,
+        temperaturePolicy: sensorData.temperaturePolicy
+      });
+      if (!binding.ok) return { datastreamBound: false, datastreamUnresolved: binding.reason };
+      const stream = await createDatastream(db, {
+        sensorId,
+        equipmentId: binding.equipmentId,
+        storageLocationId: binding.storageLocationId,
+        observedProperty: TEMPERATURE_PROPERTY,
+        unit: TEMPERATURE_UNIT,
+        samplingPolicyId,
+        thresholdProfileId: binding.thresholdProfileId,
+        validityPeriod: { start: new Date() }
+      });
+      return { datastreamBound: true, telemetryDatastreamId: stream.telemetryDatastreamId };
+    } catch (error) {
+      logger.error('Erro ao vincular TelemetryDatastream:', error.message);
+      return { datastreamBound: false, datastreamUnresolved: error.message };
+    }
+  }
+
+  /**
+   * #1392: after an edit rebinds the SensorMetadata row, the temperature
+   * datastream valid now is moved onto the new binding: a datastream is
+   * never rewritten in place, so it is ended at `now` and, when the new
+   * binding resolves, a new one starts at `now` with the old one's sampling
+   * policy and unit. A binding that no longer resolves (policy or freezer
+   * cleared) only ends it, so the readers fall back to SensorMetadata, which
+   * holds the edit. A sensor with no datastream gets none here. Never throws:
+   * the sensors write has landed.
+   */
+  async rebindTemperatureDatastream(db, sensorId) {
+    const outcome = { ended: false, rebound: false };
+    try {
+      const now = new Date();
+      const current = (await listDatastreams(db, { sensorId }))
+        .find((stream) => stream.observedProperty === TEMPERATURE_PROPERTY && TelemetryDatastreamModel.validAt(stream, now));
+      if (!current) return outcome;
+
+      const row = await db.collection('sensorMetadata').findOne({ sensorId });
+      const binding = await resolveTemperatureBinding(db, {
+        storageContainer: row?.storageContainer ?? null,
+        equipment: row?.equipment ?? null,
+        temperaturePolicy: row?.temperaturePolicy ?? null
+      });
+      if (binding.ok
+        && binding.equipmentId === String(current.equipmentId)
+        && binding.storageLocationId === String(current.storageLocationId)
+        && binding.thresholdProfileId === String(current.thresholdProfileId)) {
+        return outcome;
+      }
+
+      await endDatastreamValidity(db, current.telemetryDatastreamId, { end: now });
+      outcome.ended = true;
+      if (!binding.ok) {
+        outcome.reason = binding.reason;
+        return outcome;
+      }
+      await createDatastream(db, {
+        sensorId,
+        equipmentId: binding.equipmentId,
+        storageLocationId: binding.storageLocationId,
+        observedProperty: TEMPERATURE_PROPERTY,
+        unit: current.unit,
+        samplingPolicyId: current.samplingPolicyId,
+        thresholdProfileId: binding.thresholdProfileId,
+        validityPeriod: { start: now }
+      });
+      outcome.rebound = true;
+      return outcome;
+    } catch (error) {
+      logger.error('Erro ao revincular TelemetryDatastream:', error.message);
+      return { ...outcome, reason: error.message };
     }
   }
 
@@ -417,8 +534,13 @@ class SensorService {
         throw new Error('Sensor não encontrado');
       }
 
+      let datastream;
       if (metadataSet) {
         await db.collection('sensorMetadata').updateOne({ sensorId: metadataKey }, { $set: metadataSet });
+        const has = (field) => Object.prototype.hasOwnProperty.call(updateData || {}, field);
+        if (has('storageContainer') || has('temperaturePolicy')) {
+          datastream = await this.rebindTemperatureDatastream(db, metadataKey);
+        }
       }
 
       if (quarantineResult && quarantineResult.triggered) {
@@ -441,7 +563,8 @@ class SensorService {
             movements: quarantineResult.movements,
             reason: quarantineResult.reason
           }
-          : { triggered: false }
+          : { triggered: false },
+        ...(datastream && { datastream })
       };
     } catch (error) {
       logger.error('Erro ao atualizar sensor:', error.message);
