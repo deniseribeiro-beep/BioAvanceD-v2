@@ -13,6 +13,7 @@ const { isSampleInOrganizationScope } = require('../services/sampleTenancy.servi
 // implementation -- see fileCrypto.js for the RF007/RNF029 rationale.
 const { encryptFileBuffer, decryptFileBuffer, computeChecksum, assertFileEncryptionConfigured } = require('../utils/fileCrypto');
 const { STORAGE_BASE } = require('../config/uploadConfig');
+const { recordReplacement, discardVersion, resolveChangeReason } = require('../services/dataFileVersion.service');
 
 /**
  * Controller de Upload de Arquivos de Análise de Amostras
@@ -865,19 +866,21 @@ class SampleFileController {
         });
       }
 
-      // Remove o arquivo físico anterior só depois que o novo já está
-      // validado e gravado em disco, para que uma falha na substituição
-      // nunca deixe zero cópias no sistema de arquivos.
-      const previousStoragePath = fileRecord.storagePath;
-      if (previousStoragePath && previousStoragePath !== file.path && fs.existsSync(previousStoragePath)) {
-        try {
-          fs.unlinkSync(previousStoragePath);
-        } catch (unlinkError) {
-          logger.error('Erro ao remover arquivo anterior após substituição:', unlinkError.message);
-        }
+      // RF007 AC4, RNF029 C3 (#1321): the previous binary is kept as
+      // evidence, never unlinked, and the replace writes a DataFileVersion.
+      const { version } = await recordReplacement(db, {
+        fileRecord,
+        storageUri,
+        checksum,
+        encryption,
+        changeReason: resolveChangeReason(req.body || {})
+      });
+      try {
+        await sampleFilesCollection.updateOne({ _id: fileRecord._id }, { $set: updatedFields });
+      } catch (updateError) {
+        await discardVersion(db, version);
+        throw updateError;
       }
-
-      await sampleFilesCollection.updateOne({ _id: fileRecord._id }, { $set: updatedFields });
 
       // RF007 AC#7 - substituição é auditada, ao lado de upload/acesso/
       // remoção lógica.
@@ -899,7 +902,9 @@ class SampleFileController {
             fileType,
             specimenId: specimenIdString,
             checksum,
-            checksumAlgorithm: 'sha256'
+            checksumAlgorithm: 'sha256',
+            dataFileVersionId: version.dataFileVersionId,
+            versionNumber: version.versionNumber
             // Não inclui dados sensíveis
           },
           req: req,
@@ -923,6 +928,7 @@ class SampleFileController {
           uri: updatedFields.storageUri,
           checksum: updatedFields.checksum,
           checksumAlgorithm: updatedFields.checksumAlgorithm,
+          versionNumber: version.versionNumber,
           encryption: {
             encrypted: Boolean(updatedFields.encryptionAlgorithm),
             algorithm: updatedFields.encryptionAlgorithm

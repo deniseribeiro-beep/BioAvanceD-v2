@@ -253,6 +253,7 @@ module.exports = {
   COLL_NONCONFORMANCES: process.env.COLL_NONCONFORMANCES || 'nonconformances',
   COLL_LEGAL_HOLDS: process.env.COLL_LEGAL_HOLDS || 'legalHolds',
   COLL_DISPOSITION_ACTIONS: process.env.COLL_DISPOSITION_ACTIONS || 'dispositionActions',
+  COLL_DATA_FILE_VERSIONS: process.env.COLL_DATA_FILE_VERSIONS || 'dataFileVersions',
   COLL_INGESTION_IDEMPOTENCY_KEYS: process.env.COLL_INGESTION_IDEMPOTENCY_KEYS || 'ingestionIdempotencyKeys',
   COLL_INGESTION_QUARANTINE_RECORDS: process.env.COLL_INGESTION_QUARANTINE_RECORDS || 'ingestionQuarantineRecords',
   COLL_MISSING_DATA_REASONS: process.env.COLL_MISSING_DATA_REASONS || 'missingDataReasons',

@@ -7,6 +7,7 @@ const logger = require('../utils/logger');
 const { getUserAnonId } = require('../utils/userAnonymization');
 const { encryptFileBuffer, decryptFileBuffer, computeChecksum, assertFileEncryptionConfigured } = require('../utils/fileCrypto');
 const { STORAGE_BASE } = require('../config/uploadConfig');
+const { recordReplacement, discardVersion, resolveChangeReason } = require('../services/dataFileVersion.service');
 
 // #643 (RF007 AC#6/gate F3-G05): generalizes sample-file.controller.js's
 // upload/list/download/delete/replace + checksum/encryption/audit shape to
@@ -470,16 +471,21 @@ function createLinkedFileController(opts) {
         updatedAt: new Date()
       };
 
-      const previousStoragePath = fileRecord.storagePath;
-      if (previousStoragePath && previousStoragePath !== file.path && fs.existsSync(previousStoragePath)) {
-        try {
-          fs.unlinkSync(previousStoragePath);
-        } catch (unlinkError) {
-          logger.error('Erro ao remover arquivo anterior após substituição:', unlinkError.message);
-        }
+      // RF007 AC4, RNF029 C3 (#1321): the previous binary is kept as
+      // evidence, never unlinked, and the replace writes a DataFileVersion.
+      const { version } = await recordReplacement(db, {
+        fileRecord,
+        storageUri,
+        checksum,
+        encryption,
+        changeReason: resolveChangeReason(req.body || {})
+      });
+      try {
+        await collection.updateOne({ _id: fileRecord._id }, { $set: updatedFields });
+      } catch (updateError) {
+        await discardVersion(db, version);
+        throw updateError;
       }
-
-      await collection.updateOne({ _id: fileRecord._id }, { $set: updatedFields });
 
       await logAudit(db, req, {
         action: 'file_replace',
@@ -494,7 +500,9 @@ function createLinkedFileController(opts) {
           fileType,
           [parentIdField]: parentIdValue,
           checksum,
-          checksumAlgorithm: 'sha256'
+          checksumAlgorithm: 'sha256',
+          dataFileVersionId: version.dataFileVersionId,
+          versionNumber: version.versionNumber
         }
       });
 
@@ -512,6 +520,7 @@ function createLinkedFileController(opts) {
           uri: updatedFields.storageUri,
           checksum: updatedFields.checksum,
           checksumAlgorithm: updatedFields.checksumAlgorithm,
+          versionNumber: version.versionNumber,
           encryption: { encrypted: Boolean(updatedFields.encryptionAlgorithm), algorithm: updatedFields.encryptionAlgorithm },
           accessPolicy: fileRecord.accessPolicy
         }

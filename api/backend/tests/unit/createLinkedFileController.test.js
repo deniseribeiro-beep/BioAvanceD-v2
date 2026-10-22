@@ -62,6 +62,18 @@ function buildController(overrides = {}) {
   });
 }
 
+// #1321: a replace versions the superseded binary, so a fixture that
+// reaches the version write names its storageUri and SHA-256 checksum.
+const OLD_CHECKSUM = 'b'.repeat(64);
+
+function createVersionsCollection() {
+  return {
+    findOne: vi.fn().mockResolvedValue(null),
+    insertOne: vi.fn().mockResolvedValue({ acknowledged: true }),
+    deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 })
+  };
+}
+
 describe('createLinkedFileController', () => {
   beforeEach(() => {
     vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
@@ -324,19 +336,77 @@ describe('createLinkedFileController', () => {
       expect(res.status).toHaveBeenCalledWith(200);
     });
 
-    it('replaceFile validates fileType, updates the record, and cleans up the previous file', async () => {
+    it('replaceFile validates fileType, updates the record, keeps the previous file and records a DataFileVersion', async () => {
       const controller = buildController();
       const fileId = new ObjectId();
-      const fileRecord = { _id: fileId, widgetId: 'w-1', fileName: 'old.csv', storagePath: '/tmp/old.csv' };
+      const fileRecord = {
+        _id: fileId, widgetId: 'w-1', fileName: 'old.csv', storagePath: '/tmp/old.csv',
+        storageUri: 'objstore://widgets/w-1/files/old.csv', checksum: OLD_CHECKSUM
+      };
       const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+      const versions = createVersionsCollection();
       const db = createDb({
         widgets: { findOne: vi.fn().mockResolvedValue({ widgetId: 'w-1' }) },
-        widgetFiles: { findOne: vi.fn().mockResolvedValue(fileRecord), updateOne }
+        widgetFiles: { findOne: vi.fn().mockResolvedValue(fileRecord), updateOne },
+        dataFileVersions: versions
       });
       vi.spyOn(fs, 'existsSync').mockReturnValue(true);
       vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('new content'));
       vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
-      vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
+      const unlinkSpy = vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
+
+      const req = {
+        app: { locals: { db } },
+        params: { widgetId: 'w-1', fileID: fileId.toString() },
+        user: { userID: 'u-1' },
+        file: { path: '/tmp/new.csv', originalname: 'new.csv', size: 11 },
+        body: { changeReason: '  corrected export  ' }
+      };
+      const res = createRes();
+
+      await controller.replaceFile(req, res);
+
+      expect(updateOne).toHaveBeenCalled();
+      const updatedFields = updateOne.mock.calls[0][1].$set;
+      expect(updatedFields.fileName).toBe('new.csv');
+      expect(updatedFields.checksum).toBeTruthy();
+      // RNF029 C3 (#1321): the previous binary is evidence, never unlinked.
+      expect(unlinkSpy).not.toHaveBeenCalledWith('/tmp/old.csv');
+      // RF007 AC4: a baseline v1 for the superseded binary, then v2.
+      expect(versions.insertOne).toHaveBeenCalledTimes(2);
+      const [baseline] = versions.insertOne.mock.calls[0];
+      const [version] = versions.insertOne.mock.calls[1];
+      expect(baseline).toMatchObject({ fileId: fileId.toString(), versionNumber: 1, checksum: OLD_CHECKSUM, changeReason: 'initial upload' });
+      expect(version).toMatchObject({
+        fileId: fileId.toString(),
+        versionNumber: 2,
+        previousVersionId: baseline.dataFileVersionId,
+        checksum: updatedFields.checksum,
+        objectUri: updatedFields.storageUri,
+        changeReason: 'corrected export'
+      });
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json.mock.calls[0][0].data.versionNumber).toBe(2);
+      expect(auditLogger.log.mock.calls[0][0].payload).toMatchObject({ dataFileVersionId: version.dataFileVersionId, versionNumber: 2 });
+    });
+
+    it('replaceFile deletes the new DataFileVersion and cleans up the upload when the record update fails (#1321)', async () => {
+      const controller = buildController();
+      const fileId = new ObjectId();
+      const fileRecord = {
+        _id: fileId, widgetId: 'w-1', fileName: 'old.csv', storagePath: '/tmp/old.csv',
+        storageUri: 'objstore://widgets/w-1/files/old.csv', checksum: OLD_CHECKSUM
+      };
+      const versions = createVersionsCollection();
+      const db = createDb({
+        widgets: { findOne: vi.fn().mockResolvedValue({ widgetId: 'w-1' }) },
+        widgetFiles: { findOne: vi.fn().mockResolvedValue(fileRecord), updateOne: vi.fn().mockRejectedValue(new Error('db down')) },
+        dataFileVersions: versions
+      });
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('new content'));
+      vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+      const unlinkSpy = vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
 
       const req = {
         app: { locals: { db } },
@@ -348,11 +418,12 @@ describe('createLinkedFileController', () => {
 
       await controller.replaceFile(req, res);
 
-      expect(updateOne).toHaveBeenCalled();
-      const updatedFields = updateOne.mock.calls[0][1].$set;
-      expect(updatedFields.fileName).toBe('new.csv');
-      expect(updatedFields.checksum).toBeTruthy();
-      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.status).toHaveBeenCalledWith(400);
+      const [version] = versions.insertOne.mock.calls[1];
+      expect(versions.deleteOne).toHaveBeenCalledTimes(1);
+      expect(versions.deleteOne).toHaveBeenCalledWith({ dataFileVersionId: version.dataFileVersionId });
+      expect(unlinkSpy).toHaveBeenCalledWith('/tmp/new.csv');
+      expect(unlinkSpy).not.toHaveBeenCalledWith('/tmp/old.csv');
     });
   });
 });

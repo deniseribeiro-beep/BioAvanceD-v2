@@ -103,6 +103,7 @@ const ENTITY_TARGETS = {
   ScanEvent: () => require('../../src/models/ScanEvent').fieldsOf(),
   CustodianshipAssignment: () => require('../../src/models/CustodianshipAssignment').fieldsOf(),
   Shipment: () => require('../../src/models/Shipment').fieldsOf(),
+  DataFileVersion: () => require('../../src/models/DataFileVersion').fieldsOf(),
   TelemetryDatastream: () => require('../../src/models/TelemetryDatastream').fieldsOf(),
   TelemetryIngestionEvent: () => require('../../src/models/TelemetryIngestionEvent').fieldsOf(),
   TelemetryValidationIssue: () => require('../../src/models/TelemetryValidationIssue').fieldsOf(),

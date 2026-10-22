@@ -77,6 +77,7 @@ const CANONICAL_COLLECTIONS = Object.freeze({
   nonconformances: env.COLL_NONCONFORMANCES || 'nonconformances',
   legalHolds: env.COLL_LEGAL_HOLDS || 'legalHolds',
   dispositionActions: env.COLL_DISPOSITION_ACTIONS || 'dispositionActions',
+  dataFileVersions: env.COLL_DATA_FILE_VERSIONS || 'dataFileVersions',
   ingestionIdempotencyKeys: env.COLL_INGESTION_IDEMPOTENCY_KEYS || 'ingestionIdempotencyKeys',
   ingestionQuarantineRecords: env.COLL_INGESTION_QUARANTINE_RECORDS || 'ingestionQuarantineRecords',
   missingDataReasons: env.COLL_MISSING_DATA_REASONS || 'missingDataReasons',
