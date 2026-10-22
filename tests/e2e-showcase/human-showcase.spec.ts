@@ -3,6 +3,8 @@ import { MongoClient, Db, ObjectId } from 'mongodb';
 import { randomBytes, createHash } from 'crypto';
 import { realLogin, seedRealAuth } from '../e2e/helpers/realAuth';
 import { createRealParticipant, seedStorageBoxLocation, cleanupStorageBoxLocation, closeSeedDb, seedStudy, seedProtocol, seedCollectionEntity, seedActiveConsent, seedDuoConcept, type SeededStorageBox } from '../e2e/helpers/seedParticipant';
+import { seedSensorWithPolicy, findTemperatureIncident, removeSeededSensor, closeSeedSensorDb, type SeededSensor } from '../e2e/helpers/seedSensor';
+import { queryTemperaturePoints } from '../e2e/helpers/queryInflux';
 
 // Not a coverage spec — a human-paced showcase reel for Denise, recorded via
 // `playwright.showcase.config.ts` (video: 'on', single worker, real backend).
@@ -1131,6 +1133,92 @@ test.describe('Human-paced e2e showcase reel — W6 consent revocation', () => {
       await db.collection('terminologyConcepts').deleteMany({ code: { $in: [healthCode, diseaseCode] } });
       await db.collection('patientConsents').deleteMany({ participantId: participant.participantId });
       await db.collection('consentPermissions').deleteMany({ participantId: participant.participantId });
+      await client.close();
+    }
+  });
+});
+
+// W9 reel (#1396): RF009 telemetry and RF015 alerts. A freezer's readings
+// go through the real ingest endpoint, are persisted in InfluxDB, and the
+// out-of-range ones open a temperature incident the operator inspects in
+// Facility Management's Incidents tab. Deliberately not demoed: the
+// "Controle de Temperatura" and "Histórico de Leituras" tabs and the
+// Dashboard chart, which draw client-side simulated values rather than the
+// persisted readings, so showing them would pass a simulation off as real
+// data; and the notification attempt the alert dispatches, which is recorded
+// by the backend but has no UI that shows it.
+test.describe('Human-paced e2e showcase reel — W9 telemetry and alerts', () => {
+  // POST /api/iot/telemetry is gated by the machine ingest secret (#1091).
+  const ingestHeaders = () => ({ 'x-telemetry-ingest-secret': process.env.TELEMETRY_INGEST_SECRET ?? '' });
+
+  test.afterAll(async () => {
+    await closeSeedSensorDb();
+  });
+
+  test('RF009 an out-of-range freezer reading persisted in InfluxDB opens an alert the operator inspects', async ({ page, request }) => {
+    const session = await realLogin(request);
+    await seedRealAuth(page, session);
+    const sensorName = 'Freezer -80 °C · Sala de criopreservação';
+    const sensor: SeededSensor = await seedSensorWithPolicy(-90, -60);
+    const client = new MongoClient(process.env.E2E_MONGO_URI || 'mongodb://localhost:27017?directConnection=true');
+    await client.connect();
+    const db = client.db(process.env.E2E_MONGO_DB || 'bioavanced_test');
+
+    try {
+      // The incident takes its name from the sensor's metadata on the first
+      // reading, so the readable name is set before any reading arrives.
+      await db.collection('sensorMetadata').updateOne({ sensorId: sensor.sensorId }, { $set: { sensorName } });
+
+      const postReading = async (temperature: number) => {
+        const res = await request.post(`${apiBaseURL}/api/iot/telemetry`, {
+          headers: ingestHeaders(),
+          data: { sensorId: sensor.sensorId, temperature, timestamp: new Date().toISOString() },
+        });
+        expect(res.status(), await res.text()).toBe(200);
+      };
+
+      // Off camera: two readings above the -60 °C limit. The second is sent
+      // only once the first has opened the incident, so it updates that one.
+      await postReading(-52);
+      await expect
+        .poll(async () => (await findTemperatureIncident(sensor.sensorId))?.samplesOutOfRange ?? null, { timeout: 15_000 })
+        .toBe(1);
+      await postReading(-45);
+      await expect
+        .poll(async () => (await findTemperatureIncident(sensor.sensorId))?.samplesOutOfRange ?? null, { timeout: 15_000 })
+        .toBe(2);
+
+      // Both readings are persisted in InfluxDB, not only acknowledged.
+      await expect
+        .poll(async () => (await queryTemperaturePoints(sensor.sensorId)).map((p) => p.value).sort((a, b) => a - b), { timeout: 15_000 })
+        .toEqual([-52, -45]);
+
+      const incidentId = String((await findTemperatureIncident(sensor.sensorId))._id);
+
+      // 1. Facility Management, then its Incidents tab.
+      await page.goto('/facility-management');
+      await beat(page, LARGE);
+      await page.getByTestId('facility-tab-incidents').click();
+      await beat(page, MEDIUM);
+
+      // 2. The open alert for the freezer: its latest reading and its count.
+      const row = page.getByTestId(`incident-row-${incidentId}`);
+      await expect(row).toBeVisible();
+      await expect(row).toContainText(sensorName);
+      await expect(row).toContainText('-45.0°C');
+      await expect(row.locator('td').nth(4)).toHaveText('2');
+      await row.scrollIntoViewIfNeeded();
+      await beat(page, LARGE);
+
+      // 3. Its details: the current reading and the range the readings spanned.
+      await page.getByTestId(`incident-details-button-${incidentId}`).click();
+      const panel = page.locator('.incident-detail-panel');
+      await expect(panel).toContainText('Detalhes do Incidente');
+      await expect(panel).toContainText('-45.0°C / -52.0°C');
+      await panel.scrollIntoViewIfNeeded();
+      await beat(page, LARGE);
+    } finally {
+      await removeSeededSensor(sensor);
       await client.close();
     }
   });
