@@ -46,7 +46,7 @@ router.post('/records', requireRole(3, 4), async (req, res) => {
     return res.status(503).json({ success: false, error: 'Banco de dados não disponível.' });
   }
 
-  const { entityType, payload, provenance, idempotencyKey } = req.body || {};
+  const { entityType, payload, provenance, idempotencyKey, missingDataReasons } = req.body || {};
   const purpose = typeof provenance?.purpose === 'string' ? provenance.purpose : null;
 
   let result;
@@ -57,6 +57,7 @@ router.post('/records', requireRole(3, 4), async (req, res) => {
       payload,
       provenance,
       idempotencyKey: idempotencyKey || null,
+      missingDataReasons,
       actorId: req.user?.userID,
     });
   } catch (error) {

@@ -78,7 +78,8 @@ const CANONICAL_COLLECTIONS = Object.freeze({
   legalHolds: env.COLL_LEGAL_HOLDS || 'legalHolds',
   dispositionActions: env.COLL_DISPOSITION_ACTIONS || 'dispositionActions',
   ingestionIdempotencyKeys: env.COLL_INGESTION_IDEMPOTENCY_KEYS || 'ingestionIdempotencyKeys',
-  ingestionQuarantineRecords: env.COLL_INGESTION_QUARANTINE_RECORDS || 'ingestionQuarantineRecords'
+  ingestionQuarantineRecords: env.COLL_INGESTION_QUARANTINE_RECORDS || 'ingestionQuarantineRecords',
+  missingDataReasons: env.COLL_MISSING_DATA_REASONS || 'missingDataReasons'
 });
 
 module.exports = {

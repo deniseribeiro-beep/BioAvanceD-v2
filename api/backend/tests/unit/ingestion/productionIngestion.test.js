@@ -20,6 +20,7 @@ function seededDb({ release = { canonicalModelReleaseId: 'release-2.0.0', releas
     workflowRuns: [],
     ingestionQuarantineRecords: [],
     ingestionIdempotencyKeys: [],
+    missingDataReasons: [],
   });
 }
 
@@ -96,6 +97,25 @@ describe('ingestion/productionIngestion ingestAndPersist (RF029, #1318)', () => 
       sourceService: 'ingestion-gateway',
       schemaVersion: 1,
     });
+    // RF029 AC7, RNF011 C5: each absent field is stored as null or [], never
+    // 0, and gets one MissingDataReason row in the document's write.
+    expect(db.collections.datasets.docs[0]).toMatchObject({ doi: null, roCrateManifest: null, distributionFiles: [] });
+    const rows = db.collections.missingDataReasons.docs;
+    expect(rows.map((r) => [r.fieldPath, r.reasonCode])).toEqual([['doi', 'unknown'], ['distributionFiles', 'unknown'], ['roCrateManifest', 'unknown']]);
+    for (const row of rows) {
+      expect(row).toEqual({
+        missingDataReasonId: expect.stringMatching(UUID),
+        entityType: 'Dataset',
+        entityId: result.entityId,
+        fieldPath: row.fieldPath,
+        reasonCode: 'unknown',
+        recordedAt: expect.any(Date),
+        sourceEventId: 'evt-1',
+        canonicalModelReleaseId: 'release-2.0.0',
+        configurationReleaseId: 'cfg-release-7',
+      });
+    }
+    expect(result.missingDataReasons).toEqual(rows.map(({ missingDataReasonId, fieldPath, reasonCode }) => ({ missingDataReasonId, fieldPath, reasonCode })));
   });
 
   it('2. on a replica set, the insert and the append receive the same session', async () => {
@@ -112,6 +132,20 @@ describe('ingestion/productionIngestion ingestAndPersist (RF029, #1318)', () => 
     expect(outbox.appendEvent).toHaveBeenCalledWith(db, expect.objectContaining({ aggregateId: result.entityId }), { session });
   });
 
+  it('2b. on a replica set, every MissingDataReason insert receives the same session', async () => {
+    const db = seededDb();
+    const session = onReplicaSet(db);
+    const insertOne = vi.spyOn(db.collection('missingDataReasons'), 'insertOne');
+
+    const result = await ingest(db);
+
+    expect(result.status).toBe('accepted');
+    expect(insertOne).toHaveBeenCalledTimes(3);
+    for (const call of insertOne.mock.calls) {
+      expect(call).toEqual([expect.objectContaining({ entityId: result.entityId }), { session }]);
+    }
+  });
+
   it('3. on the session path a failing append rejects, with the insert and the append in the same session', async () => {
     const db = seededDb();
     const session = onReplicaSet(db);
@@ -121,6 +155,7 @@ describe('ingestion/productionIngestion ingestAndPersist (RF029, #1318)', () => 
     await expect(ingest(db, { outbox })).rejects.toThrow('outbox down');
     expect(insertOne).toHaveBeenCalledWith(expect.any(Object), { session });
     expect(outbox.appendEvent).toHaveBeenCalledWith(db, expect.any(Object), { session });
+    expect(db.collections.missingDataReasons.docs).toHaveLength(0);
   });
 
   it('4. a missing provenance field quarantines, with no insert and no append', async () => {
@@ -260,6 +295,7 @@ describe('ingestion/productionIngestion ingestAndPersist (RF029, #1318)', () => 
     const db = seededDb();
     db.collections.datasets = createMatchingCollection([]);
     db.collections.graph_projection_outbox = createMatchingCollection([]);
+    db.collections.missingDataReasons = createMatchingCollection([]);
     let next = 0;
     const outbox = {
       getCollection: (target) => target.collection('graph_projection_outbox'),
@@ -281,5 +317,35 @@ describe('ingestion/productionIngestion ingestAndPersist (RF029, #1318)', () => 
     expect(loser).toEqual({ status: 'idempotent_replay', outcome: 'accepted', entityType: 'Dataset', resultRef: winner.entityId, canonicalModelReleaseId: 'release-2.0.0', configurationReleaseId: 'cfg-release-7' });
     expect(db.collections.datasets.docs.map((d) => d.datasetId)).toEqual([winner.entityId]);
     expect(db.collections.graph_projection_outbox.docs.map((e) => e.eventId)).toEqual([winner.outboxEventId]);
+    expect(db.collections.missingDataReasons.docs.map((r) => r.entityId)).toEqual([winner.entityId, winner.entityId, winner.entityId]);
+  });
+
+  it('15. a declared reasonCode is stored as declared, the other absent fields as unknown', async () => {
+    const db = seededDb();
+
+    const result = await ingest(db, { missingDataReasons: [{ fieldPath: 'doi', reasonCode: 'withheld' }] });
+
+    expect(result.status).toBe('accepted');
+    expect(db.collections.missingDataReasons.docs.map((r) => [r.fieldPath, r.reasonCode])).toEqual([['doi', 'withheld'], ['distributionFiles', 'unknown'], ['roCrateManifest', 'unknown']]);
+    expect(result.missingDataReasons.map((r) => [r.fieldPath, r.reasonCode])).toEqual([['doi', 'withheld'], ['distributionFiles', 'unknown'], ['roCrateManifest', 'unknown']]);
+  });
+
+  it.each([
+    ['a present field', 'Dataset', { ...DATASET, doi: '10.1/x' }, { fieldPath: 'doi', reasonCode: 'withheld' }, 'MISSING_REASON_FIELD_PRESENT'],
+    ['a required field', 'Dataset', DATASET, { fieldPath: 'datasetTitle', reasonCode: 'withheld' }, 'MISSING_REASON_FIELD_NOT_APPLICABLE'],
+    ['the code zero', 'Dataset', DATASET, { fieldPath: 'doi', reasonCode: 'zero' }, 'MISSING_REASON_CODE_INVALID'],
+    ['a completedAt of 0', 'WorkflowRun', { ...WORKFLOW_RUN, completedAt: 0 }, { fieldPath: 'completedAt', reasonCode: 'not_applicable' }, 'MISSING_REASON_FIELD_PRESENT'],
+  ])('16. a declaration on %s quarantines with its code, with no insert and no rows', async (_label, entityType, payload, declaration, code) => {
+    const db = seededDb();
+    const outbox = fakeOutbox();
+
+    const result = await ingest(db, { outbox, entityType, payload, missingDataReasons: [declaration] });
+
+    expect(result.status).toBe('quarantined');
+    expect(result.violations).toEqual(expect.arrayContaining([expect.objectContaining({ code, field: 'missingDataReasons[0]' })]));
+    expect(db.collections.datasets.docs).toHaveLength(0);
+    expect(db.collections.workflowRuns.docs).toHaveLength(0);
+    expect(db.collections.missingDataReasons.docs).toHaveLength(0);
+    expect(outbox.appendEvent).not.toHaveBeenCalled();
   });
 });

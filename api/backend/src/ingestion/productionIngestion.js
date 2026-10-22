@@ -16,6 +16,7 @@ const { Neo4jOutboxService } = require('../services/neo4jOutbox.service');
 const { withTransactionWhereSupported } = require('../utils/mongoTransaction');
 const { ingestRecord } = require('./ingestionGateway');
 const { resolveIngestionTarget } = require('./ingestionTargets');
+const { validateMissingDataReasons, buildMissingDataReasons } = require('./missingness');
 const {
   ensureIdempotencyKeyIndex,
   findCompletedIdempotentEntry,
@@ -52,14 +53,19 @@ async function assertCanonicalReleaseActive(db) {
   return CANONICAL_MODEL_RELEASE_ID;
 }
 
-function entityValidatorFor(target) {
+// A bad missingness declaration (RF029 AC7) quarantines through the gateway
+// as any other violation.
+function entityValidatorFor(target, declared) {
   return (payload) => {
     const data = payload && typeof payload === 'object' ? payload : {};
-    return target.model.validate(data).errors.map((message) => ({
-      code: 'ENTITY_VALIDATION_FAILED',
-      field: null,
-      message,
-    }));
+    return [
+      ...target.model.validate(data).errors.map((message) => ({
+        code: 'ENTITY_VALIDATION_FAILED',
+        field: null,
+        message,
+      })),
+      ...validateMissingDataReasons(target, data, declared),
+    ];
   };
 }
 
@@ -80,6 +86,7 @@ async function ingestAndPersist({
   payload,
   provenance,
   idempotencyKey = null,
+  missingDataReasons = undefined,
   actorId,
   outbox = new Neo4jOutboxService(),
 }) {
@@ -93,7 +100,7 @@ async function ingestAndPersist({
   const releases = { canonicalModelReleaseId, configurationReleaseId };
 
   try {
-    return await ingestUnderRelease({ db, target, entityType, payload, provenance, idempotencyKey, actorId, outbox, releases });
+    return await ingestUnderRelease({ db, target, entityType, payload, provenance, idempotencyKey, missingDataReasons, actorId, outbox, releases });
   } catch (error) {
     // CFG-004: a refusal after the releases were read still names them.
     if (error && typeof error === 'object') {
@@ -104,7 +111,7 @@ async function ingestAndPersist({
   }
 }
 
-async function ingestUnderRelease({ db, target, entityType, payload, provenance, idempotencyKey, actorId, outbox, releases }) {
+async function ingestUnderRelease({ db, target, entityType, payload, provenance, idempotencyKey, missingDataReasons, actorId, outbox, releases }) {
   const scope = { idempotencyKey, scope: entityType };
   if (idempotencyKey) {
     const entry = await findCompletedIdempotentEntry(db, scope);
@@ -122,7 +129,7 @@ async function ingestUnderRelease({ db, target, entityType, payload, provenance,
     payload,
     provenance: { ...(provenance && typeof provenance === 'object' ? provenance : {}), createdBy: `Actor/${actorId}` },
     idempotencyKey: null,
-    entityValidator: entityValidatorFor(target),
+    entityValidator: entityValidatorFor(target, missingDataReasons),
   });
 
   if (outcome.status === 'quarantined') {
@@ -155,6 +162,18 @@ async function ingestUnderRelease({ db, target, entityType, payload, provenance,
   // provenanceEnvelope.js's header, so the server's Actor/<id> overrides any
   // payload value (WorkflowRun's schema requires the client to send one).
   doc.createdBy = outcome.provenance.createdBy;
+  // RF029 AC7: one MissingDataReason per absent missingness field, read off
+  // the stored document, so an absence is recorded and never written as 0.
+  const reasons = buildMissingDataReasons({
+    target,
+    entityType,
+    entityId,
+    doc,
+    declared: missingDataReasons,
+    releases,
+    recordedAt: new Date(),
+  });
+  const reasonsCollection = db.collection(CANONICAL_COLLECTIONS.missingDataReasons);
 
   const key = idempotencyKey ? { ...scope, resultRef: entityId, outcome: 'accepted' } : null;
   if (key) await ensureIdempotencyKeyIndex(db);
@@ -174,13 +193,19 @@ async function ingestUnderRelease({ db, target, entityType, payload, provenance,
           sourceService: 'ingestion-gateway',
           schemaVersion: 1,
         }, opts);
-        return event?.eventId || null;
+        const eventId = event?.eventId || null;
+        // In the document's transaction (RF029 AC6), one call per row.
+        for (const row of reasons) {
+          await reasonsCollection.insertOne(eventId ? { ...row, sourceEventId: eventId } : row, opts);
+        }
+        return eventId;
       };
       const accepted = (outboxEventId) => ({
         status: 'accepted',
         entityType,
         entityId,
         outboxEventId,
+        missingDataReasons: reasons.map(({ missingDataReasonId, fieldPath, reasonCode }) => ({ missingDataReasonId, fieldPath, reasonCode })),
         ...releases,
       });
 
@@ -200,10 +225,12 @@ async function ingestUnderRelease({ db, target, entityType, payload, provenance,
         const ref = await recordCompletedIdempotentResult(db, key);
         if (ref !== entityId) {
           // A concurrent request with this key recorded first: this
-          // request's document and event are a duplicate of the winner's, so
-          // they are removed before the winner's result is replayed.
+          // request's document, event and MissingDataReason rows are a
+          // duplicate of the winner's, so they are removed before the
+          // winner's result is replayed.
           await db.collection(target.collection).deleteOne({ [target.idField]: entityId });
           if (outboxEventId) await outbox.getCollection(db).deleteOne({ eventId: outboxEventId });
+          await reasonsCollection.deleteMany({ entityType, entityId });
           return replayOf(db, entityType, await findCompletedIdempotentEntry(db, scope), releases);
         }
       }

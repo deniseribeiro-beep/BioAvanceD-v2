@@ -255,6 +255,7 @@ module.exports = {
   COLL_DISPOSITION_ACTIONS: process.env.COLL_DISPOSITION_ACTIONS || 'dispositionActions',
   COLL_INGESTION_IDEMPOTENCY_KEYS: process.env.COLL_INGESTION_IDEMPOTENCY_KEYS || 'ingestionIdempotencyKeys',
   COLL_INGESTION_QUARANTINE_RECORDS: process.env.COLL_INGESTION_QUARANTINE_RECORDS || 'ingestionQuarantineRecords',
+  COLL_MISSING_DATA_REASONS: process.env.COLL_MISSING_DATA_REASONS || 'missingDataReasons',
 
   // Neo4j lineage behavior
   LINEAGE_MODE: process.env.LINEAGE_MODE || 'fail-open',

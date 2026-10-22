@@ -10,6 +10,13 @@ describe('ingestion/ingestionTargets (RF029, #1318)', () => {
     expect(typeof resolveIngestionTarget('Dataset').model.validate).toBe('function');
   });
 
+  it('names each target\'s missingness fields exactly, frozen (RF029 AC7)', () => {
+    expect(INGESTION_TARGETS.Dataset.missingnessFields).toEqual(['doi', 'distributionFiles', 'roCrateManifest']);
+    expect(INGESTION_TARGETS.WorkflowRun.missingnessFields).toEqual(['containerImageDigest', 'softwareDependencies', 'parameters', 'inputFileIds', 'outputFileIds', 'completedAt']);
+    expect(Object.isFrozen(INGESTION_TARGETS.Dataset.missingnessFields)).toBe(true);
+    expect(Object.isFrozen(INGESTION_TARGETS.WorkflowRun.missingnessFields)).toBe(true);
+  });
+
   it.each(['Telemetry', 'dataset', '', undefined, null, '__proto__', 'toString', 'constructor', 'hasOwnProperty'])(
     'resolves %s to null',
     (entityType) => {

@@ -46,6 +46,7 @@ function givenDb() {
     datasets: createMatchingCollection([]),
     ingestionQuarantineRecords: createMatchingCollection([]),
     ingestionIdempotencyKeys: createFakeCollection([]),
+    missingDataReasons: createMatchingCollection([]),
     graph_projection_outbox: createCollectionMock(),
   };
   app.locals.db = createDbMock({ ...stores, ...buildRbacCollections([{ userAccountId: USER, accessType: 3 }]) });
@@ -87,6 +88,19 @@ describe('POST /api/ingestion/records (RF029, #1318)', () => {
       resourceId: res.body.entityId,
       payload: expect.objectContaining({ canonicalModelReleaseId: 'release-2.0.0', configurationReleaseId: 'cfg-release-7' }),
     })]);
+  });
+
+  it('201: a declared MissingDataReason is stored in the session and named in the body (RF029 AC7)', async () => {
+    const stores = givenDb();
+
+    const res = await post({ entityType: 'Dataset', payload: DATASET, provenance: PROVENANCE, missingDataReasons: [{ fieldPath: 'doi', reasonCode: 'not_collected' }] });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    const rows = stores.missingDataReasons.docs;
+    expect(rows.map((r) => [r.fieldPath, r.reasonCode])).toEqual([['doi', 'not_collected'], ['distributionFiles', 'unknown'], ['roCrateManifest', 'unknown']]);
+    expect(rows.every((r) => r.entityType === 'Dataset' && r.entityId === res.body.entityId && r.canonicalModelReleaseId === 'release-2.0.0')).toBe(true);
+    expect(stores.missingDataReasons.insertOne).toHaveBeenCalledWith(expect.any(Object), { session: app.locals.db.session });
+    expect(res.body.missingDataReasons).toEqual(rows.map(({ missingDataReasonId, fieldPath, reasonCode }) => ({ missingDataReasonId, fieldPath, reasonCode })));
   });
 
   it('422: a missing provenance field quarantines, with details and the quarantine record id', async () => {
