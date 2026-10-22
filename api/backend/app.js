@@ -415,6 +415,20 @@ app.use("/api/collections", createMasterDataRouter({
   // RF020 AC4: a regime conversion needs an event and an approval, not an edit.
   immutableFields: ["governanceRegime"]
 }));
+// RF020 AC1 (#1322): Network and Biobank, entered by a Coordenador or
+// Administrador; the MIABIS export reads them.
+app.use("/api/biobanks", createMasterDataRouter({
+  collectionName: "biobanks",
+  idField: "biobankId",
+  model: require("./src/models/Biobank"),
+  validateReferences: require("./src/services/institutionalReferenceValidator").validateBiobankReferences
+}));
+app.use("/api/networks", createMasterDataRouter({
+  collectionName: "networks",
+  idField: "networkId",
+  model: require("./src/models/Network"),
+  validateReferences: require("./src/services/institutionalReferenceValidator").validateNetworkReferences
+}));
 app.use("/api/workflow-runs/:workflowRunId/files", require("./src/interface/routes/workflow-run-file-link.routes"));
 app.use("/api/workflow-runs", createMasterDataRouter({
   collectionName: "workflowRuns",
