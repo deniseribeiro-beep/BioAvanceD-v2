@@ -1568,6 +1568,28 @@ describe('sample-file.controller', () => {
       expect(res.status).toHaveBeenCalledWith(404);
     });
 
+    // RF007 AC6 (#1321): a logically deleted row reads as missing.
+    it('404s on a row with deletedAt (#1321)', async () => {
+      const fileID = new ObjectId().toString();
+      const specimenId = new ObjectId().toString();
+      const fileRecord = { _id: new ObjectId(fileID), specimenId, fileName: 'a.csv', fileType: 'CSV', deletedAt: new Date() };
+      const sample = { _id: new ObjectId(specimenId), participantId: '12345678' };
+      const db = createDb({
+        sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) },
+        samples: { findOne: vi.fn().mockResolvedValue(sample) }
+      });
+      const req = { app: { locals: { db } }, params: { specimenId, fileID }, user: null };
+      const res = createRes();
+      const genSpy = vi.spyOn(hl7Service, 'generateHL7v2Message').mockResolvedValue('MSH|^~\\&|...');
+
+      await controller.exportHL7v2(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(404);
+      expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Arquivo não encontrado' });
+      expect(genSpy).not.toHaveBeenCalled();
+      expect(res.send).not.toHaveBeenCalled();
+    });
+
     it('returns 404 when the sample is not found', async () => {
       const fileID = new ObjectId().toString();
       const specimenId = new ObjectId().toString();
@@ -1737,6 +1759,28 @@ describe('sample-file.controller', () => {
       expect(res.status).toHaveBeenCalledWith(404);
     });
 
+    // RF007 AC6 (#1321): a logically deleted row reads as missing.
+    it('404s on a row with deletedAt (#1321)', async () => {
+      const fileID = new ObjectId().toString();
+      const specimenId = new ObjectId().toString();
+      const fileRecord = { _id: new ObjectId(fileID), specimenId, fileName: 'a.csv', fileType: 'CSV', deletedAt: new Date() };
+      const sample = { _id: new ObjectId(specimenId), participantId: '12345678' };
+      const db = createDb({
+        sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) },
+        samples: { findOne: vi.fn().mockResolvedValue(sample) }
+      });
+      const req = { app: { locals: { db } }, params: { specimenId, fileID }, user: null };
+      const res = createRes();
+      const genSpy = vi.spyOn(hl7Service, 'generateFHIRResource').mockResolvedValue({ resourceType: 'Bundle' });
+
+      await controller.exportFHIR(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(404);
+      expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Arquivo não encontrado' });
+      expect(genSpy).not.toHaveBeenCalled();
+      expect(res.send).not.toHaveBeenCalled();
+    });
+
     it('returns 404 when the sample is not found', async () => {
       const fileID = new ObjectId().toString();
       const specimenId = new ObjectId().toString();
@@ -1835,6 +1879,28 @@ describe('sample-file.controller', () => {
       await controller.exportCDA(req, res);
 
       expect(res.status).toHaveBeenCalledWith(404);
+    });
+
+    // RF007 AC6 (#1321): a logically deleted row reads as missing.
+    it('404s on a row with deletedAt (#1321)', async () => {
+      const fileID = new ObjectId().toString();
+      const specimenId = new ObjectId().toString();
+      const fileRecord = { _id: new ObjectId(fileID), specimenId, fileName: 'a.csv', fileType: 'CSV', deletedAt: new Date() };
+      const sample = { _id: new ObjectId(specimenId), participantId: '12345678' };
+      const db = createDb({
+        sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) },
+        samples: { findOne: vi.fn().mockResolvedValue(sample) }
+      });
+      const req = { app: { locals: { db } }, params: { specimenId, fileID }, user: null };
+      const res = createRes();
+      const genSpy = vi.spyOn(hl7Service, 'generateCDA').mockResolvedValue('<ClinicalDocument/>');
+
+      await controller.exportCDA(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(404);
+      expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Arquivo não encontrado' });
+      expect(genSpy).not.toHaveBeenCalled();
+      expect(res.send).not.toHaveBeenCalled();
     });
 
     it('returns 400 when file is not linked to the given sample', async () => {
