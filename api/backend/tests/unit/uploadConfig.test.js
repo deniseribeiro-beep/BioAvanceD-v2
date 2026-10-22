@@ -3,6 +3,7 @@ import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const uploadConfig = require('../../src/config/uploadConfig');
 const env = require('../../src/config/env');
@@ -42,18 +43,24 @@ describe('uploadConfig - fileFilter', () => {
     expect(allowed).toBe(false);
   });
 
-  it('accepts a file with an allowed extension even if mimetype is unrecognized', () => {
+  // #1321 (RF007 AC1, RNF029 C1): the extension AND its MIME must both be
+  // allowed; an allowed extension no longer carries an unrelated MIME.
+  it('rejects an allowed extension whose mimetype is not allowed for it', () => {
     const cb = vi.fn();
     uploadConfig.fileFilter({}, buildFile('report.pdf', 'application/unknown'), cb);
 
-    expect(cb).toHaveBeenCalledWith(null, true);
+    const [err, allowed] = cb.mock.calls[0];
+    expect(err.message).toBe('Invalid file type');
+    expect(allowed).toBe(false);
   });
 
-  it('accepts a file with an allowed mimetype even if extension is unrecognized', () => {
+  it('rejects an unrecognized extension even with an allowed mimetype', () => {
     const cb = vi.fn();
     uploadConfig.fileFilter({}, buildFile('data.unknownext', 'text/csv'), cb);
 
-    expect(cb).toHaveBeenCalledWith(null, true);
+    const [err, allowed] = cb.mock.calls[0];
+    expect(err.message).toBe('Invalid file type');
+    expect(allowed).toBe(false);
   });
 
   it('rejects a file whose extension and mimetype are both unrecognized', () => {
@@ -66,11 +73,98 @@ describe('uploadConfig - fileFilter', () => {
     expect(allowed).toBe(false);
   });
 
-  it('treats a missing originalname as having no extension', () => {
+  it('rejects a missing originalname, which has no extension', () => {
     const cb = vi.fn();
     uploadConfig.fileFilter({}, { originalname: undefined, mimetype: 'image/jpeg' }, cb);
 
+    const [err, allowed] = cb.mock.calls[0];
+    expect(err.message).toBe('Invalid file type');
+    expect(allowed).toBe(false);
+  });
+
+  it('rejects an extension with a format policy that this upload does not allow', () => {
+    const cb = vi.fn();
+    uploadConfig.fileFilter({}, buildFile('notes.json', 'application/json'), cb);
+
+    const [err, allowed] = cb.mock.calls[0];
+    expect(err.message).toBe('Invalid file type');
+    expect(allowed).toBe(false);
+  });
+
+  it('accepts an allowed extension with its own mimetype', () => {
+    const cb = vi.fn();
+    uploadConfig.fileFilter({}, buildFile('report.pdf', 'application/pdf'), cb);
+
     expect(cb).toHaveBeenCalledWith(null, true);
+  });
+
+  it('accepts an allowed extension sent as application/octet-stream', () => {
+    const cb = vi.fn();
+    uploadConfig.fileFilter({}, buildFile('scan.raw', 'application/octet-stream'), cb);
+
+    expect(cb).toHaveBeenCalledWith(null, true);
+  });
+});
+
+// #1321 (RF007 AC1, RNF029 C1): after multer writes the file, its leading
+// bytes must match the extension's format, or the upload is removed.
+describe('uploadConfig - verifyUploadedFileSignature', () => {
+  const written = [];
+
+  function writeTemp(name, content) {
+    const filePath = path.join(os.tmpdir(), `upload-config-${process.pid}-${written.length}-${Date.now()}-${name}`);
+    fs.writeFileSync(filePath, content);
+    written.push(filePath);
+    return filePath;
+  }
+
+  const buildRes = () => ({
+    status: vi.fn().mockReturnThis(),
+    json: vi.fn().mockReturnThis()
+  });
+
+  afterEach(() => {
+    while (written.length) {
+      const filePath = written.pop();
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    }
+  });
+
+  it('calls next for a .pdf that starts with a PDF header', () => {
+    const filePath = writeTemp('report.pdf', '%PDF-1.7\n');
+    const req = { file: { originalname: 'report.pdf', path: filePath } };
+    const res = buildRes();
+    const next = vi.fn();
+
+    uploadConfig.verifyUploadedFileSignature(req, res, next);
+
+    expect(next).toHaveBeenCalledWith();
+    expect(res.status).not.toHaveBeenCalled();
+    expect(fs.existsSync(filePath)).toBe(true);
+  });
+
+  it('answers 400 and removes a .pdf whose content is not a PDF', () => {
+    const filePath = writeTemp('report.pdf', 'hello');
+    const req = { file: { originalname: 'report.pdf', path: filePath } };
+    const res = buildRes();
+    const next = vi.fn();
+
+    uploadConfig.verifyUploadedFileSignature(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Invalid file content' });
+    expect(fs.existsSync(filePath)).toBe(false);
+  });
+
+  it('calls next when no file was uploaded', () => {
+    const res = buildRes();
+    const next = vi.fn();
+
+    uploadConfig.verifyUploadedFileSignature({}, res, next);
+
+    expect(next).toHaveBeenCalledWith();
+    expect(res.status).not.toHaveBeenCalled();
   });
 });
 

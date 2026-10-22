@@ -7,6 +7,7 @@ const logger = require('../utils/logger');
 const { getUserAnonId } = require('../utils/userAnonymization');
 const { encryptFileBuffer, decryptFileBuffer, computeChecksum, assertFileEncryptionConfigured } = require('../utils/fileCrypto');
 const { STORAGE_BASE } = require('../config/uploadConfig');
+const { isMimeAllowedForExtension, checkFileSignature } = require('../utils/uploadFormatPolicy');
 const { recordReplacement, discardVersion, resolveChangeReason } = require('../services/dataFileVersion.service');
 
 // #643 (RF007 AC#6/gate F3-G05): generalizes sample-file.controller.js's
@@ -86,10 +87,14 @@ function createLinkedFileController(opts) {
   });
 
   const fileFilter = (req, file, cb) => {
-    if (extensionOf(file.originalname)) {
-      cb(null, true);
-    } else {
+    const ext = extensionOf(file.originalname);
+    if (!ext) {
       cb(new Error(`Formato de arquivo inválido. Permitidos: ${ALLOWED_EXTENSIONS.join(', ')}`), false);
+    } else if (!isMimeAllowedForExtension(ext, file.mimetype)) {
+      // #1321 (RF007 AC1, RNF029 C1): the MIME must be allowed for the extension.
+      cb(new Error(`Tipo MIME ${file.mimetype} não permitido para a extensão ${ext}`), false);
+    } else {
+      cb(null, true);
     }
   };
 
@@ -101,6 +106,19 @@ function createLinkedFileController(opts) {
       handler(req, res, (err) => {
         if (err) {
           return res.status(400).json({ success: false, error: err.message || 'Erro ao processar upload do arquivo' });
+        }
+        // #1321 (RF007 AC1, RNF029 C1): the written file's leading bytes must
+        // match its extension's format. The upload is not yet recorded by
+        // any row, so removing it destroys no evidence.
+        if (req.file) {
+          const ext = extensionOf(req.file.originalname);
+          if (!checkFileSignature(req.file.path, ext).ok) {
+            cleanupUploadedFile(req);
+            return res.status(400).json({
+              success: false,
+              error: `Conteúdo do arquivo não corresponde ao formato ${ext}`
+            });
+          }
         }
         next();
       });

@@ -3,6 +3,8 @@ const fs = require('fs');
 const multer = require('multer');
 const { v4: uuidv4 } = require('uuid');
 const env = require('./env');
+const logger = require('../utils/logger');
+const { isMimeAllowedForExtension, checkFileSignature } = require('../utils/uploadFormatPolicy');
 
 // #893: read_only:true containers in compose.prod.yml have no writable
 // mount under /app, so a root anchored on __dirname (inside the install
@@ -57,33 +59,40 @@ const allowedExtensions = new Set([
   '.zip', '.rar'
 ]);
 
-const allowedMimeTypes = new Set([
-  'image/jpeg',
-  'image/png',
-  'application/pdf',
-  'application/zip',
-  'application/x-zip-compressed',
-  'application/vnd.rar',
-  'application/x-rar-compressed',
-  'text/csv',
-  'text/plain',
-  'application/octet-stream'
-]);
-
 const fileFilter = (req, file, cb) => {
   const ext = path.extname(file.originalname || '').toLowerCase();
   if (blockedExtensions.has(ext)) {
     return cb(new Error('File type not allowed'), false);
   }
 
-  const isAllowedExt = allowedExtensions.has(ext);
-  const isAllowedMime = allowedMimeTypes.has(file.mimetype);
-
-  if (!isAllowedExt && !isAllowedMime) {
+  // #1321 (RF007 AC1, RNF029 C1): the extension AND its MIME must both be
+  // allowed; the per-extension MIMEs live in uploadFormatPolicy.js.
+  if (!(allowedExtensions.has(ext) && isMimeAllowedForExtension(ext, file.mimetype))) {
     return cb(new Error('Invalid file type'), false);
   }
 
   return cb(null, true);
+};
+
+// #1321: runs after multer has written the file; its leading bytes must
+// match the extension's format. The upload just written is not yet recorded
+// by any row, so removing it destroys no evidence.
+const verifyUploadedFileSignature = (req, res, next) => {
+  if (!req.file) {
+    return next();
+  }
+  const ext = path.extname(req.file.originalname || '').toLowerCase();
+  if (checkFileSignature(req.file.path, ext).ok) {
+    return next();
+  }
+  if (fs.existsSync(req.file.path)) {
+    try {
+      fs.unlinkSync(req.file.path);
+    } catch (unlinkError) {
+      logger.error('Erro ao remover arquivo temporário:', unlinkError.message);
+    }
+  }
+  return res.status(400).json({ success: false, error: 'Invalid file content' });
 };
 
 const upload = multer({
@@ -96,6 +105,7 @@ module.exports = {
   upload,
   storage,
   fileFilter,
+  verifyUploadedFileSignature,
   UPLOAD_ROOT,
   UPLOADS_BASE,
   STORAGE_BASE

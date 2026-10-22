@@ -99,6 +99,38 @@ describe.each([
 
       expect(res.status).toBe(404);
     });
+
+    // #1321 (RF007 AC1, RNF029 C1): content and MIME are checked through the
+    // real multer before the handler looks the parent up.
+    it('returns 400 for a .csv whose head is a PE executable', async () => {
+      const findOne = vi.fn().mockResolvedValue({ [idField]: 'p-1' });
+      const parentColl = createCollectionMock({ findOne });
+      app.locals.db = createDbMock({ [parentCollection]: parentColl, ...rbacCollectionsAdmin });
+
+      const res = await request(app)
+        .post(`/api/${entity}/p-1/files/upload`)
+        .set('Authorization', `Bearer ${makeToken('qa-1', 4)}`)
+        .attach('file', Buffer.from([0x4d, 0x5a, 0x90, 0x00, 0x03]), 'data.csv');
+
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual({ success: false, error: 'Conteúdo do arquivo não corresponde ao formato .csv' });
+      expect(findOne).not.toHaveBeenCalled();
+    });
+
+    it('returns 400 for a .csv sent with a MIME of another format', async () => {
+      const findOne = vi.fn().mockResolvedValue({ [idField]: 'p-1' });
+      const parentColl = createCollectionMock({ findOne });
+      app.locals.db = createDbMock({ [parentCollection]: parentColl, ...rbacCollectionsAdmin });
+
+      const res = await request(app)
+        .post(`/api/${entity}/p-1/files/upload`)
+        .set('Authorization', `Bearer ${makeToken('qa-1', 4)}`)
+        .attach('file', Buffer.from('a,b,c'), { filename: 'data.csv', contentType: 'application/pdf' });
+
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual({ success: false, error: 'Tipo MIME application/pdf não permitido para a extensão .csv' });
+      expect(findOne).not.toHaveBeenCalled();
+    });
   });
 
   describe(`DELETE /api/${entity}/:id/files/:fileID`, () => {

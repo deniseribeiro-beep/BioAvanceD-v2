@@ -256,6 +256,26 @@ test.describe('Scientific files (RF007) — real backend', () => {
     expect(body.success).toBe(false);
   });
 
+  test('rejects a file whose content does not match its extension (AC#1, #1321)', async ({ request }) => {
+    const admin = await realLogin(request);
+    const sampleID = await createRealSample(request, admin.token);
+
+    const upload = await request.post(`${apiBaseURL}/api/samples/${sampleID}/files/upload`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      multipart: {
+        file: {
+          name: 'fake.pdf',
+          mimeType: 'application/pdf',
+          buffer: Buffer.from('not a pdf'),
+        },
+      },
+    });
+
+    expect(upload.status()).toBe(400);
+    const body = await upload.json();
+    expect(body.success).toBe(false);
+  });
+
   test('rejects a file over the configured size limit (AC#2)', async ({ request }) => {
     const admin = await realLogin(request);
     const sampleID = await createRealSample(request, admin.token);

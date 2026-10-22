@@ -8,6 +8,8 @@ const SampleFileModel = require('../../src/models/SampleFile');
 const hl7Service = require('../../src/services/hl7.service');
 const auditLogger = require('../../src/utils/auditLogger');
 const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const { ObjectId } = require('mongodb');
 
 function createRes() {
@@ -113,9 +115,18 @@ describe('sample-file.controller', () => {
     it('fileFilter accepts allowed extensions', () => {
       const cb = vi.fn();
 
-      controller.fileFilter({}, { originalname: 'data.csv' }, cb);
+      controller.fileFilter({}, { originalname: 'data.csv', mimetype: 'text/csv' }, cb);
 
       expect(cb).toHaveBeenCalledWith(null, true);
+    });
+
+    it('fileFilter rejects an allowed extension whose mimetype is not allowed for it (#1321)', () => {
+      const cb = vi.fn();
+
+      controller.fileFilter({}, { originalname: 'data.csv', mimetype: 'application/pdf' }, cb);
+
+      expect(cb).toHaveBeenCalledWith(expect.any(Error), false);
+      expect(cb.mock.calls[0][0].message).toBe('Tipo MIME application/pdf não permitido para a extensão .csv');
     });
 
     it('fileFilter rejects disallowed extensions', () => {
@@ -131,6 +142,57 @@ describe('sample-file.controller', () => {
     it('returns a middleware function bound to the single file field', () => {
       const mw = controller.uploadMiddleware();
       expect(typeof mw).toBe('function');
+    });
+
+    // #1321 (RF007 AC1, RNF029 C1): the written file's leading bytes must
+    // match its extension's format, or the upload is removed.
+    describe('content signature (#1321)', () => {
+      const written = [];
+
+      function runWithUploadedFile(originalname, content) {
+        const filePath = path.join(os.tmpdir(), `sample-file-${process.pid}-${written.length}-${Date.now()}-${originalname}`);
+        fs.writeFileSync(filePath, content);
+        written.push(filePath);
+        const fresh = new controller.constructor();
+        fresh.upload = {
+          single: () => (req, res, cb) => {
+            req.file = { originalname, path: filePath };
+            cb();
+          }
+        };
+        const req = {};
+        const res = createRes();
+        const next = vi.fn();
+        fresh.uploadMiddleware()(req, res, next);
+        return { filePath, res, next };
+      }
+
+      afterEach(() => {
+        while (written.length) {
+          const filePath = written.pop();
+          if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+        }
+      });
+
+      it('answers 400 and removes a .csv whose head is a PE executable', () => {
+        const { filePath, res, next } = runWithUploadedFile('data.csv', Buffer.from([0x4d, 0x5a, 0x90, 0x00, 0x03]));
+
+        expect(next).not.toHaveBeenCalled();
+        expect(res.status).toHaveBeenCalledWith(400);
+        expect(res.json).toHaveBeenCalledWith({
+          success: false,
+          error: 'Conteúdo do arquivo não corresponde ao formato .csv'
+        });
+        expect(fs.existsSync(filePath)).toBe(false);
+      });
+
+      it('calls next for a real CSV', () => {
+        const { filePath, res, next } = runWithUploadedFile('data.csv', 'a,b,c\n1,2,3\n');
+
+        expect(next).toHaveBeenCalledWith();
+        expect(res.status).not.toHaveBeenCalled();
+        expect(fs.existsSync(filePath)).toBe(true);
+      });
     });
   });
 

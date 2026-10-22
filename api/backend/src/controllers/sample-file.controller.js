@@ -13,6 +13,7 @@ const { isSampleInOrganizationScope } = require('../services/sampleTenancy.servi
 // implementation -- see fileCrypto.js for the RF007/RNF029 rationale.
 const { encryptFileBuffer, decryptFileBuffer, computeChecksum, assertFileEncryptionConfigured } = require('../utils/fileCrypto');
 const { STORAGE_BASE } = require('../config/uploadConfig');
+const { isMimeAllowedForExtension, checkFileSignature } = require('../utils/uploadFormatPolicy');
 const { recordReplacement, discardVersion, resolveChangeReason } = require('../services/dataFileVersion.service');
 
 /**
@@ -66,10 +67,13 @@ class SampleFileController {
       const allowedExtensions = ['.raw', '.zip', '.csv', '.xls', '.xlsx', '.pdf', '.txt'];
       const ext = path.extname(file.originalname).toLowerCase();
 
-      if (allowedExtensions.includes(ext)) {
-        cb(null, true);
-      } else {
+      if (!allowedExtensions.includes(ext)) {
         cb(new Error(`Formato de arquivo inválido. Apenas ${allowedExtensions.join(', ')} são permitidos.`), false);
+      } else if (!isMimeAllowedForExtension(ext, file.mimetype)) {
+        // #1321 (RF007 AC1, RNF029 C1): the MIME must be allowed for the extension.
+        cb(new Error(`Tipo MIME ${file.mimetype} não permitido para a extensão ${ext}`), false);
+      } else {
+        cb(null, true);
       }
     };
 
@@ -98,6 +102,25 @@ class SampleFileController {
             success: false,
             error: err.message || (req.t ? req.t('sampleFiles.uploadError') : 'Erro ao processar upload do arquivo')
           });
+        }
+        // #1321 (RF007 AC1, RNF029 C1): the written file's leading bytes must
+        // match its extension's format. The upload is not yet recorded by
+        // any row, so removing it destroys no evidence.
+        if (req.file) {
+          const ext = path.extname(req.file.originalname || '').toLowerCase();
+          if (!checkFileSignature(req.file.path, ext).ok) {
+            if (fs.existsSync(req.file.path)) {
+              try {
+                fs.unlinkSync(req.file.path);
+              } catch (unlinkError) {
+                logger.error('Erro ao remover arquivo após validação:', unlinkError.message);
+              }
+            }
+            return res.status(400).json({
+              success: false,
+              error: `Conteúdo do arquivo não corresponde ao formato ${ext}`
+            });
+          }
         }
         next();
       });
