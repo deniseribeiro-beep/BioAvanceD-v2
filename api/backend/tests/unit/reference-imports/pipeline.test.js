@@ -1,5 +1,9 @@
-import { describe, it, expect } from 'vitest';
-const { runImport, rollbackRelease } = require('../../../src/reference-data/reference-imports/pipeline');
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const crypto = require('crypto');
+const { runImport: runImportUnderTest, rollbackRelease } = require('../../../src/reference-data/reference-imports/pipeline');
 const hpoSource = require('../../../src/reference-data/reference-imports/sources/hpo');
 const { normalizeRecord } = require('../../../src/reference-data/reference-imports/normalizeHpo');
 
@@ -85,6 +89,16 @@ function createFakeDb() {
 }
 
 describe('reference-imports pipeline runImport (HPO)', () => {
+  // Every case stores its assets under a tmp root, never under STORAGE_BASE.
+  let storageRoot;
+  const runImport = (opts) => runImportUnderTest({ assetStorageRoot: storageRoot, ...opts });
+  beforeEach(() => {
+    storageRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ref-assets-'));
+  });
+  afterEach(() => {
+    fs.rmSync(storageRoot, { recursive: true, force: true });
+  });
+
   it('promotes the bundled HPO sample end to end on first run', async () => {
     const fakeDb = createFakeDb();
 
@@ -386,6 +400,159 @@ describe('reference-imports pipeline runImport (HPO)', () => {
         referenceDatasetReleaseId: 'unresolved',
       });
       expect(issues[0].errorMessage).toContain('retrievalUri');
+    });
+  });
+
+  describe('asset preservation (RF028 AC2)', () => {
+    const sha256 = (filePath) => crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+    const assetDir = () => path.join(storageRoot, 'reference-releases', hpoSource.datasetCode, 'sha256');
+    const assetPath = () => path.join(assetDir(), hpoSource.expectedChecksum);
+
+    const expectAssetFailure = (fakeDb, result) => {
+      expect(result.approved).toBe(false);
+      expect(result.assetUri).toBeNull();
+      const releases = fakeDb.collections.referenceDatasetReleases.docs;
+      expect(releases).toHaveLength(1);
+      // The content was never judged, so the release keeps its status.
+      expect(releases[0].releaseStatus).toBe('downloaded');
+      const releaseId = releases[0].referenceDatasetReleaseId;
+      expect(result.releaseId).toBe(releaseId);
+      const runs = fakeDb.collections.referenceImportRuns.docs;
+      expect(runs).toHaveLength(1);
+      expect(runs[0]).toMatchObject({ runStatus: 'failed', referenceDatasetReleaseId: releaseId });
+      const issues = fakeDb.collections.referenceImportIssues.docs;
+      expect(issues).toHaveLength(1);
+      expect(issues[0]).toMatchObject({
+        entityType: 'ReferenceDatasetRelease',
+        errorCode: 'ASSET_PRESERVATION_FAILED',
+        severity: 'fatal',
+        referenceDatasetReleaseId: releaseId,
+        rawValue: { assetUri: `objstore://reference-releases/HPO/sha256/${hpoSource.expectedChecksum}`, checksum: hpoSource.expectedChecksum },
+      });
+      expect(fakeDb.collections.referenceImportStaging.docs).toHaveLength(0);
+      expect(fakeDb.collections.terminologyConcepts.docs).toHaveLength(0);
+    };
+
+    it('a full run stores the asset before its first staging write, content-addressed by the release checksum', async () => {
+      const fakeDb = createFakeDb();
+      const staging = fakeDb.collections.referenceImportStaging;
+      const { insertMany } = staging;
+      let storedAtFirstStage = null;
+      staging.insertMany = async (newDocs) => {
+        if (storedAtFirstStage === null) storedAtFirstStage = fs.existsSync(assetPath());
+        return insertMany.call(staging, newDocs);
+      };
+
+      const result = await runImport({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor' });
+
+      expect(storedAtFirstStage).toBe(true);
+      const release = fakeDb.collections.referenceDatasetReleases.docs[0];
+      expect(sha256(assetPath())).toBe(release.sourceChecksum);
+      expect(result.assetUri).toBe('objstore://reference-releases/HPO/sha256/' + hpoSource.expectedChecksum);
+      expect(fs.readdirSync(assetDir())).toEqual([hpoSource.expectedChecksum]);
+      expect(result.approved).toBe(true);
+    });
+
+    it.each([
+      ['a dry run', { dryRun: true }],
+      ['a checksum mismatch', { source: { ...hpoSource, expectedChecksum: 'sha256-does-not-match' } }],
+    ])('%s preserves nothing', async (_label, overrides) => {
+      const fakeDb = createFakeDb();
+
+      const result = await runImport({ db: fakeDb, source: hpoSource, normalizeRecord, ...overrides });
+
+      expect(result.assetUri).toBeNull();
+      expect(fs.existsSync(path.join(storageRoot, 'reference-releases'))).toBe(false);
+    });
+
+    it('a second full run of content-identical source reuses the stored object', async () => {
+      const fakeDb = createFakeDb();
+
+      const first = await runImport({ db: fakeDb, source: { ...hpoSource, datasetVersion: 'v1' }, normalizeRecord });
+      const bytesAfterFirst = fs.readFileSync(assetPath());
+      const second = await runImport({ db: fakeDb, source: { ...hpoSource, datasetVersion: 'v2' }, normalizeRecord });
+
+      expect(second.idempotent).toBe(false);
+      expect(second.approved).toBe(true);
+      expect(second.assetUri).toBe(first.assetUri);
+      expect(fs.readFileSync(assetPath()).equals(bytesAfterFirst)).toBe(true);
+      expect(fs.readdirSync(assetDir())).toEqual([hpoSource.expectedChecksum]);
+    });
+
+    it('a stored object with other bytes fails the run and is left unchanged', async () => {
+      const fakeDb = createFakeDb();
+      fs.mkdirSync(assetDir(), { recursive: true });
+      fs.writeFileSync(assetPath(), 'not the HPO release');
+
+      const result = await runImport({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor' });
+
+      expectAssetFailure(fakeDb, result);
+      expect(fs.readFileSync(assetPath(), 'utf8')).toBe('not the HPO release');
+      expect(fs.readdirSync(assetDir())).toEqual([hpoSource.expectedChecksum]);
+    });
+
+    it('an unwritable storage root fails the run without throwing', async () => {
+      const fakeDb = createFakeDb();
+      const fileRoot = path.join(storageRoot, 'a-regular-file');
+      fs.writeFileSync(fileRoot, 'x');
+
+      const result = await runImportUnderTest({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor', assetStorageRoot: fileRoot });
+
+      expectAssetFailure(fakeDb, result);
+      expect(fs.readFileSync(fileRoot, 'utf8')).toBe('x');
+    });
+
+    it('a run after an asset-preservation failure retries and completes', async () => {
+      const fakeDb = createFakeDb();
+      const assetRoot = path.join(storageRoot, 'asset-root');
+      fs.writeFileSync(assetRoot, 'x');
+      const failed = await runImportUnderTest({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor', assetStorageRoot: assetRoot });
+      expectAssetFailure(fakeDb, failed);
+      fs.rmSync(assetRoot);
+      fs.mkdirSync(assetRoot);
+
+      const retried = await runImportUnderTest({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor', assetStorageRoot: assetRoot });
+
+      expect(retried.idempotent).toBe(false);
+      expect(retried.approved).toBe(true);
+      expect(retried.run.referenceImportRunId).toBe(failed.run.referenceImportRunId);
+      expect(retried.run.runStatus).toBe('completed');
+      expect(retried.releaseId).toBe(failed.releaseId);
+      const runs = fakeDb.collections.referenceImportRuns.docs.filter(
+        (run) => run.idempotencyKey === failed.run.idempotencyKey && run.importMode === 'full',
+      );
+      expect(runs).toHaveLength(1);
+      expect(runs[0].runStatus).toBe('completed');
+      const releases = fakeDb.collections.referenceDatasetReleases.docs;
+      expect(releases).toHaveLength(1);
+      expect(releases[0].releaseStatus).toBe('active');
+      const stored = path.join(assetRoot, 'reference-releases', hpoSource.datasetCode, 'sha256', hpoSource.expectedChecksum);
+      expect(sha256(stored)).toBe(hpoSource.expectedChecksum);
+      expect(fakeDb.collections.terminologyConcepts.docs).toHaveLength(8);
+    });
+
+    it('a failed run with a fatal issue other than ASSET_PRESERVATION_FAILED still short-circuits', async () => {
+      const fakeDb = createFakeDb();
+      const seeded = {
+        referenceImportRunId: 'seeded-failed-run',
+        referenceDatasetReleaseId: null,
+        datasetCode: hpoSource.datasetCode,
+        importMode: 'full',
+        idempotencyKey: `${hpoSource.datasetCode}:${hpoSource.datasetVersion}:sha256:${hpoSource.expectedChecksum}`,
+        runStatus: 'failed',
+      };
+      fakeDb.collections.referenceImportRuns.docs.push(seeded);
+      fakeDb.collections.referenceImportIssues.docs.push(
+        { referenceImportRunId: seeded.referenceImportRunId, errorCode: 'ASSET_PRESERVATION_FAILED', severity: 'fatal' },
+        { referenceImportRunId: seeded.referenceImportRunId, errorCode: 'RELEASE_REGISTRATION_INVALID', severity: 'fatal' },
+      );
+
+      const result = await runImport({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor' });
+
+      expect(result.idempotent).toBe(true);
+      expect(result.run).toBe(seeded);
+      expect(fakeDb.collections.referenceDatasetReleases.docs).toHaveLength(0);
+      expect(fs.existsSync(path.join(storageRoot, 'reference-releases'))).toBe(false);
     });
   });
 

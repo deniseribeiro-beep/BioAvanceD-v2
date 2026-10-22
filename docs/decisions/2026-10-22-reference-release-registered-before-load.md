@@ -32,7 +32,7 @@ The idempotent short-circuit, the checksum branch and `rollbackRelease` are unch
 
 Later slices of #1319:
 
-- **Asset preservation in object storage** (RF028 AC2).
+- **Asset preservation in object storage** (RF028 AC2): decided in `2026-10-22-reference-release-asset-preserved.md`.
 - **The coverage manifest and the DataQualityAssessment of a release** (RF028 AC6, AC7).
 - **Explicit promotion, a rollback route and the AuditEvent of each** (RF028 AC8, AC9).
 - **Dictionary V2E-0489..0491.**
