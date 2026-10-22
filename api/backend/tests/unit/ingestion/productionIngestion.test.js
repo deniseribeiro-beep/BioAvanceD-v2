@@ -18,6 +18,7 @@ function seededDb({ release = { canonicalModelReleaseId: 'release-2.0.0', releas
     security_config: config ? [config] : [],
     datasets: [],
     workflowRuns: [],
+    omicsQualifications: [],
     ingestionQuarantineRecords: [],
     ingestionIdempotencyKeys: [],
     missingDataReasons: [],
@@ -57,6 +58,7 @@ const WORKFLOW_RUN = {
   hardwareProfile: { cpu: 'synthetic' },
   environmentManifestUri: 'object://synthetic/environment.json',
 };
+const OMICS_QUALIFICATION = { targetAssay: 'assay-wgs-1', qcRuleSetVersion: 'qc-1.0', qcMetrics: [{ name: 'q30', value: 0.92 }], qualificationDecision: 'eligible' };
 
 function ingest(db, overrides = {}) {
   return ingestAndPersist({
@@ -295,9 +297,10 @@ describe('ingestion/productionIngestion ingestAndPersist (RF029, #1318)', () => 
   });
 
   // Two concurrent calls with one key on the sequential path.
-  async function raceOnOneKey() {
+  async function raceOnOneKey({ entityType = 'Dataset', payload = DATASET, collection = 'datasets' } = {}) {
     const db = seededDb();
     db.collections.datasets = createMatchingCollection([]);
+    db.collections.omicsQualifications = createMatchingCollection([]);
     db.collections.graph_projection_outbox = createMatchingCollection([]);
     db.collections.missingDataReasons = createMatchingCollection([]);
     db.collections.dataQualityAssessments = createMatchingCollection([]);
@@ -313,11 +316,11 @@ describe('ingestion/productionIngestion ingestAndPersist (RF029, #1318)', () => 
     };
 
     const [a, b] = await Promise.all([
-      ingest(db, { outbox, idempotencyKey: 'key-race' }),
-      ingest(db, { outbox, idempotencyKey: 'key-race' }),
+      ingest(db, { outbox, entityType, payload, idempotencyKey: 'key-race' }),
+      ingest(db, { outbox, entityType, payload, idempotencyKey: 'key-race' }),
     ]);
     const [winner, loser] = a.status === 'accepted' ? [a, b] : [b, a];
-    return { db, winner, loser };
+    return { db, winner, loser, docs: db.collections[collection].docs };
   }
 
   it('14. without a session, two concurrent calls with one key leave one document and one outbox event, and the loser replays the winner', async () => {
@@ -336,6 +339,18 @@ describe('ingestion/productionIngestion ingestAndPersist (RF029, #1318)', () => 
     expect(winner.status).toBe('accepted');
     expect(db.collections.dataQualityAssessments.docs.map((d) => [d.dataQualityAssessmentId, d.scopeId]))
       .toEqual([[winner.dataQualityAssessmentId, `Dataset/${winner.entityId}`]]);
+  });
+
+  it('14c. without a session, a concurrent OmicsQualification loser leaves no document, event, MissingDataReason or assessment of its own', async () => {
+    const { db, winner, loser, docs } = await raceOnOneKey({ entityType: 'OmicsQualification', payload: OMICS_QUALIFICATION, collection: 'omicsQualifications' });
+
+    expect(winner.status).toBe('accepted');
+    expect(loser).toEqual({ status: 'idempotent_replay', outcome: 'accepted', entityType: 'OmicsQualification', resultRef: winner.entityId, canonicalModelReleaseId: 'release-2.0.0', configurationReleaseId: 'cfg-release-7' });
+    expect(docs.map((d) => d.omicsQualificationId)).toEqual([winner.entityId]);
+    expect(db.collections.graph_projection_outbox.docs.map((e) => e.eventId)).toEqual([winner.outboxEventId]);
+    expect(db.collections.missingDataReasons.docs.map((r) => r.entityId)).toEqual([winner.entityId]);
+    expect(db.collections.dataQualityAssessments.docs.map((d) => [d.dataQualityAssessmentId, d.scopeId]))
+      .toEqual([[winner.dataQualityAssessmentId, `OmicsQualification/${winner.entityId}`]]);
   });
 
   it('15. a declared reasonCode is stored as declared, the other absent fields as unknown', async () => {
@@ -442,5 +457,73 @@ describe('ingestion/productionIngestion ingestAndPersist (RF029, #1318)', () => 
     expect(resultOf(byId[first.dataQualityAssessmentId], 'uniqueness').value).toBe(1);
     expect(resultOf(byId[second.dataQualityAssessmentId], 'uniqueness').value).toBe(0);
     expect(byId[second.dataQualityAssessmentId].status).toBe('failed');
+  });
+
+  it('22. an accepted OmicsQualification is inserted with a server uuid, a MissingDataReason for limitations and a 4/4 assessment', async () => {
+    const db = seededDb();
+    const outbox = fakeOutbox();
+
+    const result = await ingest(db, { outbox, entityType: 'OmicsQualification', payload: OMICS_QUALIFICATION });
+
+    expect(result).toMatchObject({ status: 'accepted', entityType: 'OmicsQualification', outboxEventId: 'evt-1' });
+    expect(result.entityId).toMatch(UUID);
+    expect(db.collections.omicsQualifications.docs).toHaveLength(1);
+    expect(db.collections.omicsQualifications.docs[0]).toMatchObject({
+      omicsQualificationId: result.entityId,
+      targetAssay: 'assay-wgs-1',
+      createdBy: 'Actor/u-1',
+      canonicalModelReleaseId: 'release-2.0.0',
+      configurationReleaseId: 'cfg-release-7',
+      limitations: null,
+    });
+    expect(outbox.appendEvent).toHaveBeenCalledTimes(1);
+    expect(outbox.appendEvent.mock.calls[0][1]).toMatchObject({ eventType: 'INGESTION_RECORD_PERSISTED', aggregateType: 'OmicsQualification', aggregateId: result.entityId });
+    const rows = db.collections.missingDataReasons.docs;
+    expect(rows.map((r) => [r.fieldPath, r.reasonCode])).toEqual([['limitations', 'unknown']]);
+    expect(rows[0]).toMatchObject({ entityType: 'OmicsQualification', entityId: result.entityId, sourceEventId: 'evt-1' });
+    const docs = db.collections.dataQualityAssessments.docs;
+    expect(docs).toHaveLength(1);
+    expect(docs[0]).toMatchObject({ dataQualityAssessmentId: result.dataQualityAssessmentId, scopeId: `OmicsQualification/${result.entityId}`, status: 'passed' });
+    expect(resultOf(docs[0], 'completeness')).toEqual({ metric: 'completeness', value: 1, numerator: 4, denominator: 4 });
+  });
+
+  it('23. a declared reasonCode on an OmicsQualification\'s limitations is stored as declared', async () => {
+    const db = seededDb();
+
+    const result = await ingest(db, { entityType: 'OmicsQualification', payload: OMICS_QUALIFICATION, missingDataReasons: [{ fieldPath: 'limitations', reasonCode: 'not_applicable' }] });
+
+    expect(result.status).toBe('accepted');
+    expect(db.collections.missingDataReasons.docs.map((r) => [r.fieldPath, r.reasonCode])).toEqual([['limitations', 'not_applicable']]);
+    expect(result.missingDataReasons.map((r) => [r.fieldPath, r.reasonCode])).toEqual([['limitations', 'not_applicable']]);
+  });
+
+  it('24. an OmicsQualification declaring a reason on a present limitations quarantines with MISSING_REASON_FIELD_PRESENT, with no insert, no append and no rows', async () => {
+    const db = seededDb();
+    const outbox = fakeOutbox();
+
+    const result = await ingest(db, { outbox, entityType: 'OmicsQualification', payload: { ...OMICS_QUALIFICATION, limitations: 'n/a' }, missingDataReasons: [{ fieldPath: 'limitations', reasonCode: 'not_applicable' }] });
+
+    expect(result.status).toBe('quarantined');
+    expect(result.violations).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'MISSING_REASON_FIELD_PRESENT', field: 'missingDataReasons[0]' })]));
+    expect(db.collections.omicsQualifications.docs).toHaveLength(0);
+    expect(db.collections.missingDataReasons.docs).toHaveLength(0);
+    expect(outbox.appendEvent).not.toHaveBeenCalled();
+  });
+
+  it('24b. an OmicsQualification without qcRuleSetVersion quarantines with no insert, no append and no rows, and a failed 3/4 assessment', async () => {
+    const db = seededDb();
+    const outbox = fakeOutbox();
+    const { qcRuleSetVersion, ...withoutQcRuleSetVersion } = OMICS_QUALIFICATION;
+
+    const result = await ingest(db, { outbox, entityType: 'OmicsQualification', payload: withoutQcRuleSetVersion });
+
+    expect(result.status).toBe('quarantined');
+    expect(db.collections.omicsQualifications.docs).toHaveLength(0);
+    expect(db.collections.missingDataReasons.docs).toHaveLength(0);
+    expect(outbox.appendEvent).not.toHaveBeenCalled();
+    const docs = db.collections.dataQualityAssessments.docs;
+    expect(docs).toHaveLength(1);
+    expect(docs[0]).toMatchObject({ scopeId: `IngestionQuarantineRecord/${result.ingestionQuarantineRecordId}`, status: 'failed' });
+    expect(resultOf(docs[0], 'completeness')).toEqual({ metric: 'completeness', value: 0.75, numerator: 3, denominator: 4 });
   });
 });

@@ -45,6 +45,7 @@ function givenDb({ extraUsers = [], releaseStatus = 'active' } = {}) {
     canonicalModelReleases: createMatchingCollection([{ canonicalModelReleaseId: 'release-2.0.0', releaseStatus }]),
     security_config: createMatchingCollection([{ _id: 'main', configurationReleaseId: 'cfg-release-7' }]),
     datasets: createMatchingCollection([]),
+    omicsQualifications: createMatchingCollection([]),
     ingestionQuarantineRecords: createMatchingCollection([]),
     ingestionIdempotencyKeys: createFakeCollection([]),
     missingDataReasons: createMatchingCollection([]),
@@ -62,6 +63,7 @@ const PROVENANCE = {
   sourceRecordId: 'LIMS-DS-42',
 };
 const DATASET = { datasetTitle: 'Coorte A', datasetVersion: '1.0', creators: ['Equipe A'], license: 'CC-BY-4.0' };
+const OMICS_QUALIFICATION = { targetAssay: 'assay-wgs-1', qcRuleSetVersion: 'qc-1.0', qcMetrics: [{ name: 'q30', value: 0.92 }], qualificationDecision: 'eligible' };
 
 function post(body, caller) {
   return request(app).post('/api/ingestion/records').set('Authorization', `Bearer ${token(caller)}`).send(body);
@@ -111,6 +113,41 @@ describe('POST /api/ingestion/records (RF029, #1318)', () => {
     expect(rows.every((r) => r.entityType === 'Dataset' && r.entityId === res.body.entityId && r.canonicalModelReleaseId === 'release-2.0.0')).toBe(true);
     expect(stores.missingDataReasons.insertOne).toHaveBeenCalledWith(expect.any(Object), { session: app.locals.db.session });
     expect(res.body.missingDataReasons).toEqual(rows.map(({ missingDataReasonId, fieldPath, reasonCode }) => ({ missingDataReasonId, fieldPath, reasonCode })));
+  });
+
+  it('201: an accepted OmicsQualification is persisted with its outbox event in one session and one INGESTION_ACCEPTED row (RF029 AC10)', async () => {
+    const stores = givenDb();
+
+    const res = await post({ entityType: 'OmicsQualification', payload: OMICS_QUALIFICATION, provenance: PROVENANCE });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(res.body).toMatchObject({ success: true, status: 'accepted', entityType: 'OmicsQualification' });
+    expect(stores.omicsQualifications.docs.map((d) => d.omicsQualificationId)).toEqual([res.body.entityId]);
+    const session = app.locals.db.session;
+    expect(stores.omicsQualifications.insertOne).toHaveBeenCalledWith(expect.any(Object), { session });
+    const appended = stores.graph_projection_outbox.updateOne.mock.calls.find(([, update]) => update?.$setOnInsert?.eventType === 'INGESTION_RECORD_PERSISTED');
+    expect(appended[1].$setOnInsert).toMatchObject({ aggregateType: 'OmicsQualification', aggregateId: res.body.entityId });
+    expect(ingestionAuditRows()).toEqual([expect.objectContaining({
+      action: 'INGESTION_ACCEPTED',
+      resourceType: 'OmicsQualification',
+      resourceId: res.body.entityId,
+    })]);
+  });
+
+  it('422: an OmicsQualification without qcRuleSetVersion quarantines, persists no document, and writes one INGESTION_QUARANTINED row', async () => {
+    const stores = givenDb();
+    const { qcRuleSetVersion, ...withoutQcRuleSetVersion } = OMICS_QUALIFICATION;
+
+    const res = await post({ entityType: 'OmicsQualification', payload: withoutQcRuleSetVersion, provenance: PROVENANCE });
+
+    expect(res.status).toBe(422);
+    expect(res.body).toMatchObject({ success: false, error: 'INGESTION_QUARANTINED' });
+    expect(stores.omicsQualifications.docs).toHaveLength(0);
+    expect(ingestionAuditRows()).toEqual([expect.objectContaining({
+      action: 'INGESTION_QUARANTINED',
+      resourceType: 'OmicsQualification',
+      resourceId: res.body.ingestionQuarantineRecordId,
+    })]);
   });
 
   it('422: a missing provenance field quarantines, with details and the quarantine record id', async () => {

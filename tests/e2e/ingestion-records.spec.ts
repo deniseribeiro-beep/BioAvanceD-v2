@@ -173,6 +173,42 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
     expect(await findIngestionAuditRows('INGESTION_ACCEPTED', body.entityId)).toHaveLength(1);
   });
 
+  test('an accepted OmicsQualification is stored in its collection with its outbox event, a MissingDataReason for limitations, and one INGESTION_ACCEPTED row', async ({ request }) => {
+    const sourceRecordId = `rf029-e2e-${Date.now()}-omics-qualification`;
+
+    const res = await ingest(request, {
+      entityType: 'OmicsQualification',
+      payload: {
+        targetAssay: 'assay-wgs-1',
+        qcRuleSetVersion: 'qc-1.0',
+        qcMetrics: [{ name: 'q30', value: 0.92 }],
+        qualificationDecision: 'eligible',
+      },
+      provenance: provenance(sourceRecordId),
+    });
+
+    expect(res.status(), await res.text()).toBe(201);
+    const body = await res.json();
+    expect(body).toMatchObject({ success: true, status: 'accepted', entityType: 'OmicsQualification' });
+
+    const stored = await findIngestedRecord('omicsQualifications', 'omicsQualificationId', body.entityId);
+    expect(stored).toMatchObject({ createdBy: `Actor/${admin.user._id}`, sourceRecordId, limitations: null });
+
+    const events = await findOutboxEvents(body.entityId);
+    expect(events).toHaveLength(1);
+    expect(events[0].aggregateType).toBe('OmicsQualification');
+
+    const reasons = await findMissingDataReasons('OmicsQualification', body.entityId);
+    expect(reasons.map((row) => [row.fieldPath, row.reasonCode])).toEqual([['limitations', 'unknown']]);
+
+    const assessment = await findDataQualityAssessment(body.dataQualityAssessmentId);
+    expect(assessment?.scopeId).toBe(`OmicsQualification/${body.entityId}`);
+
+    const rows = await findIngestionAuditRows('INGESTION_ACCEPTED', body.entityId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].resourceType).toBe('OmicsQualification');
+  });
+
   test('a quarantined record retried with the same key answers 422 again and writes no second quarantine record', async ({ request }) => {
     const sourceRecordId = `rf029-e2e-${Date.now()}-quarantine`;
     const idempotencyKey = `rf029-e2e-q-${Date.now()}`;

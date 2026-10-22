@@ -7,6 +7,9 @@
  * the id field: an absent one gets a MissingDataReason (RF029 AC7,
  * missingness.js).
  *
+ * OmicsQualification is the third target, a MongoDB entity like the other
+ * two (docs/decisions/2026-10-23-ingestion-omics-qualification-target.md).
+ *
  * Telemetry and binaries are deliberately absent: they have their own stores
  * and paths, and a later slice names them in the refusal.
  */
@@ -26,6 +29,14 @@ const INGESTION_TARGETS = Object.freeze({
     idField: 'workflowRunId',
     model: require('../models/WorkflowRun'),
     missingnessFields: Object.freeze(['containerImageDigest', 'softwareDependencies', 'parameters', 'inputFileIds', 'outputFileIds', 'completedAt', 'randomSeed', 'datasetSnapshotId']),
+  }),
+  OmicsQualification: Object.freeze({
+    schemaId: 'canonical.v1.omicsQualification',
+    store: 'mongodb',
+    collection: 'omicsQualifications',
+    idField: 'omicsQualificationId',
+    model: require('../models/OmicsQualification'),
+    missingnessFields: Object.freeze(['limitations']),
   }),
 });
 
