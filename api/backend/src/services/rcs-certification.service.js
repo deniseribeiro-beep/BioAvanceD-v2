@@ -78,9 +78,38 @@ function normalizeWorkflowRule(value) {
   return normalizeString(value).toLowerCase();
 }
 
+// RF018 AC3 (#1320): every payload key certify() reads, through
+// normalizeSprec, detectMatrixType, evaluateGovernance and
+// resolveWorkflowRule. readInput keeps exactly these, so certify(readInput(p))
+// recalculates certify(p) and no other payload key is frozen.
+const READ_KEYS = Object.freeze([
+  'matrix_type', 'matrixType', 'sampleType', 'sampleOrigin', 'sprec',
+  'documentationSufficient', 'documentation_insufficient',
+  'traceabilitySufficient', 'traceability_insufficient', 'traceabilityBroken',
+  'monitoringRequired', 'monitoring_required', 'monitoringPresent', 'monitoring_present',
+  'semanticIncompatibility', 'semantic_incompatibility', 'workflow_context', 'workflowContext',
+  'primaryCentrifugationApplicable', 'secondCentrifugationRequired',
+  ...[...new Set(Object.values(AXES).flat().map((axis) => axis.axis_code))]
+    .flatMap((axisCode) => [`${axisCode}_workflow_rule`, `${axisCode}WorkflowRule`]),
+]);
+
 class RcsCertificationService {
   constructor(data = referenceData) {
     this.data = data;
+  }
+
+  // The input certify() is computed from, as a JSON-safe deep copy: the same
+  // `sample` wrapper rule as certify, then only the READ_KEYS present.
+  readInput(payload = {}) {
+    const normalizedPayload = normalizeObject(payload);
+    const samplePayload = Object.keys(normalizeObject(normalizedPayload.sample)).length
+      ? normalizeObject(normalizedPayload.sample)
+      : normalizedPayload;
+    const input = {};
+    for (const key of READ_KEYS) {
+      if (samplePayload[key] !== undefined) input[key] = samplePayload[key];
+    }
+    return JSON.parse(JSON.stringify(input));
   }
 
   certify(payload = {}) {

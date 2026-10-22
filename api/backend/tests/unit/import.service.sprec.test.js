@@ -197,10 +197,12 @@ describe('ImportService SPREC import', () => {
     db.collection = (name) => {
       if (name === 'samples') return samplesCollection;
       if (name === 'rcsAssessments') return rcsAssessmentsCollection;
+      // #1320: recordAssessment first freezes the RCS input in its own collection.
+      if (name === 'rcsInputSnapshots') return { insertOne: vi.fn().mockResolvedValue({ insertedId: 'snapshot-1' }), deleteOne: vi.fn() };
       throw new Error(`Unexpected collection name: ${name}`);
     };
 
-    const csvPath = path.join(tempDir, 'samples-rcs-assessment.csv');
+  const csvPath = path.join(tempDir, 'samples-rcs-assessment.csv');
     const csvContent = [
       'participantId,sampleType,sampleOrigin,extractionProtocol,quantity,quality,registeredAt,linkedProject,sprec_matrix_type,sprec_sample_type,sprec_primary_container,sprec_pre_centrifugation,sprec_centrifugation,sprec_second_centrifugation,sprec_post_centrifugation_delay,sprec_long_term_storage',
       '12345678,PLASMA,VENOUS_BLOOD,TUBE_EDTA,1.5,GOOD,2026-01-01,Projeto QA,fluid,BLD,PED,C,A,D,E,F',

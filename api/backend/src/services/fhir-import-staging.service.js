@@ -551,6 +551,8 @@ function normalizeSpecimen(specimen, index, bundleIndex) {
         axis_penalties: rcsPreview.axis_penalties || [],
         calculation_trace: rcsPreview.calculation_trace || {},
         sprec: rcsPreview.sprec || {},
+        matrix_type: rcsPreview.matrix_type,
+        rcs_input: rcsPreview.rcs_input ?? null,
       },
       consentSigned,
     },

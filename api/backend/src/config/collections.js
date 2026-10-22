@@ -24,6 +24,7 @@ const CANONICAL_COLLECTIONS = Object.freeze({
   invariantViolations: env.COLL_INVARIANT_VIOLATIONS || 'invariantViolations',
   participantIdentities: env.COLL_PARTICIPANT_IDENTITIES || 'participantIdentities',
   rcsAssessments: env.COLL_RCS_ASSESSMENTS || 'rcsAssessments',
+  rcsInputSnapshots: env.COLL_RCS_INPUT_SNAPSHOTS || 'rcsInputSnapshots',
   encounters: env.COLL_ENCOUNTERS || 'encounters',
   conditions: env.COLL_CONDITIONS || 'conditions',
   phenotypeObservations: env.COLL_PHENOTYPE_OBSERVATIONS || 'phenotypeObservations',

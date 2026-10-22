@@ -3,9 +3,12 @@
 // docs/architecture/canonical-data-contract-v1.md's RcsAssessment section
 // for the contract this mirrors. Sample keeps its embedded RCS fields for
 // backward compatibility during migration (not touched by this entity).
+const crypto = require('crypto');
+
 class RcsAssessmentModel {
   static fieldsOf(data = {}) {
     return {
+      rcsAssessmentId: data.rcsAssessmentId || crypto.randomUUID(),
       specimenId: String(data.specimenId || '').trim(),
       modelVersion: data.modelVersion ?? null,
       matrixType: data.matrixType ?? null,
@@ -18,6 +21,12 @@ class RcsAssessmentModel {
       gradeRoute: data.gradeRoute ?? null,
       axisPenalties: Array.isArray(data.axisPenalties) ? data.axisPenalties : [],
       calculationTrace: data.calculationTrace ?? null,
+      // RF018 AC2 and AC3 (#1320): the use context the request carried, and
+      // the RCSInputSnapshot this assessment was computed from.
+      qualificationContext: data.qualificationContext ?? null,
+      inputSnapshotId: data.inputSnapshotId ?? null,
+      inputSnapshotUri: data.inputSnapshotUri ?? null,
+      inputSnapshotHash: data.inputSnapshotHash ?? null,
     };
   }
 
@@ -30,9 +39,14 @@ class RcsAssessmentModel {
     return { ...fields, assessedAt: data.assessedAt ? new Date(data.assessedAt) : now, createdAt: now };
   }
 
-  /** Maps the raw rcs-certification.service#certify() output onto this entity's fields. */
-  static fromCertificationResult(specimenId, result = {}) {
+  /**
+   * Maps the raw rcs-certification.service#certify() output onto this entity's
+   * fields. `refs` carries the rcsAssessmentId and the input snapshot's id,
+   * URI and hash.
+   */
+  static fromCertificationResult(specimenId, result = {}, refs = {}) {
     return this.create({
+      ...refs,
       specimenId,
       modelVersion: result.model_version,
       matrixType: result.matrix_type,
@@ -45,6 +59,7 @@ class RcsAssessmentModel {
       gradeRoute: result.grade_route,
       axisPenalties: result.axis_penalties,
       calculationTrace: result.calculation_trace,
+      qualificationContext: result.qualification_context,
     });
   }
 }

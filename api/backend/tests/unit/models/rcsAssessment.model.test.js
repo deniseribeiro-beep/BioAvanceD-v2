@@ -81,3 +81,27 @@ describe('RcsAssessmentModel', () => {
     });
   });
 });
+
+// RF018 AC2 and AC3 (#1320): the assessment's own id, its use context and
+// the references to the RCSInputSnapshot it was computed from.
+describe('RcsAssessmentModel v4 references', () => {
+  it('emits rcsAssessmentId, qualificationContext and the three snapshot refs, defaulting to null', () => {
+    const doc = RcsAssessmentModel.create({ specimenId: 'SPEC-1' });
+    expect(doc.rcsAssessmentId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(doc).toMatchObject({
+      qualificationContext: null, inputSnapshotId: null, inputSnapshotUri: null, inputSnapshotHash: null,
+    });
+  });
+
+  it('fromCertificationResult maps qualification_context and spreads the refs', () => {
+    const refs = {
+      rcsAssessmentId: 'rcs-assessment-001',
+      inputSnapshotId: 'rcs-input-snapshot-001',
+      inputSnapshotUri: `urn:bioavanced:rcs-input-snapshot:rcs-input-snapshot-001#sha256=${'b'.repeat(64)}`,
+      inputSnapshotHash: `sha256:${'b'.repeat(64)}`,
+    };
+    const context = { intendedUseCode: 'research-sequencing', targetAnalyte: 'cfDNA', assayFamily: null, workflowProtocolId: null, workflowProtocolVersion: null };
+    const doc = RcsAssessmentModel.fromCertificationResult('SPEC-2', { rcs_score: 90, qualification_context: context }, refs);
+    expect(doc).toMatchObject({ ...refs, qualificationContext: context, specimenId: 'SPEC-2', rcsScore: 90 });
+  });
+});

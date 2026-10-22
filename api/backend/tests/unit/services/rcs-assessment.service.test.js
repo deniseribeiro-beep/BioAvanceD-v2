@@ -1,9 +1,12 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
+const logger = require('../../../src/utils/logger');
+const RcsAssessmentModel = require('../../../src/models/RcsAssessment');
 const {
   recordAssessment,
+  getInputSnapshotById,
   getAssessmentsForSpecimen,
   getAssessmentById,
   getCurrentAssessmentsForSpecimens,
@@ -35,6 +38,11 @@ function createFakeCollection() {
       docs.push(doc);
       return { insertedId: doc._id };
     },
+    async deleteOne(filter = {}) {
+      const index = docs.findIndex((doc) => matches(doc, filter));
+      if (index >= 0) docs.splice(index, 1);
+      return { deletedCount: index >= 0 ? 1 : 0 };
+    },
     async findOne(filter = {}) {
       return docs.find((doc) => matches(doc, filter)) || null;
     },
@@ -61,7 +69,7 @@ function createFakeCollection() {
 }
 
 function createFakeDb() {
-  const collections = { rcsAssessments: createFakeCollection() };
+  const collections = { rcsAssessments: createFakeCollection(), rcsInputSnapshots: createFakeCollection() };
   return {
     collections,
     collection(name) {
@@ -99,6 +107,99 @@ describe('rcs-assessment.service', () => {
       await recordAssessment(db, 'SPEC-1', { rcs_score: 95, final_grade: 'A' });
 
       expect(db.collections.rcsAssessments.docs).toHaveLength(2);
+    });
+  });
+
+  // RF018 AC3 (#1320): the input the result was computed from is frozen in
+  // one RCSInputSnapshot the assessment references by id, URI and hash.
+  describe('recordAssessment input snapshot', () => {
+    const certified = () => ({
+      model_version: 'RCS-GOV-1.0',
+      matrix_type: 'fluid',
+      governance_status: 1,
+      rcs_score: 93.75,
+      final_grade: 'A',
+      grade_route: 'Score-based certification',
+      axis_penalties: [{ axis_code: 'Pstore', sprec_code: 'A', weight: 0.25, severity: 0.25, penalty: 6.25 }],
+      calculation_trace: { model_code: 'RCS-GOV-1.0', sprec_version: '2.0', axes: [] },
+      rcs_input: { matrix_type: 'fluid', sprec: { sampleType: 'PL1' }, secondCentrifugationRequired: false },
+    });
+
+    it('writes exactly one snapshot the assessment references by id, hash and URI, under the same rcsAssessmentId', async () => {
+      const db = createFakeDb();
+      const assessment = await recordAssessment(db, ' SPEC-1 ', certified());
+
+      const snapshots = db.collections.rcsInputSnapshots.docs;
+      expect(snapshots).toHaveLength(1);
+      const [snapshot] = snapshots;
+      expect(assessment.inputSnapshotId).toBe(snapshot.rcsInputSnapshotId);
+      expect(assessment.inputSnapshotHash).toBe(snapshot.snapshotHash);
+      expect(assessment.inputSnapshotUri).toBe(snapshot.snapshotUri);
+      expect(snapshot.rcsAssessmentId).toBe(assessment.rcsAssessmentId);
+      expect(snapshot).toMatchObject({ specimenId: 'SPEC-1', matrix: 'fluid', sprecVersion: '2.0', inputs: certified().rcs_input });
+      expect(await getInputSnapshotById(db, assessment.inputSnapshotId)).toBe(snapshot);
+    });
+
+    it('keeps the score, grade, route, penalties and trace of the result on the assessment', async () => {
+      const db = createFakeDb();
+      const result = certified();
+      const assessment = await recordAssessment(db, 'SPEC-1', result);
+      expect(assessment).toMatchObject({
+        rcsScore: result.rcs_score,
+        finalGrade: result.final_grade,
+        gradeRoute: result.grade_route,
+        axisPenalties: result.axis_penalties,
+        calculationTrace: result.calculation_trace,
+      });
+    });
+
+    it('writes no snapshot and null refs for a result without rcs_input', async () => {
+      const db = createFakeDb();
+      const { rcs_input: _input, ...legacy } = certified();
+      const assessment = await recordAssessment(db, 'SPEC-1', legacy);
+      expect(db.collections.rcsInputSnapshots.docs).toHaveLength(0);
+      expect(assessment).toMatchObject({ inputSnapshotId: null, inputSnapshotUri: null, inputSnapshotHash: null });
+      expect(await getInputSnapshotById(db, null)).toBeNull();
+    });
+
+    it('deletes the snapshot and rethrows when the assessment insert fails', async () => {
+      const db = createFakeDb();
+      db.collections.rcsAssessments.insertOne = async () => { throw new Error('write refused'); };
+      await expect(recordAssessment(db, 'SPEC-1', certified())).rejects.toThrow('write refused');
+      expect(db.collections.rcsInputSnapshots.docs).toHaveLength(0);
+    });
+
+    it('rethrows the insert error, not the compensating delete error, and logs the delete failure', async () => {
+      const db = createFakeDb();
+      db.collections.rcsAssessments.insertOne = async () => { throw new Error('write refused'); };
+      db.collections.rcsInputSnapshots.deleteOne = async () => { throw new Error('delete refused'); };
+      const logged = vi.spyOn(logger, 'error').mockImplementation(() => {});
+      try {
+        await expect(recordAssessment(db, 'SPEC-1', certified())).rejects.toThrow('write refused');
+        expect(logged).toHaveBeenCalledWith(expect.any(String), 'delete refused');
+      } finally {
+        logged.mockRestore();
+      }
+    });
+
+    it.each([null, undefined])('writes neither a snapshot nor an assessment for a %s specimenId', async (specimenId) => {
+      const db = createFakeDb();
+      await expect(recordAssessment(db, specimenId, certified())).rejects.toThrow();
+      expect(db.collections.rcsInputSnapshots.docs).toHaveLength(0);
+      expect(db.collections.rcsAssessments.docs).toHaveLength(0);
+    });
+
+    it('writes no snapshot when building the assessment throws', async () => {
+      const db = createFakeDb();
+      const build = vi.spyOn(RcsAssessmentModel, 'fromCertificationResult').mockImplementation(() => {
+        throw new Error('build refused');
+      });
+      try {
+        await expect(recordAssessment(db, 'SPEC-1', certified())).rejects.toThrow('build refused');
+        expect(db.collections.rcsInputSnapshots.docs).toHaveLength(0);
+      } finally {
+        build.mockRestore();
+      }
     });
   });
 

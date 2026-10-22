@@ -309,3 +309,73 @@ describe('RCSGovernanceEvidenceSnapshot checks', () => {
       .toEqual(['validationRuleSetChecksum deve ser um digest SHA-256: abc']);
   });
 });
+
+// RF018 AC3 (#1320): capture freezes the input an assessment was computed
+// from, with no reference a release or event does not back yet.
+describe('RcsInputSnapshotModel.capture', () => {
+  const crypto = require('crypto');
+  const { canonicalJson } = require('../../../src/models/ConfigurationRelease');
+  const base = () => ({
+    rcsInputSnapshotId: 'rcs-input-snapshot-001',
+    rcsAssessmentId: 'rcs-assessment-001',
+    specimenId: 'specimen-synthetic-001',
+    matrix: 'fluid',
+    sprecVersion: '2.0',
+    capturedAt: '2026-10-22T10:00:00.000Z',
+    inputs: { matrix_type: 'fluid', sprec: { sampleType: 'PL1', longTermStorage: 'A' } },
+  });
+
+  it('nulls every reference no source backs and names its own schemaVersion', () => {
+    const snapshot = RcsInputSnapshotModel.capture(base());
+    expect(snapshot).toMatchObject({
+      matrix: 'fluid', sprecVersion: '2.0', sourceEventIds: [], preanalyticalAxes: [],
+      materialTypeCode: null, matrixMappingReleaseId: null, governanceEvidenceId: null, sprecMappingReleaseId: null,
+      schemaVersion: RcsInputSnapshotModel.CAPTURE_SCHEMA_VERSION, immutable: true,
+    });
+    expect(RcsInputSnapshotModel.capture({ ...base(), matrix: 'unknown' }).matrix).toBeNull();
+    expect(RcsInputSnapshotModel.validate(snapshot).isValid).toBe(false);
+  });
+
+  it('returns the document frozen at every level, inputs.sprec included', () => {
+    const snapshot = RcsInputSnapshotModel.capture(base());
+    expect(Object.isFrozen(snapshot)).toBe(true);
+    expect(Object.isFrozen(snapshot.inputs)).toBe(true);
+    expect(Object.isFrozen(snapshot.inputs.sprec)).toBe(true);
+    expect(Object.isFrozen(snapshot.sourceEventIds)).toBe(true);
+  });
+
+  it('hashes the sha256 of canonicalJson without the hash and the URI', () => {
+    const { snapshotHash, snapshotUri: _uri, ...content } = RcsInputSnapshotModel.capture(base());
+    const hex = crypto.createHash('sha256').update(canonicalJson(content)).digest('hex');
+    expect(content.inputs).toEqual(base().inputs);
+    expect(snapshotHash).toBe(`sha256:${hex}`);
+  });
+
+  it('gives the same hash for the same ids, inputs and capturedAt, and another for a changed input code', () => {
+    const first = RcsInputSnapshotModel.capture(base());
+    expect(RcsInputSnapshotModel.capture(base()).snapshotHash).toBe(first.snapshotHash);
+    const changed = base();
+    changed.inputs.sprec.longTermStorage = 'B';
+    expect(RcsInputSnapshotModel.capture(changed).snapshotHash).not.toBe(first.snapshotHash);
+  });
+
+  it('names the snapshot by id and pins its hash in the URI', () => {
+    const snapshot = RcsInputSnapshotModel.capture(base());
+    expect(snapshot.snapshotUri)
+      .toBe(`urn:bioavanced:rcs-input-snapshot:rcs-input-snapshot-001#sha256=${snapshot.snapshotHash.slice('sha256:'.length)}`);
+  });
+
+  it.each([
+    ['rcsInputSnapshotId', { rcsInputSnapshotId: 42 }],
+    ['rcsAssessmentId', { rcsAssessmentId: '' }],
+    ['specimenId', { specimenId: '  ' }],
+  ])('throws when %s is not a non-empty string', (field, override) => {
+    expect(() => RcsInputSnapshotModel.capture({ ...base(), ...override }))
+      .toThrow(`${field} é obrigatório para RCSInputSnapshot.capture`);
+  });
+
+  it('throws when inputs is not a plain object', () => {
+    expect(() => RcsInputSnapshotModel.capture({ ...base(), inputs: ['matrix_type'] }))
+      .toThrow('inputs deve ser um objeto para RCSInputSnapshot.capture');
+  });
+});

@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const { canonicalJson } = require('./ConfigurationRelease');
 
 // Canonical Data Model v2.0.0 RCSInputSnapshot (V2E-0497..0512), RF018 AC3,
 // AC4, AC5 and AC10 (#1320): the one immutable, resolvable snapshot of the
@@ -16,6 +17,10 @@ const SHA256 = /^(sha256:)?[a-f0-9]{64}$/i;
 const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 
 const MATRICES = ['fluid', 'solid'];
+
+// The serialization version of a capture() document: its fieldsOf keys plus
+// `inputs`, hashed as canonical JSON.
+const CAPTURE_SCHEMA_VERSION = '1.0.0';
 
 // RF018 AC5, RULE-019 and RULE-020: the five axes of each matrix.
 // INFERENCE, not a citation: the codes take the requisitos' and V2E-0515's
@@ -107,6 +112,45 @@ class RcsInputSnapshotModel {
     return deepFreeze(fields);
   }
 
+  // RF018 AC3 (#1320): the capture an assessment write takes of the input it
+  // was computed from. `inputs` is the payload read set certify() consumes,
+  // kept outside fieldsOf as RcsAssessment.create keeps assessedAt. A
+  // reference no release or event backs yet is null or empty, never
+  // fabricated, so a captured snapshot does not pass validate() until a later
+  // slice writes the mapping releases, axis inputs and governance evidence.
+  // The hash covers every key but itself and the URI, `inputs` included, and
+  // the URI names the snapshot by id and pins that hash, as ReadinessReport
+  // does (see docs/decisions/2026-10-23-rcs-input-snapshot-write.md).
+  static capture(data = {}) {
+    if (!isPlainObject(data.inputs)) throw new Error('inputs deve ser um objeto para RCSInputSnapshot.capture');
+    const fields = this.fieldsOf({
+      ...data,
+      matrix: MATRICES.includes(data.matrix) ? data.matrix : null,
+      materialTypeCode: null,
+      matrixMappingReleaseId: null,
+      preanalyticalAxes: [],
+      governanceEvidenceId: null,
+      sprecVersion: data.sprecVersion ?? null,
+      sprecMappingReleaseId: null,
+      capturedAt: data.capturedAt || new Date(),
+      sourceEventIds: [],
+      snapshotUri: null,
+      snapshotHash: null,
+      schemaVersion: CAPTURE_SCHEMA_VERSION,
+    });
+    for (const field of ['rcsInputSnapshotId', 'rcsAssessmentId', 'specimenId']) {
+      if (!isNonEmptyString(fields[field])) throw new Error(`${field} é obrigatório para RCSInputSnapshot.capture`);
+    }
+    const { snapshotUri, snapshotHash, ...content } = { ...fields, inputs: data.inputs };
+    const hex = crypto.createHash('sha256').update(canonicalJson(content)).digest('hex');
+    return deepFreeze({
+      ...fields,
+      inputs: data.inputs,
+      snapshotUri: `urn:bioavanced:rcs-input-snapshot:${fields.rcsInputSnapshotId}#sha256=${hex}`,
+      snapshotHash: `sha256:${hex}`,
+    });
+  }
+
   // RULE-019 and RULE-020: a fluid snapshot carries exactly the five fluid
   // axes and a solid one exactly the five solid axes, none of the other
   // matrix's. A missing, duplicated or foreign axisCode blocks the assessment.
@@ -136,3 +180,4 @@ class RcsInputSnapshotModel {
 module.exports = RcsInputSnapshotModel;
 module.exports.AXIS_CODES = AXIS_CODES;
 module.exports.MATRICES = MATRICES;
+module.exports.CAPTURE_SCHEMA_VERSION = CAPTURE_SCHEMA_VERSION;

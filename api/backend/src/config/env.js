@@ -200,6 +200,7 @@ module.exports = {
   COLL_INVARIANT_VIOLATIONS: process.env.COLL_INVARIANT_VIOLATIONS || 'invariantViolations',
   COLL_PARTICIPANT_IDENTITIES: process.env.COLL_PARTICIPANT_IDENTITIES || 'participantIdentities',
   COLL_RCS_ASSESSMENTS: process.env.COLL_RCS_ASSESSMENTS || 'rcsAssessments',
+  COLL_RCS_INPUT_SNAPSHOTS: process.env.COLL_RCS_INPUT_SNAPSHOTS || 'rcsInputSnapshots',
   COLL_ENCOUNTERS: process.env.COLL_ENCOUNTERS || 'encounters',
   COLL_CONDITIONS: process.env.COLL_CONDITIONS || 'conditions',
   COLL_PHENOTYPE_OBSERVATIONS: process.env.COLL_PHENOTYPE_OBSERVATIONS || 'phenotypeObservations',

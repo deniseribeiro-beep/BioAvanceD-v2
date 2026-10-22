@@ -150,3 +150,55 @@ describe('validateQualityForRelease', () => {
     expect(result.assessment.final_grade).toBe('A');
   });
 });
+
+// RF018 AC2 and AC3 (#1320): the result carries the input it was computed
+// from and, only when the request carries one, its use context.
+describe('evaluateQuality rcs_input and qualification_context', () => {
+  const rcsCertificationService = require('../../src/services/rcs-certification.service');
+  const qualityCompatibility = require('../../src/services/quality-compatibility.service');
+  const payload = { matrixType: 'fluid', sprec: validFluidSprec };
+
+  it('resolveMethodologicalQuality carries rcs_input, the read set of the normalized payload', () => {
+    const result = resolveMethodologicalQuality(payload);
+    expect(result.rcs_input).toEqual(rcsCertificationService.readInput(qualityCompatibility.normalizeSample(payload)));
+    expect(result.rcs_input).toMatchObject({ matrixType: 'fluid', sprec: expect.objectContaining({ sampleType: 'BLD' }) });
+  });
+
+  it('adds no qualification_context when the request carries none', () => {
+    expect(evaluateQuality(payload)).not.toHaveProperty('qualification_context');
+  });
+
+  it('keeps exactly the five context keys, each a non-empty string or plain object, else null', () => {
+    const result = evaluateQuality({
+      ...payload,
+      qualificationContext: {
+        intendedUseCode: { systemUri: 'urn:synthetic:use', code: 'research-sequencing' },
+        targetAnalyte: 'cfDNA',
+        assayFamily: '  ',
+        workflowProtocolId: 42,
+        extra: 'dropped',
+      },
+    });
+    expect(result.qualification_context).toEqual({
+      intendedUseCode: { systemUri: 'urn:synthetic:use', code: 'research-sequencing' },
+      targetAnalyte: 'cfDNA',
+      assayFamily: null,
+      workflowProtocolId: null,
+      workflowProtocolVersion: null,
+    });
+  });
+
+  it('reads the context from a sample wrapper too', () => {
+    const result = evaluateQuality({ sample: { ...payload, qualificationContext: { targetAnalyte: 'cfDNA' } } });
+    expect(result.qualification_context.targetAnalyte).toBe('cfDNA');
+  });
+
+  it('leaves the score, grade, route, penalties and trace as certify computes them', () => {
+    const { rcs_input: _input, ...rest } = evaluateQuality(payload);
+    expect(rest).toEqual({
+      ...rcsCertificationService.certify(qualityCompatibility.normalizeSample(payload)),
+      deprecated_legacy_fields: ['quality_score', 'quality_category', 'penalty_log', 'forcedQuarantine', 'category'],
+    });
+    expect(rest.final_grade).toBe('A');
+  });
+});

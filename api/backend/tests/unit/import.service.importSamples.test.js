@@ -99,6 +99,8 @@ const PHYSICAL_CHAIN_COLLECTIONS = ['containers', 'specimenContainerAssignments'
 
 function makeDb(collection, rcsAssessmentsCollection = makeRcsAssessmentsCollection(), specimenPreanalyticsCollection = makeSpecimenPreanalyticsCollection(), outboxCollection = makeOutboxCollection()) {
   const aggregateVersionsCollection = makeAggregateVersionsCollection();
+  // #1320: recordAssessment first freezes the RCS input in its own collection.
+  const rcsInputSnapshotsCollection = createMatchingCollection([], { collectionName: 'rcsInputSnapshots' });
   const physicalChain = Object.fromEntries(PHYSICAL_CHAIN_COLLECTIONS.map((name) => [name, createMatchingCollection([], { collectionName: name })]));
   return {
     outboxCollection,
@@ -106,6 +108,7 @@ function makeDb(collection, rcsAssessmentsCollection = makeRcsAssessmentsCollect
     collection: (name) => {
       if (physicalChain[name]) return physicalChain[name];
       if (name === 'rcsAssessments') return rcsAssessmentsCollection;
+      if (name === 'rcsInputSnapshots') return rcsInputSnapshotsCollection;
       if (name === 'specimenPreanalytics') return specimenPreanalyticsCollection;
       if (name === 'graph_projection_outbox') return outboxCollection;
       if (name === 'graph_projection_outbox_aggregate_versions') return aggregateVersionsCollection;

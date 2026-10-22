@@ -221,3 +221,35 @@ describe('RcsCertificationService RCS-GOV 1.0', () => {
     expect(sample.calculationTrace.axes).toHaveLength(5);
   });
 });
+
+// RF018 AC3 (#1320): readInput keeps exactly the payload keys certify reads,
+// so the frozen input recalculates the same result.
+describe('readInput', () => {
+  const qualityCompatibility = require('../../src/services/quality-compatibility.service');
+  const F = {
+    sampleType: 'PL1', primaryContainer: 'SST', preCentrifugation: 'A', centrifugation: 'A',
+    secondCentrifugation: 'N', postCentrifugationDelay: 'A', longTermStorage: 'A',
+  };
+
+  it.each([
+    ['matrix_type beside sprec', { matrix_type: 'fluid', sprec: F }, 'E'],
+    ['matrixType inside sprec', { sprec: { ...F, matrixType: 'fluid' } }, 'E'],
+    ['a sampleType text', { sampleType: 'plasma', sprec: F }, 'E'],
+    ['a sample wrapper', { sample: { matrix_type: 'fluid', sprec: F } }, 'E'],
+    ['secondCentrifugationRequired false', { matrix_type: 'fluid', sprec: F, secondCentrifugationRequired: false }, 'A'],
+    ['a workflow_context.Pcent2 rule', { matrix_type: 'fluid', sprec: F, workflow_context: { Pcent2: { workflow_rule: 'pcent2_not_required' } } }, 'A'],
+    ['an empty sprec', { sprec: {} }, 'E'],
+    ['documentationSufficient false', { matrix_type: 'fluid', sprec: F, documentationSufficient: false }, 'E'],
+  ])('certify(readInput(p)) recalculates certify(p) for %s', (_label, raw, grade) => {
+    const payload = qualityCompatibility.normalizeSample(raw);
+    const expected = rcsService.certify(payload);
+    expect(expected.final_grade).toBe(grade);
+    expect(rcsService.certify(rcsService.readInput(payload))).toEqual(expected);
+  });
+
+  it('copies no key certify does not read', () => {
+    const input = rcsService.readInput({ matrix_type: 'fluid', sprec: F, patientName: 'Maria Synthetic', cpf: '00000000000' });
+    expect(input).toEqual({ matrix_type: 'fluid', sprec: F });
+    expect(input.sprec).not.toBe(F);
+  });
+});

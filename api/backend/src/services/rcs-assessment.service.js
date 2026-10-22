@@ -1,5 +1,11 @@
+const crypto = require('crypto');
 const { getCollection } = require('../utils/collectionResolver');
+const logger = require('../utils/logger');
 const RcsAssessmentModel = require('../models/RcsAssessment');
+const RcsInputSnapshotModel = require('../models/RcsInputSnapshot');
+
+const isPlainObject = (value) => value !== null && typeof value === 'object'
+  && !Array.isArray(value) && !(value instanceof Date);
 
 /**
  * Persists one versioned RCS certification snapshot referenced by
@@ -9,10 +15,58 @@ const RcsAssessmentModel = require('../models/RcsAssessment');
  * "usar referências e snapshots versionados" guidance.
  */
 async function recordAssessment(db, specimenId, certificationResult) {
-  const collection = await getCollection(db, 'rcsAssessments');
-  const assessment = RcsAssessmentModel.fromCertificationResult(specimenId, certificationResult);
-  await collection.insertOne(assessment);
+  const rcsAssessmentId = crypto.randomUUID();
+  // RF018 AC3 (#1320): the input the result was computed from is frozen,
+  // and the assessment references it by id, URI and hash. Both documents
+  // are built before either is written, so a build failure writes nothing.
+  // A result with no rcs_input (one computed before the capture existed)
+  // writes no snapshot and carries null references.
+  const snapshot = isPlainObject(certificationResult?.rcs_input)
+    ? RcsInputSnapshotModel.capture({
+      rcsAssessmentId,
+      specimenId: String(specimenId || '').trim(),
+      matrix: certificationResult.matrix_type,
+      sprecVersion: certificationResult.calculation_trace?.sprec_version ?? null,
+      inputs: certificationResult.rcs_input,
+    })
+    : null;
+  const assessment = RcsAssessmentModel.fromCertificationResult(specimenId, certificationResult, {
+    rcsAssessmentId,
+    inputSnapshotId: snapshot?.rcsInputSnapshotId ?? null,
+    inputSnapshotUri: snapshot?.snapshotUri ?? null,
+    inputSnapshotHash: snapshot?.snapshotHash ?? null,
+  });
+
+  let snapshots = null;
+  if (snapshot) {
+    snapshots = await getCollection(db, 'rcsInputSnapshots');
+    // A shallow copy: the driver writes _id onto the object it is given, and
+    // the snapshot is frozen.
+    await snapshots.insertOne({ ...snapshot });
+  }
+  try {
+    const collection = await getCollection(db, 'rcsAssessments');
+    await collection.insertOne(assessment);
+  } catch (error) {
+    // No snapshot is left without the assessment it was captured for. A
+    // failed delete is logged, and the insert error stays the one thrown.
+    if (snapshot) {
+      try {
+        await snapshots.deleteOne({ rcsInputSnapshotId: snapshot.rcsInputSnapshotId });
+      } catch (deleteError) {
+        logger.error(`Falha ao remover o RCSInputSnapshot ${snapshot.rcsInputSnapshotId} sem avaliação:`, deleteError.message || deleteError);
+      }
+    }
+    throw error;
+  }
   return assessment;
+}
+
+/** The RCSInputSnapshot an assessment's inputSnapshotId names (RF018 AC3). */
+async function getInputSnapshotById(db, rcsInputSnapshotId) {
+  if (!rcsInputSnapshotId) return null;
+  const collection = await getCollection(db, 'rcsInputSnapshots');
+  return collection.findOne({ rcsInputSnapshotId });
 }
 
 /** All snapshots for a specimen, newest first. */
@@ -120,6 +174,7 @@ async function findSpecimenIdsWithCurrentAssessmentMatching(db, matchFields = {}
 
 module.exports = {
   recordAssessment,
+  getInputSnapshotById,
   getAssessmentsForSpecimen,
   getAssessmentById,
   getCurrentAssessmentsForSpecimens,

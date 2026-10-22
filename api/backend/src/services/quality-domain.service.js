@@ -8,13 +8,40 @@ function normalizeObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
 
+// RF018 AC2 (#1320): the assessment's use context, kept only when the request
+// carries one. Each field is a non-empty string or a plain object, else null.
+const QUALIFICATION_CONTEXT_KEYS = Object.freeze([
+  'intendedUseCode', 'targetAnalyte', 'assayFamily', 'workflowProtocolId', 'workflowProtocolVersion',
+]);
+
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date);
+}
+
+function readQualificationContext(payload = {}) {
+  const source = normalizeObject(payload);
+  const context = isPlainObject(source.qualificationContext)
+    ? source.qualificationContext
+    : normalizeObject(source.sample).qualificationContext;
+  if (!isPlainObject(context)) return null;
+  return Object.fromEntries(QUALIFICATION_CONTEXT_KEYS.map((key) => {
+    const value = context[key];
+    const kept = (typeof value === 'string' && value.trim() !== '') || isPlainObject(value);
+    return [key, kept ? value : null];
+  }));
+}
+
 function evaluateQuality(payload = {}) {
   // Normalize legacy input to canonical fields without destroying legacy values
   const normalized = qualityCompatibility.normalizeSample(payload || {});
   const result = rcsCertificationService.certify(normalized);
+  const qualificationContext = readQualificationContext(payload);
   return {
     ...result,
     deprecated_legacy_fields: ['quality_score', 'quality_category', 'penalty_log', 'forcedQuarantine', 'category'],
+    // RF018 AC3: the input this result was computed from, for its snapshot.
+    rcs_input: rcsCertificationService.readInput(normalized),
+    ...(qualificationContext ? { qualification_context: qualificationContext } : {}),
   };
 }
 
