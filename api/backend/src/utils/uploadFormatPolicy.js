@@ -87,8 +87,9 @@ const FORMAT_POLICY = Object.freeze({
   '.sam': policy(['text/plain'], 'text'),
   '.fastq': policy(['text/plain'], 'text'),
   '.json': policy(['application/json', 'text/plain'], 'text'),
-  // Browsers map .vcf to vCard.
-  '.vcf': policy(['text/vcard', 'text/x-vcard', 'text/plain'], 'text'),
+  // A .vcf here is Variant Call Format, so its canonical type is text/plain
+  // (first, #1321); browsers map .vcf to vCard, so those are accepted too.
+  '.vcf': policy(['text/plain', 'text/vcard', 'text/x-vcard'], 'text'),
   '.raw': policy([], 'none')
 });
 
@@ -99,6 +100,14 @@ function isMimeAllowedForExtension(ext, mime) {
   const essence = mime.split(';')[0].trim().toLowerCase();
   if (!essence) return false;
   return essence === OCTET_STREAM || FORMAT_POLICY[ext].mimes.includes(essence);
+}
+
+// RF007 AC3, V2E-0471 (#1321): a DataFile's mimeType is its extension's
+// canonical type, the axis its bytes were checked against, never the MIME
+// the client declared.
+function canonicalMimeType(ext) {
+  if (!hasPolicy(ext) || FORMAT_POLICY[ext].mimes.length === 0) return OCTET_STREAM;
+  return FORMAT_POLICY[ext].mimes[0];
 }
 
 function readHead(filePath) {
@@ -139,5 +148,6 @@ function checkFileSignature(filePath, ext) {
 module.exports = {
   FORMAT_POLICY,
   isMimeAllowedForExtension,
-  checkFileSignature
+  checkFileSignature,
+  canonicalMimeType
 };

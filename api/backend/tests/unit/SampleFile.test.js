@@ -133,6 +133,54 @@ describe('SampleFileModel.validate', () => {
     expect(isValid).toBe(false);
     expect(errors).toContain('storageObjectVersion deve ser string não vazia');
   });
+
+  // RF007 AC3/AC5, V2E-0471/V2E-0476 (#1321): optional, since older rows
+  // lack them, but a supplied value is well formed.
+  it('accepts a row with no mimeType, ownerId or linkedEntityRefs (V2E-0471, V2E-0476, #1321)', () => {
+    const { isValid, errors } = SampleFileModel.validate(validData);
+    expect(isValid).toBe(true);
+    expect(errors).toEqual([]);
+  });
+
+  it('accepts a well-formed mimeType and linkedEntityRefs (#1321)', () => {
+    const { isValid, errors } = SampleFileModel.validate({
+      ...validData,
+      mimeType: 'text/csv',
+      linkedEntityRefs: [{ entityType: 'Specimen', entityId: 's-1' }, { entityType: 'Study', entityId: 'st-1' }]
+    });
+    expect(isValid).toBe(true);
+    expect(errors).toEqual([]);
+  });
+
+  it.each([['not a mime'], ['text/'], ['Text/CSV'], [42]])('rejects a malformed mimeType %j (V2E-0471, #1321)', (mimeType) => {
+    const { isValid, errors } = SampleFileModel.validate({ ...validData, mimeType });
+    expect(isValid).toBe(false);
+    expect(errors).toContain('mimeType deve ser um tipo MIME válido');
+  });
+
+  it('rejects an empty linkedEntityRefs (V2E-0476 is 1..*, #1321)', () => {
+    const { isValid, errors } = SampleFileModel.validate({ ...validData, linkedEntityRefs: [] });
+    expect(isValid).toBe(false);
+    expect(errors).toContain('linkedEntityRefs deve ser uma lista não vazia');
+  });
+
+  it('rejects a linkedEntityRefs entry with an unknown entityType (#1321)', () => {
+    const { isValid, errors } = SampleFileModel.validate({
+      ...validData,
+      linkedEntityRefs: [{ entityType: 'Patient', entityId: 'p-1' }]
+    });
+    expect(isValid).toBe(false);
+    expect(errors).toContain(`linkedEntityRefs[0].entityType deve ser um dos: ${SampleFileModel.LINKED_ENTITY_TYPES.join(', ')}`);
+  });
+
+  it('rejects a linkedEntityRefs entry with an empty entityId (#1321)', () => {
+    const { isValid, errors } = SampleFileModel.validate({
+      ...validData,
+      linkedEntityRefs: [{ entityType: 'Specimen', entityId: 's-1' }, { entityType: 'Study', entityId: '' }]
+    });
+    expect(isValid).toBe(false);
+    expect(errors).toContain('linkedEntityRefs[1].entityId deve ser string não vazia');
+  });
 });
 
 describe('SampleFileModel.create', () => {
@@ -158,6 +206,31 @@ describe('SampleFileModel.create', () => {
     const result = SampleFileModel.create({ ...baseInput, storageObjectVersion: version });
     expect(result.storageObjectVersion).toBe(version);
     expect(SampleFileModel.create(baseInput).storageObjectVersion).toBeNull();
+  });
+
+  // RF007 AC3/AC5, V2E-0471/V2E-0474/V2E-0476 (#1321).
+  it('writes mimeType, ownerId and linkedEntityRefs (#1321)', () => {
+    const result = SampleFileModel.create({
+      ...baseInput,
+      mimeType: 'text/csv',
+      uploaderAnonId: 'anon-1',
+      ownerId: 'owner-1',
+      linkedEntityRefs: [{ entityType: 'Specimen', entityId: 's-1', extra: 'x' }, { entityType: 'Study', entityId: 'st-1' }]
+    });
+    expect(result.mimeType).toBe('text/csv');
+    expect(result.ownerId).toBe('owner-1');
+    expect(result.linkedEntityRefs).toEqual([
+      { entityType: 'Specimen', entityId: 's-1' },
+      { entityType: 'Study', entityId: 'st-1' }
+    ]);
+  });
+
+  it('defaults ownerId to the uploader, mimeType to null and linkedEntityRefs to [] (#1321)', () => {
+    const result = SampleFileModel.create({ ...baseInput, uploaderAnonId: 'anon-1' });
+    expect(result.ownerId).toBe('anon-1');
+    expect(result.mimeType).toBeNull();
+    expect(result.linkedEntityRefs).toEqual([]);
+    expect(SampleFileModel.create(baseInput).ownerId).toBeNull();
   });
 
   it('defaults uploaderAnonId to null when not provided', () => {

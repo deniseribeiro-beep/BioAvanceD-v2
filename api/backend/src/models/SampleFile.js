@@ -13,6 +13,12 @@
 // stage).
 const FILE_ROLES = ['raw', 'intermediate', 'processed', 'derived', 'report', 'manifest'];
 
+// RF007 AC5, V2E-0476 (#1321): the entities a DataFile may be linked to.
+// Each reference is { entityType, entityId }.
+const LINKED_ENTITY_TYPES = ['Specimen', 'Assay', 'Dataset', 'Consent', 'CollectionGovernanceApproval', 'Study', 'WorkflowRun'];
+
+const MIME_TYPE_PATTERN = /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/;
+
 const FILE_FORMAT_BY_TYPE = {
   RAW: 'application/octet-stream',
   ZIP: 'application/zip',
@@ -60,6 +66,28 @@ class SampleFileModel {
       errors.push('storageObjectVersion deve ser string não vazia');
     }
 
+    // V2E-0471/V2E-0476 (#1321): optional for the same reason, but a
+    // supplied mimeType is a MIME type and supplied links are 1..*.
+    if (data.mimeType !== undefined && data.mimeType !== null
+      && (typeof data.mimeType !== 'string' || !MIME_TYPE_PATTERN.test(data.mimeType))) {
+      errors.push('mimeType deve ser um tipo MIME válido');
+    }
+
+    if (data.linkedEntityRefs !== undefined && data.linkedEntityRefs !== null) {
+      if (!Array.isArray(data.linkedEntityRefs) || data.linkedEntityRefs.length === 0) {
+        errors.push('linkedEntityRefs deve ser uma lista não vazia');
+      } else {
+        data.linkedEntityRefs.forEach((ref, index) => {
+          if (!ref || !LINKED_ENTITY_TYPES.includes(ref.entityType)) {
+            errors.push(`linkedEntityRefs[${index}].entityType deve ser um dos: ${LINKED_ENTITY_TYPES.join(', ')}`);
+          }
+          if (!ref || typeof ref.entityId !== 'string' || ref.entityId.length === 0) {
+            errors.push(`linkedEntityRefs[${index}].entityId deve ser string não vazia`);
+          }
+        });
+      }
+    }
+
     // Valida tipos de arquivo permitidos
     const allowedTypes = ['RAW', 'ZIP', 'CSV', 'XLS', 'XLSX', 'PDF', 'TXT'];
     if (typeof data.fileType === 'string' && !allowedTypes.includes(data.fileType.toUpperCase())) {
@@ -87,6 +115,7 @@ class SampleFileModel {
       fileType: data.fileType.toUpperCase(), // Tipo: RAW, ZIP, CSV, XLS, XLSX, PDF, TXT
       fileRole: data.fileRole || 'raw', // dict-02 ELM-0317 -- papel no pipeline
       fileFormat: data.fileFormat || SampleFileModel.getFileFormatFromType(data.fileType), // dict-02 ELM-0319 -- MIME/EDAM
+      mimeType: data.mimeType || null, // V2E-0471 - tipo MIME canônico da extensão (#1321)
       fileSize: data.fileSize, // Tamanho em bytes
       storagePath: data.storagePath, // Caminho no sistema de arquivos (não exposto ao frontend)
       storageUri: data.storageUri || null, // RF007 - URI estável de Object Storage
@@ -99,6 +128,10 @@ class SampleFileModel {
       encryptionTag: data.encryptionTag || null,
       accessPolicy: data.accessPolicy || null, // RF007 - restrições de acesso vigentes
       uploaderAnonId: data.uploaderAnonId || null, // ID anonimizado do uploader (LGPD)
+      ownerId: data.ownerId || data.uploaderAnonId || null, // V2E-0474 - owner (#1321)
+      linkedEntityRefs: Array.isArray(data.linkedEntityRefs) // V2E-0476 - vínculos canônicos (#1321)
+        ? data.linkedEntityRefs.map(r => ({ entityType: r.entityType, entityId: r.entityId }))
+        : [],
       uploadDate: data.uploadDate || new Date(),
       createdAt: new Date(),
       updatedAt: new Date()
@@ -187,6 +220,7 @@ class SampleFileModel {
 }
 
 SampleFileModel.FILE_ROLES = FILE_ROLES;
+SampleFileModel.LINKED_ENTITY_TYPES = LINKED_ENTITY_TYPES;
 
 module.exports = SampleFileModel;
 

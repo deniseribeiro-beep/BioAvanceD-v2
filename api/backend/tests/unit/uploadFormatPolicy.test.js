@@ -8,7 +8,8 @@ const path = require('path');
 const {
   FORMAT_POLICY,
   isMimeAllowedForExtension,
-  checkFileSignature
+  checkFileSignature,
+  canonicalMimeType
 } = require('../../src/utils/uploadFormatPolicy');
 
 // #1321 (RF007 AC1, RNF029 C1): an upload's extension, MIME and leading
@@ -158,5 +159,30 @@ describe('uploadFormatPolicy - isMimeAllowedForExtension', () => {
   it('rejects a missing or empty MIME', () => {
     expect(isMimeAllowedForExtension('.csv', undefined)).toBe(false);
     expect(isMimeAllowedForExtension('.csv', '')).toBe(false);
+  });
+});
+
+// RF007 AC3, V2E-0471 (#1321): a DataFile's mimeType is its extension's
+// canonical type, never the client's declared one.
+describe('canonicalMimeType', () => {
+  it('answers the first MIME of the extension policy', () => {
+    expect(canonicalMimeType('.csv')).toBe('text/csv');
+    expect(canonicalMimeType('.fastq.gz')).toBe('application/gzip');
+  });
+
+  it('answers text/plain for a .vcf, a Variant Call Format file, never a vCard, and still accepts the vCard MIMEs browsers send', () => {
+    expect(canonicalMimeType('.vcf')).toBe('text/plain');
+    expect(isMimeAllowedForExtension('.vcf', 'text/vcard')).toBe(true);
+    expect(isMimeAllowedForExtension('.vcf', 'text/x-vcard')).toBe(true);
+  });
+
+  it('answers application/octet-stream for a policy with no MIME list', () => {
+    expect(canonicalMimeType('.raw')).toBe('application/octet-stream');
+    expect(canonicalMimeType('.bam')).toBe('application/octet-stream');
+  });
+
+  it('answers application/octet-stream for an unknown extension', () => {
+    expect(canonicalMimeType('.xyz')).toBe('application/octet-stream');
+    expect(canonicalMimeType(undefined)).toBe('application/octet-stream');
   });
 });

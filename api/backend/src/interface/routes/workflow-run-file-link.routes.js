@@ -71,6 +71,12 @@ router.post('/', authenticate, requireRole(3, 4), async (req, res) => {
       { _id: workflowRun._id },
       { $addToSet: { [arrayField]: fileId }, $set: { updatedAt: new Date() } }
     );
+    // RF007 AC5, V2E-0476 (#1321): the file records the run too. The keys
+    // keep this order, so a repeated link adds no second entry.
+    await db.collection(foundInCollection).updateOne(
+      { _id: new ObjectId(fileId) },
+      { $addToSet: { linkedEntityRefs: { entityType: 'WorkflowRun', entityId: String(workflowRun.workflowRunId || workflowRun._id) } } }
+    );
 
     if (req.user) {
       auditLogger.init(db);

@@ -13,7 +13,8 @@ const { isSampleInOrganizationScope } = require('../services/sampleTenancy.servi
 // implementation -- see fileCrypto.js for the RF007/RNF029 rationale.
 const { encryptFileBuffer, decryptFileBuffer, computeChecksum, assertFileEncryptionConfigured } = require('../utils/fileCrypto');
 const { STORAGE_BASE } = require('../config/uploadConfig');
-const { isMimeAllowedForExtension, checkFileSignature } = require('../utils/uploadFormatPolicy');
+const { isMimeAllowedForExtension, checkFileSignature, canonicalMimeType } = require('../utils/uploadFormatPolicy');
+const { resolveLinkedEntityRefs } = require('../services/dataFileLinks.service');
 const { recordReplacement, discardVersion, resolveChangeReason } = require('../services/dataFileVersion.service');
 const objectStorage = require('../infrastructure/objectStorage');
 
@@ -234,6 +235,26 @@ class SampleFileController {
         });
       }
 
+      // RF007 AC5, V2E-0476 (#1321): the specimen, then any consent,
+      // approval or study the upload names. Refused before the object is
+      // written, so a bad link leaves no orphan object, and before any row,
+      // so removing the staging file destroys no evidence.
+      const { refs: linkedEntityRefs, errors: linkErrors } = await resolveLinkedEntityRefs(
+        db,
+        req.body || {},
+        { entityType: 'Specimen', entityId: sample._id.toString() }
+      );
+      if (linkErrors.length > 0) {
+        if (fs.existsSync(file.path)) {
+          fs.unlinkSync(file.path);
+        }
+        return res.status(422).json({
+          success: false,
+          error: 'Vínculo inválido',
+          details: linkErrors
+        });
+      }
+
       // RF007 AC#3/AC#4/AC#5 - checksum do conteúdo original, cifra em
       // repouso (RNF029) e URI estável de Object Storage. O conteúdo em
       // disco é substituído pelo ciphertext; o checksum é sempre calculado
@@ -270,6 +291,7 @@ class SampleFileController {
         fileType: fileType,
         fileRole: fileRole || 'raw',
         fileFormat: SampleFileModel.getFileFormatFromType(fileType),
+        mimeType: canonicalMimeType(path.extname(file.originalname).toLowerCase()),
         fileSize: file.size,
         storagePath: stored.path,
         storageUri,
@@ -285,6 +307,8 @@ class SampleFileController {
         // uploadSampleFiles/deleteSampleFiles (Admin/Coordenador).
         accessPolicy: { view: 'authenticated', manage: ['admin', 'coordinator'] },
         uploaderAnonId: uploaderAnonId,
+        ownerId: uploaderAnonId,
+        linkedEntityRefs,
         uploadDate: new Date(),
         createdAt: new Date(),
         updatedAt: new Date()
@@ -323,7 +347,8 @@ class SampleFileController {
             fileType: fileType,
             specimenId: sample._id.toString(),
             checksum,
-            checksumAlgorithm: 'sha256'
+            checksumAlgorithm: 'sha256',
+            linkedEntityRefs: sampleFile.linkedEntityRefs
             // Não inclui dados sensíveis
           },
           req: req,
@@ -342,8 +367,11 @@ class SampleFileController {
           fileType: sampleFile.fileType,
           fileRole: sampleFile.fileRole,
           fileFormat: sampleFile.fileFormat,
+          mimeType: sampleFile.mimeType,
           fileSize: sampleFile.fileSize,
           uploaderAnonId: sampleFile.uploaderAnonId,
+          ownerId: sampleFile.ownerId,
+          linkedEntityRefs: sampleFile.linkedEntityRefs,
           uploadDate: sampleFile.uploadDate,
           uri: sampleFile.storageUri,
           storageObjectVersion: sampleFile.storageObjectVersion,
@@ -433,6 +461,7 @@ class SampleFileController {
         fileType: file.fileType,
         fileRole: file.fileRole,
         fileFormat: file.fileFormat,
+        mimeType: file.mimeType,
         fileSize: file.fileSize,
         uri: file.storageUri,
         checksum: file.checksum,
@@ -443,6 +472,8 @@ class SampleFileController {
         },
         accessPolicy: file.accessPolicy,
         uploaderAnonId: file.uploaderAnonId, // Apenas ID anonimizado
+        ownerId: file.ownerId,
+        linkedEntityRefs: file.linkedEntityRefs,
         uploadDate: file.uploadDate,
         createdAt: file.createdAt
         // storagePath não é retornado por segurança
@@ -898,6 +929,9 @@ class SampleFileController {
         fileName: file.originalname,
         fileType,
         fileFormat: SampleFileModel.getFileFormatFromType(fileType),
+        // V2E-0471 (#1321): the new binary's type. ownerId and
+        // linkedEntityRefs belong to the DataFile, not its version.
+        mimeType: canonicalMimeType(path.extname(file.originalname).toLowerCase()),
         fileSize: file.size,
         storagePath: stored.path,
         storageUri,
@@ -984,6 +1018,7 @@ class SampleFileController {
           fileType: updatedFields.fileType,
           fileRole: updatedFields.fileRole !== undefined ? updatedFields.fileRole : fileRecord.fileRole,
           fileFormat: updatedFields.fileFormat,
+          mimeType: updatedFields.mimeType,
           fileSize: updatedFields.fileSize,
           uploaderAnonId: fileRecord.uploaderAnonId,
           uploadDate: fileRecord.uploadDate,

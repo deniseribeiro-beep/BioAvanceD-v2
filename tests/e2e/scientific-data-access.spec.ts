@@ -133,6 +133,46 @@ test.describe('Scientific files (RF007) — real backend', () => {
     await assertAuditEventRecorded(request, apiBaseURL!, admin.token, listWatch);
   });
 
+  test('links a file to its specimen and a study, and records its MIME type and owner (AC#3/AC#5, V2E-0471/0474/0476, #1321)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const sampleID = await createRealSample(request, admin.token);
+
+    const studyId = `study-rf007-ac5-${Date.now()}`;
+    const createStudy = await request.post(`${apiBaseURL}/api/studies`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { studyId, studyTitle: `e2e RF007 AC5 ${studyId}`, ethicsApprovalId: ['CAAE-e2e-rf007-ac5'] },
+    });
+    expect(createStudy.status()).toBe(201);
+
+    const upload = await request.post(`${apiBaseURL}/api/samples/${sampleID}/files/upload`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      multipart: {
+        file: { name: 'raw-data.csv', mimeType: 'text/csv', buffer: Buffer.from('a,b\n1,2\n') },
+        studyId,
+      },
+    });
+    expect(upload.status()).toBe(201);
+    const { data } = await upload.json();
+    expect(data.mimeType).toBe('text/csv');
+    expect(data.ownerId).toBe(data.uploaderAnonId);
+    expect(data.linkedEntityRefs).toEqual([
+      { entityType: 'Specimen', entityId: data.specimenId },
+      { entityType: 'Study', entityId: studyId },
+    ]);
+
+    // A study that does not exist is refused before anything is stored.
+    const refused = await request.post(`${apiBaseURL}/api/samples/${sampleID}/files/upload`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      multipart: {
+        file: { name: 'raw-data.csv', mimeType: 'text/csv', buffer: Buffer.from('a,b\n3,4\n') },
+        studyId: `no-such-study-${Date.now()}`,
+      },
+    });
+    expect(refused.status()).toBe(422);
+  });
+
   test('accepts an explicit fileRole and records it (dict-02 ELM-0317, #679)', async ({ request }) => {
     const admin = await realLogin(request);
     const sampleID = await createRealSample(request, admin.token);

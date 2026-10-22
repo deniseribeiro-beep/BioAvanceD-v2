@@ -2206,6 +2206,167 @@ describe('sample-file.controller', () => {
     });
   });
 
+  // RF007 AC3/AC5, V2E-0471/V2E-0474/V2E-0476 (#1321): a DataFile records its
+  // canonical MIME, its owner and every entity it is linked to.
+  describe('DataFile links and Core companions (#1321)', () => {
+    function linkDb({ consents = null, approvals = null, studies = null } = {}) {
+      const sample = { _id: new ObjectId() };
+      const insertOne = vi.fn().mockResolvedValue({ insertedId: new ObjectId() });
+      const lookups = {
+        patientConsents: { findOne: vi.fn().mockResolvedValue(consents) },
+        collectionGovernanceApprovals: { findOne: vi.fn().mockResolvedValue(approvals) },
+        studies: { findOne: vi.fn().mockResolvedValue(studies) }
+      };
+      const db = createDb({
+        samples: { findOne: vi.fn().mockResolvedValue(sample) },
+        sample_files: { insertOne },
+        ...lookups
+      });
+      return { db, sample, insertOne, lookups };
+    }
+
+    function linkReq(db, sample, body) {
+      return {
+        app: { locals: { db } },
+        params: { specimenId: sample._id.toString() },
+        file: { path: '/tmp/file.csv', originalname: 'file.csv', size: 100 },
+        body,
+        user: null
+      };
+    }
+
+    beforeEach(() => {
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('a,b\n1,2\n'));
+      vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+      vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
+    });
+
+    it('uploadFile with no link fields records the specimen as the only linked entity, the canonical mimeType and the uploader as owner', async () => {
+      const { db, sample, insertOne } = linkDb();
+      stubFileStore();
+      const res = createRes();
+
+      await controller.uploadFile(linkReq(db, sample, {}), res);
+
+      expect(res.status).toHaveBeenCalledWith(201);
+      const record = insertOne.mock.calls[0][0];
+      const specimenRef = { entityType: 'Specimen', entityId: sample._id.toString() };
+      expect(record.linkedEntityRefs).toEqual([specimenRef]);
+      expect(record.mimeType).toBe('text/csv');
+      expect(record.ownerId).toBe('USR-SYSTEM');
+      expect(record.ownerId).toBe(record.uploaderAnonId);
+      const body = res.json.mock.calls[0][0];
+      expect(body.data.linkedEntityRefs).toEqual([specimenRef]);
+      expect(body.data.mimeType).toBe('text/csv');
+      expect(body.data.ownerId).toBe('USR-SYSTEM');
+    });
+
+    it('uploadFile with a found studyId records the specimen, then the study', async () => {
+      const { db, sample, insertOne, lookups } = linkDb({ studies: { studyId: 'ST-1' } });
+      stubFileStore();
+      const res = createRes();
+
+      await controller.uploadFile(linkReq(db, sample, { studyId: 'ST-1' }), res);
+
+      expect(res.status).toHaveBeenCalledWith(201);
+      expect(lookups.studies.findOne).toHaveBeenCalledWith({ studyId: 'ST-1' });
+      expect(insertOne.mock.calls[0][0].linkedEntityRefs).toEqual([
+        { entityType: 'Specimen', entityId: sample._id.toString() },
+        { entityType: 'Study', entityId: 'ST-1' }
+      ]);
+    });
+
+    it('uploadFile with a consent, an approval and a study, all found, records them in that order', async () => {
+      const { db, sample, insertOne, lookups } = linkDb({
+        consents: { consentId: 'C-1' },
+        approvals: { approvalId: 'A-1' },
+        studies: { studyId: 'ST-1' }
+      });
+      stubFileStore();
+      const res = createRes();
+
+      await controller.uploadFile(linkReq(db, sample, { studyId: 'ST-1', approvalId: 'A-1', consentId: 'C-1' }), res);
+
+      expect(res.status).toHaveBeenCalledWith(201);
+      expect(lookups.patientConsents.findOne).toHaveBeenCalledWith({ consentId: 'C-1' });
+      expect(lookups.collectionGovernanceApprovals.findOne).toHaveBeenCalledWith({ approvalId: 'A-1' });
+      expect(insertOne.mock.calls[0][0].linkedEntityRefs).toEqual([
+        { entityType: 'Specimen', entityId: sample._id.toString() },
+        { entityType: 'Consent', entityId: 'C-1' },
+        { entityType: 'CollectionGovernanceApproval', entityId: 'A-1' },
+        { entityType: 'Study', entityId: 'ST-1' }
+      ]);
+    });
+
+    it('uploadFile with an unknown studyId answers 422, inserts no row, writes no object and removes the staging file', async () => {
+      const { db, sample, insertOne } = linkDb();
+      const putObject = stubFileStore();
+      const res = createRes();
+
+      await controller.uploadFile(linkReq(db, sample, { studyId: 'ST-404' }), res);
+
+      expect(res.status).toHaveBeenCalledWith(422);
+      expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Vínculo inválido', details: ['studyId ST-404 não encontrado'] });
+      expect(insertOne).not.toHaveBeenCalled();
+      expect(putObject).not.toHaveBeenCalled();
+      expect(fs.unlinkSync).toHaveBeenCalledWith('/tmp/file.csv');
+    });
+
+    it('uploadFile with a repeated consentId field (an array) answers 422 without a lookup', async () => {
+      const { db, sample, insertOne, lookups } = linkDb({ consents: { consentId: 'C-1' } });
+      const putObject = stubFileStore();
+      const res = createRes();
+
+      await controller.uploadFile(linkReq(db, sample, { consentId: ['C-1', 'C-2'] }), res);
+
+      expect(res.status).toHaveBeenCalledWith(422);
+      expect(res.json.mock.calls[0][0].details).toEqual(['consentId deve ser string não vazia']);
+      expect(lookups.patientConsents.findOne).not.toHaveBeenCalled();
+      expect(insertOne).not.toHaveBeenCalled();
+      expect(putObject).not.toHaveBeenCalled();
+    });
+
+    it('replaceFile recomputes mimeType and leaves linkedEntityRefs and ownerId as they are', async () => {
+      const specimenId = new ObjectId().toString();
+      const fileRecord = {
+        _id: new ObjectId(),
+        specimenId,
+        fileName: 'old.csv',
+        fileType: 'CSV',
+        fileSize: 10,
+        mimeType: 'text/csv',
+        ownerId: 'anon-owner',
+        linkedEntityRefs: [{ entityType: 'Specimen', entityId: specimenId }],
+        storagePath: '/x/old.csv',
+        storageUri: OLD_STORAGE_URI,
+        checksum: OLD_CHECKSUM
+      };
+      const updateOne = vi.fn().mockResolvedValue({ modifiedCount: 1 });
+      const db = createDb({
+        sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord), updateOne },
+        dataFileVersions: createVersionsCollection()
+      });
+      stubFileStore();
+      const req = {
+        app: { locals: { db } },
+        params: { specimenId, fileID: fileRecord._id.toString() },
+        file: { path: '/tmp/new.pdf', originalname: 'new.pdf', size: 20 },
+        user: null
+      };
+      const res = createRes();
+
+      await controller.replaceFile(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      const updated = updateOne.mock.calls[0][1].$set;
+      expect(updated.mimeType).toBe('application/pdf');
+      expect(updated).not.toHaveProperty('linkedEntityRefs');
+      expect(updated).not.toHaveProperty('ownerId');
+      expect(res.json.mock.calls[0][0].data.mimeType).toBe('application/pdf');
+    });
+  });
+
   describe('req.t translation branch (truthy req.t)', () => {
     const t = vi.fn((key) => key);
 

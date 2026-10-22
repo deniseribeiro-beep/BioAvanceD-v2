@@ -182,6 +182,170 @@ describe('createLinkedFileController', () => {
     });
   });
 
+  // RF007 AC3/AC5, V2E-0471/V2E-0474/V2E-0476 (#1321): a DataFile records its
+  // canonical MIME, its owner and every entity it is linked to.
+  describe('DataFile links and Core companions (#1321)', () => {
+    function linkDb({ consents = null, approvals = null, studies = null } = {}) {
+      const insertOne = vi.fn().mockResolvedValue({ insertedId: new ObjectId() });
+      const lookups = {
+        patientConsents: { findOne: vi.fn().mockResolvedValue(consents) },
+        collectionGovernanceApprovals: { findOne: vi.fn().mockResolvedValue(approvals) },
+        studies: { findOne: vi.fn().mockResolvedValue(studies) }
+      };
+      const db = createDb({
+        widgets: { findOne: vi.fn().mockResolvedValue({ _id: new ObjectId(), widgetId: 'w-1' }) },
+        widgetFiles: { insertOne },
+        ...lookups
+      });
+      return { db, insertOne, lookups };
+    }
+
+    function linkReq(db, body) {
+      return {
+        app: { locals: { db } },
+        params: { widgetId: 'w-1' },
+        user: null,
+        file: { path: '/tmp/x.csv', originalname: 'x.csv', size: 5 },
+        body
+      };
+    }
+
+    beforeEach(() => {
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('a,b\n1,2\n'));
+      vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+      vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
+    });
+
+    it('uploadFile with no link fields records the parent as the only linked entity, the canonical mimeType and the uploader as owner', async () => {
+      const { db, insertOne } = linkDb();
+      stubFileStore();
+      const res = createRes();
+
+      await buildController().uploadFile(linkReq(db, {}), res);
+
+      expect(res.status).toHaveBeenCalledWith(201);
+      const record = insertOne.mock.calls[0][0];
+      const parentRef = { entityType: 'Widget', entityId: 'w-1' };
+      expect(record.linkedEntityRefs).toEqual([parentRef]);
+      expect(record.mimeType).toBe('text/csv');
+      expect(record.ownerId).toBe('USR-SYSTEM');
+      expect(record.ownerId).toBe(record.uploaderAnonId);
+      const body = res.json.mock.calls[0][0];
+      expect(body.data.linkedEntityRefs).toEqual([parentRef]);
+      expect(body.data.mimeType).toBe('text/csv');
+      expect(body.data.ownerId).toBe('USR-SYSTEM');
+    });
+
+    it('the parent entity type follows resourceType, or the parentEntityType opt', async () => {
+      const first = linkDb();
+      stubFileStore();
+      await buildController({ resourceType: 'AssayFile' }).uploadFile(linkReq(first.db, {}), createRes());
+      expect(first.insertOne.mock.calls[0][0].linkedEntityRefs).toEqual([{ entityType: 'Assay', entityId: 'w-1' }]);
+
+      const second = linkDb();
+      await buildController({ parentEntityType: 'Dataset' }).uploadFile(linkReq(second.db, {}), createRes());
+      expect(second.insertOne.mock.calls[0][0].linkedEntityRefs).toEqual([{ entityType: 'Dataset', entityId: 'w-1' }]);
+    });
+
+    it('uploadFile with a found studyId records the parent, then the study', async () => {
+      const { db, insertOne, lookups } = linkDb({ studies: { studyId: 'ST-1' } });
+      stubFileStore();
+      const res = createRes();
+
+      await buildController().uploadFile(linkReq(db, { studyId: 'ST-1' }), res);
+
+      expect(res.status).toHaveBeenCalledWith(201);
+      expect(lookups.studies.findOne).toHaveBeenCalledWith({ studyId: 'ST-1' });
+      expect(insertOne.mock.calls[0][0].linkedEntityRefs).toEqual([
+        { entityType: 'Widget', entityId: 'w-1' },
+        { entityType: 'Study', entityId: 'ST-1' }
+      ]);
+    });
+
+    it('uploadFile with a consent, an approval and a study, all found, records them in that order', async () => {
+      const { db, insertOne } = linkDb({
+        consents: { consentId: 'C-1' },
+        approvals: { approvalId: 'A-1' },
+        studies: { studyId: 'ST-1' }
+      });
+      stubFileStore();
+      const res = createRes();
+
+      await buildController().uploadFile(linkReq(db, { studyId: 'ST-1', approvalId: ' A-1 ', consentId: 'C-1' }), res);
+
+      expect(res.status).toHaveBeenCalledWith(201);
+      expect(insertOne.mock.calls[0][0].linkedEntityRefs).toEqual([
+        { entityType: 'Widget', entityId: 'w-1' },
+        { entityType: 'Consent', entityId: 'C-1' },
+        { entityType: 'CollectionGovernanceApproval', entityId: 'A-1' },
+        { entityType: 'Study', entityId: 'ST-1' }
+      ]);
+    });
+
+    it('uploadFile with an unknown studyId answers 422, inserts no row, writes no object and removes the staging file', async () => {
+      const { db, insertOne } = linkDb();
+      const putObject = stubFileStore();
+      const res = createRes();
+
+      await buildController().uploadFile(linkReq(db, { studyId: 'ST-404' }), res);
+
+      expect(res.status).toHaveBeenCalledWith(422);
+      expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Vínculo inválido', details: ['studyId ST-404 não encontrado'] });
+      expect(insertOne).not.toHaveBeenCalled();
+      expect(putObject).not.toHaveBeenCalled();
+      expect(fs.unlinkSync).toHaveBeenCalledWith('/tmp/x.csv');
+    });
+
+    it('uploadFile with a repeated consentId field (an array) and an unknown approvalId answers 422 naming both', async () => {
+      const { db, insertOne, lookups } = linkDb({ consents: { consentId: 'C-1' } });
+      const putObject = stubFileStore();
+      const res = createRes();
+
+      await buildController().uploadFile(linkReq(db, { consentId: ['C-1', 'C-2'], approvalId: 'A-404' }), res);
+
+      expect(res.status).toHaveBeenCalledWith(422);
+      expect(res.json.mock.calls[0][0].details).toEqual([
+        'consentId deve ser string não vazia',
+        'approvalId A-404 não encontrado'
+      ]);
+      expect(lookups.patientConsents.findOne).not.toHaveBeenCalled();
+      expect(insertOne).not.toHaveBeenCalled();
+      expect(putObject).not.toHaveBeenCalled();
+    });
+
+    it('replaceFile recomputes mimeType and leaves linkedEntityRefs and ownerId as they are', async () => {
+      const fileRecord = {
+        _id: new ObjectId(), widgetId: 'w-1', fileName: 'old.csv', mimeType: 'text/csv',
+        ownerId: 'anon-owner', linkedEntityRefs: [{ entityType: 'Widget', entityId: 'w-1' }],
+        storagePath: '/tmp/old.csv', storageUri: 'objstore://widgets/w-1/files/old.csv', checksum: OLD_CHECKSUM
+      };
+      const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+      const db = createDb({
+        widgets: { findOne: vi.fn().mockResolvedValue({ widgetId: 'w-1' }) },
+        widgetFiles: { findOne: vi.fn().mockResolvedValue(fileRecord), updateOne },
+        dataFileVersions: createVersionsCollection()
+      });
+      stubFileStore();
+      const req = {
+        app: { locals: { db } },
+        params: { widgetId: 'w-1', fileID: fileRecord._id.toString() },
+        user: null,
+        file: { path: '/tmp/new.json', originalname: 'new.json', size: 11 }
+      };
+      const res = createRes();
+
+      await buildController().replaceFile(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      const updated = updateOne.mock.calls[0][1].$set;
+      expect(updated.mimeType).toBe('application/json');
+      expect(updated).not.toHaveProperty('linkedEntityRefs');
+      expect(updated).not.toHaveProperty('ownerId');
+      expect(res.json.mock.calls[0][0].data.mimeType).toBe('application/json');
+    });
+  });
+
   describe('listFiles', () => {
     it('404s when the parent entity does not exist', async () => {
       const controller = buildController();

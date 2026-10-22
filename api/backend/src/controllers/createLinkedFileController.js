@@ -7,7 +7,8 @@ const logger = require('../utils/logger');
 const { getUserAnonId } = require('../utils/userAnonymization');
 const { encryptFileBuffer, decryptFileBuffer, computeChecksum, assertFileEncryptionConfigured } = require('../utils/fileCrypto');
 const { STORAGE_BASE } = require('../config/uploadConfig');
-const { isMimeAllowedForExtension, checkFileSignature } = require('../utils/uploadFormatPolicy');
+const { isMimeAllowedForExtension, checkFileSignature, canonicalMimeType } = require('../utils/uploadFormatPolicy');
+const { resolveLinkedEntityRefs } = require('../services/dataFileLinks.service');
 const { recordReplacement, discardVersion, resolveChangeReason } = require('../services/dataFileVersion.service');
 const objectStorage = require('../infrastructure/objectStorage');
 
@@ -48,6 +49,9 @@ function buildParentIdQuery(parentIdField, rawId) {
  * @param {string} opts.storageSubdir - e.g. 'assays' -> storage/<storageSubdir>/<parentId>/files/
  * @param {string} opts.resourceType - audit resourceType, e.g. 'AssayFile'
  * @param {string} opts.moduleLabel - audit module label, e.g. 'Ensaios'
+ * @param {string} [opts.parentEntityType] - the parent's linkedEntityRefs
+ *   entityType (RF007 AC5, #1321); defaults to resourceType without its
+ *   'File' suffix, e.g. 'Assay'
  * @param {(parentDoc: object, req: import('express').Request) => Promise<boolean>} [opts.checkOrgScope]
  *   Optional: resolve+check organization scope against the parent document.
  *   Returns true if allowed. Omit when the parent entity has no
@@ -62,7 +66,8 @@ function createLinkedFileController(opts) {
     storageSubdir,
     resourceType,
     moduleLabel,
-    checkOrgScope
+    checkOrgScope,
+    parentEntityType = resourceType.replace(/File$/, '')
   } = opts;
 
   const storage = multer.diskStorage({
@@ -198,6 +203,19 @@ function createLinkedFileController(opts) {
 
       const fileType = (extensionOf(file.originalname) || '').replace(/^\./, '').toUpperCase();
 
+      // RF007 AC5, V2E-0476 (#1321): the parent, then any consent, approval
+      // or study the upload names. Refused before the object is written and
+      // before any row, so removing the staging file destroys no evidence.
+      const { refs: linkedEntityRefs, errors: linkErrors } = await resolveLinkedEntityRefs(
+        db,
+        req.body || {},
+        { entityType: parentEntityType, entityId: String(parent[parentIdField] || parentId) }
+      );
+      if (linkErrors.length > 0) {
+        cleanupUploadedFile(req);
+        return res.status(422).json({ success: false, error: 'Vínculo inválido', details: linkErrors });
+      }
+
       // #938: fail closed BEFORE the plaintext multer already wrote to disk
       // can be left there. This used to read `if (encryption)` as
       // "skip encryption when no key is configured", so a keyless
@@ -226,6 +244,7 @@ function createLinkedFileController(opts) {
         [parentIdField]: parentIdValue,
         fileName: file.originalname,
         fileType,
+        mimeType: canonicalMimeType(extensionOf(file.originalname)),
         fileSize: file.size,
         storagePath: stored.path,
         storageUri,
@@ -238,6 +257,8 @@ function createLinkedFileController(opts) {
         encryptionTag: encryption ? encryption.tag : null,
         accessPolicy: { view: 'authenticated', manage: ['administrator', 'coordinator'] },
         uploaderAnonId,
+        ownerId: uploaderAnonId,
+        linkedEntityRefs,
         uploadDate: new Date(),
         createdAt: new Date(),
         updatedAt: new Date()
@@ -250,7 +271,7 @@ function createLinkedFileController(opts) {
         action: 'file_upload',
         resourceId: insertResult.insertedId.toString(),
         message: `Upload de arquivo: ${file.originalname} (${(file.size / 1024).toFixed(2)} KB)`,
-        payload: { fileName: file.originalname, fileSize: file.size, fileType, [parentIdField]: parentIdValue, checksum, checksumAlgorithm: 'sha256' }
+        payload: { fileName: file.originalname, fileSize: file.size, fileType, [parentIdField]: parentIdValue, checksum, checksumAlgorithm: 'sha256', linkedEntityRefs }
       });
 
       return res.status(201).json({
@@ -261,8 +282,11 @@ function createLinkedFileController(opts) {
           [parentIdField]: parentIdValue,
           fileName: fileDoc.fileName,
           fileType: fileDoc.fileType,
+          mimeType: fileDoc.mimeType,
           fileSize: fileDoc.fileSize,
           uploaderAnonId: fileDoc.uploaderAnonId,
+          ownerId: fileDoc.ownerId,
+          linkedEntityRefs: fileDoc.linkedEntityRefs,
           uploadDate: fileDoc.uploadDate,
           uri: fileDoc.storageUri,
           storageObjectVersion: fileDoc.storageObjectVersion,
@@ -310,6 +334,7 @@ function createLinkedFileController(opts) {
         [parentIdField]: file[parentIdField],
         fileName: file.fileName,
         fileType: file.fileType,
+        mimeType: file.mimeType,
         fileSize: file.fileSize,
         uri: file.storageUri,
         checksum: file.checksum,
@@ -317,6 +342,8 @@ function createLinkedFileController(opts) {
         encryption: { encrypted: Boolean(file.encryptionAlgorithm), algorithm: file.encryptionAlgorithm },
         accessPolicy: file.accessPolicy,
         uploaderAnonId: file.uploaderAnonId,
+        ownerId: file.ownerId,
+        linkedEntityRefs: file.linkedEntityRefs,
         uploadDate: file.uploadDate,
         createdAt: file.createdAt
       }));
@@ -520,6 +547,9 @@ function createLinkedFileController(opts) {
       const updatedFields = {
         fileName: file.originalname,
         fileType,
+        // V2E-0471 (#1321): the new binary's type. ownerId and
+        // linkedEntityRefs belong to the DataFile, not its version.
+        mimeType: canonicalMimeType(extensionOf(file.originalname)),
         fileSize: file.size,
         storagePath: stored.path,
         storageUri,
@@ -576,6 +606,7 @@ function createLinkedFileController(opts) {
           [parentIdField]: parentIdValue,
           fileName: updatedFields.fileName,
           fileType: updatedFields.fileType,
+          mimeType: updatedFields.mimeType,
           fileSize: updatedFields.fileSize,
           uploaderAnonId: fileRecord.uploaderAnonId,
           uploadDate: fileRecord.uploadDate,
