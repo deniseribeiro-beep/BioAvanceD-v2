@@ -17,10 +17,11 @@ const auditLogger = require('../../src/utils/auditLogger');
 // Coordenador (role 3) caller and a transaction-capable db mock.
 
 const USER = 'ingest-coord';
+const TECNICO = 'ingest-tecnico';
 
-function token() {
+function token({ userID = USER, accessType = 3, roleName = 'Coordenador' } = {}) {
   return jwt.sign(
-    { userID: USER, accessType: 3, roleName: 'Coordenador', name: 'QA', mfaVerified: true },
+    { userID, accessType, roleName, name: 'QA', mfaVerified: true },
     process.env.JWT_SECRET,
     { expiresIn: '1h' }
   );
@@ -39,9 +40,9 @@ function ingestionAuditRows() {
   return auditLog.mock.calls.map(([entry]) => entry).filter((entry) => String(entry.action).startsWith('INGESTION_'));
 }
 
-function givenDb() {
+function givenDb({ extraUsers = [], releaseStatus = 'active' } = {}) {
   const stores = {
-    canonicalModelReleases: createMatchingCollection([{ canonicalModelReleaseId: 'release-2.0.0', releaseStatus: 'active' }]),
+    canonicalModelReleases: createMatchingCollection([{ canonicalModelReleaseId: 'release-2.0.0', releaseStatus }]),
     security_config: createMatchingCollection([{ _id: 'main', configurationReleaseId: 'cfg-release-7' }]),
     datasets: createMatchingCollection([]),
     ingestionQuarantineRecords: createMatchingCollection([]),
@@ -50,7 +51,7 @@ function givenDb() {
     dataQualityAssessments: createMatchingCollection([]),
     graph_projection_outbox: createCollectionMock(),
   };
-  app.locals.db = createDbMock({ ...stores, ...buildRbacCollections([{ userAccountId: USER, accessType: 3 }]) });
+  app.locals.db = createDbMock({ ...stores, ...buildRbacCollections([{ userAccountId: USER, accessType: 3 }, ...extraUsers]) });
   return stores;
 }
 
@@ -62,8 +63,14 @@ const PROVENANCE = {
 };
 const DATASET = { datasetTitle: 'Coorte A', datasetVersion: '1.0', creators: ['Equipe A'], license: 'CC-BY-4.0' };
 
-function post(body) {
-  return request(app).post('/api/ingestion/records').set('Authorization', `Bearer ${token()}`).send(body);
+function post(body, caller) {
+  return request(app).post('/api/ingestion/records').set('Authorization', `Bearer ${token(caller)}`).send(body);
+}
+
+// RF029 AC10: a 401 or 403 never reaches the route, so its audit row is the
+// global auditRequest one, written in a setImmediate after the response.
+function accessDenialRow(action, statusCode) {
+  return expect.objectContaining({ action, payload: expect.objectContaining({ path: '/api/ingestion/records', statusCode }) });
 }
 
 describe('POST /api/ingestion/records (RF029, #1318)', () => {
@@ -195,5 +202,38 @@ describe('POST /api/ingestion/records (RF029, #1318)', () => {
     const res = await request(app).post('/api/ingestion/records').send({ entityType: 'Dataset', payload: DATASET, provenance: PROVENANCE });
 
     expect(res.status).toBe(401);
+    // RF029 AC10: the access denial is audited, and the route writes no row.
+    await vi.waitFor(() => expect(auditLog).toHaveBeenCalledWith(accessDenialRow('UNAUTHORIZED', 401)));
+    expect(ingestionAuditRows()).toEqual([]);
+  });
+
+  it('403: a Técnico (role 2) is refused by requireRole, audited as FORBIDDEN, and nothing is written (RF029 AC10)', async () => {
+    const stores = givenDb({ extraUsers: [{ userAccountId: TECNICO, accessType: 2 }] });
+
+    const res = await post({ entityType: 'Dataset', payload: DATASET, provenance: PROVENANCE }, { userID: TECNICO, accessType: 2, roleName: 'Técnico' });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(403);
+    expect(res.body.error).toBe('Acesso negado');
+    expect(stores.datasets.docs).toHaveLength(0);
+    expect(stores.ingestionQuarantineRecords.docs).toHaveLength(0);
+    await vi.waitFor(() => expect(auditLog).toHaveBeenCalledWith(accessDenialRow('FORBIDDEN', 403)));
+    expect(ingestionAuditRows()).toEqual([]);
+  });
+
+  it('503: a canonical release that is not active is refused, audited as a warning, and nothing is written (RF029 AC10)', async () => {
+    const stores = givenDb({ releaseStatus: 'draft' });
+
+    const res = await post({ entityType: 'Dataset', payload: DATASET, provenance: PROVENANCE });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(503);
+    expect(res.body).toMatchObject({ success: false, error: 'CANONICAL_RELEASE_NOT_ACTIVE' });
+    expect(stores.datasets.docs).toHaveLength(0);
+    expect(stores.ingestionQuarantineRecords.docs).toHaveLength(0);
+    expect(ingestionAuditRows()).toEqual([expect.objectContaining({
+      action: 'INGESTION_REFUSED',
+      severity: 'warning',
+      status: 'warning',
+      resourceType: 'Dataset',
+    })]);
   });
 });

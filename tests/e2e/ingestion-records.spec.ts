@@ -1,6 +1,7 @@
 import { test, expect, type APIRequestContext } from '@playwright/test';
 import { realLogin, type RealAuthSession } from './helpers/realAuth';
 import { watchAuditTrail, assertAuditEventRecorded } from './helpers/assertAuditEvent';
+import { completeFirstLoginMfa } from './helpers/completeFirstLoginMfa';
 import {
   findIngestionIdempotencyKey,
   findIngestedRecord,
@@ -11,6 +12,8 @@ import {
   findMissingDataReasons,
   findDataQualityAssessment,
   countDataQualityAssessmentsByScope,
+  findIngestionRefusalRows,
+  countAccessDenialRows,
   closeIngestionDb,
 } from './helpers/queryIngestion';
 
@@ -23,6 +26,7 @@ const apiBaseURL = process.env.PLAYWRIGHT_API_BASE_URL;
 test.skip(!apiBaseURL, 'PLAYWRIGHT_API_BASE_URL not set — run via npm run test:e2e:docker');
 
 const CANONICAL_MODEL_RELEASE_ID = 'release-2.0.0';
+const INGESTION_PATH = '/api/ingestion/records';
 
 test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () => {
   let admin: RealAuthSession;
@@ -331,5 +335,74 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
     const second = await ingest(request, body);
     expect(second.status(), await second.text()).toBe(422);
     expect(await countDataQualityAssessmentsByScope(scopeId)).toBe(1);
+  });
+
+  test('RF029 AC10: an unsupported entityType is refused 422, persists nothing, and writes one INGESTION_REFUSED row', async ({ request }) => {
+    const sourceRecordId = `rf029-e2e-${Date.now()}-unsupported`;
+    // Unique per run, so the stack's persistent logs hold one row for it.
+    // The first char is already upper case, so it is the row's resourceType.
+    const entityType = `Rf029E2eUnsupported${Date.now()}`;
+
+    const res = await ingest(request, { entityType, payload: datasetPayload(), provenance: provenance(sourceRecordId) });
+
+    expect(res.status(), await res.text()).toBe(422);
+    const body = await res.json();
+    expect(body.error).toBe('INGESTION_TARGET_UNSUPPORTED');
+    expect(body.details).toEqual(expect.arrayContaining([expect.stringContaining(entityType)]));
+    expect(await countIngestedBySourceRecordId('datasets', sourceRecordId)).toBe(0);
+    expect(await countIngestedBySourceRecordId('ingestionQuarantineRecords', sourceRecordId)).toBe(0);
+
+    // The route awaits this row before it answers. Refused before the
+    // releases are read, so the row names none.
+    const rows = await findIngestionRefusalRows(entityType);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ status: 'warning', severity: 'warning' });
+    expect(rows[0].payload.canonicalModelReleaseId).toBeNull();
+    expect(rows[0].payload.configurationReleaseId).toBeNull();
+  });
+
+  test('RF029 AC10: a Técnico is refused 403, persists nothing, and the denial is audited as FORBIDDEN', async ({ request }) => {
+    const sourceRecordId = `rf029-e2e-${Date.now()}-forbidden`;
+    const username = `tecnico.rf029.${Date.now()}`;
+    const password = 'Tecnico@123-forte';
+    const registerResponse = await request.post(`${apiBaseURL}/api/users/register`, {
+      headers: auth,
+      data: {
+        name: 'RF029 Técnico Fixture',
+        email: `${username}@example.com`,
+        username,
+        password,
+        accessType: 2,
+        roleName: 'Técnico',
+      },
+    });
+    expect(registerResponse.ok(), await registerResponse.text()).toBeTruthy();
+    const tecnico = await completeFirstLoginMfa(request, apiBaseURL!, username, password);
+    // A delta, not an absolute: the stack's logs persist across runs.
+    const before = await countAccessDenialRows('FORBIDDEN', INGESTION_PATH);
+
+    const res = await request.post(`${apiBaseURL}${INGESTION_PATH}`, {
+      headers: { Authorization: `Bearer ${tecnico.token}` },
+      data: { entityType: 'Dataset', payload: datasetPayload(), provenance: provenance(sourceRecordId) },
+    });
+
+    expect(res.status(), await res.text()).toBe(403);
+    expect((await res.json()).error).toBe('Acesso negado');
+    expect(await countIngestedBySourceRecordId('datasets', sourceRecordId)).toBe(0);
+    // The global request audit writes this row after the response.
+    await expect.poll(() => countAccessDenialRows('FORBIDDEN', INGESTION_PATH)).toBe(before + 1);
+  });
+
+  test('RF029 AC10: a call without a token is refused 401, persists nothing, and the denial is audited as UNAUTHORIZED', async ({ request }) => {
+    const sourceRecordId = `rf029-e2e-${Date.now()}-unauthorized`;
+    const before = await countAccessDenialRows('UNAUTHORIZED', INGESTION_PATH);
+
+    const res = await request.post(`${apiBaseURL}${INGESTION_PATH}`, {
+      data: { entityType: 'Dataset', payload: datasetPayload(), provenance: provenance(sourceRecordId) },
+    });
+
+    expect(res.status(), await res.text()).toBe(401);
+    expect(await countIngestedBySourceRecordId('datasets', sourceRecordId)).toBe(0);
+    await expect.poll(() => countAccessDenialRows('UNAUTHORIZED', INGESTION_PATH)).toBe(before + 1);
   });
 });

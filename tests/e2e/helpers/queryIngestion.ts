@@ -67,6 +67,19 @@ export async function findIngestionAuditRows(action: string, resourceId: string)
   return db.collection('logs').find({ action, resourceId }).toArray();
 }
 
+// RF029 AC10: a refusal the route audits itself, keyed by the request's entityType.
+export async function findIngestionRefusalRows(resourceType: string): Promise<any[]> {
+  const db = await getDb();
+  return db.collection('logs').find({ action: 'INGESTION_REFUSED', resourceType }).toArray();
+}
+
+// RF029 AC10: a 401 or 403 never reaches the route; the global request audit
+// writes its row, named by the request path.
+export async function countAccessDenialRows(action: 'UNAUTHORIZED' | 'FORBIDDEN', path: string): Promise<number> {
+  const db = await getDb();
+  return db.collection('logs').countDocuments({ action, 'payload.path': path });
+}
+
 export async function findCanonicalModelRelease(canonicalModelReleaseId: string): Promise<any> {
   const db = await getDb();
   return db.collection('canonicalModelReleases').findOne({ canonicalModelReleaseId });
