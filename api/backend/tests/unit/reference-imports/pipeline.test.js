@@ -294,6 +294,101 @@ describe('reference-imports pipeline runImport (HPO)', () => {
     expect(fakeDb.collections.referenceDatasetReleases.docs).toHaveLength(1);
   });
 
+  describe('release registration (RF028 AC1)', () => {
+    it('registers before load: the release exists, downloaded, and the run carries its id at the first staging write', async () => {
+      const fakeDb = createFakeDb();
+      const staging = fakeDb.collections.referenceImportStaging;
+      const { insertMany } = staging;
+      let atFirstStage = null;
+      staging.insertMany = async (newDocs) => {
+        if (!atFirstStage) {
+          atFirstStage = {
+            releases: fakeDb.collections.referenceDatasetReleases.docs.map((doc) => ({ ...doc })),
+            runs: fakeDb.collections.referenceImportRuns.docs.map((doc) => ({ ...doc })),
+          };
+        }
+        return insertMany.call(staging, newDocs);
+      };
+
+      const result = await runImport({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor' });
+
+      expect(atFirstStage.releases).toHaveLength(1);
+      const registered = atFirstStage.releases[0];
+      expect(registered.releaseStatus).toBe('downloaded');
+      expect(registered).toMatchObject({
+        sourceId: hpoSource.sourceId,
+        datasetVersion: hpoSource.datasetVersion,
+        license: hpoSource.license,
+        retrievalUri: hpoSource.retrievalUri,
+        sourceChecksum: hpoSource.expectedChecksum,
+        parserVersion: hpoSource.parserVersion,
+        mappingVersion: hpoSource.mappingVersion,
+      });
+      expect(registered.sourceFormat.length).toBeGreaterThan(0);
+      expect(atFirstStage.runs).toHaveLength(1);
+      expect(atFirstStage.runs[0].referenceDatasetReleaseId).toBe(registered.referenceDatasetReleaseId);
+
+      const release = fakeDb.collections.referenceDatasetReleases.docs[0];
+      expect(fakeDb.collections.referenceDatasetReleases.docs).toHaveLength(1);
+      expect(release.referenceDatasetReleaseId).toBe(registered.referenceDatasetReleaseId);
+      expect(release.releaseStatus).toBe('active');
+      expect(result.releaseId).toBe(registered.referenceDatasetReleaseId);
+      expect(fakeDb.collections.terminologyConcepts.docs.every(
+        (concept) => concept.referenceDatasetReleaseId === registered.referenceDatasetReleaseId,
+      )).toBe(true);
+    });
+
+    it('rejected run keeps its release: the registered release ends rejected and is linked from the run and its issues', async () => {
+      const fakeDb = createFakeDb();
+      const rejectAll = () => ({ ok: false, issue: { errorCode: 'TEST_REJECT', errorMessage: 'rejected', severity: 'error' } });
+
+      const result = await runImport({ db: fakeDb, source: hpoSource, normalizeRecord: rejectAll, initiatedBy: 'test-actor' });
+
+      expect(result.approved).toBe(false);
+      const releases = fakeDb.collections.referenceDatasetReleases.docs;
+      expect(releases).toHaveLength(1);
+      expect(releases[0].releaseStatus).toBe('rejected');
+      const releaseId = releases[0].referenceDatasetReleaseId;
+      expect(result.releaseId).toBe(releaseId);
+
+      const runDoc = fakeDb.collections.referenceImportRuns.docs[0];
+      expect(runDoc.runStatus).toBe('failed');
+      expect(runDoc.referenceDatasetReleaseId).toBe(releaseId);
+      const issues = fakeDb.collections.referenceImportIssues.docs;
+      expect(issues.length).toBeGreaterThan(0);
+      expect(issues.every((issue) => issue.referenceDatasetReleaseId === releaseId)).toBe(true);
+      expect(fakeDb.collections.terminologyConcepts.docs).toHaveLength(0);
+    });
+
+    it.each([
+      ['a full run', false],
+      ['a dry run', true],
+    ])('invalid registration on %s writes no release, stages nothing and fails with one fatal issue', async (_label, dryRun) => {
+      const fakeDb = createFakeDb();
+      const source = { ...hpoSource, retrievalUri: undefined };
+
+      const result = await runImport({ db: fakeDb, source, normalizeRecord, dryRun, initiatedBy: 'test-actor' });
+
+      expect(result.approved).toBe(false);
+      expect(result.releaseId).toBeNull();
+      expect(fakeDb.collections.referenceDatasetReleases.docs).toHaveLength(0);
+      expect(fakeDb.collections.referenceImportStaging.docs).toHaveLength(0);
+      expect(fakeDb.collections.terminologyConcepts.docs).toHaveLength(0);
+      const runs = fakeDb.collections.referenceImportRuns.docs;
+      expect(runs).toHaveLength(1);
+      expect(runs[0].runStatus).toBe('failed');
+      const issues = fakeDb.collections.referenceImportIssues.docs;
+      expect(issues).toHaveLength(1);
+      expect(issues[0]).toMatchObject({
+        entityType: 'ReferenceDatasetRelease',
+        errorCode: 'RELEASE_REGISTRATION_INVALID',
+        severity: 'fatal',
+        referenceDatasetReleaseId: 'unresolved',
+      });
+      expect(issues[0].errorMessage).toContain('retrievalUri');
+    });
+  });
+
   describe('checkpoint/resume (AC 7)', () => {
     it('writes the checkpoint in batches as staging progresses, not once at the end', async () => {
       const fakeDb = createFakeDb();
@@ -357,6 +452,11 @@ describe('reference-imports pipeline runImport (HPO)', () => {
       expect(resumeDb.collections.terminologyRelations.docs).toHaveLength(7);
       expect(resumeDb.collections.referenceDatasetReleases.docs).toHaveLength(1);
       expect(result.approved).toBe(true);
+      // RF028 AC1: the seeded run's stale release id names no release here,
+      // so the resumed run is linked to the release it registered.
+      const resumedRelease = resumeDb.collections.referenceDatasetReleases.docs[0];
+      expect(resumedRelease.releaseStatus).toBe('active');
+      expect(result.run.referenceDatasetReleaseId).toBe(resumedRelease.referenceDatasetReleaseId);
 
       // Checkpoint writes during resume only cover the remaining items
       // (offset continues from 5, doesn't restart at 0 or re-cover 0-5).
@@ -365,6 +465,56 @@ describe('reference-imports pipeline runImport (HPO)', () => {
         .map((call) => call.update.$set.checkpoint.offset);
       expect(checkpointOffsets).toEqual([10, 15]);
     });
+
+    // RF028 AC1 / AC 7: a release that is history is never reactivated by
+    // the resume of a run that registered it before a newer release landed.
+    it.each(['superseded', 'rolled_back', 'rejected'])(
+      'a resumed run whose registered release was since %s registers a new release',
+      async (storedStatus) => {
+        const fakeDb = createFakeDb();
+        const releases = fakeDb.collections.referenceDatasetReleases;
+        const releaseA = {
+          referenceDatasetReleaseId: 'release-a',
+          datasetCode: hpoSource.datasetCode,
+          systemUri: hpoSource.systemUri,
+          datasetVersion: hpoSource.datasetVersion,
+          sourceChecksum: hpoSource.expectedChecksum,
+          releaseStatus: storedStatus,
+          previousReleaseId: null,
+        };
+        const releaseB = {
+          referenceDatasetReleaseId: 'release-b',
+          datasetCode: hpoSource.datasetCode,
+          systemUri: hpoSource.systemUri,
+          datasetVersion: 'newer-version',
+          sourceChecksum: 'newer-checksum',
+          releaseStatus: 'active',
+          previousReleaseId: 'release-a',
+        };
+        releases.docs.push(releaseA, releaseB);
+        fakeDb.collections.referenceImportRuns.docs.push({
+          referenceImportRunId: 'seeded-run-in-progress',
+          referenceDatasetReleaseId: 'release-a',
+          datasetCode: hpoSource.datasetCode,
+          importMode: 'full',
+          idempotencyKey: `${hpoSource.datasetCode}:${hpoSource.datasetVersion}:sha256:${hpoSource.expectedChecksum}`,
+          runStatus: 'running',
+          checkpoint: null,
+        });
+
+        const result = await runImport({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor' });
+
+        expect(releases.docs).toHaveLength(3);
+        expect(releaseA).toMatchObject({ releaseStatus: storedStatus, previousReleaseId: null });
+        expect(releaseB.releaseStatus).toBe('superseded');
+        const releaseC = releases.docs.find((r) => r.referenceDatasetReleaseId !== 'release-a' && r.referenceDatasetReleaseId !== 'release-b');
+        expect(releaseC.releaseStatus).toBe('active');
+        expect(releaseC.previousReleaseId).toBe('release-b');
+        expect(releases.docs.filter((r) => r.datasetCode === hpoSource.datasetCode && r.releaseStatus === 'active')).toHaveLength(1);
+        expect(result.run.referenceDatasetReleaseId).toBe(releaseC.referenceDatasetReleaseId);
+        expect(fakeDb.collections.referenceImportRuns.docs[0].referenceDatasetReleaseId).toBe(releaseC.referenceDatasetReleaseId);
+      },
+    );
 
     it('does not lose relations on resume — staging persists both concepts and relations (not just concepts)', async () => {
       const fakeDb = createFakeDb();

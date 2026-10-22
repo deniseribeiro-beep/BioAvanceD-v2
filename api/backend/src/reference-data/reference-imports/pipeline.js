@@ -20,6 +20,8 @@ const REJECTION_RATE_BLOCK_THRESHOLD = 0.5;
 // resumed from its checkpoint instead.
 const TERMINAL_RUN_STATUSES = ['validated', 'completed', 'failed', 'cancelled', 'rolled_back'];
 const DEFAULT_BATCH_SIZE = 500;
+// The release statuses a resumed run may keep loading into (RF028 AC1).
+const RESUMABLE_RELEASE_STATUSES = ['downloaded', 'staged', 'active'];
 
 /**
  * Runs the RF028 universal import pipeline (Plano Integrado §7.2) for one
@@ -96,16 +98,95 @@ async function runImport({
     return { run: runDoc, releaseId: null, approved: false, idempotent: false };
   }
 
+  const resuming = Boolean(existingRun) && existingRun.runStatus === 'running';
+
+  // RF028 AC1: origin, version, license, URI, checksum, format,
+  // parserVersion and mappingVersion are registered before the load. The
+  // registration is validated on every run, a dry run included, so a source
+  // that could never be registered stages nothing.
+  const registration = {
+    sourceId: source.sourceId,
+    datasetCode: source.datasetCode,
+    datasetName: source.datasetName,
+    systemUri: source.systemUri,
+    datasetVersion: source.datasetVersion,
+    retrievalUri: source.retrievalUri,
+    accessMethod: source.accessMethod,
+    sourceFormat: source.sourceFormat,
+    license: source.license,
+    licenseUri: source.licenseUri,
+    sourceChecksum: checksum,
+    fileSize,
+    parserVersion: source.parserVersion,
+    mappingVersion: source.mappingVersion,
+    releaseStatus: 'downloaded',
+    previousReleaseId: null,
+  };
+  const registrationCheck = ReferenceDatasetReleaseModel.validate(registration);
+  if (!registrationCheck.isValid) {
+    const issue = {
+      entityType: 'ReferenceDatasetRelease',
+      errorCode: 'RELEASE_REGISTRATION_INVALID',
+      errorMessage: registrationCheck.errors.join('; '),
+      severity: 'fatal',
+    };
+    const failedFields = {
+      completedAt: new Date(),
+      runStatus: 'failed',
+      validationSummary: { fatal: 1, errors: 0, warnings: 0, rejectionRate: 0, approved: false },
+    };
+    let failedRun;
+    if (resuming) {
+      await runs.updateOne(
+        { referenceImportRunId: existingRun.referenceImportRunId },
+        { $set: { ...failedFields, updatedAt: new Date() } },
+      );
+      failedRun = { ...existingRun, ...failedFields };
+    } else {
+      failedRun = ReferenceImportRunModel.create({
+        referenceDatasetReleaseId: null,
+        datasetCode: source.datasetCode,
+        importMode,
+        idempotencyKey,
+        startedAt: new Date(),
+        inputChecksum: checksum,
+        initiatedBy,
+        ...failedFields,
+      });
+      await runs.insertOne(failedRun);
+    }
+    await issuesCollection.insertMany([
+      ReferenceImportIssueModel.create({ ...issue, referenceImportRunId: failedRun.referenceImportRunId, referenceDatasetReleaseId: 'unresolved' }),
+    ]);
+    return { run: failedRun, releaseId: null, approved: false, idempotent: false };
+  }
+
+  // INFERENCE, not a citation: a dry run registers no release. It loads
+  // nothing, so AC1's "antes da carga" has nothing to precede. A checksum
+  // mismatch (above) registers none either: integrity is the acquire gate,
+  // and its run and fatal issue already record it.
+  let releaseDoc = null;
+  if (!dryRun) {
+    releaseDoc = await resolveRelease({ releases, source, checksum, registration, existingRun: resuming ? existingRun : null });
+  }
+  const releaseId = releaseDoc ? releaseDoc.referenceDatasetReleaseId : null;
+
   // Resuming an interrupted run reuses its own doc/id; a fresh attempt
   // creates one now (not at the end) so staging can be tagged with its
   // real referenceImportRunId from the very first batch — the earlier
   // `pending-<idempotencyKey>` placeholder made every batch's staging rows
   // orphaned from the run that actually produced them.
-  const resuming = Boolean(existingRun) && existingRun.runStatus === 'running';
   let runDoc = resuming ? existingRun : null;
+  if (runDoc && releaseId && runDoc.referenceDatasetReleaseId !== releaseId) {
+    await runs.updateOne(
+      { referenceImportRunId: runDoc.referenceImportRunId },
+      { $set: { referenceDatasetReleaseId: releaseId, updatedAt: new Date() } },
+    );
+    runDoc = { ...runDoc, referenceDatasetReleaseId: releaseId };
+  }
   if (!runDoc) {
     runDoc = ReferenceImportRunModel.create({
-      referenceDatasetReleaseId: null,
+      referenceDatasetReleaseId: releaseId,
       datasetCode: source.datasetCode,
       importMode,
       idempotencyKey,
@@ -161,6 +242,13 @@ async function runImport({
     runDoc = { ...runDoc, checkpoint };
   }
 
+  // INFERENCE, not a citation: the status path downloaded → staged →
+  // active | rejected is read off RELEASE_STATUSES' order in the model.
+  if (releaseDoc && releaseDoc.releaseStatus !== 'active') {
+    await releases.updateOne({ referenceDatasetReleaseId: releaseId }, { $set: { releaseStatus: 'staged', updatedAt: new Date() } });
+    releaseDoc = { ...releaseDoc, releaseStatus: 'staged' };
+  }
+
   // The staging collection, not the in-memory parse, is the source of truth
   // for promotion — identical whether this call staged everything itself or
   // resumed a prior attempt's partial work.
@@ -174,18 +262,20 @@ async function runImport({
   const rejectionRate = recordsRead > 0 ? issues.length / recordsRead : 0;
   const approved = fatalIssues.length === 0 && rejectionRate <= REJECTION_RATE_BLOCK_THRESHOLD && Boolean(source.license);
 
-  let releaseId = null;
   let recordsInserted = 0;
   let recordsUpdated = 0;
   let recordsSkipped = 0;
 
   if (approved && !dryRun) {
-    const promotion = await promote({ db, releases, concepts, relations, source, stagedConcepts, stagedRelations, checksum, fileSize, graphProjection });
-    releaseId = promotion.releaseId;
+    const promotion = await promote({ db, releases, concepts, relations, source, releaseDoc, stagedConcepts, stagedRelations, graphProjection });
     recordsInserted = promotion.recordsInserted;
     recordsUpdated = promotion.recordsUpdated;
     recordsSkipped = promotion.recordsSkipped;
     issues.push(...promotion.issues);
+  } else if (releaseDoc && releaseDoc.releaseStatus !== 'active') {
+    // A release already active stays so: a rejected re-run of its content
+    // never demotes it.
+    await releases.updateOne({ referenceDatasetReleaseId: releaseId }, { $set: { releaseStatus: 'rejected', updatedAt: new Date() } });
   }
 
   const runStatus = fatalIssues.length > 0 || rejectionRate > REJECTION_RATE_BLOCK_THRESHOLD
@@ -231,38 +321,51 @@ async function runImport({
   return { run: runDoc, releaseId, approved, idempotent: false };
 }
 
-async function promote({ db, releases, concepts, relations, source, stagedConcepts, stagedRelations, checksum, fileSize, graphProjection }) {
-  const issues = [];
+/**
+ * RF028 AC1: the release a full run loads into, registered before its first
+ * staging write. A resumed run keeps the release it already registered; a
+ * run of the content the dataset's active release already holds reuses that
+ * one; anything else registers a new release in `downloaded` status.
+ */
+async function resolveRelease({ releases, source, checksum, registration, existingRun }) {
+  if (existingRun && existingRun.referenceDatasetReleaseId) {
+    const registered = await releases.findOne({ referenceDatasetReleaseId: existingRun.referenceDatasetReleaseId });
+    // A superseded, rolled-back or rejected release is history: a resume
+    // never reactivates it (or rewrites its previousReleaseId), so the run
+    // registers a new release instead.
+    if (registered && RESUMABLE_RELEASE_STATUSES.includes(registered.releaseStatus)) return registered;
+  }
 
   const existingActive = await releases.findOne({ datasetCode: source.datasetCode, releaseStatus: 'active' });
   const sameRelease = existingActive
     && existingActive.systemUri === source.systemUri
     && existingActive.datasetVersion === source.datasetVersion
     && existingActive.sourceChecksum === checksum;
+  if (sameRelease) return existingActive;
 
-  let releaseDoc;
-  if (sameRelease) {
-    releaseDoc = existingActive;
-  } else {
-    releaseDoc = ReferenceDatasetReleaseModel.create({
-      sourceId: source.sourceId,
-      datasetCode: source.datasetCode,
-      datasetName: source.datasetName,
-      systemUri: source.systemUri,
-      datasetVersion: source.datasetVersion,
-      retrievalUri: source.retrievalUri,
-      accessMethod: source.accessMethod,
-      sourceFormat: source.sourceFormat,
-      license: source.license,
-      licenseUri: source.licenseUri,
-      sourceChecksum: checksum,
-      fileSize,
-      parserVersion: source.parserVersion,
-      mappingVersion: source.mappingVersion,
-      releaseStatus: 'active',
-      previousReleaseId: existingActive ? existingActive.referenceDatasetReleaseId : null,
-    });
-    await releases.insertOne(releaseDoc);
+  const releaseDoc = ReferenceDatasetReleaseModel.create(registration);
+  await releases.insertOne(releaseDoc);
+  return releaseDoc;
+}
+
+async function promote({ db, releases, concepts, relations, source, releaseDoc, stagedConcepts, stagedRelations, graphProjection }) {
+  const issues = [];
+
+  if (releaseDoc.releaseStatus !== 'active') {
+    // INFERENCE, not a citation: previousReleaseId is set here, at promotion,
+    // since the dataset's active release can change between registration
+    // and promotion.
+    const existingActive = await releases.findOne({ datasetCode: source.datasetCode, releaseStatus: 'active' });
+    await releases.updateOne(
+      { referenceDatasetReleaseId: releaseDoc.referenceDatasetReleaseId },
+      {
+        $set: {
+          releaseStatus: 'active',
+          previousReleaseId: existingActive ? existingActive.referenceDatasetReleaseId : null,
+          updatedAt: new Date(),
+        },
+      },
+    );
     // Preserve history — supersede, never delete (Plano Integrado §7.2 step 10).
     if (existingActive) {
       await releases.updateOne(
@@ -362,7 +465,7 @@ async function promote({ db, releases, concepts, relations, source, stagedConcep
     recordsInserted += 1;
   }
 
-  return { releaseId: releaseDoc.referenceDatasetReleaseId, recordsInserted, recordsUpdated, recordsSkipped, issues };
+  return { recordsInserted, recordsUpdated, recordsSkipped, issues };
 }
 
 /**
