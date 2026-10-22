@@ -53,6 +53,13 @@ class SampleFileModel {
       errors.push('fileSize deve ser um número maior que zero');
     }
 
+    // V2E-0472 (#1321): rows written before the object store lack it, so it
+    // is optional here, but a supplied value is a non-empty string.
+    if (data.storageObjectVersion !== undefined && data.storageObjectVersion !== null
+      && (typeof data.storageObjectVersion !== 'string' || data.storageObjectVersion.length === 0)) {
+      errors.push('storageObjectVersion deve ser string não vazia');
+    }
+
     // Valida tipos de arquivo permitidos
     const allowedTypes = ['RAW', 'ZIP', 'CSV', 'XLS', 'XLSX', 'PDF', 'TXT'];
     if (typeof data.fileType === 'string' && !allowedTypes.includes(data.fileType.toUpperCase())) {
@@ -83,6 +90,7 @@ class SampleFileModel {
       fileSize: data.fileSize, // Tamanho em bytes
       storagePath: data.storagePath, // Caminho no sistema de arquivos (não exposto ao frontend)
       storageUri: data.storageUri || null, // RF007 - URI estável de Object Storage
+      storageObjectVersion: data.storageObjectVersion || null, // V2E-0472 - versão do objeto (#1321)
       checksum: data.checksum || null, // RF007/RNF029 - SHA-256 do conteúdo original
       checksumAlgorithm: data.checksumAlgorithm || null,
       encryptionAlgorithm: data.encryptionAlgorithm || null, // RNF029 - cifra em repouso

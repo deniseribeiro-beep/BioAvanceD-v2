@@ -4,8 +4,13 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 
 const createLinkedFileController = require('../../src/controllers/createLinkedFileController');
+const crypto = require('crypto');
 const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const { ObjectId } = require('mongodb');
+const objectStorage = require('../../src/infrastructure/objectStorage');
+const { decryptFileBuffer } = require('../../src/utils/fileCrypto');
 // createLinkedFileController.js lazily requires auditLogger inside
 // logAudit(), which itself lazily requires log.service.js at call time --
 // with fs.readFileSync mocked (below), Node's own CJS loader can end up
@@ -72,6 +77,19 @@ function createVersionsCollection() {
     insertOne: vi.fn().mockResolvedValue({ acknowledged: true }),
     deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 })
   };
+}
+
+// #1321: a case that reaches the object-store write gets a stubbed store, so
+// it exercises the controller without touching a disk.
+function stubFileStore() {
+  const hex = 'd'.repeat(64);
+  const putObject = vi.fn().mockResolvedValue({
+    uri: `objstore://widgets/w-1/sha256/${hex}`,
+    version: `sha256:${hex}`,
+    path: `/store/widgets/w-1/sha256/${hex}`
+  });
+  vi.spyOn(objectStorage, 'getFileObjectStore').mockReturnValue({ putObject });
+  return putObject;
 }
 
 describe('createLinkedFileController', () => {
@@ -143,6 +161,7 @@ describe('createLinkedFileController', () => {
 
       vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('hello'));
       vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+      stubFileStore();
 
       const req = {
         app: { locals: { db } },
@@ -231,6 +250,7 @@ describe('createLinkedFileController', () => {
       const db = createDb({ widgets: createMatchingCollection(parents()), widgetFiles });
       vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('hello'));
       vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+      stubFileStore();
 
       const req = {
         app: { locals: { db } },
@@ -471,6 +491,7 @@ describe('createLinkedFileController', () => {
       vi.spyOn(fs, 'existsSync').mockReturnValue(true);
       vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('new content'));
       vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+      stubFileStore();
       const unlinkSpy = vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
 
       const req = {
@@ -524,6 +545,7 @@ describe('createLinkedFileController', () => {
       vi.spyOn(fs, 'existsSync').mockReturnValue(true);
       vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('new content'));
       vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+      stubFileStore();
       const unlinkSpy = vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
 
       const req = {
@@ -542,6 +564,177 @@ describe('createLinkedFileController', () => {
       expect(versions.deleteOne).toHaveBeenCalledWith({ dataFileVersionId: version.dataFileVersionId });
       expect(unlinkSpy).toHaveBeenCalledWith('/tmp/new.csv');
       expect(unlinkSpy).not.toHaveBeenCalledWith('/tmp/old.csv');
+    });
+  });
+
+  // RF007 AC2 / RNF016 C4 (#1321): on a real filesystem object store and a
+  // real staging file, with no fs mocks.
+  describe('object storage (#1321)', () => {
+    let storeRoot;
+    let stagingDir;
+    beforeEach(() => {
+      storeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'linked-objstore-'));
+      stagingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'linked-staging-'));
+      vi.spyOn(objectStorage, 'getFileObjectStore').mockReturnValue(
+        objectStorage.createFilesystemObjectStore({ root: storeRoot })
+      );
+    });
+    afterEach(() => {
+      fs.rmSync(storeRoot, { recursive: true, force: true });
+      fs.rmSync(stagingDir, { recursive: true, force: true });
+    });
+
+    function stage(name, content) {
+      const stagingPath = path.join(stagingDir, name);
+      fs.writeFileSync(stagingPath, content);
+      return stagingPath;
+    }
+
+    it('uploadFile stores the ciphertext as a content-addressed object and removes the plaintext staging file', async () => {
+      const controller = buildController();
+      const insertOne = vi.fn().mockResolvedValue({ insertedId: new ObjectId() });
+      const db = createDb({
+        widgets: { findOne: vi.fn().mockResolvedValue({ widgetId: 'w-1' }) },
+        widgetFiles: { insertOne }
+      });
+      const plaintext = Buffer.from('a,b\n1,2\n');
+      const stagingPath = stage('upload.csv', plaintext);
+      const req = {
+        app: { locals: { db } },
+        params: { widgetId: 'w-1' },
+        user: null,
+        file: { path: stagingPath, originalname: 'upload.csv', size: plaintext.length }
+      };
+      const res = createRes();
+
+      await controller.uploadFile(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(201);
+      const record = insertOne.mock.calls[0][0];
+      expect(record.storageUri).toMatch(/^objstore:\/\/widgets\/w-1\/sha256\/[0-9a-f]{64}$/);
+      expect(record.storageObjectVersion).toMatch(/^sha256:[0-9a-f]{64}$/);
+      expect(fs.existsSync(record.storagePath)).toBe(true);
+      expect(decryptFileBuffer(fs.readFileSync(record.storagePath), record).equals(plaintext)).toBe(true);
+      expect(fs.existsSync(stagingPath)).toBe(false);
+      const body = res.json.mock.calls[0][0];
+      expect(body.data.uri).toBe(record.storageUri);
+      expect(body.data.storageObjectVersion).toBe(record.storageObjectVersion);
+    });
+
+    it('replaceFile stores the new object, keeps the previous object unchanged and removes the staging file', async () => {
+      const controller = buildController();
+      const previousBytes = Buffer.from('previous ciphertext');
+      const previous = await objectStorage.createFilesystemObjectStore({ root: storeRoot })
+        .putObject({ area: 'widgets', ownerKey: 'w-1', body: previousBytes });
+      const fileId = new ObjectId();
+      const fileRecord = {
+        _id: fileId, widgetId: 'w-1', fileName: 'old.csv', storagePath: previous.path,
+        storageUri: previous.uri, checksum: OLD_CHECKSUM
+      };
+      const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+      const db = createDb({
+        widgets: { findOne: vi.fn().mockResolvedValue({ widgetId: 'w-1' }) },
+        widgetFiles: { findOne: vi.fn().mockResolvedValue(fileRecord), updateOne },
+        dataFileVersions: createVersionsCollection()
+      });
+      const plaintext = Buffer.from('c,d\n3,4\n');
+      const stagingPath = stage('new.csv', plaintext);
+      const req = {
+        app: { locals: { db } },
+        params: { widgetId: 'w-1', fileID: fileId.toString() },
+        user: null,
+        file: { path: stagingPath, originalname: 'new.csv', size: plaintext.length }
+      };
+      const res = createRes();
+
+      await controller.replaceFile(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      const updated = updateOne.mock.calls[0][1].$set;
+      expect(updated.storageUri).toMatch(/^objstore:\/\/widgets\/w-1\/sha256\/[0-9a-f]{64}$/);
+      expect(updated.storageObjectVersion).toMatch(/^sha256:[0-9a-f]{64}$/);
+      expect(decryptFileBuffer(fs.readFileSync(updated.storagePath), updated).equals(plaintext)).toBe(true);
+      expect(fs.existsSync(stagingPath)).toBe(false);
+      expect(fs.readFileSync(previous.path).equals(previousBytes)).toBe(true);
+      const body = res.json.mock.calls[0][0];
+      expect(body.data.uri).toBe(updated.storageUri);
+      expect(body.data.storageObjectVersion).toBe(updated.storageObjectVersion);
+    });
+
+    // An assay id is client-supplied and may hold a space or an accent: the
+    // store maps it to an x- segment, and the row keeps the raw id.
+    const ASSAY_ID = 'Ensaio São Paulo 1';
+    const assayController = () => buildController({
+      parentCollectionName: 'assays',
+      parentIdParam: 'assayId',
+      parentIdField: 'assayId',
+      fileCollectionName: 'assayFiles',
+      storageSubdir: 'assays',
+      resourceType: 'AssayFile',
+      moduleLabel: 'Ensaios'
+    });
+    const assaySegment = `x-${crypto.createHash('sha256').update(ASSAY_ID).digest('hex')}`;
+
+    it('uploadFile answers 201 for an assay whose id holds a space and an accent', async () => {
+      const insertOne = vi.fn().mockResolvedValue({ insertedId: new ObjectId() });
+      const db = createDb({
+        assays: { findOne: vi.fn().mockResolvedValue({ assayId: ASSAY_ID }) },
+        assayFiles: { insertOne }
+      });
+      const plaintext = Buffer.from('a,b\n1,2\n');
+      const stagingPath = stage('upload.csv', plaintext);
+      const req = {
+        app: { locals: { db } },
+        params: { assayId: ASSAY_ID },
+        user: null,
+        file: { path: stagingPath, originalname: 'upload.csv', size: plaintext.length }
+      };
+      const res = createRes();
+
+      await assayController().uploadFile(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(201);
+      const record = insertOne.mock.calls[0][0];
+      expect(record.assayId).toBe(ASSAY_ID);
+      expect(record.storageUri).toMatch(new RegExp(`^objstore://assays/${assaySegment}/sha256/[0-9a-f]{64}$`));
+      expect(record.storagePath.startsWith(path.join(storeRoot, 'assays', assaySegment) + path.sep)).toBe(true);
+      expect(decryptFileBuffer(fs.readFileSync(record.storagePath), record).equals(plaintext)).toBe(true);
+      expect(fs.existsSync(stagingPath)).toBe(false);
+    });
+
+    it('replaceFile answers 200 for an assay whose id holds a space and an accent', async () => {
+      const previousBytes = Buffer.from('previous ciphertext');
+      const previous = await objectStorage.createFilesystemObjectStore({ root: storeRoot })
+        .putObject({ area: 'assays', ownerKey: ASSAY_ID, body: previousBytes });
+      const fileId = new ObjectId();
+      const fileRecord = {
+        _id: fileId, assayId: ASSAY_ID, fileName: 'old.csv', storagePath: previous.path,
+        storageUri: previous.uri, checksum: OLD_CHECKSUM
+      };
+      const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+      const db = createDb({
+        assays: { findOne: vi.fn().mockResolvedValue({ assayId: ASSAY_ID }) },
+        assayFiles: { findOne: vi.fn().mockResolvedValue(fileRecord), updateOne },
+        dataFileVersions: createVersionsCollection()
+      });
+      const plaintext = Buffer.from('c,d\n3,4\n');
+      const stagingPath = stage('new.csv', plaintext);
+      const req = {
+        app: { locals: { db } },
+        params: { assayId: ASSAY_ID, fileID: fileId.toString() },
+        user: null,
+        file: { path: stagingPath, originalname: 'new.csv', size: plaintext.length }
+      };
+      const res = createRes();
+
+      await assayController().replaceFile(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      const updated = updateOne.mock.calls[0][1].$set;
+      expect(updated.storageUri).toMatch(new RegExp(`^objstore://assays/${assaySegment}/sha256/[0-9a-f]{64}$`));
+      expect(decryptFileBuffer(fs.readFileSync(updated.storagePath), updated).equals(plaintext)).toBe(true);
+      expect(fs.existsSync(stagingPath)).toBe(false);
+      expect(fs.readFileSync(previous.path).equals(previousBytes)).toBe(true);
     });
   });
 });

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
@@ -7,6 +7,8 @@ const controller = require('../../src/controllers/sample-file.controller');
 const SampleFileModel = require('../../src/models/SampleFile');
 const hl7Service = require('../../src/services/hl7.service');
 const auditLogger = require('../../src/utils/auditLogger');
+const objectStorage = require('../../src/infrastructure/objectStorage');
+const { decryptFileBuffer } = require('../../src/utils/fileCrypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -51,6 +53,19 @@ function createVersionsCollection() {
     insertOne: vi.fn().mockResolvedValue({ acknowledged: true }),
     deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 })
   };
+}
+
+// #1321: a case that reaches the object-store write gets a stubbed store, so
+// it exercises the controller without touching a disk.
+function stubFileStore() {
+  const hex = 'd'.repeat(64);
+  const putObject = vi.fn().mockResolvedValue({
+    uri: `objstore://samples/s/sha256/${hex}`,
+    version: `sha256:${hex}`,
+    path: `/store/samples/s/sha256/${hex}`
+  });
+  vi.spyOn(objectStorage, 'getFileObjectStore').mockReturnValue({ putObject });
+  return putObject;
 }
 
 describe('sample-file.controller', () => {
@@ -356,6 +371,7 @@ describe('sample-file.controller', () => {
       // below already mocks both; this one did not.
       vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('file content'));
       vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+      stubFileStore();
       const unlinkSpy = vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
       vi.spyOn(SampleFileModel, 'getFileTypeFromExtension').mockReturnValue('CSV');
       vi.spyOn(SampleFileModel, 'validate').mockReturnValue({ isValid: false, errors: ['bad'] });
@@ -387,6 +403,7 @@ describe('sample-file.controller', () => {
       vi.spyOn(fs, 'existsSync').mockReturnValue(true);
       vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('file content'));
       vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+      stubFileStore();
       vi.spyOn(SampleFileModel, 'getFileTypeFromExtension').mockReturnValue('CSV');
       vi.spyOn(SampleFileModel, 'validate').mockReturnValue({ isValid: true, errors: [] });
 
@@ -429,6 +446,7 @@ describe('sample-file.controller', () => {
       vi.spyOn(fs, 'existsSync').mockReturnValue(true);
       vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('file content'));
       vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+      stubFileStore();
       vi.spyOn(SampleFileModel, 'getFileTypeFromExtension').mockReturnValue('PDF');
       vi.spyOn(SampleFileModel, 'validate').mockReturnValue({ isValid: true, errors: [] });
 
@@ -464,6 +482,7 @@ describe('sample-file.controller', () => {
       vi.spyOn(fs, 'existsSync').mockReturnValue(true);
       vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('file content'));
       vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+      stubFileStore();
       vi.spyOn(SampleFileModel, 'getFileTypeFromExtension').mockReturnValue('CSV');
       vi.spyOn(SampleFileModel, 'validate').mockReturnValue({ isValid: true, errors: [] });
       const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
@@ -1309,6 +1328,7 @@ describe('sample-file.controller', () => {
       vi.spyOn(fs, 'existsSync').mockReturnValue(true);
       vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('new file content'));
       vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+      stubFileStore();
       const unlinkSpy = vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
       vi.spyOn(SampleFileModel, 'getFileTypeFromExtension').mockReturnValue('CSV');
       vi.spyOn(SampleFileModel, 'validate').mockReturnValue({ isValid: true, errors: [] });
@@ -1374,6 +1394,7 @@ describe('sample-file.controller', () => {
       vi.spyOn(fs, 'existsSync').mockReturnValue(true);
       vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('new file content'));
       vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+      stubFileStore();
       vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
       vi.spyOn(SampleFileModel, 'getFileTypeFromExtension').mockReturnValue('CSV');
       vi.spyOn(SampleFileModel, 'validate').mockReturnValue({ isValid: true, errors: [] });
@@ -1439,6 +1460,7 @@ describe('sample-file.controller', () => {
       vi.spyOn(fs, 'existsSync').mockReturnValue(true);
       vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('new file content'));
       vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+      stubFileStore();
       vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
       vi.spyOn(SampleFileModel, 'getFileTypeFromExtension').mockReturnValue('CSV');
       vi.spyOn(SampleFileModel, 'validate').mockReturnValue({ isValid: true, errors: [] });
@@ -1478,6 +1500,7 @@ describe('sample-file.controller', () => {
       vi.spyOn(fs, 'existsSync').mockReturnValue(true);
       vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('new file content'));
       vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+      stubFileStore();
       const unlinkSpy = vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
       vi.spyOn(SampleFileModel, 'getFileTypeFromExtension').mockReturnValue('CSV');
       vi.spyOn(SampleFileModel, 'validate').mockReturnValue({ isValid: true, errors: [] });
@@ -1502,6 +1525,7 @@ describe('sample-file.controller', () => {
       vi.spyOn(fs, 'existsSync').mockReturnValue(true);
       vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('new file content'));
       vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+      stubFileStore();
       const unlinkSpy = vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
       vi.spyOn(SampleFileModel, 'getFileTypeFromExtension').mockReturnValue('CSV');
       vi.spyOn(SampleFileModel, 'validate').mockReturnValue({ isValid: false, errors: ['bad'] });
@@ -1531,6 +1555,7 @@ describe('sample-file.controller', () => {
       vi.spyOn(fs, 'existsSync').mockReturnValue(true);
       vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('new file content'));
       vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+      stubFileStore();
       vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {
         throw new Error('locked');
       });
@@ -1563,6 +1588,7 @@ describe('sample-file.controller', () => {
       vi.spyOn(fs, 'existsSync').mockReturnValue(true);
       vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('new file content'));
       vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+      stubFileStore();
       const unlinkSpy = vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
       vi.spyOn(SampleFileModel, 'getFileTypeFromExtension').mockReturnValue('CSV');
       vi.spyOn(SampleFileModel, 'validate').mockReturnValue({ isValid: true, errors: [] });
@@ -1596,6 +1622,7 @@ describe('sample-file.controller', () => {
       vi.spyOn(fs, 'existsSync').mockReturnValue(true);
       vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('new file content'));
       vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+      stubFileStore();
       const unlinkSpy = vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
       vi.spyOn(SampleFileModel, 'getFileTypeFromExtension').mockReturnValue('CSV');
       vi.spyOn(SampleFileModel, 'validate').mockReturnValue({ isValid: true, errors: [] });
@@ -2079,6 +2106,106 @@ describe('sample-file.controller', () => {
     });
   });
 
+  // RF007 AC2 / RNF016 C4 (#1321): on a real filesystem object store and a
+  // real staging file, with no fs mocks.
+  describe('object storage (#1321)', () => {
+    let storeRoot;
+    let stagingDir;
+    beforeEach(() => {
+      storeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sample-objstore-'));
+      stagingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sample-staging-'));
+      vi.spyOn(objectStorage, 'getFileObjectStore').mockReturnValue(
+        objectStorage.createFilesystemObjectStore({ root: storeRoot })
+      );
+    });
+    afterEach(() => {
+      fs.rmSync(storeRoot, { recursive: true, force: true });
+      fs.rmSync(stagingDir, { recursive: true, force: true });
+    });
+
+    function stage(name, content) {
+      const stagingPath = path.join(stagingDir, name);
+      fs.writeFileSync(stagingPath, content);
+      return stagingPath;
+    }
+
+    it('uploadFile stores the ciphertext as a content-addressed object and removes the plaintext staging file', async () => {
+      const sample = { _id: new ObjectId() };
+      const owner = sample._id.toString();
+      const insertOne = vi.fn().mockResolvedValue({ insertedId: new ObjectId() });
+      const db = createDb({
+        samples: { findOne: vi.fn().mockResolvedValue(sample) },
+        sample_files: { insertOne }
+      });
+      const plaintext = Buffer.from('a,b\n1,2\n');
+      const stagingPath = stage('upload.csv', plaintext);
+      const req = {
+        app: { locals: { db } },
+        params: { specimenId: owner },
+        file: { path: stagingPath, originalname: 'upload.csv', size: plaintext.length },
+        user: null
+      };
+      const res = createRes();
+
+      await controller.uploadFile(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(201);
+      const record = insertOne.mock.calls[0][0];
+      expect(record.storageUri).toMatch(new RegExp(`^objstore://samples/${owner}/sha256/[0-9a-f]{64}$`));
+      expect(record.storageObjectVersion).toMatch(/^sha256:[0-9a-f]{64}$/);
+      expect(fs.existsSync(record.storagePath)).toBe(true);
+      expect(decryptFileBuffer(fs.readFileSync(record.storagePath), record).equals(plaintext)).toBe(true);
+      expect(fs.existsSync(stagingPath)).toBe(false);
+      const body = res.json.mock.calls[0][0];
+      expect(body.data.uri).toBe(record.storageUri);
+      expect(body.data.storageObjectVersion).toBe(record.storageObjectVersion);
+    });
+
+    it('replaceFile stores the new object, keeps the previous object unchanged and removes the staging file', async () => {
+      const specimenId = new ObjectId().toString();
+      const previousBytes = Buffer.from('previous ciphertext');
+      const previous = await objectStorage.createFilesystemObjectStore({ root: storeRoot })
+        .putObject({ area: 'samples', ownerKey: specimenId, body: previousBytes });
+      const fileRecord = {
+        _id: new ObjectId(),
+        specimenId,
+        fileName: 'old.csv',
+        fileType: 'CSV',
+        fileSize: previousBytes.length,
+        storagePath: previous.path,
+        storageUri: previous.uri,
+        checksum: OLD_CHECKSUM
+      };
+      const updateOne = vi.fn().mockResolvedValue({ modifiedCount: 1 });
+      const db = createDb({
+        sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord), updateOne },
+        dataFileVersions: createVersionsCollection()
+      });
+      const plaintext = Buffer.from('c,d\n3,4\n');
+      const stagingPath = stage('new.csv', plaintext);
+      const req = {
+        app: { locals: { db } },
+        params: { specimenId, fileID: fileRecord._id.toString() },
+        file: { path: stagingPath, originalname: 'new.csv', size: plaintext.length },
+        user: null
+      };
+      const res = createRes();
+
+      await controller.replaceFile(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      const updated = updateOne.mock.calls[0][1].$set;
+      expect(updated.storageUri).toMatch(new RegExp(`^objstore://samples/${specimenId}/sha256/[0-9a-f]{64}$`));
+      expect(updated.storageObjectVersion).toMatch(/^sha256:[0-9a-f]{64}$/);
+      expect(decryptFileBuffer(fs.readFileSync(updated.storagePath), updated).equals(plaintext)).toBe(true);
+      expect(fs.existsSync(stagingPath)).toBe(false);
+      expect(fs.readFileSync(previous.path).equals(previousBytes)).toBe(true);
+      const body = res.json.mock.calls[0][0];
+      expect(body.data.uri).toBe(updated.storageUri);
+      expect(body.data.storageObjectVersion).toBe(updated.storageObjectVersion);
+    });
+  });
+
   describe('req.t translation branch (truthy req.t)', () => {
     const t = vi.fn((key) => key);
 
@@ -2100,6 +2227,7 @@ describe('sample-file.controller', () => {
 
       vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('file content'));
       vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+      stubFileStore();
 
       // 404 sample not found
       res = createRes();
@@ -2158,6 +2286,7 @@ describe('sample-file.controller', () => {
       vi.spyOn(SampleFileModel, 'validate').mockReturnValue({ isValid: true, errors: [] });
       vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('file content'));
       vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+      stubFileStore();
       await controller.uploadFile(
         { app: { locals: { db: db5 } }, params: { specimenId }, file: { path: '/tmp/f.csv', originalname: 'f.csv', size: 1 }, user: null, t },
         res

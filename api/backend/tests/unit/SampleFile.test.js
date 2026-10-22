@@ -127,6 +127,12 @@ describe('SampleFileModel.validate', () => {
     expect(isValid).toBe(true);
     expect(errors).toEqual([]);
   });
+
+  it('rejects a non-string storageObjectVersion (V2E-0472, #1321)', () => {
+    const { isValid, errors } = SampleFileModel.validate({ ...validData, storageObjectVersion: 42 });
+    expect(isValid).toBe(false);
+    expect(errors).toContain('storageObjectVersion deve ser string não vazia');
+  });
 });
 
 describe('SampleFileModel.create', () => {
@@ -145,6 +151,13 @@ describe('SampleFileModel.create', () => {
     expect(result.fileName).toBe('result.csv');
     expect(result.fileSize).toBe(100);
     expect(result.storagePath).toBe('/storage/result.csv');
+  });
+
+  it('carries storageObjectVersion beside storageUri (V2E-0472, #1321)', () => {
+    const version = `sha256:${'c'.repeat(64)}`;
+    const result = SampleFileModel.create({ ...baseInput, storageObjectVersion: version });
+    expect(result.storageObjectVersion).toBe(version);
+    expect(SampleFileModel.create(baseInput).storageObjectVersion).toBeNull();
   });
 
   it('defaults uploaderAnonId to null when not provided', () => {

@@ -15,6 +15,18 @@ const { encryptFileBuffer, decryptFileBuffer, computeChecksum, assertFileEncrypt
 const { STORAGE_BASE } = require('../config/uploadConfig');
 const { isMimeAllowedForExtension, checkFileSignature } = require('../utils/uploadFormatPolicy');
 const { recordReplacement, discardVersion, resolveChangeReason } = require('../services/dataFileVersion.service');
+const objectStorage = require('../infrastructure/objectStorage');
+
+// RNF029 (#938, #1321): once the ciphertext is in the object store, the
+// plaintext multer staged is removed. A failed removal is logged, never
+// thrown, since the object and its record are already sound.
+function removeStagingFile(stagingPath) {
+  try {
+    fs.unlinkSync(stagingPath);
+  } catch (unlinkError) {
+    logger.error('Erro ao remover arquivo temporário:', unlinkError.message);
+  }
+}
 
 /**
  * Controller de Upload de Arquivos de Análise de Amostras
@@ -239,10 +251,15 @@ class SampleFileController {
       const plaintext = fs.readFileSync(file.path);
       const checksum = computeChecksum(plaintext);
       const encryption = encryptFileBuffer(plaintext);
-      if (encryption) {
-        fs.writeFileSync(file.path, encryption.ciphertext);
-      }
-      const storageUri = `objstore://samples/${sample._id.toString()}/files/${path.basename(file.path)}`;
+      // RF007 AC2 / RNF016 C4 (#1321): the binary goes to the object store,
+      // write-once and content-addressed; MongoDB keeps its metadata.
+      const stored = await objectStorage.getFileObjectStore().putObject({
+        area: 'samples',
+        ownerKey: sample._id.toString(),
+        body: encryption ? encryption.ciphertext : plaintext
+      });
+      removeStagingFile(file.path);
+      const storageUri = stored.uri;
 
       // Cria registro na collection sample_files
       const sampleFilesCollection = db.collection('sample_files');
@@ -254,8 +271,9 @@ class SampleFileController {
         fileRole: fileRole || 'raw',
         fileFormat: SampleFileModel.getFileFormatFromType(fileType),
         fileSize: file.size,
-        storagePath: file.path,
+        storagePath: stored.path,
         storageUri,
+        storageObjectVersion: stored.version,
         checksum,
         checksumAlgorithm: 'sha256',
         encryptionAlgorithm: encryption ? encryption.algorithm : null,
@@ -328,6 +346,7 @@ class SampleFileController {
           uploaderAnonId: sampleFile.uploaderAnonId,
           uploadDate: sampleFile.uploadDate,
           uri: sampleFile.storageUri,
+          storageObjectVersion: sampleFile.storageObjectVersion,
           checksum: sampleFile.checksum,
           checksumAlgorithm: sampleFile.checksumAlgorithm,
           encryption: {
@@ -857,18 +876,32 @@ class SampleFileController {
       const plaintext = fs.readFileSync(file.path);
       const checksum = computeChecksum(plaintext);
       const encryption = encryptFileBuffer(plaintext);
-      if (encryption) {
-        fs.writeFileSync(file.path, encryption.ciphertext);
+      // RF007 AC2 / RNF016 C4 (#1321): the new binary is a new object; the
+      // previous object is never touched.
+      const body = encryption ? encryption.ciphertext : plaintext;
+      const stored = await objectStorage.getFileObjectStore().putObject({
+        area: 'samples',
+        ownerKey: specimenIdString,
+        body
+      });
+      if (fileRecord.storagePath && path.resolve(file.path) === path.resolve(fileRecord.storagePath)) {
+        // The staging path is the previous record's binary: it is kept as
+        // evidence, so it is overwritten with the ciphertext, not unlinked.
+        logger.warn('Arquivo temporário coincide com o arquivo anterior; mantido cifrado:', fileRecord._id.toString());
+        fs.writeFileSync(file.path, body);
+      } else {
+        removeStagingFile(file.path);
       }
-      const storageUri = `objstore://samples/${specimenIdString}/files/${path.basename(file.path)}`;
+      const storageUri = stored.uri;
 
       const updatedFields = {
         fileName: file.originalname,
         fileType,
         fileFormat: SampleFileModel.getFileFormatFromType(fileType),
         fileSize: file.size,
-        storagePath: file.path,
+        storagePath: stored.path,
         storageUri,
+        storageObjectVersion: stored.version,
         checksum,
         checksumAlgorithm: 'sha256',
         encryptionAlgorithm: encryption ? encryption.algorithm : null,
@@ -955,6 +988,7 @@ class SampleFileController {
           uploaderAnonId: fileRecord.uploaderAnonId,
           uploadDate: fileRecord.uploadDate,
           uri: updatedFields.storageUri,
+          storageObjectVersion: updatedFields.storageObjectVersion,
           checksum: updatedFields.checksum,
           checksumAlgorithm: updatedFields.checksumAlgorithm,
           versionNumber: version.versionNumber,
