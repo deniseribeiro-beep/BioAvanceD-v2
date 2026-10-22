@@ -253,18 +253,22 @@ async function promoteRelease({ db, releaseId, approvedBy, req = null, graphProj
     );
   }
 
-  await runs.updateOne(
-    { referenceImportRunId: approvedRun.referenceImportRunId },
-    {
-      $set: {
-        recordsInserted,
-        recordsUpdated,
-        recordsSkipped,
-        recordsRejected: (approvedRun.recordsRejected || 0) + issues.length,
-        updatedAt: new Date(),
+  // A run that staged nothing (the essential loader's, whose own job wrote
+  // its records) keeps its counts.
+  if (stagedDocs.length > 0) {
+    await runs.updateOne(
+      { referenceImportRunId: approvedRun.referenceImportRunId },
+      {
+        $set: {
+          recordsInserted,
+          recordsUpdated,
+          recordsSkipped,
+          recordsRejected: (approvedRun.recordsRejected || 0) + issues.length,
+          updatedAt: new Date(),
+        },
       },
-    },
-  );
+    );
+  }
   if (issues.length > 0) {
     await issuesCollection.insertMany(
       issues.map((issue) =>

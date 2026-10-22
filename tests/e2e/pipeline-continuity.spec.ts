@@ -265,7 +265,9 @@ test.describe('Foundation Data Pipeline bootstrap (RF022) — real backend', () 
         importMode: 'full',
         runStatus: 'completed',
         foundationDataRunId: foundationRun!.foundationDataRunId,
+        referenceDatasetReleaseId: expect.any(String),
       });
+      expect(await countActiveReferenceDatasetReleasesByDatasetCode(key)).toBe(1);
     }
   });
 
