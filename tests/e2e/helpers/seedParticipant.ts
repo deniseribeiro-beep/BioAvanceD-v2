@@ -515,10 +515,10 @@ export async function seedActiveTerminologyConcept(
   // #705: activeCodeValidator.checkActiveCode fails closed
   // (`ambiguous_active_release`) on more than one `releaseStatus: 'active'`
   // release per datasetCode — an invariant the real importer's own
-  // `promote()` (reference-imports/pipeline.js) guarantees by superseding
+  // `promoteRelease` (services/referenceRelease.service.js) guarantees by superseding
   // the prior active release, never leaving two active at once. This
   // fixture skipped that step, so every run left the previous run's
-  // release active too. Mirror promote()'s own supersede behavior here.
+  // release active too. Mirror promoteRelease's own supersede behavior here.
   //
   // #745: on a stack whose reference-data bootstrap chain has run, the
   // release this supersedes is the *real* HPO/ORPHA/ICD10/OMIM release,
@@ -550,6 +550,7 @@ export async function seedActiveTerminologyConcept(
     parserVersion: '1.0.0',
     mappingVersion: '1.0.0',
     releaseStatus: 'active',
+    promotionApprovedBy: 'e2e-fixture',
     createdAt: new Date(),
     updatedAt: new Date(),
   });

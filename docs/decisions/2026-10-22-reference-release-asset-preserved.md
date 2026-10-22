@@ -34,7 +34,7 @@ By the coordinator for #1319, on 2026-10-22:
 Later slices of #1319:
 
 - **The coverage manifest and the DataQualityAssessment of a release** (RF028 AC6, AC7).
-- **Explicit promotion, a rollback route and the AuditEvent of each** (RF028 AC8, AC9).
+- **Explicit promotion, a rollback route and the AuditEvent of each** (RF028 AC8, AC9): decided in `2026-10-23-reference-release-explicit-promotion.md`.
 - **Dictionary V2E-0489..0491.**
 - **The essential-reference loader** `api/backend/scripts/load-essential-references.js`.
 - **Serving or deleting a stored asset.**

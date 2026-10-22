@@ -205,8 +205,8 @@ test.describe('Outbox → Neo4j projection (RF023) — real backend', () => {
 });
 
 // RF028 AC9 ("Persistir primeiro no MongoDB e projetar no Neo4j
-// exclusivamente pelo outbox", #552): reference-imports/pipeline.js's
-// promote() now appends a TERMINOLOGY_CONCEPT_PROMOTED/
+// exclusivamente pelo outbox", #552): services/referenceRelease.service.js's
+// promoteRelease now appends a TERMINOLOGY_CONCEPT_PROMOTED/
 // TERMINOLOGY_RELATION_PROMOTED event to graph_projection_outbox on the same
 // write that inserts a TerminologyConcept/TerminologyRelation, same pattern
 // RF023 uses above — the generic neo4jProjection.worker.js drains both. HPO

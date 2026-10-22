@@ -185,8 +185,8 @@ class GraphProjectionService {
   }
 
   // RF028 AC9: "Persistir primeiro no MongoDB e projetar no Neo4j
-  // exclusivamente pelo outbox" — appended by reference-imports/pipeline.js's
-  // promote() on the same write that inserts a TerminologyConcept, same
+  // exclusivamente pelo outbox" — appended by referenceRelease.service.js's
+  // promoteRelease on the same write that inserts a TerminologyConcept, same
   // outbox pattern RF023 uses for consent/lineage/quality/telemetry.
   async appendTerminologyConceptEvent(db, payload, options = {}) {
     return this.outbox.appendEvent(db, {

@@ -205,6 +205,7 @@ const ENTITY_MAP = {
   'quality': 'RCSAssessment',
   'quality-descriptions': 'QualityDescription',
   'reagent-lots': 'ReagentLot',
+  'reference-releases': 'ReferenceDatasetRelease',
   'report-templates': 'ReportTemplate',
   'retention-policies': 'RetentionPolicy',
   'sample-origins': 'SampleOrigin',

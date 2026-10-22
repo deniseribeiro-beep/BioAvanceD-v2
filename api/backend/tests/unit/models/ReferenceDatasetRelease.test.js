@@ -47,6 +47,23 @@ describe('ReferenceDatasetReleaseModel', () => {
       expect(result.isValid).toBe(false);
       expect(result.errors).toContain('sourceChecksum é obrigatório e deve ser string (SHA-256)');
     });
+
+    it('rejects an active release without promotionApprovedBy (V2E-0490)', () => {
+      const result = ReferenceDatasetReleaseModel.validate({ ...validData, releaseStatus: 'active' });
+      expect(result.isValid).toBe(false);
+      expect(result.errors).toContain('promotionApprovedBy é obrigatório quando releaseStatus é active');
+    });
+
+    it('accepts an active release with promotionApprovedBy (V2E-0490)', () => {
+      const result = ReferenceDatasetReleaseModel.validate({ ...validData, releaseStatus: 'active', promotionApprovedBy: 'USR-1' });
+      expect(result.isValid).toBe(true);
+    });
+
+    it('rejects a rollbackTargetId that is not a string (V2E-0491)', () => {
+      const result = ReferenceDatasetReleaseModel.validate({ ...validData, rollbackTargetId: 42 });
+      expect(result.isValid).toBe(false);
+      expect(result.errors).toContain('rollbackTargetId deve ser string');
+    });
   });
 
   describe('create', () => {

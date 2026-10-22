@@ -34,6 +34,6 @@ Later slices of #1319:
 
 - **Asset preservation in object storage** (RF028 AC2): decided in `2026-10-22-reference-release-asset-preserved.md`.
 - **The coverage manifest and the DataQualityAssessment of a release** (RF028 AC6, AC7).
-- **Explicit promotion, a rollback route and the AuditEvent of each** (RF028 AC8, AC9).
+- **Explicit promotion, a rollback route and the AuditEvent of each** (RF028 AC8, AC9): decided in `2026-10-23-reference-release-explicit-promotion.md`.
 - **Dictionary V2E-0489..0491.**
 - **The essential-reference loader** `api/backend/scripts/load-essential-references.js`, whose manifest carries no license or retrieval URI.

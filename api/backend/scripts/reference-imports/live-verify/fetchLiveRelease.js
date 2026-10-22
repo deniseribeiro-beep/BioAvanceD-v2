@@ -6,7 +6,7 @@ const crypto = require('crypto');
 // .arch.test.js's "no live network calls" assertions cover pipeline.js/
 // sources/*.js/normalize*.js/parseJsonLines.js only, and this module must
 // never be imported by any of them. Verification-only: never writes to
-// Mongo, never runs pipeline.js's promote() step.
+// Mongo, never runs referenceRelease.service.js's promoteRelease step.
 
 /**
  * Fetches JSON from a live URL (e.g. a GitHub releases API endpoint).

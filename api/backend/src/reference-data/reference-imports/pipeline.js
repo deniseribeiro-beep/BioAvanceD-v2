@@ -3,11 +3,7 @@ const { processRecords } = require('./processRecords');
 const ReferenceDatasetReleaseModel = require('../../models/ReferenceDatasetRelease');
 const ReferenceImportRunModel = require('../../models/ReferenceImportRun');
 const ReferenceImportIssueModel = require('../../models/ReferenceImportIssue');
-const TerminologyConceptModel = require('../../models/TerminologyConcept');
-const TerminologyRelationModel = require('../../models/TerminologyRelation');
 const { CANONICAL_COLLECTIONS } = require('../../config/collections');
-const { GraphProjectionService } = require('../../services/graphProjection.service');
-const { withTransactionWhereSupported } = require('../../utils/mongoTransaction');
 const { STORAGE_BASE } = require('../../config/uploadConfig');
 const { preserveReferenceAsset } = require('./preserveAsset');
 
@@ -38,15 +34,12 @@ async function runImport({
   dryRun = false,
   initiatedBy = 'system:reference-data-bootstrap',
   batchSize = DEFAULT_BATCH_SIZE,
-  graphProjection = new GraphProjectionService(),
   assetStorageRoot = STORAGE_BASE,
 }) {
   const releases = db.collection(CANONICAL_COLLECTIONS.referenceDatasetReleases);
   const runs = db.collection(CANONICAL_COLLECTIONS.referenceImportRuns);
   const issuesCollection = db.collection(CANONICAL_COLLECTIONS.referenceImportIssues);
   const staging = db.collection(CANONICAL_COLLECTIONS.referenceImportStaging);
-  const concepts = db.collection(CANONICAL_COLLECTIONS.terminologyConcepts);
-  const relations = db.collection(CANONICAL_COLLECTIONS.terminologyRelations);
 
   // 7.2 step 2 "Acquire" + step 3 "Integrity"
   const { checksum, fileSize } = await checksumFile(source.fixturePath);
@@ -269,7 +262,8 @@ async function runImport({
   }
 
   // INFERENCE, not a citation: the status path downloaded → staged →
-  // active | rejected is read off RELEASE_STATUSES' order in the model.
+  // approved | rejected is read off RELEASE_STATUSES' order in the model;
+  // promoteRelease (RF028 AC8) alone moves an approved release to active.
   if (releaseDoc && releaseDoc.releaseStatus !== 'active') {
     await releases.updateOne({ referenceDatasetReleaseId: releaseId }, { $set: { releaseStatus: 'staged', updatedAt: new Date() } });
     releaseDoc = { ...releaseDoc, releaseStatus: 'staged' };
@@ -282,22 +276,24 @@ async function runImport({
   const stagedConcepts = new Map(
     stagedDocs.filter((doc) => doc.entityType === 'TerminologyConcept').map((doc) => [doc.candidate.code, doc.candidate]),
   );
-  const stagedRelations = stagedDocs.filter((doc) => doc.entityType === 'TerminologyRelation').map((doc) => doc.candidate);
 
   const fatalIssues = issues.filter((issue) => issue.severity === 'fatal');
   const rejectionRate = recordsRead > 0 ? issues.length / recordsRead : 0;
   const approved = fatalIssues.length === 0 && rejectionRate <= REJECTION_RATE_BLOCK_THRESHOLD && Boolean(source.license);
 
-  let recordsInserted = 0;
-  let recordsUpdated = 0;
-  let recordsSkipped = 0;
+  // Records are written only when promoteRelease promotes the release.
+  const recordsInserted = 0;
+  const recordsUpdated = 0;
+  const recordsSkipped = 0;
 
   if (approved && !dryRun) {
-    const promotion = await promote({ db, releases, concepts, relations, source, releaseDoc, stagedConcepts, stagedRelations, graphProjection });
-    recordsInserted = promotion.recordsInserted;
-    recordsUpdated = promotion.recordsUpdated;
-    recordsSkipped = promotion.recordsSkipped;
-    issues.push(...promotion.issues);
+    // RF028 AC8: an approved run promotes nothing. Its release waits,
+    // `approved`, for promoteRelease. Written before the run's final update:
+    // a crash between the two leaves a `running` run, whose resume registers
+    // a fresh release, never a `completed` run beside a `staged` release.
+    if (releaseDoc.releaseStatus !== 'active') {
+      await releases.updateOne({ referenceDatasetReleaseId: releaseId }, { $set: { releaseStatus: 'approved', updatedAt: new Date() } });
+    }
   } else if (releaseDoc && releaseDoc.releaseStatus !== 'active') {
     // A release already active stays so: a rejected re-run of its content
     // never demotes it.
@@ -419,179 +415,4 @@ async function resolveRelease({ releases, source, checksum, registration, existi
   return releaseDoc;
 }
 
-async function promote({ db, releases, concepts, relations, source, releaseDoc, stagedConcepts, stagedRelations, graphProjection }) {
-  const issues = [];
-
-  if (releaseDoc.releaseStatus !== 'active') {
-    // INFERENCE, not a citation: previousReleaseId is set here, at promotion,
-    // since the dataset's active release can change between registration
-    // and promotion.
-    const existingActive = await releases.findOne({ datasetCode: source.datasetCode, releaseStatus: 'active' });
-    await releases.updateOne(
-      { referenceDatasetReleaseId: releaseDoc.referenceDatasetReleaseId },
-      {
-        $set: {
-          releaseStatus: 'active',
-          previousReleaseId: existingActive ? existingActive.referenceDatasetReleaseId : null,
-          updatedAt: new Date(),
-        },
-      },
-    );
-    // Preserve history — supersede, never delete (Plano Integrado §7.2 step 10).
-    if (existingActive) {
-      await releases.updateOne(
-        { referenceDatasetReleaseId: existingActive.referenceDatasetReleaseId },
-        { $set: { releaseStatus: 'superseded', updatedAt: new Date() } },
-      );
-    }
-  }
-
-  const codeToConceptId = new Map();
-  let recordsInserted = 0;
-  let recordsUpdated = 0;
-  let recordsSkipped = 0;
-
-  for (const candidate of stagedConcepts.values()) {
-    const filter = { systemUri: source.systemUri, code: candidate.code, version: source.datasetVersion };
-    const existingConcept = await concepts.findOne(filter);
-    if (existingConcept) {
-      codeToConceptId.set(candidate.code, existingConcept.terminologyConceptId);
-      recordsSkipped += 1;
-      continue;
-    }
-    const conceptDoc = TerminologyConceptModel.create({
-      ...candidate,
-      systemUri: source.systemUri,
-      version: source.datasetVersion,
-      referenceDatasetReleaseId: releaseDoc.referenceDatasetReleaseId,
-    });
-    // AC9: Mongo write is the source of truth, appended on the same request
-    // the concept is actually inserted — never for the skip-existing branch
-    // above, mirroring RF023's "append on write" outbox discipline. #1313
-    // (RF023 AC3): the insert and its event share one transaction.
-    await withTransactionWhereSupported(db, async (session) => {
-      await concepts.insertOne(conceptDoc, ...(session ? [{ session }] : []));
-      await graphProjection.appendTerminologyConceptEvent(db, {
-        terminologyConceptId: conceptDoc.terminologyConceptId,
-        systemUri: conceptDoc.systemUri,
-        code: conceptDoc.code,
-        version: conceptDoc.version,
-        display: conceptDoc.display,
-        conceptStatus: conceptDoc.conceptStatus,
-        referenceDatasetReleaseId: conceptDoc.referenceDatasetReleaseId,
-        sourceService: 'reference-imports-pipeline',
-      }, { session });
-    });
-    codeToConceptId.set(candidate.code, conceptDoc.terminologyConceptId);
-    recordsInserted += 1;
-  }
-
-  for (const candidate of stagedRelations) {
-    const sourceConceptId = codeToConceptId.get(candidate.sourceCode);
-    const targetConceptId = codeToConceptId.get(candidate.targetCode);
-    if (!sourceConceptId || !targetConceptId) {
-      // Endpoint existed in this run's concepts but wasn't newly promoted
-      // (e.g. reused from an existing release without a fresh lookup) —
-      // record rather than silently drop, per §7.3's no-orphan rule.
-      issues.push({
-        entityType: 'TerminologyRelation',
-        sourceRecordId: `${candidate.sourceCode}>${candidate.targetCode}`,
-        errorCode: 'ORPHAN_RELATION',
-        errorMessage: `Não foi possível resolver terminologyConceptId para ${candidate.sourceCode} ou ${candidate.targetCode}.`,
-        severity: 'error',
-      });
-      continue;
-    }
-    const filter = {
-      sourceConceptId,
-      targetConceptId,
-      relationType: candidate.relationType,
-      relationVersion: source.datasetVersion,
-    };
-    const existingRelation = await relations.findOne(filter);
-    if (existingRelation) {
-      recordsSkipped += 1;
-      continue;
-    }
-    const relationDoc = TerminologyRelationModel.create({
-      sourceConceptId,
-      targetConceptId,
-      relationType: candidate.relationType,
-      relationVersion: source.datasetVersion,
-      relationSystem: 'http://www.w3.org/2000/01/rdf-schema#subClassOf',
-      referenceDatasetReleaseId: releaseDoc.referenceDatasetReleaseId,
-    });
-    await withTransactionWhereSupported(db, async (session) => {
-      await relations.insertOne(relationDoc, ...(session ? [{ session }] : []));
-      await graphProjection.appendTerminologyRelationEvent(db, {
-        terminologyRelationId: relationDoc.terminologyRelationId,
-        sourceConceptId: relationDoc.sourceConceptId,
-        targetConceptId: relationDoc.targetConceptId,
-        relationType: relationDoc.relationType,
-        relationVersion: relationDoc.relationVersion,
-        referenceDatasetReleaseId: relationDoc.referenceDatasetReleaseId,
-        sourceService: 'reference-imports-pipeline',
-      }, { session });
-    });
-    recordsInserted += 1;
-  }
-
-  return { recordsInserted, recordsUpdated, recordsSkipped, issues };
-}
-
-/**
- * AC 7 rollback: reactivates the release immediately before the dataset's
- * current active one, one step at a time. Never deletes anything (Plano
- * Integrado §7.2 step 12 / §7.3 "preserve history") — both releases stay in
- * `referenceDatasetReleases`, only `releaseStatus` moves. The just-active
- * release becomes `rolled_back` (not `superseded` — that status already
- * means "an ordinary newer promotion replaced this one," a different event
- * than an operator explicitly reverting it), and the one before it becomes
- * `active` again. TerminologyConcept/TerminologyRelation docs are untouched:
- * they're deduped by systemUri+code+version, not owned by one release, so
- * nothing about them needs to change for a release-status rollback.
- */
-async function rollbackRelease({ db, datasetCode, initiatedBy = 'system:reference-data-bootstrap' }) {
-  const releases = db.collection(CANONICAL_COLLECTIONS.referenceDatasetReleases);
-  const runs = db.collection(CANONICAL_COLLECTIONS.referenceImportRuns);
-
-  const activeRelease = await releases.findOne({ datasetCode, releaseStatus: 'active' });
-  if (!activeRelease) {
-    return { rolledBack: false, reason: 'no_active_release' };
-  }
-  if (!activeRelease.previousReleaseId) {
-    return { rolledBack: false, reason: 'no_previous_release' };
-  }
-  const previousRelease = await releases.findOne({ referenceDatasetReleaseId: activeRelease.previousReleaseId });
-  if (!previousRelease) {
-    return { rolledBack: false, reason: 'previous_release_not_found' };
-  }
-
-  await releases.updateOne(
-    { referenceDatasetReleaseId: activeRelease.referenceDatasetReleaseId },
-    { $set: { releaseStatus: 'rolled_back', updatedAt: new Date() } },
-  );
-  await releases.updateOne(
-    { referenceDatasetReleaseId: previousRelease.referenceDatasetReleaseId },
-    { $set: { releaseStatus: 'active', updatedAt: new Date() } },
-  );
-
-  const startedAt = new Date();
-  const runDoc = ReferenceImportRunModel.create({
-    referenceDatasetReleaseId: previousRelease.referenceDatasetReleaseId,
-    datasetCode,
-    importMode: 'rollback',
-    idempotencyKey: `${datasetCode}:rollback:${activeRelease.referenceDatasetReleaseId}`,
-    startedAt,
-    completedAt: new Date(),
-    runStatus: 'rolled_back',
-    inputChecksum: activeRelease.sourceChecksum,
-    validationSummary: { fatal: 0, errors: 0, warnings: 0, rejectionRate: 0, approved: true },
-    initiatedBy,
-  });
-  await runs.insertOne(runDoc);
-
-  return { rolledBack: true, run: runDoc, activeReleaseId: previousRelease.referenceDatasetReleaseId, rolledBackReleaseId: activeRelease.referenceDatasetReleaseId };
-}
-
-module.exports = { runImport, rollbackRelease };
+module.exports = { runImport };

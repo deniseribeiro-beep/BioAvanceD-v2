@@ -63,6 +63,14 @@ class ReferenceDatasetReleaseModel {
     if (data.releaseStatus && !RELEASE_STATUSES.includes(data.releaseStatus)) {
       errors.push(`releaseStatus deve ser um de: ${RELEASE_STATUSES.join('|')}`);
     }
+    // V2E-0490: obrigatório quando active.
+    if (data.releaseStatus === 'active' && (typeof data.promotionApprovedBy !== 'string' || data.promotionApprovedBy.trim() === '')) {
+      errors.push('promotionApprovedBy é obrigatório quando releaseStatus é active');
+    }
+    // V2E-0491: release anterior para rollback.
+    if (data.rollbackTargetId !== undefined && data.rollbackTargetId !== null && typeof data.rollbackTargetId !== 'string') {
+      errors.push('rollbackTargetId deve ser string');
+    }
 
     return { isValid: errors.length === 0, errors };
   }
@@ -89,6 +97,9 @@ class ReferenceDatasetReleaseModel {
       mappingVersion: data.mappingVersion,
       releaseStatus: data.releaseStatus || 'planned',
       previousReleaseId: data.previousReleaseId || null,
+      promotionApprovedBy: data.promotionApprovedBy || null,
+      rollbackTargetId: data.rollbackTargetId || null,
+      promotionClaimedAt: data.promotionClaimedAt ? new Date(data.promotionClaimedAt) : null,
       createdAt: now,
       updatedAt: now,
     };
