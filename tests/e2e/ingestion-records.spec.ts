@@ -8,6 +8,9 @@ import {
   findOutboxEvents,
   findIngestionAuditRows,
   findCanonicalModelRelease,
+  findMissingDataReasons,
+  findDataQualityAssessment,
+  countDataQualityAssessmentsByScope,
   closeIngestionDb,
 } from './helpers/queryIngestion';
 
@@ -233,5 +236,100 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
 
     expect(res.status(), await res.text()).toBe(201);
     await assertAuditEventRecorded(request, apiBaseURL!, admin.token, watch);
+  });
+
+  test('RF029 AC7: an accepted Dataset gets a MissingDataReason per absent field, declared or unknown, and no absence becomes 0', async ({ request }) => {
+    const sourceRecordId = `rf029-e2e-${Date.now()}-missing`;
+
+    const res = await ingest(request, {
+      entityType: 'Dataset',
+      payload: datasetPayload(),
+      provenance: provenance(sourceRecordId),
+      missingDataReasons: [{ fieldPath: 'doi', reasonCode: 'withheld' }],
+    });
+
+    expect(res.status(), await res.text()).toBe(201);
+    const body = await res.json();
+    expect(body.missingDataReasons).toHaveLength(3);
+
+    const rows = await findMissingDataReasons('Dataset', body.entityId);
+    expect(rows).toHaveLength(3);
+    const byField = Object.fromEntries(rows.map((row) => [row.fieldPath, row.reasonCode]));
+    expect(byField).toEqual({ doi: 'withheld', distributionFiles: 'unknown', roCrateManifest: 'unknown' });
+    for (const row of rows) {
+      expect(row.sourceEventId).toBe(body.outboxEventId);
+    }
+
+    const stored = await findIngestedRecord('datasets', 'datasetId', body.entityId);
+    expect(stored).toMatchObject({ doi: null, roCrateManifest: null, distributionFiles: [] });
+  });
+
+  test('RF029 AC7: a MissingDataReason declared on a field that holds a value quarantines the record', async ({ request }) => {
+    const sourceRecordId = `rf029-e2e-${Date.now()}-present`;
+
+    const res = await ingest(request, {
+      entityType: 'Dataset',
+      payload: { ...datasetPayload(), doi: '10.1234/rf029-e2e' },
+      provenance: provenance(sourceRecordId),
+      missingDataReasons: [{ fieldPath: 'doi', reasonCode: 'withheld' }],
+    });
+
+    expect(res.status(), await res.text()).toBe(422);
+    const body = await res.json();
+    expect(body.error).toBe('INGESTION_QUARANTINED');
+    expect(body.details).toContain('doi tem valor e não pode ter MissingDataReason');
+    expect(await countIngestedBySourceRecordId('datasets', sourceRecordId)).toBe(0);
+  });
+
+  test('RNF011 C3: an accepted record gets a DataQualityAssessment, and a second record from the same source scores uniqueness 0', async ({ request }) => {
+    const sourceRecordId = `rf029-e2e-${Date.now()}-dqa`;
+
+    const first = await ingest(request, { entityType: 'Dataset', payload: datasetPayload(), provenance: provenance(sourceRecordId) });
+    expect(first.status(), await first.text()).toBe(201);
+    const firstBody = await first.json();
+    expect(typeof firstBody.dataQualityAssessmentId).toBe('string');
+
+    const assessment = await findDataQualityAssessment(firstBody.dataQualityAssessmentId);
+    expect(assessment).toMatchObject({
+      scopeType: 'ingested_record',
+      scopeId: `Dataset/${firstBody.entityId}`,
+      status: 'passed',
+    });
+    expect(assessment.results).toHaveLength(6);
+    const results = Object.fromEntries(assessment.results.map((result: any) => [result.metric, result]));
+    expect(results.completeness).toMatchObject({ numerator: 4, denominator: 4 });
+    expect(results.uniqueness.value).toBe(1);
+
+    const second = await ingest(request, { entityType: 'Dataset', payload: datasetPayload(), provenance: provenance(sourceRecordId) });
+    expect(second.status(), await second.text()).toBe(201);
+    const secondBody = await second.json();
+
+    const duplicate = await findDataQualityAssessment(secondBody.dataQualityAssessmentId);
+    expect(duplicate.scopeId).toBe(`Dataset/${secondBody.entityId}`);
+    expect(duplicate.status).toBe('failed');
+    const duplicateResults = Object.fromEntries(duplicate.results.map((result: any) => [result.metric, result]));
+    expect(duplicateResults.uniqueness.value).toBe(0);
+  });
+
+  test('RNF011 C3: a quarantined record gets a failed DataQualityAssessment, and its replay records none', async ({ request }) => {
+    const sourceRecordId = `rf029-e2e-${Date.now()}-dqa-quarantine`;
+    const idempotencyKey = `rf029-e2e-dqa-q-${Date.now()}`;
+    const { purpose: _omitted, ...withoutPurpose } = provenance(sourceRecordId);
+    const body = { entityType: 'Dataset', payload: datasetPayload(), provenance: withoutPurpose, idempotencyKey };
+
+    const first = await ingest(request, body);
+    expect(first.status(), await first.text()).toBe(422);
+    const firstBody = await first.json();
+    expect(typeof firstBody.dataQualityAssessmentId).toBe('string');
+
+    const scopeId = `IngestionQuarantineRecord/${firstBody.ingestionQuarantineRecordId}`;
+    const assessment = await findDataQualityAssessment(firstBody.dataQualityAssessmentId);
+    expect(assessment).toMatchObject({ scopeType: 'ingested_record', scopeId, status: 'failed' });
+    const results = Object.fromEntries(assessment.results.map((result: any) => [result.metric, result]));
+    expect(results.provenance).toMatchObject({ numerator: 3, denominator: 4 });
+
+    const second = await ingest(request, body);
+    expect(second.status(), await second.text()).toBe(422);
+    expect(await countDataQualityAssessmentsByScope(scopeId)).toBe(1);
   });
 });

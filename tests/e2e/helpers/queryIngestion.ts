@@ -71,3 +71,18 @@ export async function findCanonicalModelRelease(canonicalModelReleaseId: string)
   const db = await getDb();
   return db.collection('canonicalModelReleases').findOne({ canonicalModelReleaseId });
 }
+
+export async function findMissingDataReasons(entityType: string, entityId: string): Promise<any[]> {
+  const db = await getDb();
+  return db.collection('missingDataReasons').find({ entityType, entityId }).toArray();
+}
+
+export async function findDataQualityAssessment(dataQualityAssessmentId: string): Promise<any> {
+  const db = await getDb();
+  return db.collection('dataQualityAssessments').findOne({ dataQualityAssessmentId });
+}
+
+export async function countDataQualityAssessmentsByScope(scopeId: string): Promise<number> {
+  const db = await getDb();
+  return db.collection('dataQualityAssessments').countDocuments({ scopeId });
+}
