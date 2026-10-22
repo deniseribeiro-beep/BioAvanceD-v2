@@ -117,6 +117,9 @@ const ENTITY_TARGETS = {
   Session: () => require('../../src/models/Session').fieldsOf(),
   RecoveryCodeSet: () => require('../../src/models/RecoveryCodeSet').fieldsOf(),
   DataQualityAssessment: () => require('../../src/models/DataQualityAssessment').fieldsOf(),
+  RCSInputSnapshot: () => require('../../src/models/RcsInputSnapshot').fieldsOf(),
+  RCSPreanalyticalAxisInput: () => require('../../src/models/RcsPreanalyticalAxisInput').fieldsOf(),
+  RCSGovernanceEvidenceSnapshot: () => require('../../src/models/RcsGovernanceEvidenceSnapshot').fieldsOf(),
 };
 
 // Drift measured against catalog.1.3.0.json, 2026-09-02, and re-measured
