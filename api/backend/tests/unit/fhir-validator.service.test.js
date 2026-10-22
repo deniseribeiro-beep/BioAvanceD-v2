@@ -230,3 +230,228 @@ describe('FhirValidatorService.buildOperationOutcome', () => {
     expect(outcome.issue).toEqual([]);
   });
 });
+
+describe('FhirValidatorService conformance (RF011 AC1)', () => {
+  const FHIRProfileRegistryModel = require('../../src/models/FHIRProfileRegistry');
+
+  const PROFILE_URL = 'https://bioadvanced.dev/fhir/StructureDefinition/participant';
+  const SYSTEM_URI = 'https://bioadvanced.dev/fhir/NamingSystem/participant';
+
+  const patient = (extra = {}) => ({
+    resourceType: 'Patient',
+    name: [{ family: 'Silva', given: ['Ana'] }],
+    gender: 'female',
+    birthDate: '1990-01-01',
+    ...extra
+  });
+
+  const profileRow = (overrides = {}) => FHIRProfileRegistryModel.create({
+    canonicalUrl: PROFILE_URL,
+    fhirVersion: '4.0.1',
+    profileVersion: '1.0.0',
+    mappingReleaseId: 'mapping-release-test',
+    status: 'active',
+    ...overrides
+  });
+
+  const namespaceRow = (overrides = {}) => ({
+    namespaceKey: 'participant',
+    systemUri: SYSTEM_URI,
+    authorityDomain: 'bioadvanced.dev',
+    targetTypes: ['participant'],
+    semanticVersion: '1.0.0',
+    effectivePeriod: { start: '2026-01-01' },
+    configurationReleaseId: 'configuration-release-test',
+    ...overrides
+  });
+
+  const registry = ({ profiles = [], namespaces = [], approvedAuthorities = [] } = {}) => ({
+    registry: { profiles, namespaces, approvedAuthorities }
+  });
+
+  const validate = (payload, options) => fhirValidator.validatePayload(payload, undefined, options);
+
+  describe('version', () => {
+    it('refuses fhirVersion 5.0.0 as fhir-version-unsupported at /fhirVersion', () => {
+      const result = validate(patient({ fhirVersion: '5.0.0' }));
+      expect(result.valid).toBe(false);
+      expect(result.issues).toHaveLength(1);
+      expect(result.issues[0]).toMatchObject({
+        reason: 'fhir-version-unsupported',
+        code: 'not-supported',
+        expression: '/fhirVersion',
+        diagnostics: 'Versão FHIR não suportada: 5.0.0 (aceitas: 4.0.1, R4)'
+      });
+    });
+
+    it('accepts fhirVersion 4.0.1', () => {
+      expect(validate(patient({ fhirVersion: '4.0.1' })).valid).toBe(true);
+    });
+
+    it('accepts fhirVersion R4', () => {
+      expect(validate(patient({ fhirVersion: 'R4' })).valid).toBe(true);
+    });
+
+    it('accepts a resource that declares no fhirVersion', () => {
+      expect(validate(patient()).valid).toBe(true);
+    });
+  });
+
+  describe('profile', () => {
+    it('refuses a declared profile with the default registry', () => {
+      const result = validate(patient({ meta: { profile: [PROFILE_URL] } }));
+      expect(result.valid).toBe(false);
+      expect(result.issues).toHaveLength(1);
+      expect(result.issues[0]).toMatchObject({
+        reason: 'profile-not-registered',
+        code: 'not-supported',
+        expression: '/meta/profile/0',
+        diagnostics: `Perfil FHIR não registrado: ${PROFILE_URL}`
+      });
+    });
+
+    it('accepts a profile an active registry row names', () => {
+      const result = validate(patient({ meta: { profile: [PROFILE_URL] } }), registry({ profiles: [profileRow()] }));
+      expect(result).toEqual({ valid: true, issues: [], resourcesValidated: 1 });
+    });
+
+    it('refuses a profile whose registry row is draft', () => {
+      const result = validate(
+        patient({ meta: { profile: [PROFILE_URL] } }),
+        registry({ profiles: [profileRow({ status: 'draft' })] })
+      );
+      expect(result.valid).toBe(false);
+      expect(result.issues[0].reason).toBe('profile-not-registered');
+    });
+
+    it('accepts a versioned profile url|1.0.0 matching the row version', () => {
+      const result = validate(
+        patient({ meta: { profile: [`${PROFILE_URL}|1.0.0`] } }),
+        registry({ profiles: [profileRow()] })
+      );
+      expect(result.valid).toBe(true);
+    });
+
+    it('refuses a versioned profile url|2.0.0 the row does not carry', () => {
+      const result = validate(
+        patient({ meta: { profile: [`${PROFILE_URL}|2.0.0`] } }),
+        registry({ profiles: [profileRow()] })
+      );
+      expect(result.valid).toBe(false);
+      expect(result.issues[0]).toMatchObject({ reason: 'profile-not-registered', expression: '/meta/profile/0' });
+    });
+
+    it('refuses a meta.profile that is not an array', () => {
+      const result = validate(patient({ meta: { profile: 'x' } }), registry({ profiles: [profileRow()] }));
+      expect(result.valid).toBe(false);
+      expect(result.issues[0]).toMatchObject({ reason: 'profile-not-registered', expression: '/meta/profile' });
+    });
+  });
+
+  describe('identifier.system', () => {
+    it('refuses an identifier system with the default registry', () => {
+      const result = validate(patient({ identifier: [{ system: 'cpf', value: '1' }] }));
+      expect(result.valid).toBe(false);
+      expect(result.issues).toHaveLength(1);
+      expect(result.issues[0]).toMatchObject({
+        reason: 'identifier-system-unknown',
+        code: 'invalid',
+        expression: '/identifier/0/system',
+        diagnostics: 'identifier.system fora de namespace registrado: cpf'
+      });
+    });
+
+    it('accepts the systemUri of a registered namespace in force', () => {
+      const result = validate(
+        patient({ identifier: [{ system: SYSTEM_URI, value: '1' }] }),
+        registry({ namespaces: [namespaceRow()] })
+      );
+      expect(result.valid).toBe(true);
+    });
+
+    it('refuses the systemUri of a namespace whose vigência has ended', () => {
+      const result = validate(
+        patient({ identifier: [{ system: SYSTEM_URI, value: '1' }] }),
+        registry({ namespaces: [namespaceRow({ effectivePeriod: { start: '2026-01-01', end: '2026-02-01' } })] })
+      );
+      expect(result.valid).toBe(false);
+      expect(result.issues[0]).toMatchObject({ reason: 'identifier-system-unknown', expression: '/identifier/0/system' });
+    });
+
+    it('refuses a system whose namespace row breaks RULE-036, the row being ignored', () => {
+      const result = validate(
+        patient({ identifier: [{ system: 'http://bioadvanced.dev/x', value: '1' }] }),
+        registry({ namespaces: [namespaceRow({ systemUri: 'http://bioadvanced.dev/x' })] })
+      );
+      expect(result.valid).toBe(false);
+      expect(result.issues[0]).toMatchObject({ reason: 'identifier-system-unknown', expression: '/identifier/0/system' });
+    });
+
+    it('accepts an identifier with no system', () => {
+      expect(validate(patient({ identifier: [{ value: '1' }] })).valid).toBe(true);
+    });
+
+    it('refuses a nested Specimen container identifier system at its path', () => {
+      const specimen = {
+        resourceType: 'Specimen',
+        subject: { reference: 'Patient/1' },
+        type: { coding: [] },
+        container: [{ identifier: [{ system: 'urn:oid:1', value: 'B1' }] }]
+      };
+      const result = validate(specimen);
+      expect(result.valid).toBe(false);
+      expect(result.issues).toHaveLength(1);
+      expect(result.issues[0]).toMatchObject({
+        reason: 'identifier-system-unknown',
+        expression: '/container/0/identifier/0/system'
+      });
+    });
+  });
+
+  describe('Bundle', () => {
+    it('refuses a Bundle identifier system once, counting only its entries', () => {
+      const bundle = {
+        resourceType: 'Bundle',
+        type: 'collection',
+        identifier: { system: 'cpf', value: 'b1' },
+        entry: [{ resource: patient() }]
+      };
+      const result = validate(bundle);
+      expect(result.valid).toBe(false);
+      expect(result.issues).toHaveLength(1);
+      expect(result.issues[0]).toMatchObject({ reason: 'identifier-system-unknown', expression: '/identifier/system' });
+      expect(result.resourcesValidated).toBe(1);
+    });
+
+    it('refuses an entry Patient declaring an unregistered profile once', () => {
+      const bundle = {
+        resourceType: 'Bundle',
+        type: 'collection',
+        entry: [{ resource: patient({ meta: { profile: [PROFILE_URL] } }) }]
+      };
+      const result = validate(bundle);
+      expect(result.valid).toBe(false);
+      expect(result.issues).toHaveLength(1);
+      expect(result.issues[0]).toMatchObject({ reason: 'profile-not-registered', expression: '/meta/profile/0' });
+      expect(result.resourcesValidated).toBe(1);
+    });
+  });
+
+  describe('issue shape', () => {
+    it('carries severity error and its reason, and the OperationOutcome carries the diagnostics', () => {
+      const result = fhirValidator.validateResource(patient({ fhirVersion: '5.0.0' }));
+      expect(result.valid).toBe(false);
+      result.issues.forEach((issue) => {
+        expect(issue.severity).toBe('error');
+        expect(issue.reason).toBe('fhir-version-unsupported');
+      });
+      const outcome = fhirValidator.buildOperationOutcome(result.issues);
+      expect(outcome.issue[0]).toEqual({
+        severity: 'error',
+        code: 'not-supported',
+        diagnostics: 'Versão FHIR não suportada: 5.0.0 (aceitas: 4.0.1, R4)',
+        expression: ['/fhirVersion']
+      });
+    });
+  });
+});
