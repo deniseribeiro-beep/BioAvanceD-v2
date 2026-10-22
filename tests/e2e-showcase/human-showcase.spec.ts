@@ -1144,10 +1144,8 @@ test.describe('Human-paced e2e showcase reel — W6 consent revocation', () => {
 // Facility Management's Incidents tab. The "Controle de Temperatura" and
 // "Histórico de Leituras" tabs now read the persisted readings, and
 // tests/e2e/facility-temperature-readings.spec.ts covers them. Deliberately
-// not demoed: the Dashboard chart, which still draws client-side simulated
-// values rather than the persisted readings (#1397), so showing it would pass
-// a simulation off as real data; and the notification attempt the alert
-// dispatches, which is recorded by the backend but has no UI that shows it.
+// not demoed: the notification attempt the alert dispatches, which is
+// recorded by the backend but has no UI that shows it.
 test.describe('Human-paced e2e showcase reel — W9 telemetry and alerts', () => {
   // POST /api/iot/telemetry is gated by the machine ingest secret (#1091).
   const ingestHeaders = () => ({ 'x-telemetry-ingest-secret': process.env.TELEMETRY_INGEST_SECRET ?? '' });
