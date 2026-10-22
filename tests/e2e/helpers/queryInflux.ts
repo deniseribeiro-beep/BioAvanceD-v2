@@ -56,15 +56,18 @@ export async function queryTemperaturePoints(
 /**
  * #1317: the telemetryReadingId of every `freezer_temperature` point the
  * temperature reading route wrote for `sensorId`, with each point's time.
+ * #1392: `measurement: 'temperature'` reads the points POST
+ * /api/iot/telemetry wrote instead (saveTelemetryPoint.js).
  */
 export async function queryFreezerReadingIds(
   sensorId: string,
-  lookbackMinutes = 10
+  lookbackMinutes = 10,
+  measurement: 'freezer_temperature' | 'temperature' = 'freezer_temperature'
 ): Promise<{ time: string; telemetryReadingId: string }[]> {
   const queryApi = getClient().getQueryApi(org);
   const flux = `from(bucket: "${bucket}")
     |> range(start: -${lookbackMinutes}m)
-    |> filter(fn: (r) => r._measurement == "freezer_temperature")
+    |> filter(fn: (r) => r._measurement == "${measurement}")
     |> filter(fn: (r) => r._field == "telemetryReadingId")
     |> filter(fn: (r) => r.sensorId == "${sensorId}")`;
 
