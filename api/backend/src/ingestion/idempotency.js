@@ -101,16 +101,39 @@ async function findCompletedIdempotentResult(db, { idempotencyKey, scope }) {
 }
 
 /**
+ * #1318: the completed (idempotencyKey, scope)'s `{ resultRef, outcome }`, or
+ * null, so a replay can report the same outcome as the first call. `outcome`
+ * is null for a key recorded without one.
+ */
+async function findCompletedIdempotentEntry(db, { idempotencyKey, scope }, { session } = {}) {
+  if (!idempotencyKey || !scope) {
+    throw new Error('findCompletedIdempotentEntry: idempotencyKey e scope são obrigatórios');
+  }
+
+  const keys = db.collection(CANONICAL_COLLECTIONS.ingestionIdempotencyKeys);
+  const filter = { idempotencyKey, scope, status: 'completed' };
+  const existing = session ? await keys.findOne(filter, { session }) : await keys.findOne(filter);
+  return existing ? { resultRef: existing.resultRef, outcome: existing.outcome || null } : null;
+}
+
+/**
  * Records (idempotencyKey, scope) completed with its resultRef in one upsert;
  * the first record wins and is never overwritten. Returns the first record's
  * resultRef, so a caller that lost a concurrent race learns the winner's.
+ *
+ * #1318: with a `session`, both writes run in the caller's transaction. The
+ * index is then the caller's to ensure beforehand, because an index build is
+ * not transactional, and a duplicate-key error is rethrown, because an
+ * aborted transaction cannot read the winner's record afterwards. An
+ * `outcome` given is stored beside the resultRef; without one the record is
+ * written as before.
  */
-async function recordCompletedIdempotentResult(db, { idempotencyKey, scope, resultRef = null }) {
+async function recordCompletedIdempotentResult(db, { idempotencyKey, scope, resultRef = null, outcome = null }, { session } = {}) {
   if (!idempotencyKey || !scope) {
     throw new Error('recordCompletedIdempotentResult: idempotencyKey e scope são obrigatórios');
   }
 
-  await ensureIdempotencyKeyIndex(db);
+  if (!session) await ensureIdempotencyKeyIndex(db);
   const keys = db.collection(CANONICAL_COLLECTIONS.ingestionIdempotencyKeys);
   const now = new Date();
   try {
@@ -122,24 +145,29 @@ async function recordCompletedIdempotentResult(db, { idempotencyKey, scope, resu
           scope,
           status: 'completed',
           resultRef,
+          ...(outcome ? { outcome } : {}),
           claimedAt: now,
           completedAt: now,
         },
       },
-      { upsert: true },
+      session ? { upsert: true, session } : { upsert: true },
     );
   } catch (error) {
     // Two concurrent upserts of one key: the unique index lets one insert,
     // and the other reads the winner's record below.
-    if (error?.code !== 11000) throw error;
+    if (session || error?.code !== 11000) throw error;
   }
-  return (await keys.findOne({ idempotencyKey, scope }))?.resultRef ?? null;
+  const stored = session
+    ? await keys.findOne({ idempotencyKey, scope }, { session })
+    : await keys.findOne({ idempotencyKey, scope });
+  return stored?.resultRef ?? null;
 }
 
 module.exports = {
   claimIdempotencyKey,
   recordIdempotentResult,
   findCompletedIdempotentResult,
+  findCompletedIdempotentEntry,
   recordCompletedIdempotentResult,
   ensureIdempotencyKeyIndex,
 };

@@ -4,6 +4,7 @@ const {
   recordIdempotentResult,
   findCompletedIdempotentResult,
   recordCompletedIdempotentResult,
+  findCompletedIdempotentEntry,
   ensureIdempotencyKeyIndex,
 } = require('../../../src/ingestion/idempotency');
 const { createFakeDb, createFakeCollection } = require('./testHelpers');
@@ -135,6 +136,58 @@ describe('ingestion/idempotency (RF029 AC 5)', () => {
       const db = { collection: () => keys };
       await expect(recordCompletedIdempotentResult(db, { idempotencyKey: 'key-1', scope: 'TelemetryReading:s1', resultRef: null }))
         .rejects.toThrow(/connection reset/);
+    });
+
+    // #1318: inside a caller's transaction both writes take its session, no
+    // index is built, and a duplicate key is rethrown for the caller.
+    it('with a session, passes it to the upsert and the read, and builds no index', async () => {
+      const createIndex = vi.fn().mockResolvedValue('ok');
+      const keys = { ...createFakeCollection([]), collectionName: 'ingestionIdempotencyKeys_session_case', createIndex };
+      const updateOne = vi.spyOn(keys, 'updateOne');
+      const findOne = vi.spyOn(keys, 'findOne');
+      const db = { collection: () => keys };
+      const session = { id: 'session-1' };
+
+      await expect(recordCompletedIdempotentResult(db, { idempotencyKey: 'key-1', scope: 'Dataset', resultRef: 'ds-1' }, { session }))
+        .resolves.toBe('ds-1');
+      expect(updateOne).toHaveBeenCalledWith({ idempotencyKey: 'key-1', scope: 'Dataset' }, expect.any(Object), { upsert: true, session });
+      expect(findOne).toHaveBeenCalledWith({ idempotencyKey: 'key-1', scope: 'Dataset' }, { session });
+      expect(createIndex).not.toHaveBeenCalled();
+    });
+
+    it('stores an outcome given beside the resultRef, and findCompletedIdempotentEntry reads both', async () => {
+      const db = createFakeDb({ ingestionIdempotencyKeys: [{ idempotencyKey: 'key-old', scope: 'Dataset', status: 'completed', resultRef: 'ds-old' }] });
+
+      await recordCompletedIdempotentResult(db, { idempotencyKey: 'key-1', scope: 'Dataset', resultRef: 'q-1', outcome: 'quarantined' });
+
+      await expect(findCompletedIdempotentEntry(db, { idempotencyKey: 'key-1', scope: 'Dataset' })).resolves.toEqual({ resultRef: 'q-1', outcome: 'quarantined' });
+      await expect(findCompletedIdempotentEntry(db, { idempotencyKey: 'key-old', scope: 'Dataset' })).resolves.toEqual({ resultRef: 'ds-old', outcome: null });
+      await expect(findCompletedIdempotentEntry(db, { idempotencyKey: 'key-none', scope: 'Dataset' })).resolves.toBeNull();
+    });
+
+    it('without an outcome, the stored record has no outcome field', async () => {
+      const db = createFakeDb({ ingestionIdempotencyKeys: [] });
+      await recordCompletedIdempotentResult(db, { idempotencyKey: 'key-1', scope: 'TelemetryReading:s1', resultRef: 'r-1' });
+      expect(db.collections.ingestionIdempotencyKeys.docs[0]).not.toHaveProperty('outcome');
+    });
+
+    it('with a session, a duplicate-key error is rethrown', async () => {
+      const keys = createFakeCollection([{ idempotencyKey: 'key-1', scope: 'Dataset', status: 'completed', resultRef: 'ds-1' }]);
+      keys.updateOne = vi.fn().mockRejectedValue(Object.assign(new Error('E11000 duplicate key'), { code: 11000 }));
+      const db = { collection: () => keys };
+      await expect(recordCompletedIdempotentResult(db, { idempotencyKey: 'key-1', scope: 'Dataset', resultRef: 'ds-2' }, { session: {} }))
+        .rejects.toMatchObject({ code: 11000 });
+    });
+
+    it('without a session, the upsert and the read take no session argument', async () => {
+      const keys = createFakeCollection([]);
+      const updateOne = vi.spyOn(keys, 'updateOne');
+      const findOne = vi.spyOn(keys, 'findOne');
+      const db = { collection: () => keys };
+
+      await recordCompletedIdempotentResult(db, { idempotencyKey: 'key-1', scope: 'Dataset', resultRef: 'ds-1' });
+      expect(updateOne.mock.calls[0][2]).toEqual({ upsert: true });
+      expect(findOne.mock.calls[0]).toEqual([{ idempotencyKey: 'key-1', scope: 'Dataset' }]);
     });
 
     it('requires idempotencyKey and scope', async () => {

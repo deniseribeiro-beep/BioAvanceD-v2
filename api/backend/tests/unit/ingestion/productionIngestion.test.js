@@ -1,0 +1,285 @@
+import { describe, it, expect, vi, afterEach } from 'vitest';
+const { ingestAndPersist } = require('../../../src/ingestion/productionIngestion');
+const { findCompletedIdempotentResult } = require('../../../src/ingestion/idempotency');
+const { createFakeDb } = require('./testHelpers');
+const { createMatchingCollection } = require('../../factories/filter.factory');
+
+// RF029 (#1318): the production ingestion path. createFakeDb has no client,
+// so it takes the sequential path; the replica-set cases attach a client
+// shaped like graphProjection.service.test.js's own.
+
+afterEach(() => { vi.restoreAllMocks(); });
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+function seededDb({ release = { canonicalModelReleaseId: 'release-2.0.0', releaseStatus: 'active' }, config = { _id: 'main', configurationReleaseId: 'cfg-release-7' } } = {}) {
+  return createFakeDb({
+    canonicalModelReleases: release ? [release] : [],
+    security_config: config ? [config] : [],
+    datasets: [],
+    workflowRuns: [],
+    ingestionQuarantineRecords: [],
+    ingestionIdempotencyKeys: [],
+  });
+}
+
+function onReplicaSet(db) {
+  const session = { withTransaction: vi.fn(async (fn) => { await fn(); }), endSession: vi.fn(async () => {}) };
+  db.client = {
+    db: () => ({ command: async () => ({ setName: 'rs0' }) }),
+    startSession: () => session,
+  };
+  return session;
+}
+
+function fakeOutbox() {
+  return { appendEvent: vi.fn(async (_db, event) => ({ eventId: 'evt-1', ...event })) };
+}
+
+function provenance() {
+  return {
+    sourceSystem: 'urn:system:lims',
+    retrievedAt: '2026-10-01T12:00:00.000Z',
+    purpose: 'operational_registration',
+    sourceRecordId: 'LIMS-DS-42',
+  };
+}
+
+const DATASET = { datasetTitle: 'Coorte A', datasetVersion: '1.0', creators: ['Equipe A'], license: 'CC-BY-4.0' };
+const WORKFLOW_RUN = {
+  workflowId: 'variant-calling',
+  workflowVersion: '2.3.1',
+  createdBy: 'User/client-claimed',
+  startedAt: '2026-10-01T10:00:00.000Z',
+  runStatus: 'succeeded',
+};
+
+function ingest(db, overrides = {}) {
+  return ingestAndPersist({
+    db,
+    entityType: 'Dataset',
+    payload: DATASET,
+    provenance: provenance(),
+    actorId: 'u-1',
+    outbox: fakeOutbox(),
+    ...overrides,
+  });
+}
+
+describe('ingestion/productionIngestion ingestAndPersist (RF029, #1318)', () => {
+  it('1. an accepted Dataset is inserted with a server uuid, its provenance and release ids, and one INGESTION_RECORD_PERSISTED append', async () => {
+    const db = seededDb();
+    const outbox = fakeOutbox();
+
+    const result = await ingest(db, { outbox });
+
+    expect(result).toMatchObject({ status: 'accepted', entityType: 'Dataset', outboxEventId: 'evt-1', canonicalModelReleaseId: 'release-2.0.0', configurationReleaseId: 'cfg-release-7' });
+    expect(result.entityId).toMatch(UUID);
+    expect(db.collections.datasets.docs).toHaveLength(1);
+    expect(db.collections.datasets.docs[0]).toMatchObject({
+      datasetId: result.entityId,
+      datasetTitle: 'Coorte A',
+      sourceSystem: 'urn:system:lims',
+      sourceRecordId: 'LIMS-DS-42',
+      createdBy: 'Actor/u-1',
+      canonicalModelReleaseId: 'release-2.0.0',
+      configurationReleaseId: 'cfg-release-7',
+    });
+    expect(db.collections.datasets.docs[0].retrievedAt).toEqual(new Date('2026-10-01T12:00:00.000Z'));
+    expect(outbox.appendEvent).toHaveBeenCalledTimes(1);
+    expect(outbox.appendEvent.mock.calls[0][1]).toEqual({
+      eventType: 'INGESTION_RECORD_PERSISTED',
+      aggregateType: 'Dataset',
+      aggregateId: result.entityId,
+      canonicalModelReleaseId: 'release-2.0.0',
+      payload: { entityType: 'Dataset', entityId: result.entityId, configurationReleaseId: 'cfg-release-7' },
+      sourceService: 'ingestion-gateway',
+      schemaVersion: 1,
+    });
+  });
+
+  it('2. on a replica set, the insert and the append receive the same session', async () => {
+    const db = seededDb();
+    const session = onReplicaSet(db);
+    const insertOne = vi.spyOn(db.collection('datasets'), 'insertOne');
+    const outbox = fakeOutbox();
+
+    const result = await ingest(db, { outbox });
+
+    expect(result.status).toBe('accepted');
+    expect(session.withTransaction).toHaveBeenCalledTimes(1);
+    expect(insertOne).toHaveBeenCalledWith(expect.objectContaining({ datasetId: result.entityId }), { session });
+    expect(outbox.appendEvent).toHaveBeenCalledWith(db, expect.objectContaining({ aggregateId: result.entityId }), { session });
+  });
+
+  it('3. on the session path a failing append rejects, with the insert and the append in the same session', async () => {
+    const db = seededDb();
+    const session = onReplicaSet(db);
+    const insertOne = vi.spyOn(db.collection('datasets'), 'insertOne');
+    const outbox = { appendEvent: vi.fn().mockRejectedValue(new Error('outbox down')) };
+
+    await expect(ingest(db, { outbox })).rejects.toThrow('outbox down');
+    expect(insertOne).toHaveBeenCalledWith(expect.any(Object), { session });
+    expect(outbox.appendEvent).toHaveBeenCalledWith(db, expect.any(Object), { session });
+  });
+
+  it('4. a missing provenance field quarantines, with no insert and no append', async () => {
+    const db = seededDb();
+    const outbox = fakeOutbox();
+
+    const result = await ingest(db, { outbox, provenance: { ...provenance(), sourceSystem: undefined } });
+
+    expect(result.status).toBe('quarantined');
+    expect(result.violations.map((v) => v.field)).toContain('provenance.sourceSystem');
+    expect(result.ingestionQuarantineRecordId).toBe(db.collections.ingestionQuarantineRecords.docs[0].ingestionQuarantineRecordId);
+    expect(result).toMatchObject({ canonicalModelReleaseId: 'release-2.0.0', configurationReleaseId: 'cfg-release-7' });
+    expect(db.collections.datasets.docs).toHaveLength(0);
+    expect(outbox.appendEvent).not.toHaveBeenCalled();
+  });
+
+  it('5. a WorkflowRun that passes the schema but fails the model quarantines with ENTITY_VALIDATION_FAILED', async () => {
+    const db = seededDb();
+    const outbox = fakeOutbox();
+
+    const result = await ingest(db, { outbox, entityType: 'WorkflowRun', payload: { ...WORKFLOW_RUN, startedAt: 'not-a-date' } });
+
+    expect(result.status).toBe('quarantined');
+    expect(result.violations).toEqual([
+      { code: 'ENTITY_VALIDATION_FAILED', field: null, message: 'startedAt é obrigatório e deve ser uma data válida' },
+    ]);
+    expect(db.collections.workflowRuns.docs).toHaveLength(0);
+    expect(outbox.appendEvent).not.toHaveBeenCalled();
+  });
+
+  it.each(['Telemetry', '__proto__', 'toString'])('6. entityType %s throws 422 INGESTION_TARGET_UNSUPPORTED with no write', async (entityType) => {
+    const db = seededDb();
+    const outbox = fakeOutbox();
+
+    await expect(ingest(db, { outbox, entityType })).rejects.toMatchObject({
+      statusCode: 422,
+      code: 'INGESTION_TARGET_UNSUPPORTED',
+      details: [expect.stringContaining(entityType)],
+    });
+    expect(db.collections.ingestionQuarantineRecords.docs).toHaveLength(0);
+    expect(db.collections.datasets.docs).toHaveLength(0);
+    expect(outbox.appendEvent).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['missing', null],
+    ['retired', { canonicalModelReleaseId: 'release-2.0.0', releaseStatus: 'retired' }],
+  ])('7. a %s CanonicalModelRelease throws 503 with no write', async (_label, release) => {
+    const db = seededDb({ release });
+    const outbox = fakeOutbox();
+
+    await expect(ingest(db, { outbox })).rejects.toMatchObject({ statusCode: 503, code: 'CANONICAL_RELEASE_NOT_ACTIVE' });
+    expect(db.collections.ingestionQuarantineRecords.docs).toHaveLength(0);
+    expect(db.collections.datasets.docs).toHaveLength(0);
+    expect(outbox.appendEvent).not.toHaveBeenCalled();
+  });
+
+  it('8. a second call with the same idempotencyKey replays the first entityId and inserts once', async () => {
+    const db = seededDb();
+    const outbox = fakeOutbox();
+
+    const first = await ingest(db, { outbox, idempotencyKey: 'key-1' });
+    const second = await ingest(db, { outbox, idempotencyKey: 'key-1' });
+
+    expect(first.status).toBe('accepted');
+    expect(second).toEqual({ status: 'idempotent_replay', outcome: 'accepted', entityType: 'Dataset', resultRef: first.entityId, canonicalModelReleaseId: 'release-2.0.0', configurationReleaseId: 'cfg-release-7' });
+    expect(db.collections.datasets.docs).toHaveLength(1);
+    expect(outbox.appendEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it('9. configurationReleaseId comes from security_config, and is null when the config is absent', async () => {
+    const configured = await ingest(seededDb());
+    const unconfigured = seededDb({ config: null });
+    const bare = await ingest(unconfigured);
+
+    expect(configured.configurationReleaseId).toBe('cfg-release-7');
+    expect(bare.configurationReleaseId).toBeNull();
+    expect(unconfigured.collections.datasets.docs[0].configurationReleaseId).toBeNull();
+  });
+
+  it('10. without a session, a failing insert rejects and leaves no completed key', async () => {
+    const db = seededDb();
+    vi.spyOn(db.collection('datasets'), 'insertOne').mockRejectedValue(new Error('insert failed'));
+
+    await expect(ingest(db, { idempotencyKey: 'key-1' })).rejects.toThrow('insert failed');
+    await expect(findCompletedIdempotentResult(db, { idempotencyKey: 'key-1', scope: 'Dataset' })).resolves.toBeNull();
+  });
+
+  it('11. a payload createdBy and a body id are overridden by Actor/<actorId> and the server uuid', async () => {
+    const db = seededDb();
+
+    const result = await ingest(db, { entityType: 'WorkflowRun', payload: { ...WORKFLOW_RUN, workflowRunId: 'client-chosen-id' } });
+
+    expect(result.status).toBe('accepted');
+    expect(result.entityId).toMatch(UUID);
+    expect(result.entityId).not.toBe('client-chosen-id');
+    expect(db.collections.workflowRuns.docs[0]).toMatchObject({ workflowRunId: result.entityId, createdBy: 'Actor/u-1' });
+  });
+
+  it('12. a quarantined record retried with the same idempotencyKey replays as a quarantine, with its record id and violations', async () => {
+    const db = seededDb();
+    const unprovenanced = { ...provenance(), purpose: undefined };
+
+    const first = await ingest(db, { provenance: unprovenanced, idempotencyKey: 'key-q' });
+    const second = await ingest(db, { provenance: unprovenanced, idempotencyKey: 'key-q' });
+
+    expect(first.status).toBe('quarantined');
+    expect(second).toEqual({
+      status: 'idempotent_replay',
+      outcome: 'quarantined',
+      entityType: 'Dataset',
+      resultRef: first.ingestionQuarantineRecordId,
+      ingestionQuarantineRecordId: first.ingestionQuarantineRecordId,
+      violations: first.violations,
+      canonicalModelReleaseId: 'release-2.0.0',
+      configurationReleaseId: 'cfg-release-7',
+    });
+    expect(db.collections.ingestionQuarantineRecords.docs).toHaveLength(1);
+  });
+
+  it('13. a key stored before outcomes were recorded replays as a bare replay', async () => {
+    const db = seededDb();
+    db.collections.ingestionIdempotencyKeys.docs.push({ idempotencyKey: 'key-old', scope: 'Dataset', status: 'completed', resultRef: 'ds-old' });
+
+    await expect(ingest(db, { idempotencyKey: 'key-old' })).resolves.toEqual({
+      status: 'idempotent_replay',
+      outcome: null,
+      entityType: 'Dataset',
+      resultRef: 'ds-old',
+      canonicalModelReleaseId: 'release-2.0.0',
+      configurationReleaseId: 'cfg-release-7',
+    });
+    expect(db.collections.datasets.docs).toHaveLength(0);
+  });
+
+  it('14. without a session, two concurrent calls with one key leave one document and one outbox event, and the loser replays the winner', async () => {
+    const db = seededDb();
+    db.collections.datasets = createMatchingCollection([]);
+    db.collections.graph_projection_outbox = createMatchingCollection([]);
+    let next = 0;
+    const outbox = {
+      getCollection: (target) => target.collection('graph_projection_outbox'),
+      appendEvent: vi.fn(async (target, event) => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        const doc = { eventId: `evt-${++next}`, ...event };
+        await target.collection('graph_projection_outbox').insertOne(doc);
+        return doc;
+      }),
+    };
+
+    const [a, b] = await Promise.all([
+      ingest(db, { outbox, idempotencyKey: 'key-race' }),
+      ingest(db, { outbox, idempotencyKey: 'key-race' }),
+    ]);
+
+    const [winner, loser] = a.status === 'accepted' ? [a, b] : [b, a];
+    expect(winner.status).toBe('accepted');
+    expect(loser).toEqual({ status: 'idempotent_replay', outcome: 'accepted', entityType: 'Dataset', resultRef: winner.entityId, canonicalModelReleaseId: 'release-2.0.0', configurationReleaseId: 'cfg-release-7' });
+    expect(db.collections.datasets.docs.map((d) => d.datasetId)).toEqual([winner.entityId]);
+    expect(db.collections.graph_projection_outbox.docs.map((e) => e.eventId)).toEqual([winner.outboxEventId]);
+  });
+});
