@@ -47,6 +47,7 @@ function givenDb() {
     ingestionQuarantineRecords: createMatchingCollection([]),
     ingestionIdempotencyKeys: createFakeCollection([]),
     missingDataReasons: createMatchingCollection([]),
+    dataQualityAssessments: createMatchingCollection([]),
     graph_projection_outbox: createCollectionMock(),
   };
   app.locals.db = createDbMock({ ...stores, ...buildRbacCollections([{ userAccountId: USER, accessType: 3 }]) });
@@ -75,6 +76,8 @@ describe('POST /api/ingestion/records (RF029, #1318)', () => {
     expect(res.body).toMatchObject({ success: true, status: 'accepted', entityType: 'Dataset', canonicalModelReleaseId: 'release-2.0.0', configurationReleaseId: 'cfg-release-7' });
     expect(stores.datasets.docs).toHaveLength(1);
     expect(stores.datasets.docs[0]).toMatchObject({ datasetId: res.body.entityId, createdBy: `Actor/${USER}` });
+    // RNF011 C3: the record's DataQualityAssessment is named in the body.
+    expect(stores.dataQualityAssessments.docs.map((d) => [d.dataQualityAssessmentId, d.scopeId])).toEqual([[res.body.dataQualityAssessmentId, `Dataset/${res.body.entityId}`]]);
     const session = app.locals.db.session;
     expect(stores.datasets.insertOne).toHaveBeenCalledWith(expect.any(Object), { session });
     const appended = stores.graph_projection_outbox.updateOne.mock.calls.find(([, update]) => update?.$setOnInsert?.eventType === 'INGESTION_RECORD_PERSISTED');
@@ -112,6 +115,8 @@ describe('POST /api/ingestion/records (RF029, #1318)', () => {
     expect(res.body).toMatchObject({ success: false, error: 'INGESTION_QUARANTINED' });
     expect(res.body.details).toEqual(['provenance.purpose é obrigatório']);
     expect(res.body.ingestionQuarantineRecordId).toBe(stores.ingestionQuarantineRecords.docs[0].ingestionQuarantineRecordId);
+    expect(stores.dataQualityAssessments.docs.map((d) => [d.dataQualityAssessmentId, d.scopeId]))
+      .toEqual([[res.body.dataQualityAssessmentId, `IngestionQuarantineRecord/${res.body.ingestionQuarantineRecordId}`]]);
     expect(stores.datasets.docs).toHaveLength(0);
     expect(ingestionAuditRows()).toEqual([expect.objectContaining({
       action: 'INGESTION_QUARANTINED',

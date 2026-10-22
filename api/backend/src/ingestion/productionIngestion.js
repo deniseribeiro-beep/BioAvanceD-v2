@@ -17,6 +17,7 @@ const { withTransactionWhereSupported } = require('../utils/mongoTransaction');
 const { ingestRecord } = require('./ingestionGateway');
 const { resolveIngestionTarget } = require('./ingestionTargets');
 const { validateMissingDataReasons, buildMissingDataReasons } = require('./missingness');
+const { assessIngestedRecord, findSourceDuplicate, insertDataQualityAssessment } = require('./dataQualityAssessment');
 const {
   ensureIdempotencyKeyIndex,
   findCompletedIdempotentEntry,
@@ -138,14 +139,33 @@ async function ingestUnderRelease({ db, target, entityType, payload, provenance,
       const ref = await recordCompletedIdempotentResult(db, { ...scope, resultRef: ingestionQuarantineRecordId, outcome: 'quarantined' });
       if (ref !== ingestionQuarantineRecordId) return replayOf(db, entityType, await findCompletedIdempotentEntry(db, scope), releases);
     }
+    // RNF011 C3: a quarantined record is assessed too; only this request's
+    // own record, never a lost race's.
+    const envelope = outcome.quarantineRecord.provenance;
+    const assessment = assessIngestedRecord({
+      target,
+      entityType,
+      payload,
+      violations: outcome.violations,
+      envelope,
+      duplicateFound: await findSourceDuplicate(db, target, envelope),
+      scopeId: `IngestionQuarantineRecord/${ingestionQuarantineRecordId}`,
+      releases,
+      actorId,
+    });
+    await insertDataQualityAssessment(db, assessment);
     return {
       status: 'quarantined',
       entityType,
       violations: outcome.violations,
       ingestionQuarantineRecordId,
+      dataQualityAssessmentId: assessment.dataQualityAssessmentId,
       ...releases,
     };
   }
+
+  // RNF011 C3: read before the document exists, so the record never finds itself.
+  const duplicateFound = await findSourceDuplicate(db, target, outcome.provenance);
 
   // INFERENCE, not a citation: the server always assigns the id, a uuid as
   // #896 settled. Unlike master-data POST, which keeps a body id, a body id
@@ -174,6 +194,18 @@ async function ingestUnderRelease({ db, target, entityType, payload, provenance,
     recordedAt: new Date(),
   });
   const reasonsCollection = db.collection(CANONICAL_COLLECTIONS.missingDataReasons);
+  const assessment = assessIngestedRecord({
+    target,
+    entityType,
+    payload,
+    violations: outcome.violations,
+    envelope: outcome.provenance,
+    duplicateFound,
+    scopeId: `${entityType}/${entityId}`,
+    releases,
+    actorId,
+  });
+  const dataQualityAssessmentId = assessment.dataQualityAssessmentId;
 
   const key = idempotencyKey ? { ...scope, resultRef: entityId, outcome: 'accepted' } : null;
   if (key) await ensureIdempotencyKeyIndex(db);
@@ -198,6 +230,8 @@ async function ingestUnderRelease({ db, target, entityType, payload, provenance,
         for (const row of reasons) {
           await reasonsCollection.insertOne(eventId ? { ...row, sourceEventId: eventId } : row, opts);
         }
+        // RNF011 C3, in the same transaction (RF029 AC6).
+        await insertDataQualityAssessment(db, assessment, opts);
         return eventId;
       };
       const accepted = (outboxEventId) => ({
@@ -206,6 +240,7 @@ async function ingestUnderRelease({ db, target, entityType, payload, provenance,
         entityId,
         outboxEventId,
         missingDataReasons: reasons.map(({ missingDataReasonId, fieldPath, reasonCode }) => ({ missingDataReasonId, fieldPath, reasonCode })),
+        dataQualityAssessmentId,
         ...releases,
       });
 
@@ -225,12 +260,13 @@ async function ingestUnderRelease({ db, target, entityType, payload, provenance,
         const ref = await recordCompletedIdempotentResult(db, key);
         if (ref !== entityId) {
           // A concurrent request with this key recorded first: this
-          // request's document, event and MissingDataReason rows are a
-          // duplicate of the winner's, so they are removed before the
-          // winner's result is replayed.
+          // request's document, event, MissingDataReason rows and
+          // DataQualityAssessment are a duplicate of the winner's, so they
+          // are removed before the winner's result is replayed.
           await db.collection(target.collection).deleteOne({ [target.idField]: entityId });
           if (outboxEventId) await outbox.getCollection(db).deleteOne({ eventId: outboxEventId });
           await reasonsCollection.deleteMany({ entityType, entityId });
+          await db.collection(CANONICAL_COLLECTIONS.dataQualityAssessments).deleteOne({ dataQualityAssessmentId });
           return replayOf(db, entityType, await findCompletedIdempotentEntry(db, scope), releases);
         }
       }

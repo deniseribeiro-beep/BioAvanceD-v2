@@ -100,7 +100,8 @@ const DEFAULTS = {
   dispositionActions: 'dispositionActions',
   ingestionIdempotencyKeys: 'ingestionIdempotencyKeys',
   ingestionQuarantineRecords: 'ingestionQuarantineRecords',
-  missingDataReasons: 'missingDataReasons'
+  missingDataReasons: 'missingDataReasons',
+  dataQualityAssessments: 'dataQualityAssessments'
 };
 
 const ORIGINAL_ENV = { ...process.env };
@@ -245,11 +246,12 @@ describe('config/collections', () => {
       legalHolds: 'legalHolds',
       dispositionActions: 'dispositionActions',
       // COLL_INGESTION_IDEMPOTENCY_KEYS/COLL_INGESTION_QUARANTINE_RECORDS/
-      // COLL_MISSING_DATA_REASONS aren't in ENV_KEYS/read by env.js either,
-      // same reasoning.
+      // COLL_MISSING_DATA_REASONS/COLL_DATA_QUALITY_ASSESSMENTS aren't in
+      // ENV_KEYS/read by env.js either, same reasoning.
       ingestionIdempotencyKeys: 'ingestionIdempotencyKeys',
       ingestionQuarantineRecords: 'ingestionQuarantineRecords',
-      missingDataReasons: 'missingDataReasons'
+      missingDataReasons: 'missingDataReasons',
+      dataQualityAssessments: 'dataQualityAssessments'
     });
   });
 

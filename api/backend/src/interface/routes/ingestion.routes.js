@@ -102,6 +102,7 @@ router.post('/records', requireRole(3, 4), async (req, res) => {
       message,
       details: result.violations.map((v) => v.message),
       ingestionQuarantineRecordId: result.ingestionQuarantineRecordId,
+      dataQualityAssessmentId: result.dataQualityAssessmentId,
     });
   }
 

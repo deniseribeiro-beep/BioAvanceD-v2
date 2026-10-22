@@ -21,6 +21,7 @@ function seededDb({ release = { canonicalModelReleaseId: 'release-2.0.0', releas
     ingestionQuarantineRecords: [],
     ingestionIdempotencyKeys: [],
     missingDataReasons: [],
+    dataQualityAssessments: [],
   });
 }
 
@@ -291,11 +292,13 @@ describe('ingestion/productionIngestion ingestAndPersist (RF029, #1318)', () => 
     expect(db.collections.datasets.docs).toHaveLength(0);
   });
 
-  it('14. without a session, two concurrent calls with one key leave one document and one outbox event, and the loser replays the winner', async () => {
+  // Two concurrent calls with one key on the sequential path.
+  async function raceOnOneKey() {
     const db = seededDb();
     db.collections.datasets = createMatchingCollection([]);
     db.collections.graph_projection_outbox = createMatchingCollection([]);
     db.collections.missingDataReasons = createMatchingCollection([]);
+    db.collections.dataQualityAssessments = createMatchingCollection([]);
     let next = 0;
     const outbox = {
       getCollection: (target) => target.collection('graph_projection_outbox'),
@@ -311,13 +314,26 @@ describe('ingestion/productionIngestion ingestAndPersist (RF029, #1318)', () => 
       ingest(db, { outbox, idempotencyKey: 'key-race' }),
       ingest(db, { outbox, idempotencyKey: 'key-race' }),
     ]);
-
     const [winner, loser] = a.status === 'accepted' ? [a, b] : [b, a];
+    return { db, winner, loser };
+  }
+
+  it('14. without a session, two concurrent calls with one key leave one document and one outbox event, and the loser replays the winner', async () => {
+    const { db, winner, loser } = await raceOnOneKey();
+
     expect(winner.status).toBe('accepted');
     expect(loser).toEqual({ status: 'idempotent_replay', outcome: 'accepted', entityType: 'Dataset', resultRef: winner.entityId, canonicalModelReleaseId: 'release-2.0.0', configurationReleaseId: 'cfg-release-7' });
     expect(db.collections.datasets.docs.map((d) => d.datasetId)).toEqual([winner.entityId]);
     expect(db.collections.graph_projection_outbox.docs.map((e) => e.eventId)).toEqual([winner.outboxEventId]);
     expect(db.collections.missingDataReasons.docs.map((r) => r.entityId)).toEqual([winner.entityId, winner.entityId, winner.entityId]);
+  });
+
+  it('14b. without a session, the concurrent loser leaves no DataQualityAssessment of its own', async () => {
+    const { db, winner } = await raceOnOneKey();
+
+    expect(winner.status).toBe('accepted');
+    expect(db.collections.dataQualityAssessments.docs.map((d) => [d.dataQualityAssessmentId, d.scopeId]))
+      .toEqual([[winner.dataQualityAssessmentId, `Dataset/${winner.entityId}`]]);
   });
 
   it('15. a declared reasonCode is stored as declared, the other absent fields as unknown', async () => {
@@ -347,5 +363,82 @@ describe('ingestion/productionIngestion ingestAndPersist (RF029, #1318)', () => 
     expect(db.collections.workflowRuns.docs).toHaveLength(0);
     expect(db.collections.missingDataReasons.docs).toHaveLength(0);
     expect(outbox.appendEvent).not.toHaveBeenCalled();
+  });
+
+  // RNF011 C3: one DataQualityAssessment per ingested record.
+  const resultOf = (doc, metric) => doc.results.find((r) => r.metric === metric);
+
+  it('17. an accepted Dataset leaves one passed assessment scoped to it, with completeness 4/4', async () => {
+    const db = seededDb();
+
+    const result = await ingest(db);
+
+    const docs = db.collections.dataQualityAssessments.docs;
+    expect(docs).toHaveLength(1);
+    expect(docs[0]).toMatchObject({
+      dataQualityAssessmentId: result.dataQualityAssessmentId,
+      scopeType: 'ingested_record',
+      scopeId: `Dataset/${result.entityId}`,
+      status: 'passed',
+      entityType: 'Dataset',
+      canonicalModelReleaseId: 'release-2.0.0',
+      configurationReleaseId: 'cfg-release-7',
+      createdBy: 'Actor/u-1',
+    });
+    expect(resultOf(docs[0], 'completeness')).toEqual({ metric: 'completeness', value: 1, numerator: 4, denominator: 4 });
+    expect(resultOf(docs[0], 'uniqueness').value).toBe(1);
+  });
+
+  it('18. a quarantined Dataset without license leaves one failed assessment scoped to its quarantine record, with completeness 3/4', async () => {
+    const db = seededDb();
+    const { license, ...withoutLicense } = DATASET;
+
+    const result = await ingest(db, { payload: withoutLicense });
+
+    expect(result.status).toBe('quarantined');
+    const docs = db.collections.dataQualityAssessments.docs;
+    expect(docs).toHaveLength(1);
+    expect(docs[0]).toMatchObject({
+      dataQualityAssessmentId: result.dataQualityAssessmentId,
+      scopeId: `IngestionQuarantineRecord/${result.ingestionQuarantineRecordId}`,
+      status: 'failed',
+    });
+    expect(resultOf(docs[0], 'completeness')).toEqual({ metric: 'completeness', value: 0.75, numerator: 3, denominator: 4 });
+  });
+
+  it('19. a replay, accepted or quarantined, records no new assessment', async () => {
+    const db = seededDb();
+    const unprovenanced = { ...provenance(), purpose: undefined };
+
+    await ingest(db, { idempotencyKey: 'key-a' });
+    await ingest(db, { idempotencyKey: 'key-a' });
+    await ingest(db, { provenance: unprovenanced, idempotencyKey: 'key-q' });
+    await ingest(db, { provenance: unprovenanced, idempotencyKey: 'key-q' });
+
+    expect(db.collections.dataQualityAssessments.docs.map((d) => d.scopeId.split('/')[0])).toEqual(['Dataset', 'IngestionQuarantineRecord']);
+  });
+
+  it('20. on a replica set, the assessment insert receives the record transaction session', async () => {
+    const db = seededDb();
+    const session = onReplicaSet(db);
+    const insertOne = vi.spyOn(db.collection('dataQualityAssessments'), 'insertOne');
+
+    const result = await ingest(db);
+
+    expect(insertOne).toHaveBeenCalledTimes(1);
+    expect(insertOne).toHaveBeenCalledWith(expect.objectContaining({ dataQualityAssessmentId: result.dataQualityAssessmentId }), { session });
+  });
+
+  it('21. a second record with the same sourceSystem and sourceRecordId under another key gets uniqueness 0', async () => {
+    const db = seededDb();
+
+    const first = await ingest(db, { idempotencyKey: 'key-1' });
+    const second = await ingest(db, { idempotencyKey: 'key-2' });
+
+    expect(second.status).toBe('accepted');
+    const byId = Object.fromEntries(db.collections.dataQualityAssessments.docs.map((d) => [d.dataQualityAssessmentId, d]));
+    expect(resultOf(byId[first.dataQualityAssessmentId], 'uniqueness').value).toBe(1);
+    expect(resultOf(byId[second.dataQualityAssessmentId], 'uniqueness').value).toBe(0);
+    expect(byId[second.dataQualityAssessmentId].status).toBe('failed');
   });
 });
