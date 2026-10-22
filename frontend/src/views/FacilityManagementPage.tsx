@@ -12,6 +12,7 @@ import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import { Equipment, Temperature, Sensor, Policy } from '../types/models';
 import { useEquipment } from '../hooks/useEquipment';
 import { useTemperature } from '../hooks/useTemperature';
+import { useTemperatureReadings, TemperatureReading } from '../hooks/useTemperatureReadings';
 import { useSensors } from '../hooks/useSensors';
 import { usePolicies } from '../hooks/usePolicies';
 import { useOrganizations } from '../hooks/useOrganizations';
@@ -30,22 +31,10 @@ type HistoryLogEntry = {
   sensorName: string;
   temperature: number;
   status: string;
-  validationHash: string;
+  readingId: string;
 };
 
 const ALERT_TRIGGER_THRESHOLD = -70;
-
-function createIncidentId() {
-  return globalThis.crypto?.randomUUID?.() || `incident-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-async function buildValidationHash(payload: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const digest = await globalThis.crypto.subtle.digest('SHA-256', encoder.encode(payload));
-  return Array.from(new Uint8Array(digest))
-    .map((byte) => byte.toString(16).padStart(2, '0'))
-    .join('');
-}
 
 export default function FacilityManagementPage() {
   const { t } = useLanguage();
@@ -54,73 +43,12 @@ export default function FacilityManagementPage() {
   const validTabs: TabType[] = ['equipment', 'temperature', 'history', 'sensors', 'policies', 'incidents'];
   const initialTab = (tabParam && validTabs.includes(tabParam)) ? tabParam : 'equipment';
   const [activeTab, setActiveTab] = useState<TabType>(initialTab);
-  const [sensorSnapshot, setSensorSnapshot] = useState({
-    sensor1: -80.2,
-    sensor2: -79.6,
-    sensor3: -81.1,
-  });
-  const [telemetryData, setTelemetryData] = useState([
-    { time: '10:00', temp: -80.1 },
-    { time: '10:05', temp: -79.5 },
-    { time: '10:10', temp: -80.4 },
-    { time: '10:15', temp: -79.8 },
-    { time: '10:20', temp: -80.7 },
-  ]);
-  const [historyLog, setHistoryLog] = useState<HistoryLogEntry[]>([]);
 
   useEffect(() => {
     if (tabParam && validTabs.includes(tabParam)) {
       setActiveTab(tabParam);
     }
   }, [tabParam]);
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      void (async () => {
-        const nextSensor1 = Number((-80 + (Math.random() * 4 - 2)).toFixed(1));
-        const nextSensor2 = Number((-80 + (Math.random() * 4 - 2)).toFixed(1));
-        const nextSensor3 = Number((-80 + (Math.random() * 4 - 2)).toFixed(1));
-        const nextAverage = Number(((nextSensor1 + nextSensor2 + nextSensor3) / 3).toFixed(1));
-        const chartTime = new Date().toLocaleTimeString('pt-BR', { hour12: false, hour: '2-digit', minute: '2-digit' });
-        const timestamp = new Date().toISOString();
-        const timestampMs = Date.now();
-
-        const sensorReadings = [
-          { sensorKey: 'sensor1', sensorName: 'Sensor 1', temperature: nextSensor1 },
-          { sensorKey: 'sensor2', sensorName: 'Sensor 2', temperature: nextSensor2 },
-          { sensorKey: 'sensor3', sensorName: 'Sensor 3', temperature: nextSensor3 },
-        ];
-
-        const logs = await Promise.all(sensorReadings.map(async (entry) => {
-          const validationHash = await buildValidationHash(
-            `${entry.sensorName}|${timestamp}|${entry.temperature.toFixed(1)}|${entry.temperature > ALERT_TRIGGER_THRESHOLD ? 'Alerta' : 'Normal'}`
-          );
-
-          return {
-            id: globalThis.crypto?.randomUUID?.() || `${entry.sensorName}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-            timestamp,
-            sensorName: entry.sensorName,
-            temperature: entry.temperature,
-            status: entry.temperature > ALERT_TRIGGER_THRESHOLD ? 'Alerta' : 'Normal',
-            validationHash,
-          };
-        }));
-
-        setSensorSnapshot({
-          sensor1: nextSensor1,
-          sensor2: nextSensor2,
-          sensor3: nextSensor3,
-        });
-
-        setTelemetryData((current) => [...current.slice(-19), { time: chartTime, temp: nextAverage }]);
-        setHistoryLog((prev) => [...logs, ...prev].slice(0, 100));
-      })().catch((error) => {
-        console.error('Falha ao gerar hash de validação da leitura:', error);
-      });
-    }, 2000);
-
-    return () => clearInterval(interval);
-  }, []);
 
   const tabs = [
     { id: 'equipment' as TabType, label: t('facility.tabs.equipment', 'Equipamentos'), icon: Box },
@@ -162,15 +90,8 @@ export default function FacilityManagementPage() {
 
       <div className="facility-tab-content flex-1 min-w-0 overflow-hidden">
         {activeTab === 'equipment' && <EquipmentSection />}
-        {activeTab === 'temperature' && (
-          <TemperatureSection
-            sensorSnapshot={sensorSnapshot}
-            telemetryData={telemetryData}
-          />
-        )}
-        {activeTab === 'history' && (
-          <HistorySection historyLog={historyLog} />
-        )}
+        {activeTab === 'temperature' && <TemperatureSection />}
+        {activeTab === 'history' && <HistorySection />}
         {activeTab === 'incidents' && <IncidentManagementPage />}
         {activeTab === 'sensors' && <SensorsSection />}
         {activeTab === 'policies' && <PoliciesSection />}
@@ -531,17 +452,10 @@ function getEquipmentTypeDescription(equipmentType: number | undefined): string 
 }
 
 // Seção de Controle de Temperatura
-function TemperatureSection({
-  sensorSnapshot,
-  telemetryData,
-}: {
-  sensorSnapshot: {
-    sensor1: number;
-    sensor2: number;
-    sensor3: number;
-  };
-  telemetryData: Array<{ time: string; temp: number }>;
-}) {
+// #1397 (RF009 AC7): the cards and the chart show the readings persisted in
+// InfluxDB, and an empty or failed read as such, never a generated value.
+function TemperatureSection() {
+  const { readings, loading, error, reload } = useTemperatureReadings();
 
   const getTemperatureTone = (temperature: number) => {
     if (temperature <= -78 && temperature >= -82) {
@@ -576,39 +490,67 @@ function TemperatureSection({
     };
   };
 
-  const sensorCards = [
-    { id: 'sensor1', label: 'Sensor 1', temperature: sensorSnapshot.sensor1 },
-    { id: 'sensor2', label: 'Sensor 2', temperature: sensorSnapshot.sensor2 },
-    { id: 'sensor3', label: 'Sensor 3', temperature: sensorSnapshot.sensor3 },
-  ];
+  if (error) {
+    return (
+      <div role="alert" data-testid="temperature-readings-error" style={{ color: 'var(--danger)' }}>
+        Falha ao carregar as leituras de temperatura: {error}
+      </div>
+    );
+  }
+
+  if (loading && readings.length === 0) {
+    return <div data-testid="temperature-readings-loading">Carregando leituras de temperatura…</div>;
+  }
+
+  if (readings.length === 0) {
+    return <div data-testid="temperature-readings-empty">Nenhuma leitura de temperatura registrada.</div>;
+  }
+
+  // Readings come newest first, so a sensor's first reading is its newest.
+  const sensorCards: TemperatureReading[] = [];
+  const seenSensors = new Set<string>();
+  readings.forEach((reading) => {
+    if (reading.sensorId === null || seenSensors.has(reading.sensorId)) return;
+    seenSensors.add(reading.sensorId);
+    sensorCards.push(reading);
+  });
+
+  const chartSensorId = readings[0].sensorId;
+  const telemetryData = readings
+    .filter((reading) => reading.sensorId === chartSensorId)
+    .slice(0, 20)
+    .reverse();
 
   const chartWidth = 920;
   const chartHeight = 300;
   const chartPadding = 28;
-  const chartMin = -90;
-  const chartMax = -60;
+  const chartValues = telemetryData.map((point) => point.temperatureCelsius);
+  const chartMin = Math.min(-90, Math.floor(Math.min(...chartValues)) - 2);
+  const chartMax = Math.max(-60, Math.ceil(Math.max(...chartValues)) + 2);
   const chartRange = chartMax - chartMin;
   const chartPoints = telemetryData.map((point, index) => {
     const x = telemetryData.length > 1
       ? chartPadding + ((chartWidth - chartPadding * 2) * index) / (telemetryData.length - 1)
       : chartWidth / 2;
-    const normalized = (point.temp - chartMin) / chartRange;
+    const normalized = (point.temperatureCelsius - chartMin) / chartRange;
     const y = chartHeight - chartPadding - normalized * (chartHeight - chartPadding * 2);
-    return { ...point, x, y };
+    return { key: point.telemetryReadingId ?? `${point.timestamp}-${index}`, x, y };
   });
   const chartLinePath = chartPoints.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ');
+  const chartTitle = `Histórico recente de temperatura — ${chartSensorId ?? '—'}`;
 
   return (
     <>
       <div className="temperature-monitor-grid">
         <div className="temperature-status-grid">
           {sensorCards.map((sensor) => {
-            const tone = getTemperatureTone(sensor.temperature);
+            const tone = getTemperatureTone(sensor.temperatureCelsius);
             const TrendIcon = tone.trend;
 
             return (
               <Card
-                key={sensor.id}
+                key={sensor.sensorId}
+                data-testid={`temperature-sensor-card-${sensor.sensorId}`}
                 className="temperature-status-card"
                 style={{
                   border: `1px solid ${tone.border}33`,
@@ -617,7 +559,7 @@ function TemperatureSection({
                 }}
               >
                 <div className="temperature-status-card__header" style={{ color: '#64748b' }}>
-                  <span className="temperature-status-card__label">{sensor.label}</span>
+                  <span className="temperature-status-card__label">{sensor.sensorId}</span>
                   <span
                     className="temperature-status-card__icon"
                     style={{ backgroundColor: `${tone.icon}14`, color: tone.icon }}
@@ -626,7 +568,10 @@ function TemperatureSection({
                   </span>
                 </div>
                 <div className="temperature-status-card__value" style={{ color: tone.border }}>
-                  {sensor.temperature.toFixed(1)}°C
+                  {sensor.temperatureCelsius.toFixed(1)}°C
+                </div>
+                <div className="temperature-status-card__timestamp" style={{ color: '#64748b', fontSize: '0.75rem' }}>
+                  {new Date(sensor.timestamp).toLocaleString('pt-BR')}
                 </div>
                 <div className="temperature-status-card__footer">
                   <span
@@ -645,14 +590,16 @@ function TemperatureSection({
         <Card className="temperature-monitor-chart-card">
           <div className="temperature-monitor-chart-card__header">
             <div>
-              <p className="temperature-monitor-chart-card__eyebrow">Monitoramento em tempo real</p>
-              <h3 className="temperature-monitor-chart-card__title">Histórico recente de temperatura</h3>
+              <p className="temperature-monitor-chart-card__eyebrow">Leituras persistidas</p>
+              <h3 className="temperature-monitor-chart-card__title">{chartTitle}</h3>
             </div>
-            <span className="temperature-monitor-chart-card__badge">Atualiza a cada 2s</span>
+            <Button variant="secondary" data-testid="temperature-readings-refresh" onClick={() => void reload()}>
+              Atualizar
+            </Button>
           </div>
 
           <div className="temperature-monitor-chart-card__chart">
-            <svg viewBox={`0 0 ${chartWidth} ${chartHeight}`} className="temperature-monitor-chart-card__svg" role="img" aria-label="Histórico recente de temperatura">
+            <svg viewBox={`0 0 ${chartWidth} ${chartHeight}`} className="temperature-monitor-chart-card__svg" role="img" aria-label={chartTitle}>
               <defs>
                 <linearGradient id="temperatureLineGradient" x1="0" x2="0" y1="0" y2="1">
                   <stop offset="0%" stopColor="#2563eb" stopOpacity="0.95" />
@@ -673,7 +620,7 @@ function TemperatureSection({
               <path d={chartLinePath} className="temperature-monitor-chart-card__line" stroke="url(#temperatureLineGradient)" />
 
               {chartPoints.map((point) => (
-                <circle key={`${point.time}-${point.x}`} cx={point.x} cy={point.y} r="4.5" className="temperature-monitor-chart-card__point" />
+                <circle key={point.key} cx={point.x} cy={point.y} r="4.5" className="temperature-monitor-chart-card__point" />
               ))}
             </svg>
           </div>
@@ -684,11 +631,18 @@ function TemperatureSection({
   );
 }
 
-function HistorySection({
-  historyLog,
-}: {
-  historyLog: HistoryLogEntry[];
-}) {
+// #1397 (RF009 AC7): the rows are the readings persisted in InfluxDB, and an
+// empty or failed read shows as such.
+function HistorySection() {
+  const { readings, loading, error, reload } = useTemperatureReadings();
+  const historyLog = useMemo<HistoryLogEntry[]>(() => readings.map((reading) => ({
+    id: reading.telemetryReadingId ?? `${reading.sensorId}-${reading.timestamp}`,
+    timestamp: reading.timestamp,
+    sensorName: reading.sensorId ?? '—',
+    temperature: reading.temperatureCelsius,
+    status: reading.temperatureCelsius > ALERT_TRIGGER_THRESHOLD ? 'Alerta' : 'Normal',
+    readingId: reading.telemetryReadingId ?? '—',
+  })), [readings]);
   const [currentPage, setCurrentPage] = useState(1);
   const [sensorFilter, setSensorFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -727,11 +681,11 @@ function HistorySection({
       entry.sensorName,
       `${entry.temperature.toFixed(1)}°C`,
       entry.status,
-      entry.validationHash,
+      entry.readingId,
     ]);
 
     const csvLines = [
-      ['Timestamp', 'Sensor', 'Temperatura', 'Status', 'Validation Hash'],
+      ['Timestamp', 'Sensor', 'Temperatura', 'Status', 'ID da leitura'],
       ...rows,
     ].map((row) => row.map((value) => `"${String(value).replace(/"/g, '""')}"`).join(';'));
 
@@ -754,11 +708,14 @@ function HistorySection({
     <Card className="temperature-history-card">
       <div className="temperature-history-card__header">
         <div>
-          <p className="temperature-history-card__eyebrow">Leituras em tempo real</p>
+          <p className="temperature-history-card__eyebrow">Leituras persistidas</p>
           <h3 className="temperature-history-card__title">Histórico de Leituras</h3>
         </div>
         <div className="temperature-history-card__actions">
           <span className="temperature-history-card__badge">Últimos 100 registros</span>
+          <Button variant="secondary" data-testid="history-readings-refresh" onClick={() => void reload()}>
+            Atualizar
+          </Button>
           <Button variant="secondary" onClick={handleExportCsv} disabled={filteredHistory.length === 0}>
             <Download size={16} />
             Exportar CSV
@@ -798,22 +755,34 @@ function HistorySection({
         </Button>
       </div>
 
-      <Table headers={['Timestamp', 'Sensor', 'Temperatura', 'Status', 'Validation Hash']}>
-        {filteredHistory.length === 0 ? (
+      <Table headers={['Timestamp', 'Sensor', 'Temperatura', 'Status', 'ID da leitura']}>
+        {error ? (
           <tr>
-            <td colSpan={5} className="table-empty-state-cell">
+            <td colSpan={5}>
+              <div role="alert" data-testid="history-readings-error" style={{ color: 'var(--danger)' }}>
+                Falha ao carregar as leituras de temperatura: {error}
+              </div>
+            </td>
+          </tr>
+        ) : loading && readings.length === 0 ? (
+          <tr>
+            <td colSpan={5} data-testid="history-readings-loading">Carregando leituras de temperatura…</td>
+          </tr>
+        ) : filteredHistory.length === 0 ? (
+          <tr>
+            <td colSpan={5} className="table-empty-state-cell" data-testid="history-readings-empty">
               <div className="table-empty-state">
                 <span className="table-empty-state__icon">
                   <Thermometer size={34} />
                 </span>
                 <h3 className="table-empty-state__title">Nenhuma leitura encontrada</h3>
-                <p className="table-empty-state__text">Ajuste os filtros ou aguarde a próxima leitura da simulação para preencher o histórico.</p>
+                <p className="table-empty-state__text">Nenhuma leitura persistida corresponde aos filtros.</p>
               </div>
             </td>
           </tr>
         ) : (
           paginatedHistory.map((entry) => (
-            <tr key={entry.id}>
+            <tr key={entry.id} data-testid={`history-row-${entry.id}`}>
               <td className="break-words whitespace-normal overflow-x-auto max-w-xs">{entry.timestamp}</td>
               <td className="break-words whitespace-normal overflow-x-auto max-w-xs">{entry.sensorName}</td>
               <td className="break-words whitespace-normal overflow-x-auto max-w-xs">{entry.temperature.toFixed(1)}°C</td>
@@ -821,14 +790,14 @@ function HistorySection({
                 <span className={`status-badge status-${entry.status.toLowerCase()}`}>{entry.status}</span>
               </td>
               <td className="history-hash-cell break-all whitespace-normal overflow-x-auto max-w-xs">
-                <code>{entry.validationHash}</code>
+                <code>{entry.readingId}</code>
               </td>
             </tr>
           ))
         )}
       </Table>
 
-      {filteredHistory.length > 0 && (
+      {!error && filteredHistory.length > 0 && (
         <div className="history-pagination">
           <div className="history-pagination__summary">
             Mostrando {Math.min((currentPage - 1) * pageSize + 1, filteredHistory.length)}-
