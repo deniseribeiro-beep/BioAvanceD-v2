@@ -54,6 +54,8 @@ const WORKFLOW_RUN = {
   createdBy: 'User/client-claimed',
   startedAt: '2026-10-01T10:00:00.000Z',
   runStatus: 'succeeded',
+  hardwareProfile: { cpu: 'synthetic' },
+  environmentManifestUri: 'object://synthetic/environment.json',
 };
 
 function ingest(db, overrides = {}) {

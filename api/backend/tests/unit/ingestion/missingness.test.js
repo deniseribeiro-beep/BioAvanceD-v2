@@ -130,7 +130,7 @@ describe('ingestion/missingness (RF029 AC7, RNF011 C4/C5, #1318)', () => {
   });
 
   it('buildMissingDataReasons never emits a row for a field holding 0', () => {
-    const doc = { workflowRunId: 'wr-1', containerImageDigest: 'sha256:abc', softwareDependencies: [{ name: 'gatk' }], parameters: { depth: 0 }, inputFileIds: ['in'], outputFileIds: ['out'], completedAt: 0 };
+    const doc = { workflowRunId: 'wr-1', containerImageDigest: 'sha256:abc', softwareDependencies: [{ name: 'gatk' }], parameters: { depth: 0 }, inputFileIds: ['in'], outputFileIds: ['out'], completedAt: 0, randomSeed: 0, datasetSnapshotId: 'snapshot-synthetic-001' };
 
     const rows = buildMissingDataReasons({ target: WORKFLOW_RUN, entityType: 'WorkflowRun', entityId: 'wr-1', doc, declared: [], releases: RELEASES, recordedAt: RECORDED_AT });
 

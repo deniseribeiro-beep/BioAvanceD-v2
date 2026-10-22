@@ -149,6 +149,9 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
         createdBy: 'User/e2e-suite',
         startedAt: new Date().toISOString(),
         runStatus: 'succeeded',
+        hardwareProfile: { cpu: 'synthetic', gpu: null },
+        randomSeed: 0,
+        environmentManifestUri: 'object://synthetic/environment.json',
       },
       provenance: provenance(sourceRecordId),
     });
@@ -159,6 +162,9 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
 
     const stored = await findIngestedRecord('workflowRuns', 'workflowRunId', body.entityId);
     expect(stored?.createdBy).toBe(`Actor/${admin.user._id}`);
+    expect(stored?.hardwareProfile).toEqual({ cpu: 'synthetic', gpu: null });
+    expect(stored?.environmentManifestUri).toBe('object://synthetic/environment.json');
+    expect(stored?.randomSeed).toBe(0);
 
     const events = await findOutboxEvents(body.entityId);
     expect(events).toHaveLength(1);

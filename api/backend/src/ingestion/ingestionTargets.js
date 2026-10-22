@@ -25,7 +25,7 @@ const INGESTION_TARGETS = Object.freeze({
     collection: 'workflowRuns',
     idField: 'workflowRunId',
     model: require('../models/WorkflowRun'),
-    missingnessFields: Object.freeze(['containerImageDigest', 'softwareDependencies', 'parameters', 'inputFileIds', 'outputFileIds', 'completedAt']),
+    missingnessFields: Object.freeze(['containerImageDigest', 'softwareDependencies', 'parameters', 'inputFileIds', 'outputFileIds', 'completedAt', 'randomSeed', 'datasetSnapshotId']),
   }),
 });
 

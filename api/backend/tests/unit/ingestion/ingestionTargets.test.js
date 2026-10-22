@@ -12,7 +12,7 @@ describe('ingestion/ingestionTargets (RF029, #1318)', () => {
 
   it('names each target\'s missingness fields exactly, frozen (RF029 AC7)', () => {
     expect(INGESTION_TARGETS.Dataset.missingnessFields).toEqual(['doi', 'distributionFiles', 'roCrateManifest']);
-    expect(INGESTION_TARGETS.WorkflowRun.missingnessFields).toEqual(['containerImageDigest', 'softwareDependencies', 'parameters', 'inputFileIds', 'outputFileIds', 'completedAt']);
+    expect(INGESTION_TARGETS.WorkflowRun.missingnessFields).toEqual(['containerImageDigest', 'softwareDependencies', 'parameters', 'inputFileIds', 'outputFileIds', 'completedAt', 'randomSeed', 'datasetSnapshotId']);
     expect(Object.isFrozen(INGESTION_TARGETS.Dataset.missingnessFields)).toBe(true);
     expect(Object.isFrozen(INGESTION_TARGETS.WorkflowRun.missingnessFields)).toBe(true);
   });

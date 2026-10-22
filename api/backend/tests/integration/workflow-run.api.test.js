@@ -42,6 +42,8 @@ const VALID_WORKFLOW_RUN_PAYLOAD = {
   createdBy: 'User/user-1',
   startedAt: '2026-08-21T10:00:00.000Z',
   runStatus: 'succeeded',
+  hardwareProfile: { cpu: 'synthetic', gpu: null },
+  environmentManifestUri: 'object://synthetic/environment.json',
 };
 
 describe('GET /api/workflow-runs', () => {
@@ -85,6 +87,19 @@ describe('POST /api/workflow-runs', () => {
 
     expect(res.status).toBe(422);
     expect(res.body.details).toContain('createdBy é obrigatório');
+  });
+
+  it('returns 422 when hardwareProfile is missing (V2E-0477, 1..1)', async () => {
+    app.locals.db = createDbMock({ ...rbacCollectionsAdmin });
+    const { hardwareProfile, ...invalidPayload } = VALID_WORKFLOW_RUN_PAYLOAD;
+
+    const res = await request(app)
+      .post('/api/workflow-runs')
+      .set('Authorization', `Bearer ${makeToken('qa-1', 4)}`)
+      .send(invalidPayload);
+
+    expect(res.status).toBe(422);
+    expect(res.body.details).toContain('hardwareProfile é obrigatório e deve ser um objeto não vazio');
   });
 
   it('returns 422 when runStatus is out of enum', async () => {

@@ -771,6 +771,8 @@ test.describe('Workflows and omics data (RF027) — real backend', () => {
         startedAt,
         completedAt: new Date().toISOString(),
         runStatus: 'succeeded',
+        hardwareProfile: { cpu: 'synthetic', gpu: null },
+        environmentManifestUri: 'object://synthetic/environment.json',
       },
     });
     expect(createRun.status()).toBe(201);

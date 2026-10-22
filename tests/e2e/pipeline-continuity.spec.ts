@@ -1225,6 +1225,8 @@ test.describe('Ingestion gateway — workflows, omics data (RF029 slice 6/6) —
         createdBy: 'User/e2e-suite',
         startedAt: new Date().toISOString(),
         runStatus: 'succeeded',
+        hardwareProfile: { cpu: 'synthetic' },
+        environmentManifestUri: 'object://synthetic/environment.json',
       },
       provenance: provenance(),
     });
@@ -1242,6 +1244,8 @@ test.describe('Ingestion gateway — workflows, omics data (RF029 slice 6/6) —
         workflowVersion: '2.3.1',
         startedAt: new Date().toISOString(),
         runStatus: 'succeeded',
+        hardwareProfile: { cpu: 'synthetic' },
+        environmentManifestUri: 'object://synthetic/environment.json',
       },
       provenance: provenance(),
     });

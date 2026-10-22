@@ -9,6 +9,8 @@ describe('WorkflowRunModel (RF027 AC#1/#2/#4, dict-02 ELM-0326..0336)', () => {
     createdBy: 'User/user-1',
     startedAt: '2026-08-21T10:00:00.000Z',
     runStatus: 'succeeded',
+    hardwareProfile: { cpu: 'synthetic', gpu: null },
+    environmentManifestUri: 'object://synthetic/environment.json',
   };
 
   describe('validate', () => {
@@ -120,6 +122,65 @@ describe('WorkflowRunModel (RF027 AC#1/#2/#4, dict-02 ELM-0326..0336)', () => {
       const result = WorkflowRunModel.validate({ ...baseRun, outputFileIds: ['file-1', 42] });
       expect(result.isValid).toBe(false);
     });
+
+    it.each([
+      ['missing', undefined],
+      ['null', null],
+      ['a string', 'synthetic'],
+      ['an empty object', {}],
+      ['an array', []],
+    ])('hardwareProfile %s -> isValid false (V2E-0477, 1..1)', (_label, hardwareProfile) => {
+      const result = WorkflowRunModel.validate({ ...baseRun, hardwareProfile });
+      expect(result.isValid).toBe(false);
+      expect(result.errors).toContain('hardwareProfile é obrigatório e deve ser um objeto não vazio');
+    });
+
+    it.each([
+      ['missing', undefined],
+      ['null', null],
+      ['a number', 42],
+      ['not a uri', 'not a uri'],
+      ['empty', ''],
+    ])('environmentManifestUri %s -> isValid false (V2E-0480, 1..1)', (_label, environmentManifestUri) => {
+      const result = WorkflowRunModel.validate({ ...baseRun, environmentManifestUri });
+      expect(result.isValid).toBe(false);
+      expect(result.errors).toContain('environmentManifestUri é obrigatório e deve ser uma URI absoluta');
+    });
+
+    it.each([0, -1, 20260504])('randomSeed %s -> isValid true (V2E-0478)', (randomSeed) => {
+      const result = WorkflowRunModel.validate({ ...baseRun, randomSeed });
+      expect(result.isValid).toBe(true);
+    });
+
+    it.each([
+      ['a numeric string', '20260504'],
+      ['a fraction', 1.5],
+      ['a boolean', true],
+      ['beyond the safe integers', 2 ** 60],
+    ])('randomSeed %s -> isValid false', (_label, randomSeed) => {
+      const result = WorkflowRunModel.validate({ ...baseRun, randomSeed });
+      expect(result.isValid).toBe(false);
+      expect(result.errors).toContain('randomSeed deve ser um inteiro');
+    });
+
+    it('randomSeed and datasetSnapshotId omitted -> still valid', () => {
+      const result = WorkflowRunModel.validate({ ...baseRun });
+      expect(result.isValid).toBe(true);
+    });
+
+    it('datasetSnapshotId a non-empty string -> isValid true, never resolved', () => {
+      const result = WorkflowRunModel.validate({ ...baseRun, datasetSnapshotId: 'snapshot-synthetic-001' });
+      expect(result.isValid).toBe(true);
+    });
+
+    it.each([
+      ['empty', ''],
+      ['a number', 42],
+    ])('datasetSnapshotId %s -> isValid false (V2E-0479)', (_label, datasetSnapshotId) => {
+      const result = WorkflowRunModel.validate({ ...baseRun, datasetSnapshotId });
+      expect(result.isValid).toBe(false);
+      expect(result.errors).toContain('datasetSnapshotId deve ser uma string não vazia');
+    });
   });
 
   describe('create', () => {
@@ -138,6 +199,33 @@ describe('WorkflowRunModel (RF027 AC#1/#2/#4, dict-02 ELM-0326..0336)', () => {
       expect(result.inputFileIds).toEqual([]);
       expect(result.outputFileIds).toEqual([]);
       expect(result.runStatus).toBe('succeeded');
+      expect(result.hardwareProfile).toEqual({ cpu: 'synthetic', gpu: null });
+      expect(result.environmentManifestUri).toBe('object://synthetic/environment.json');
+      expect(result.randomSeed).toBeNull();
+      expect(result.datasetSnapshotId).toBeNull();
+    });
+
+    it('keeps randomSeed 0 and stores datasetSnapshotId as sent', () => {
+      const result = WorkflowRunModel.create({ ...baseRun, randomSeed: 0, datasetSnapshotId: 'snapshot-synthetic-001' });
+      expect(result.randomSeed).toBe(0);
+      expect(result.datasetSnapshotId).toBe('snapshot-synthetic-001');
+    });
+
+    it('copies hardwareProfile, not the caller-provided object reference', () => {
+      const hardwareProfile = { cpu: 'synthetic' };
+      const result = WorkflowRunModel.create({ ...baseRun, hardwareProfile });
+
+      expect(result.hardwareProfile).not.toBe(hardwareProfile);
+      result.hardwareProfile.cpu = 'changed';
+      expect(hardwareProfile).toEqual({ cpu: 'synthetic' });
+    });
+
+    it('create({}) does not throw and nulls the four provenance companions', () => {
+      const result = WorkflowRunModel.create({});
+      expect(result.hardwareProfile).toBeNull();
+      expect(result.randomSeed).toBeNull();
+      expect(result.datasetSnapshotId).toBeNull();
+      expect(result.environmentManifestUri).toBeNull();
     });
 
     it('does not mutate the caller-provided softwareDependencies/inputFileIds/outputFileIds arrays', () => {

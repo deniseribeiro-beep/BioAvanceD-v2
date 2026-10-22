@@ -75,10 +75,10 @@ describe('ingestion/dataQualityAssessment assessIngestedRecord (RNF011 C3, #1318
       .toEqual({ metric: 'completeness', value: 0.25, numerator: 1, denominator: 4 });
   });
 
-  it('3. a WorkflowRun completeness is over its five required fields', () => {
+  it('3. a WorkflowRun completeness is over its seven required fields', () => {
     const doc = assess({ target: INGESTION_TARGETS.WorkflowRun, entityType: 'WorkflowRun', payload: { workflowId: 'wf', workflowVersion: '1.0.0' } });
 
-    expect(resultOf(doc, 'completeness')).toEqual({ metric: 'completeness', value: 0.4, numerator: 2, denominator: 5 });
+    expect(resultOf(doc, 'completeness')).toEqual({ metric: 'completeness', value: 2 / 7, numerator: 2, denominator: 7 });
   });
 
   it('4. provenance counts the four envelope fields, and a retrievedAt counts only as a valid Date', () => {
