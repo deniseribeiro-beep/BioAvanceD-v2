@@ -1156,6 +1156,10 @@ test.describe('Human-paced e2e showcase reel — W9 telemetry and alerts', () =>
 
   test('RF009 an out-of-range freezer reading persisted in InfluxDB opens an alert the operator inspects', async ({ page, request }) => {
     const session = await realLogin(request);
+    // Pin the UI language before any goto, as the reel's other cases do: every label asserted here is the pt-BR one.
+    await page.addInitScript(() => {
+      window.localStorage.setItem('app_language', 'pt-BR');
+    });
     await seedRealAuth(page, session);
     const sensorName = 'Freezer -80 °C · Sala de criopreservação';
     const sensor: SeededSensor = await seedSensorWithPolicy(-90, -60);
