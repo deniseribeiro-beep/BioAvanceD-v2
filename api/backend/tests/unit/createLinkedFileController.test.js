@@ -192,6 +192,23 @@ describe('createLinkedFileController', () => {
       expect(payload.data[0]).not.toHaveProperty('storagePath');
       expect(payload.data[0].fileName).toBe('a.csv');
     });
+
+    // RF007 AC6 (#1321): a logically deleted file is not listed.
+    it('lists only files with no deletedAt', async () => {
+      const controller = buildController();
+      const find = vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue([]) });
+      const db = createDb({
+        widgets: { findOne: vi.fn().mockResolvedValue({ widgetId: 'w-1' }) },
+        widgetFiles: { find }
+      });
+      const req = { app: { locals: { db } }, params: { widgetId: 'w-1' } };
+      const res = createRes();
+
+      await controller.listFiles(req, res);
+
+      expect(find).toHaveBeenCalledWith({ widgetId: 'w-1', deletedAt: null });
+      expect(res.status).toHaveBeenCalledWith(200);
+    });
   });
 
   // #1336: every parent lookup above is an identity stub, so none of them
@@ -263,6 +280,73 @@ describe('createLinkedFileController', () => {
   });
 
   describe('downloadFile / deleteFile / replaceFile — link check', () => {
+    // RF007 AC6 (#1321): findFileAndCheckLink reads a logically deleted row
+    // as missing, for download, delete and replace alike.
+    describe('a logically deleted file reads as missing', () => {
+      function deletedFileDb(fileId, extra = {}) {
+        const fileRecord = { _id: fileId, widgetId: 'w-1', fileName: 'a.csv', storagePath: '/tmp/a.csv', deletedAt: new Date() };
+        return createDb({
+          widgets: { findOne: vi.fn().mockResolvedValue({ widgetId: 'w-1' }) },
+          widgetFiles: { findOne: vi.fn().mockResolvedValue(fileRecord), ...extra }
+        });
+      }
+
+      it('downloadFile 404s on a deletedAt row', async () => {
+        const controller = buildController();
+        const fileId = new ObjectId();
+        const db = deletedFileDb(fileId);
+        vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+        const readSpy = vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('plaintext'));
+        const req = { app: { locals: { db } }, params: { widgetId: 'w-1', fileID: fileId.toString() } };
+        const res = createRes();
+
+        await controller.downloadFile(req, res);
+
+        expect(res.status).toHaveBeenCalledWith(404);
+        expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Arquivo não encontrado' });
+        expect(readSpy).not.toHaveBeenCalled();
+      });
+
+      it('deleteFile 404s on a deletedAt row and writes no audit', async () => {
+        const controller = buildController();
+        const fileId = new ObjectId();
+        const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+        const db = deletedFileDb(fileId, { updateOne });
+        const req = { app: { locals: { db } }, params: { widgetId: 'w-1', fileID: fileId.toString() }, user: { userID: 'u-1' } };
+        const res = createRes();
+
+        await controller.deleteFile(req, res);
+
+        expect(res.status).toHaveBeenCalledWith(404);
+        expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Arquivo não encontrado' });
+        expect(updateOne).not.toHaveBeenCalled();
+        expect(auditLogger.log).not.toHaveBeenCalled();
+      });
+
+      it('replaceFile 404s on a deletedAt row and cleans up the upload', async () => {
+        const controller = buildController();
+        const fileId = new ObjectId();
+        const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+        const db = deletedFileDb(fileId, { updateOne });
+        vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+        const unlinkSpy = vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
+        const req = {
+          app: { locals: { db } },
+          params: { widgetId: 'w-1', fileID: fileId.toString() },
+          user: { userID: 'u-1' },
+          file: { path: '/tmp/new.csv', originalname: 'new.csv', size: 11 }
+        };
+        const res = createRes();
+
+        await controller.replaceFile(req, res);
+
+        expect(res.status).toHaveBeenCalledWith(404);
+        expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Arquivo não encontrado' });
+        expect(updateOne).not.toHaveBeenCalled();
+        expect(unlinkSpy).toHaveBeenCalledWith('/tmp/new.csv');
+      });
+    });
+
     it('downloadFile 403s when the file belongs to a different parent', async () => {
       const controller = buildController();
       const fileId = new ObjectId();
@@ -315,25 +399,59 @@ describe('createLinkedFileController', () => {
       expect(res.send).toHaveBeenCalledWith(Buffer.from('plaintext'));
     });
 
-    it('deleteFile removes the physical file and the record, audits critical severity', async () => {
+    // RF007 AC6 (#1321): a delete is logical and the binary is kept.
+    it('deleteFile logically deletes: sets deletedAt and deletedByAnonId, never unlinks, audits file_delete critical with logicalDelete', async () => {
       const controller = buildController();
       const fileId = new ObjectId();
       const fileRecord = { _id: fileId, widgetId: 'w-1', fileName: 'a.csv', storagePath: '/tmp/a.csv' };
       const deleteOne = vi.fn().mockResolvedValue({ deletedCount: 1 });
+      const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
       const db = createDb({
         widgets: { findOne: vi.fn().mockResolvedValue({ widgetId: 'w-1' }) },
-        widgetFiles: { findOne: vi.fn().mockResolvedValue(fileRecord), deleteOne }
+        widgetFiles: { findOne: vi.fn().mockResolvedValue(fileRecord), deleteOne, updateOne }
       });
       vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-      vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
+      const unlinkSpy = vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
 
+      const req = { app: { locals: { db } }, params: { widgetId: 'w-1', fileID: fileId.toString() }, user: { userID: 'u-1', anonId: 'USR-ANON-1' } };
+      const res = createRes();
+
+      await controller.deleteFile(req, res);
+
+      expect(updateOne).toHaveBeenCalledTimes(1);
+      const [filter, update] = updateOne.mock.calls[0];
+      expect(filter).toEqual({ _id: fileId, deletedAt: null });
+      expect(update.$set.deletedAt).toBeInstanceOf(Date);
+      expect(update.$set.deletedByAnonId).toBe('USR-ANON-1');
+      expect(unlinkSpy).not.toHaveBeenCalled();
+      expect(deleteOne).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(auditLogger.log).toHaveBeenCalledWith(expect.objectContaining({
+        action: 'file_delete',
+        severity: 'critical',
+        message: 'Arquivo removido logicamente: a.csv',
+        payload: expect.objectContaining({ logicalDelete: true, deletedAt: update.$set.deletedAt.toISOString() })
+      }));
+    });
+
+    it('deleteFile 404s and writes no audit when updateOne matches nothing', async () => {
+      const controller = buildController();
+      const fileId = new ObjectId();
+      const fileRecord = { _id: fileId, widgetId: 'w-1', fileName: 'a.csv', storagePath: '/tmp/a.csv' };
+      const updateOne = vi.fn().mockResolvedValue({ matchedCount: 0, modifiedCount: 0 });
+      const db = createDb({
+        widgets: { findOne: vi.fn().mockResolvedValue({ widgetId: 'w-1' }) },
+        widgetFiles: { findOne: vi.fn().mockResolvedValue(fileRecord), updateOne }
+      });
       const req = { app: { locals: { db } }, params: { widgetId: 'w-1', fileID: fileId.toString() }, user: { userID: 'u-1' } };
       const res = createRes();
 
       await controller.deleteFile(req, res);
 
-      expect(deleteOne).toHaveBeenCalledWith({ _id: fileId });
-      expect(res.status).toHaveBeenCalledWith(200);
+      expect(updateOne).toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(404);
+      expect(res.json).toHaveBeenCalledWith({ success: false, error: 'Arquivo não encontrado' });
+      expect(auditLogger.log).not.toHaveBeenCalled();
     });
 
     it('replaceFile validates fileType, updates the record, keeps the previous file and records a DataFileVersion', async () => {

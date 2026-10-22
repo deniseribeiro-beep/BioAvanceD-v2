@@ -266,7 +266,7 @@ function createLinkedFileController(opts) {
 
       const parentIdValue = parent[parentIdField] || parentId;
       const collection = db.collection(fileCollectionName);
-      const files = await collection.find({ [parentIdField]: parentIdValue }).toArray();
+      const files = await collection.find({ [parentIdField]: parentIdValue, deletedAt: null }).toArray();
 
       const sanitized = files.map((file) => ({
         _id: file._id,
@@ -310,7 +310,7 @@ function createLinkedFileController(opts) {
       return null;
     }
 
-    if (!fileRecord) {
+    if (!fileRecord || fileRecord.deletedAt) {
       res.status(404).json({ success: false, error: 'Arquivo não encontrado' });
       return null;
     }
@@ -389,22 +389,33 @@ function createLinkedFileController(opts) {
       if (!linked) return;
       const { fileRecord, collection } = linked;
 
-      if (fs.existsSync(fileRecord.storagePath)) {
-        try {
-          fs.unlinkSync(fileRecord.storagePath);
-        } catch (unlinkError) {
-          logger.error('Erro ao remover arquivo físico:', unlinkError.message);
-        }
+      // RF007 AC6 (#1321): a delete is logical. The row is marked and the
+      // binary at storagePath is kept as evidence (RNF029 C3), never unlinked.
+      // INFERENCE, not a citation: the `deletedAt`/`deletedByAnonId` fields
+      // follow StorageContainer's `deletedAt` logical delete.
+      const deletedAt = new Date();
+      const deletedByAnonId = await getUserAnonId(req.user, db);
+      const result = await collection.updateOne(
+        { _id: fileRecord._id, deletedAt: null },
+        { $set: { deletedAt, deletedByAnonId, updatedAt: deletedAt } }
+      );
+      if (!result || result.matchedCount === 0) {
+        return res.status(404).json({ success: false, error: 'Arquivo não encontrado' });
       }
-
-      await collection.deleteOne({ _id: fileRecord._id });
 
       await logAudit(db, req, {
         action: 'file_delete',
         resourceId: fileRecord._id.toString(),
         severity: 'critical',
-        message: `Arquivo excluído: ${fileRecord.fileName}`,
-        payload: { fileName: fileRecord.fileName, fileType: fileRecord.fileType, fileSize: fileRecord.fileSize, [parentIdField]: linked.parentIdValue }
+        message: `Arquivo removido logicamente: ${fileRecord.fileName}`,
+        payload: {
+          fileName: fileRecord.fileName,
+          fileType: fileRecord.fileType,
+          fileSize: fileRecord.fileSize,
+          [parentIdField]: linked.parentIdValue,
+          logicalDelete: true,
+          deletedAt: deletedAt.toISOString()
+        }
       });
 
       return res.status(200).json({ success: true, message: 'Arquivo excluído com sucesso' });

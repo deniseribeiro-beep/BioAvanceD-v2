@@ -381,7 +381,7 @@ class SampleFileController {
       // Busca arquivos da amostra
       const sampleFilesCollection = db.collection('sample_files');
       const specimenIdString = sample._id.toString();
-      const files = await sampleFilesCollection.find({ specimenId: specimenIdString }).toArray();
+      const files = await sampleFilesCollection.find({ specimenId: specimenIdString, deletedAt: null }).toArray();
 
       // Remove caminhos sensíveis da resposta (LGPD)
       const sanitizedFiles = files.map(file => ({
@@ -468,7 +468,7 @@ class SampleFileController {
         });
       }
 
-      if (!fileRecord) {
+      if (!fileRecord || fileRecord.deletedAt) {
         return res.status(404).json({
           success: false,
           error: req.t ? req.t('sampleFiles.fileNotFound') : 'Arquivo não encontrado'
@@ -604,7 +604,7 @@ class SampleFileController {
         });
       }
 
-      if (!fileRecord) {
+      if (!fileRecord || fileRecord.deletedAt) {
         return res.status(404).json({
           success: false,
           error: req.t ? req.t('sampleFiles.fileNotFound') : 'Arquivo não encontrado'
@@ -647,19 +647,23 @@ class SampleFileController {
         }
       }
 
-      // Remove arquivo físico do sistema de arquivos
-      if (fs.existsSync(fileRecord.storagePath)) {
-        try {
-          fs.unlinkSync(fileRecord.storagePath);
-          logger.info(`Arquivo removido do sistema de arquivos: ${fileRecord.storagePath}`);
-        } catch (unlinkError) {
-          logger.error('Erro ao remover arquivo físico:', unlinkError.message);
-          // Continua mesmo se houver erro ao remover arquivo físico
-        }
+      // RF007 AC6 (#1321): a delete is logical. The row is marked and the
+      // binary at storagePath is kept as evidence (RNF029 C3), never unlinked.
+      // INFERENCE, not a citation: the `deletedAt`/`deletedByAnonId` fields
+      // follow StorageContainer's `deletedAt` logical delete.
+      const deletedAt = new Date();
+      const deletedByAnonId = await getUserAnonId(req.user, db);
+      const result = await sampleFilesCollection.updateOne(
+        { _id: fileRecord._id, deletedAt: null },
+        { $set: { deletedAt, deletedByAnonId, updatedAt: deletedAt } }
+      );
+      if (!result || result.matchedCount === 0) {
+        // A concurrent delete marked the row first: no audit for this request.
+        return res.status(404).json({
+          success: false,
+          error: req.t ? req.t('sampleFiles.fileNotFound') : 'Arquivo não encontrado'
+        });
       }
-
-      // Remove registro do banco de dados
-      await sampleFilesCollection.deleteOne({ _id: new ObjectId(fileID) });
 
       // Registra log de exclusão (alta severidade - LGPD)
       if (req.user) {
@@ -671,12 +675,14 @@ class SampleFileController {
           resourceId: fileID,
           status: 'success',
           severity: 'critical', // Alta severidade para exclusão
-          message: `Arquivo excluído: ${fileRecord.fileName}`,
+          message: `Arquivo removido logicamente: ${fileRecord.fileName}`,
           payload: {
             fileName: fileRecord.fileName,
             fileType: fileRecord.fileType,
             fileSize: fileRecord.fileSize,
-            specimenId: specimenIdString
+            specimenId: specimenIdString,
+            logicalDelete: true,
+            deletedAt: deletedAt.toISOString()
             // Não inclui dados sensíveis
           },
           req: req,
@@ -748,7 +754,7 @@ class SampleFileController {
         });
       }
 
-      if (!fileRecord) {
+      if (!fileRecord || fileRecord.deletedAt) {
         cleanupUploadedFile();
         return res.status(404).json({
           success: false,
@@ -970,7 +976,7 @@ class SampleFileController {
       const sampleFilesCollection = db.collection('sample_files');
       const fileRecord = await sampleFilesCollection.findOne({ _id: new ObjectId(fileID) });
 
-      if (!fileRecord) {
+      if (!fileRecord || fileRecord.deletedAt) {
         return res.status(404).json({
           success: false,
           error: req.t ? req.t('sampleFiles.fileNotFound') : 'Arquivo não encontrado'
@@ -1072,7 +1078,7 @@ class SampleFileController {
       const sampleFilesCollection = db.collection('sample_files');
       const fileRecord = await sampleFilesCollection.findOne({ _id: new ObjectId(fileID) });
 
-      if (!fileRecord) {
+      if (!fileRecord || fileRecord.deletedAt) {
         return res.status(404).json({
           success: false,
           error: req.t ? req.t('sampleFiles.fileNotFound') : 'Arquivo não encontrado'
@@ -1173,7 +1179,7 @@ class SampleFileController {
       const sampleFilesCollection = db.collection('sample_files');
       const fileRecord = await sampleFilesCollection.findOne({ _id: new ObjectId(fileID) });
 
-      if (!fileRecord) {
+      if (!fileRecord || fileRecord.deletedAt) {
         return res.status(404).json({
           success: false,
           error: req.t ? req.t('sampleFiles.fileNotFound') : 'Arquivo não encontrado'

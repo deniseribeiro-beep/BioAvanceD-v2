@@ -19,6 +19,6 @@ RF007 AC4 asks for a DataFileVersion "para substituições, preservando checksum
 ## Not decided here
 
 - **Reading or downloading a past version.** No route serves a version row or its binary yet.
-- **Logical delete** (RF007 AC6): `deleteFile` still removes the current binary and the DataFile row, and leaves the file's version rows and retained binaries in place.
+- **Logical delete** (RF007 AC6): decided in `docs/decisions/2026-10-22-data-file-logical-delete.md`.
 - **Object storage and `storageObjectVersion`** (RF007 AC2, V2E-0472): `objectUri` holds the same `objstore://` URI the DataFile row does.
 - **A unique index on `(fileId, versionNumber)`** against two concurrent replaces of the same file, which could both read the same latest version today.
