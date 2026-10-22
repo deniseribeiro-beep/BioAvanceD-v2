@@ -415,6 +415,10 @@ app.use("/api/collections", createMasterDataRouter({
   // RF020 AC4: a regime conversion needs an event and an approval, not an edit.
   immutableFields: ["governanceRegime"]
 }));
+// RF020 AC5-AC7 (#1322): the MIABIS export of Biobank and Collection, its
+// national extensions and its round-trip loss report. Mounted before
+// /api/biobanks so its GET /:id does not take the path.
+app.use("/api/biobanks/miabis", require("./src/interface/routes/miabis-export.routes"));
 // RF020 AC1 (#1322): Network and Biobank, entered by a Coordenador or
 // Administrador; the MIABIS export reads them.
 app.use("/api/biobanks", createMasterDataRouter({
