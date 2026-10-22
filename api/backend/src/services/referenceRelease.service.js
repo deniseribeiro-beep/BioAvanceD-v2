@@ -8,6 +8,7 @@ const ReferenceImportRunModel = require('../models/ReferenceImportRun');
 const ReferenceImportIssueModel = require('../models/ReferenceImportIssue');
 const TerminologyConceptModel = require('../models/TerminologyConcept');
 const TerminologyRelationModel = require('../models/TerminologyRelation');
+const ReferenceCoverageManifestModel = require('../models/ReferenceCoverageManifest');
 const { CANONICAL_COLLECTIONS } = require('../config/collections');
 const { GraphProjectionService } = require('./graphProjection.service');
 const { withTransactionWhereSupported } = require('../utils/mongoTransaction');
@@ -31,6 +32,36 @@ async function auditRelease({ db, action, resourceId, message, payload, req }) {
     module: 'Dados de referência',
     source: req ? 'api' : 'system',
   });
+}
+
+const isNonEmptyString = (value) => typeof value === 'string' && value.trim() !== '';
+
+/**
+ * RF028 AC6/AC7, RULE-017 "Block promotion": the refusal reason of a release
+ * without a valid, justified coverage manifest (V2E-0489) and a passed
+ * quality assessment of its own, or null when it has both. Only positive
+ * evidence promotes.
+ */
+async function refuseWithoutCoverageAndQuality({ db, releaseDoc, releaseId }) {
+  const manifest = isNonEmptyString(releaseDoc.coverageManifestId)
+    ? await db.collection(CANONICAL_COLLECTIONS.referenceCoverageManifests).findOne({ referenceCoverageManifestId: releaseDoc.coverageManifestId })
+    : null;
+  if (!manifest) return 'coverage_manifest_missing';
+  if (!ReferenceCoverageManifestModel.validate(manifest).isValid
+    || manifest.referenceDatasetReleaseId !== releaseId
+    || manifest.checksum !== ReferenceCoverageManifestModel.checksumOf(manifest)) {
+    return 'coverage_manifest_invalid';
+  }
+  if (!['complete', 'justified'].includes(manifest.coverageResult)) return 'coverage_incomplete';
+
+  const assessment = isNonEmptyString(releaseDoc.dataQualityAssessmentId)
+    ? await db.collection(CANONICAL_COLLECTIONS.dataQualityAssessments).findOne({ dataQualityAssessmentId: releaseDoc.dataQualityAssessmentId })
+    : null;
+  if (!assessment || assessment.scopeType !== 'dataset_release' || assessment.scopeId !== releaseId) {
+    return 'quality_assessment_missing';
+  }
+  if (assessment.status !== 'passed') return 'quality_assessment_failed';
+  return null;
 }
 
 /**
@@ -66,6 +97,11 @@ async function promoteRelease({ db, releaseId, approvedBy, req = null, graphProj
   const approvedRun = completedRuns.find((run) => run.validationSummary && run.validationSummary.approved === true);
   if (!approvedRun) {
     return { promoted: false, reason: 'approved_run_not_found' };
+  }
+
+  const coverageRefusal = await refuseWithoutCoverageAndQuality({ db, releaseDoc, releaseId });
+  if (coverageRefusal) {
+    return { promoted: false, reason: coverageRefusal };
   }
 
   const stagedDocs = await staging.find({ referenceImportRunId: approvedRun.referenceImportRunId }).toArray();

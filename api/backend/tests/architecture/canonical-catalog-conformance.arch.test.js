@@ -7,8 +7,8 @@
 // canonical-dictionary/v2.js's own header) names the canonical
 // field for every entity, and nothing in the repo compared those names
 // against the shape the runtime code actually produces. This is that
-// comparison, for 25 entities: SecurityConfiguration (a service singleton's
-// getDefaultConfig()) plus 24 models exposing a pure `static fieldsOf(data =
+// comparison, for 26 entities: SecurityConfiguration (a service singleton's
+// getDefaultConfig()) plus 25 models exposing a pure `static fieldsOf(data =
 // {})`. It must stay green while recording every drift it finds explicitly,
 // in KNOWN_DRIFT -- both a new, undeclared drift and a KNOWN_DRIFT entry that
 // no longer matches reality are failures (see diffEntity below for how the
@@ -119,6 +119,7 @@ const ENTITY_TARGETS = {
   Session: () => require('../../src/models/Session').fieldsOf(),
   RecoveryCodeSet: () => require('../../src/models/RecoveryCodeSet').fieldsOf(),
   DataQualityAssessment: () => require('../../src/models/DataQualityAssessment').fieldsOf(),
+  ReferenceCoverageManifest: () => require('../../src/models/ReferenceCoverageManifest').fieldsOf(),
   RCSInputSnapshot: () => require('../../src/models/RcsInputSnapshot').fieldsOf(),
   RCSPreanalyticalAxisInput: () => require('../../src/models/RcsPreanalyticalAxisInput').fieldsOf(),
   RCSGovernanceEvidenceSnapshot: () => require('../../src/models/RcsGovernanceEvidenceSnapshot').fieldsOf(),

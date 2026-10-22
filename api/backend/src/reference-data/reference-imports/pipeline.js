@@ -3,7 +3,10 @@ const { processRecords } = require('./processRecords');
 const ReferenceDatasetReleaseModel = require('../../models/ReferenceDatasetRelease');
 const ReferenceImportRunModel = require('../../models/ReferenceImportRun');
 const ReferenceImportIssueModel = require('../../models/ReferenceImportIssue');
+const ReferenceCoverageManifestModel = require('../../models/ReferenceCoverageManifest');
 const { CANONICAL_COLLECTIONS } = require('../../config/collections');
+const { insertDataQualityAssessment } = require('../../ingestion/dataQualityAssessment');
+const { buildCoverageManifest, assessRelease } = require('./coverage');
 const { STORAGE_BASE } = require('../../config/uploadConfig');
 const { preserveReferenceAsset } = require('./preserveAsset');
 
@@ -40,6 +43,7 @@ async function runImport({
   const runs = db.collection(CANONICAL_COLLECTIONS.referenceImportRuns);
   const issuesCollection = db.collection(CANONICAL_COLLECTIONS.referenceImportIssues);
   const staging = db.collection(CANONICAL_COLLECTIONS.referenceImportStaging);
+  const coverageManifests = db.collection(CANONICAL_COLLECTIONS.referenceCoverageManifests);
 
   // 7.2 step 2 "Acquire" + step 3 "Integrity"
   const { checksum, fileSize } = await checksumFile(source.fixturePath);
@@ -281,6 +285,41 @@ async function runImport({
   const rejectionRate = recordsRead > 0 ? issues.length / recordsRead : 0;
   const approved = fatalIssues.length === 0 && rejectionRate <= REJECTION_RATE_BLOCK_THRESHOLD && Boolean(source.license);
 
+  // RF028 AC6/AC7, RNF032 C7: the release's coverage manifest and quality
+  // assessment are written before its status flip, which names both. A
+  // release already active keeps its own. A crash before the flip leaves
+  // these unreferenced; the resumed run writes fresh ones.
+  let coverageFields = {};
+  if (!dryRun && releaseDoc && releaseDoc.releaseStatus !== 'active') {
+    const manifest = buildCoverageManifest({
+      releaseId,
+      runId: runDoc.referenceImportRunId,
+      datasetCode: source.datasetCode,
+      assetUri: asset.assetUri,
+      recordsRead,
+      obtainedCount: stagedConcepts.size,
+      issues,
+    });
+    const manifestCheck = ReferenceCoverageManifestModel.validate(manifest);
+    if (!manifestCheck.isValid) {
+      throw new Error(`ReferenceCoverageManifest inválido: ${manifestCheck.errors.join('; ')}`);
+    }
+    await coverageManifests.insertOne(manifest);
+    const assessment = assessRelease({
+      release: releaseDoc,
+      manifest,
+      fatalCount: fatalIssues.length,
+      rejectionRate,
+      maxRejectionRate: REJECTION_RATE_BLOCK_THRESHOLD,
+      actorId: initiatedBy,
+    });
+    await insertDataQualityAssessment(db, assessment);
+    coverageFields = {
+      coverageManifestId: manifest.referenceCoverageManifestId,
+      dataQualityAssessmentId: assessment.dataQualityAssessmentId,
+    };
+  }
+
   // Records are written only when promoteRelease promotes the release.
   const recordsInserted = 0;
   const recordsUpdated = 0;
@@ -292,12 +331,12 @@ async function runImport({
     // a crash between the two leaves a `running` run, whose resume registers
     // a fresh release, never a `completed` run beside a `staged` release.
     if (releaseDoc.releaseStatus !== 'active') {
-      await releases.updateOne({ referenceDatasetReleaseId: releaseId }, { $set: { releaseStatus: 'approved', updatedAt: new Date() } });
+      await releases.updateOne({ referenceDatasetReleaseId: releaseId }, { $set: { releaseStatus: 'approved', ...coverageFields, updatedAt: new Date() } });
     }
   } else if (releaseDoc && releaseDoc.releaseStatus !== 'active') {
     // A release already active stays so: a rejected re-run of its content
     // never demotes it.
-    await releases.updateOne({ referenceDatasetReleaseId: releaseId }, { $set: { releaseStatus: 'rejected', updatedAt: new Date() } });
+    await releases.updateOne({ referenceDatasetReleaseId: releaseId }, { $set: { releaseStatus: 'rejected', ...coverageFields, updatedAt: new Date() } });
   }
 
   const runStatus = fatalIssues.length > 0 || rejectionRate > REJECTION_RATE_BLOCK_THRESHOLD

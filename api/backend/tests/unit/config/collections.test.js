@@ -102,7 +102,8 @@ const DEFAULTS = {
   ingestionIdempotencyKeys: 'ingestionIdempotencyKeys',
   ingestionQuarantineRecords: 'ingestionQuarantineRecords',
   missingDataReasons: 'missingDataReasons',
-  dataQualityAssessments: 'dataQualityAssessments'
+  dataQualityAssessments: 'dataQualityAssessments',
+  referenceCoverageManifests: 'referenceCoverageManifests'
 };
 
 const ORIGINAL_ENV = { ...process.env };
@@ -248,12 +249,14 @@ describe('config/collections', () => {
       dispositionActions: 'dispositionActions',
       dataFileVersions: 'dataFileVersions',
       // COLL_INGESTION_IDEMPOTENCY_KEYS/COLL_INGESTION_QUARANTINE_RECORDS/
-      // COLL_MISSING_DATA_REASONS/COLL_DATA_QUALITY_ASSESSMENTS aren't in
-      // ENV_KEYS/read by env.js either, same reasoning.
+      // COLL_MISSING_DATA_REASONS/COLL_DATA_QUALITY_ASSESSMENTS/
+      // COLL_REFERENCE_COVERAGE_MANIFESTS aren't in ENV_KEYS/read by env.js
+      // either, same reasoning.
       ingestionIdempotencyKeys: 'ingestionIdempotencyKeys',
       ingestionQuarantineRecords: 'ingestionQuarantineRecords',
       missingDataReasons: 'missingDataReasons',
-      dataQualityAssessments: 'dataQualityAssessments'
+      dataQualityAssessments: 'dataQualityAssessments',
+      referenceCoverageManifests: 'referenceCoverageManifests'
     });
   });
 

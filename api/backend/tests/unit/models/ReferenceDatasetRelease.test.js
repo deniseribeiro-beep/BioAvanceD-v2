@@ -64,6 +64,12 @@ describe('ReferenceDatasetReleaseModel', () => {
       expect(result.isValid).toBe(false);
       expect(result.errors).toContain('rollbackTargetId deve ser string');
     });
+
+    it('rejects a coverageManifestId that is not a string (V2E-0489)', () => {
+      const result = ReferenceDatasetReleaseModel.validate({ ...validData, coverageManifestId: 42 });
+      expect(result.isValid).toBe(false);
+      expect(result.errors).toContain('coverageManifestId deve ser string');
+    });
   });
 
   describe('create', () => {
@@ -74,6 +80,8 @@ describe('ReferenceDatasetReleaseModel', () => {
       expect(doc.accessMethod).toBe('manual_upload');
       expect(doc.sourceFormat).toEqual([]);
       expect(doc.previousReleaseId).toBeNull();
+      expect(doc.coverageManifestId).toBeNull();
+      expect(doc.dataQualityAssessmentId).toBeNull();
       expect(doc.createdAt).toBeInstanceOf(Date);
       expect(doc.updatedAt).toBeInstanceOf(Date);
     });

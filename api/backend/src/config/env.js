@@ -258,6 +258,7 @@ module.exports = {
   COLL_INGESTION_QUARANTINE_RECORDS: process.env.COLL_INGESTION_QUARANTINE_RECORDS || 'ingestionQuarantineRecords',
   COLL_MISSING_DATA_REASONS: process.env.COLL_MISSING_DATA_REASONS || 'missingDataReasons',
   COLL_DATA_QUALITY_ASSESSMENTS: process.env.COLL_DATA_QUALITY_ASSESSMENTS || 'dataQualityAssessments',
+  COLL_REFERENCE_COVERAGE_MANIFESTS: process.env.COLL_REFERENCE_COVERAGE_MANIFESTS || 'referenceCoverageManifests',
 
   // Neo4j lineage behavior
   LINEAGE_MODE: process.env.LINEAGE_MODE || 'fail-open',

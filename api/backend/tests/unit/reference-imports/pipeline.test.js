@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const { runImport: runImportUnderTest } = require('../../../src/reference-data/reference-imports/pipeline');
 const { promoteRelease, rollbackRelease } = require('../../../src/services/referenceRelease.service');
 const auditLogger = require('../../../src/utils/auditLogger');
+const ReferenceCoverageManifestModel = require('../../../src/models/ReferenceCoverageManifest');
 const hpoSource = require('../../../src/reference-data/reference-imports/sources/hpo');
 const { normalizeRecord } = require('../../../src/reference-data/reference-imports/normalizeHpo');
 
@@ -93,6 +94,8 @@ function createFakeDb() {
     terminologyRelations: createFakeCollection(),
     graph_projection_outbox: createFakeCollection(),
     graph_projection_outbox_aggregate_versions: createFakeCollection(),
+    referenceCoverageManifests: createFakeCollection(),
+    dataQualityAssessments: createFakeCollection(),
   };
   return {
     collections,
@@ -974,6 +977,121 @@ describe('reference-imports pipeline runImport (HPO)', () => {
       expect(promotion.promoted).toBe(true);
       expect(fakeDb.collections.referenceDatasetReleases.docs[0]).toMatchObject({ releaseStatus: 'active', promotionClaimedAt: null });
       expect(fakeDb.collections.terminologyConcepts.docs).toHaveLength(8);
+    });
+  });
+
+  describe('coverage manifest and quality gate (RF028 AC6/AC7)', () => {
+    const rejectAll = () => ({ ok: false, issue: { errorCode: 'TEST_REJECT', errorMessage: 'rejected', severity: 'error' } });
+
+    it('an approved run writes its manifest and assessment before the approved flip, which names both', async () => {
+      const fakeDb = createFakeDb();
+      const releases = fakeDb.collections.referenceDatasetReleases;
+      const { updateOne } = releases;
+      let atApproval = null;
+      releases.updateOne = async (filter, update, options) => {
+        if (update.$set && update.$set.releaseStatus === 'approved') {
+          atApproval = {
+            manifests: fakeDb.collections.referenceCoverageManifests.docs.map((doc) => ({ ...doc })),
+            assessments: fakeDb.collections.dataQualityAssessments.docs.map((doc) => ({ ...doc })),
+          };
+        }
+        return updateOne.call(releases, filter, update, options);
+      };
+
+      const result = await runImport({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor' });
+
+      expect(result.approved).toBe(true);
+      const manifests = fakeDb.collections.referenceCoverageManifests.docs;
+      const assessments = fakeDb.collections.dataQualityAssessments.docs;
+      expect(manifests).toHaveLength(1);
+      expect(manifests[0]).toMatchObject({
+        referenceDatasetReleaseId: result.releaseId,
+        expectedCount: 10,
+        obtainedCount: 8,
+        coverageResult: 'justified',
+        assets: [result.assetUri],
+      });
+      expect(manifests[0].exclusions.map((exclusion) => exclusion.reason)).toEqual(['MISSING_CODE', 'MISSING_DISPLAY']);
+      expect(assessments).toHaveLength(1);
+      expect(assessments[0]).toMatchObject({ scopeType: 'dataset_release', scopeId: result.releaseId, status: 'passed' });
+      expect(releases.docs[0]).toMatchObject({
+        releaseStatus: 'approved',
+        coverageManifestId: manifests[0].referenceCoverageManifestId,
+        dataQualityAssessmentId: assessments[0].dataQualityAssessmentId,
+      });
+      expect(atApproval.manifests.map((doc) => doc.referenceCoverageManifestId)).toEqual([manifests[0].referenceCoverageManifestId]);
+      expect(atApproval.assessments.map((doc) => doc.dataQualityAssessmentId)).toEqual([assessments[0].dataQualityAssessmentId]);
+    });
+
+    it('a dry run and a checksum mismatch write no manifest and no assessment', async () => {
+      const dryDb = createFakeDb();
+      await runImport({ db: dryDb, source: hpoSource, normalizeRecord, dryRun: true });
+      const mismatchDb = createFakeDb();
+      await runImport({ db: mismatchDb, source: { ...hpoSource, expectedChecksum: 'sha256-does-not-match' }, normalizeRecord });
+
+      for (const db of [dryDb, mismatchDb]) {
+        expect(db.collections.referenceCoverageManifests.docs).toHaveLength(0);
+        expect(db.collections.dataQualityAssessments.docs).toHaveLength(0);
+      }
+    });
+
+    it('a rejected release carries its manifest and a failed assessment', async () => {
+      const fakeDb = createFakeDb();
+
+      const result = await runImport({ db: fakeDb, source: hpoSource, normalizeRecord: rejectAll, initiatedBy: 'test-actor' });
+
+      const manifest = fakeDb.collections.referenceCoverageManifests.docs[0];
+      const assessment = fakeDb.collections.dataQualityAssessments.docs[0];
+      expect(fakeDb.collections.referenceDatasetReleases.docs[0]).toMatchObject({
+        referenceDatasetReleaseId: result.releaseId,
+        releaseStatus: 'rejected',
+        coverageManifestId: manifest.referenceCoverageManifestId,
+        dataQualityAssessmentId: assessment.dataQualityAssessmentId,
+      });
+      expect(assessment).toMatchObject({ scopeId: result.releaseId, status: 'failed' });
+    });
+
+    describe('promoteRelease refuses a release without passing evidence, writing nothing', () => {
+      const manifestOf = (db) => db.collections.referenceCoverageManifests.docs[0];
+      const assessmentOf = (db) => db.collections.dataQualityAssessments.docs[0];
+      const releaseOf = (db) => db.collections.referenceDatasetReleases.docs[0];
+
+      it.each([
+        ['coverage_manifest_missing', 'the release names no manifest or assessment', (db) => {
+          Object.assign(releaseOf(db), { coverageManifestId: null, dataQualityAssessmentId: null });
+        }],
+        ['coverage_manifest_invalid', 'its manifest assets were changed after its checksum', (db) => {
+          manifestOf(db).assets = ['file:///tampered'];
+        }],
+        ['coverage_manifest_invalid', 'its manifest covers another release', (db) => {
+          const manifest = manifestOf(db);
+          manifest.referenceDatasetReleaseId = 'another-release';
+          manifest.checksum = ReferenceCoverageManifestModel.checksumOf(manifest);
+        }],
+        ['coverage_incomplete', 'its manifest leaves a gap no exclusion explains', (db) => {
+          const manifest = manifestOf(db);
+          const rebuilt = ReferenceCoverageManifestModel.create({ ...manifest, exclusions: manifest.exclusions.slice(1), coverageResult: null, checksum: null });
+          expect(rebuilt.coverageResult).toBe('incomplete');
+          db.collections.referenceCoverageManifests.docs[0] = rebuilt;
+        }],
+        ['quality_assessment_missing', 'the release names no assessment', (db) => {
+          releaseOf(db).dataQualityAssessmentId = null;
+        }],
+        ['quality_assessment_failed', 'its assessment failed', (db) => {
+          assessmentOf(db).status = 'failed';
+        }],
+      ])('%s when %s', async (reason, _when, alter) => {
+        const fakeDb = createFakeDb();
+        const result = await runImport({ db: fakeDb, source: hpoSource, normalizeRecord, initiatedBy: 'test-actor' });
+        alter(fakeDb);
+
+        const promotion = await promote(fakeDb, result);
+
+        expect(promotion).toEqual({ promoted: false, reason });
+        expect(releaseOf(fakeDb)).toMatchObject({ releaseStatus: 'approved', promotionClaimedAt: null });
+        expect(fakeDb.collections.terminologyConcepts.docs).toHaveLength(0);
+        expect(auditLogger.log).not.toHaveBeenCalled();
+      });
     });
   });
 });

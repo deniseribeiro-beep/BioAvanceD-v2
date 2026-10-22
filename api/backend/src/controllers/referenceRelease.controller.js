@@ -9,6 +9,11 @@ const STATUS_BY_REASON = {
   release_not_approved: 409,
   promotion_in_progress: 409,
   approved_run_not_found: 409,
+  coverage_manifest_missing: 409,
+  coverage_manifest_invalid: 409,
+  coverage_incomplete: 409,
+  quality_assessment_missing: 409,
+  quality_assessment_failed: 409,
   no_previous_release: 409,
   previous_release_not_found: 409,
 };

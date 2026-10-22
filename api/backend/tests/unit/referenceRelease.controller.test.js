@@ -48,6 +48,11 @@ describe('referenceRelease.controller.promote', () => {
     ['release_not_approved', 409],
     ['approved_run_not_found', 409],
     ['promotion_in_progress', 409],
+    ['coverage_manifest_missing', 409],
+    ['coverage_manifest_invalid', 409],
+    ['coverage_incomplete', 409],
+    ['quality_assessment_missing', 409],
+    ['quality_assessment_failed', 409],
   ])('answers a refused promotion %s with %i and its reason', async (reason, status) => {
     vi.spyOn(referenceReleaseService, 'promoteRelease').mockResolvedValue({ promoted: false, reason });
     const res = buildRes();
