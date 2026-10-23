@@ -24,7 +24,7 @@ By the coordinator for #1319, on 2026-10-23:
 
 `[inference]` `expectedCount` is the number of rows read from the preserved asset, and `obtainedCount` the number of concepts staged. The bundled samples carry no declared total, and the preserved asset is the bytes whose checksum was verified.
 
-`[inference]` An exclusion is a row-level issue (`entityType` `TerminologyConcept`): each consumed a source row and staged nothing. It is recorded as `{ rowNumber, sourceRecordId, reason, justification }`, with the issue's `errorCode` as `reason` and its `errorMessage` as `justification`. An `ORPHAN_RELATION` issue consumed no row and is not an exclusion.
+`[inference]` An exclusion is a row-level issue (`entityType` `TerminologyConcept`): each consumed a source row and staged nothing. It is recorded as `{ rowNumber, sourceRecordId, reason, justification }`, with the issue's `errorCode` as `reason` and its `errorMessage` as `justification`. Every row-level issue is an exclusion and the manifest refuses a blank `reason` or `justification`, so an issue with a blank or missing `errorCode` has `UNSPECIFIED_REJECTION` as `reason`, and one with a blank or missing `errorMessage` has its `reason` as `justification` (#1398). An `ORPHAN_RELATION` issue consumed no row and is not an exclusion.
 
 `[inference]` `coverageResult` is `complete | justified | incomplete`; the dictionary's only example is `complete`. It is `complete` when every row read was staged, `justified` when the gap is exactly the exclusions, and `incomplete` otherwise: an unexplained gap (two rows sharing one code), more staged than read, or a non-integer count.
 

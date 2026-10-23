@@ -18,6 +18,11 @@ const DIMENSIONS = ['completeness', 'validity', 'provenance'];
 // The release fields that name where its content came from and how it was read.
 const PROVENANCE_FIELDS = ['sourceId', 'datasetVersion', 'retrievalUri', 'license', 'sourceChecksum', 'parserVersion', 'mappingVersion'];
 
+// The reason of an exclusion whose issue carried no errorCode (#1398).
+const UNSPECIFIED_REJECTION = 'UNSPECIFIED_REJECTION';
+
+const isNonBlank = (value) => typeof value === 'string' && value.trim() !== '';
+
 const METRICS = Object.freeze([
   { metric: 'completeness', definition: 'registros obtidos mais exclusões justificadas sobre registros lidos do asset; 0 sem registro lido', denominator: 'records read' },
   { metric: 'validity', definition: '0 com issue fatal; senão 1 menos a taxa de rejeição', denominator: null },
@@ -27,17 +32,22 @@ const METRICS = Object.freeze([
 /**
  * expectedCount is the rows read from the preserved asset, obtainedCount the
  * concepts staged. Each row-level issue consumed a row and staged nothing,
- * so it is an exclusion; a rejected relation consumed no row.
+ * so it is an exclusion; a rejected relation consumed no row. An issue with a
+ * blank errorCode or errorMessage still is one, with UNSPECIFIED_REJECTION as
+ * its reason and its reason as its justification (#1398).
  */
 function buildCoverageManifest({ releaseId, runId, datasetCode, assetUri, recordsRead, obtainedCount, issues = [], generatedAt = new Date() }) {
   const exclusions = issues
     .filter((issue) => issue.entityType === 'TerminologyConcept')
-    .map((issue) => ({
-      rowNumber: issue.rowNumber ?? null,
-      sourceRecordId: issue.sourceRecordId ?? null,
-      reason: issue.errorCode,
-      justification: issue.errorMessage,
-    }));
+    .map((issue) => {
+      const reason = isNonBlank(issue.errorCode) ? issue.errorCode : UNSPECIFIED_REJECTION;
+      return {
+        rowNumber: issue.rowNumber ?? null,
+        sourceRecordId: issue.sourceRecordId ?? null,
+        reason,
+        justification: isNonBlank(issue.errorMessage) ? issue.errorMessage : reason,
+      };
+    });
   return ReferenceCoverageManifestModel.create({
     referenceDatasetReleaseId: releaseId,
     assets: [assetUri],

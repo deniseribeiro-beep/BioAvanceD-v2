@@ -75,6 +75,27 @@ describe('reference release coverage (RF028 AC6/AC7)', () => {
     expect(manifest).toMatchObject({ expectedCount: 2, obtainedCount: 2, exclusions: [], coverageResult: 'complete' });
   });
 
+  it.each([
+    ['a blank errorMessage', { errorCode: 'MISSING_CODE', errorMessage: '' }, { reason: 'MISSING_CODE', justification: 'MISSING_CODE' }],
+    ['a whitespace errorMessage', { errorCode: 'MISSING_CODE', errorMessage: '   ' }, { reason: 'MISSING_CODE', justification: 'MISSING_CODE' }],
+    ['a blank errorCode', { errorCode: '', errorMessage: 'Linha 2 sem código.' }, { reason: 'UNSPECIFIED_REJECTION', justification: 'Linha 2 sem código.' }],
+    ['neither errorCode nor errorMessage', {}, { reason: 'UNSPECIFIED_REJECTION', justification: 'UNSPECIFIED_REJECTION' }],
+  ])('a row-level issue with %s is still a justified exclusion of a valid manifest (#1398)', (_label, fields, expected) => {
+    const manifest = buildCoverageManifest({
+      releaseId: release.referenceDatasetReleaseId,
+      runId: 'run-1',
+      datasetCode: 'TEST',
+      assetUri: 'objstore://reference-releases/TEST/sha256/abc',
+      recordsRead: 2,
+      obtainedCount: 1,
+      issues: [{ entityType: 'TerminologyConcept', rowNumber: 2, severity: 'error', ...fields }],
+    });
+
+    expect(manifest.exclusions).toEqual([{ rowNumber: 2, sourceRecordId: null, ...expected }]);
+    expect(manifest.coverageResult).toBe('justified');
+    expect(ReferenceCoverageManifestModel.validate(manifest).isValid).toBe(true);
+  });
+
   it('a source with no row read fails completeness', () => {
     const { manifest, assessment } = coverageOf([]);
 
