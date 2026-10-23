@@ -22,6 +22,6 @@ The rows (`api/backend/src/ingestion/missingness.js`) go to the `missingDataReas
 
 ## Not decided here
 
-- **The quarantine record does not store the declaration.** The gateway stores the `payload` only, so a quarantined record's `missingDataReasons` is not kept for its review.
+- **The quarantine record's copy of the declaration** was decided on 2026-10-23: [it keeps `missingDataReasons` as received](2026-10-23-ingestion-quarantine-keeps-missing-data-reasons.md).
 - **A Neo4j projection of MissingDataReason.** The dictionary routes it to Neo4j via the outbox only; no event or projection carries it yet.
 - **How a DataQualityAssessment's completeness reads a reasoned absence**: whether a field with a reasonCode other than `unknown` counts as complete is that slice's decision.

@@ -447,6 +447,9 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
     expect(body.error).toBe('INGESTION_QUARANTINED');
     expect(body.details).toContain('doi tem valor e não pode ter MissingDataReason');
     expect(await countIngestedBySourceRecordId('datasets', sourceRecordId)).toBe(0);
+
+    const record = await findIngestionQuarantineRecord(body.ingestionQuarantineRecordId);
+    expect(record.missingDataReasons).toEqual([{ fieldPath: 'doi', reasonCode: 'withheld' }]);
   });
 
   test('RNF011 C3: an accepted record gets a DataQualityAssessment, and a second record from the same source scores uniqueness 0', async ({ request }) => {

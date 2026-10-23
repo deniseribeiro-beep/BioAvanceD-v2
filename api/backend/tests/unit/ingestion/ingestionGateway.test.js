@@ -50,6 +50,26 @@ describe('ingestion/ingestionGateway (RF029 slice 1/6, #669)', () => {
     expect(db.collections.ingestionQuarantineRecords.docs[0]).toMatchObject({ entityType: 'Specimen', resolutionStatus: 'open' });
   });
 
+  // RF029 AC7 (#1318): the quarantine record keeps the client's declaration.
+  it('quarantines with the missingDataReasons it was given, stored on the record', async () => {
+    const db = createFakeDb({ ingestionQuarantineRecords: [] });
+    const missingDataReasons = [{ fieldPath: 'doi', reasonCode: 'withheld' }];
+
+    const outcome = await ingestRecord({ db, entityType: 'Specimen', payload: { specimenId: 'S-1' }, provenance: {}, missingDataReasons });
+
+    expect(outcome.status).toBe('quarantined');
+    expect(db.collections.ingestionQuarantineRecords.docs[0].missingDataReasons).toEqual([{ fieldPath: 'doi', reasonCode: 'withheld' }]);
+  });
+
+  it('quarantines without missingDataReasons, storing null on the record', async () => {
+    const db = createFakeDb({ ingestionQuarantineRecords: [] });
+
+    const outcome = await ingestRecord({ db, entityType: 'Specimen', payload: { specimenId: 'S-1' }, provenance: {} });
+
+    expect(outcome.status).toBe('quarantined');
+    expect(db.collections.ingestionQuarantineRecords.docs[0].missingDataReasons).toBeNull();
+  });
+
   // #1318: an entity type's own model check, appended to the gateway's.
   it('quarantines on an entityValidator violation, passing it the payload', async () => {
     const db = createFakeDb({ ingestionQuarantineRecords: [] });

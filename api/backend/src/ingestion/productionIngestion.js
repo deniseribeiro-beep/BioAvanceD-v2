@@ -180,6 +180,7 @@ async function ingestUnderRelease({ db, target, entityType, payload, provenance,
     provenance: { ...(provenance && typeof provenance === 'object' ? provenance : {}), createdBy: `Actor/${actorId}` },
     idempotencyKey: null,
     entityValidator: entityValidatorFor(target, missingDataReasons, references.violations),
+    missingDataReasons,
   });
 
   if (outcome.status === 'quarantined') {

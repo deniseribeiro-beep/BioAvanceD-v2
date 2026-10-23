@@ -527,6 +527,32 @@ describe('ingestion/productionIngestion ingestAndPersist (RF029, #1318)', () => 
     expect(resultOf(docs[0], 'completeness')).toEqual({ metric: 'completeness', value: 0.75, numerator: 3, denominator: 4 });
   });
 
+  it('24c. case 24\'s quarantine record keeps the declaration and the payload as sent', async () => {
+    const db = seededDb();
+    const payload = { ...OMICS_QUALIFICATION, limitations: 'n/a' };
+
+    const result = await ingest(db, { entityType: 'OmicsQualification', payload, missingDataReasons: [{ fieldPath: 'limitations', reasonCode: 'not_applicable' }] });
+
+    expect(result.status).toBe('quarantined');
+    const records = db.collections.ingestionQuarantineRecords.docs;
+    expect(records).toHaveLength(1);
+    expect(records[0].missingDataReasons).toEqual([{ fieldPath: 'limitations', reasonCode: 'not_applicable' }]);
+    expect(records[0].payload).toEqual({ ...OMICS_QUALIFICATION, limitations: 'n/a' });
+  });
+
+  it('24d. a Dataset quarantined for a provenance without purpose keeps its valid declaration on the record, with no rows', async () => {
+    const db = seededDb();
+    const { purpose, ...withoutPurpose } = provenance();
+
+    const result = await ingest(db, { provenance: withoutPurpose, missingDataReasons: [{ fieldPath: 'doi', reasonCode: 'not_collected' }] });
+
+    expect(result.status).toBe('quarantined');
+    const records = db.collections.ingestionQuarantineRecords.docs;
+    expect(records).toHaveLength(1);
+    expect(records[0].missingDataReasons).toEqual([{ fieldPath: 'doi', reasonCode: 'not_collected' }]);
+    expect(db.collections.missingDataReasons.docs).toHaveLength(0);
+  });
+
   // #1318: Assay, the fourth target, runs its master mount's reference check
   // (assayReferenceValidator.js, #1219) and #1182 organization scope on
   // laboratoryId. createFakeDb compares with ===, so the samples lookup by a

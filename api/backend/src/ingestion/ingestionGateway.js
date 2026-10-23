@@ -19,7 +19,8 @@
  * outcome. #1318: ingestion/productionIngestion.js is the caller that does,
  * for the entity types ingestion/ingestionTargets.js names, passing each
  * type's model check as `entityValidator`: a function of the payload whose
- * violations are appended to the gateway's own.
+ * violations are appended to the gateway's own. RF029 AC7 (#1318): a
+ * quarantined record also keeps the client's `missingDataReasons` as received.
  */
 const { validateProvenanceEnvelope } = require('./provenanceEnvelope');
 const { validateIngestionPayload, assertReferencesExist } = require('./canonicalGateway');
@@ -38,6 +39,7 @@ async function ingestRecord({
   references = [],
   referenceCodes = [],
   entityValidator = null,
+  missingDataReasons = undefined,
 }) {
   if (!db) throw new Error('ingestRecord: db é obrigatório');
   if (!entityType) throw new Error('ingestRecord: entityType é obrigatório');
@@ -78,6 +80,7 @@ async function ingestRecord({
       payload,
       violations,
       provenance: provenanceResult.envelope,
+      missingDataReasons,
     });
     outcome = {
       status: 'quarantined',
