@@ -1235,7 +1235,53 @@ test.describe('Human-paced e2e showcase reel — W9 telemetry and alerts', () =>
 // custody assignment, and the cryovial container, position and
 // rack-to-location chain, because no UI calls them;
 // tests/e2e/physical-chain.spec.ts and tests/e2e/specimen-status-v2.spec.ts
-// cover them at the API.
+// cover them at the API. The specimen carries the compliance-graph inputs
+// (consent template, clinical, pharmacology, SPREC, sealed Merkle root),
+// because opening its page revalidates the graph and a blocked graph makes it
+// unavailable (#532, #537).
+
+// The sealed sample hash, computed the way the backend's generateSampleHash
+// does, without importing backend source across npm roots.
+function sampleMerkleRoot(sample: Record<string, any>): string {
+  const deepSort = (value: any): any => {
+    if (Array.isArray(value)) return value.map(deepSort);
+    if (value instanceof Date) return value.toISOString();
+    if (value && typeof value === 'object') {
+      return Object.keys(value).sort().reduce((acc: Record<string, any>, key) => {
+        acc[key] = deepSort(value[key]);
+        return acc;
+      }, {});
+    }
+    return value;
+  };
+  const text = (value: unknown) => String(value || '').trim();
+  const asObject = (value: unknown) => (value && typeof value === 'object' ? (value as Record<string, any>) : {});
+  const pharmacology = asObject(sample.pharmacologyData);
+  const payload = {
+    participant_identity: {
+      participantId: text(sample.participantId),
+      participantName: text(sample.participantName || sample.patientName),
+    },
+    clinicalData: asObject(sample.clinicalData),
+    sprec: asObject(sample.sprec),
+    pharmacologyData: {
+      ...pharmacology,
+      treatmentStatus: text(pharmacology.treatmentStatus || pharmacology.treatment_status).toUpperCase(),
+      medicationName: text(pharmacology.medicationName || pharmacology.medication_name || pharmacology.drug_name),
+      atcCode: text(pharmacology.atcCode || pharmacology.atc_code || pharmacology.medication_code).toUpperCase().replace(/^ATC:/i, ''),
+      atcClass: text(pharmacology.atcClass || pharmacology.atc_level_1 || pharmacology.medication_drug_class).toUpperCase(),
+      lastDoseDate: pharmacology.lastDoseDate || pharmacology.last_dose_date || null,
+      washoutStartDate: pharmacology.washoutStartDate || pharmacology.washout_start_date || null,
+      washoutEndDate: pharmacology.washoutEndDate || pharmacology.washout_end_date || null,
+    },
+    rcsScore: sample.rcsScore ?? null,
+    finalGrade: sample.finalGrade ?? null,
+    calculationTrace: sample.calculationTrace ?? null,
+    axisPenalties: sample.axisPenalties ?? null,
+  };
+  return createHash('sha256').update(JSON.stringify(deepSort(payload))).digest('hex');
+}
+
 test.describe('Human-paced e2e showcase reel — W8 storage and specimen state', () => {
   const boxes: SeededStorageBox[] = [];
 
@@ -1295,6 +1341,49 @@ test.describe('Human-paced e2e showcase reel — W8 storage and specimen state',
     });
     expect([201, 202]).toContain(sample.status());
     const specimenId = (await sample.json()).data.specimenId as string;
+
+    // Off camera: the compliance-graph inputs, so opening the page clears the graph instead of blocking the specimen.
+    const graphClient = new MongoClient(process.env.E2E_MONGO_URI || 'mongodb://localhost:27017?directConnection=true');
+    await graphClient.connect();
+    try {
+      const db = graphClient.db(process.env.E2E_MONGO_DB || 'bioavanced_test');
+      await db.collection('patientConsents').updateOne(
+        { participantId: participant.participantId, status: 'ACTIVE' },
+        { $set: { consentTemplateId: participant.consentTemplateId } },
+      );
+      const samples = db.collection('samples');
+      await samples.updateOne({ specimenId }, {
+        $set: {
+          consentTemplateId: participant.consentTemplateId,
+          clinicalData: { orphaCode: 'ORPHA:999001', cid: 'E75.2' },
+          pharmacologyData: { treatmentStatus: 'NAIVE' },
+          matrixType: 'fluid',
+          sprec: {
+            sampleType: 'BLD',
+            primaryContainer: 'SST',
+            preCentrifugation: 'A',
+            centrifugation: 'A',
+            secondCentrifugation: 'A',
+            postCentrifugationDelay: 'A',
+            longTermStorage: 'C',
+          },
+          sealedRcsAssessmentId: null,
+          sealedSpecimenPreanalyticsId: null,
+        },
+      });
+      const stored = await samples.findOne({ specimenId });
+      expect(stored, `sample ${specimenId} not found`).not.toBeNull();
+      await samples.updateOne({ specimenId }, { $set: { merkleRoot: sampleMerkleRoot(stored!) } });
+    } finally {
+      await graphClient.close();
+    }
+    const graph = await request.get(`${apiBaseURL}/api/samples/${specimenId}/compliance-graph`, { headers });
+    const graphText = await graph.text();
+    expect(graph.status(), graphText).toBe(200);
+    const graphBody = JSON.parse(graphText).data;
+    expect(graphBody.isReleasable, graphText).toBe(true);
+    expect(graphBody.suggestedStatus, graphText).toBe('AVAILABLE');
+
     const currentStatus = page.getByText('Status Atual:', { exact: true }).locator('xpath=..');
 
     // 1. The specimen's page: available, stored in box A at A1.
