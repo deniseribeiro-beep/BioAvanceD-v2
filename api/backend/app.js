@@ -453,6 +453,7 @@ app.use("/api/identifier-namespaces", createMasterDataRouter({
   immutableFields: ["namespaceKey", "systemUri"]
 }));
 app.use("/api/workflow-runs/:workflowRunId/files", require("./src/interface/routes/workflow-run-file-link.routes"));
+app.use("/api/workflow-runs/:workflowRunId/lineage", require("./src/interface/routes/workflow-run-lineage.routes"));
 app.use("/api/workflow-runs", createMasterDataRouter({
   collectionName: "workflowRuns",
   idField: "workflowRunId",
