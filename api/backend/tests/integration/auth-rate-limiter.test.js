@@ -25,6 +25,14 @@
  * is now loaded once at file level, as every other integration file does,
  * so each test re-requires only app.js and env.js (~7 ms) and its budget
  * covers the requests it proves.
+ *
+ * #1395: the requests carry no password, so each one stops at the login's
+ * missing-field check (401) and runs no bcrypt compare. That compare, the
+ * #1036 timing equalizer for an unknown user, cost 70-650 ms per request and
+ * made these cases scale with machine load; the limiter counts every request
+ * on /api/auth before the route runs, so it counts these the same. Each case
+ * asserts that every response short of a 429 is that 401, so a request that
+ * missed the counted login route cannot turn a case green.
  */
 import { describe, it, expect, afterEach } from 'vitest';
 const request = require('supertest');
@@ -58,19 +66,17 @@ async function postLoginAttempts(app, count) {
   const responses = [];
   for (let i = 0; i < count; i += 1) {
     // eslint-disable-next-line no-await-in-loop
-    responses.push(await request(app).post('/api/auth/login').send({ username: 'admin', password: 'wrong' }));
+    responses.push(await request(app).post('/api/auth/login').send({ username: 'admin' }));
   }
   return responses;
 }
 
 describe('#359: authLimiter budget requires the explicit AUTH_RATE_LIMIT_RELAXED opt-in', () => {
   // #1038: this test measured at 3966ms of the default 5000ms budget (79%)
-  // on an idle machine, and timed out under scheduling pressure in a full
-  // 458-file regression run. #1333 found most of that was the cold app
-  // load, now paid at file level (see the header). What remains is
-  // inherent: exhausting the strict budget fires 12 real logins (~70 ms
-  // each), so the 15000ms budget stays as headroom for that work under
-  // load (see tests/unit/iot.controller.test.js).
+  // and timed out under scheduling pressure in a full regression run. #1333
+  // moved the cold app load to file level and #1395 took the bcrypt compare
+  // out of each request (see the header), so it runs under the default
+  // budget like the other two.
   it('stays strict under NODE_ENV=development alone, with no explicit opt-in set', async () => {
     const app = loadAppWithEnv('development', { relaxed: false });
 
@@ -78,7 +84,8 @@ describe('#359: authLimiter budget requires the explicit AUTH_RATE_LIMIT_RELAXED
 
     const rateLimited = responses.filter((res) => res.status === 429);
     expect(rateLimited.length).toBeGreaterThan(0);
-  }, 15000);
+    expect(responses.filter((res) => res.status !== 429).every((res) => res.status === 401)).toBe(true);
+  });
 
   it('allows more than 10 /api/auth requests/min when the explicit opt-in is set (real Docker dev stack)', async () => {
     const app = loadAppWithEnv('development', { relaxed: true });
@@ -87,6 +94,7 @@ describe('#359: authLimiter budget requires the explicit AUTH_RATE_LIMIT_RELAXED
 
     const rateLimited = responses.filter((res) => res.status === 429);
     expect(rateLimited).toHaveLength(0);
+    expect(responses.filter((res) => res.status !== 429).every((res) => res.status === 401)).toBe(true);
   });
 
   it('stays strict in production even if the opt-in is set', async () => {
@@ -96,5 +104,6 @@ describe('#359: authLimiter budget requires the explicit AUTH_RATE_LIMIT_RELAXED
 
     const rateLimited = responses.filter((res) => res.status === 429);
     expect(rateLimited.length).toBeGreaterThan(0);
+    expect(responses.filter((res) => res.status !== 429).every((res) => res.status === 401)).toBe(true);
   });
 });

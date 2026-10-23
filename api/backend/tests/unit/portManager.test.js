@@ -183,12 +183,23 @@ describe('portManager', () => {
     it('frees and reuses the requested port when the process on it can be killed', async () => {
       const port = await getFreePort();
       const holder = await spawnPortHolder(port);
+      // #1395: the lookup's two spawns measured up to 5954 ms (netstat) and
+      // 3720 ms (tasklist) under ordinary load, and the two real-OS cases above
+      // already prove it. This case proves the kill-then-reuse branch, so the
+      // lookup answers with the holder's known pid; the real kill, the port's
+      // release and both availability checks stay. What remains is the holder
+      // spawn, the kill and the module's fixed 1000 ms sleep.
+      const lookup = vi.spyOn(portManager, 'getProcessUsingPort').mockResolvedValue({ pid: String(holder.pid), processName: 'node' });
 
-      const result = await portManager.getAvailablePort(port);
-      expect(result).toBe(port);
-
-      // Holder should already be dead; killing again should be a no-op, not throw.
-      holder.kill();
+      try {
+        const result = await portManager.getAvailablePort(port);
+        expect(result).toBe(port);
+        expect(lookup).toHaveBeenCalledWith(port);
+      } finally {
+        lookup.mockRestore();
+        // Holder should already be dead; killing again should be a no-op, not throw.
+        holder.kill();
+      }
     }, 15000);
 
     // The next two tests exercise getAvailablePort's fallback/throw branches by
