@@ -452,6 +452,22 @@ app.use("/api/identifier-namespaces", createMasterDataRouter({
   validateReferences: require("./src/services/identifierNamespaceRegistry.service").validateNamespaceReferences,
   immutableFields: ["namespaceKey", "systemUri"]
 }));
+// RF011 AC2 (#1322): mapping releases; a new mappingVersion is a new row naming the old one in supersedesReleaseId.
+app.use("/api/interoperability-mapping-releases", createMasterDataRouter({
+  collectionName: "interoperabilityMappingReleases",
+  idField: "interoperabilityMappingReleaseId",
+  model: require("./src/models/InteroperabilityMappingRelease"),
+  validateReferences: require("./src/services/interoperabilityMappingRelease.service").validateMappingReleaseReferences,
+  immutableFields: ["mappingVersion"]
+}));
+// RF011 AC2 (#1322): FHIR profiles under a stored release; the FHIR import validation reads them for meta.profile.
+app.use("/api/fhir-profiles", createMasterDataRouter({
+  collectionName: "fhirProfileRegistries",
+  idField: "fhirProfileRegistryId",
+  model: require("./src/models/FHIRProfileRegistry"),
+  validateReferences: require("./src/services/interoperabilityMappingRelease.service").validateProfileReferences,
+  immutableFields: ["canonicalUrl", "profileVersion"]
+}));
 app.use("/api/workflow-runs/:workflowRunId/files", require("./src/interface/routes/workflow-run-file-link.routes"));
 app.use("/api/workflow-runs/:workflowRunId/lineage", require("./src/interface/routes/workflow-run-lineage.routes"));
 app.use("/api/workflow-runs", createMasterDataRouter({

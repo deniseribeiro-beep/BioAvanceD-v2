@@ -75,15 +75,20 @@ function createMasterDataRouter({ collectionName, idField, model, validateRefere
   // allowlist without needing a separate filter -- deliberate
   // immutable-identity treatment, not an oversight.
   //
-  // Four mounted models throw on an empty `model.create({})` probe. Three
+  // Six mounted models throw on an empty `model.create({})` probe. Three
   // spread/map a required array field with no fallback when it's absent
   // (Assay.js:105 specimenIds, Dataset.js:56 creators,
-  // OmicsQualification.js:52 qcMetrics), and IdentifierNamespaceRegistry
-  // refuses any row missing a required field. For those four the allowlist
-  // falls back to a hand-enumerated list, derived by reading that model's
-  // own create() return keys, keyed by collectionName. The namespace list
-  // leaves out namespaceKey and systemUri: RULE-036 keeps the URI stable,
-  // so a new version is a new row (#1322).
+  // OmicsQualification.js:52 qcMetrics), and IdentifierNamespaceRegistry,
+  // InteroperabilityMappingRelease and FHIRProfileRegistry refuse any row
+  // missing a required field. For those six the allowlist falls back to a
+  // hand-enumerated list, derived by reading that model's own create()
+  // return keys, keyed by collectionName. The namespace list leaves out
+  // namespaceKey and systemUri: RULE-036 keeps the URI stable, so a new
+  // version is a new row (#1322). The release list leaves out mappingVersion,
+  // since a new mapping version is a new row naming the old one in
+  // supersedesReleaseId, and the profile list leaves out canonicalUrl and
+  // profileVersion, the key the FHIR validator matches meta.profile on
+  // (RF011 AC2, #1322).
   const HAND_ENUMERATED_UPDATE_FIELDS = {
     assays: [
       'studyId', 'specimenIds', 'assayType', 'omicsDomain', 'protocolId',
@@ -101,6 +106,21 @@ function createMasterDataRouter({ collectionName, idField, model, validateRefere
     identifierNamespaceRegistries: [
       'authorityDomain', 'targetTypes', 'semanticVersion', 'status',
       'effectivePeriod', 'configurationReleaseId',
+    ],
+    interoperabilityMappingReleases: [
+      'standard', 'profile', 'mappingUri', 'checksum', 'authorId', 'status',
+      'roundTripLossReportUri', 'canonicalModelReleaseId', 'fhirVersion',
+      'implementationGuideCanonical', 'implementationGuideVersion',
+      'jurisdiction', 'profileRegistryIds', 'resourceTypes',
+      'identifierNamespaceRegistryIds', 'terminologyReleaseIds',
+      'mappingDefinitionUri', 'mappingDefinitionHash',
+      'conformanceTestReportUri', 'coverageNumerator', 'coverageDenominator',
+      'coverageRatio', 'roundTripLossesPresent', 'approvedBy', 'approvedAt',
+      'effectivePeriod', 'supersedesReleaseId',
+    ],
+    fhirProfileRegistries: [
+      'fhirVersion', 'identifierSystems', 'capabilityStatementUri',
+      'mappingReleaseId', 'status',
     ],
   };
 

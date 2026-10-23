@@ -1,31 +1,49 @@
 const IdentifierNamespaceRegistryModel = require('../models/IdentifierNamespaceRegistry');
+const { PROFILE_COLLECTION } = require('./interoperabilityMappingRelease.service');
 const logger = require('../utils/logger');
 
-// RF011 AC3, RNF024 C2, RULE-036 (#1322): the stored IdentifierNamespaceRegistry
-// rows (/api/identifier-namespaces) and the registry the FHIR validator's
-// identifier.system check reads at import validation.
+// RF011 AC2/AC3, RNF024 C1/C2, RULE-036 (#1322): the stored
+// IdentifierNamespaceRegistry rows (/api/identifier-namespaces) and the
+// registry the FHIR validator's identifier.system and meta.profile checks
+// read at import validation.
 const COLLECTION = 'identifierNamespaceRegistries';
 
 const isNonEmptyString = (value) => typeof value === 'string' && value.trim() !== '';
 
-// The base registry plus every stored namespace row. No filtering here: the
-// validator's buildConformanceSets re-runs IdentifierNamespaceRegistry.create
-// on each row and keeps a systemUri only while its [start, end) holds now, so
-// a refused or expired row stays ignored. Fails closed: without a readable
-// store the base answers, and the empty base refuses every system.
-async function loadConformanceRegistry(db, { base = require('../resources/fhir/conformance-registry') } = {}) {
-  if (!db || typeof db.collection !== 'function') return base;
+// One collection's stored rows, or null when the read throws or answers a
+// non-array.
+async function readRows(db, collectionName, label) {
   let rows;
   try {
-    rows = await db.collection(COLLECTION).find({}).toArray();
+    rows = await db.collection(collectionName).find({}).toArray();
   } catch (error) {
-    logger.warn('IdentifierNamespaceRegistry indisponível; validação FHIR usa o registro base:', error.message);
-    return base;
+    logger.warn(`${label} indisponível; validação FHIR usa o registro base:`, error.message);
+    return null;
   }
-  if (!Array.isArray(rows)) return base;
+  if (!Array.isArray(rows)) {
+    logger.warn(`${label} indisponível; validação FHIR usa o registro base: a leitura não retornou uma lista`);
+    return null;
+  }
+  return rows;
+}
+
+// The base registry plus every stored namespace row and every stored
+// FHIRProfileRegistry row (/api/fhir-profiles, RF011 AC2). No filtering here:
+// the validator's buildConformanceSets re-runs IdentifierNamespaceRegistry.create
+// on each namespace row and keeps a systemUri only while its [start, end)
+// holds now, and keeps a profile row only while FHIRProfileRegistry.validate
+// accepts it with status approved or active, so a refused, expired or draft
+// row stays ignored. Each part fails closed on its own: a part whose store is
+// unreadable keeps the base rows for that part, and the empty base refuses
+// every profile and every system.
+async function loadConformanceRegistry(db, { base = require('../resources/fhir/conformance-registry') } = {}) {
+  if (!db || typeof db.collection !== 'function') return base;
+  const namespaces = await readRows(db, COLLECTION, 'IdentifierNamespaceRegistry');
+  const profiles = await readRows(db, PROFILE_COLLECTION, 'FHIRProfileRegistry');
+  if (!namespaces && !profiles) return base;
   return {
-    profiles: base.profiles,
-    namespaces: [...base.namespaces, ...rows],
+    profiles: profiles ? [...base.profiles, ...profiles] : base.profiles,
+    namespaces: namespaces ? [...base.namespaces, ...namespaces] : base.namespaces,
     approvedAuthorities: base.approvedAuthorities,
   };
 }
