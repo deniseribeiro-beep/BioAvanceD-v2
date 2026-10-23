@@ -352,3 +352,33 @@ describe('evaluateGovernanceEvidence', () => {
     expect(changed.governanceRuleSet().checksum).not.toBe(rcsService.governanceRuleSet().checksum);
   });
 });
+
+describe('matrixMappingRelease (RF018 AC4, #1320)', () => {
+  const { RcsCertificationService } = rcsService;
+
+  it('checksums the release as a stable sha256, equal across instances on the same data', () => {
+    const release = rcsService.matrixMappingRelease();
+    expect(release).toMatchObject({
+      sprecMappingReleaseId: referenceData.matrixMapping.sprec_mapping_release_id,
+      sprecVersion: 'SPREC-2.0',
+      mappingVersion: '1.0.0',
+      compatibilityStatus: 'current_baseline',
+      status: 'active',
+    });
+    expect(release.checksum).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(new RcsCertificationService(referenceData).matrixMappingRelease()).toEqual(release);
+  });
+
+  it('gives another checksum when one rule term changes', () => {
+    const rules = referenceData.matrixMapping.rules.map((rule, index) => (
+      index === 0 ? { ...rule, contains_any: [...rule.contains_any.slice(1), 'lymph'] } : rule
+    ));
+    const changed = new RcsCertificationService({ ...referenceData, matrixMapping: { ...referenceData.matrixMapping, rules } });
+    expect(changed.matrixMappingRelease().checksum).not.toBe(rcsService.matrixMappingRelease().checksum);
+  });
+
+  it('leaves the governance rule-set checksum as it was before the release', () => {
+    expect(rcsService.governanceRuleSet().checksum)
+      .toBe('sha256:0aa3cb01efdf45f4e1d08809ba30ffad1386f56c982a5cf07088d1f26c2b52d5');
+  });
+});

@@ -268,3 +268,100 @@ describe('RcsCertificationService constants', () => {
     expect(Array.isArray(AXES.solid)).toBe(true);
   });
 });
+
+describe('RcsCertificationService matrix mapping release (RF018 AC4, #1320)', () => {
+  const { RcsCertificationService, AXES } = rcsCertificationService;
+  const referenceData = require('../../src/services/rcs-reference-data');
+  const releaseId = referenceData.matrixMapping.sprec_mapping_release_id;
+
+  // The base rule the release replaces, kept verbatim so the release is
+  // proven to classify every input as it did.
+  const normalizeString = (value) => String(value ?? '').trim();
+  function legacyDetectMatrixType(payload = {}, sprec = {}) {
+    const explicit = normalizeString(payload.matrix_type || payload.matrixType || sprec.matrix_type).toLowerCase();
+    if (explicit === 'fluid' || explicit === 'solid') return explicit;
+
+    const sampleText = normalizeString(payload.sampleType || payload.sampleOrigin).toLowerCase();
+    if (sampleText.includes('plasma') || sampleText.includes('serum') || sampleText.includes('blood') || sampleText.includes('urine')) {
+      return 'fluid';
+    }
+    if (sampleText.includes('tissue') || sampleText.includes('tumor') || sampleText.includes('solid')) {
+      return 'solid';
+    }
+
+    if (sprec.fixationType || sprec.fixationTime || sprec.warmIschemia || sprec.coldIschemia) return 'solid';
+    return null;
+  }
+
+  it('classifies every catalog description as the unversioned base rule did', () => {
+    const descriptions = Object.keys(AXES).flatMap((matrix) => referenceData.catalogs[matrix].map((entry) => entry.description));
+    const sprecs = [{}, { fixationType: 'FRZ' }, { coldIschemia: 'B' }, { matrix_type: 'solid' }];
+    let compared = 0;
+    for (const description of [...descriptions, '']) {
+      for (const textKey of ['sampleType', 'sampleOrigin']) {
+        for (const matrixType of [undefined, 'fluid', 'SOLID', 'liquid']) {
+          for (const sprec of sprecs) {
+            const payload = { [textKey]: description, matrix_type: matrixType };
+            expect(rcsCertificationService.detectMatrixType(payload, sprec)).toBe(legacyDetectMatrixType(payload, sprec));
+            compared += 1;
+          }
+        }
+      }
+    }
+    expect(compared).toBeGreaterThan(1000);
+  });
+
+  it('resolves serum text by the fluid-sample-text rule of the release', () => {
+    expect(rcsCertificationService.resolveMatrix({ sampleType: 'Serum sample' })).toEqual({
+      matrix: 'fluid', resolvedBy: 'mapping', matrixMappingReleaseId: releaseId, ruleId: 'fluid-sample-text',
+    });
+  });
+
+  it('resolves fixation data by the solid-sprec-axes rule of the release', () => {
+    expect(rcsCertificationService.resolveMatrix({}, { fixationType: 'FFPE' })).toEqual({
+      matrix: 'solid', resolvedBy: 'mapping', matrixMappingReleaseId: releaseId, ruleId: 'solid-sprec-axes',
+    });
+  });
+
+  it('gives an explicit matrix a null release id', () => {
+    expect(rcsCertificationService.resolveMatrix({ matrix_type: 'fluid' })).toEqual({
+      matrix: 'fluid', resolvedBy: 'explicit', matrixMappingReleaseId: null, ruleId: null,
+    });
+  });
+
+  it('resolves nothing for an input no rule matches', () => {
+    expect(rcsCertificationService.resolveMatrix({})).toEqual({
+      matrix: null, resolvedBy: null, matrixMappingReleaseId: null, ruleId: null,
+    });
+  });
+
+  it('resolves nothing by a rule whose source is unknown', () => {
+    const rules = referenceData.matrixMapping.rules.map((rule) => ({ ...rule, source: 'free_text_guess' }));
+    const service = new RcsCertificationService({ ...referenceData, matrixMapping: { ...referenceData.matrixMapping, rules } });
+    expect(service.resolveMatrix({ sampleType: 'plasma' }, { fixationType: 'FFPE' }).matrix).toBeNull();
+  });
+
+  it('gives no release when the data carries no matrix mapping', () => {
+    const service = new RcsCertificationService({ ...referenceData, matrixMapping: undefined });
+    expect(service.matrixMappingRelease()).toBeNull();
+    expect(service.matrixResolution({ sampleType: 'plasma' }).matrix).toBeNull();
+  });
+
+  it('freezes the terms and fields of each release rule', () => {
+    const [fluidText, , solidAxes] = referenceData.matrixMapping.rules;
+    expect(Object.isFrozen(fluidText.contains_any)).toBe(true);
+    expect(Object.isFrozen(solidAxes.fields_any)).toBe(true);
+  });
+
+  it('codes the material from the resolved matrix catalog', () => {
+    expect(rcsCertificationService.matrixResolution({ sampleType: 'plasma', sprec: { sampleType: 'PL1' } }).materialTypeCode).toEqual({
+      systemUri: 'urn:bioavanced:sprec-2.0:type-of-sample', code: 'PL1', version: 'SPREC-2.0', display: 'Plasma, single spun',
+    });
+  });
+
+  it('codes no material that is outside the resolved matrix catalog', () => {
+    const resolution = rcsCertificationService.matrixResolution({ matrix_type: 'fluid', sprec: { sampleType: 'TIS' } });
+    expect(resolution.matrix).toBe('fluid');
+    expect(resolution.materialTypeCode).toBeNull();
+  });
+});

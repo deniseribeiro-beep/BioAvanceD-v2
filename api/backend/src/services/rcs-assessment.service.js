@@ -36,11 +36,17 @@ async function recordAssessment(db, specimenId, certificationResult) {
       snapshotId: rcsInputSnapshotId,
       evaluatedAt: now,
     });
+    // RF018 AC4 (#1320): the material and mapping release are kept only when the
+    // resolution's matrix is this result's matrix.
+    const resolution = rcsCertificationService.matrixResolution(certificationResult.rcs_input);
+    const resolved = resolution.matrix === certificationResult.matrix_type;
     snapshot = RcsInputSnapshotModel.capture({
       rcsInputSnapshotId,
       rcsAssessmentId,
       specimenId: String(specimenId || '').trim(),
       matrix: certificationResult.matrix_type,
+      materialTypeCode: resolved ? resolution.materialTypeCode : null,
+      matrixMappingReleaseId: resolved ? resolution.matrixMappingReleaseId : null,
       sprecVersion: certificationResult.calculation_trace?.sprec_version ?? null,
       governanceEvidenceId: governanceEvidenceSnapshotId,
       capturedAt: now,

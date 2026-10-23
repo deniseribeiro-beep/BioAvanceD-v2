@@ -1,0 +1,14 @@
+{
+  "model_code": "RCS-GOV-1.0",
+  "sprec_version": "SPREC-2.0",
+  "sprec_mapping_release_id": "938f8bfc-4593-4e6e-ba60-86a4f3c0d8a2",
+  "mapping_version": "1.0.0",
+  "compatibility_status": "current_baseline",
+  "status": "active",
+  "material_type_system": "urn:bioavanced:sprec-2.0:type-of-sample",
+  "rules": [
+    { "rule_id": "fluid-sample-text", "matrix_type": "fluid", "source": "sample_text", "contains_any": ["plasma", "serum", "blood", "urine"] },
+    { "rule_id": "solid-sample-text", "matrix_type": "solid", "source": "sample_text", "contains_any": ["tissue", "tumor", "solid"] },
+    { "rule_id": "solid-sprec-axes", "matrix_type": "solid", "source": "sprec_axis_present", "fields_any": ["fixationType", "fixationTime", "warmIschemia", "coldIschemia"] }
+  ]
+}

@@ -381,6 +381,32 @@ describe('RcsInputSnapshotModel.capture', () => {
     expect(RcsInputSnapshotModel.capture({ ...base(), governanceEvidenceId: '' }).governanceEvidenceId).toBeNull();
   });
 
+  // RF018 AC4 (#1320): the matrix resolution's material and release.
+  const coding = { systemUri: 'urn:bioavanced:sprec-2.0:type-of-sample', code: 'PL1', version: 'SPREC-2.0', display: 'Plasma, single spun' };
+
+  it('keeps a given materialTypeCode Coding inside its hash', () => {
+    const coded = RcsInputSnapshotModel.capture({ ...base(), materialTypeCode: coding });
+    expect(coded.materialTypeCode).toEqual(coding);
+    expect(coded.snapshotHash).not.toBe(RcsInputSnapshotModel.capture(base()).snapshotHash);
+  });
+
+  it('keeps a given matrixMappingReleaseId inside its hash', () => {
+    const released = RcsInputSnapshotModel.capture({ ...base(), matrixMappingReleaseId: 'matrix-mapping-release-001' });
+    expect(released.matrixMappingReleaseId).toBe('matrix-mapping-release-001');
+    expect(released.snapshotHash).not.toBe(RcsInputSnapshotModel.capture(base()).snapshotHash);
+  });
+
+  it('drops a materialTypeCode that is not a Coding', () => {
+    expect(RcsInputSnapshotModel.capture({ ...base(), materialTypeCode: 'PL1' }).materialTypeCode).toBeNull();
+    expect(RcsInputSnapshotModel.capture({ ...base(), materialTypeCode: { code: 'PL1' } }).materialTypeCode).toBeNull();
+  });
+
+  it('drops the matrixMappingReleaseId beside a matrix that is neither fluid nor solid', () => {
+    const snapshot = RcsInputSnapshotModel.capture({ ...base(), matrix: 'unknown', matrixMappingReleaseId: 'matrix-mapping-release-001' });
+    expect(snapshot.matrix).toBeNull();
+    expect(snapshot.matrixMappingReleaseId).toBeNull();
+  });
+
   it('throws when inputs is not a plain object', () => {
     expect(() => RcsInputSnapshotModel.capture({ ...base(), inputs: ['matrix_type'] }))
       .toThrow('inputs deve ser um objeto para RCSInputSnapshot.capture');

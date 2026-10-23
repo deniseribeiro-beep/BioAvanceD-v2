@@ -118,8 +118,12 @@ class RcsInputSnapshotModel {
   // kept outside fieldsOf as RcsAssessment.create keeps assessedAt. A
   // reference no release or event backs yet is null or empty, never
   // fabricated, so a captured snapshot does not pass validate() until a later
-  // slice writes the mapping releases and axis inputs. governanceEvidenceId
-  // names the RCSGovernanceEvidenceSnapshot the write records, or is null.
+  // slice writes the SPREC mapping release and axis inputs. materialTypeCode
+  // and matrixMappingReleaseId (RF018 AC4) are written when the matrix
+  // resolution backs them: a Coding, and a release id only beside a fluid or
+  // solid matrix (see 2026-10-23-rcs-versioned-matrix-mapping.md).
+  // governanceEvidenceId names the RCSGovernanceEvidenceSnapshot the write
+  // records, or is null.
   // The hash covers every key but itself and the URI, `inputs` included, and
   // the URI names the snapshot by id and pins that hash, as ReadinessReport
   // does (see docs/decisions/2026-10-23-rcs-input-snapshot-write.md).
@@ -128,8 +132,9 @@ class RcsInputSnapshotModel {
     const fields = this.fieldsOf({
       ...data,
       matrix: MATRICES.includes(data.matrix) ? data.matrix : null,
-      materialTypeCode: null,
-      matrixMappingReleaseId: null,
+      materialTypeCode: isCoding(data.materialTypeCode) ? data.materialTypeCode : null,
+      matrixMappingReleaseId: isNonEmptyString(data.matrixMappingReleaseId) && MATRICES.includes(data.matrix)
+        ? data.matrixMappingReleaseId : null,
       preanalyticalAxes: [],
       governanceEvidenceId: isNonEmptyString(data.governanceEvidenceId) ? data.governanceEvidenceId : null,
       sprecVersion: data.sprecVersion ?? null,

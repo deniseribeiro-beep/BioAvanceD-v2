@@ -167,6 +167,33 @@ describe('rcs-assessment.service', () => {
       expect(await getInputSnapshotById(db, null)).toBeNull();
     });
 
+    // RF018 AC4 (#1320): the snapshot records the material and the matrix
+    // mapping release only when the resolution's matrix is the result's.
+    const plasmaCoding = { systemUri: 'urn:bioavanced:sprec-2.0:type-of-sample', code: 'PL1', version: 'SPREC-2.0', display: 'Plasma, single spun' };
+    const { matrixMapping } = require('../../../src/services/rcs-reference-data');
+
+    it('writes the PL1 Coding and a null release id for an explicit fluid matrix', async () => {
+      const db = createFakeDb();
+      await recordAssessment(db, 'SPEC-1', certified());
+      expect(db.collections.rcsInputSnapshots.docs[0]).toMatchObject({ materialTypeCode: plasmaCoding, matrixMappingReleaseId: null });
+    });
+
+    it('writes the release id for a matrix the mapping release resolves', async () => {
+      const db = createFakeDb();
+      const rcs_input = { sampleType: 'plasma', sprec: { sampleType: 'PL1' } };
+      await recordAssessment(db, 'SPEC-1', { ...certified(), matrix_type: 'fluid', rcs_input });
+      expect(db.collections.rcsInputSnapshots.docs[0]).toMatchObject({
+        materialTypeCode: plasmaCoding, matrixMappingReleaseId: matrixMapping.sprec_mapping_release_id,
+      });
+    });
+
+    it('writes neither when the resolution disagrees with the result matrix', async () => {
+      const db = createFakeDb();
+      const rcs_input = { sampleType: 'plasma', sprec: { sampleType: 'PL1' } };
+      await recordAssessment(db, 'SPEC-1', { ...certified(), matrix_type: 'solid', rcs_input });
+      expect(db.collections.rcsInputSnapshots.docs[0]).toMatchObject({ materialTypeCode: null, matrixMappingReleaseId: null });
+    });
+
     it('deletes the snapshot and rethrows when the assessment insert fails', async () => {
       const db = createFakeDb();
       db.collections.rcsAssessments.insertOne = async () => { throw new Error('write refused'); };

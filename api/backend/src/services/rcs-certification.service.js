@@ -311,19 +311,87 @@ class RcsCertificationService {
   }
 
   detectMatrixType(payload = {}, sprec = {}) {
+    return this.resolveMatrix(payload, sprec).matrix;
+  }
+
+  // RF018 AC4 (#1320): the matrix of an input, either stated by the payload
+  // or resolved by the versioned matrix mapping release, never by an
+  // unversioned rule. The release's rules are walked in order and the first
+  // match wins; `sprec` is the normalized SPREC certify passes.
+  // INFERENCE, not a citation: an explicit matrix is resolved by no release,
+  // so its matrixMappingReleaseId (V2E-0502) is null, never fabricated (see
+  // docs/decisions/2026-10-23-rcs-versioned-matrix-mapping.md).
+  resolveMatrix(payload = {}, sprec = {}) {
     const explicit = normalizeString(payload.matrix_type || payload.matrixType || sprec.matrix_type).toLowerCase();
-    if (explicit === 'fluid' || explicit === 'solid') return explicit;
+    if (explicit === 'fluid' || explicit === 'solid') {
+      return { matrix: explicit, resolvedBy: 'explicit', matrixMappingReleaseId: null, ruleId: null };
+    }
 
+    const mapping = this.data.matrixMapping;
     const sampleText = normalizeString(payload.sampleType || payload.sampleOrigin).toLowerCase();
-    if (sampleText.includes('plasma') || sampleText.includes('serum') || sampleText.includes('blood') || sampleText.includes('urine')) {
-      return 'fluid';
-    }
-    if (sampleText.includes('tissue') || sampleText.includes('tumor') || sampleText.includes('solid')) {
-      return 'solid';
-    }
+    const matches = (rule) => {
+      if (!Object.keys(AXES).includes(rule.matrix_type)) return false;
+      if (rule.source === 'sample_text') {
+        return Array.isArray(rule.contains_any) && rule.contains_any.some((term) => sampleText.includes(term));
+      }
+      if (rule.source === 'sprec_axis_present') {
+        return Array.isArray(rule.fields_any) && rule.fields_any.some((field) => sprec[field]);
+      }
+      return false;
+    };
+    const rule = (mapping?.rules ?? []).find(matches);
+    if (!rule) return { matrix: null, resolvedBy: null, matrixMappingReleaseId: null, ruleId: null };
+    return {
+      matrix: rule.matrix_type,
+      resolvedBy: 'mapping',
+      matrixMappingReleaseId: mapping.sprec_mapping_release_id,
+      ruleId: rule.rule_id,
+    };
+  }
 
-    if (sprec.fixationType || sprec.fixationTime || sprec.warmIschemia || sprec.coldIschemia) return 'solid';
-    return null;
+  // RF018 AC4 (#1320): the matrix, its resolution and its materialTypeCode
+  // (V2E-0500..0502) for the input certify() reads.
+  // INFERENCE, not a citation: materialTypeCode is the SPREC 2.0 type of
+  // sample, kept only when it is in the resolved matrix's seeded catalog.
+  matrixResolution(input = {}) {
+    const samplePayload = samplePayloadOf(input);
+    const sprec = this.normalizeSprec(samplePayload);
+    const resolution = this.resolveMatrix(samplePayload, sprec);
+    let materialTypeCode = null;
+    if (resolution.matrix && AXES[resolution.matrix]) {
+      const entry = (this.data.catalogs?.[resolution.matrix] ?? [])
+        .find((item) => item.axis_code === 'sampleType' && item.sprec_code === sprec.sampleType);
+      const systemUri = this.data.matrixMapping?.material_type_system;
+      if (entry && sprec.sampleType && systemUri) {
+        materialTypeCode = {
+          systemUri,
+          code: entry.sprec_code,
+          version: this.data.sprec_version,
+          display: entry.description,
+        };
+      }
+    }
+    return { ...resolution, materialTypeCode };
+  }
+
+  // RF018 AC4 (#1320): the matrix mapping release's identity and checksum,
+  // as canonical JSON over the seeded release. It is not part of
+  // governanceRuleSet(), whose checksum stays the gate's own. With no
+  // release in the data it is null, as matrixResolution resolves nothing.
+  matrixMappingRelease() {
+    if (!this.mappingRelease) {
+      const mapping = this.data.matrixMapping;
+      if (!mapping) return null;
+      this.mappingRelease = {
+        sprecMappingReleaseId: mapping.sprec_mapping_release_id,
+        sprecVersion: mapping.sprec_version,
+        mappingVersion: mapping.mapping_version,
+        compatibilityStatus: mapping.compatibility_status,
+        status: mapping.status,
+        checksum: `sha256:${crypto.createHash('sha256').update(canonicalJson(mapping)).digest('hex')}`,
+      };
+    }
+    return this.mappingRelease;
   }
 
   evaluateGovernance(payload = {}, sprec = {}, matrixType = null) {
