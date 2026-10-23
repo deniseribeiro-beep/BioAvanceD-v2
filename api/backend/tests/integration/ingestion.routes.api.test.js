@@ -47,6 +47,7 @@ function givenDb({ extraUsers = [], releaseStatus = 'active' } = {}) {
     datasets: createMatchingCollection([]),
     omicsQualifications: createMatchingCollection([]),
     assays: createMatchingCollection([]),
+    omicsRuns: createMatchingCollection([]),
     samples: createMatchingCollection([{ specimenId: 'SPC-1', specimenStatus: 'available' }]),
     protocols: createMatchingCollection([{ protocolId: 'protocol-1' }]),
     users: createMatchingCollection([{ _id: 'op-1' }]),
@@ -196,6 +197,44 @@ describe('POST /api/ingestion/records (RF029, #1318)', () => {
       action: 'INGESTION_REFUSED',
       severity: 'warning',
       resourceType: 'Assay',
+      payload: expect.objectContaining({ canonicalModelReleaseId: 'release-2.0.0', configurationReleaseId: 'cfg-release-7' }),
+    })]);
+  });
+
+  it('201: an accepted genomics OmicsRun is persisted in omicsRuns with one INGESTION_ACCEPTED row', async () => {
+    const stores = givenDb();
+
+    const res = await post({ entityType: 'OmicsRun', payload: { modality: 'genomics' }, provenance: PROVENANCE });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(res.body).toMatchObject({ success: true, status: 'accepted', entityType: 'OmicsRun' });
+    expect(stores.omicsRuns.docs.map((d) => [d.omicsRunId, d.modality])).toEqual([[res.body.entityId, 'genomics']]);
+    expect(stores.omicsRuns.insertOne).toHaveBeenCalledWith(expect.any(Object), { session: app.locals.db.session });
+    expect(ingestionAuditRows()).toEqual([expect.objectContaining({
+      action: 'INGESTION_ACCEPTED',
+      resourceType: 'OmicsRun',
+      resourceId: res.body.entityId,
+    })]);
+  });
+
+  it('422: a proteomics OmicsRun, an Object Storage entity, is refused INGESTION_STORE_UNSUPPORTED, writes nothing, and one INGESTION_REFUSED row (RF029 AC4)', async () => {
+    const stores = givenDb();
+
+    const res = await post({ entityType: 'OmicsRun', payload: { modality: 'proteomics' }, provenance: PROVENANCE, idempotencyKey: 'omics-run-key-1' });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(422);
+    expect(res.body).toMatchObject({ success: false, error: 'INGESTION_STORE_UNSUPPORTED' });
+    expect(res.body.details).toEqual([expect.stringContaining('proteomics')]);
+    expect(stores.omicsRuns.docs).toHaveLength(0);
+    expect(stores.ingestionQuarantineRecords.docs).toHaveLength(0);
+    expect(stores.ingestionIdempotencyKeys.docs).toHaveLength(0);
+    expect(stores.missingDataReasons.docs).toHaveLength(0);
+    expect(stores.dataQualityAssessments.docs).toHaveLength(0);
+    expect(ingestionAuditRows()).toEqual([expect.objectContaining({
+      action: 'INGESTION_REFUSED',
+      severity: 'warning',
+      status: 'warning',
+      resourceType: 'OmicsRun',
       payload: expect.objectContaining({ canonicalModelReleaseId: 'release-2.0.0', configurationReleaseId: 'cfg-release-7' }),
     })]);
   });

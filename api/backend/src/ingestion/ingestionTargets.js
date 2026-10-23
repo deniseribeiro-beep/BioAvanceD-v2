@@ -16,6 +16,12 @@
  * names the field #1182 organization scope reads
  * (docs/decisions/2026-10-23-ingestion-assay-target.md).
  *
+ * OmicsRun is the fifth, for its MongoDB modalities only. Its `otherStore`
+ * key names the field and the values whose v2 entity is stored elsewhere
+ * (TranscriptomicsRun, ProteomicsRun and MetabolomicsRun in Object
+ * Storage): such a record is refused, never written to MongoDB (RF029 AC4,
+ * docs/decisions/2026-10-23-ingestion-omics-run-target.md).
+ *
  * Telemetry and binaries are deliberately absent: they have their own stores
  * and paths, and a later slice names them in the refusal.
  */
@@ -53,6 +59,15 @@ const INGESTION_TARGETS = Object.freeze({
     missingnessFields: Object.freeze(['omicsDomain', 'assayBatchId', 'controls', 'reagentLotIds', 'equipmentIds']),
     validateReferences: require('../services/assayReferenceValidator').validateAssayReferences,
     scopeField: 'laboratoryId',
+  }),
+  OmicsRun: Object.freeze({
+    schemaId: 'canonical.v1.omicsRun',
+    store: 'mongodb',
+    collection: 'omicsRuns',
+    idField: 'omicsRunId',
+    model: require('../models/OmicsRun'),
+    missingnessFields: Object.freeze(['referenceAssembly', 'mixsChecklist', 'fileLinks']),
+    otherStore: Object.freeze({ field: 'modality', values: Object.freeze(['transcriptomics', 'proteomics', 'metabolomics']), store: 'objectStorage' }),
   }),
 });
 

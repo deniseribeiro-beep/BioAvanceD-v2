@@ -90,6 +90,18 @@ async function assertInOrganizationScope(target, payload, resolveOrganizationSco
   }
 }
 
+// RF029 AC4: a target with otherStore refuses a record whose field names a
+// value stored outside MongoDB, so it never lands in the wrong store. Any
+// other value, absent or unknown included, goes on to the model and schema.
+function assertStoredHere(target, entityType, payload) {
+  const { otherStore } = target;
+  if (!otherStore || !payload || typeof payload !== 'object' || Array.isArray(payload)) return;
+  const value = payload[otherStore.field];
+  if (typeof value === 'string' && otherStore.values.includes(value)) {
+    throw ingestionError(422, 'INGESTION_STORE_UNSUPPORTED', `${entityType} com ${otherStore.field} ${value} é armazenado em Object Storage, não suportado pela ingestão`);
+  }
+}
+
 // The status codes the master mount's reference check throws (#664, RF019).
 const REFERENCE_VIOLATION_CODES = { 404: 'REFERENCE_NOT_FOUND', 409: 'REFERENCE_NOT_USABLE' };
 
@@ -160,6 +172,7 @@ async function ingestAndPersist({
 async function ingestUnderRelease({ db, target, entityType, payload, provenance, idempotencyKey, missingDataReasons, actorId, outbox, releases, resolveOrganizationScope }) {
   // Before the replay, so an out-of-scope caller learns nothing of a key.
   await assertInOrganizationScope(target, payload, resolveOrganizationScope);
+  assertStoredHere(target, entityType, payload);
 
   const scope = { idempotencyKey, scope: entityType };
   if (idempotencyKey) {

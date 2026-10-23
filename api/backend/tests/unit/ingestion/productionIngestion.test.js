@@ -19,6 +19,7 @@ function seededDb({ release = { canonicalModelReleaseId: 'release-2.0.0', releas
     datasets: [],
     workflowRuns: [],
     omicsQualifications: [],
+    omicsRuns: [],
     ingestionQuarantineRecords: [],
     ingestionIdempotencyKeys: [],
     missingDataReasons: [],
@@ -301,6 +302,7 @@ describe('ingestion/productionIngestion ingestAndPersist (RF029, #1318)', () => 
     const db = seededDb();
     db.collections.datasets = createMatchingCollection([]);
     db.collections.omicsQualifications = createMatchingCollection([]);
+    db.collections.omicsRuns = createMatchingCollection([]);
     db.collections.graph_projection_outbox = createMatchingCollection([]);
     db.collections.missingDataReasons = createMatchingCollection([]);
     db.collections.dataQualityAssessments = createMatchingCollection([]);
@@ -699,5 +701,94 @@ describe('ingestion/productionIngestion ingestAndPersist (RF029, #1318)', () => 
     expect((await ingest(seededDb())).status).toBe('accepted');
     expect((await ingest(seededDb(), { resolveOrganizationScope: resolver })).status).toBe('accepted');
     expect(resolver).not.toHaveBeenCalled();
+  });
+
+  // #1318: OmicsRun, the fifth target, is ingested only for the modalities
+  // whose v2 entity is stored in MongoDB (dict-ENTIDADES GenomicsRun,
+  // MicrobiomeRun); the three Object Storage ones are refused (RF029 AC4).
+  const OMICS_RUN = { modality: 'genomics' };
+
+  it('32. an accepted genomics OmicsRun is inserted with a server uuid, three MissingDataReason rows and an assessment', async () => {
+    const db = seededDb();
+    const outbox = fakeOutbox();
+
+    const result = await ingest(db, { outbox, entityType: 'OmicsRun', payload: OMICS_RUN });
+
+    expect(result).toMatchObject({ status: 'accepted', entityType: 'OmicsRun', outboxEventId: 'evt-1' });
+    expect(result.entityId).toMatch(UUID);
+    expect(db.collections.omicsRuns.docs).toHaveLength(1);
+    expect(db.collections.omicsRuns.docs[0]).toMatchObject({
+      omicsRunId: result.entityId,
+      modality: 'genomics',
+      createdBy: 'Actor/u-1',
+      canonicalModelReleaseId: 'release-2.0.0',
+      configurationReleaseId: 'cfg-release-7',
+      referenceAssembly: null,
+      mixsChecklist: null,
+      fileLinks: [],
+    });
+    expect(outbox.appendEvent).toHaveBeenCalledTimes(1);
+    expect(outbox.appendEvent.mock.calls[0][1]).toMatchObject({ eventType: 'INGESTION_RECORD_PERSISTED', aggregateType: 'OmicsRun', aggregateId: result.entityId });
+    const rows = db.collections.missingDataReasons.docs;
+    expect(rows.map((r) => [r.fieldPath, r.reasonCode])).toEqual([['referenceAssembly', 'unknown'], ['mixsChecklist', 'unknown'], ['fileLinks', 'unknown']]);
+    expect(rows.every((r) => r.entityType === 'OmicsRun' && r.entityId === result.entityId && r.sourceEventId === 'evt-1')).toBe(true);
+    const docs = db.collections.dataQualityAssessments.docs;
+    expect(docs).toHaveLength(1);
+    expect(docs[0]).toMatchObject({ dataQualityAssessmentId: result.dataQualityAssessmentId, scopeId: `OmicsRun/${result.entityId}`, status: 'passed' });
+  });
+
+  it('33. a microbiome OmicsRun is accepted', async () => {
+    const db = seededDb();
+
+    const result = await ingest(db, { entityType: 'OmicsRun', payload: { modality: 'microbiome', mixsChecklist: 'MIMARKS-survey' } });
+
+    expect(result.status).toBe('accepted');
+    expect(db.collections.omicsRuns.docs.map((d) => [d.omicsRunId, d.modality, d.mixsChecklist])).toEqual([[result.entityId, 'microbiome', 'MIMARKS-survey']]);
+    expect(db.collections.missingDataReasons.docs.map((r) => r.fieldPath)).toEqual(['referenceAssembly', 'fileLinks']);
+  });
+
+  it.each(['transcriptomics', 'proteomics', 'metabolomics'])('34. a %s OmicsRun, an Object Storage entity, is refused 422 INGESTION_STORE_UNSUPPORTED and writes nothing (RF029 AC4)', async (modality) => {
+    const db = seededDb();
+    const outbox = fakeOutbox();
+
+    const error = await ingest(db, { outbox, entityType: 'OmicsRun', payload: { modality }, idempotencyKey: 'omics-run-key-1' }).catch((e) => e);
+
+    expect(error).toMatchObject({
+      statusCode: 422,
+      code: 'INGESTION_STORE_UNSUPPORTED',
+      details: [expect.stringContaining(modality)],
+      canonicalModelReleaseId: 'release-2.0.0',
+      configurationReleaseId: 'cfg-release-7',
+    });
+    for (const [name, collection] of Object.entries(db.collections)) {
+      if (name === 'canonicalModelReleases' || name === 'security_config') continue;
+      expect(collection.docs, name).toHaveLength(0);
+    }
+    expect(outbox.appendEvent).not.toHaveBeenCalled();
+  });
+
+  it('35. an OmicsRun with an unknown modality quarantines rather than being refused', async () => {
+    const db = seededDb();
+    const outbox = fakeOutbox();
+
+    const result = await ingest(db, { outbox, entityType: 'OmicsRun', payload: { modality: 'foo' } });
+
+    expect(result.status).toBe('quarantined');
+    expect(db.collections.ingestionQuarantineRecords.docs.map((r) => r.payload)).toEqual([{ modality: 'foo' }]);
+    expect(db.collections.omicsRuns.docs).toHaveLength(0);
+    expect(db.collections.missingDataReasons.docs).toHaveLength(0);
+    expect(outbox.appendEvent).not.toHaveBeenCalled();
+  });
+
+  it('36. without a session, a concurrent OmicsRun loser leaves no document, event, MissingDataReason or assessment of its own', async () => {
+    const { db, winner, loser, docs } = await raceOnOneKey({ entityType: 'OmicsRun', payload: OMICS_RUN, collection: 'omicsRuns' });
+
+    expect(winner.status).toBe('accepted');
+    expect(loser).toEqual({ status: 'idempotent_replay', outcome: 'accepted', entityType: 'OmicsRun', resultRef: winner.entityId, canonicalModelReleaseId: 'release-2.0.0', configurationReleaseId: 'cfg-release-7' });
+    expect(docs.map((d) => d.omicsRunId)).toEqual([winner.entityId]);
+    expect(db.collections.graph_projection_outbox.docs.map((e) => e.eventId)).toEqual([winner.outboxEventId]);
+    expect(db.collections.missingDataReasons.docs.map((r) => r.entityId)).toEqual([winner.entityId, winner.entityId, winner.entityId]);
+    expect(db.collections.dataQualityAssessments.docs.map((d) => [d.dataQualityAssessmentId, d.scopeId]))
+      .toEqual([[winner.dataQualityAssessmentId, `OmicsRun/${winner.entityId}`]]);
   });
 });

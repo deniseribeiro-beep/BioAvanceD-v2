@@ -229,6 +229,49 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
     expect(rows[0].resourceType).toBe('OmicsQualification');
   });
 
+  test('#1318: an accepted genomics OmicsRun is stored in omicsRuns with its outbox event, three MissingDataReason rows, and one INGESTION_ACCEPTED row', async ({ request }) => {
+    const sourceRecordId = `rf029-e2e-${Date.now()}-omics-run`;
+
+    const res = await ingest(request, { entityType: 'OmicsRun', payload: { modality: 'genomics' }, provenance: provenance(sourceRecordId) });
+
+    expect(res.status(), await res.text()).toBe(201);
+    const body = await res.json();
+    expect(body).toMatchObject({ success: true, status: 'accepted', entityType: 'OmicsRun' });
+
+    const stored = await findIngestedRecord('omicsRuns', 'omicsRunId', body.entityId);
+    expect(stored).toMatchObject({ modality: 'genomics', createdBy: `Actor/${admin.user._id}`, sourceRecordId, referenceAssembly: null, mixsChecklist: null, fileLinks: [] });
+
+    const events = await findOutboxEvents(body.entityId);
+    expect(events).toHaveLength(1);
+    expect(events[0].aggregateType).toBe('OmicsRun');
+
+    const reasons = await findMissingDataReasons('OmicsRun', body.entityId);
+    expect(reasons.map((row) => [row.fieldPath, row.reasonCode])).toEqual([['referenceAssembly', 'unknown'], ['mixsChecklist', 'unknown'], ['fileLinks', 'unknown']]);
+
+    const rows = await findIngestionAuditRows('INGESTION_ACCEPTED', body.entityId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].resourceType).toBe('OmicsRun');
+  });
+
+  test('#1318 RF029 AC4: a transcriptomics OmicsRun, an Object Storage entity, is refused 422 INGESTION_STORE_UNSUPPORTED, persists nothing, and writes one INGESTION_REFUSED row', async ({ request }) => {
+    const sourceRecordId = `rf029-e2e-${Date.now()}-omics-run-transcriptomics`;
+    // A delta, not an absolute: the stack's logs persist across runs.
+    const before = (await findIngestionRefusalRows('OmicsRun')).length;
+
+    const res = await ingest(request, { entityType: 'OmicsRun', payload: { modality: 'transcriptomics' }, provenance: provenance(sourceRecordId) });
+
+    expect(res.status(), await res.text()).toBe(422);
+    const body = await res.json();
+    expect(body.error).toBe('INGESTION_STORE_UNSUPPORTED');
+    expect(body.details).toEqual([expect.stringContaining('transcriptomics')]);
+    expect(await countIngestedBySourceRecordId('omicsRuns', sourceRecordId)).toBe(0);
+    expect(await countIngestedBySourceRecordId('ingestionQuarantineRecords', sourceRecordId)).toBe(0);
+
+    // The route awaits this row before it answers.
+    const rows = await findIngestionRefusalRows('OmicsRun');
+    expect(rows).toHaveLength(before + 1);
+  });
+
   // #1318: an Assay's references resolve against real records (#664), so its
   // specimen, study, protocol and laboratory are seeded as
   // specimen-quality-inventory.spec.ts seeds an assay's, by the admin, whose
