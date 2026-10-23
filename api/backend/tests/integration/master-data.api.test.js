@@ -223,7 +223,10 @@ describe('PUT /api/measurement-units/:id', () => {
   });
 
   it('updates item for admin', async () => {
-    const coll = createCollectionMock({ findOneAndUpdate: vi.fn().mockResolvedValue({ ...FAKE_ITEM, description: 'Updated' }) });
+    const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue({ ...FAKE_ITEM, unitID: 1, description: 'mL' }),
+      findOneAndUpdate: vi.fn().mockResolvedValue({ ...FAKE_ITEM, description: 'Updated' }),
+    });
     app.locals.db = createDbMock({ measurementUnits: coll, ...rbacCollectionsAdmin });
 
     const res = await request(app)
@@ -235,7 +238,10 @@ describe('PUT /api/measurement-units/:id', () => {
   });
 
   it('updates item by numeric (non-ObjectId) id, matching on idField', async () => {
-    const coll = createCollectionMock({ findOneAndUpdate: vi.fn().mockResolvedValue({ ...FAKE_ITEM, description: 'Updated' }) });
+    const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue({ ...FAKE_ITEM, unitID: 1, description: 'mL' }),
+      findOneAndUpdate: vi.fn().mockResolvedValue({ ...FAKE_ITEM, description: 'Updated' }),
+    });
     app.locals.db = createDbMock({ measurementUnits: coll, ...rbacCollectionsAdmin });
 
     const res = await request(app)
@@ -263,6 +269,7 @@ describe('PUT /api/measurement-units/:id', () => {
   // alongside the handler-owned `updatedAt`.
   it('#875 regression: PUT ignores non-model keys and the id/idField spoof attempt', async () => {
     const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue({ ...FAKE_ITEM, unitID: 1, description: 'mL' }),
       findOneAndUpdate: vi.fn().mockResolvedValue({ ...FAKE_ITEM, description: 'x' }),
     });
     app.locals.db = createDbMock({ measurementUnits: coll, ...rbacCollectionsAdmin });
@@ -478,6 +485,7 @@ describe('GET /api/sample-types/:id (canonical string business key)', () => {
 describe('PUT /api/sample-types/:id (canonical string business key)', () => {
   it('updates a seeded row found by its canonical string key ("PLASMA")', async () => {
     const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue({ id: 'PLASMA', description: 'Plasma' }),
       findOneAndUpdate: vi.fn().mockResolvedValue({ id: 'PLASMA', description: 'Plasma Updated' }),
     });
     app.locals.db = createDbMock({ sampleTypes: coll, ...rbacCollectionsAdmin });
@@ -499,6 +507,7 @@ describe('PUT /api/sample-types/:id (canonical string business key)', () => {
 
   it('regression: still updates a row found by its Mongo _id', async () => {
     const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue({ id: 'PLASMA', description: 'Plasma' }),
       findOneAndUpdate: vi.fn().mockResolvedValue({ id: 'PLASMA', description: 'Updated' }),
     });
     app.locals.db = createDbMock({ sampleTypes: coll, ...rbacCollectionsAdmin });
@@ -700,6 +709,7 @@ describe('unexpected-error (500) branches', () => {
 
   it('PUT /:id returns 500 when findOneAndUpdate throws', async () => {
     const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue({ ...FAKE_ITEM, unitID: 1, description: 'mL' }),
       findOneAndUpdate: vi.fn().mockRejectedValue(new Error('boom')),
     });
     app.locals.db = createDbMock({ measurementUnits: coll, ...rbacCollectionsAdmin });

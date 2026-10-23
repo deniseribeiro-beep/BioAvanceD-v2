@@ -147,6 +147,7 @@ describe('IdentifierNamespaceRegistry mount (/api/identifier-namespaces)', () =>
 
   it('a PUT of semanticVersion sets only allowlisted keys', async () => {
     const coll = namespacesWith([], {
+      findOne: vi.fn().mockResolvedValue({ identifierNamespaceRegistryId: 'ns-1', ...valid }),
       findOneAndUpdate: vi.fn().mockResolvedValue({ identifierNamespaceRegistryId: 'ns-1', ...valid, semanticVersion: '1.1.0' }),
     });
     app.locals.db = createDbMock({ identifierNamespaceRegistries: coll, ...rbacCollectionsAdmin });

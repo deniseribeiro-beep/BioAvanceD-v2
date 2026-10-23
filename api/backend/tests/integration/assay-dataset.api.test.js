@@ -206,7 +206,7 @@ describe('POST /api/datasets', () => {
 // Administrador (4) is global and bypasses org scope by design.
 describe('#1182: /api/assays is scoped on laboratoryId', () => {
   const rbacCollectionsScoped = buildRbacCollections([{ userAccountId: 'qa-3', accessType: 3, organizationId: 'org-mine' }]);
-  const MINE = { assayId: 'assay-mine', laboratoryId: 'org-mine', studyId: 'study-1' };
+  const MINE = { ...VALID_ASSAY_PAYLOAD, assayId: 'assay-mine', laboratoryId: 'org-mine' };
   const OTHER = { assayId: 'assay-other', laboratoryId: 'org-other', studyId: 'study-1' };
   const token = () => `Bearer ${makeToken('qa-3', 3)}`;
 

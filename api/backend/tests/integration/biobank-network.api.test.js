@@ -136,6 +136,7 @@ describe.each(MOUNTS)('$entity mount ($path)', ({ entity, path, collection, refe
 
   it(`updates ${nameField} alone without an organizations lookup`, async () => {
     const coll = createCollectionMock({
+      findOne: vi.fn().mockResolvedValue({ ...valid }),
       findOneAndUpdate: vi.fn().mockResolvedValue({ [nameField]: 'Novo nome' }),
     });
     const organizations = organizationsWith('org-1');

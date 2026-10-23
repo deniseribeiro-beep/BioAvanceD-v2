@@ -198,19 +198,18 @@ function createMasterDataRouter({ collectionName, idField, model, validateRefere
       const query = buildIdQuery(rawId);
       const body = req.body || {};
 
+      // #1400: the stored row is read for every mount, since the edit is
+      // validated merged into it below. The scope check runs only when the
+      // mount sets scopeField.
+      const existing = await findScopedRecord(req, res, query);
+      if (!existing) return undefined;
       if (scopeField) {
-        const existing = await findScopedRecord(req, res, query);
-        if (!existing) return undefined;
         // #1182: the check above is the SOURCE; this is the destination.
         assertOrganizationFieldNotReparented(req.organizationScope, existing[scopeField], body[scopeField], scopeField);
       }
 
       const changedImmutable = immutableFields.filter((key) => Object.prototype.hasOwnProperty.call(body, key));
       if (changedImmutable.length > 0) {
-        const existing = await db.collection(collectionName).findOne(query);
-        if (!existing) {
-          return res.status(404).json({ success: false, error: 'Registro não encontrado' });
-        }
         const refused = changedImmutable.filter(
           (key) => existing[key] !== undefined && existing[key] !== null && existing[key] !== body[key]
         );
@@ -230,6 +229,15 @@ function createMasterDataRouter({ collectionName, idField, model, validateRefere
         if (Object.prototype.hasOwnProperty.call(body, key)) {
           update[key] = body[key];
         }
+      }
+
+      // #1400: an edit must not store a record the model refuses at create,
+      // so the stored row merged with this update is validated as POST
+      // validates its payload. Only `update` is written; the merge is never $set.
+      const merged = { ...existing, ...update };
+      const mergedValidation = model.validate(merged);
+      if (!mergedValidation.isValid) {
+        return res.status(422).json({ success: false, error: 'Payload inválido', details: mergedValidation.errors });
       }
 
       // #1221: the create path's #664 reference check, over the keys this
