@@ -178,6 +178,8 @@ describe('createS3ObjectStore (RF007 AC2, RNF016 C4)', () => {
     const served = await store.putObject({ area: 'samples', ownerKey: 'o', body: Buffer.from('x') }).catch((e) => e);
     expect(served).toMatchObject({ code: 'OBJECT_STORE_UNAVAILABLE' });
     expect(served.message).toContain('500');
+    // An upload's catch answers this status rather than its default 400.
+    expect(served.statusCode).toBe(503);
     expect(served.message).not.toContain(SECRET);
 
     const rejecting = createS3ObjectStore({
@@ -206,6 +208,20 @@ describe('createS3ObjectStore (RF007 AC2, RNF016 C4)', () => {
 
     expect(() => createS3ObjectStore(config)).toThrow();
     expect(fake.log).toEqual([]);
+  });
+
+  it('refuses an endpoint with credentials without naming its password', () => {
+    const config = { endpoint: 'http://AKIAUSERINFO:s3cr3tUserinfo@127.0.0.1:9000', bucket: BUCKET, accessKeyId: ACCESS_KEY_ID, secretAccessKey: SECRET };
+
+    let thrown;
+    try {
+      createS3ObjectStore(config);
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown.message).not.toContain('s3cr3tUserinfo');
   });
 
   it('puts the object under the path prefix of an endpoint with a trailing slash', async () => {

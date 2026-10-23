@@ -5,6 +5,7 @@ const fs = require('fs');
 const hl7AuditService = require('../../src/services/hl7Audit.service');
 const integrityCheckService = require('../../src/services/integrityCheckService');
 const logger = require('../../src/utils/logger');
+const objectStorage = require('../../src/infrastructure/objectStorage');
 
 function sha256Hex(input) {
   return crypto.createHash('sha256').update(String(input)).digest('hex');
@@ -187,6 +188,60 @@ describe('hl7Audit.service', () => {
 
       expect(result.hl7).toEqual([]);
       expect(errorSpy).toHaveBeenCalledWith('Erro ao gerar hash do arquivo HL7:', 'plain string disk failure');
+    });
+
+    // RF007 AC2 (#1321): a row held only in the object store has no local path.
+    const storeOnlyDoc = {
+      _id: 'file-s3',
+      storagePath: null,
+      storageUri: 'objstore://samples/abc/sha256/' + 'a'.repeat(64),
+      storageObjectVersion: 'sha256:' + 'a'.repeat(64),
+      fileName: 'report.hl7',
+      fileSize: 42
+    };
+
+    it('hashes the object-store bytes of a store-only row, reading nothing from disk (RF007 AC2, #1321)', async () => {
+      const content = 'MSH|^~\\&|S3SENDER|...';
+      const getObject = vi.fn(async () => Buffer.from(content, 'utf8'));
+      vi.spyOn(objectStorage, 'getFileObjectStore').mockReturnValue({ getObject, putObject: vi.fn() });
+      const existsSpy = vi.spyOn(fs, 'existsSync');
+      const readSpy = vi.spyOn(fs, 'readFileSync');
+
+      const { db } = makeDb({ samples: [], sampleFiles: [storeOnlyDoc] });
+
+      const result = await hl7AuditService.buildHL7HashesForDate('2026-07-01', db);
+
+      expect(getObject).toHaveBeenCalledWith(storeOnlyDoc.storageUri);
+      expect(result.hl7).toHaveLength(1);
+      expect(result.hl7[0]).toMatchObject({ type: 'hl7', fileId: 'file-s3', hash: sha256Hex(content) });
+      expect(result.hl7[0].note).toBeUndefined();
+      expect(existsSpy).not.toHaveBeenCalled();
+      expect(readSpy).not.toHaveBeenCalled();
+    });
+
+    it('falls back to fileName|fileSize hashing when the object store answers ENOENT (RF007 AC2, #1321)', async () => {
+      const missing = Object.assign(new Error('missing'), { code: 'ENOENT' });
+      vi.spyOn(objectStorage, 'getFileObjectStore').mockReturnValue({ getObject: vi.fn(async () => { throw missing; }), putObject: vi.fn() });
+
+      const { db } = makeDb({ samples: [], sampleFiles: [storeOnlyDoc] });
+
+      const result = await hl7AuditService.buildHL7HashesForDate('2026-07-01', db);
+
+      expect(result.hl7).toHaveLength(1);
+      expect(result.hl7[0]).toMatchObject({ type: 'hl7', fileId: 'file-s3', hash: sha256Hex('report.hl7|42'), note: 'arquivo não encontrado em disco' });
+    });
+
+    it('logs and leaves out a store-only row whose object-store read fails otherwise (RF007 AC2, #1321)', async () => {
+      const outage = Object.assign(new Error('S3 down'), { code: 'OBJECT_STORE_UNAVAILABLE' });
+      vi.spyOn(objectStorage, 'getFileObjectStore').mockReturnValue({ getObject: vi.fn(async () => { throw outage; }), putObject: vi.fn() });
+      const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
+
+      const { db } = makeDb({ samples: [], sampleFiles: [storeOnlyDoc] });
+
+      const result = await hl7AuditService.buildHL7HashesForDate('2026-07-01', db);
+
+      expect(result.hl7).toEqual([]);
+      expect(errorSpy).toHaveBeenCalledWith('Erro ao gerar hash do arquivo HL7:', 'S3 down');
     });
 
     it('queries sample_files with the hl7 fileType/fileName filter and date range', async () => {

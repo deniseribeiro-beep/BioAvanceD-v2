@@ -50,7 +50,8 @@ function createS3ObjectStore({
 } = {}) {
   const endpointUrl = typeof endpoint === 'string' ? parseEndpoint(endpoint) : null;
   if (!endpointUrl) {
-    throw new Error(`endpoint do Object Storage S3 inválido: ${endpoint}.`);
+    // Names the cause only: an endpoint with userinfo would print its secret.
+    throw new Error('endpoint do Object Storage S3 inválido (protocolo, consulta, fragmento ou credenciais não permitidos).');
   }
   if (typeof bucket !== 'string' || !BUCKET_PATTERN.test(bucket)) {
     throw new Error(`bucket do Object Storage S3 inválido: ${bucket}.`);
@@ -64,9 +65,12 @@ function createS3ObjectStore({
     return `${base}/${bucket}/${area}/${owner}/sha256/${hex}`;
   }
 
-  // Never names the secret or the authorization header.
+  // Never names the secret or the authorization header. Status 503, so an
+  // upload's catch answers the outage rather than its default 400.
   function unavailable(uri, reason) {
-    return storeError('OBJECT_STORE_UNAVAILABLE', `Object Storage S3 indisponível para ${uri}: ${reason}.`);
+    const error = storeError('OBJECT_STORE_UNAVAILABLE', `Object Storage S3 indisponível para ${uri}: ${reason}.`);
+    error.statusCode = 503;
+    return error;
   }
 
   async function send(method, url, uri, { body, payloadHash, extraHeaders = {} }) {

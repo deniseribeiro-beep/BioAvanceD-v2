@@ -59,6 +59,37 @@ describe('SampleFileModel.validate', () => {
     expect(errors).toContain('storagePath é obrigatório e deve ser string');
   });
 
+  // RF007 AC2 / RNF016 C4 (#1321): an S3 row has no local path.
+  const storeOnly = {
+    storageUri: 'objstore://samples/abc/sha256/' + 'a'.repeat(64),
+    storageObjectVersion: 'sha256:' + 'a'.repeat(64)
+  };
+
+  it('accepts storagePath null on a row naming its storageUri and storageObjectVersion (#1321)', () => {
+    const { isValid, errors } = SampleFileModel.validate({ ...validData, ...storeOnly, storagePath: null });
+    expect(errors).toEqual([]);
+    expect(isValid).toBe(true);
+  });
+
+  it.each([
+    ['only the version', { storageObjectVersion: storeOnly.storageObjectVersion }],
+    ['only the uri', { storageUri: storeOnly.storageUri }],
+    ['neither', {}]
+  ])('rejects storagePath null with %s (#1321)', (_label, fields) => {
+    const { isValid, errors } = SampleFileModel.validate({ ...validData, ...fields, storagePath: null });
+    expect(isValid).toBe(false);
+    expect(errors).toContain('storagePath é obrigatório e deve ser string');
+  });
+
+  it.each([
+    ['an empty string', ''],
+    ['a number', 999]
+  ])('rejects storagePath as %s even with the uri and version set (#1321)', (_label, storagePath) => {
+    const { isValid, errors } = SampleFileModel.validate({ ...validData, ...storeOnly, storagePath });
+    expect(isValid).toBe(false);
+    expect(errors).toContain('storagePath é obrigatório e deve ser string');
+  });
+
   it('rejects missing fileSize (undefined)', () => {
     const { isValid, errors } = SampleFileModel.validate({ ...validData, fileSize: undefined });
     expect(isValid).toBe(false);

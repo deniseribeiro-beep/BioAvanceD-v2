@@ -24,8 +24,8 @@ By the coordinator for #1321, on 2026-10-23:
 
 ## Not decided here
 
-- **The driver selector** between the filesystem and S3 adapters, and **the S3 config keys in `env.js`.**
-- **`SampleFile.validate`'s required `storagePath`,** which an S3 row (`path: null`) cannot satisfy.
-- **The download existence checks** that test `fs.existsSync(storagePath)`.
+- **The driver selector** between the filesystem and S3 adapters, and **the S3 config keys in `env.js`.** Decided in `2026-10-23-data-file-object-store-driver.md`.
+- **`SampleFile.validate`'s required `storagePath`,** which an S3 row (`path: null`) cannot satisfy. Decided in `2026-10-23-data-file-object-store-driver.md`.
+- **The download existence checks** that test `fs.existsSync(storagePath)`. Decided in `2026-10-23-data-file-object-store-driver.md`.
 - **The MinIO compose service** and its end-to-end proof.
 - **Re-encrypting stored binaries after a key rotation.**

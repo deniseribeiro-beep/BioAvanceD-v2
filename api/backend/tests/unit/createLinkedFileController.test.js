@@ -723,6 +723,62 @@ describe('createLinkedFileController', () => {
       }));
     });
 
+    // RF007 AC2 (#1321): a row held only in the object store has no local
+    // path, so the disk check is skipped; /api/file-access answers its absence.
+    it('downloadFile redirects a store-only row (storagePath null, uri and version set) without checking the disk', async () => {
+      const controller = buildController({ fileCollectionName: 'datasetFiles' });
+      const fileId = new ObjectId();
+      const hex = 'e'.repeat(64);
+      const fileRecord = {
+        _id: fileId,
+        widgetId: 'w-1',
+        fileName: 'a.csv',
+        storagePath: null,
+        storageUri: `objstore://widgets/w-1/sha256/${hex}`,
+        storageObjectVersion: `sha256:${hex}`
+      };
+      const db = createDb({
+        widgets: { findOne: vi.fn().mockResolvedValue({ widgetId: 'w-1' }) },
+        datasetFiles: { findOne: vi.fn().mockResolvedValue(fileRecord) }
+      });
+      const existsSpy = vi.spyOn(fs, 'existsSync');
+      const req = { app: { locals: { db } }, params: { widgetId: 'w-1', fileID: fileId.toString() }, user: { userID: 'u-1' } };
+      const res = createRes();
+
+      await controller.downloadFile(req, res);
+
+      expect(existsSpy).not.toHaveBeenCalled();
+      expect(res.redirect).toHaveBeenCalledTimes(1);
+      const [status, location] = res.redirect.mock.calls[0];
+      expect(status).toBe(302);
+      const verified = verifyFileAccessToken(location.slice(location.indexOf('=') + 1));
+      expect(verified.ok).toBe(true);
+      expect(verified.payload).toMatchObject({ c: 'datasetFiles', f: fileId.toHexString(), u: fileRecord.storageUri });
+    });
+
+    it('downloadFile 404s a row with storagePath null and no object version', async () => {
+      const controller = buildController({ fileCollectionName: 'datasetFiles' });
+      const fileId = new ObjectId();
+      const fileRecord = {
+        _id: fileId,
+        widgetId: 'w-1',
+        fileName: 'a.csv',
+        storagePath: null,
+        storageUri: `objstore://widgets/w-1/sha256/${'e'.repeat(64)}`
+      };
+      const db = createDb({
+        widgets: { findOne: vi.fn().mockResolvedValue({ widgetId: 'w-1' }) },
+        datasetFiles: { findOne: vi.fn().mockResolvedValue(fileRecord) }
+      });
+      const req = { app: { locals: { db } }, params: { widgetId: 'w-1', fileID: fileId.toString() }, user: { userID: 'u-1' } };
+      const res = createRes();
+
+      await controller.downloadFile(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(404);
+      expect(res.redirect).not.toHaveBeenCalled();
+    });
+
     // RF007 AC6 (#1321): a delete is logical and the binary is kept.
     it('deleteFile logically deletes: sets deletedAt and deletedByAnonId, never unlinks, audits file_delete critical with logicalDelete', async () => {
       const controller = buildController();

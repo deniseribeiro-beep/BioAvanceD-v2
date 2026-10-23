@@ -818,6 +818,48 @@ describe('sample-file.controller', () => {
       expect(res.status).toHaveBeenCalledWith(404);
     });
 
+    // RF007 AC2 (#1321): a row held only in the object store has no local
+    // path, so the disk check is skipped; /api/file-access answers its absence.
+    it('redirects a store-only row (storagePath null, uri and version set) without checking the disk', async () => {
+      const fileID = new ObjectId().toString();
+      const specimenId = new ObjectId().toString();
+      const hex = 'e'.repeat(64);
+      const fileRecord = {
+        _id: new ObjectId(fileID), specimenId, storagePath: null, fileName: 'a.csv',
+        storageUri: `objstore://samples/s/sha256/${hex}`, storageObjectVersion: `sha256:${hex}`
+      };
+      const db = createDb({
+        sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) }
+      });
+      const req = { app: { locals: { db } }, params: { specimenId, fileID }, user: null };
+      const res = createRes();
+      const existsSpy = vi.spyOn(fs, 'existsSync');
+
+      await controller.downloadFile(req, res);
+
+      expect(existsSpy).not.toHaveBeenCalled();
+      expectFileAccessRedirect(res, fileID);
+    });
+
+    it('returns 404 for a row with storagePath null and no object version', async () => {
+      const fileID = new ObjectId().toString();
+      const specimenId = new ObjectId().toString();
+      const fileRecord = {
+        _id: new ObjectId(fileID), specimenId, storagePath: null, fileName: 'a.csv',
+        storageUri: `objstore://samples/s/sha256/${'e'.repeat(64)}`
+      };
+      const db = createDb({
+        sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) }
+      });
+      const req = { app: { locals: { db } }, params: { specimenId, fileID }, user: null };
+      const res = createRes();
+
+      await controller.downloadFile(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(404);
+      expect(res.redirect).not.toHaveBeenCalled();
+    });
+
     // #625: an existing sample outside the caller's organization scope
     // 403s before the file is served.
     it('returns 403 when the sample belongs to a different organization', async () => {
@@ -2377,6 +2419,23 @@ describe('sample-file.controller', () => {
       expect(body.data.linkedEntityRefs).toEqual([specimenRef]);
       expect(body.data.mimeType).toBe('text/csv');
       expect(body.data.ownerId).toBe('USR-SYSTEM');
+    });
+
+    // RF007 AC2 / RNF016 C4 (#1321): an S3 store returns no local path.
+    it('uploadFile through a store that returns path null answers 201 and inserts storagePath null', async () => {
+      const { db, sample, insertOne } = linkDb();
+      const hex = 'e'.repeat(64);
+      const stored = { uri: `objstore://samples/s/sha256/${hex}`, version: `sha256:${hex}`, path: null };
+      vi.spyOn(objectStorage, 'getFileObjectStore').mockReturnValue({ putObject: vi.fn().mockResolvedValue(stored) });
+      const res = createRes();
+
+      await controller.uploadFile(linkReq(db, sample, {}), res);
+
+      expect(res.status).toHaveBeenCalledWith(201);
+      const record = insertOne.mock.calls[0][0];
+      expect(record.storagePath).toBeNull();
+      expect(record.storageUri).toBe(stored.uri);
+      expect(record.storageObjectVersion).toBe(stored.version);
     });
 
     it('uploadFile with a found studyId records the specimen, then the study', async () => {

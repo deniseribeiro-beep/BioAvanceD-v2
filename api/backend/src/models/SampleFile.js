@@ -49,7 +49,13 @@ class SampleFileModel {
       errors.push('fileType é obrigatório e deve ser string');
     }
 
-    if (!data.storagePath || typeof data.storagePath !== 'string') {
+    // RF007 AC2 / RNF016 C4 (#1321): an S3 row has no local file, so its
+    // storagePath is null; that is accepted only when the row names its
+    // object by storageUri and storageObjectVersion.
+    const storeOnly = (data.storagePath === null || data.storagePath === undefined)
+      && typeof data.storageObjectVersion === 'string' && data.storageObjectVersion.length > 0
+      && typeof data.storageUri === 'string' && data.storageUri.length > 0;
+    if (!storeOnly && (!data.storagePath || typeof data.storagePath !== 'string')) {
       errors.push('storagePath é obrigatório e deve ser string');
     }
 
@@ -124,7 +130,7 @@ class SampleFileModel {
       fileFormat: data.fileFormat || SampleFileModel.getFileFormatFromType(data.fileType), // dict-02 ELM-0319 -- MIME/EDAM
       mimeType: data.mimeType || null, // V2E-0471 - tipo MIME canônico da extensão (#1321)
       fileSize: data.fileSize, // Tamanho em bytes
-      storagePath: data.storagePath, // Caminho no sistema de arquivos (não exposto ao frontend)
+      storagePath: data.storagePath, // Caminho no sistema de arquivos (não exposto ao frontend); null numa linha do Object Storage S3 (#1321)
       storageUri: data.storageUri || null, // RF007 - URI estável de Object Storage
       storageObjectVersion: data.storageObjectVersion || null, // V2E-0472 - versão do objeto (#1321)
       malwareScan: data.malwareScan || null, // RNF029 C4 (#1321)

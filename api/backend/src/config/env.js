@@ -157,6 +157,14 @@ module.exports = {
   STORAGE_DIR: process.env.STORAGE_DIR,
   // #1321 (RNF029 C4): DataFile malware scanner; unset or "none" records not-available.
   MALWARE_SCAN_DRIVER: process.env.MALWARE_SCAN_DRIVER,
+  // #1321 (RF007 AC2, RNF016 C4): DataFile object store; unset or "filesystem" keeps STORAGE_BASE.
+  OBJECT_STORE_DRIVER: process.env.OBJECT_STORE_DRIVER,
+  OBJECT_STORE_S3_ENDPOINT: process.env.OBJECT_STORE_S3_ENDPOINT,
+  OBJECT_STORE_S3_BUCKET: process.env.OBJECT_STORE_S3_BUCKET,
+  OBJECT_STORE_S3_REGION: process.env.OBJECT_STORE_S3_REGION,
+  OBJECT_STORE_S3_ACCESS_KEY_ID: process.env.OBJECT_STORE_S3_ACCESS_KEY_ID,
+  OBJECT_STORE_S3_SECRET_ACCESS_KEY: process.env.OBJECT_STORE_S3_SECRET_ACCESS_KEY,
+  OBJECT_STORE_S3_TIMEOUT_MS: process.env.OBJECT_STORE_S3_TIMEOUT_MS,
   BACKUP_CRON: process.env.BACKUP_CRON,
   BACKUP_RETENTION_DAYS: process.env.BACKUP_RETENTION_DAYS,
   // #749: read by scheduler.service.js#startRetentionSweepSchedule since it

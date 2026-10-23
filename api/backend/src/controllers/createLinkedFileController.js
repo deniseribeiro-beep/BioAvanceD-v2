@@ -424,7 +424,12 @@ function createLinkedFileController(opts) {
       if (!linked) return;
       const { fileRecord } = linked;
 
-      if (!fs.existsSync(fileRecord.storagePath)) {
+      // RF007 AC2 (#1321): a row held only in the object store has no local
+      // path; /api/file-access answers its absence with 404.
+      const storeOnly = (fileRecord.storagePath === null || fileRecord.storagePath === undefined)
+        && typeof fileRecord.storageObjectVersion === 'string' && fileRecord.storageObjectVersion.length > 0
+        && typeof fileRecord.storageUri === 'string' && fileRecord.storageUri.length > 0;
+      if (!storeOnly && !fs.existsSync(fileRecord.storagePath)) {
         logger.error(`Arquivo não encontrado no sistema de arquivos: ${fileRecord.storagePath}`);
         return res.status(404).json({ success: false, error: 'Arquivo não encontrado no sistema de arquivos' });
       }
