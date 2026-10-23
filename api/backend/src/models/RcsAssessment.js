@@ -30,6 +30,12 @@ class RcsAssessmentModel {
       inputSnapshotId: data.inputSnapshotId ?? null,
       inputSnapshotUri: data.inputSnapshotUri ?? null,
       inputSnapshotHash: data.inputSnapshotHash ?? null,
+      // RF018 AC10 and AC11 (#1320): the rule package and environment the
+      // result was computed with, and its justifications.
+      rulePackageVersion: data.rulePackageVersion ?? null,
+      rulePackageChecksum: data.rulePackageChecksum ?? null,
+      executionEnvironment: data.executionEnvironment ?? null,
+      justifications: Array.isArray(data.justifications) ? data.justifications : [],
     };
   }
 

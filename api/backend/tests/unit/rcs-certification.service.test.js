@@ -431,3 +431,44 @@ describe('sprecMappingRelease (RF018 AC1, #1320)', () => {
       .toBe('sha256:d5749ff8cc4a834c7042b6d283b3634bbb3c1a856c4a15a278d786a7391d904e');
   });
 });
+
+describe('rulePackage (RF018 AC10, #1320)', () => {
+  const { RcsCertificationService } = rcsService;
+  const checksumWith = (data) => new RcsCertificationService({ ...referenceData, ...data }).rulePackage().checksum;
+
+  it('checksums the package as a stable sha256 named by the model code, equal across instances on the same data', () => {
+    const rulePackage = rcsService.rulePackage();
+    expect(rulePackage).toEqual({ version: 'RCS-GOV-1.0', checksum: expect.stringMatching(/^sha256:[a-f0-9]{64}$/) });
+    expect(rcsService.rulePackage()).toBe(rulePackage);
+    expect(new RcsCertificationService(referenceData).rulePackage()).toEqual(rulePackage);
+  });
+
+  it('gives another checksum when one grade threshold changes', () => {
+    const thresholds = referenceData.thresholds.map((item, i) => (i === 0 ? { ...item, min_inclusive: item.min_inclusive + 1 } : item));
+    expect(checksumWith({ thresholds })).not.toBe(rcsService.rulePackage().checksum);
+  });
+
+  it('gives another checksum when one weight changes', () => {
+    const weights = referenceData.weights.map((item, i) => (i === 0 ? { ...item, weight: Number(item.weight) + 1 } : item));
+    expect(checksumWith({ weights })).not.toBe(rcsService.rulePackage().checksum);
+  });
+
+  it('gives another checksum when a governance rule description changes', () => {
+    const governanceRules = referenceData.governanceRules.map((rule, index) => (
+      index === 0 ? { ...rule, description: `${rule.description} (changed)` } : rule
+    ));
+    expect(checksumWith({ governanceRules })).not.toBe(rcsService.rulePackage().checksum);
+  });
+
+  it('is null with no SPREC or matrix mapping release in the data', () => {
+    const { sprecMapping, matrixMapping, ...withoutReleases } = referenceData;
+    expect(new RcsCertificationService({ ...withoutReleases, matrixMapping }).rulePackage()).toBeNull();
+    expect(new RcsCertificationService({ ...withoutReleases, sprecMapping }).rulePackage()).toBeNull();
+  });
+});
+
+describe('RCS_SCOPE_STATEMENT (RF018 AC11, #1320)', () => {
+  it('states that the RCS is not clinical validity, assay quality or a universal measure', () => {
+    expect(rcsService.RCS_SCOPE_STATEMENT).toBe('RCS qualifies the pre-analytical history of this specimen for the stated use context; it is not clinical validity, analytical assay quality or a universal quality measure.');
+  });
+});

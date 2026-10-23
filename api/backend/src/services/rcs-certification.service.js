@@ -24,6 +24,10 @@ const UNKNOWN_CODES = new Set(['X', 'XXX', 'UNKNOWN', 'UNK']);
 const OTHER_CODES = new Set(['Z', 'ZZZ', 'OTHER']);
 const SPREC_CODE_PATTERN = /^[A-Z0-9]{1,12}$/;
 
+// RF018 AC11 (#1320): what an RCS result is and is not, stated on every
+// assessment's justifications.
+const RCS_SCOPE_STATEMENT = 'RCS qualifies the pre-analytical history of this specimen for the stated use context; it is not clinical validity, analytical assay quality or a universal quality measure.';
+
 const GOVERNANCE_RULE_BY_REASON = Object.freeze({
   'Missing or invalid matrix type': 'MISSING_CRITICAL_METADATA',
   'Missing critical metadata': 'MISSING_CRITICAL_METADATA',
@@ -492,6 +496,34 @@ class RcsCertificationService {
     return this.sprecRelease;
   }
 
+  // RF018 AC10 (#1320): the rule package certify() runs, as the version and
+  // checksum an assessment preserves. The checksum composes the gate's rule
+  // set, the matrix mapping release and the SPREC mapping release checksums
+  // with the grade thresholds, the one table none of them covers, so it
+  // changes whenever any rule certify reads changes. The version is the
+  // seed's own model code, as governanceRuleSet()'s is, not a SemVer. With
+  // either release absent from the data it is null.
+  rulePackage() {
+    if (!this.rcsRulePackage) {
+      const matrixRelease = this.matrixMappingRelease();
+      const sprecRelease = this.sprecMappingRelease();
+      if (!matrixRelease || !sprecRelease) return null;
+      const rules = {
+        model_code: this.data.model_code,
+        sprec_version: this.data.sprec_version,
+        governance_rule_set: this.governanceRuleSet().checksum,
+        matrix_mapping_release: matrixRelease.checksum,
+        sprec_mapping_release: sprecRelease.checksum,
+        thresholds: this.data.thresholds,
+      };
+      this.rcsRulePackage = {
+        version: this.data.model_code,
+        checksum: `sha256:${crypto.createHash('sha256').update(canonicalJson(rules)).digest('hex')}`,
+      };
+    }
+    return this.rcsRulePackage;
+  }
+
   evaluateGovernance(payload = {}, sprec = {}, matrixType = null) {
     const reasons = [];
     const trace = [];
@@ -678,3 +710,4 @@ module.exports = new RcsCertificationService();
 module.exports.RcsCertificationService = RcsCertificationService;
 module.exports.referenceData = referenceData;
 module.exports.AXES = AXES;
+module.exports.RCS_SCOPE_STATEMENT = RCS_SCOPE_STATEMENT;

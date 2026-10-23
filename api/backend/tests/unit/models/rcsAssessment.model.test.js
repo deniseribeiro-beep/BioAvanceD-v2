@@ -125,3 +125,23 @@ describe('RcsAssessmentModel axis results and route reasons', () => {
     expect(fields).toMatchObject({ rcsAxisResults: [], routeReasons: [] });
   });
 });
+
+// RF018 AC10 and AC11 (#1320): the rule package, the execution environment
+// and the justifications.
+describe('RcsAssessmentModel rule package, environment and justifications', () => {
+  it('defaults the package and environment to null and the justifications to an empty array', () => {
+    expect(RcsAssessmentModel.fieldsOf({})).toMatchObject({
+      rulePackageVersion: null, rulePackageChecksum: null, executionEnvironment: null, justifications: [],
+    });
+  });
+
+  it('keeps the given values and turns non-array justifications into an empty array', () => {
+    const executionEnvironment = { runtime: 'node', packageVersion: 'RCS-GOV-1.0' };
+    const fields = RcsAssessmentModel.fieldsOf({
+      rulePackageVersion: 'RCS-GOV-1.0', rulePackageChecksum: 'sha256:abc', executionEnvironment, justifications: ['x'],
+    });
+    expect(fields).toMatchObject({ rulePackageVersion: 'RCS-GOV-1.0', rulePackageChecksum: 'sha256:abc', justifications: ['x'] });
+    expect(fields.executionEnvironment).toBe(executionEnvironment);
+    expect(RcsAssessmentModel.fieldsOf({ justifications: 'x' }).justifications).toEqual([]);
+  });
+});

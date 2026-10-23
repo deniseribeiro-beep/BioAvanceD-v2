@@ -132,8 +132,9 @@ const ENTITY_TARGETS = {
 // Drift measured against catalog.1.3.0.json, 2026-09-02, and re-measured
 // against catalog.2.0.0.json, 2026-10-07, via loadCanonicalDictionary() and
 // each ENTITY_TARGETS entry above. The v2.0.0 re-measure changed only
-// RCSAssessment: 16 V2E elements absent, which name the issue that builds
-// them (TODO(#1320)), and two former extras (finalGrade, gradeRoute) that
+// RCSAssessment: V2E elements absent, which name the issue that builds
+// them (TODO(#1320)) and which the RCS v4 slices have since emitted in
+// part, and two former extras (finalGrade, gradeRoute) that
 // v2.0.0 made canonical. Every entry carries a one-line note of what the
 // drift is, populated from what running the diff actually produced, and
 // either says it is deliberate or names the issue that fixes it in a
@@ -223,11 +224,7 @@ const KNOWN_DRIFT = {
       { elementId: 'V2E-0442', field: 'assayFamily', note: 'TODO(#1320): 1..1 Core -- held as qualificationContext.assayFamily, as the v2.0.0 synthetic example (biobankExample.rcsAssessments[0]) nests it; null until a request carries a context.' },
       { elementId: 'V2E-0443', field: 'workflowProtocolId', note: 'TODO(#1320): 1..1 Core -- held as qualificationContext.workflowProtocolId, as the v2.0.0 synthetic example (biobankExample.rcsAssessments[0]) nests it; null until a request carries a context.' },
       { elementId: 'V2E-0444', field: 'workflowProtocolVersion', note: 'TODO(#1320): 1..1 Core -- held as qualificationContext.workflowProtocolVersion, as the v2.0.0 synthetic example (biobankExample.rcsAssessments[0]) nests it; null until a request carries a context.' },
-      { elementId: 'V2E-0445', field: 'rulePackageVersion', note: 'TODO(#1320): 1..1 Core -- v2.0.0 element (added), not emitted; RCS v4 builds it.' },
-      { elementId: 'V2E-0446', field: 'rulePackageChecksum', note: 'TODO(#1320): 1..1 Core -- v2.0.0 element (added), not emitted; RCS v4 builds it.' },
       { elementId: 'V2E-0448', field: 'sprecVersion', note: 'TODO(#1320): 1..1 Core -- v2.0.0 element (added), not emitted; RCS v4 builds it.' },
-      { elementId: 'V2E-0449', field: 'executionEnvironment', note: 'TODO(#1320): 1..1 Core -- v2.0.0 element (added), not emitted; RCS v4 builds it.' },
-      { elementId: 'V2E-0450', field: 'justifications', note: 'TODO(#1320): 1..* Core -- v2.0.0 element (added), not emitted; RCS v4 builds it.' },
       { elementId: 'V2E-0539', field: 'preanalyticalPenalty', note: 'TODO(#1320): 0..1 Conditional -- v2.0.0 element (added), not emitted; RCS v4 builds it.' },
       { elementId: 'V2E-0540', field: 'score', note: 'TODO(#1320): 0..1 Conditional -- v2.0.0 element (added), not emitted; RCS v4 builds it.' }
     ],

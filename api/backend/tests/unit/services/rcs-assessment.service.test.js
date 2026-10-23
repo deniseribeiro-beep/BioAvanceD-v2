@@ -444,6 +444,62 @@ describe('rcs-assessment.service', () => {
     });
   });
 
+  // RF018 AC10 and AC11 (#1320): the rule package and execution environment
+  // are kept only when the package reproduces the stored result; every
+  // assessment's justifications state that the RCS is not clinical validity.
+  describe('recordAssessment rule package, environment and justifications', () => {
+    const rcsCertificationService = require('../../../src/services/rcs-certification.service');
+    const { RCS_SCOPE_STATEMENT } = rcsCertificationService;
+    const env = require('../../../src/config/env');
+    const sprec = {
+      sampleType: 'PL1', primaryContainer: 'SST', preCentrifugation: 'A', centrifugation: 'A',
+      secondCentrifugation: 'A', postCentrifugationDelay: 'A', longTermStorage: 'A',
+    };
+    const certified = (sprecEdit = {}) => {
+      const rcsInput = rcsCertificationService.readInput({ matrix_type: 'fluid', sprec: { ...sprec, ...sprecEdit } });
+      return { ...rcsCertificationService.certify(rcsInput), rcs_input: rcsInput };
+    };
+    const noPackage = { rulePackageVersion: null, rulePackageChecksum: null, executionEnvironment: null };
+
+    it('writes the package version, checksum and environment of a reproduced result', async () => {
+      const rulePackage = rcsCertificationService.rulePackage();
+      const assessment = await recordAssessment(createFakeDb(), 'SPEC-1', certified());
+      expect(assessment.rulePackageVersion).toBe(rulePackage.version);
+      expect(assessment.rulePackageChecksum).toBe(rulePackage.checksum);
+      expect(assessment.executionEnvironment).toEqual({
+        runtime: 'node', runtimeVersion: process.version, environment: env.NODE_ENV, packageVersion: rulePackage.version,
+      });
+    });
+
+    it('writes no package or environment when the result is not reproduced', async () => {
+      const assessment = await recordAssessment(createFakeDb(), 'SPEC-1', { ...certified(), rcs_score: 1 });
+      expect(assessment).toMatchObject(noPackage);
+    });
+
+    it('writes no package or environment for a result with no rcs_input', async () => {
+      const { rcs_input: _input, ...result } = certified();
+      const assessment = await recordAssessment(createFakeDb(), 'SPEC-1', result);
+      expect(assessment).toMatchObject(noPackage);
+    });
+
+    it('justifies every assessment with its route reasons and then the scope statement', async () => {
+      const failure = certified({ preCentrifugation: 'X' });
+      const { rcs_input: _input, ...withoutInput } = certified();
+      for (const result of [certified(), failure, { ...certified(), rcs_score: 1 }, withoutInput, { rcs_score: 70 }]) {
+        const assessment = await recordAssessment(createFakeDb(), 'SPEC-1', result);
+        expect(assessment.justifications).toEqual([...assessment.routeReasons, RCS_SCOPE_STATEMENT]);
+        expect(assessment.justifications.slice(0, -1)).toEqual(rcsCertificationService.routeReasons(result));
+      }
+      expect((await recordAssessment(createFakeDb(), 'SPEC-1', failure)).justifications[0]).toBe('governance failure');
+    });
+
+    it('keeps the trace of the result unchanged', async () => {
+      const result = certified();
+      const assessment = await recordAssessment(createFakeDb(), 'SPEC-1', result);
+      expect(assessment.calculationTrace).toEqual(result.calculation_trace);
+    });
+  });
+
   describe('getAssessmentsForSpecimen', () => {
     it('scopes results to the requested specimenId only', async () => {
       const db = createFakeDb();

@@ -5,6 +5,8 @@ const RcsAssessmentModel = require('../models/RcsAssessment');
 const RcsInputSnapshotModel = require('../models/RcsInputSnapshot');
 const RcsGovernanceEvidenceSnapshotModel = require('../models/RcsGovernanceEvidenceSnapshot');
 const rcsCertificationService = require('./rcs-certification.service');
+const { RCS_SCOPE_STATEMENT } = require('./rcs-certification.service');
+const env = require('../config/env');
 const { canonicalJson } = require('../models/ConfigurationRelease');
 
 const isPlainObject = (value) => value !== null && typeof value === 'object'
@@ -22,15 +24,14 @@ const reproducedKeysOf = (result) => canonicalJson(Object.fromEntries(
   REPRODUCED_KEYS.map((key) => [key, result?.[key] ?? null]),
 ));
 
-// INFERENCE, not a citation: the release is named only on positive evidence
-// that its tables give the stored result, i.e. certify() over the captured
-// input reproduces it; otherwise null, never fabricated (see
-// docs/decisions/2026-10-23-rcs-sprec-mapping-release.md).
-function sprecMappingReleaseFor(certificationResult) {
-  const release = rcsCertificationService.sprecMappingRelease();
-  if (!release) return null;
+// INFERENCE, not a citation: a release or rule package is named only on
+// positive evidence that its tables give the stored result, i.e. certify()
+// over the captured input reproduces it; otherwise null, never fabricated
+// (see docs/decisions/2026-10-23-rcs-sprec-mapping-release.md and
+// docs/decisions/2026-10-23-rcs-rule-package-and-scope.md).
+function reproduces(certificationResult) {
   const recomputed = rcsCertificationService.certify(certificationResult.rcs_input);
-  return reproducedKeysOf(recomputed) === reproducedKeysOf(certificationResult) ? release : null;
+  return reproducedKeysOf(recomputed) === reproducedKeysOf(certificationResult);
 }
 
 /**
@@ -54,13 +55,27 @@ async function recordAssessment(db, specimenId, certificationResult) {
   // RF018 AC6 (#1320): each axis's resolution, kept only when the input's
   // matrix is this result's, as the AC4 resolution check below.
   let rcsAxisResults = [];
+  // RF018 AC10 (#1320): the rule package and the environment it ran in, kept
+  // only when the package reproduces this result.
+  let rulePackage = null;
+  let executionEnvironment = null;
   if (isPlainObject(certificationResult?.rcs_input)) {
     const axisResults = rcsCertificationService.evaluateAxisResults(certificationResult.rcs_input);
     if (axisResults.matrix === certificationResult.matrix_type) rcsAxisResults = axisResults.axes;
+    const reproduced = reproduces(certificationResult);
     // RF018 AC1 (#1320): the SPREC mapping release, kept only when its tables
     // reproduce this result; otherwise no axis names a release the snapshot
     // does not.
-    const sprecRelease = sprecMappingReleaseFor(certificationResult);
+    const sprecRelease = reproduced ? rcsCertificationService.sprecMappingRelease() : null;
+    if (reproduced) rulePackage = rcsCertificationService.rulePackage();
+    if (rulePackage) {
+      executionEnvironment = {
+        runtime: 'node',
+        runtimeVersion: process.version,
+        environment: env.NODE_ENV ?? null,
+        packageVersion: rulePackage.version,
+      };
+    }
     if (!sprecRelease) {
       rcsAxisResults = rcsAxisResults.map((axis) => ({ ...axis, severityMappingReleaseId: null }));
     }
@@ -90,14 +105,21 @@ async function recordAssessment(db, specimenId, certificationResult) {
       inputs: certificationResult.rcs_input,
     });
   }
+  // RF018 AC8 (#1320): the reasons for the result's route.
+  const routeReasons = rcsCertificationService.routeReasons(certificationResult);
   const assessment = RcsAssessmentModel.fromCertificationResult(specimenId, certificationResult, {
     rcsAssessmentId,
     inputSnapshotId: snapshot?.rcsInputSnapshotId ?? null,
     inputSnapshotUri: snapshot?.snapshotUri ?? null,
     inputSnapshotHash: snapshot?.snapshotHash ?? null,
-    // RF018 AC8 (#1320): the reasons for the result's route.
-    routeReasons: rcsCertificationService.routeReasons(certificationResult),
+    routeReasons,
     rcsAxisResults,
+    rulePackageVersion: rulePackage?.version ?? null,
+    rulePackageChecksum: rulePackage?.checksum ?? null,
+    executionEnvironment,
+    // RF018 AC10 and AC11 (#1320): the route's reasons, then the statement
+    // that the RCS is not clinical validity, so the list is never empty.
+    justifications: [...routeReasons, RCS_SCOPE_STATEMENT],
   });
 
   // No snapshot or evidence is left without the assessment it was captured
