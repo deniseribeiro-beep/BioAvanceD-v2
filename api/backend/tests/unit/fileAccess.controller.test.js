@@ -279,6 +279,43 @@ describe('fileAccess.controller serveFileByAccessToken', () => {
     expect(res.send).not.toHaveBeenCalled();
   });
 
+  // #1398: a name Node refuses in a header value no longer answers 500.
+  it('serves a non-ASCII file name with an ASCII filename fallback and an RFC 5987 filename* that Node accepts', async () => {
+    const plaintext = Buffer.from('cjk name');
+    const row = { ...(await encryptedObjectRow(plaintext)), fileName: '数据 "a".csv' };
+    const { db } = createDb(row);
+    const { token } = issueFileAccessToken({ collection: 'datasetFiles', fileRecord: row, userId: 'u-1' });
+    const res = createRes();
+    res.setHeader = vi.fn((name, value) => require('http').validateHeaderValue(name, value));
+
+    await serveFileByAccessToken(requestFor(db, token), res);
+
+    expect(res.status).not.toHaveBeenCalled();
+    expect(res.setHeader).toHaveBeenCalledWith(
+      'Content-Disposition',
+      'attachment; filename="__ _a_.csv"; filename*=UTF-8\'\'%E6%95%B0%E6%8D%AE%20%22a%22.csv'
+    );
+    expect(res.send).toHaveBeenCalledWith(plaintext);
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({ action: 'file_access_token_used' }));
+  });
+
+  it('answers 500 and audits no success when setting a header throws', async () => {
+    const row = await encryptedObjectRow(Buffer.from('x'));
+    const { db } = createDb(row);
+    const { token } = issueFileAccessToken({ collection: 'datasetFiles', fileRecord: row, userId: 'u-1' });
+    const res = createRes();
+    res.setHeader = vi.fn((name) => {
+      if (name === 'Content-Disposition') throw new Error('invalid header');
+    });
+
+    await serveFileByAccessToken(requestFor(db, token), res);
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.send).not.toHaveBeenCalled();
+    expect(logSpy).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'file_access_token_used' }));
+  });
+
   it('answers 503 when the database is unavailable', async () => {
     const res = createRes();
     await serveFileByAccessToken({ app: { locals: {} }, query: {} }, res);

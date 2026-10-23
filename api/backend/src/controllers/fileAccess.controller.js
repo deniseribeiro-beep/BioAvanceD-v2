@@ -42,6 +42,18 @@ function refuse(db, req, reason, verified) {
   });
 }
 
+// #1398: Node refuses a header value outside Latin-1, so a CJK file name
+// would throw from setHeader. The filename parameter carries an ASCII
+// fallback and filename* the UTF-8 name (RFC 5987, whose attr-char
+// excludes ' ( ) *); a printable-ASCII name keeps the plain header.
+function contentDispositionFor(fileName) {
+  const name = String(fileName).toWellFormed();
+  const fallback = name.replace(/[^\x20-\x7e]|["\\]/g, '_');
+  if (fallback === name) return `attachment; filename="${name}"`;
+  const ext = encodeURIComponent(name).replace(/['()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+  return `attachment; filename="${fallback}"; filename*=UTF-8''${ext}`;
+}
+
 async function readStoredBytes(row) {
   if (row.storageObjectVersion) {
     try {
@@ -105,6 +117,9 @@ async function serveFileByAccessToken(req, res) {
       }
     }
 
+    // Headers first: one that throws answers 500 before a success row exists.
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Disposition', contentDispositionFor(row.fileName));
     await audit(db, req, {
       action: 'file_access_token_used',
       status: 'success',
@@ -115,8 +130,6 @@ async function serveFileByAccessToken(req, res) {
       payload: { tokenId: payload.j }
     });
 
-    res.setHeader('Cache-Control', 'no-store');
-    res.setHeader('Content-Disposition', `attachment; filename="${row.fileName}"`);
     return res.send(outputBuffer);
   } catch (error) {
     logger.error('Erro ao servir arquivo por token de acesso:', error.message);
