@@ -7,6 +7,7 @@ const ReadinessReportModel = require('../../../src/models/ReadinessReport');
 const { CANONICAL_COLLECTIONS } = require('../../../src/config/collections');
 const { CANONICAL_MODEL_RELEASE_ID, DEFERRED_P0_GATES } = require('../../../src/foundation/readiness');
 const { createFakeDb } = require('../foundation/helpers/fake-db');
+const rcsService = require('../../../src/services/rcs-certification.service');
 
 /**
  * RF022 (Requisitos v4.0.0) through the Foundation job's own entry point:
@@ -102,10 +103,11 @@ describe('Foundation job: apply', () => {
 
     expect(reportsOf(db)).toEqual([report]);
     expect(report).toMatchObject({ status: 'ready', blockers: [], foundationDataRunId: run.foundationDataRunId, canonicalModelReleaseId: CANONICAL_MODEL_RELEASE_ID, environment: 'test' });
-    const evaluated = ['version', 'schemas', 'reference-mechanisms', 'governance-registry', 'configuration', 'storage-constraints', 'zero-operational-data', 'zero-reference-data'];
+    const evaluated = ['version', 'schemas', 'reference-mechanisms', 'governance-registry', 'configuration', 'rcs', 'storage-constraints', 'zero-operational-data', 'zero-reference-data'];
     for (const name of evaluated) {
       expect(gateOf(report, name)).toMatchObject({ result: 'pass', p0: true });
     }
+    expect(gateOf(report, 'rcs').evidence.rulePackage.checksum).toBe(rcsService.rulePackage().checksum);
     for (const { gate } of DEFERRED_P0_GATES) {
       expect(gateOf(report, gate)).toMatchObject({ result: 'not_evaluated', p0: true });
     }
@@ -269,6 +271,7 @@ describe('Foundation job: the other modes', () => {
 
     expect(result.run).toMatchObject({ executionMode: 'validate', verifyResult: 'pass', applyResult: 'not_run' });
     expect(result.report.status).toBe('ready');
+    expect(gateOf(result.report, 'rcs')).toMatchObject({ result: 'pass', p0: true });
     expect(reportsOf(db)).toHaveLength(2);
   });
 

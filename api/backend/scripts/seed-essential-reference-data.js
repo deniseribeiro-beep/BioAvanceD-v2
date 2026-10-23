@@ -12,6 +12,7 @@ const canonicalDictionary = require('../src/reference-data/canonical-dictionary/
 const { CANONICAL_COLLECTIONS } = require('../src/config/collections');
 const { buildFoundationIndexes, verifyFoundationIndexes, INDEX_TARGETS } = require('../src/foundation/indexes');
 const { CANONICAL_MODEL_RELEASE_ID, MIGRATION_PLAN_ID, DEFERRED_P0_GATES } = require('../src/foundation/readiness');
+const { rcsReadinessGate } = require('../src/foundation/rcs-readiness');
 
 // The Foundation Data Pipeline's one-shot job (RF022, RNF031). It runs
 // before the API and workers (RF022 AC4, RNF014 C6) and, in one apply run,
@@ -301,6 +302,7 @@ async function runApply({ db, args, environment, deploymentId, selected, configu
     mechanismsGate(plan),
     await governanceGate(db),
     await configurationGate(db),
+    rcsReadinessGate(),
     ...indexGates(builds, missingIndexes),
     gate('zero-operational-data', createdOperational.length === 0, true, { before: operationalBefore, after: operationalAfter }),
     gate('zero-reference-data', populatedReferences.length === 0, true, { before: referencesBefore, after: referencesAfter }),
@@ -361,6 +363,7 @@ async function runVerify({ db, args, environment, deploymentId, selected }) {
     mechanismsGate(plan),
     await governanceGate(db),
     await configurationGate(db),
+    rcsReadinessGate(),
     ...indexGates(builds, missingIndexes),
   ];
   const passed = gateResults.every((g) => g.result !== 'fail');

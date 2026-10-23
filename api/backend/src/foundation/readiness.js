@@ -23,7 +23,6 @@ const DEFERRED_P0_GATES = [
   { gate: 'biobank-biorepository', phase: 'W6 · governance regime' },
   { gate: 'consent', phase: 'W6 · consent v4' },
   { gate: 'specimen', phase: 'W8 · specimen state model' },
-  { gate: 'rcs', phase: 'W10 · RCS v4' },
   { gate: 'identification', phase: 'W5 · PII hygiene' },
   { gate: 'persistence', phase: 'W7 · outbox v2' },
   { gate: 'fhir', phase: 'W10 · interoperability' },
