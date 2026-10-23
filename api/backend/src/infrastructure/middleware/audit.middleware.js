@@ -177,6 +177,7 @@ const ENTITY_MAP = {
   'access-policies': 'AccessPolicy',
   'access-requests': 'AccessRequest',
   'analysis-files': 'AnalysisFile',
+  'file-access': 'DataFile',
   'analysis-types': 'AnalysisType',
   'assays': 'Assay',
   'audit': 'AuditEvent',

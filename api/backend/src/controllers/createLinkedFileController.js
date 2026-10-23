@@ -5,12 +5,13 @@ const crypto = require('crypto');
 const { ObjectId } = require('mongodb');
 const logger = require('../utils/logger');
 const { getUserAnonId } = require('../utils/userAnonymization');
-const { encryptFileBuffer, decryptFileBuffer, computeChecksum, assertFileEncryptionConfigured } = require('../utils/fileCrypto');
+const { encryptFileBuffer, computeChecksum, assertFileEncryptionConfigured } = require('../utils/fileCrypto');
 const { STORAGE_BASE } = require('../config/uploadConfig');
 const { isMimeAllowedForExtension, checkFileSignature, canonicalMimeType } = require('../utils/uploadFormatPolicy');
 const { resolveLinkedEntityRefs } = require('../services/dataFileLinks.service');
 const { recordReplacement, discardVersion, resolveChangeReason } = require('../services/dataFileVersion.service');
 const objectStorage = require('../infrastructure/objectStorage');
+const { issueFileAccessToken } = require('../services/dataFileAccessToken.service');
 
 // #643 (RF007 AC#6/gate F3-G05): generalizes sample-file.controller.js's
 // upload/list/download/delete/replace + checksum/encryption/audit shape to
@@ -414,28 +415,30 @@ function createLinkedFileController(opts) {
         return res.status(404).json({ success: false, error: 'Arquivo não encontrado no sistema de arquivos' });
       }
 
+      // RNF029 C5 (#1321): the checks above passed, so the caller is
+      // redirected to a short-lived file access token URL for this one file.
+      const { token, tokenId, expiresAt } = issueFileAccessToken({
+        collection: fileCollectionName,
+        fileRecord,
+        userId: req.user && (req.user.userID || (req.user._id && String(req.user._id)))
+      });
+
       await logAudit(db, req, {
         action: 'file_download',
         resourceId: fileRecord._id.toString(),
         message: `Download de arquivo: ${fileRecord.fileName}`,
-        payload: { fileName: fileRecord.fileName, fileType: fileRecord.fileType, fileSize: fileRecord.fileSize, [parentIdField]: linked.parentIdValue }
+        payload: {
+          fileName: fileRecord.fileName,
+          fileType: fileRecord.fileType,
+          fileSize: fileRecord.fileSize,
+          [parentIdField]: linked.parentIdValue,
+          accessTokenId: tokenId,
+          accessTokenExpiresAt: expiresAt.toISOString()
+        }
       });
 
-      let outputBuffer;
-      if (fileRecord.encryptionAlgorithm) {
-        const ciphertext = fs.readFileSync(fileRecord.storagePath);
-        try {
-          outputBuffer = decryptFileBuffer(ciphertext, fileRecord);
-        } catch (decryptError) {
-          logger.error('Erro ao decifrar arquivo:', decryptError.message);
-          return res.status(500).json({ success: false, error: 'Erro ao fazer download do arquivo' });
-        }
-      } else {
-        outputBuffer = fs.readFileSync(fileRecord.storagePath);
-      }
-
-      res.setHeader('Content-Disposition', `attachment; filename="${fileRecord.fileName}"`);
-      return res.send(outputBuffer);
+      res.setHeader('Cache-Control', 'no-store');
+      return res.redirect(302, '/api/file-access?token=' + token);
     } catch (error) {
       logger.error('Erro ao fazer download de arquivo:', error.message);
       return res.status(500).json({ success: false, error: 'Erro ao fazer download de arquivo', message: error.message });

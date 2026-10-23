@@ -11,6 +11,7 @@ const path = require('path');
 const { ObjectId } = require('mongodb');
 const objectStorage = require('../../src/infrastructure/objectStorage');
 const { decryptFileBuffer } = require('../../src/utils/fileCrypto');
+const { verifyFileAccessToken } = require('../../src/services/dataFileAccessToken.service');
 // createLinkedFileController.js lazily requires auditLogger inside
 // logAudit(), which itself lazily requires log.service.js at call time --
 // with fs.readFileSync mocked (below), Node's own CJS loader can end up
@@ -32,6 +33,7 @@ function createRes() {
     json: vi.fn().mockReturnThis(),
     setHeader: vi.fn(),
     send: vi.fn(),
+    redirect: vi.fn(),
     headersSent: false
   };
 }
@@ -557,30 +559,49 @@ describe('createLinkedFileController', () => {
       expect(res.status).toHaveBeenCalledWith(404);
     });
 
-    it('downloadFile decrypts and sends the plaintext', async () => {
-      const controller = buildController();
+    // RNF029 C5 (#1321): a file access token names one of the three file
+    // collections, so this case wires the factory to datasetFiles.
+    it('downloadFile audits file_download with the token id and redirects to a file access token URL, sending no bytes', async () => {
+      const controller = buildController({ fileCollectionName: 'datasetFiles' });
       const fileId = new ObjectId();
       const fileRecord = {
         _id: fileId,
         widgetId: 'w-1',
         fileName: 'a.csv',
         storagePath: '/tmp/a.csv',
+        storageUri: 'objstore://widgets/w-1/sha256/' + 'e'.repeat(64),
         encryptionAlgorithm: null
       };
       const db = createDb({
         widgets: { findOne: vi.fn().mockResolvedValue({ widgetId: 'w-1' }) },
-        widgetFiles: { findOne: vi.fn().mockResolvedValue(fileRecord) }
+        datasetFiles: { findOne: vi.fn().mockResolvedValue(fileRecord) }
       });
       vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-      vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('plaintext'));
+      const readSpy = vi.spyOn(fs, 'readFileSync');
 
-      const req = { app: { locals: { db } }, params: { widgetId: 'w-1', fileID: fileId.toString() } };
+      const req = { app: { locals: { db } }, params: { widgetId: 'w-1', fileID: fileId.toString() }, user: { userID: 'u-1' } };
       const res = createRes();
 
       await controller.downloadFile(req, res);
 
-      expect(res.setHeader).toHaveBeenCalledWith('Content-Disposition', expect.stringContaining('a.csv'));
-      expect(res.send).toHaveBeenCalledWith(Buffer.from('plaintext'));
+      expect(readSpy).not.toHaveBeenCalledWith('/tmp/a.csv');
+      expect(res.send).not.toHaveBeenCalled();
+      expect(res.setHeader).toHaveBeenCalledWith('Cache-Control', 'no-store');
+      expect(res.redirect).toHaveBeenCalledTimes(1);
+      const [status, location] = res.redirect.mock.calls[0];
+      expect(status).toBe(302);
+      expect(location).toMatch(/^\/api\/file-access\?token=[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+      const verified = verifyFileAccessToken(location.slice(location.indexOf('=') + 1));
+      expect(verified.ok).toBe(true);
+      expect(verified.payload).toMatchObject({ c: 'datasetFiles', f: fileId.toHexString(), u: fileRecord.storageUri, s: 'u-1' });
+      expect(auditLogger.log).toHaveBeenCalledWith(expect.objectContaining({
+        action: 'file_download',
+        resourceType: 'WidgetFile',
+        payload: expect.objectContaining({
+          accessTokenId: verified.payload.j,
+          accessTokenExpiresAt: new Date(verified.payload.exp * 1000).toISOString()
+        })
+      }));
     });
 
     // RF007 AC6 (#1321): a delete is logical and the binary is kept.

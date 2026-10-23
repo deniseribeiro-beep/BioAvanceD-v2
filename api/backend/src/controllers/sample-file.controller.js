@@ -11,12 +11,13 @@ const { isSampleInOrganizationScope } = require('../services/sampleTenancy.servi
 // #643: extracted to a shared module so the Assay/Dataset scientific-file
 // linkage controllers reuse the exact same crypto path instead of a second
 // implementation -- see fileCrypto.js for the RF007/RNF029 rationale.
-const { encryptFileBuffer, decryptFileBuffer, computeChecksum, assertFileEncryptionConfigured } = require('../utils/fileCrypto');
+const { encryptFileBuffer, computeChecksum, assertFileEncryptionConfigured } = require('../utils/fileCrypto');
 const { STORAGE_BASE } = require('../config/uploadConfig');
 const { isMimeAllowedForExtension, checkFileSignature, canonicalMimeType } = require('../utils/uploadFormatPolicy');
 const { resolveLinkedEntityRefs } = require('../services/dataFileLinks.service');
 const { recordReplacement, discardVersion, resolveChangeReason } = require('../services/dataFileVersion.service');
 const objectStorage = require('../infrastructure/objectStorage');
+const { issueFileAccessToken } = require('../services/dataFileAccessToken.service');
 
 // RNF029 (#938, #1321): once the ciphertext is in the object store, the
 // plaintext multer staged is removed. A failed removal is logged, never
@@ -594,6 +595,16 @@ class SampleFileController {
         });
       }
 
+      // RNF029 C5 (#1321): the checks above passed, so the caller gets a
+      // short-lived file access token for this one file and is redirected to
+      // the URL that serves it. The token rides in the query string, which
+      // the audit trail records only as present.
+      const { token, tokenId, expiresAt } = issueFileAccessToken({
+        collection: 'sample_files',
+        fileRecord,
+        userId: req.user && (req.user.userID || (req.user._id && String(req.user._id)))
+      });
+
       // Registra log de download (LGPD)
       if (req.user) {
         const auditLogger = require('../utils/auditLogger');
@@ -609,7 +620,9 @@ class SampleFileController {
             fileName: fileRecord.fileName,
             fileType: fileRecord.fileType,
             fileSize: fileRecord.fileSize,
-            specimenId: specimenIdString
+            specimenId: specimenIdString,
+            accessTokenId: tokenId,
+            accessTokenExpiresAt: expiresAt.toISOString()
             // Não inclui dados sensíveis
           },
           req: req,
@@ -617,27 +630,8 @@ class SampleFileController {
         });
       }
 
-      // RNF029 - o conteúdo em disco é o ciphertext cifrado no upload;
-      // decifra antes de servir para que o download reproduza o
-      // plaintext original (round-trip prova a integridade do checksum).
-      let outputBuffer;
-      if (fileRecord.encryptionAlgorithm) {
-        const ciphertext = fs.readFileSync(fileRecord.storagePath);
-        try {
-          outputBuffer = decryptFileBuffer(ciphertext, fileRecord);
-        } catch (decryptError) {
-          logger.error('Erro ao decifrar arquivo:', decryptError.message);
-          return res.status(500).json({
-            success: false,
-            error: req.t ? req.t('sampleFiles.downloadError') : 'Erro ao fazer download do arquivo'
-          });
-        }
-      } else {
-        outputBuffer = fs.readFileSync(fileRecord.storagePath);
-      }
-
-      res.setHeader('Content-Disposition', `attachment; filename="${fileRecord.fileName}"`);
-      return res.send(outputBuffer);
+      res.setHeader('Cache-Control', 'no-store');
+      return res.redirect(302, '/api/file-access?token=' + token);
     } catch (error) {
       logger.error('Erro ao fazer download de arquivo:', error.message);
       return res.status(500).json({

@@ -9,6 +9,7 @@ const hl7Service = require('../../src/services/hl7.service');
 const auditLogger = require('../../src/utils/auditLogger');
 const objectStorage = require('../../src/infrastructure/objectStorage');
 const { decryptFileBuffer } = require('../../src/utils/fileCrypto');
+const { verifyFileAccessToken } = require('../../src/services/dataFileAccessToken.service');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -21,8 +22,26 @@ function createRes() {
     setHeader: vi.fn(),
     send: vi.fn(),
     download: vi.fn(),
+    redirect: vi.fn(),
     headersSent: false
   };
+}
+
+// RNF029 C5 (#1321): a download that passes its checks redirects to a
+// short-lived file access token URL for that one file, and sends no bytes.
+const FILE_ACCESS_LOCATION = /^\/api\/file-access\?token=[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
+function expectFileAccessRedirect(res, fileID) {
+  expect(res.send).not.toHaveBeenCalled();
+  expect(res.setHeader).toHaveBeenCalledWith('Cache-Control', 'no-store');
+  expect(res.redirect).toHaveBeenCalledTimes(1);
+  const [status, location] = res.redirect.mock.calls[0];
+  expect(status).toBe(302);
+  expect(location).toMatch(FILE_ACCESS_LOCATION);
+  const verified = verifyFileAccessToken(location.slice(location.indexOf('=') + 1));
+  expect(verified.ok).toBe(true);
+  expect(verified.payload.c).toBe('sample_files');
+  expect(verified.payload.f).toBe(fileID);
+  return verified.payload;
 }
 
 function createDb(collections = {}) {
@@ -839,15 +858,14 @@ describe('sample-file.controller', () => {
       };
       const res = createRes();
       vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-      vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('a.csv content'));
 
       await controller.downloadFile(req, res);
 
       expect(res.status).not.toHaveBeenCalledWith(403);
-      expect(res.send).toHaveBeenCalled();
+      expectFileAccessRedirect(res, fileID);
     });
 
-    it('happy path (unencrypted record): reads the stored plaintext and sends it via res.send', async () => {
+    it('happy path (unencrypted record): redirects to a file access token URL for this file without reading it', async () => {
       const fileID = new ObjectId().toString();
       const specimenId = new ObjectId().toString();
       const fileRecord = { _id: new ObjectId(fileID), specimenId, storagePath: '/x/a.csv', fileName: 'a.csv' };
@@ -857,16 +875,15 @@ describe('sample-file.controller', () => {
       const req = { app: { locals: { db } }, params: { specimenId, fileID }, user: null };
       const res = createRes();
       vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-      const plaintext = Buffer.from('a.csv content');
-      vi.spyOn(fs, 'readFileSync').mockReturnValue(plaintext);
+      const readSpy = vi.spyOn(fs, 'readFileSync');
 
       await controller.downloadFile(req, res);
 
-      expect(res.setHeader).toHaveBeenCalledWith('Content-Disposition', expect.stringContaining('a.csv'));
-      expect(res.send).toHaveBeenCalledWith(plaintext);
+      expect(readSpy).not.toHaveBeenCalledWith('/x/a.csv');
+      expectFileAccessRedirect(res, fileID);
     });
 
-    it('happy path (encrypted record, RNF029): decrypts the ciphertext on disk before sending it', async () => {
+    it('happy path (encrypted record, RNF029): audits file_download with the token id and redirects to the token URL', async () => {
       const fileID = new ObjectId().toString();
       const specimenId = new ObjectId().toString();
       const plaintext = Buffer.from('RNF029 round-trip content');
@@ -889,44 +906,32 @@ describe('sample-file.controller', () => {
       const db = createDb({
         sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) }
       });
-      const req = { app: { locals: { db } }, params: { specimenId, fileID }, user: { id: 'u1' } };
+      const req = { app: { locals: { db } }, params: { specimenId, fileID }, user: { userID: 'u1' } };
       const res = createRes();
       vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-      vi.spyOn(fs, 'readFileSync').mockReturnValue(ciphertext);
       const logSpy = vi.spyOn(auditLogger, 'log').mockResolvedValue(undefined);
       vi.spyOn(auditLogger, 'init').mockImplementation(() => {});
 
       await controller.downloadFile(req, res);
 
-      expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({ action: 'file_download' }));
-      expect(res.send).toHaveBeenCalledWith(plaintext);
+      const tokenPayload = expectFileAccessRedirect(res, fileID);
+      expect(tokenPayload.s).toBe('u1');
+      expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({
+        action: 'file_download',
+        resourceType: 'SampleFile',
+        payload: expect.objectContaining({
+          accessTokenId: tokenPayload.j,
+          accessTokenExpiresAt: new Date(tokenPayload.exp * 1000).toISOString()
+        })
+      }));
+      // The redirect carries the token; the audit row carries only its id.
+      const [, location] = res.redirect.mock.calls[0];
+      const { req: _req, ...recorded } = logSpy.mock.calls[0][0];
+      expect(JSON.stringify(recorded)).not.toContain(location.slice(location.indexOf('=') + 1).split('.')[1]);
     });
 
-    it('returns 500 when decryption fails (tampered/corrupt ciphertext)', async () => {
-      const fileID = new ObjectId().toString();
-      const specimenId = new ObjectId().toString();
-      const fileRecord = {
-        _id: new ObjectId(fileID),
-        specimenId,
-        storagePath: '/x/a.csv',
-        fileName: 'a.csv',
-        encryptionAlgorithm: 'aes-256-gcm',
-        encryptionKeyId: 'vitest-key-001',
-        encryptionIv: Buffer.alloc(12).toString('base64'),
-        encryptionTag: Buffer.alloc(16).toString('base64')
-      };
-      const db = createDb({
-        sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord) }
-      });
-      const req = { app: { locals: { db } }, params: { specimenId, fileID } };
-      const res = createRes();
-      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-      vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('not really valid ciphertext bytes!!'));
-
-      await controller.downloadFile(req, res);
-
-      expect(res.status).toHaveBeenCalledWith(500);
-    });
+    // The decrypt-failure case moved to fileAccess.controller.test.js: the
+    // download handler no longer reads or decrypts bytes (RNF029 C5, #1321).
 
     it('returns 500 when an unexpected error is thrown', async () => {
       const fileID = new ObjectId().toString();
@@ -2511,14 +2516,14 @@ describe('sample-file.controller', () => {
       await controller.downloadFile({ app: { locals: { db: db4 } }, params: { specimenId, fileID }, t }, res);
       expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'sampleFiles.fileNotFoundOnDisk' }));
 
+      // RNF029 C5 (#1321): past the on-disk check the handler reads no
+      // bytes, so a broken read can no longer fail it; it redirects.
       res = createRes();
       const db5 = createDb({ sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord2) } });
       vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-      vi.spyOn(fs, 'readFileSync').mockImplementation(() => {
-        throw new Error('read broke');
-      });
       await controller.downloadFile({ app: { locals: { db: db5 } }, params: { specimenId, fileID }, user: null, t }, res);
-      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'sampleFiles.downloadError' }));
+      expect(res.json).not.toHaveBeenCalled();
+      expectFileAccessRedirect(res, fileID);
 
       res = createRes();
       const db6 = createDb({ sample_files: { findOne: vi.fn().mockResolvedValue(fileRecord2) } });
@@ -2631,12 +2636,10 @@ describe('sample-file.controller', () => {
       const req = { app: { locals: { db } }, params: { specimenId: 'sample-42', fileID }, user: null };
       const res = createRes();
       vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-      const plaintext = Buffer.from('a.csv content');
-      vi.spyOn(fs, 'readFileSync').mockReturnValue(plaintext);
 
       await controller.downloadFile(req, res);
 
-      expect(res.send).toHaveBeenCalledWith(plaintext);
+      expectFileAccessRedirect(res, fileID);
     });
 
     it('deleteFile falls back to String(specimenId) when specimenId is not a valid ObjectId', async () => {
@@ -2695,13 +2698,11 @@ describe('sample-file.controller', () => {
       const req = { app: { locals: { db } }, params: { specimenId: SPECIMEN_ID, fileID }, user: null };
       const res = createRes();
       vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-      const plaintext = Buffer.from('a.csv content');
-      vi.spyOn(fs, 'readFileSync').mockReturnValue(plaintext);
 
       await controller.downloadFile(req, res);
 
       expect(res.status).not.toHaveBeenCalledWith(403);
-      expect(res.send).toHaveBeenCalledWith(plaintext);
+      expectFileAccessRedirect(res, fileID);
     });
 
     it('exportHL7v2 resolves it before the link check, so scope still decides', async () => {

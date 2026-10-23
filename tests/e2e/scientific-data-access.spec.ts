@@ -133,6 +133,53 @@ test.describe('Scientific files (RF007) — real backend', () => {
     await assertAuditEventRecorded(request, apiBaseURL!, admin.token, listWatch);
   });
 
+  test('serves a download through a short-lived file access token and refuses a tampered one (RNF029 C5, #1321)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+    const sampleID = await createRealSample(request, admin.token);
+    const auth = { Authorization: `Bearer ${admin.token}` };
+
+    const fileContent = Buffer.from('RNF029 C5 e2e payload, served only through a file access token');
+    const expectedChecksum = crypto.createHash('sha256').update(fileContent).digest('hex');
+
+    const upload = await request.post(`${apiBaseURL}/api/samples/${sampleID}/files/upload`, {
+      headers: auth,
+      multipart: {
+        file: {
+          name: 'raw-data.csv',
+          mimeType: 'text/csv',
+          buffer: fileContent,
+        },
+      },
+    });
+    expect(upload.status()).toBe(201);
+    const fileID = (await upload.json()).data._id;
+
+    // The authenticated download answers with a redirect, not the bytes.
+    const download = await request.get(`${apiBaseURL}/api/samples/${sampleID}/files/${fileID}/download`, {
+      headers: auth,
+      maxRedirects: 0,
+    });
+    expect(download.status()).toBe(302);
+    const location = download.headers()['location'];
+    expect(location).toMatch(/^\/api\/file-access\?token=/);
+
+    // The token is the credential: no Authorization header is sent.
+    const served = await request.get(`${apiBaseURL}${location}`);
+    expect(served.status()).toBe(200);
+    const servedChecksum = crypto.createHash('sha256').update(await served.body()).digest('hex');
+    expect(servedChecksum).toBe(expectedChecksum);
+
+    // A token with its last character replaced is refused and audited.
+    const tampered = location.slice(0, -1) + (location.slice(-1) === 'A' ? 'B' : 'A');
+    const watch = await watchAuditTrail(request, apiBaseURL!, admin.token);
+    const refused = await request.get(`${apiBaseURL}${tampered}`);
+    expect(refused.status()).toBe(403);
+    expect((await refused.json()).code).toBe('FILE_ACCESS_TOKEN_INVALID');
+    await assertAuditEventRecorded(request, apiBaseURL!, admin.token, watch);
+  });
+
   test('links a file to its specimen and a study, and records its MIME type and owner (AC#3/AC#5, V2E-0471/0474/0476, #1321)', async ({
     request,
   }) => {
