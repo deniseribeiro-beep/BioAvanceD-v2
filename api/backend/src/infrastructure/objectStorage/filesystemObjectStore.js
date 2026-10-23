@@ -122,4 +122,13 @@ function createFilesystemObjectStore({ root }) {
   return { putObject, getObject };
 }
 
-module.exports = { createFilesystemObjectStore, ownerSegment };
+module.exports = {
+  createFilesystemObjectStore,
+  ownerSegment,
+  isValidSegment,
+  assertSegment,
+  sha256Hex,
+  storeError,
+  OBJECT_URI_PATTERN,
+  PLAIN_OWNER_PATTERN
+};
