@@ -90,7 +90,8 @@ describe('Disease schema', () => {
     expect(doc.drug_classes).toEqual([]);
     expect(doc.active).toBe(true);
     expect(doc.validation_requirements.miabis.requireTreatmentStatus).toBe(true);
-    expect(doc.validation_requirements.biomarkers.required).toEqual([]);
+    // #1206: biomarker knowledge lives on BiomarkerAssociation, not here.
+    expect(doc.validation_requirements.toObject()).not.toHaveProperty('biomarkers');
     expect(doc.validation_requirements.pharmacology.treatmentStatuses).toEqual([
       'NAIVE',
       'TREATED',
@@ -98,7 +99,7 @@ describe('Disease schema', () => {
     ]);
   });
 
-  it('allows overriding nested validation_requirements fields', () => {
+  it('allows overriding nested validation_requirements fields and drops a sent biomarkers key (#1206)', () => {
     const doc = new Disease({
       orpha_code: 'ORPHA:1',
       name: 'Rare Disease',
@@ -109,7 +110,7 @@ describe('Disease schema', () => {
     });
 
     expect(doc.validation_requirements.miabis.requireTreatmentStatus).toBe(false);
-    expect(doc.validation_requirements.biomarkers.required).toEqual(['BRCA1']);
+    expect(doc.toObject().validation_requirements).not.toHaveProperty('biomarkers');
   });
 });
 

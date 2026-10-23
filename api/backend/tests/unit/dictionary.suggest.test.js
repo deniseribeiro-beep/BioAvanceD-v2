@@ -101,16 +101,16 @@ describe('dictionary suggest fallback', () => {
             findOne: vi.fn().mockResolvedValue({
               orpha_code: '324',
               name: 'Doenca de Fabry',
-              validation_requirements: {
-                biomarkers: {
-                  required: ['alphaGal'],
-                  recommended: ['lysoGb3'],
-                },
-              },
               phenotypes: [{ hpoId: 'HP:0001066', label: 'Angioqueratoma' }],
               active: true,
             }),
           };
+        }
+
+        // The filter is ignored on purpose: whatever a lax query could return
+        // reaches the route, which must offer only the valid ORPHA:324 row.
+        if (name === 'biomarkerAssociations') {
+          return { find: vi.fn(() => cursor(ASSOCIATIONS)) };
         }
 
         if (name === 'terminologies') {
@@ -134,10 +134,41 @@ describe('dictionary suggest fallback', () => {
   }
 
   const HPO = 'http://purl.obolibrary.org/obo/hp.owl';
+  // #1206: each row names its own analyte, since uniqueCodings dedupes on
+  // system+code and would hide a bad row that shared the valid one's.
+  const fabryAssociation = {
+    biomarkerId: 'bm-1',
+    analyte: { systemUri: 'http://www.genenames.org', code: 'HGNC:4065', display: 'GLA' },
+    associatedCondition: [{ systemUri: 'http://www.orpha.net', code: 'ORPHA:324' }],
+    biomarkerRole: 'diagnostic',
+    contextOfUse: 'Diagnóstico de Fabry',
+    evidenceReferences: [{ system: 'PMID', value: '12345678' }],
+  };
+  const ASSOCIATIONS = [
+    fabryAssociation,
+    {
+      ...fabryAssociation,
+      biomarkerId: 'bm-2',
+      analyte: { ...fabryAssociation.analyte, code: 'HGNC:0002' },
+      evidenceReferences: [{ system: ['DOI'], value: '10.1000/x' }],
+    },
+    {
+      ...fabryAssociation,
+      biomarkerId: 'bm-3',
+      analyte: { ...fabryAssociation.analyte, code: 'HGNC:0003' },
+      associatedCondition: [{ systemUri: ['http://www.orpha.net'], code: 'ORPHA:324' }],
+    },
+    {
+      ...fabryAssociation,
+      biomarkerId: 'bm-4',
+      analyte: { ...fabryAssociation.analyte, code: 'HGNC:0004' },
+      associatedCondition: [{ systemUri: 'http://www.orpha.net', code: 'ORPHA:355' }],
+    },
+  ];
   const activeRelease = { referenceDatasetReleaseId: 'hpo-2026-08', releaseStatus: 'active' };
   const retiredRelease = { referenceDatasetReleaseId: 'hpo-2025-01', releaseStatus: 'retired' };
 
-  it('retorna HPO e biomarcadores do cache local quando Neo4j esta indisponivel', async () => {
+  it('retorna HPO do cache local e só os biomarcadores das BiomarkerAssociation válidas de ORPHA:324 quando Neo4j esta indisponivel (#1206)', async () => {
     const db = buildFabryDb({
       concepts: [
         { systemUri: HPO, code: 'HP:0001066', version: '2026-08-01', referenceDatasetReleaseId: 'hpo-2026-08' },
@@ -156,12 +187,11 @@ describe('dictionary suggest fallback', () => {
         expect.objectContaining({ code: 'HP:0012471', display: 'Acroparestesia' }),
       ])
     );
-    expect(response.body.biomarkers).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ code: 'alphaGal', display: 'alphaGal' }),
-        expect.objectContaining({ code: 'lysoGb3', display: 'lysoGb3' }),
-      ])
-    );
+    // Not row 2 (an array evidence system), row 3 (an array condition
+    // systemUri) or row 4 (another disease).
+    expect(response.body.biomarkers).toEqual([
+      { system: 'http://www.genenames.org', code: 'HGNC:4065', display: 'GLA' },
+    ]);
   });
 
   it('offers only phenotypes from an active release, stamps their version, and lists the rest as excluded (#885)', async () => {
@@ -187,8 +217,9 @@ describe('dictionary suggest fallback', () => {
         { system: HPO, code: 'HP:0012471', display: 'Acroparestesia', status: 'inactive_release' },
       ],
     });
-    // Biomarkers are local names, not gated on write: annotated, never dropped.
-    expect(response.body.biomarkers.map((b) => b.code)).toEqual(['alphaGal', 'lysoGb3']);
+    // Biomarkers are analyte Codings from BiomarkerAssociation (#1206), not
+    // gated on write: annotated, never dropped.
+    expect(response.body.biomarkers.map((b) => b.code)).toEqual(['HGNC:4065']);
     expect(response.body.biomarkers.every((b) => !('version' in b))).toBe(true);
   });
 

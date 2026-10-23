@@ -307,7 +307,9 @@ describe('SampleGraphValidator', () => {
     expect(report.graphPath.integrity.valid).toBe(true);
   });
 
-  it('valida o nó de Clínica com sucesso e falha em Fabry sem biomarcadores', async () => {
+  // #1206: the required biomarkers come from the defaults only, so the
+  // disease_dictionary mock's Fabry list no longer blocks a sample.
+  it('valida o nó de Clínica com sucesso e não bloqueia Fabry sem biomarcadores, mesmo com disease_dictionary exigindo-os', async () => {
     const completeSample = buildSample();
     samplesCollection.findOne.mockResolvedValue(completeSample);
     consentsCollection.findOne.mockResolvedValue({ status: 'ACTIVE', participantId: '12345678' });
@@ -327,9 +329,8 @@ describe('SampleGraphValidator', () => {
     });
     samplesCollection.findOne.mockResolvedValue(incompleteFabrySample);
 
-    const failReport = await validator.validateSampleCompliance(incompleteFabrySample._id);
-    expect(failReport.graphPath.clinical.valid).toBe(false);
-    expect(failReport.suggestedStatus).toBe('BLOCKED');
+    const fabryReport = await validator.validateSampleCompliance(incompleteFabrySample._id);
+    expect(fabryReport.graphPath.clinical).toEqual(expect.objectContaining({ valid: true }));
   });
 
   it('valida o nó de Integridade com sucesso e falha por tampering', async () => {

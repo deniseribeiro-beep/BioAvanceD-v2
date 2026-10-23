@@ -24,4 +24,28 @@ async function validateBiomarkerAssociationReferences(db, payload = {}) {
   if (presentKeys.includes('biomarkerRole')) payload.biomarkerRole = fields.biomarkerRole;
 }
 
-module.exports = { COLLECTION, validateBiomarkerAssociationReferences };
+const ORPHA_SYSTEM = 'http://www.orpha.net';
+const stripOrpha = (value) => String(value || '').trim().replace(/^ORPHA:/i, '');
+
+// The rows associating an analyte with an ORPHA disease, for /suggest's local
+// fallback (#1206). The query only narrows: MongoDB matches a scalar against
+// an array field, so `system: ['DOI']` or a systemUri array would come back
+// too. A row is kept only when the model's own check passes and one of its
+// conditions is that ORPHA code with string fields.
+async function findAssociationsForOrpha(db, orphaCode) {
+  const normalized = stripOrpha(orphaCode);
+  if (!normalized) return [];
+
+  const rows = await db.collection(COLLECTION).find({
+    associatedCondition: {
+      $elemMatch: { systemUri: ORPHA_SYSTEM, code: { $in: [normalized, `ORPHA:${normalized}`] } },
+    },
+  }).limit(100).toArray();
+
+  return rows.filter((row) => BiomarkerAssociationModel.validate(row).isValid
+    && row.associatedCondition.some((entry) => typeof entry.code === 'string'
+      && entry.systemUri === ORPHA_SYSTEM
+      && stripOrpha(entry.code) === normalized));
+}
+
+module.exports = { COLLECTION, validateBiomarkerAssociationReferences, findAssociationsForOrpha };

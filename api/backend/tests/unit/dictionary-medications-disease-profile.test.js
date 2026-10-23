@@ -117,6 +117,21 @@ describe('GET /api/dictionary/disease-profile', () => {
     expect(res.body.disease.drug_classes).toEqual(['enzyme_replacement_therapy']);
   });
 
+  it('no longer serves the stored biomarker requirements, but keeps the other validation_requirements keys (#1206)', async () => {
+    collection.findOne.mockResolvedValue({
+      orpha_code: '324',
+      name: 'Doenca de Fabry',
+      validation_requirements: {
+        miabis: { requireTreatmentStatus: true },
+        biomarkers: { required: ['Lyso-Gb3'], recommended: [] },
+      },
+    });
+
+    const res = await request(app).get('/api/dictionary/disease-profile?orphaCode=324');
+    expect(res.status).toBe(200);
+    expect(res.body.disease.validation_requirements).toEqual({ miabis: { requireTreatmentStatus: true } });
+  });
+
   it('defaults validation_requirements to {} when it is not an object (e.g. a string)', async () => {
     collection.findOne.mockResolvedValue({
       orpha_code: '558',

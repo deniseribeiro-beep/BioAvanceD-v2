@@ -20,7 +20,6 @@
     "migrate:result-specimen-ids": "node src/scripts/backfillResultSpecimenIds.js",
     "migrate:sealed-snapshot-pins": "node src/scripts/backfillSealedSnapshotPins.js",
     "migrate:drop-legacy-locations": "node src/scripts/dropLegacyLocationsCollection.js",
-    "seed:disease-validation-rules": "node src/scripts/seedDiseaseValidationRules.js",
     "audit": "node scripts/audit-database.js",
     "audit:verify": "node scripts/audit-verify.js",
     "audit:verify-chain": "node scripts/audit-verify-chain.js",

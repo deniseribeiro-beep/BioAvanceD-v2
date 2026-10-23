@@ -6,6 +6,7 @@ const { getNeo4jDriver } = require('../database/neo4j');
 const DrugService = require('../services/DrugService');
 const { escapeRegex } = require('../utils/escapeRegex');
 const { checkActiveCode } = require('../ingestion/activeCodeValidator');
+const { findAssociationsForOrpha } = require('../services/biomarkerAssociation.service');
 
 let redisClient = null;
 let redisConnectPromise = null;
@@ -63,9 +64,12 @@ function normalizeOrphaCode(value) {
 }
 
 function normalizeDiseaseProfile(record = {}) {
+  // The biomarker requirements are not served (#1206): BiomarkerAssociation
+  // holds that knowledge, and every other key passes through.
   const requirements = record?.validation_requirements && typeof record.validation_requirements === 'object'
-    ? record.validation_requirements
+    ? { ...record.validation_requirements }
     : {};
+  delete requirements.biomarkers;
 
   return {
     orpha_code: normalizeOrphaCode(record.orpha_code),
@@ -82,27 +86,15 @@ function normalizeHpoCode(value) {
   return /^HP:/i.test(raw) ? raw.replace(/^hp:/i, 'HP:') : raw;
 }
 
-function normalizeBiomarkerCode(value) {
-  return String(value || '').trim();
-}
-
-function biomarkerDisplayName(code) {
-  const normalized = normalizeBiomarkerCode(code);
-  const known = {
-  };
-  return known[normalized] || normalized;
-}
-
 function normalizeLocalPhenotype(raw = {}) {
   const code = normalizeHpoCode(raw.hpoId || raw.code || raw.codigo || raw.relacoes?.hpo);
   const display = String(raw.label || raw.display || raw.descricao || raw.name || raw.nome || code).trim();
   return normalizeCoding({ system: 'http://purl.obolibrary.org/obo/hp.owl', code, display }, 'http://purl.obolibrary.org/obo/hp.owl');
 }
 
-function normalizeLocalBiomarker(raw) {
-  const code = normalizeBiomarkerCode(typeof raw === 'string' ? raw : raw?.code || raw?.biomarkerType || raw?.id || raw?.codigo);
-  const display = String((typeof raw === 'object' && (raw.display || raw.label || raw.name || raw.nome)) || biomarkerDisplayName(code)).trim();
-  return normalizeCoding({ system: 'http://loinc.org', code, display }, 'http://loinc.org');
+function analyteCoding({ analyte }) {
+  const display = typeof analyte.display === 'string' && analyte.display.trim() ? analyte.display : analyte.code;
+  return normalizeCoding({ system: analyte.systemUri, code: analyte.code, display });
 }
 
 function uniqueCodings(codings = []) {
@@ -149,13 +141,10 @@ async function buildLocalSemanticSuggestions(db, orphaCode) {
     })),
   ].filter(Boolean));
 
-  const requirements = disease?.validation_requirements || {};
-  const biomarkerRequirements = [
-    ...(Array.isArray(requirements?.biomarkers?.required) ? requirements.biomarkers.required : []),
-    ...(Array.isArray(requirements?.biomarkers?.recommended) ? requirements.biomarkers.recommended : []),
-    ...(Array.isArray(disease?.biomarkers) ? disease.biomarkers : []),
-  ];
-  const biomarkers = uniqueCodings(biomarkerRequirements.map(normalizeLocalBiomarker).filter(Boolean));
+  // #1206: the biomarkers are the analytes of the valid BiomarkerAssociation
+  // rows for this disease, no longer disease_dictionary's lists.
+  const associations = await findAssociationsForOrpha(db, normalizedOrpha);
+  const biomarkers = uniqueCodings(associations.map(analyteCoding).filter(Boolean));
 
   if (!disease && phenotypes.length === 0 && biomarkers.length === 0) {
     return null;
@@ -184,9 +173,9 @@ async function buildLocalSemanticSuggestions(db, orphaCode) {
  * write side would stamp (#866).
  *
  * Only phenotypes are filtered, because only they are gated on write. The
- * disease is the code the operator asked about, and the biomarker codes here
- * are local names rather than LOINC codes, so both are annotated, never
- * dropped. Excluded phenotypes are listed in `releaseGate.excluded` with the
+ * disease is the code the operator asked about, and the biomarkers are the
+ * analyte Codings of BiomarkerAssociation rows (#1206), which no write gates,
+ * so both are annotated, never dropped. Excluded phenotypes are listed in `releaseGate.excluded` with the
  * validator's status, so an empty list is distinguishable from "no
  * phenotypes known".
  *

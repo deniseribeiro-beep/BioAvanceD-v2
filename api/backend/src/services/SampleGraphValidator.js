@@ -198,9 +198,15 @@ class SampleGraphValidator {
       active: { $ne: false },
     });
 
+    // #1206: no RF/RNF requires disease-gated release, so the required
+    // biomarkers stay on the defaults; disease_dictionary's own list is not
+    // read. miabis, pharmacology and drug_classes still come from it.
     return {
       disease,
-      requirements: disease?.validation_requirements || defaultRequirements(),
+      requirements: {
+        ...(disease?.validation_requirements || defaultRequirements()),
+        biomarkers: defaultRequirements().biomarkers,
+      },
     };
   }
 

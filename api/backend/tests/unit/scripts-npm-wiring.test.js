@@ -34,7 +34,6 @@ const WIRED = [
   ['migrate:auth-canonical-names', 'migrateAuthCanonicalNames.js'],
   ['migrate:sensor-metadata-to-datastreams', 'migrateSensorMetadataToDatastreams.js'],
   ['encryption:rewrite', 'rewriteEncryptedFields.js'],
-  ['seed:disease-validation-rules', 'seedDiseaseValidationRules.js'],
 
   // CLI wrappers over tested services.
   ['migrate:participant-identities', 'backfillParticipantIdentities.js'],

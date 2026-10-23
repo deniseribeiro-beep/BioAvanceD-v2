@@ -66,12 +66,16 @@ function throwingSession() {
 // The release gate (#885) offers only phenotypes whose concept sits in an
 // active release. These cases test the fallback's normalization, so every
 // code resolves to an active, version-less concept: the gate keeps each
-// coding as built and adds no version.
-function buildFallbackDb({ disease = null, terminologyRows = [] } = {}) {
+// coding as built and adds no version. `associations` stands in for the
+// biomarkerAssociations rows the query returns (#1206).
+function buildFallbackDb({ disease = null, terminologyRows = [], associations = [] } = {}) {
   return {
     collection: vi.fn((name) => {
       if (name === 'disease_dictionary') {
         return { findOne: vi.fn().mockResolvedValue(disease) };
+      }
+      if (name === 'biomarkerAssociations') {
+        return { find: vi.fn(() => cursor(associations)) };
       }
       if (name === 'terminologies') {
         return { find: vi.fn(() => cursor(terminologyRows)) };
@@ -88,6 +92,17 @@ function buildFallbackDb({ disease = null, terminologyRows = [] } = {}) {
       }
       return { find: vi.fn(() => cursor([])), findOne: vi.fn().mockResolvedValue(null) };
     }),
+  };
+}
+
+// A valid BiomarkerAssociation row (#1206) for an ORPHA code and analyte.
+function association(orphaCode, analyte) {
+  return {
+    analyte,
+    associatedCondition: [{ systemUri: 'http://www.orpha.net', code: `ORPHA:${orphaCode}` }],
+    biomarkerRole: 'diagnostic',
+    contextOfUse: 'Diagnóstico',
+    evidenceReferences: [{ system: 'PMID', value: '12345678' }],
   };
 }
 
@@ -324,14 +339,10 @@ describe('dictionary.js branch coverage - /suggest local fallback (buildLocalSem
     ]);
   });
 
-  it('normalizes a biomarker entry using biomarkerType/id/codigo for code and label/name/nome for display', async () => {
+  it('builds a biomarker from a BiomarkerAssociation analyte, keeping its system, code and display (#1206)', async () => {
     const db = buildFallbackDb({
-      disease: {
-        orpha_code: '64',
-        name: 'Biomarker disease',
-        biomarkers: [{ id: 'BM-1', label: 'Labelled biomarker' }],
-      },
-      terminologyRows: [],
+      disease: { orpha_code: '64', name: 'Biomarker disease' },
+      associations: [association('64', { systemUri: 'http://loinc.org', code: 'BM-1', display: 'Labelled biomarker' })],
     });
     const app = loadRouteWithMocks({ session: throwingSession() });
     app.locals.db = db;
@@ -368,37 +379,34 @@ describe('dictionary.js branch coverage - /suggest local fallback (buildLocalSem
     ]));
   });
 
-  it('normalizes disease.biomarkers entries via codigo-only code and nome-only display, falling back to the code itself when no display field is set', async () => {
+  it('falls back to the analyte code for the display when the analyte has no display or a blank one (#1206)', async () => {
     const db = buildFallbackDb({
-      disease: {
-        orpha_code: '66',
-        name: 'Biomarker fallback disease',
-        biomarkers: [
-          { codigo: 'BM-CODIGO', nome: 'Via nome' },
-          { codigo: 'BM-BARE' },
-        ],
-      },
-      terminologyRows: [],
+      disease: { orpha_code: '66', name: 'Biomarker fallback disease' },
+      associations: [
+        association('66', { systemUri: 'http://www.genenames.org', code: 'HGNC:1', display: 'Named' }),
+        association('66', { systemUri: 'http://www.genenames.org', code: 'HGNC:2' }),
+        association('66', { systemUri: 'http://www.genenames.org', code: 'HGNC:3', display: '  ' }),
+      ],
     });
     const app = loadRouteWithMocks({ session: throwingSession() });
     app.locals.db = db;
 
     const res = await request(app).get('/api/dictionary/suggest?orphaCode=66');
     expect(res.status).toBe(200);
-    expect(res.body.biomarkers).toEqual(expect.arrayContaining([
-      { system: 'http://loinc.org', code: 'BM-CODIGO', display: 'Via nome' },
-      { system: 'http://loinc.org', code: 'BM-BARE', display: 'BM-BARE' },
-    ]));
+    expect(res.body.biomarkers).toEqual([
+      { system: 'http://www.genenames.org', code: 'HGNC:1', display: 'Named' },
+      { system: 'http://www.genenames.org', code: 'HGNC:2', display: 'HGNC:2' },
+      { system: 'http://www.genenames.org', code: 'HGNC:3', display: 'HGNC:3' },
+    ]);
   });
 
-  it('normalizes disease.phenotypes entries via Synonym/name fallback chains and biomarkers via string entries', async () => {
+  it('offers an analyte named by two BiomarkerAssociation rows once, and the disease from disease_dictionary (#1206)', async () => {
     const db = buildFallbackDb({
-      disease: {
-        orpha_code: '558',
-        name: 'Fabry',
-        biomarkers: ['alphaGal'],
-      },
-      terminologyRows: [],
+      disease: { orpha_code: '558', name: 'Fabry' },
+      associations: [
+        association('558', { systemUri: 'http://www.genenames.org', code: 'HGNC:4065', display: 'GLA' }),
+        { ...association('558', { systemUri: 'http://www.genenames.org', code: 'HGNC:4065', display: 'GLA' }), biomarkerRole: 'monitoring' },
+      ],
     });
     const app = loadRouteWithMocks({ session: throwingSession() });
     app.locals.db = db;
@@ -411,7 +419,7 @@ describe('dictionary.js branch coverage - /suggest local fallback (buildLocalSem
       display: 'Fabry',
     });
     expect(res.body.biomarkers).toEqual([
-      { system: 'http://loinc.org', code: 'alphaGal', display: 'alphaGal' },
+      { system: 'http://www.genenames.org', code: 'HGNC:4065', display: 'GLA' },
     ]);
   });
 });

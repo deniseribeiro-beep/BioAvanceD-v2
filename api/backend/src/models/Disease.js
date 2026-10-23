@@ -5,10 +5,6 @@ const ValidationRequirementSchema = new mongoose.Schema(
     miabis: {
       requireTreatmentStatus: { type: Boolean, default: true },
     },
-    biomarkers: {
-      required: { type: [String], default: [] },
-      recommended: { type: [String], default: [] },
-    },
     pharmacology: {
       required: { type: [String], default: [] },
       recommended: { type: [String], default: [] },
