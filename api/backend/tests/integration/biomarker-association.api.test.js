@@ -50,6 +50,7 @@ const put = (body) => request(app).put(`${PATH}/bm-1`).set('Authorization', `Bea
 
 function associations(overrides = {}) {
   return createCollectionMock({
+    findOne: vi.fn().mockResolvedValue({ biomarkerId: 'bm-1', ...valid }),
     findOneAndUpdate: vi.fn().mockResolvedValue({ biomarkerId: 'bm-1', ...valid }),
     ...overrides,
   });
@@ -106,7 +107,8 @@ describe('BiomarkerAssociation mount (/api/biomarker-associations)', () => {
     const res = await put({ evidenceReferences: [] });
 
     expect(res.status).toBe(422);
-    expect(res.body.error).toMatch(/evidenceReferences é obrigatório/);
+    expect(res.body.error).toBe('Payload inválido');
+    expect(res.body.details.join(' | ')).toMatch(/evidenceReferences é obrigatório/);
     expect(coll.findOneAndUpdate).not.toHaveBeenCalled();
   });
 
@@ -128,7 +130,8 @@ describe('BiomarkerAssociation mount (/api/biomarker-associations)', () => {
     const res = await put({ evidenceReferences: [{ system: ['DOI'], value: '10.1234/a' }] });
 
     expect(res.status).toBe(422);
-    expect(res.body.error).toMatch(/evidenceReferences.*DOI\|PMID/);
+    expect(res.body.error).toBe('Payload inválido');
+    expect(res.body.details.join(' | ')).toMatch(/evidenceReferences.*DOI\|PMID/);
     expect(coll.findOneAndUpdate).not.toHaveBeenCalled();
   });
 
@@ -139,7 +142,8 @@ describe('BiomarkerAssociation mount (/api/biomarker-associations)', () => {
     const res = await put({ associatedCondition: [] });
 
     expect(res.status).toBe(422);
-    expect(res.body.error).toMatch(/associatedCondition é obrigatório/);
+    expect(res.body.error).toBe('Payload inválido');
+    expect(res.body.details.join(' | ')).toMatch(/associatedCondition é obrigatório/);
     expect(coll.findOneAndUpdate).not.toHaveBeenCalled();
   });
 
