@@ -19,7 +19,10 @@ class RcsAssessmentModel {
       scoreBasedGrade: data.scoreBasedGrade ?? null,
       finalGrade: data.finalGrade ?? null,
       gradeRoute: data.gradeRoute ?? null,
+      // RF018 AC6 and AC8 (#1320): the reasons for the route and each axis's resolution.
+      routeReasons: Array.isArray(data.routeReasons) ? data.routeReasons : [],
       axisPenalties: Array.isArray(data.axisPenalties) ? data.axisPenalties : [],
+      rcsAxisResults: Array.isArray(data.rcsAxisResults) ? data.rcsAxisResults : [],
       calculationTrace: data.calculationTrace ?? null,
       // RF018 AC2 and AC3 (#1320): the use context the request carried, and
       // the RCSInputSnapshot this assessment was computed from.

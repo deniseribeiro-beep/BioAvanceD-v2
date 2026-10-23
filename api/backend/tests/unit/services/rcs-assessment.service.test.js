@@ -328,6 +328,59 @@ describe('rcs-assessment.service', () => {
     });
   });
 
+  // RF018 AC6 and AC8 (#1320): the assessment keeps each axis's resolution
+  // and the reasons for its route.
+  describe('recordAssessment axis results and route reasons', () => {
+    const rcsCertificationService = require('../../../src/services/rcs-certification.service');
+    const sprec = {
+      sampleType: 'PL1', primaryContainer: 'SST', preCentrifugation: 'A', centrifugation: 'A',
+      secondCentrifugation: 'A', postCentrifugationDelay: 'A', longTermStorage: 'A',
+    };
+    const certified = (sprecEdit = {}) => {
+      const rcsInput = rcsCertificationService.readInput({ matrix_type: 'fluid', sprec: { ...sprec, ...sprecEdit } });
+      return { ...rcsCertificationService.certify(rcsInput), rcs_input: rcsInput };
+    };
+
+    it('writes five resolved axes and the score reasons for a scored input', async () => {
+      const db = createFakeDb();
+      const result = certified();
+      expect(result.governance_status).toBe(1);
+      const assessment = await recordAssessment(db, 'SPEC-1', result);
+      expect(assessment.rcsAxisResults.map((entry) => [entry.axisCode, entry.resolutionStatus, entry.weightedPenalty]))
+        .toEqual(result.axis_penalties.map((item) => [item.axis_code.replace(/^P/, 'P_'), 'resolved', item.penalty]));
+      expect(assessment.routeReasons).toEqual(['no governance failure found', `score threshold ${result.score_based_grade}`]);
+      expect(db.collections.rcsAssessments.docs[0]).toMatchObject({
+        rcsAxisResults: assessment.rcsAxisResults, routeReasons: assessment.routeReasons,
+      });
+    });
+
+    it('writes the failure reasons and the unresolved axis for a governance failure', async () => {
+      const db = createFakeDb();
+      const result = certified({ preCentrifugation: 'X' });
+      expect(result.governance_status).toBe(0);
+      const assessment = await recordAssessment(db, 'SPEC-1', result);
+      expect(assessment.routeReasons).toEqual(['governance failure', 'Unknown SPREC code']);
+      expect(assessment.rcsAxisResults).toHaveLength(5);
+      expect(assessment.rcsAxisResults[0]).toMatchObject({
+        axisCode: 'P_pre', sprecCode: 'X', resolutionStatus: 'unknown', severity: null, weightedPenalty: null,
+      });
+    });
+
+    it('writes no axis but still the route reasons for a result without rcs_input', async () => {
+      const db = createFakeDb();
+      const { rcs_input: _input, ...legacy } = certified();
+      const assessment = await recordAssessment(db, 'SPEC-1', legacy);
+      expect(assessment.rcsAxisResults).toEqual([]);
+      expect(assessment.routeReasons).toEqual(['no governance failure found', `score threshold ${legacy.score_based_grade}`]);
+    });
+
+    it('writes no axis when the input matrix disagrees with the result matrix', async () => {
+      const db = createFakeDb();
+      const assessment = await recordAssessment(db, 'SPEC-1', { ...certified(), matrix_type: 'solid' });
+      expect(assessment.rcsAxisResults).toEqual([]);
+    });
+  });
+
   describe('getAssessmentsForSpecimen', () => {
     it('scopes results to the requested specimenId only', async () => {
       const db = createFakeDb();

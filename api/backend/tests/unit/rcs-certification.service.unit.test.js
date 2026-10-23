@@ -365,3 +365,144 @@ describe('RcsCertificationService matrix mapping release (RF018 AC4, #1320)', ()
     expect(resolution.materialTypeCode).toBeNull();
   });
 });
+
+// RF018 AC6, AC8 and AC9 (#1320): each axis's resolution status beside
+// certify(), and the reasons for its route.
+describe('RcsCertificationService.evaluateAxisResults (RF018 AC6, #1320)', () => {
+  const { AXES } = rcsCertificationService;
+  const referenceData = require('../../src/services/rcs-reference-data');
+  const { AXIS_CODES } = require('../../src/models/RcsInputSnapshot');
+  const { RESOLUTION_STATUSES } = require('../../src/models/RcsPreanalyticalAxisInput');
+
+  const catalogCodes = (matrix, axisCode) => [...new Set(referenceData.catalogs[matrix]
+    .filter((entry) => entry.axis_code === axisCode).map((entry) => entry.sprec_code))];
+  const fluidSprec = {
+    sampleType: 'PL1', primaryContainer: 'SST', preCentrifugation: 'A', centrifugation: 'A',
+    secondCentrifugation: 'A', postCentrifugationDelay: 'A', longTermStorage: 'A',
+  };
+  const fluidAxes = (sprec, extra = {}) => rcsCertificationService
+    .evaluateAxisResults({ matrix_type: 'fluid', sprec: { ...fluidSprec, ...sprec }, ...extra }).axes;
+  const unresolved = (axisCode, sprecCode, maximumWeight, resolutionStatus) => ({
+    axisCode, sprecCode, severity: null, maximumWeight, weightedPenalty: null,
+    severityMappingReleaseId: null, resolutionStatus, applicabilityContext: null, evidenceIds: [],
+  });
+
+  it('agrees with certify on every corpus input and leaves an unresolved axis null', () => {
+    const seen = new Set();
+    let scored = 0;
+    let failed = 0;
+    for (const matrix of Object.keys(AXES)) {
+      const base = {
+        sampleType: catalogCodes(matrix, 'sampleType')[0],
+        primaryContainer: catalogCodes(matrix, 'primaryContainer')[0],
+      };
+      for (const axis of AXES[matrix]) base[axis.field] = catalogCodes(matrix, axis.axis_code)[0];
+      const axisCodes = AXES[matrix].map((axis) => axis.axis_code);
+      for (const axis of AXES[matrix]) {
+        for (const code of [...catalogCodes(matrix, axis.axis_code), 'X', 'Z', '', 'bad!', 'QQ']) {
+          for (const rule of [undefined, 'pcent1_no_centrifugation_acceptable', 'nope']) {
+            const payload = {
+              matrix_type: matrix,
+              sprec: { ...base, [axis.field]: code },
+              ...(rule ? { [`${axis.axis_code}_workflow_rule`]: rule } : {}),
+            };
+            const result = rcsCertificationService.certify(payload);
+            const { axes } = rcsCertificationService.evaluateAxisResults(payload);
+            expect(axes).toHaveLength(5);
+            for (const entry of axes) {
+              seen.add(entry.resolutionStatus);
+              if (entry.resolutionStatus !== 'resolved') {
+                expect([entry.severity, entry.weightedPenalty, entry.applicabilityContext]).toEqual([null, null, null]);
+              }
+            }
+            if (result.governance_status === 1) {
+              scored += 1;
+              expect(axes.map((entry) => [entry.resolutionStatus, entry.sprecCode, entry.severity, entry.maximumWeight, entry.weightedPenalty]))
+                .toEqual(result.axis_penalties.map((item) => ['resolved', item.sprec_code, item.severity, item.weight, item.penalty]));
+            } else if (result.calculation_trace.governance_trace.some((item) => axisCodes.includes(item.axis_code))) {
+              failed += 1;
+              expect(axes.some((entry) => entry.resolutionStatus !== 'resolved')).toBe(true);
+            }
+          }
+        }
+      }
+    }
+    expect(scored).toBeGreaterThan(0);
+    expect(failed).toBeGreaterThan(0);
+    expect([...seen].sort()).toEqual([...RESOLUTION_STATUSES].sort());
+  });
+
+  it('codes each axis as the input snapshot spells it, for both matrices', () => {
+    for (const matrix of Object.keys(AXES)) {
+      const { axes } = rcsCertificationService.evaluateAxisResults({ matrix_type: matrix });
+      expect(axes.map((entry) => entry.axisCode)).toEqual([...AXIS_CODES[matrix]]);
+    }
+  });
+
+  it('marks an unknown code unknown', () => {
+    expect(fluidAxes({ preCentrifugation: 'X' })[0]).toEqual(unresolved('P_pre', 'X', 30, 'unknown'));
+  });
+
+  it('marks an other code not_scored', () => {
+    expect(fluidAxes({ preCentrifugation: 'Z' })[0]).toEqual(unresolved('P_pre', 'Z', 30, 'not_scored'));
+  });
+
+  it('marks a malformed code invalid', () => {
+    expect(fluidAxes({ preCentrifugation: 'bad!' })[0]).toEqual(unresolved('P_pre', 'BAD!', 30, 'invalid'));
+  });
+
+  it('marks an off-catalog code incompatible', () => {
+    expect(fluidAxes({ preCentrifugation: 'QQ' })[0]).toEqual(unresolved('P_pre', 'QQ', 30, 'incompatible'));
+  });
+
+  it('marks a workflow rule the severity mapping does not hold incompatible', () => {
+    expect(fluidAxes({ centrifugation: 'N' }, { Pcent1_workflow_rule: 'nope' })[1]).toEqual(unresolved('P_cent1', 'N', 15, 'incompatible'));
+  });
+
+  it('marks a missing code absent', () => {
+    expect(fluidAxes({ preCentrifugation: '' })[0]).toEqual(unresolved('P_pre', null, 30, 'absent'));
+  });
+
+  it('resolves a workflow-conditional code with its applicability context', () => {
+    const payload = { matrix_type: 'fluid', sprec: { ...fluidSprec, centrifugation: 'N' }, primaryCentrifugationApplicable: false };
+    const [, pcent1] = rcsCertificationService.evaluateAxisResults(payload).axes;
+    const [, penalty] = rcsCertificationService.certify(payload).axis_penalties;
+    expect(pcent1).toEqual({
+      axisCode: 'P_cent1', sprecCode: 'N', severity: penalty.severity, maximumWeight: 15, weightedPenalty: penalty.penalty,
+      severityMappingReleaseId: null, resolutionStatus: 'resolved',
+      applicabilityContext: { workflowRule: 'pcent1_no_centrifugation_acceptable' }, evidenceIds: [],
+    });
+  });
+
+  it('writes no axis for an input with no resolvable matrix', () => {
+    expect(rcsCertificationService.evaluateAxisResults({ sprec: { sampleType: 'PL1' } })).toEqual({ matrix: null, axes: [] });
+  });
+
+  it('gives a scored result the no-failure and threshold reasons', () => {
+    const result = rcsCertificationService.certify({ matrix_type: 'fluid', sprec: fluidSprec });
+    expect(result.governance_status).toBe(1);
+    expect(rcsCertificationService.routeReasons(result)).toEqual(['no governance failure found', `score threshold ${result.score_based_grade}`]);
+  });
+
+  it('gives a governance failure its failure reasons', () => {
+    const result = rcsCertificationService.certify({ matrix_type: 'fluid', sprec: { ...fluidSprec, preCentrifugation: 'X' } });
+    expect(result.governance_status).toBe(0);
+    expect(result.governance_failure_reasons.length).toBeGreaterThan(0);
+    expect(rcsCertificationService.routeReasons(result)).toEqual(['governance failure', ...result.governance_failure_reasons]);
+  });
+
+  it('gives a result with no recognised route no reason', () => {
+    expect(rcsCertificationService.routeReasons({})).toEqual([]);
+    expect(rcsCertificationService.routeReasons()).toEqual([]);
+  });
+
+  it('changes neither its input nor the certify result', () => {
+    const payload = { matrix_type: 'fluid', sprec: { ...fluidSprec, centrifugation: 'N' }, primaryCentrifugationApplicable: false };
+    const before = rcsCertificationService.certify(payload);
+    const copy = JSON.parse(JSON.stringify(payload));
+    rcsCertificationService.evaluateAxisResults(payload);
+    rcsCertificationService.routeReasons(before);
+    expect(payload).toEqual(copy);
+    expect(rcsCertificationService.certify(payload)).toEqual(before);
+  });
+});

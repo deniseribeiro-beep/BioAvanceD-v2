@@ -211,6 +211,74 @@ class RcsCertificationService {
     };
   }
 
+  // RF018 AC6 and AC9 (#1320): each axis of the input's matrix with its
+  // observed code, severity, maximum weight, weighted penalty and resolution
+  // status, computed beside certify() and agreeing with its axis_penalties.
+  // An unresolved axis carries null severity, penalty and context, never 0
+  // (RULE-011). No severity mapping release or axis evidence exists yet, so
+  // severityMappingReleaseId is null and evidenceIds empty, never fabricated
+  // (see docs/decisions/2026-10-23-rcs-axis-results-and-route-reasons.md).
+  evaluateAxisResults(input = {}) {
+    const samplePayload = samplePayloadOf(input);
+    const sprec = this.normalizeSprec(samplePayload);
+    const matrix = this.detectMatrixType(samplePayload, sprec);
+    if (!AXES[matrix]) return { matrix: matrix || null, axes: [] };
+
+    const axes = AXES[matrix].map((axis) => {
+      const code = sprec[axis.field];
+      const weight = this.data.weights.find((item) => item.matrix_type === matrix && item.axis_code === axis.axis_code);
+      let severity = null;
+      let resolutionStatus;
+      if (!code) resolutionStatus = 'absent';
+      else if (UNKNOWN_CODES.has(code)) resolutionStatus = 'unknown';
+      else if (OTHER_CODES.has(code)) resolutionStatus = 'not_scored';
+      else if (!SPREC_CODE_PATTERN.test(code)) resolutionStatus = 'invalid';
+      else if (!this.catalogHas(matrix, axis.axis_code, code)) resolutionStatus = 'incompatible';
+      else {
+        severity = this.resolveSeverity(samplePayload, matrix, axis.axis_code, code);
+        if (!severity || severity.is_scored !== true || severity.severity_value === null || !weight) {
+          resolutionStatus = severity?.failure_reason === 'Analytical workflow context does not match seeded severity mapping'
+            ? 'incompatible'
+            : 'not_scored';
+        } else {
+          resolutionStatus = 'resolved';
+        }
+      }
+      const resolved = resolutionStatus === 'resolved';
+      return {
+        axisCode: axis.axis_code.replace(/^P/, 'P_'),
+        sprecCode: code || null,
+        severity: resolved ? Number(severity.severity_value) : null,
+        maximumWeight: weight ? Number(weight.weight) : null,
+        weightedPenalty: resolved ? round(Number(weight.weight) * Number(severity.severity_value)) : null,
+        severityMappingReleaseId: null,
+        resolutionStatus,
+        applicabilityContext: resolved && severity.requires_workflow_context ? { workflowRule: severity.workflow_rule } : null,
+        evidenceIds: [],
+      };
+    });
+    return { matrix, axes };
+  }
+
+  // RF018 AC8 (#1320): the reasons for a certify() result's route. A result
+  // with no recognised route gets none, never a fabricated one.
+  routeReasons(result = {}) {
+    const scoreRoutes = ['Score-based certification', 'Score critical penalty'];
+    if (result.governance_status === 1 && scoreRoutes.includes(result.grade_route)
+      && typeof result.score_based_grade === 'string' && result.score_based_grade !== '') {
+      // INFERENCE, not a citation: V2E-0543's example reads "governance gate
+      // passed", but the gate never reads traceability, monitoring or
+      // documentation evidence and evaluateGovernanceEvidence leaves its
+      // aggregate unresolved, never pass; so only no failure was found.
+      return ['no governance failure found', `score threshold ${result.score_based_grade}`];
+    }
+    if (result.governance_status === 0 && result.grade_route === 'Governance failure') {
+      const reasons = Array.isArray(result.governance_failure_reasons) ? result.governance_failure_reasons : [];
+      return ['governance failure', ...reasons];
+    }
+    return [];
+  }
+
   certify(payload = {}) {
     const samplePayload = samplePayloadOf(payload);
     const sprec = this.normalizeSprec(samplePayload);

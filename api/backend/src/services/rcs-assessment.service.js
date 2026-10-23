@@ -27,7 +27,12 @@ async function recordAssessment(db, specimenId, certificationResult) {
   // the capture existed) writes neither and carries null references.
   let snapshot = null;
   let evidence = null;
+  // RF018 AC6 (#1320): each axis's resolution, kept only when the input's
+  // matrix is this result's, as the AC4 resolution check below.
+  let rcsAxisResults = [];
   if (isPlainObject(certificationResult?.rcs_input)) {
+    const axisResults = rcsCertificationService.evaluateAxisResults(certificationResult.rcs_input);
+    if (axisResults.matrix === certificationResult.matrix_type) rcsAxisResults = axisResults.axes;
     const rcsInputSnapshotId = crypto.randomUUID();
     const governanceEvidenceSnapshotId = crypto.randomUUID();
     evidence = RcsGovernanceEvidenceSnapshotModel.capture({
@@ -58,6 +63,9 @@ async function recordAssessment(db, specimenId, certificationResult) {
     inputSnapshotId: snapshot?.rcsInputSnapshotId ?? null,
     inputSnapshotUri: snapshot?.snapshotUri ?? null,
     inputSnapshotHash: snapshot?.snapshotHash ?? null,
+    // RF018 AC8 (#1320): the reasons for the result's route.
+    routeReasons: rcsCertificationService.routeReasons(certificationResult),
+    rcsAxisResults,
   });
 
   // No snapshot or evidence is left without the assessment it was captured

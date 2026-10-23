@@ -105,3 +105,23 @@ describe('RcsAssessmentModel v4 references', () => {
     expect(doc).toMatchObject({ ...refs, qualificationContext: context, specimenId: 'SPEC-2', rcsScore: 90 });
   });
 });
+
+// RF018 AC6 and AC8 (#1320): each axis's resolution and the route's reasons.
+describe('RcsAssessmentModel axis results and route reasons', () => {
+  it('keeps the given arrays', () => {
+    const rcsAxisResults = [{ axisCode: 'P_pre', resolutionStatus: 'unknown', weightedPenalty: null }];
+    const routeReasons = ['governance failure', 'Unknown SPREC code'];
+    const fields = RcsAssessmentModel.fieldsOf({ rcsAxisResults, routeReasons });
+    expect(fields.rcsAxisResults).toBe(rcsAxisResults);
+    expect(fields.routeReasons).toBe(routeReasons);
+  });
+
+  it('defaults both to an empty array', () => {
+    expect(RcsAssessmentModel.fieldsOf({})).toMatchObject({ rcsAxisResults: [], routeReasons: [] });
+  });
+
+  it('turns a non-array into an empty array', () => {
+    const fields = RcsAssessmentModel.fieldsOf({ rcsAxisResults: { axisCode: 'P_pre' }, routeReasons: 'governance failure' });
+    expect(fields).toMatchObject({ rcsAxisResults: [], routeReasons: [] });
+  });
+});

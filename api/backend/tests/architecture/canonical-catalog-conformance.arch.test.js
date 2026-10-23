@@ -198,7 +198,6 @@ const KNOWN_DRIFT = {
       { elementId: 'ELM-0160', field: 'rcsGrade', note: 'TODO(#1320): 0..1 Core -- not emitted; finalGrade is its own v2.0.0 element (V2E-0541), so it is not a rename of this one.' },
       { elementId: 'ELM-0161', field: 'rcsModelVersion', note: 'TODO(#1320): 1..1 Core -- code emits modelVersion (extra below), not this canonical name.' },
       { elementId: 'ELM-0162', field: 'sprecRcsMappingVersion', note: 'TODO(#1320): 1..1 Core -- not emitted.' },
-      { elementId: 'ELM-0163', field: 'rcsAxisResults', note: 'TODO(#1320): 0..* Core -- code emits axisPenalties (extra below), not this canonical name.' },
       { elementId: 'ELM-0164', field: 'governanceGateResult', note: 'TODO(#1320): 1..1 Core -- code emits governanceStatus (extra below), not this canonical name.' },
       { elementId: 'ELM-0165', field: 'unmappedCodes', note: 'TODO(#1320): 0..* Condicional -- not emitted.' },
       { elementId: 'ELM-0166', field: 'rcsCalculatedAt', note: 'TODO(#1320): 0..1 Core -- not emitted by fieldsOf(); create() sets a separate assessedAt outside fieldsOf().' },
@@ -220,15 +219,14 @@ const KNOWN_DRIFT = {
       { elementId: 'V2E-0449', field: 'executionEnvironment', note: 'TODO(#1320): 1..1 Core -- v2.0.0 element (added), not emitted; RCS v4 builds it.' },
       { elementId: 'V2E-0450', field: 'justifications', note: 'TODO(#1320): 1..* Core -- v2.0.0 element (added), not emitted; RCS v4 builds it.' },
       { elementId: 'V2E-0539', field: 'preanalyticalPenalty', note: 'TODO(#1320): 0..1 Conditional -- v2.0.0 element (added), not emitted; RCS v4 builds it.' },
-      { elementId: 'V2E-0540', field: 'score', note: 'TODO(#1320): 0..1 Conditional -- v2.0.0 element (added), not emitted; RCS v4 builds it.' },
-      { elementId: 'V2E-0543', field: 'routeReasons', note: 'TODO(#1320): 1..* Core -- v2.0.0 element (added), not emitted; RCS v4 builds it.' }
+      { elementId: 'V2E-0540', field: 'score', note: 'TODO(#1320): 0..1 Conditional -- v2.0.0 element (added), not emitted; RCS v4 builds it.' }
     ],
     extra: [
       { key: 'modelVersion', note: 'TODO(#1320): no canonical counterpart; likely predecessor of rcsModelVersion (ELM-0161, absent above).' },
       { key: 'governanceStatus', note: 'TODO(#1320): no canonical counterpart; likely predecessor of governanceGateResult (ELM-0164, absent above).' },
       { key: 'governanceFailureReasons', note: 'TODO(#1320): no canonical counterpart; likely predecessor of governanceFailureCodes (P1X-0068, absent above).' },
       { key: 'governanceRuleCodes', note: 'TODO(#1320): no canonical counterpart; likely predecessor of governanceChecks (P1X-0067, absent above).' },
-      { key: 'axisPenalties', note: 'TODO(#1320): no canonical counterpart; likely predecessor of rcsAxisResults (ELM-0163, absent above).' },
+      { key: 'axisPenalties', note: 'TODO(#1320): no canonical counterpart; the score-route penalties the Merkle hash reads, kept beside rcsAxisResults (ELM-0163).' },
       { key: 'calculationTrace', note: 'TODO(#1320): no canonical counterpart; free-form trace value, not calculationStatus (P1X-0071, absent above).' }
     ]
   },
