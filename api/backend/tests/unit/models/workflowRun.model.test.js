@@ -188,6 +188,40 @@ describe('WorkflowRunModel (RF027 AC#1/#2/#4, dict-02 ELM-0326..0336)', () => {
       expect(result.isValid).toBe(false);
       expect(result.errors).toContain('datasetSnapshotId deve ser uma string não vazia');
     });
+
+    it.each(['failed', 'cancelled'])('failureReason with runStatus %s -> isValid true (RF027 AC6)', (runStatus) => {
+      const result = WorkflowRunModel.validate({ ...baseRun, runStatus, failureReason: 'aligner exited with code 137' });
+      expect(result.isValid).toBe(true);
+    });
+
+    it.each(['succeeded', 'queued', 'running'])('failureReason with runStatus %s -> isValid false', (runStatus) => {
+      const result = WorkflowRunModel.validate({ ...baseRun, runStatus, failureReason: 'aligner exited with code 137' });
+      expect(result.isValid).toBe(false);
+      expect(result.errors).toContain('failureReason só é permitido quando runStatus é failed ou cancelled');
+    });
+
+    it.each([
+      ['blank', '   '],
+      ['a number', 137],
+    ])('failureReason %s -> isValid false', (_label, failureReason) => {
+      const result = WorkflowRunModel.validate({ ...baseRun, runStatus: 'failed', failureReason });
+      expect(result.isValid).toBe(false);
+      expect(result.errors).toContain('failureReason deve ser uma string não vazia');
+    });
+
+    it.each(['queued', 'running', 'succeeded', 'failed', 'cancelled'])('failureReason null with runStatus %s -> isValid true', (runStatus) => {
+      const result = WorkflowRunModel.validate({ ...baseRun, runStatus, failureReason: null });
+      expect(result.isValid).toBe(true);
+    });
+
+    it.each([
+      ['blank', '   '],
+      ['a number', 42],
+    ])('resumesWorkflowRunId %s -> isValid false (RF027 AC6)', (_label, resumesWorkflowRunId) => {
+      const result = WorkflowRunModel.validate({ ...baseRun, resumesWorkflowRunId });
+      expect(result.isValid).toBe(false);
+      expect(result.errors).toContain('resumesWorkflowRunId deve ser uma string não vazia');
+    });
   });
 
   describe('create', () => {
@@ -216,6 +250,23 @@ describe('WorkflowRunModel (RF027 AC#1/#2/#4, dict-02 ELM-0326..0336)', () => {
       const result = WorkflowRunModel.create({ ...baseRun, randomSeed: 0, datasetSnapshotId: 'snapshot-synthetic-001' });
       expect(result.randomSeed).toBe(0);
       expect(result.datasetSnapshotId).toBe('snapshot-synthetic-001');
+    });
+
+    it('nulls failureReason and resumesWorkflowRunId when absent', () => {
+      const result = WorkflowRunModel.create({ ...baseRun });
+      expect(result.failureReason).toBeNull();
+      expect(result.resumesWorkflowRunId).toBeNull();
+    });
+
+    it('keeps failureReason and resumesWorkflowRunId when given (RF027 AC6)', () => {
+      const result = WorkflowRunModel.create({
+        ...baseRun,
+        runStatus: 'failed',
+        failureReason: 'aligner exited with code 137',
+        resumesWorkflowRunId: 'run-failed-001',
+      });
+      expect(result.failureReason).toBe('aligner exited with code 137');
+      expect(result.resumesWorkflowRunId).toBe('run-failed-001');
     });
 
     it('copies hardwareProfile, not the caller-provided object reference', () => {

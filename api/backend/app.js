@@ -473,7 +473,9 @@ app.use("/api/workflow-runs/:workflowRunId/lineage", require("./src/interface/ro
 app.use("/api/workflow-runs", createMasterDataRouter({
   collectionName: "workflowRuns",
   idField: "workflowRunId",
-  model: require("./src/models/WorkflowRun")
+  model: require("./src/models/WorkflowRun"),
+  // RF027 AC6 (#1322): resumesWorkflowRunId names a stored failed run on create, never edited.
+  validateReferences: require("./src/services/workflowRun.service").validateWorkflowRunReferences
 }));
 app.use("/api/omics-qualifications", createMasterDataRouter({
   collectionName: "omicsQualifications",
