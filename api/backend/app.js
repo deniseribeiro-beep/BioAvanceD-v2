@@ -460,6 +460,12 @@ app.use("/api/omics-runs", createMasterDataRouter({
   idField: "omicsRunId",
   model: require("./src/models/OmicsRun")
 }));
+// ImagingStudy, DICOM study and series metadata (ELM-0353/0354, #721).
+app.use("/api/imaging-studies", createMasterDataRouter({
+  collectionName: "imagingStudies",
+  idField: "imagingStudyId",
+  model: require("./src/models/ImagingStudy")
+}));
 app.use("/api/equipment", require("./src/interface/routes/equipment.routes"));
 app.use("/api/organizations", require("./src/interface/routes/organization.routes"));
 app.use("/api/storage", require("./src/interface/routes/storage.routes"));

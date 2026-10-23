@@ -193,6 +193,7 @@ const ENTITY_MAP = {
   'extraction-protocols': 'ExtractionProtocol',
   'hpo': 'TerminologyConcept',
   'identifier-namespaces': 'IdentifierNamespaceRegistry',
+  'imaging-studies': 'ImagingStudy',
   'incidents': 'Incident',
   'iot': 'TelemetryReading',
   'legal-holds': 'LegalHold',

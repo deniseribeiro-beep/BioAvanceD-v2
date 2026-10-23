@@ -74,6 +74,7 @@ const ENTITY_TARGETS = {
   FHIRProfileRegistry: () => require('../../src/models/FHIRProfileRegistry').fieldsOf(),
   Biobank: () => require('../../src/models/Biobank').fieldsOf(),
   Network: () => require('../../src/models/Network').fieldsOf(),
+  ImagingStudy: () => require('../../src/models/ImagingStudy').fieldsOf(),
   ConfigurationValidationRun: () => require('../../src/models/ConfigurationValidationRun').fieldsOf(),
   GovernanceInvariantCatalog: () => require('../../src/models/GovernanceInvariantCatalog').fieldsOf(),
   InvariantViolation: () => require('../../src/models/InvariantViolation').fieldsOf(),
@@ -157,6 +158,15 @@ const KNOWN_DRIFT = {
       {
         key: 'derivedScoreId',
         note: "Deliberate: DerivedScoreModel's own generated id, the key getDerivedScoreById looks a score up by. dict-02 gives DerivedScore no id row (ELM-0255..0259)."
+      }
+    ]
+  },
+  ImagingStudy: {
+    absent: [],
+    extra: [
+      {
+        key: 'imagingStudyId',
+        note: "Deliberate: the master-data router's idField, the key GET/PUT /api/imaging-studies/:id looks a study up by. The dictionary gives ImagingStudy no id row (ELM-0353..0354)."
       }
     ]
   },

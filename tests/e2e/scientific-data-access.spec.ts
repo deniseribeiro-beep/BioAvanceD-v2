@@ -937,6 +937,39 @@ test.describe('Workflows and omics data (RF027) — real backend', () => {
     expect(omicsRun.status()).toBe(201);
     expect((await omicsRun.json()).data.referenceAssembly).toBeNull();
   });
+
+  test('registers an imaging study with its DICOM series (dict ELM-0353/0354, #721)', async ({ request }) => {
+    const admin = await realLogin(request);
+    // A UID per run, so a rerun against the same database never collides.
+    const root = `1.2.826.0.1.3680043.2.${Date.now()}`;
+    const dicomStudyUid = `${root}.1`;
+    const series = [{ uid: `${root}.2`, modality: 'CT', numberOfInstances: 1 }];
+
+    const created = await request.post(`${apiBaseURL}/api/imaging-studies`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { dicomStudyUid, series },
+    });
+    expect(created.status()).toBe(201);
+    const study = (await created.json()).data;
+    expect(study.dicomStudyUid).toBe(dicomStudyUid);
+    expect(study.series).toEqual(series);
+    expect(study.imagingStudyId).toBeTruthy();
+
+    const read = await request.get(`${apiBaseURL}/api/imaging-studies/${study.imagingStudyId}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(read.status()).toBe(200);
+    const readBody = (await read.json()).data;
+    expect(readBody.dicomStudyUid).toBe(dicomStudyUid);
+    expect(readBody.series).toEqual(series);
+
+    // ELM-0354 is 1..*: a study with no series is refused.
+    const empty = await request.post(`${apiBaseURL}/api/imaging-studies`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { dicomStudyUid: `${root}.3`, series: [] },
+    });
+    expect(empty.status()).toBe(422);
+  });
 });
 
 // RF008 (Relatórios) — Wave 4 kickoff (#723). The report pipeline
