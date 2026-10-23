@@ -184,6 +184,7 @@ const ENTITY_MAP = {
   'backup': 'Backup',
   'backup-policy': 'BackupPolicy',
   'biobanks': 'Biobank',
+  'biomarker-associations': 'BiomarkerAssociation',
   'cids': 'Cid',
   'collections': 'Collection',
   'compliance': 'Compliance',

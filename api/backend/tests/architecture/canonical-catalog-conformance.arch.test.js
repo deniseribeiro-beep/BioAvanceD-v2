@@ -73,6 +73,7 @@ const ENTITY_TARGETS = {
   InteroperabilityMappingRelease: () => require('../../src/models/InteroperabilityMappingRelease').fieldsOf(),
   FHIRProfileRegistry: () => require('../../src/models/FHIRProfileRegistry').fieldsOf(),
   Biobank: () => require('../../src/models/Biobank').fieldsOf(),
+  BiomarkerAssociation: () => require('../../src/models/BiomarkerAssociation').fieldsOf(),
   Network: () => require('../../src/models/Network').fieldsOf(),
   ImagingStudy: () => require('../../src/models/ImagingStudy').fieldsOf(),
   ConfigurationValidationRun: () => require('../../src/models/ConfigurationValidationRun').fieldsOf(),

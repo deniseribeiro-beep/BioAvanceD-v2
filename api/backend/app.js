@@ -434,6 +434,14 @@ app.use("/api/networks", createMasterDataRouter({
   model: require("./src/models/Network"),
   validateReferences: require("./src/services/institutionalReferenceValidator").validateNetworkReferences
 }));
+// ELM-0275..0285 (#1206): BiomarkerAssociation reference data, entered by a
+// Coordenador or Administrador; each association names its evidence (1..*).
+app.use("/api/biomarker-associations", createMasterDataRouter({
+  collectionName: "biomarkerAssociations",
+  idField: "biomarkerId",
+  model: require("./src/models/BiomarkerAssociation"),
+  validateReferences: require("./src/services/biomarkerAssociation.service").validateBiomarkerAssociationReferences
+}));
 // RF011 AC3, RNF024 C2, RULE-036 (#1322): the identifier namespaces a
 // Coordenador or Administrador enters; the FHIR import validation reads
 // them for identifier.system. A namespaceKey keeps its systemUri.
