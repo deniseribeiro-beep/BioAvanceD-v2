@@ -381,6 +381,69 @@ describe('rcs-assessment.service', () => {
     });
   });
 
+  // RF018 AC1 (#1320): the SPREC mapping release is named on the snapshot and
+  // the resolved axes only when its tables reproduce the stored result.
+  describe('recordAssessment SPREC mapping release', () => {
+    const rcsCertificationService = require('../../../src/services/rcs-certification.service');
+    const { sprecMapping } = require('../../../src/services/rcs-reference-data');
+    const releaseId = sprecMapping.sprec_mapping_release_id;
+    const sprec = {
+      sampleType: 'PL1', primaryContainer: 'SST', preCentrifugation: 'A', centrifugation: 'A',
+      secondCentrifugation: 'A', postCentrifugationDelay: 'A', longTermStorage: 'A',
+    };
+    const certified = (sprecEdit = {}) => {
+      const rcsInput = rcsCertificationService.readInput({ matrix_type: 'fluid', sprec: { ...sprec, ...sprecEdit } });
+      return { ...rcsCertificationService.certify(rcsInput), rcs_input: rcsInput };
+    };
+
+    it('writes the release id on the snapshot and on all five axes of a scored result', async () => {
+      const db = createFakeDb();
+      const result = certified();
+      expect(result.governance_status).toBe(1);
+      const assessment = await recordAssessment(db, 'SPEC-1', result);
+      expect(db.collections.rcsInputSnapshots.docs[0].sprecMappingReleaseId).toBe(releaseId);
+      expect(assessment.rcsAxisResults.map((entry) => entry.severityMappingReleaseId)).toEqual(Array(5).fill(releaseId));
+    });
+
+    it('writes no release id on the snapshot or any axis when the result is not reproduced', async () => {
+      const db = createFakeDb();
+      const assessment = await recordAssessment(db, 'SPEC-1', { ...certified(), rcs_score: 1 });
+      expect(db.collections.rcsInputSnapshots.docs[0].sprecMappingReleaseId).toBeNull();
+      expect(assessment.rcsAxisResults).toHaveLength(5);
+      expect(assessment.rcsAxisResults.map((entry) => entry.severityMappingReleaseId)).toEqual(Array(5).fill(null));
+    });
+
+    it('writes the release id for a FHIR-preview-shaped result of the eight reproduced keys', async () => {
+      const db = createFakeDb();
+      const full = certified();
+      const preview = Object.fromEntries([
+        'model_version', 'matrix_type', 'governance_status', 'p_bio',
+        'rcs_score', 'final_grade', 'grade_route', 'axis_penalties', 'rcs_input',
+      ].map((key) => [key, full[key]]));
+      const assessment = await recordAssessment(db, 'SPEC-1', preview);
+      expect(db.collections.rcsInputSnapshots.docs[0].sprecMappingReleaseId).toBe(releaseId);
+      expect(assessment.rcsAxisResults.map((entry) => entry.severityMappingReleaseId)).toEqual(Array(5).fill(releaseId));
+    });
+
+    it('writes the release id on the snapshot of a governance failure and null on its unknown axis', async () => {
+      const db = createFakeDb();
+      const result = certified({ preCentrifugation: 'X' });
+      expect(result.governance_status).toBe(0);
+      const assessment = await recordAssessment(db, 'SPEC-1', result);
+      expect(db.collections.rcsInputSnapshots.docs[0].sprecMappingReleaseId).toBe(releaseId);
+      expect(assessment.rcsAxisResults.map((entry) => [entry.resolutionStatus, entry.severityMappingReleaseId])).toEqual([
+        ['unknown', null], ['resolved', releaseId], ['resolved', releaseId], ['resolved', releaseId], ['resolved', releaseId],
+      ]);
+    });
+
+    it('keeps the trace of the result unchanged', async () => {
+      const db = createFakeDb();
+      const result = certified();
+      const assessment = await recordAssessment(db, 'SPEC-1', result);
+      expect(assessment.calculationTrace).toEqual(result.calculation_trace);
+    });
+  });
+
   describe('getAssessmentsForSpecimen', () => {
     it('scopes results to the requested specimenId only', async () => {
       const db = createFakeDb();

@@ -1,0 +1,15 @@
+{
+  "model_code": "RCS-GOV-1.0",
+  "sprec_version": "SPREC-2.0",
+  "sprec_mapping_release_id": "a5341072-35e8-4bf4-a9d1-127bc47536da",
+  "mapping_version": "1.0.0",
+  "compatibility_status": "current_baseline",
+  "status": "active",
+  "migration_notes": "SPREC 2.0 is the current RCS baseline; SPREC 4.0 is roadmap only (RF018 AC1).",
+  "tables": [
+    "rcs-sprec-fluid-catalog.RCS-GOV-1.0.json",
+    "rcs-sprec-solid-catalog.RCS-GOV-1.0.json",
+    "rcs-severity-mapping.RCS-GOV-1.0.json",
+    "rcs-axis-weights.RCS-GOV-1.0.json"
+  ]
+}

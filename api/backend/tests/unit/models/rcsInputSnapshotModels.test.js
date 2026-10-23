@@ -401,6 +401,20 @@ describe('RcsInputSnapshotModel.capture', () => {
     expect(RcsInputSnapshotModel.capture({ ...base(), materialTypeCode: { code: 'PL1' } }).materialTypeCode).toBeNull();
   });
 
+  // RF018 AC1 (#1320): the SPREC mapping release of the codes, severities
+  // and weights, with no matrix condition.
+  it('keeps a given sprecMappingReleaseId inside its hash', () => {
+    const released = RcsInputSnapshotModel.capture({ ...base(), sprecMappingReleaseId: 'sprec-mapping-release-001' });
+    expect(released.sprecMappingReleaseId).toBe('sprec-mapping-release-001');
+    expect(released.snapshotHash).not.toBe(RcsInputSnapshotModel.capture(base()).snapshotHash);
+  });
+
+  it.each([[''], ['  '], [42], [{ id: 'sprec-mapping-release-001' }]])('drops a sprecMappingReleaseId of %j', (sprecMappingReleaseId) => {
+    const snapshot = RcsInputSnapshotModel.capture({ ...base(), sprecMappingReleaseId });
+    expect(snapshot.sprecMappingReleaseId).toBeNull();
+    expect(snapshot.snapshotHash).toBe(RcsInputSnapshotModel.capture(base()).snapshotHash);
+  });
+
   it('drops the matrixMappingReleaseId beside a matrix that is neither fluid nor solid', () => {
     const snapshot = RcsInputSnapshotModel.capture({ ...base(), matrix: 'unknown', matrixMappingReleaseId: 'matrix-mapping-release-001' });
     expect(snapshot.matrix).toBeNull();

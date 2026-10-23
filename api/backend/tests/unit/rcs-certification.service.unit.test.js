@@ -411,6 +411,9 @@ describe('RcsCertificationService.evaluateAxisResults (RF018 AC6, #1320)', () =>
             expect(axes).toHaveLength(5);
             for (const entry of axes) {
               seen.add(entry.resolutionStatus);
+              // RF018 AC1: an axis names the SPREC mapping release iff it is resolved.
+              expect(entry.severityMappingReleaseId)
+                .toBe(entry.resolutionStatus === 'resolved' ? referenceData.sprecMapping.sprec_mapping_release_id : null);
               if (entry.resolutionStatus !== 'resolved') {
                 expect([entry.severity, entry.weightedPenalty, entry.applicabilityContext]).toEqual([null, null, null]);
               }
@@ -469,9 +472,17 @@ describe('RcsCertificationService.evaluateAxisResults (RF018 AC6, #1320)', () =>
     const [, penalty] = rcsCertificationService.certify(payload).axis_penalties;
     expect(pcent1).toEqual({
       axisCode: 'P_cent1', sprecCode: 'N', severity: penalty.severity, maximumWeight: 15, weightedPenalty: penalty.penalty,
-      severityMappingReleaseId: null, resolutionStatus: 'resolved',
+      severityMappingReleaseId: referenceData.sprecMapping.sprec_mapping_release_id, resolutionStatus: 'resolved',
       applicabilityContext: { workflowRule: 'pcent1_no_centrifugation_acceptable' }, evidenceIds: [],
     });
+  });
+
+  it('names no SPREC mapping release on a resolved axis when the data holds none', () => {
+    const { sprecMapping, ...withoutRelease } = referenceData;
+    const service = new rcsCertificationService.RcsCertificationService(withoutRelease);
+    const { axes } = service.evaluateAxisResults({ matrix_type: 'fluid', sprec: fluidSprec });
+    expect(axes.map((entry) => entry.resolutionStatus)).toEqual(Array(5).fill('resolved'));
+    expect(axes.map((entry) => entry.severityMappingReleaseId)).toEqual(Array(5).fill(null));
   });
 
   it('writes no axis for an input with no resolvable matrix', () => {

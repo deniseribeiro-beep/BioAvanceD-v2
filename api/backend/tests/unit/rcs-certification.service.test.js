@@ -382,3 +382,52 @@ describe('matrixMappingRelease (RF018 AC4, #1320)', () => {
       .toBe('sha256:0aa3cb01efdf45f4e1d08809ba30ffad1386f56c982a5cf07088d1f26c2b52d5');
   });
 });
+
+describe('sprecMappingRelease (RF018 AC1, #1320)', () => {
+  const { RcsCertificationService } = rcsService;
+  const checksumWith = (data) => new RcsCertificationService({ ...referenceData, ...data }).sprecMappingRelease().checksum;
+
+  it('checksums the release and its tables as a stable sha256, equal across instances on the same data', () => {
+    const release = rcsService.sprecMappingRelease();
+    expect(release).toEqual({
+      sprecMappingReleaseId: referenceData.sprecMapping.sprec_mapping_release_id,
+      sprecVersion: referenceData.sprecMapping.sprec_version,
+      mappingVersion: referenceData.sprecMapping.mapping_version,
+      compatibilityStatus: referenceData.sprecMapping.compatibility_status,
+      status: referenceData.sprecMapping.status,
+      checksum: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+    });
+    expect(release.sprecMappingReleaseId).toBe('a5341072-35e8-4bf4-a9d1-127bc47536da');
+    expect(new RcsCertificationService(referenceData).sprecMappingRelease()).toEqual(release);
+  });
+
+  it('gives another checksum when one severity value changes', () => {
+    const index = referenceData.severityMappings.findIndex((item) => typeof item.severity_value === 'number');
+    const severityMappings = referenceData.severityMappings.map((item, i) => (
+      i === index ? { ...item, severity_value: item.severity_value + 0.5 } : item
+    ));
+    expect(checksumWith({ severityMappings })).not.toBe(rcsService.sprecMappingRelease().checksum);
+  });
+
+  it('gives another checksum when one weight changes', () => {
+    const weights = referenceData.weights.map((item, i) => (i === 0 ? { ...item, weight: Number(item.weight) + 1 } : item));
+    expect(checksumWith({ weights })).not.toBe(rcsService.sprecMappingRelease().checksum);
+  });
+
+  it('gives another checksum with a fluid catalog entry dropped', () => {
+    const catalogs = { ...referenceData.catalogs, fluid: referenceData.catalogs.fluid.slice(1) };
+    expect(checksumWith({ catalogs })).not.toBe(rcsService.sprecMappingRelease().checksum);
+  });
+
+  it('is null with no release in the data', () => {
+    const { sprecMapping, ...withoutRelease } = referenceData;
+    expect(new RcsCertificationService(withoutRelease).sprecMappingRelease()).toBeNull();
+  });
+
+  it('leaves the governance rule-set and matrix mapping checksums as they were before the release', () => {
+    expect(rcsService.governanceRuleSet().checksum)
+      .toBe('sha256:0aa3cb01efdf45f4e1d08809ba30ffad1386f56c982a5cf07088d1f26c2b52d5');
+    expect(rcsService.matrixMappingRelease().checksum)
+      .toBe('sha256:d5749ff8cc4a834c7042b6d283b3634bbb3c1a856c4a15a278d786a7391d904e');
+  });
+});

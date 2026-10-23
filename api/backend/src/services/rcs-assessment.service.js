@@ -5,9 +5,33 @@ const RcsAssessmentModel = require('../models/RcsAssessment');
 const RcsInputSnapshotModel = require('../models/RcsInputSnapshot');
 const RcsGovernanceEvidenceSnapshotModel = require('../models/RcsGovernanceEvidenceSnapshot');
 const rcsCertificationService = require('./rcs-certification.service');
+const { canonicalJson } = require('../models/ConfigurationRelease');
 
 const isPlainObject = (value) => value !== null && typeof value === 'object'
   && !Array.isArray(value) && !(value instanceof Date);
+
+// RF018 AC1 (#1320): the result keys a recomputation must reproduce before
+// the SPREC mapping release is named as the one that gave the result. They
+// are the keys the FHIR staging preview keeps, so a preview-shaped result
+// qualifies.
+const REPRODUCED_KEYS = Object.freeze([
+  'model_version', 'matrix_type', 'governance_status', 'p_bio',
+  'rcs_score', 'final_grade', 'grade_route', 'axis_penalties',
+]);
+const reproducedKeysOf = (result) => canonicalJson(Object.fromEntries(
+  REPRODUCED_KEYS.map((key) => [key, result?.[key] ?? null]),
+));
+
+// INFERENCE, not a citation: the release is named only on positive evidence
+// that its tables give the stored result, i.e. certify() over the captured
+// input reproduces it; otherwise null, never fabricated (see
+// docs/decisions/2026-10-23-rcs-sprec-mapping-release.md).
+function sprecMappingReleaseFor(certificationResult) {
+  const release = rcsCertificationService.sprecMappingRelease();
+  if (!release) return null;
+  const recomputed = rcsCertificationService.certify(certificationResult.rcs_input);
+  return reproducedKeysOf(recomputed) === reproducedKeysOf(certificationResult) ? release : null;
+}
 
 /**
  * Persists one versioned RCS certification snapshot referenced by
@@ -33,6 +57,13 @@ async function recordAssessment(db, specimenId, certificationResult) {
   if (isPlainObject(certificationResult?.rcs_input)) {
     const axisResults = rcsCertificationService.evaluateAxisResults(certificationResult.rcs_input);
     if (axisResults.matrix === certificationResult.matrix_type) rcsAxisResults = axisResults.axes;
+    // RF018 AC1 (#1320): the SPREC mapping release, kept only when its tables
+    // reproduce this result; otherwise no axis names a release the snapshot
+    // does not.
+    const sprecRelease = sprecMappingReleaseFor(certificationResult);
+    if (!sprecRelease) {
+      rcsAxisResults = rcsAxisResults.map((axis) => ({ ...axis, severityMappingReleaseId: null }));
+    }
     const rcsInputSnapshotId = crypto.randomUUID();
     const governanceEvidenceSnapshotId = crypto.randomUUID();
     evidence = RcsGovernanceEvidenceSnapshotModel.capture({
@@ -52,6 +83,7 @@ async function recordAssessment(db, specimenId, certificationResult) {
       matrix: certificationResult.matrix_type,
       materialTypeCode: resolved ? resolution.materialTypeCode : null,
       matrixMappingReleaseId: resolved ? resolution.matrixMappingReleaseId : null,
+      sprecMappingReleaseId: sprecRelease ? sprecRelease.sprecMappingReleaseId : null,
       sprecVersion: certificationResult.calculation_trace?.sprec_version ?? null,
       governanceEvidenceId: governanceEvidenceSnapshotId,
       capturedAt: now,

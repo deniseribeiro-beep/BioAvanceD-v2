@@ -215,9 +215,12 @@ class RcsCertificationService {
   // observed code, severity, maximum weight, weighted penalty and resolution
   // status, computed beside certify() and agreeing with its axis_penalties.
   // An unresolved axis carries null severity, penalty and context, never 0
-  // (RULE-011). No severity mapping release or axis evidence exists yet, so
-  // severityMappingReleaseId is null and evidenceIds empty, never fabricated
-  // (see docs/decisions/2026-10-23-rcs-axis-results-and-route-reasons.md).
+  // (RULE-011). A resolved axis names the SPREC mapping release whose
+  // tables gave its severity and weight (RF018 AC1); any other axis, and any
+  // axis with no release in the data, carries a null severityMappingReleaseId.
+  // No axis evidence exists yet, so evidenceIds is empty, never fabricated
+  // (see docs/decisions/2026-10-23-rcs-axis-results-and-route-reasons.md and
+  // 2026-10-23-rcs-sprec-mapping-release.md).
   evaluateAxisResults(input = {}) {
     const samplePayload = samplePayloadOf(input);
     const sprec = this.normalizeSprec(samplePayload);
@@ -251,7 +254,7 @@ class RcsCertificationService {
         severity: resolved ? Number(severity.severity_value) : null,
         maximumWeight: weight ? Number(weight.weight) : null,
         weightedPenalty: resolved ? round(Number(weight.weight) * Number(severity.severity_value)) : null,
-        severityMappingReleaseId: null,
+        severityMappingReleaseId: resolved ? this.sprecMappingRelease()?.sprecMappingReleaseId ?? null : null,
         resolutionStatus,
         applicabilityContext: resolved && severity.requires_workflow_context ? { workflowRule: severity.workflow_rule } : null,
         evidenceIds: [],
@@ -460,6 +463,33 @@ class RcsCertificationService {
       };
     }
     return this.mappingRelease;
+  }
+
+  // RF018 AC1 (#1320): the SPREC mapping release's identity and checksum.
+  // V2E-0239 is the checksum of the tables, so it is canonical JSON over the
+  // seeded release with the catalogs, severity mappings and weights it
+  // names; the thresholds are not codes, severities or weights and stay out.
+  // With no release in the data it is null.
+  sprecMappingRelease() {
+    if (!this.sprecRelease) {
+      const release = this.data.sprecMapping;
+      if (!release) return null;
+      const tables = {
+        release,
+        catalogs: this.data.catalogs,
+        severity_mappings: this.data.severityMappings,
+        weights: this.data.weights,
+      };
+      this.sprecRelease = {
+        sprecMappingReleaseId: release.sprec_mapping_release_id,
+        sprecVersion: release.sprec_version,
+        mappingVersion: release.mapping_version,
+        compatibilityStatus: release.compatibility_status,
+        status: release.status,
+        checksum: `sha256:${crypto.createHash('sha256').update(canonicalJson(tables)).digest('hex')}`,
+      };
+    }
+    return this.sprecRelease;
   }
 
   evaluateGovernance(payload = {}, sprec = {}, matrixType = null) {
