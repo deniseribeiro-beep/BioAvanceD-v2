@@ -192,6 +192,7 @@ const ENTITY_MAP = {
   'e-consent': 'Consent',
   'extraction-protocols': 'ExtractionProtocol',
   'hpo': 'TerminologyConcept',
+  'identifier-namespaces': 'IdentifierNamespaceRegistry',
   'incidents': 'Incident',
   'iot': 'TelemetryReading',
   'legal-holds': 'LegalHold',

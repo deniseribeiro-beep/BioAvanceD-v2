@@ -59,6 +59,17 @@ class IdentifierNamespaceRegistryModel {
     return fields;
   }
 
+  // The master-data router's POST gate: a row create refuses answers its
+  // message as a 422.
+  static validate(data = {}, { approvedAuthorities = [] } = {}) {
+    try {
+      this.create(data, { approvedAuthorities });
+      return { isValid: true, errors: [] };
+    } catch (error) {
+      return { isValid: false, errors: [error.message] };
+    }
+  }
+
   // RULE-036.
   static assertSystemUri(systemUri, approvedAuthorities = []) {
     let url;

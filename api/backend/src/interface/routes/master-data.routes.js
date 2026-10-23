@@ -75,13 +75,15 @@ function createMasterDataRouter({ collectionName, idField, model, validateRefere
   // allowlist without needing a separate filter -- deliberate
   // immutable-identity treatment, not an oversight.
   //
-  // Three of the fourteen mounted models throw on an empty
-  // `model.create({})` probe because their create() spreads/maps a
-  // required array field with no fallback when it's absent
+  // Four mounted models throw on an empty `model.create({})` probe. Three
+  // spread/map a required array field with no fallback when it's absent
   // (Assay.js:105 specimenIds, Dataset.js:56 creators,
-  // OmicsQualification.js:52 qcMetrics). For those three the allowlist
+  // OmicsQualification.js:52 qcMetrics), and IdentifierNamespaceRegistry
+  // refuses any row missing a required field. For those four the allowlist
   // falls back to a hand-enumerated list, derived by reading that model's
-  // own create() return keys, keyed by collectionName.
+  // own create() return keys, keyed by collectionName. The namespace list
+  // leaves out namespaceKey and systemUri: RULE-036 keeps the URI stable,
+  // so a new version is a new row (#1322).
   const HAND_ENUMERATED_UPDATE_FIELDS = {
     assays: [
       'studyId', 'specimenIds', 'assayType', 'omicsDomain', 'protocolId',
@@ -95,6 +97,10 @@ function createMasterDataRouter({ collectionName, idField, model, validateRefere
     omicsQualifications: [
       'targetAssay', 'qcRuleSetVersion', 'qcMetrics', 'qualificationDecision',
       'limitations',
+    ],
+    identifierNamespaceRegistries: [
+      'authorityDomain', 'targetTypes', 'semanticVersion', 'status',
+      'effectivePeriod', 'configurationReleaseId',
     ],
   };
 

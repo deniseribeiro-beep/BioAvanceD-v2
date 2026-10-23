@@ -434,6 +434,16 @@ app.use("/api/networks", createMasterDataRouter({
   model: require("./src/models/Network"),
   validateReferences: require("./src/services/institutionalReferenceValidator").validateNetworkReferences
 }));
+// RF011 AC3, RNF024 C2, RULE-036 (#1322): the identifier namespaces a
+// Coordenador or Administrador enters; the FHIR import validation reads
+// them for identifier.system. A namespaceKey keeps its systemUri.
+app.use("/api/identifier-namespaces", createMasterDataRouter({
+  collectionName: "identifierNamespaceRegistries",
+  idField: "identifierNamespaceRegistryId",
+  model: require("./src/models/IdentifierNamespaceRegistry"),
+  validateReferences: require("./src/services/identifierNamespaceRegistry.service").validateNamespaceReferences,
+  immutableFields: ["namespaceKey", "systemUri"]
+}));
 app.use("/api/workflow-runs/:workflowRunId/files", require("./src/interface/routes/workflow-run-file-link.routes"));
 app.use("/api/workflow-runs", createMasterDataRouter({
   collectionName: "workflowRuns",

@@ -199,7 +199,7 @@ class ImportService {
   /**
    * Valida arquivo JSON como FHIR R4 (Patient/Specimen/Observation/Organization)
    */
-  validateFHIRFile(file) {
+  validateFHIRFile(file, { registry } = {}) {
     try {
       const raw = fs.readFileSync(file.path, 'utf8');
       const payload = JSON.parse(raw);
@@ -208,7 +208,7 @@ class ImportService {
         return { isFhir: false, valid: true };
       }
 
-      const result = fhirValidator.validatePayload(payload, ['Patient', 'Specimen', 'Observation', 'Organization', 'Bundle']);
+      const result = fhirValidator.validatePayload(payload, ['Patient', 'Specimen', 'Observation', 'Organization', 'Bundle'], { registry });
       const operationOutcome = fhirValidator.buildOperationOutcome(result.issues || []);
 
       return {

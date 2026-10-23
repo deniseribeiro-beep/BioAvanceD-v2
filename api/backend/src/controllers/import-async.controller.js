@@ -100,7 +100,7 @@ class ImportAsyncController {
       }
 
       // Valida arquivo
-      const validation = await importAsyncService.validateFile(file, dataType);
+      const validation = await importAsyncService.validateFile(file, dataType, { db });
 
       if (!validation.valid) {
         // Limpa arquivo se validação falhar

@@ -46,6 +46,17 @@ describe('IdentifierNamespaceRegistry model (RULE-036)', () => {
     expect(() => IdentifierNamespaceRegistryModel.assertStableUri(v1, moved)).toThrow(/RULE-036/);
   });
 
+  it('validate answers isValid true for an accepted row, and false with the RULE-036 message for a refused one', () => {
+    expect(IdentifierNamespaceRegistryModel.validate(namespace)).toEqual({ isValid: true, errors: [] });
+    expect(IdentifierNamespaceRegistryModel.validate({ ...namespace, systemUri: 'http://id.bioadvanced.dev/ns/x' })).toEqual({
+      isValid: false,
+      errors: ['systemUri deve usar HTTPS (RULE-036): http://id.bioadvanced.dev/ns/x'],
+    });
+    const external = { ...namespace, systemUri: 'https://gs1.org/ns/x' };
+    expect(IdentifierNamespaceRegistryModel.validate(external).isValid).toBe(false);
+    expect(IdentifierNamespaceRegistryModel.validate(external, { approvedAuthorities: ['gs1.org'] }).isValid).toBe(true);
+  });
+
   it('requires a SemVer version, a target type and a period whose end follows its start', () => {
     expect(() => IdentifierNamespaceRegistryModel.create({ ...namespace, semanticVersion: 'v1' })).toThrow(/SemVer/);
     expect(() => IdentifierNamespaceRegistryModel.create({ ...namespace, targetTypes: [] })).toThrow(/targetTypes/);

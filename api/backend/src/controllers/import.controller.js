@@ -2,6 +2,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const importService = require('../services/import.service');
+const { loadConformanceRegistry } = require('../services/identifierNamespaceRegistry.service');
 const callerCreateOrganization = require('../services/callerCreateOrganization.service');
 const logService = require('../services/log.service');
 const logger = require('../utils/logger');
@@ -129,7 +130,9 @@ class ImportController {
 
       // JSON - validação básica
       if (path.extname(file.originalname).toLowerCase() === '.json') {
-        const fhirValidation = importService.validateFHIRFile(file);
+        // RF011 AC3 (#1322): the stored identifier namespaces join the base registry.
+        const registry = await loadConformanceRegistry(db);
+        const fhirValidation = importService.validateFHIRFile(file, { registry });
 
         if (fhirValidation.isFhir && !fhirValidation.valid) {
           logger.warn('Validação FHIR falhou (sync import):', JSON.stringify(fhirValidation.operationOutcome));

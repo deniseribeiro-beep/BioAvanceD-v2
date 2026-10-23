@@ -1,7 +1,10 @@
-// RF011 AC1/AC3, RNF024 C1 (#1322): the conformance rows the FHIR validator
-// reads by default. `profiles` are FHIRProfileRegistry rows, `namespaces` are
+// RF011 AC1/AC3, RNF024 C1/C2 (#1322): the base conformance rows the FHIR
+// validator reads. `profiles` are FHIRProfileRegistry rows, `namespaces` are
 // IdentifierNamespaceRegistry rows, and `approvedAuthorities` are RULE-036's
-// explicitly approved external hosts.
+// explicitly approved external hosts. At import validation,
+// loadConformanceRegistry (identifierNamespaceRegistry.service.js) adds the
+// stored IdentifierNamespaceRegistry rows (/api/identifier-namespaces) to
+// this base; without a readable store the base alone answers.
 //
 // All three are empty on purpose: the requisitos populate profiles and
 // mappings in Phase 2, and Phase 1 holds no fictitious operational data, so

@@ -217,6 +217,31 @@ describe('ImportService.validateFHIRFile', () => {
     }
   });
 
+  // RF011 AC3 (#1322): the registry the caller loaded reaches the validator.
+  it('accepts an identifier.system that the passed registry holds, and refuses it without one', () => {
+    const systemUri = 'https://id.bioadvanced.dev/ns/specimen';
+    const filePath = writeTempFile(JSON.stringify({
+      resourceType: 'Patient', id: '123', name: [{ family: 'Silva', given: ['Ana'] }], gender: 'female', birthDate: '1990-01-01',
+      identifier: [{ system: systemUri, value: 'S-0001' }]
+    }), '.json');
+    const registry = {
+      profiles: [],
+      approvedAuthorities: [],
+      namespaces: [{
+        namespaceKey: 'specimen', systemUri, authorityDomain: 'bioadvanced.dev', targetTypes: ['specimen'],
+        semanticVersion: '1.0.0', effectivePeriod: { start: '2026-01-01' }, configurationReleaseId: 'cfg-2026-10'
+      }]
+    };
+    try {
+      expect(importService.validateFHIRFile({ path: filePath }, { registry })).toMatchObject({ isFhir: true, valid: true, issues: [] });
+      const refused = importService.validateFHIRFile({ path: filePath });
+      expect(refused.valid).toBe(false);
+      expect(refused.issues.map((issue) => issue.reason)).toEqual(['identifier-system-unknown']);
+    } finally {
+      fs.unlinkSync(filePath);
+    }
+  });
+
   it('returns a structured error result when the file does not exist', () => {
     const result = importService.validateFHIRFile({ path: path.join(os.tmpdir(), 'does-not-exist-import-service.json') });
     expect(result.isFhir).toBe(false);
