@@ -271,6 +271,98 @@ describe('FHIR import staging', () => {
     expect(db.collections.samples.docs).toHaveLength(0);
   });
 
+  // RF011 AC6, RNF024 C6 (#1322): staging records its round-trip loss.
+  it('registra roundTripLoss no registro e no batch: campos não mapeados e recursos não anexados', async () => {
+    const bundle = {
+      resourceType: 'Bundle',
+      entry: [
+        {
+          resource: {
+            resourceType: 'Patient',
+            id: 'P-RT',
+            name: [{ text: 'Paciente Round Trip' }],
+            identifier: [{ value: 'DOC-RT' }],
+            telecom: [{ system: 'email', value: 'rt@example.org' }],
+          },
+        },
+        { resource: { resourceType: 'Organization', name: 'Biobanco RT' } },
+        {
+          resource: {
+            resourceType: 'Specimen',
+            id: 'S-RT',
+            subject: { reference: 'Patient/P-RT' },
+            type: { text: 'SANGUE' },
+            collection: { quantity: { value: 5, unit: 'mL' } },
+          },
+        },
+      ],
+    };
+
+    const result = await fhirImportStagingService.stageBundle(db, bundle, { fileName: 'round-trip.json' });
+
+    const expectedRecordLoss = {
+      unmappedCount: 2,
+      unmapped: [
+        { source: 'specimen', path: 'Specimen.collection.quantity.unit' },
+        { source: 'specimen', path: 'Specimen.collection.quantity.value' },
+      ],
+      truncated: false,
+    };
+    const expectedBatchLoss = {
+      unattachedResourceCount: 1,
+      unattached: [{ resourceIndex: 1, resourceType: 'Organization' }],
+    };
+    expect(db.collections.import_staging_records.docs[0].roundTripLoss).toMatchObject(expectedRecordLoss);
+    expect(db.collections.import_staging_records.docs[0].roundTripLoss.limitations.length).toBeGreaterThan(0);
+    expect(db.collections.import_batches.docs[0].roundTripLoss).toEqual(expectedBatchLoss);
+    expect(result.batch.roundTripLoss).toEqual(expectedBatchLoss);
+    expect(result.records[0].roundTripLoss).toMatchObject(expectedRecordLoss);
+  });
+
+  // #1322: a large Bundle stores a bounded roundTripLoss on each staged record.
+  it('limita roundTripLoss a 50 caminhos por registro num Bundle com 2000 Observations', async () => {
+    const observations = Array.from({ length: 2000 }, (_, i) => ({
+      resource: {
+        resourceType: 'Observation',
+        subject: { reference: 'Patient/P-BIG' },
+        category: [{ coding: [{ system: 'http://terminology.hl7.org/CodeSystem/observation-category', code: 'laboratory' }] }],
+        code: { coding: [{ system: 'http://loinc.org', code: `LAB-${i}`, display: 'Exame' }] },
+        valueQuantity: { value: i, unit: 'mg/dL', system: 'http://unitsofmeasure.org' },
+      },
+    }));
+    const bundle = {
+      resourceType: 'Bundle',
+      entry: [
+        {
+          resource: {
+            resourceType: 'Patient',
+            id: 'P-BIG',
+            name: [{ text: 'Paciente Grande' }],
+            identifier: [{ value: 'DOC-BIG' }],
+            telecom: [{ system: 'email', value: 'grande@example.org' }],
+          },
+        },
+        { resource: { resourceType: 'Specimen', id: 'S-BIG-1', subject: { reference: 'Patient/P-BIG' }, type: { text: 'SANGUE' } } },
+        { resource: { resourceType: 'Specimen', id: 'S-BIG-2', subject: { reference: 'Patient/P-BIG' }, type: { text: 'SANGUE' } } },
+        ...observations,
+      ],
+    };
+
+    await fhirImportStagingService.stageBundle(db, bundle, { fileName: 'big.json' });
+
+    const staged = db.collections.import_staging_records.docs;
+    expect(staged).toHaveLength(2);
+    staged.forEach((doc) => {
+      // Per Observation: category coding system and code, code.coding[0].system, valueQuantity.system.
+      expect(doc.roundTripLoss.unmappedCount).toBe(8000);
+      expect(doc.roundTripLoss.unmapped.length).toBeLessThanOrEqual(50);
+      expect(doc.roundTripLoss.truncated).toBe(true);
+      // The sealed fhir payload of 2000 Observations is itself about 1 MB per
+      // record; what roundTripLoss adds stays small.
+      expect(Buffer.byteLength(JSON.stringify(doc.roundTripLoss))).toBeLessThan(16 * 1024);
+    });
+  });
+
   it('mapeia Patient, Specimen, Condition, Observation e Consent para staging', async () => {
     const result = await fhirImportStagingService.stageBundle(db, signedBundle, { fileName: 'bundle.json' });
     const record = result.records[0];

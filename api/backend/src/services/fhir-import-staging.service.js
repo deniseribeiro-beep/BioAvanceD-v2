@@ -14,6 +14,7 @@ const { withMongoTransaction, isTransactionCapable } = require('../utils/mongoTr
 const rcsAssessmentService = require('./rcs-assessment.service');
 const specimenPreanalyticsService = require('./specimen-preanalytics.service');
 const { isRecordInOrganizationScope } = require('./rbac-assignment.service');
+const { buildRecordRoundTripLoss, buildBundleRoundTripLoss } = require('../resources/fhir/round-trip-loss');
 
 const STATUS = Object.freeze({
   VALID: 'VALID',
@@ -644,16 +645,22 @@ async function stageBundle(db, payload, metadata = {}) {
     counts: summarize(records),
     createdBy: metadata.userID || null,
     organizationId,
+    // RF011 AC6, RNF024 C6 (#1322): the Bundle resources no record attaches.
+    roundTripLoss: buildBundleRoundTripLoss(resources, records),
     createdAt: now,
     updatedAt: now,
   };
   const batchResult = await collection(db, 'import_batches').insertOne(batchDoc);
   const batchId = batchResult.insertedId;
 
+  // #1322: an Observation several records attach is walked once.
+  const roundTripLossCache = new WeakMap();
   const docs = records.map((record) => ({
     ...record,
     batchId,
     organizationId,
+    // RF011 AC6, RNF024 C6 (#1322): paths only, kept outside the sealed fields.
+    roundTripLoss: buildRecordRoundTripLoss(record.fhir, roundTripLossCache),
     createdAt: now,
     updatedAt: now,
   }));
