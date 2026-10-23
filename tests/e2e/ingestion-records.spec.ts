@@ -4,6 +4,7 @@ import { watchAuditTrail, assertAuditEventRecorded } from './helpers/assertAudit
 import { completeFirstLoginMfa } from './helpers/completeFirstLoginMfa';
 import {
   findIngestionIdempotencyKey,
+  findIngestionQuarantineRecord,
   findIngestedRecord,
   countIngestedBySourceRecordId,
   findOutboxEvents,
@@ -16,6 +17,16 @@ import {
   countAccessDenialRows,
   closeIngestionDb,
 } from './helpers/queryIngestion';
+import {
+  createRealParticipant,
+  seedStorageBoxLocation,
+  cleanupStorageBoxLocation,
+  seedStudy,
+  seedProtocol,
+  closeSeedDb,
+  type SeededStorageBox,
+} from './helpers/seedParticipant';
+import { deleteOrganizations } from './helpers/listOrganizations';
 
 // RF029 (#1318): POST /api/ingestion/records against the real backend, its
 // writes read back from the stack's Mongo. Real backend only — see
@@ -72,7 +83,16 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
     inForce = config.configurationReleaseId;
   });
 
-  test.afterAll(async () => {
+  // #1318: what the Assay cases seed for their references.
+  const seededStorageBoxes: SeededStorageBox[] = [];
+  const organizationIdsToDelete: string[] = [];
+
+  test.afterAll(async ({ request }) => {
+    await Promise.all(
+      seededStorageBoxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {}))
+    );
+    await deleteOrganizations(request, apiBaseURL!, organizationIdsToDelete);
+    await closeSeedDb();
     await closeIngestionDb();
   });
 
@@ -207,6 +227,108 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
     const rows = await findIngestionAuditRows('INGESTION_ACCEPTED', body.entityId);
     expect(rows).toHaveLength(1);
     expect(rows[0].resourceType).toBe('OmicsQualification');
+  });
+
+  // #1318: an Assay's references resolve against real records (#664), so its
+  // specimen, study, protocol and laboratory are seeded as
+  // specimen-quality-inventory.spec.ts seeds an assay's, by the admin, whose
+  // global scope holds any laboratory (#1182).
+  async function seedAssayReferences(request: APIRequestContext) {
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const studyId = `rf029-assay-study-${suffix}`;
+    const protocolId = `rf029-assay-protocol-${suffix}`;
+    await seedStudy(studyId);
+    await seedProtocol(protocolId);
+
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const seededStorageBox = await seedStorageBoxLocation();
+    seededStorageBoxes.push(seededStorageBox);
+    const { boxId, positionCode } = seededStorageBox;
+    const sampleRes = await request.post(`${apiBaseURL}/api/samples`, {
+      headers: auth,
+      data: {
+        participantId: participant.participantId,
+        sampleType: 'PLASMA',
+        sampleOrigin: 'VENOUS_BLOOD',
+        extractionProtocol: 'TUBE_EDTA',
+        quantity: 5,
+        quality: 'GOOD',
+        linkedProject: 'RF029 e2e fixture project',
+        registeredAt: new Date().toISOString(),
+        boxId,
+        positionCode,
+      },
+    });
+    expect(sampleRes.status(), await sampleRes.text()).toBe(201);
+    const specimenId = String((await sampleRes.json()).data.specimenId);
+
+    const orgRes = await request.post(`${apiBaseURL}/api/organizations`, {
+      headers: auth,
+      data: { officialName: `RF029 Lab ${suffix}`, acronym: 'RF029', organizationType: 'biobank', countryCode: 'BR' },
+    });
+    expect(orgRes.status(), await orgRes.text()).toBe(201);
+    const organizationId = (await orgRes.json()).data.organizationId;
+    organizationIdsToDelete.push(organizationId);
+
+    return {
+      studyId,
+      specimenIds: [specimenId],
+      assayType: 'RNA sequencing',
+      protocolId,
+      operatorId: String(admin.user._id),
+      laboratoryId: organizationId,
+      assayDateTime: new Date().toISOString(),
+      intendedUse: 'RF029 e2e proof',
+    };
+  }
+
+  test('#1318: an accepted Assay is stored in assays with its outbox event and one INGESTION_ACCEPTED row', async ({ request }) => {
+    const sourceRecordId = `rf029-e2e-${Date.now()}-assay`;
+    const payload = await seedAssayReferences(request);
+
+    const res = await ingest(request, { entityType: 'Assay', payload, provenance: provenance(sourceRecordId) });
+
+    expect(res.status(), await res.text()).toBe(201);
+    const body = await res.json();
+    expect(body).toMatchObject({ success: true, status: 'accepted', entityType: 'Assay' });
+
+    const stored = await findIngestedRecord('assays', 'assayId', body.entityId);
+    expect(stored).toMatchObject({
+      createdBy: `Actor/${admin.user._id}`,
+      sourceRecordId,
+      specimenIds: payload.specimenIds,
+      laboratoryId: payload.laboratoryId,
+      omicsDomain: null,
+      reagentLotIds: [],
+    });
+
+    const events = await findOutboxEvents(body.entityId);
+    expect(events).toHaveLength(1);
+    expect(events[0].aggregateType).toBe('Assay');
+
+    const reasons = await findMissingDataReasons('Assay', body.entityId);
+    expect(reasons.map((row) => row.fieldPath)).toEqual(['omicsDomain', 'assayBatchId', 'controls', 'reagentLotIds', 'equipmentIds']);
+
+    const rows = await findIngestionAuditRows('INGESTION_ACCEPTED', body.entityId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].resourceType).toBe('Assay');
+  });
+
+  test('#1318: an Assay naming a nonexistent specimen answers 422 INGESTION_QUARANTINED with REFERENCE_NOT_FOUND and writes no assays document', async ({ request }) => {
+    const sourceRecordId = `rf029-e2e-${Date.now()}-assay-unresolved`;
+    const missingSpecimenId = `rf029-specimen-does-not-exist-${Date.now()}`;
+    const payload = { ...(await seedAssayReferences(request)), specimenIds: [missingSpecimenId] };
+
+    const res = await ingest(request, { entityType: 'Assay', payload, provenance: provenance(sourceRecordId) });
+
+    expect(res.status(), await res.text()).toBe(422);
+    const body = await res.json();
+    expect(body).toMatchObject({ success: false, error: 'INGESTION_QUARANTINED' });
+    expect(body.details).toEqual([`specimenIds: ${missingSpecimenId} não encontrado`]);
+
+    const record = await findIngestionQuarantineRecord(body.ingestionQuarantineRecordId);
+    expect(record?.violations?.map((v: { code: string }) => v.code)).toEqual(['REFERENCE_NOT_FOUND']);
+    expect(await countIngestedBySourceRecordId('assays', sourceRecordId)).toBe(0);
   });
 
   test('a quarantined record retried with the same key answers 422 again and writes no second quarantine record', async ({ request }) => {

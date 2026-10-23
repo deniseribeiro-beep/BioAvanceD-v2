@@ -10,6 +10,12 @@
  * OmicsQualification is the third target, a MongoDB entity like the other
  * two (docs/decisions/2026-10-23-ingestion-omics-qualification-target.md).
  *
+ * Assay is the fourth, and the one target with gates of its own, the two its
+ * master-data mount enforces (app.js `/api/assays`): `validateReferences`
+ * resolves its references before the write (#1219, RF019), and `scopeField`
+ * names the field #1182 organization scope reads
+ * (docs/decisions/2026-10-23-ingestion-assay-target.md).
+ *
  * Telemetry and binaries are deliberately absent: they have their own stores
  * and paths, and a later slice names them in the refusal.
  */
@@ -37,6 +43,16 @@ const INGESTION_TARGETS = Object.freeze({
     idField: 'omicsQualificationId',
     model: require('../models/OmicsQualification'),
     missingnessFields: Object.freeze(['limitations']),
+  }),
+  Assay: Object.freeze({
+    schemaId: 'canonical.v1.assay',
+    store: 'mongodb',
+    collection: 'assays',
+    idField: 'assayId',
+    model: require('../models/Assay'),
+    missingnessFields: Object.freeze(['omicsDomain', 'assayBatchId', 'controls', 'reagentLotIds', 'equipmentIds']),
+    validateReferences: require('../services/assayReferenceValidator').validateAssayReferences,
+    scopeField: 'laboratoryId',
   }),
 });
 

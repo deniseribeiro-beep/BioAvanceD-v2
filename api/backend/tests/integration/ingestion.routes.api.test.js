@@ -46,6 +46,11 @@ function givenDb({ extraUsers = [], releaseStatus = 'active' } = {}) {
     security_config: createMatchingCollection([{ _id: 'main', configurationReleaseId: 'cfg-release-7' }]),
     datasets: createMatchingCollection([]),
     omicsQualifications: createMatchingCollection([]),
+    assays: createMatchingCollection([]),
+    samples: createMatchingCollection([{ specimenId: 'SPC-1', specimenStatus: 'available' }]),
+    protocols: createMatchingCollection([{ protocolId: 'protocol-1' }]),
+    users: createMatchingCollection([{ _id: 'op-1' }]),
+    organizations: createMatchingCollection([{ organizationId: 'test-org-default' }, { organizationId: 'org-other' }]),
     ingestionQuarantineRecords: createMatchingCollection([]),
     ingestionIdempotencyKeys: createFakeCollection([]),
     missingDataReasons: createMatchingCollection([]),
@@ -64,6 +69,18 @@ const PROVENANCE = {
 };
 const DATASET = { datasetTitle: 'Coorte A', datasetVersion: '1.0', creators: ['Equipe A'], license: 'CC-BY-4.0' };
 const OMICS_QUALIFICATION = { targetAssay: 'assay-wgs-1', qcRuleSetVersion: 'qc-1.0', qcMetrics: [{ name: 'q30', value: 0.92 }], qualificationDecision: 'eligible' };
+// The Coordenador caller resolves to organization scope test-org-default
+// (rbac.factory.js), the laboratory this Assay names.
+const ASSAY = {
+  studyId: 'study-1',
+  specimenIds: ['SPC-1'],
+  assayType: 'RNA sequencing',
+  protocolId: 'protocol-1',
+  operatorId: 'op-1',
+  laboratoryId: 'test-org-default',
+  assayDateTime: '2026-10-01T09:00:00.000Z',
+  intendedUse: 'RF029 ingestion proof',
+};
 
 function post(body, caller) {
   return request(app).post('/api/ingestion/records').set('Authorization', `Bearer ${token(caller)}`).send(body);
@@ -147,6 +164,39 @@ describe('POST /api/ingestion/records (RF029, #1318)', () => {
       action: 'INGESTION_QUARANTINED',
       resourceType: 'OmicsQualification',
       resourceId: res.body.ingestionQuarantineRecordId,
+    })]);
+  });
+
+  it('201: an accepted Assay in the caller\'s organization is persisted with one INGESTION_ACCEPTED row (#1182)', async () => {
+    const stores = givenDb();
+
+    const res = await post({ entityType: 'Assay', payload: ASSAY, provenance: PROVENANCE });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(res.body).toMatchObject({ success: true, status: 'accepted', entityType: 'Assay' });
+    expect(stores.assays.docs.map((d) => [d.assayId, d.laboratoryId])).toEqual([[res.body.entityId, 'test-org-default']]);
+    expect(ingestionAuditRows()).toEqual([expect.objectContaining({
+      action: 'INGESTION_ACCEPTED',
+      resourceType: 'Assay',
+      resourceId: res.body.entityId,
+    })]);
+  });
+
+  it('403: an Assay naming a laboratory outside the caller\'s organization is refused, writes nothing, and one INGESTION_REFUSED row (#1182)', async () => {
+    const stores = givenDb();
+
+    const res = await post({ entityType: 'Assay', payload: { ...ASSAY, laboratoryId: 'org-other' }, provenance: PROVENANCE });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(403);
+    expect(res.body).toMatchObject({ success: false, error: 'INGESTION_OUT_OF_SCOPE' });
+    expect(stores.assays.docs).toHaveLength(0);
+    expect(stores.ingestionQuarantineRecords.docs).toHaveLength(0);
+    expect(stores.dataQualityAssessments.docs).toHaveLength(0);
+    expect(ingestionAuditRows()).toEqual([expect.objectContaining({
+      action: 'INGESTION_REFUSED',
+      severity: 'warning',
+      resourceType: 'Assay',
+      payload: expect.objectContaining({ canonicalModelReleaseId: 'release-2.0.0', configurationReleaseId: 'cfg-release-7' }),
     })]);
   });
 

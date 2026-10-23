@@ -44,13 +44,13 @@ export async function findIngestionIdempotencyKey(idempotencyKey: string, scope:
   return db.collection('ingestionIdempotencyKeys').findOne({ idempotencyKey, scope });
 }
 
-export async function findIngestedRecord(collection: 'datasets' | 'workflowRuns' | 'omicsQualifications', idField: string, id: string): Promise<any> {
+export async function findIngestedRecord(collection: 'datasets' | 'workflowRuns' | 'omicsQualifications' | 'assays', idField: string, id: string): Promise<any> {
   const db = await getDb();
   return db.collection(collection).findOne({ [idField]: id });
 }
 
 export async function countIngestedBySourceRecordId(
-  collection: 'datasets' | 'workflowRuns' | 'omicsQualifications' | 'ingestionQuarantineRecords',
+  collection: 'datasets' | 'workflowRuns' | 'omicsQualifications' | 'assays' | 'ingestionQuarantineRecords',
   sourceRecordId: string
 ): Promise<number> {
   const db = await getDb();

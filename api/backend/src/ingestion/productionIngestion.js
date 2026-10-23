@@ -54,9 +54,9 @@ async function assertCanonicalReleaseActive(db) {
   return CANONICAL_MODEL_RELEASE_ID;
 }
 
-// A bad missingness declaration (RF029 AC7) quarantines through the gateway
-// as any other violation.
-function entityValidatorFor(target, declared) {
+// A bad missingness declaration (RF029 AC7) or an unresolved reference
+// (RF029 AC3) quarantines through the gateway as any other violation.
+function entityValidatorFor(target, declared, referenceViolations = []) {
   return (payload) => {
     const data = payload && typeof payload === 'object' ? payload : {};
     return [
@@ -66,8 +66,52 @@ function entityValidatorFor(target, declared) {
         message,
       })),
       ...validateMissingDataReasons(target, data, declared),
+      ...referenceViolations,
     ];
   };
+}
+
+// #1182: a target with a scopeField is written only on positive evidence, a
+// global scope or an organization scope naming the field's value exactly.
+// Every other input refuses, and the value is never restamped to the
+// caller's organization as the master mount does: ingestion refuses rather
+// than correct (RF029 AC3).
+async function assertInOrganizationScope(target, payload, resolveOrganizationScope) {
+  if (!target.scopeField) return;
+  const scope = typeof resolveOrganizationScope === 'function' ? await resolveOrganizationScope() : null;
+  const value = payload && typeof payload === 'object' ? payload[target.scopeField] : undefined;
+  const inScope = scope?.scope === 'global'
+    || (scope?.scope === 'organization'
+      && typeof value === 'string'
+      && Array.isArray(scope.organizationIds)
+      && scope.organizationIds.includes(value));
+  if (!inScope) {
+    throw ingestionError(403, 'INGESTION_OUT_OF_SCOPE', `${target.scopeField} fora do escopo de organização do usuário`);
+  }
+}
+
+// The status codes the master mount's reference check throws (#664, RF019).
+const REFERENCE_VIOLATION_CODES = { 404: 'REFERENCE_NOT_FOUND', 409: 'REFERENCE_NOT_USABLE' };
+
+// RF029 AC3: a target with validateReferences runs its master mount's check
+// on a clone of a model-valid payload. A resolved check yields the clone,
+// with the canonical ids the check writes back (#1219), as the create input;
+// a 404 or 409 becomes a violation, so the original payload quarantines. Any
+// other error is a failure, not a verdict, and rethrows.
+async function checkReferences(db, target, payload) {
+  const unchecked = { input: payload, violations: [] };
+  if (!target.validateReferences) return unchecked;
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return unchecked;
+  if (!target.model.validate(payload).isValid) return unchecked;
+  const resolved = structuredClone(payload);
+  try {
+    await target.validateReferences(db, resolved);
+    return { input: resolved, violations: [] };
+  } catch (error) {
+    const code = REFERENCE_VIOLATION_CODES[error?.statusCode];
+    if (!code) throw error;
+    return { input: payload, violations: [{ code, field: null, message: error.message }] };
+  }
 }
 
 // A replay reports the first call's outcome: a quarantine answers again as
@@ -90,6 +134,7 @@ async function ingestAndPersist({
   missingDataReasons = undefined,
   actorId,
   outbox = new Neo4jOutboxService(),
+  resolveOrganizationScope = null,
 }) {
   const target = resolveIngestionTarget(entityType);
   if (!target) {
@@ -101,7 +146,7 @@ async function ingestAndPersist({
   const releases = { canonicalModelReleaseId, configurationReleaseId };
 
   try {
-    return await ingestUnderRelease({ db, target, entityType, payload, provenance, idempotencyKey, missingDataReasons, actorId, outbox, releases });
+    return await ingestUnderRelease({ db, target, entityType, payload, provenance, idempotencyKey, missingDataReasons, actorId, outbox, releases, resolveOrganizationScope });
   } catch (error) {
     // CFG-004: a refusal after the releases were read still names them.
     if (error && typeof error === 'object') {
@@ -112,7 +157,10 @@ async function ingestAndPersist({
   }
 }
 
-async function ingestUnderRelease({ db, target, entityType, payload, provenance, idempotencyKey, missingDataReasons, actorId, outbox, releases }) {
+async function ingestUnderRelease({ db, target, entityType, payload, provenance, idempotencyKey, missingDataReasons, actorId, outbox, releases, resolveOrganizationScope }) {
+  // Before the replay, so an out-of-scope caller learns nothing of a key.
+  await assertInOrganizationScope(target, payload, resolveOrganizationScope);
+
   const scope = { idempotencyKey, scope: entityType };
   if (idempotencyKey) {
     const entry = await findCompletedIdempotentEntry(db, scope);
@@ -123,6 +171,7 @@ async function ingestUnderRelease({ db, target, entityType, payload, provenance,
   // client-named collection is the #675 hazard. The gateway's own claim is
   // bypassed (idempotencyKey: null) because it claims before the write, and a
   // failed write would leave a claimed key with no record.
+  const references = await checkReferences(db, target, payload);
   const outcome = await ingestRecord({
     db,
     entityType,
@@ -130,7 +179,7 @@ async function ingestUnderRelease({ db, target, entityType, payload, provenance,
     payload,
     provenance: { ...(provenance && typeof provenance === 'object' ? provenance : {}), createdBy: `Actor/${actorId}` },
     idempotencyKey: null,
-    entityValidator: entityValidatorFor(target, missingDataReasons),
+    entityValidator: entityValidatorFor(target, missingDataReasons, references.violations),
   });
 
   if (outcome.status === 'quarantined') {
@@ -171,7 +220,7 @@ async function ingestUnderRelease({ db, target, entityType, payload, provenance,
   // #896 settled. Unlike master-data POST, which keeps a body id, a body id
   // is ignored here; the client's own key travels as provenance.sourceRecordId.
   const entityId = randomUUID();
-  const doc = target.model.create({ ...payload, [target.idField]: entityId });
+  const doc = target.model.create({ ...references.input, [target.idField]: entityId });
   // BaseRecord provenance (ELM-0010/0011/0013) and the releases in force.
   doc.sourceSystem = outcome.provenance.sourceSystem;
   doc.sourceRecordId = outcome.provenance.sourceRecordId;

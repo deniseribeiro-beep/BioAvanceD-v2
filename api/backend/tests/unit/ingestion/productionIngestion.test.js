@@ -526,4 +526,152 @@ describe('ingestion/productionIngestion ingestAndPersist (RF029, #1318)', () => 
     expect(docs[0]).toMatchObject({ scopeId: `IngestionQuarantineRecord/${result.ingestionQuarantineRecordId}`, status: 'failed' });
     expect(resultOf(docs[0], 'completeness')).toEqual({ metric: 'completeness', value: 0.75, numerator: 3, denominator: 4 });
   });
+
+  // #1318: Assay, the fourth target, runs its master mount's reference check
+  // (assayReferenceValidator.js, #1219) and #1182 organization scope on
+  // laboratoryId. createFakeDb compares with ===, so the samples lookup by a
+  // 24-hex _id is answered here by String(_id), as the driver matches it.
+  const SPECIMEN_HEX = '507f1f77bcf86cd799439011';
+  const ASSAY = {
+    studyId: 'study-1',
+    specimenIds: ['SPC-1'],
+    assayType: 'RNA sequencing',
+    protocolId: 'protocol-1',
+    operatorId: 'op-1',
+    laboratoryId: 'org-lab-1',
+    assayDateTime: '2026-10-01T09:00:00.000Z',
+    intendedUse: 'RF029 ingestion proof',
+  };
+  const GLOBAL_SCOPE = async () => ({ scope: 'global', organizationIds: [] });
+  const orgScope = (...organizationIds) => async () => ({ scope: 'organization', organizationIds });
+
+  function assayDb({ samples = [{ specimenId: 'SPC-1', specimenStatus: 'available' }] } = {}) {
+    const db = seededDb();
+    for (const [name, docs] of Object.entries({
+      samples,
+      protocols: [{ protocolId: 'protocol-1' }],
+      users: [{ _id: 'op-1' }],
+      organizations: [{ organizationId: 'org-lab-1' }],
+      assays: [],
+    })) {
+      db.collection(name).docs.push(...docs);
+    }
+    const sampleCollection = db.collection('samples');
+    const byField = sampleCollection.findOne.bind(sampleCollection);
+    sampleCollection.findOne = async (filter = {}) => ('_id' in filter
+      ? sampleCollection.docs.find((doc) => doc._id !== undefined && String(doc._id) === String(filter._id)) || null
+      : byField(filter));
+    return db;
+  }
+
+  function ingestAssay(db, overrides = {}) {
+    return ingest(db, { entityType: 'Assay', payload: ASSAY, resolveOrganizationScope: GLOBAL_SCOPE, ...overrides });
+  }
+
+  it('25. an accepted Assay from a global caller lands in assays with its outbox event, five MissingDataReason rows and an assessment', async () => {
+    const db = assayDb();
+    const outbox = fakeOutbox();
+
+    const result = await ingestAssay(db, { outbox });
+
+    expect(result).toMatchObject({ status: 'accepted', entityType: 'Assay', outboxEventId: 'evt-1' });
+    expect(result.entityId).toMatch(UUID);
+    expect(db.collections.assays.docs).toHaveLength(1);
+    expect(db.collections.assays.docs[0]).toMatchObject({
+      assayId: result.entityId,
+      specimenIds: ['SPC-1'],
+      laboratoryId: 'org-lab-1',
+      createdBy: 'Actor/u-1',
+      canonicalModelReleaseId: 'release-2.0.0',
+      omicsDomain: null,
+      assayBatchId: null,
+      controls: [],
+      reagentLotIds: [],
+      equipmentIds: [],
+    });
+    expect(outbox.appendEvent).toHaveBeenCalledTimes(1);
+    expect(outbox.appendEvent.mock.calls[0][1]).toMatchObject({ eventType: 'INGESTION_RECORD_PERSISTED', aggregateType: 'Assay', aggregateId: result.entityId });
+    const rows = db.collections.missingDataReasons.docs;
+    expect(rows.map((r) => [r.fieldPath, r.reasonCode])).toEqual([['omicsDomain', 'unknown'], ['assayBatchId', 'unknown'], ['controls', 'unknown'], ['reagentLotIds', 'unknown'], ['equipmentIds', 'unknown']]);
+    expect(rows.every((r) => r.entityType === 'Assay' && r.entityId === result.entityId && r.sourceEventId === 'evt-1')).toBe(true);
+    const docs = db.collections.dataQualityAssessments.docs;
+    expect(docs).toHaveLength(1);
+    expect(docs[0]).toMatchObject({ dataQualityAssessmentId: result.dataQualityAssessmentId, scopeId: `Assay/${result.entityId}`, status: 'passed' });
+  });
+
+  it('26. an Assay naming its specimen by _id is stored with the canonical specimenId (#1219)', async () => {
+    const { ObjectId } = require('mongodb');
+    const db = assayDb({ samples: [{ _id: new ObjectId(SPECIMEN_HEX), specimenId: 'SPC-CANON', specimenStatus: 'available' }] });
+    const payload = { ...ASSAY, specimenIds: [SPECIMEN_HEX] };
+
+    const result = await ingestAssay(db, { payload });
+
+    expect(result.status).toBe('accepted');
+    expect(db.collections.assays.docs.map((d) => d.specimenIds)).toEqual([['SPC-CANON']]);
+    expect(payload.specimenIds).toEqual([SPECIMEN_HEX]);
+  });
+
+  it('27. an Assay naming an unresolved specimen quarantines with REFERENCE_NOT_FOUND and the original payload, and writes no assays document', async () => {
+    const db = assayDb({ samples: [] });
+    const outbox = fakeOutbox();
+
+    const result = await ingestAssay(db, { outbox });
+
+    expect(result.status).toBe('quarantined');
+    expect(result.violations).toEqual([{ code: 'REFERENCE_NOT_FOUND', field: null, message: 'specimenIds: SPC-1 não encontrado' }]);
+    expect(db.collections.ingestionQuarantineRecords.docs).toHaveLength(1);
+    expect(db.collections.ingestionQuarantineRecords.docs[0].payload).toEqual(ASSAY);
+    expect(db.collections.assays.docs).toHaveLength(0);
+    expect(db.collections.missingDataReasons.docs).toHaveLength(0);
+    expect(outbox.appendEvent).not.toHaveBeenCalled();
+    expect(db.collections.dataQualityAssessments.docs.map((d) => d.status)).toEqual(['failed']);
+  });
+
+  it('28. an Assay naming a quarantined specimen quarantines with REFERENCE_NOT_USABLE (RF019)', async () => {
+    const db = assayDb({ samples: [{ specimenId: 'SPC-1', specimenStatus: 'quarantined' }] });
+
+    const result = await ingestAssay(db);
+
+    expect(result.status).toBe('quarantined');
+    expect(result.violations).toEqual([expect.objectContaining({ code: 'REFERENCE_NOT_USABLE', field: null, message: expect.stringMatching(/quarentena/) })]);
+    expect(db.collections.assays.docs).toHaveLength(0);
+  });
+
+  it('29. an organization caller whose organizationIds include the laboratoryId is accepted', async () => {
+    const db = assayDb();
+
+    const result = await ingestAssay(db, { resolveOrganizationScope: orgScope('org-other', 'org-lab-1') });
+
+    expect(result.status).toBe('accepted');
+    expect(db.collections.assays.docs.map((d) => d.laboratoryId)).toEqual(['org-lab-1']);
+  });
+
+  const { laboratoryId: _laboratoryId, ...ASSAY_WITHOUT_LABORATORY } = ASSAY;
+  it.each([
+    ['an organization caller outside the laboratoryId', { resolveOrganizationScope: orgScope('org-other') }],
+    ['an organization caller sending no laboratoryId', { resolveOrganizationScope: orgScope('org-lab-1'), payload: ASSAY_WITHOUT_LABORATORY }],
+    ['a caller with none scope', { resolveOrganizationScope: async () => ({ scope: 'none', organizationIds: [] }) }],
+    ['a call with no resolver', { resolveOrganizationScope: undefined }],
+  ])('30. %s is refused 403 INGESTION_OUT_OF_SCOPE and writes nothing (#1182)', async (_label, overrides) => {
+    const db = assayDb();
+    const outbox = fakeOutbox();
+
+    const error = await ingestAssay(db, { outbox, idempotencyKey: 'assay-key-1', ...overrides }).catch((e) => e);
+
+    expect(error).toMatchObject({ statusCode: 403, code: 'INGESTION_OUT_OF_SCOPE', canonicalModelReleaseId: 'release-2.0.0', configurationReleaseId: 'cfg-release-7' });
+    expect(db.collections.assays.docs).toHaveLength(0);
+    expect(db.collections.ingestionQuarantineRecords.docs).toHaveLength(0);
+    expect(db.collections.ingestionIdempotencyKeys.docs).toHaveLength(0);
+    expect(db.collections.missingDataReasons.docs).toHaveLength(0);
+    expect(db.collections.dataQualityAssessments.docs).toHaveLength(0);
+    expect(outbox.appendEvent).not.toHaveBeenCalled();
+  });
+
+  it('31. a Dataset ingested with no resolver is accepted, and a passed resolver is never called', async () => {
+    const resolver = vi.fn(GLOBAL_SCOPE);
+
+    expect((await ingest(seededDb())).status).toBe('accepted');
+    expect((await ingest(seededDb(), { resolveOrganizationScope: resolver })).status).toBe('accepted');
+    expect(resolver).not.toHaveBeenCalled();
+  });
 });

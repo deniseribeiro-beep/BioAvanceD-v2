@@ -2,6 +2,7 @@ const express = require('express');
 const { authenticate } = require('../../infrastructure/middleware/auth');
 const { requireRole } = require('../../infrastructure/middleware/rbac');
 const auditLogger = require('../../utils/auditLogger');
+const rbacAssignment = require('../../services/rbac-assignment.service');
 const { ingestAndPersist } = require('../../ingestion/productionIngestion');
 
 // RF029 (#1318): the production ingestion route. ingestionTestSupport.routes.js
@@ -37,9 +38,10 @@ async function auditOutcome(req, db, kind, { entityType, resourceId = null, viol
   });
 }
 
-// INFERENCE, not a citation: datasets and workflow runs are written by roles
-// 3 and 4 on their master-data mounts (app.js), so ingesting one takes the
-// same roles.
+// INFERENCE, not a citation: datasets, workflow runs and assays are written
+// by roles 3 and 4 on their master-data mounts (app.js), so ingesting one
+// takes the same roles. An assay's laboratoryId is held to the caller's
+// organization scope, as on its mount (#1182, productionIngestion.js).
 router.post('/records', requireRole(3, 4), async (req, res) => {
   const db = req.app.locals.db;
   if (!db) {
@@ -59,6 +61,7 @@ router.post('/records', requireRole(3, 4), async (req, res) => {
       idempotencyKey: idempotencyKey || null,
       missingDataReasons,
       actorId: req.user?.userID,
+      resolveOrganizationScope: () => rbacAssignment.resolveUserOrganizationScope(db, req.user?.userID),
     });
   } catch (error) {
     const statusCode = error?.statusCode || 500;
