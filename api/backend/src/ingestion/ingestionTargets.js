@@ -22,9 +22,22 @@
  * Storage): such a record is refused, never written to MongoDB (RF029 AC4,
  * docs/decisions/2026-10-23-ingestion-omics-run-target.md).
  *
+ * Specimen is the sixth, stored in samples. Its `validateReferences` runs the
+ * sample mount's participant, consent, site, parent and barcode gates, the
+ * consent one failing closed (RF029 AC2), and `scopeField` is
+ * `collectionSite`. Three keys only it carries: `organizationField` names the
+ * #1192 tenancy field stamped from the in-scope `scopeField` value,
+ * `generateId` assigns the mount's 7-digit specimenId instead of a uuid, and
+ * `appendProjection` appends SPECIMEN_UPSERTED and LINEAGE_REGISTERED in the
+ * insert's transaction (#1313,
+ * docs/decisions/2026-10-23-ingestion-specimen-target.md).
+ *
  * Telemetry and binaries are deliberately absent: they have their own stores
  * and paths, and a later slice names them in the refusal.
  */
+const { CANONICAL_COLLECTIONS } = require('../config/collections');
+const { generateSpecimenId, validateSpecimenReferences, appendSpecimenProjection } = require('./specimenTarget');
+
 const INGESTION_TARGETS = Object.freeze({
   Dataset: Object.freeze({
     schemaId: 'canonical.v1.dataset',
@@ -68,6 +81,19 @@ const INGESTION_TARGETS = Object.freeze({
     model: require('../models/OmicsRun'),
     missingnessFields: Object.freeze(['referenceAssembly', 'mixsChecklist', 'fileLinks']),
     otherStore: Object.freeze({ field: 'modality', values: Object.freeze(['transcriptomics', 'proteomics', 'metabolomics']), store: 'objectStorage' }),
+  }),
+  Specimen: Object.freeze({
+    schemaId: 'canonical.v1.specimen',
+    store: 'mongodb',
+    collection: CANONICAL_COLLECTIONS.samples,
+    idField: 'specimenId',
+    model: require('../models/Sample').SampleModel,
+    missingnessFields: Object.freeze(['barcode', 'linkedProject', 'parentSpecimenIds', 'merkleRoot', 'sprec']),
+    validateReferences: validateSpecimenReferences,
+    scopeField: 'collectionSite',
+    organizationField: 'organizationId',
+    generateId: generateSpecimenId,
+    appendProjection: appendSpecimenProjection,
   }),
 });
 

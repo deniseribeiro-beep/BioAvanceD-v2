@@ -75,12 +75,14 @@ function entityValidatorFor(target, declared, referenceViolations = []) {
 // global scope or an organization scope naming the field's value exactly.
 // Every other input refuses, and the value is never restamped to the
 // caller's organization as the master mount does: ingestion refuses rather
-// than correct (RF029 AC3).
+// than correct (RF029 AC3). A target with organizationField stamps its
+// tenancy from the value, so it needs one even from a global caller.
 async function assertInOrganizationScope(target, payload, resolveOrganizationScope) {
   if (!target.scopeField) return;
   const scope = typeof resolveOrganizationScope === 'function' ? await resolveOrganizationScope() : null;
   const value = payload && typeof payload === 'object' ? payload[target.scopeField] : undefined;
-  const inScope = scope?.scope === 'global'
+  const stampable = !target.organizationField || (typeof value === 'string' && value !== '');
+  const inScope = (scope?.scope === 'global' && stampable)
     || (scope?.scope === 'organization'
       && typeof value === 'string'
       && Array.isArray(scope.organizationIds)
@@ -108,8 +110,10 @@ const REFERENCE_VIOLATION_CODES = { 404: 'REFERENCE_NOT_FOUND', 409: 'REFERENCE_
 // RF029 AC3: a target with validateReferences runs its master mount's check
 // on a clone of a model-valid payload. A resolved check yields the clone,
 // with the canonical ids the check writes back (#1219), as the create input;
-// a 404 or 409 becomes a violation, so the original payload quarantines. Any
-// other error is a failure, not a verdict, and rethrows.
+// a 404 or 409 becomes a violation, so the original payload quarantines, under
+// the check's own violationCode where it names one (Specimen's
+// CONSENT_NOT_ACTIVE). Any other error is a failure, not a verdict, and
+// rethrows.
 async function checkReferences(db, target, payload) {
   const unchecked = { input: payload, violations: [] };
   if (!target.validateReferences) return unchecked;
@@ -120,8 +124,9 @@ async function checkReferences(db, target, payload) {
     await target.validateReferences(db, resolved);
     return { input: resolved, violations: [] };
   } catch (error) {
-    const code = REFERENCE_VIOLATION_CODES[error?.statusCode];
-    if (!code) throw error;
+    const statusViolation = REFERENCE_VIOLATION_CODES[error?.statusCode];
+    if (!statusViolation) throw error;
+    const code = typeof error.violationCode === 'string' && error.violationCode !== '' ? error.violationCode : statusViolation;
     return { input: payload, violations: [{ code, field: null, message: error.message }] };
   }
 }
@@ -231,10 +236,14 @@ async function ingestUnderRelease({ db, target, entityType, payload, provenance,
   const duplicateFound = await findSourceDuplicate(db, target, outcome.provenance);
 
   // INFERENCE, not a citation: the server always assigns the id, a uuid as
-  // #896 settled. Unlike master-data POST, which keeps a body id, a body id
+  // #896 settled, or the target's own format (Specimen's 7-digit
+  // specimenId). Unlike master-data POST, which keeps a body id, a body id
   // is ignored here; the client's own key travels as provenance.sourceRecordId.
-  const entityId = randomUUID();
+  const entityId = target.generateId ? await target.generateId(db) : randomUUID();
   const doc = target.model.create({ ...references.input, [target.idField]: entityId });
+  // #1192: the tenancy key is stamped by the server, from the scopeField
+  // value assertInOrganizationScope proved in the caller's scope.
+  if (target.organizationField) doc[target.organizationField] = payload[target.scopeField];
   // BaseRecord provenance (ELM-0010/0011/0013) and the releases in force.
   doc.sourceSystem = outcome.provenance.sourceSystem;
   doc.sourceRecordId = outcome.provenance.sourceRecordId;
@@ -277,7 +286,7 @@ async function ingestUnderRelease({ db, target, entityType, payload, provenance,
     return await withTransactionWhereSupported(db, async (session) => {
       const opts = session ? { session } : {};
       const persist = async () => {
-        await db.collection(target.collection).insertOne(doc, opts);
+        const inserted = await db.collection(target.collection).insertOne(doc, opts);
         // Ids only: no PII and no raw payload (RF029 AC6).
         const event = await outbox.appendEvent(db, {
           eventType: 'INGESTION_RECORD_PERSISTED',
@@ -289,13 +298,17 @@ async function ingestUnderRelease({ db, target, entityType, payload, provenance,
           schemaVersion: 1,
         }, opts);
         const eventId = event?.eventId || null;
+        // The target's own graph events, in the same transaction (#1313).
+        const projectionEventIds = target.appendProjection
+          ? await target.appendProjection(db, { doc, insertedId: inserted?.insertedId, outbox }, opts)
+          : [];
         // In the document's transaction (RF029 AC6), one call per row.
         for (const row of reasons) {
           await reasonsCollection.insertOne(eventId ? { ...row, sourceEventId: eventId } : row, opts);
         }
         // RNF011 C3, in the same transaction (RF029 AC6).
         await insertDataQualityAssessment(db, assessment, opts);
-        return eventId;
+        return { eventId, projectionEventIds };
       };
       const accepted = (outboxEventId) => ({
         status: 'accepted',
@@ -312,22 +325,25 @@ async function ingestUnderRelease({ db, target, entityType, payload, provenance,
           const ref = await recordCompletedIdempotentResult(db, key, opts);
           if (ref !== entityId) return replayOf(db, entityType, await findCompletedIdempotentEntry(db, scope, opts), releases, opts);
         }
-        return accepted(await persist());
+        return accepted((await persist()).eventId);
       }
 
       // Without a transaction the key is recorded last, so a failed insert
       // leaves no completed key pointing at nothing (idempotency.js's
       // findCompletedIdempotentResult: a key is recorded once its result exists).
-      const outboxEventId = await persist();
+      const { eventId: outboxEventId, projectionEventIds } = await persist();
       if (key) {
         const ref = await recordCompletedIdempotentResult(db, key);
         if (ref !== entityId) {
           // A concurrent request with this key recorded first: this
-          // request's document, event, MissingDataReason rows and
+          // request's document, events, MissingDataReason rows and
           // DataQualityAssessment are a duplicate of the winner's, so they
           // are removed before the winner's result is replayed.
           await db.collection(target.collection).deleteOne({ [target.idField]: entityId });
           if (outboxEventId) await outbox.getCollection(db).deleteOne({ eventId: outboxEventId });
+          for (const projectionEventId of projectionEventIds) {
+            await outbox.getCollection(db).deleteOne({ eventId: projectionEventId });
+          }
           await reasonsCollection.deleteMany({ entityType, entityId });
           await db.collection(CANONICAL_COLLECTIONS.dataQualityAssessments).deleteOne({ dataQualityAssessmentId });
           return replayOf(db, entityType, await findCompletedIdempotentEntry(db, scope), releases);

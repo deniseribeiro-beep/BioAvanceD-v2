@@ -23,6 +23,7 @@ import {
   cleanupStorageBoxLocation,
   seedStudy,
   seedProtocol,
+  seedActiveConsent,
   closeSeedDb,
   type SeededStorageBox,
 } from './helpers/seedParticipant';
@@ -372,6 +373,83 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
     const record = await findIngestionQuarantineRecord(body.ingestionQuarantineRecordId);
     expect(record?.violations?.map((v: { code: string }) => v.code)).toEqual(['REFERENCE_NOT_FOUND']);
     expect(await countIngestedBySourceRecordId('assays', sourceRecordId)).toBe(0);
+  });
+
+  // #1318: a Specimen runs the sample mount's gates against real records: a
+  // real participant, an active consent unless the case leaves it out
+  // (createRealParticipant seeds none), and a collection site the admin's
+  // global scope holds.
+  async function seedSpecimenReferences(request: APIRequestContext, { consent = true } = {}) {
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    if (consent) await seedActiveConsent(participant.participantId);
+
+    const orgRes = await request.post(`${apiBaseURL}/api/organizations`, {
+      headers: auth,
+      data: { officialName: `RF029 Site ${suffix}`, acronym: 'RF029', organizationType: 'biobank', countryCode: 'BR' },
+    });
+    expect(orgRes.status(), await orgRes.text()).toBe(201);
+    const organizationId = (await orgRes.json()).data.organizationId;
+    organizationIdsToDelete.push(organizationId);
+
+    return {
+      specimenId: 'client-claimed',
+      participantId: participant.participantId,
+      sampleType: 'PLASMA',
+      sampleOrigin: 'VENOUS_BLOOD',
+      extractionProtocol: 'TUBE_EDTA',
+      quantity: 5,
+      registeredAt: new Date().toISOString(),
+      collectionSite: organizationId,
+    };
+  }
+
+  test('#1318: an accepted Specimen is stored in samples with a server specimenId, its organizationId, its outbox event and one INGESTION_ACCEPTED row', async ({ request }) => {
+    const sourceRecordId = `rf029-e2e-${Date.now()}-specimen`;
+    const payload = await seedSpecimenReferences(request);
+
+    const res = await ingest(request, { entityType: 'Specimen', payload, provenance: provenance(sourceRecordId) });
+
+    expect(res.status(), await res.text()).toBe(201);
+    const body = await res.json();
+    expect(body).toMatchObject({ success: true, status: 'accepted', entityType: 'Specimen' });
+    expect(body.entityId).toMatch(/^\d{7}$/);
+
+    const stored = await findIngestedRecord('samples', 'specimenId', body.entityId);
+    expect(stored).toMatchObject({
+      createdBy: `Actor/${admin.user._id}`,
+      sourceRecordId,
+      participantId: payload.participantId,
+      collectionSite: payload.collectionSite,
+      organizationId: payload.collectionSite,
+      specimenStatus: 'available',
+    });
+
+    const events = await findOutboxEvents(body.entityId);
+    expect(events).toHaveLength(1);
+    expect(events[0].aggregateType).toBe('Specimen');
+
+    const reasons = await findMissingDataReasons('Specimen', body.entityId);
+    expect(reasons.map((row) => row.fieldPath)).toEqual(['barcode', 'linkedProject', 'parentSpecimenIds', 'merkleRoot', 'sprec']);
+
+    const rows = await findIngestionAuditRows('INGESTION_ACCEPTED', body.entityId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].resourceType).toBe('Specimen');
+  });
+
+  test('#1318 RF029 AC2: a Specimen whose participant has no active consent answers 422 INGESTION_QUARANTINED with CONSENT_NOT_ACTIVE and writes no sample', async ({ request }) => {
+    const sourceRecordId = `rf029-e2e-${Date.now()}-specimen-no-consent`;
+    const payload = await seedSpecimenReferences(request, { consent: false });
+
+    const res = await ingest(request, { entityType: 'Specimen', payload, provenance: provenance(sourceRecordId) });
+
+    expect(res.status(), await res.text()).toBe(422);
+    const body = await res.json();
+    expect(body).toMatchObject({ success: false, error: 'INGESTION_QUARANTINED' });
+
+    const record = await findIngestionQuarantineRecord(body.ingestionQuarantineRecordId);
+    expect(record?.violations?.map((v: { code: string }) => v.code)).toEqual(['CONSENT_NOT_ACTIVE']);
+    expect(await countIngestedBySourceRecordId('samples', sourceRecordId)).toBe(0);
   });
 
   test('a quarantined record retried with the same key answers 422 again and writes no second quarantine record', async ({ request }) => {

@@ -20,6 +20,10 @@ function seededDb({ release = { canonicalModelReleaseId: 'release-2.0.0', releas
     workflowRuns: [],
     omicsQualifications: [],
     omicsRuns: [],
+    samples: [],
+    patients: [],
+    patientConsents: [],
+    organizations: [],
     ingestionQuarantineRecords: [],
     ingestionIdempotencyKeys: [],
     missingDataReasons: [],
@@ -298,11 +302,13 @@ describe('ingestion/productionIngestion ingestAndPersist (RF029, #1318)', () => 
   });
 
   // Two concurrent calls with one key on the sequential path.
-  async function raceOnOneKey({ entityType = 'Dataset', payload = DATASET, collection = 'datasets' } = {}) {
+  async function raceOnOneKey({ entityType = 'Dataset', payload = DATASET, collection = 'datasets', seed = () => {}, overrides = {} } = {}) {
     const db = seededDb();
+    seed(db);
     db.collections.datasets = createMatchingCollection([]);
     db.collections.omicsQualifications = createMatchingCollection([]);
     db.collections.omicsRuns = createMatchingCollection([]);
+    db.collections.samples = createMatchingCollection([]);
     db.collections.graph_projection_outbox = createMatchingCollection([]);
     db.collections.missingDataReasons = createMatchingCollection([]);
     db.collections.dataQualityAssessments = createMatchingCollection([]);
@@ -318,8 +324,8 @@ describe('ingestion/productionIngestion ingestAndPersist (RF029, #1318)', () => 
     };
 
     const [a, b] = await Promise.all([
-      ingest(db, { outbox, entityType, payload, idempotencyKey: 'key-race' }),
-      ingest(db, { outbox, entityType, payload, idempotencyKey: 'key-race' }),
+      ingest(db, { outbox, entityType, payload, idempotencyKey: 'key-race', ...overrides }),
+      ingest(db, { outbox, entityType, payload, idempotencyKey: 'key-race', ...overrides }),
     ]);
     const [winner, loser] = a.status === 'accepted' ? [a, b] : [b, a];
     return { db, winner, loser, docs: db.collections[collection].docs };
@@ -790,5 +796,179 @@ describe('ingestion/productionIngestion ingestAndPersist (RF029, #1318)', () => 
     expect(db.collections.missingDataReasons.docs.map((r) => r.entityId)).toEqual([winner.entityId, winner.entityId, winner.entityId]);
     expect(db.collections.dataQualityAssessments.docs.map((d) => [d.dataQualityAssessmentId, d.scopeId]))
       .toEqual([[winner.dataQualityAssessmentId, `OmicsRun/${winner.entityId}`]]);
+  });
+
+  // #1318: Specimen, the sixth target, runs the sample mount's participant,
+  // consent, site, parent and barcode gates (specimenTarget.js) and #1182
+  // scope on collectionSite. samples is a matching collection, so an insert
+  // gets the driver's _id, the key SPECIMEN_UPSERTED carries.
+  const PARTICIPANT = '12345678';
+  const SPECIMEN = {
+    specimenId: 'client-claimed',
+    participantId: PARTICIPANT,
+    sampleType: 'PLASMA',
+    sampleOrigin: 'VENOUS_BLOOD',
+    extractionProtocol: 'TUBE_EDTA',
+    quantity: 5,
+    registeredAt: '2026-10-01T09:00:00.000Z',
+    collectionSite: 'org-site-1',
+  };
+
+  function seedSpecimenReferences(db, { consents = [{ participantId: PARTICIPANT, status: 'ACTIVE' }] } = {}) {
+    db.collection('patients').docs.push({ participantId: PARTICIPANT });
+    db.collection('patientConsents').docs.push(...consents);
+    db.collection('organizations').docs.push({ organizationId: 'org-site-1' });
+  }
+
+  function specimenDb(options = {}) {
+    const db = seededDb();
+    seedSpecimenReferences(db, options);
+    db.collections.samples = createMatchingCollection(options.samples || []);
+    return db;
+  }
+
+  function ingestSpecimen(db, overrides = {}) {
+    return ingest(db, { entityType: 'Specimen', payload: SPECIMEN, resolveOrganizationScope: GLOBAL_SCOPE, ...overrides });
+  }
+
+  it('37. an accepted Specimen lands in samples with a 7-digit server specimenId, organizationId stamped from collectionSite, five MissingDataReason rows and SPECIMEN_UPSERTED', async () => {
+    const db = specimenDb();
+    const outbox = fakeOutbox();
+
+    const result = await ingestSpecimen(db, { outbox });
+
+    expect(result).toMatchObject({ status: 'accepted', entityType: 'Specimen', outboxEventId: 'evt-1' });
+    expect(result.entityId).toMatch(/^\d{7}$/);
+    const docs = db.collections.samples.docs;
+    expect(docs).toHaveLength(1);
+    expect(docs[0]).toMatchObject({
+      specimenId: result.entityId,
+      participantId: PARTICIPANT,
+      collectionSite: 'org-site-1',
+      organizationId: 'org-site-1',
+      specimenStatus: 'available',
+      unit: 'µL',
+      locationID: null,
+      storageLocation: null,
+      createdBy: 'Actor/u-1',
+      sourceRecordId: 'LIMS-DS-42',
+      canonicalModelReleaseId: 'release-2.0.0',
+    });
+    expect(outbox.appendEvent.mock.calls.map(([, event]) => [event.eventType, event.aggregateId]))
+      .toEqual([['INGESTION_RECORD_PERSISTED', result.entityId], ['SPECIMEN_UPSERTED', String(docs[0]._id)]]);
+    expect(outbox.appendEvent.mock.calls[1][1]).toMatchObject({ payload: { specimenId: String(docs[0]._id), participantId: PARTICIPANT }, sourceService: 'ingestion-gateway' });
+    const rows = db.collections.missingDataReasons.docs;
+    expect(rows.map((r) => [r.fieldPath, r.reasonCode])).toEqual([['barcode', 'unknown'], ['linkedProject', 'unknown'], ['parentSpecimenIds', 'unknown'], ['merkleRoot', 'unknown'], ['sprec', 'unknown']]);
+    expect(rows.every((r) => r.entityType === 'Specimen' && r.entityId === result.entityId)).toBe(true);
+    expect(db.collections.dataQualityAssessments.docs.map((d) => [d.scopeId, d.status])).toEqual([[`Specimen/${result.entityId}`, 'passed']]);
+  });
+
+  it('38. on a replica set, SPECIMEN_UPSERTED and LINEAGE_REGISTERED are appended in the sample insert\'s session (#1313)', async () => {
+    const { ObjectId } = require('mongodb');
+    const parentOid = new ObjectId(SPECIMEN_HEX);
+    const db = specimenDb({ samples: [{ _id: parentOid, specimenId: '1111111', participantId: PARTICIPANT, specimenStatus: 'available' }] });
+    const session = onReplicaSet(db);
+    const outbox = fakeOutbox();
+
+    const result = await ingestSpecimen(db, { outbox, payload: { ...SPECIMEN, parentSpecimenIds: ['1111111'] } });
+
+    expect(result.status).toBe('accepted');
+    const stored = db.collections.samples.docs.find((d) => d.specimenId === result.entityId);
+    expect(db.collections.samples.insertOne).toHaveBeenCalledWith(stored, { session });
+    expect(outbox.appendEvent.mock.calls.map(([, event, opts]) => [event.eventType, event.payload.parentSpecimenId ?? null, opts]))
+      .toEqual([['INGESTION_RECORD_PERSISTED', null, { session }], ['SPECIMEN_UPSERTED', null, { session }], ['LINEAGE_REGISTERED', SPECIMEN_HEX, { session }]]);
+    expect(stored.parentSpecimenIds).toEqual(['1111111']);
+  });
+
+  it.each([
+    ['no consent', []],
+    ['a revoked consent', [{ participantId: PARTICIPANT, status: 'REVOKED' }]],
+  ])('39. a Specimen whose participant has %s quarantines with CONSENT_NOT_ACTIVE and writes nothing to samples (RF029 AC2)', async (_label, consents) => {
+    const db = specimenDb({ consents });
+    const outbox = fakeOutbox();
+
+    const result = await ingestSpecimen(db, { outbox });
+
+    expect(result.status).toBe('quarantined');
+    expect(result.violations).toEqual([expect.objectContaining({ code: 'CONSENT_NOT_ACTIVE', field: null })]);
+    expect(db.collections.samples.docs).toHaveLength(0);
+    expect(db.collections.missingDataReasons.docs).toHaveLength(0);
+    expect(outbox.appendEvent).not.toHaveBeenCalled();
+  });
+
+  it('40. a Specimen naming an unknown participant quarantines with REFERENCE_NOT_FOUND', async () => {
+    const db = specimenDb();
+
+    const result = await ingestSpecimen(db, { payload: { ...SPECIMEN, participantId: '87654321' } });
+
+    expect(result.status).toBe('quarantined');
+    expect(result.violations).toEqual([{ code: 'REFERENCE_NOT_FOUND', field: null, message: 'participantId 87654321 não encontrado' }]);
+    expect(db.collections.samples.docs).toHaveLength(0);
+  });
+
+  it('40b. a Specimen whose participant lookup fails rejects, and writes no sample, quarantine record or idempotency key', async () => {
+    const db = specimenDb();
+    const outage = new Error('connection reset');
+    db.collection('patients').findOne = async () => { throw outage; };
+    const outbox = fakeOutbox();
+
+    await expect(ingestSpecimen(db, { outbox, idempotencyKey: 'specimen-key-1' })).rejects.toBe(outage);
+
+    expect(db.collections.samples.docs).toHaveLength(0);
+    expect(db.collections.ingestionQuarantineRecords.docs).toHaveLength(0);
+    expect(db.collections.ingestionIdempotencyKeys.docs).toHaveLength(0);
+    expect(outbox.appendEvent).not.toHaveBeenCalled();
+  });
+
+  it('41. a Specimen whose barcode samples already holds quarantines with DUPLICATE_BARCODE', async () => {
+    const db = specimenDb({ samples: [{ specimenId: '2222222', participantId: PARTICIPANT, barcode: 'BC-1' }] });
+
+    const result = await ingestSpecimen(db, { payload: { ...SPECIMEN, barcode: 'BC-1' } });
+
+    expect(result.status).toBe('quarantined');
+    expect(result.violations).toEqual([expect.objectContaining({ code: 'DUPLICATE_BARCODE' })]);
+    expect(db.collections.samples.docs).toHaveLength(1);
+  });
+
+  it('42. a Specimen sending organizationId quarantines: tenancy is stamped by the server, never taken from a body (#1192)', async () => {
+    const db = specimenDb();
+
+    const result = await ingestSpecimen(db, { payload: { ...SPECIMEN, organizationId: 'org-site-1' } });
+
+    expect(result.status).toBe('quarantined');
+    expect(db.collections.samples.docs).toHaveLength(0);
+  });
+
+  const { collectionSite: _collectionSite, ...SPECIMEN_WITHOUT_SITE } = SPECIMEN;
+  it.each([
+    ['an organization caller outside the collectionSite', { resolveOrganizationScope: orgScope('org-other') }],
+    ['a global caller sending no collectionSite', { payload: SPECIMEN_WITHOUT_SITE }],
+  ])('43. %s is refused 403 INGESTION_OUT_OF_SCOPE and writes nothing (#1182)', async (_label, overrides) => {
+    const db = specimenDb();
+    const outbox = fakeOutbox();
+
+    const error = await ingestSpecimen(db, { outbox, ...overrides }).catch((e) => e);
+
+    expect(error).toMatchObject({ statusCode: 403, code: 'INGESTION_OUT_OF_SCOPE' });
+    expect(db.collections.samples.docs).toHaveLength(0);
+    expect(db.collections.ingestionQuarantineRecords.docs).toHaveLength(0);
+    expect(outbox.appendEvent).not.toHaveBeenCalled();
+  });
+
+  it('44. without a session, a concurrent Specimen loser leaves no document and none of its own events, SPECIMEN_UPSERTED included', async () => {
+    const { db, winner, loser, docs } = await raceOnOneKey({
+      entityType: 'Specimen',
+      payload: SPECIMEN,
+      collection: 'samples',
+      seed: (target) => seedSpecimenReferences(target),
+      overrides: { resolveOrganizationScope: GLOBAL_SCOPE },
+    });
+
+    expect(winner.status).toBe('accepted');
+    expect(loser).toMatchObject({ status: 'idempotent_replay', outcome: 'accepted', entityType: 'Specimen', resultRef: winner.entityId });
+    expect(docs.map((d) => d.specimenId)).toEqual([winner.entityId]);
+    expect(db.collections.graph_projection_outbox.docs.map((e) => [e.eventType, e.aggregateId]))
+      .toEqual([['INGESTION_RECORD_PERSISTED', winner.entityId], ['SPECIMEN_UPSERTED', String(docs[0]._id)]]);
+    expect(db.collections.missingDataReasons.docs.every((r) => r.entityId === winner.entityId)).toBe(true);
   });
 });

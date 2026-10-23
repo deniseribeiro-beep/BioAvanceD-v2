@@ -40,6 +40,10 @@ function ingestionAuditRows() {
   return auditLog.mock.calls.map(([entry]) => entry).filter((entry) => String(entry.action).startsWith('INGESTION_'));
 }
 
+// #1318: a Specimen needs a known participant with an active consent.
+const CONSENTED_PARTICIPANT = '12345678';
+const UNCONSENTED_PARTICIPANT = '23456789';
+
 function givenDb({ extraUsers = [], releaseStatus = 'active' } = {}) {
   const stores = {
     canonicalModelReleases: createMatchingCollection([{ canonicalModelReleaseId: 'release-2.0.0', releaseStatus }]),
@@ -52,6 +56,8 @@ function givenDb({ extraUsers = [], releaseStatus = 'active' } = {}) {
     protocols: createMatchingCollection([{ protocolId: 'protocol-1' }]),
     users: createMatchingCollection([{ _id: 'op-1' }]),
     organizations: createMatchingCollection([{ organizationId: 'test-org-default' }, { organizationId: 'org-other' }]),
+    patients: createMatchingCollection([{ participantId: CONSENTED_PARTICIPANT }, { participantId: UNCONSENTED_PARTICIPANT }]),
+    patientConsents: createMatchingCollection([{ participantId: CONSENTED_PARTICIPANT, status: 'ACTIVE' }]),
     ingestionQuarantineRecords: createMatchingCollection([]),
     ingestionIdempotencyKeys: createFakeCollection([]),
     missingDataReasons: createMatchingCollection([]),
@@ -81,6 +87,17 @@ const ASSAY = {
   laboratoryId: 'test-org-default',
   assayDateTime: '2026-10-01T09:00:00.000Z',
   intendedUse: 'RF029 ingestion proof',
+};
+// The collectionSite is the Coordenador's organization, as for the Assay.
+const SPECIMEN = {
+  specimenId: 'client-claimed',
+  participantId: CONSENTED_PARTICIPANT,
+  sampleType: 'PLASMA',
+  sampleOrigin: 'VENOUS_BLOOD',
+  extractionProtocol: 'TUBE_EDTA',
+  quantity: 5,
+  registeredAt: '2026-10-01T09:00:00.000Z',
+  collectionSite: 'test-org-default',
 };
 
 function post(body, caller) {
@@ -198,6 +215,45 @@ describe('POST /api/ingestion/records (RF029, #1318)', () => {
       severity: 'warning',
       resourceType: 'Assay',
       payload: expect.objectContaining({ canonicalModelReleaseId: 'release-2.0.0', configurationReleaseId: 'cfg-release-7' }),
+    })]);
+  });
+
+  it('201: an accepted Specimen is persisted in samples with its SPECIMEN_UPSERTED event in one session and one INGESTION_ACCEPTED row (#1318)', async () => {
+    const stores = givenDb();
+
+    const res = await post({ entityType: 'Specimen', payload: SPECIMEN, provenance: PROVENANCE });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(res.body).toMatchObject({ success: true, status: 'accepted', entityType: 'Specimen' });
+    expect(res.body.entityId).toMatch(/^\d{7}$/);
+    const stored = stores.samples.docs.find((d) => d.specimenId === res.body.entityId);
+    expect(stored).toMatchObject({ participantId: CONSENTED_PARTICIPANT, collectionSite: 'test-org-default', organizationId: 'test-org-default' });
+    const session = app.locals.db.session;
+    expect(stores.samples.insertOne).toHaveBeenCalledWith(stored, { session });
+    const upserted = stores.graph_projection_outbox.updateOne.mock.calls.find(([, update]) => update?.$setOnInsert?.eventType === 'SPECIMEN_UPSERTED');
+    expect(upserted[1].$setOnInsert).toMatchObject({ aggregateType: 'Sample', aggregateId: String(stored._id) });
+    expect(upserted[2]).toEqual({ upsert: true, session });
+    expect(ingestionAuditRows()).toEqual([expect.objectContaining({
+      action: 'INGESTION_ACCEPTED',
+      resourceType: 'Specimen',
+      resourceId: res.body.entityId,
+    })]);
+  });
+
+  it('422: a Specimen whose participant has no active consent quarantines CONSENT_NOT_ACTIVE, persists no sample, and writes one INGESTION_QUARANTINED row (RF029 AC2)', async () => {
+    const stores = givenDb();
+
+    const res = await post({ entityType: 'Specimen', payload: { ...SPECIMEN, participantId: UNCONSENTED_PARTICIPANT }, provenance: PROVENANCE });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(422);
+    expect(res.body).toMatchObject({ success: false, error: 'INGESTION_QUARANTINED' });
+    const record = stores.ingestionQuarantineRecords.docs.find((d) => d.ingestionQuarantineRecordId === res.body.ingestionQuarantineRecordId);
+    expect(record.violations.map((v) => v.code)).toEqual(['CONSENT_NOT_ACTIVE']);
+    expect(stores.samples.docs.map((d) => d.specimenId)).toEqual(['SPC-1']);
+    expect(ingestionAuditRows()).toEqual([expect.objectContaining({
+      action: 'INGESTION_QUARANTINED',
+      resourceType: 'Specimen',
+      resourceId: res.body.ingestionQuarantineRecordId,
     })]);
   });
 
