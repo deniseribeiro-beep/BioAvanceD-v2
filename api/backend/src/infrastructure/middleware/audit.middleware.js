@@ -189,6 +189,7 @@ const ENTITY_MAP = {
   'collections': 'Collection',
   'compliance': 'Compliance',
   'datasets': 'Dataset',
+  'diagnostic-reports': 'DiagnosticReport',
   'disposition-actions': 'DispositionAction',
   'e-consent': 'Consent',
   'extraction-protocols': 'ExtractionProtocol',

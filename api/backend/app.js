@@ -481,6 +481,7 @@ app.use("/api/imaging-studies", createMasterDataRouter({
   idField: "imagingStudyId",
   model: require("./src/models/ImagingStudy")
 }));
+app.use("/api/diagnostic-reports", require("./src/interface/routes/diagnostic-report.routes"));
 app.use("/api/equipment", require("./src/interface/routes/equipment.routes"));
 app.use("/api/organizations", require("./src/interface/routes/organization.routes"));
 app.use("/api/storage", require("./src/interface/routes/storage.routes"));

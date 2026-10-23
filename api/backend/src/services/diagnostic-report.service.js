@@ -14,7 +14,16 @@ const TYPED_PREFIX = 'DiagnosticReport/';
  * entity.md).
  */
 async function createDiagnosticReport(db, data) {
-  const report = DiagnosticReportModel.create(data);
+  // Both refusals are 422 with a `details` list (RNF018, #1299), so the
+  // route answers them as validation errors rather than 500.
+  let report;
+  try {
+    report = DiagnosticReportModel.create(data);
+  } catch (error) {
+    error.statusCode = 422;
+    error.details = error.message.split(', ');
+    throw error;
+  }
 
   const referenceCheck = await assertReferencesExist(
     db,
@@ -26,7 +35,10 @@ async function createDiagnosticReport(db, data) {
     }))
   );
   if (!referenceCheck.valid) {
-    throw new Error(referenceCheck.violations.map((v) => v.message).join(', '));
+    const error = new Error(referenceCheck.violations.map((v) => v.message).join(', '));
+    error.statusCode = 422;
+    error.details = referenceCheck.violations.map((v) => v.message);
+    throw error;
   }
 
   const collection = await getCollection(db, 'diagnosticReports');

@@ -48,6 +48,26 @@ describe('diagnostic-report.service', () => {
 
       await expect(createDiagnosticReport(db, {})).rejects.toThrow('participantId é obrigatório para DiagnosticReport');
     });
+
+    it('gives a model refusal statusCode 422 and one details entry per missing field (#695, RNF018)', async () => {
+      const db = createFakeDb({});
+
+      await expect(createDiagnosticReport(db, {})).rejects.toMatchObject({
+        statusCode: 422,
+        details: ['participantId é obrigatório para DiagnosticReport', 'reportStatus é obrigatório para DiagnosticReport'],
+      });
+    });
+
+    it('gives a resultIds reference violation statusCode 422 and the violation messages as details (#695, RNF018)', async () => {
+      const db = createFakeDb({ clinicalObservations: [] });
+
+      await expect(
+        createDiagnosticReport(db, { participantId: 'PART-1', reportStatus: 'final', resultIds: ['obs-unknown'] })
+      ).rejects.toMatchObject({
+        statusCode: 422,
+        details: ['Referência inexistente: resultIds[0]="obs-unknown" não encontrado em clinicalObservations'],
+      });
+    });
   });
 
   describe('getDiagnosticReportsForParticipant', () => {
