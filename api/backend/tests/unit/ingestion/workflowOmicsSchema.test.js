@@ -101,6 +101,18 @@ describe('canonical.v1.workflow (RF029 slice 6/6, #674)', () => {
       expect(errors.some((e) => e.keyword === 'pattern')).toBe(true);
     });
 
+    it('rejects a drive-letter environmentManifestUri, a path rather than a URI (V2E-0480, #1398)', () => {
+      const { valid, errors } = validate('canonical.v1.workflow', { ...minimalRun, environmentManifestUri: 'C:\\manifests\\env.json' });
+      expect(valid).toBe(false);
+      expect(errors.some((e) => e.keyword === 'pattern')).toBe(true);
+    });
+
+    it('rejects a whitespace-only datasetSnapshotId (V2E-0479, #1398)', () => {
+      const { valid, errors } = validate('canonical.v1.workflow', { ...minimalRun, datasetSnapshotId: '   ' });
+      expect(valid).toBe(false);
+      expect(errors.some((e) => e.keyword === 'pattern')).toBe(true);
+    });
+
     it('rejects a fractional randomSeed (V2E-0478)', () => {
       const { valid, errors } = validate('canonical.v1.workflow', { ...minimalRun, randomSeed: 1.5 });
       expect(valid).toBe(false);

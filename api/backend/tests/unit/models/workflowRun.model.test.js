@@ -141,10 +141,17 @@ describe('WorkflowRunModel (RF027 AC#1/#2/#4, dict-02 ELM-0326..0336)', () => {
       ['a number', 42],
       ['not a uri', 'not a uri'],
       ['empty', ''],
+      ['a Windows path', 'C:\\manifests\\env.json'],
+      ['a drive path with slashes', 'C:/manifests/env.json'],
     ])('environmentManifestUri %s -> isValid false (V2E-0480, 1..1)', (_label, environmentManifestUri) => {
       const result = WorkflowRunModel.validate({ ...baseRun, environmentManifestUri });
       expect(result.isValid).toBe(false);
       expect(result.errors).toContain('environmentManifestUri é obrigatório e deve ser uma URI absoluta');
+    });
+
+    it('environmentManifestUri with a two-letter scheme -> isValid true (#1398)', () => {
+      const result = WorkflowRunModel.validate({ ...baseRun, environmentManifestUri: 's3://bucket/env.json' });
+      expect(result.isValid).toBe(true);
     });
 
     it.each([0, -1, 20260504])('randomSeed %s -> isValid true (V2E-0478)', (randomSeed) => {

@@ -24,8 +24,9 @@ const { randomUUID } = require('crypto');
  * `datasetSnapshotId` is accepted but stays optional and unresolved while
  * DatasetSnapshot is written by no flow, the same reasoning as the file ids
  * above. See docs/decisions/2026-10-23-workflow-run-provenance-companions.md.
+ * A one-letter scheme is a drive-letter path (`C:\manifests`), not a URI (#1398).
  */
-const ABSOLUTE_URI = /^[A-Za-z][A-Za-z0-9+.-]*:\S+$/;
+const ABSOLUTE_URI = /^[A-Za-z][A-Za-z0-9+.-]+:\S+$/;
 const RUN_STATUSES = ['queued', 'running', 'succeeded', 'failed', 'cancelled'];
 
 class WorkflowRunModel {

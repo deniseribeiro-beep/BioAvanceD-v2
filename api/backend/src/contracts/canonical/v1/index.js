@@ -392,6 +392,7 @@ const datasetSchema = {
 // #1322 adds the v2 companions V2E-0477..0480: hardwareProfile and
 // environmentManifestUri are required, randomSeed and an unresolved
 // datasetSnapshotId optional, each checked as WorkflowRunModel.validate() does.
+// #1398: datasetSnapshotId needs a non-whitespace char; a one-letter scheme is a drive path.
 const workflowSchema = {
   $id: 'canonical.v1.workflow',
   type: 'object',
@@ -411,8 +412,8 @@ const workflowSchema = {
     runStatus: { type: 'string', enum: ['queued', 'running', 'succeeded', 'failed', 'cancelled'] },
     hardwareProfile: { type: 'object', minProperties: 1 },
     randomSeed: { type: 'integer', minimum: -9007199254740991, maximum: 9007199254740991 },
-    datasetSnapshotId: { type: 'string', minLength: 1 },
-    environmentManifestUri: { type: 'string', pattern: '^[A-Za-z][A-Za-z0-9+.-]*:\\S+$' }
+    datasetSnapshotId: { type: 'string', minLength: 1, pattern: '\\S' },
+    environmentManifestUri: { type: 'string', pattern: '^[A-Za-z][A-Za-z0-9+.-]+:\\S+$' }
   },
   required: ['workflowId', 'workflowVersion', 'createdBy', 'startedAt', 'runStatus', 'hardwareProfile', 'environmentManifestUri']
 };
