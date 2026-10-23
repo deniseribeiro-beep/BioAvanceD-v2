@@ -208,6 +208,12 @@ describe('SampleFileModel.create', () => {
     expect(SampleFileModel.create(baseInput).storageObjectVersion).toBeNull();
   });
 
+  it('carries the malwareScan verdict and defaults it to null (RNF029 C4, #1321)', () => {
+    const verdict = { status: 'not-available', scanner: 'none', scannedAt: new Date() };
+    expect(SampleFileModel.create({ ...baseInput, malwareScan: verdict }).malwareScan).toEqual(verdict);
+    expect(SampleFileModel.create(baseInput).malwareScan).toBeNull();
+  });
+
   // RF007 AC3/AC5, V2E-0471/V2E-0474/V2E-0476 (#1321).
   it('writes mimeType, ownerId and linkedEntityRefs (#1321)', () => {
     const result = SampleFileModel.create({

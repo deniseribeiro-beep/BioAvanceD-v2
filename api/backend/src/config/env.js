@@ -155,6 +155,8 @@ module.exports = {
   // set only so prod can point them at a volume mounted outside /app.
   UPLOAD_DIR: process.env.UPLOAD_DIR,
   STORAGE_DIR: process.env.STORAGE_DIR,
+  // #1321 (RNF029 C4): DataFile malware scanner; unset or "none" records not-available.
+  MALWARE_SCAN_DRIVER: process.env.MALWARE_SCAN_DRIVER,
   BACKUP_CRON: process.env.BACKUP_CRON,
   BACKUP_RETENTION_DAYS: process.env.BACKUP_RETENTION_DAYS,
   // #749: read by scheduler.service.js#startRetentionSweepSchedule since it

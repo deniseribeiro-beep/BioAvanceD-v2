@@ -17,6 +17,7 @@ const { isMimeAllowedForExtension, checkFileSignature, canonicalMimeType } = req
 const { resolveLinkedEntityRefs } = require('../services/dataFileLinks.service');
 const { recordReplacement, discardVersion, resolveChangeReason } = require('../services/dataFileVersion.service');
 const objectStorage = require('../infrastructure/objectStorage');
+const malwareScan = require('../infrastructure/malwareScan');
 const { issueFileAccessToken } = require('../services/dataFileAccessToken.service');
 
 // RNF029 (#938, #1321): once the ciphertext is in the object store, the
@@ -271,6 +272,10 @@ class SampleFileController {
       // Same shape as #734's backup guard.
       assertFileEncryptionConfigured();
       const plaintext = fs.readFileSync(file.path);
+      // RNF029 C4 (#1321): the plaintext passes the malware scanner before
+      // it is encrypted or stored; a refusal throws to the catch below,
+      // which removes the staging file and answers its statusCode.
+      const malwareScanVerdict = await malwareScan.scanStagedFile(malwareScan.getFileScanner(), plaintext, { fileName: file.originalname });
       const checksum = computeChecksum(plaintext);
       const encryption = encryptFileBuffer(plaintext);
       // RF007 AC2 / RNF016 C4 (#1321): the binary goes to the object store,
@@ -303,6 +308,7 @@ class SampleFileController {
         encryptionKeyId: encryption ? encryption.keyId : null,
         encryptionIv: encryption ? encryption.iv : null,
         encryptionTag: encryption ? encryption.tag : null,
+        malwareScan: malwareScanVerdict,
         // Restrição de acesso vigente hoje (rbac.js/roles.min.json): leitura
         // exige apenas autenticação, upload/exclusão exigem
         // uploadSampleFiles/deleteSampleFiles (Admin/Coordenador).
@@ -899,6 +905,10 @@ class SampleFileController {
       // Same shape as #734's backup guard.
       assertFileEncryptionConfigured();
       const plaintext = fs.readFileSync(file.path);
+      // RNF029 C4 (#1321): the plaintext passes the malware scanner before
+      // it is encrypted or stored; a refusal throws to the catch below,
+      // which removes the staging file and answers its statusCode.
+      const malwareScanVerdict = await malwareScan.scanStagedFile(malwareScan.getFileScanner(), plaintext, { fileName: file.originalname });
       const checksum = computeChecksum(plaintext);
       const encryption = encryptFileBuffer(plaintext);
       // RF007 AC2 / RNF016 C4 (#1321): the new binary is a new object; the
@@ -936,6 +946,7 @@ class SampleFileController {
         encryptionKeyId: encryption ? encryption.keyId : null,
         encryptionIv: encryption ? encryption.iv : null,
         encryptionTag: encryption ? encryption.tag : null,
+        malwareScan: malwareScanVerdict,
         updatedAt: new Date()
       };
       if (fileRole !== undefined) {

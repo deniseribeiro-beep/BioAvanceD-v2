@@ -120,6 +120,7 @@ class SampleFileModel {
       storagePath: data.storagePath, // Caminho no sistema de arquivos (não exposto ao frontend)
       storageUri: data.storageUri || null, // RF007 - URI estável de Object Storage
       storageObjectVersion: data.storageObjectVersion || null, // V2E-0472 - versão do objeto (#1321)
+      malwareScan: data.malwareScan || null, // RNF029 C4 (#1321)
       checksum: data.checksum || null, // RF007/RNF029 - SHA-256 do conteúdo original
       checksumAlgorithm: data.checksumAlgorithm || null,
       encryptionAlgorithm: data.encryptionAlgorithm || null, // RNF029 - cifra em repouso

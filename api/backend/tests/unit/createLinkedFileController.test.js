@@ -10,6 +10,7 @@ const os = require('os');
 const path = require('path');
 const { ObjectId } = require('mongodb');
 const objectStorage = require('../../src/infrastructure/objectStorage');
+const malwareScan = require('../../src/infrastructure/malwareScan');
 const { decryptFileBuffer } = require('../../src/utils/fileCrypto');
 const { verifyFileAccessToken } = require('../../src/services/dataFileAccessToken.service');
 // createLinkedFileController.js lazily requires auditLogger inside
@@ -920,6 +921,111 @@ describe('createLinkedFileController', () => {
       expect(decryptFileBuffer(fs.readFileSync(updated.storagePath), updated).equals(plaintext)).toBe(true);
       expect(fs.existsSync(stagingPath)).toBe(false);
       expect(fs.readFileSync(previous.path).equals(previousBytes)).toBe(true);
+    });
+
+    // RNF029 C4 (#1321): the plaintext passes the malware scanner before the
+    // object store sees it, and a refused file leaves no object and no row.
+    function storedFiles(dir) {
+      return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+        const full = path.join(dir, entry.name);
+        return entry.isDirectory() ? storedFiles(full) : [full];
+      });
+    }
+
+    function uploadCase() {
+      const insertOne = vi.fn().mockResolvedValue({ insertedId: new ObjectId() });
+      const db = createDb({
+        widgets: { findOne: vi.fn().mockResolvedValue({ widgetId: 'w-1' }) },
+        widgetFiles: { insertOne }
+      });
+      const plaintext = Buffer.from('a,b\n1,2\n');
+      const stagingPath = stage('upload.csv', plaintext);
+      const req = {
+        app: { locals: { db } },
+        params: { widgetId: 'w-1' },
+        user: null,
+        file: { path: stagingPath, originalname: 'upload.csv', size: plaintext.length }
+      };
+      return { req, insertOne, stagingPath };
+    }
+
+    it('uploadFile refuses an infected file with 422, writing no object and no row and removing the staging file', async () => {
+      const scan = vi.fn().mockResolvedValue({ status: 'infected', signature: 'EICAR-Test-File' });
+      vi.spyOn(malwareScan, 'getFileScanner').mockReturnValue({ name: 'test', scan });
+      const { req, insertOne, stagingPath } = uploadCase();
+      const res = createRes();
+
+      await buildController().uploadFile(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(422);
+      expect(scan).toHaveBeenCalledWith(Buffer.from('a,b\n1,2\n'), { fileName: 'upload.csv' });
+      expect(insertOne).not.toHaveBeenCalled();
+      expect(storedFiles(storeRoot)).toEqual([]);
+      expect(fs.existsSync(stagingPath)).toBe(false);
+    });
+
+    it('uploadFile answers 503 when the scan rejects, writing no object and no row and removing the staging file', async () => {
+      const scan = vi.fn().mockRejectedValue(new Error('scanner down'));
+      vi.spyOn(malwareScan, 'getFileScanner').mockReturnValue({ name: 'test', scan });
+      const { req, insertOne, stagingPath } = uploadCase();
+      const res = createRes();
+
+      await buildController().uploadFile(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(503);
+      expect(insertOne).not.toHaveBeenCalled();
+      expect(storedFiles(storeRoot)).toEqual([]);
+      expect(fs.existsSync(stagingPath)).toBe(false);
+    });
+
+    it('uploadFile with the default driver records a not-available verdict from the "none" scanner on the row', async () => {
+      const { req, insertOne } = uploadCase();
+      const res = createRes();
+
+      await buildController().uploadFile(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(201);
+      expect(insertOne.mock.calls[0][0].malwareScan).toEqual({
+        status: 'not-available', scanner: 'none', scannedAt: expect.any(Date)
+      });
+    });
+
+    it('replaceFile refuses an infected file with 422, with no update, no DataFileVersion and the previous object unchanged', async () => {
+      const scan = vi.fn().mockResolvedValue({ status: 'infected', signature: 'EICAR-Test-File' });
+      vi.spyOn(malwareScan, 'getFileScanner').mockReturnValue({ name: 'test', scan });
+      const previousBytes = Buffer.from('previous ciphertext');
+      const previous = await objectStorage.createFilesystemObjectStore({ root: storeRoot })
+        .putObject({ area: 'widgets', ownerKey: 'w-1', body: previousBytes });
+      const fileId = new ObjectId();
+      const fileRecord = {
+        _id: fileId, widgetId: 'w-1', fileName: 'old.csv', storagePath: previous.path,
+        storageUri: previous.uri, checksum: OLD_CHECKSUM
+      };
+      const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+      const versions = createVersionsCollection();
+      const db = createDb({
+        widgets: { findOne: vi.fn().mockResolvedValue({ widgetId: 'w-1' }) },
+        widgetFiles: { findOne: vi.fn().mockResolvedValue(fileRecord), updateOne },
+        dataFileVersions: versions
+      });
+      const plaintext = Buffer.from('c,d\n3,4\n');
+      const stagingPath = stage('new.csv', plaintext);
+      const req = {
+        app: { locals: { db } },
+        params: { widgetId: 'w-1', fileID: fileId.toString() },
+        user: null,
+        file: { path: stagingPath, originalname: 'new.csv', size: plaintext.length }
+      };
+      const res = createRes();
+
+      await buildController().replaceFile(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(422);
+      expect(updateOne).not.toHaveBeenCalled();
+      expect(versions.insertOne).not.toHaveBeenCalled();
+      expect(storedFiles(storeRoot)).toEqual([previous.path]);
+      expect(fs.readFileSync(previous.path).equals(previousBytes)).toBe(true);
+      expect(fs.existsSync(stagingPath)).toBe(false);
     });
   });
 });
