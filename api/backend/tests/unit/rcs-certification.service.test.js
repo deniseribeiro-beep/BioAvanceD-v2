@@ -317,6 +317,14 @@ describe('evaluateGovernanceEvidence', () => {
     expect(rcsService.certify(payload)).toEqual(before);
   });
 
+  it.each([
+    ['docFalse', { matrix_type: 'fluid', sprec: F, documentationSufficient: false }],
+    ['pass', { matrix_type: 'fluid', sprec: F, secondCentrifugationRequired: false }],
+  ])('reads the %s row the same under a sample wrapper, as certify does', (_name, raw) => {
+    const input = rcsService.readInput(qualityCompatibility.normalizeSample(raw));
+    expect(rcsService.evaluateGovernanceEvidence({ sample: input })).toEqual(rcsService.evaluateGovernanceEvidence(input));
+  });
+
   it('names the workflow-context mismatch reason for the wfMismatch row', () => {
     const input = rcsService.readInput({ matrix_type: 'fluid', sprec: F, workflow_context: { Pcent2: { workflow_rule: 'nope' } } });
     expect(rcsService.evaluateGovernanceEvidence(input).failureReasons)

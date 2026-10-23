@@ -113,6 +113,15 @@ const READ_KEYS = Object.freeze([
     .flatMap((axisCode) => [`${axisCode}_workflow_rule`, `${axisCode}WorkflowRule`]),
 ]);
 
+// The payload certify() reads: its `sample` when that is a non-empty
+// object, else the payload itself.
+const samplePayloadOf = (payload) => {
+  const normalizedPayload = normalizeObject(payload);
+  return Object.keys(normalizeObject(normalizedPayload.sample)).length
+    ? normalizeObject(normalizedPayload.sample)
+    : normalizedPayload;
+};
+
 class RcsCertificationService {
   constructor(data = referenceData) {
     this.data = data;
@@ -121,10 +130,7 @@ class RcsCertificationService {
   // The input certify() is computed from, as a JSON-safe deep copy: the same
   // `sample` wrapper rule as certify, then only the READ_KEYS present.
   readInput(payload = {}) {
-    const normalizedPayload = normalizeObject(payload);
-    const samplePayload = Object.keys(normalizeObject(normalizedPayload.sample)).length
-      ? normalizeObject(normalizedPayload.sample)
-      : normalizedPayload;
+    const samplePayload = samplePayloadOf(payload);
     const input = {};
     for (const key of READ_KEYS) {
       if (samplePayload[key] !== undefined) input[key] = samplePayload[key];
@@ -164,10 +170,11 @@ class RcsCertificationService {
   // null with its reason, never true from a client-sent boolean (see
   // docs/decisions/2026-10-23-rcs-governance-evidence.md).
   evaluateGovernanceEvidence(input = {}) {
-    const sprec = this.normalizeSprec(input);
-    const matrixType = this.detectMatrixType(input, sprec);
-    const gate = this.evaluateGovernance(input, sprec, matrixType);
-    const result = this.certify(input);
+    const samplePayload = samplePayloadOf(input);
+    const sprec = this.normalizeSprec(samplePayload);
+    const matrixType = this.detectMatrixType(samplePayload, sprec);
+    const gate = this.evaluateGovernance(samplePayload, sprec, matrixType);
+    const result = this.certify(samplePayload);
     const codes = new Set(gate.trace.map((item) => item.rule_code));
     const failed = (ruleCodes) => ruleCodes.some((ruleCode) => codes.has(ruleCode));
     const falseOrNull = (isFailed) => (isFailed ? false : null);
@@ -205,10 +212,7 @@ class RcsCertificationService {
   }
 
   certify(payload = {}) {
-    const normalizedPayload = normalizeObject(payload);
-    const samplePayload = Object.keys(normalizeObject(normalizedPayload.sample)).length
-      ? normalizeObject(normalizedPayload.sample)
-      : normalizedPayload;
+    const samplePayload = samplePayloadOf(payload);
     const sprec = this.normalizeSprec(samplePayload);
     const matrixType = this.detectMatrixType(samplePayload, sprec);
     const governance = this.evaluateGovernance(samplePayload, sprec, matrixType);

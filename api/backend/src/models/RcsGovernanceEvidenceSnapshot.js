@@ -115,6 +115,9 @@ class RcsGovernanceEvidenceSnapshotModel {
   // yet, so a captured document does not pass validate().
   static capture(data = {}) {
     const fields = this.fieldsOf({ ...data, evidenceRefs: [], evaluatedAt: data.evaluatedAt || new Date() });
+    if (!isValidDate(fields.evaluatedAt)) {
+      throw new Error('evaluatedAt deve ser uma data válida para RCSGovernanceEvidenceSnapshot.capture');
+    }
     for (const field of REQUIRED_STRINGS) {
       if (!isNonEmptyString(data[field])) throw new Error(`${field} é obrigatório para RCSGovernanceEvidenceSnapshot.capture`);
     }
@@ -148,6 +151,11 @@ class RcsGovernanceEvidenceSnapshotModel {
       } else if (fields.failureReasons.length === 0 || !fields.failureReasons.every(isNonEmptyString)) {
         throw new Error(`failureReasons é obrigatório quando gateResult é ${fields.gateResult}`);
       }
+    }
+    // eq:governance_product: one false criterion gives G_gov = 0, so the
+    // gate is fail, never null or review_required.
+    if (GOVERNANCE_FLAGS.some((flag) => fields[flag] === false) && fields.gateResult !== 'fail') {
+      throw new Error('gateResult deve ser fail quando um critério de governança é false (eq:governance_product)');
     }
     return deepFreeze({ ...fields, unresolvedReasons });
   }

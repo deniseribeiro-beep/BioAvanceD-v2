@@ -489,4 +489,16 @@ describe('RcsGovernanceEvidenceSnapshotModel.capture', () => {
     expect(() => RcsGovernanceEvidenceSnapshotModel.capture({ ...base(), gateResult, failureReasons: [''] }))
       .toThrow(`failureReasons é obrigatório quando gateResult é ${gateResult}`);
   });
+
+  it.each([[null], ['review_required']])('throws on a %s gateResult with a false flag (eq:governance_product)', (gateResult) => {
+    const unresolvedReasons = gateResult === null
+      ? { ...base().unresolvedReasons, gateResult: UNREAD }
+      : base().unresolvedReasons;
+    expect(() => RcsGovernanceEvidenceSnapshotModel.capture({ ...base(), gateResult, unresolvedReasons }))
+      .toThrow(/gateResult deve ser fail/);
+  });
+
+  it('throws on an evaluatedAt that is not a valid date', () => {
+    expect(() => RcsGovernanceEvidenceSnapshotModel.capture({ ...base(), evaluatedAt: 'garbage' })).toThrow(/evaluatedAt/);
+  });
 });
