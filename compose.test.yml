@@ -135,7 +135,7 @@ services:
       # seed data directly (e.g. consentTemplates — no API seed path exists,
       # see issue #294). npm run test:e2e:docker runs Playwright from the
       # host, mirroring backend-app-test/frontend-app-test's published ports.
-      - "${MONGO_HOST_PORT:-27017}:27017"
+      - "127.0.0.1:${MONGO_HOST_PORT:-27017}:27017"
     healthcheck:
       test: ["CMD-SHELL", "mongosh --quiet --eval 'db.adminCommand({ ping: 1 })'"]
       interval: 10s
@@ -185,7 +185,7 @@ services:
       # Host-side access for e2e fixture helpers (tests/e2e/helpers/) that
       # query Neo4j directly to prove outbox projection (RF023, #292) — same
       # rationale as mongodb-test's/influxdb-test's published ports above.
-      - "${NEO4J_BOLT_HOST_PORT:-7687}:7687"
+      - "127.0.0.1:${NEO4J_BOLT_HOST_PORT:-7687}:7687"
     healthcheck:
       test: ["CMD-SHELL", "cypher-shell -u neo4j -p testpassword 'RETURN 1' >/dev/null 2>&1"]
       interval: 10s
@@ -234,7 +234,7 @@ services:
       # permissions", and because one failed publish abandons a multi-service `up`,
       # backend/worker/frontend/projection-worker were all left in Created. There was
       # no supported way out: the port was a literal. Names match .env.docker.example.
-      - "${INFLUXDB_HOST_PORT:-8086}:8086"
+      - "127.0.0.1:${INFLUXDB_HOST_PORT:-8086}:8086"
     volumes:
       - influxdb-test-data:/var/lib/influxdb2
     healthcheck:
@@ -410,11 +410,12 @@ services:
       witness-test:
         condition: service_healthy
     ports:
-      - "${BACKEND_HOST_PORT:-3000}:3000"
+      - "127.0.0.1:${BACKEND_HOST_PORT:-3000}:3000"
       # #1263: trusted-hop-test shares this service's network namespace, so
       # its port is published here (a network_mode service cannot publish).
-      # Host loopback only: the hop lets its caller choose a source address,
-      # so it is not offered to the host's network the way 3000 is.
+      # Host loopback only, as every published port here is
+      # (docs/decisions/2026-10-23-compose-ports-loopback.md): the hop lets its
+      # caller choose a source address.
       - "127.0.0.1:${TRUSTED_HOP_HOST_PORT:-3100}:3100"
     expose:
       - "3000"
@@ -842,7 +843,7 @@ services:
       backend-app-test:
         condition: service_healthy
     ports:
-      - "${FRONTEND_HOST_PORT:-5173}:5173"
+      - "127.0.0.1:${FRONTEND_HOST_PORT:-5173}:5173"
     expose:
       - "5173"
     healthcheck:
