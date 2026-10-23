@@ -34,6 +34,7 @@ async function recordReplacement(db, { fileRecord, storageUri, checksum, encrypt
       encryptionIv: fileRecord.encryptionIv,
       encryptionTag: fileRecord.encryptionTag,
       previousVersionId: null,
+      retentionPolicyId: fileRecord.retentionPolicyId,
       changeReason: BASELINE_CHANGE_REASON,
       createdAt: fileRecord.uploadDate || fileRecord.createdAt || now,
     });
@@ -51,6 +52,7 @@ async function recordReplacement(db, { fileRecord, storageUri, checksum, encrypt
     encryptionIv: encryption ? encryption.iv : null,
     encryptionTag: encryption ? encryption.tag : null,
     previousVersionId: latest.dataFileVersionId,
+    retentionPolicyId: fileRecord.retentionPolicyId,
     changeReason,
     createdAt: now,
   });

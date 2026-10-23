@@ -88,6 +88,13 @@ class SampleFileModel {
       }
     }
 
+    // V2E-0475 (#1321): optional for older rows, but a supplied policy id is
+    // a non-empty string.
+    if (data.retentionPolicyId !== undefined && data.retentionPolicyId !== null
+      && (typeof data.retentionPolicyId !== 'string' || data.retentionPolicyId.length === 0)) {
+      errors.push('retentionPolicyId deve ser string não vazia');
+    }
+
     // Valida tipos de arquivo permitidos
     const allowedTypes = ['RAW', 'ZIP', 'CSV', 'XLS', 'XLSX', 'PDF', 'TXT'];
     if (typeof data.fileType === 'string' && !allowedTypes.includes(data.fileType.toUpperCase())) {
@@ -130,6 +137,7 @@ class SampleFileModel {
       accessPolicy: data.accessPolicy || null, // RF007 - restrições de acesso vigentes
       uploaderAnonId: data.uploaderAnonId || null, // ID anonimizado do uploader (LGPD)
       ownerId: data.ownerId || data.uploaderAnonId || null, // V2E-0474 - owner (#1321)
+      retentionPolicyId: data.retentionPolicyId || null, // V2E-0475 - política de retenção (#1321)
       linkedEntityRefs: Array.isArray(data.linkedEntityRefs) // V2E-0476 - vínculos canônicos (#1321)
         ? data.linkedEntityRefs.map(r => ({ entityType: r.entityType, entityId: r.entityId }))
         : [],

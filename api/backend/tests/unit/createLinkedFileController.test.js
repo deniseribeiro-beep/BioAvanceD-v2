@@ -349,6 +349,124 @@ describe('createLinkedFileController', () => {
     });
   });
 
+  // RF007 AC3, V2E-0475 (#1321): the server records the active DataFile
+  // RetentionPolicy on the row; the client never picks it.
+  describe('DataFile retentionPolicyId (#1321)', () => {
+    const POLICY_ID = '64b7f0c2a1b2c3d4e5f60718';
+
+    function policyDb(policy) {
+      const insertOne = vi.fn().mockResolvedValue({ insertedId: new ObjectId() });
+      const retentionPolicies = { findOne: vi.fn().mockResolvedValue(policy) };
+      const db = createDb({
+        widgets: { findOne: vi.fn().mockResolvedValue({ _id: new ObjectId(), widgetId: 'w-1' }) },
+        widgetFiles: { insertOne },
+        retentionPolicies
+      });
+      return { db, insertOne, retentionPolicies };
+    }
+
+    function policyReq(db, body = {}) {
+      return {
+        app: { locals: { db } },
+        params: { widgetId: 'w-1' },
+        user: { id: 'u1' },
+        file: { path: '/tmp/x.csv', originalname: 'x.csv', size: 5 },
+        body
+      };
+    }
+
+    beforeEach(() => {
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs, 'readFileSync').mockReturnValue(Buffer.from('a,b\n1,2\n'));
+      vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+      vi.spyOn(fs, 'unlinkSync').mockImplementation(() => {});
+    });
+
+    it('uploadFile with an active DataFile policy records its id on the row, the 201 data and the audit payload', async () => {
+      const { db, insertOne, retentionPolicies } = policyDb({ _id: new ObjectId(POLICY_ID) });
+      stubFileStore();
+      const res = createRes();
+
+      await buildController().uploadFile(policyReq(db), res);
+
+      expect(res.status).toHaveBeenCalledWith(201);
+      expect(retentionPolicies.findOne).toHaveBeenCalledWith(
+        { active: true, applicableEntityTypes: { $in: ['DataFile'] } },
+        { sort: { createdAt: -1 } }
+      );
+      expect(insertOne.mock.calls[0][0].retentionPolicyId).toBe(POLICY_ID);
+      expect(res.json.mock.calls[0][0].data.retentionPolicyId).toBe(POLICY_ID);
+      expect(auditLogger.log.mock.calls[0][0].payload.retentionPolicyId).toBe(POLICY_ID);
+    });
+
+    it('uploadFile with no active DataFile policy records null and still answers 201', async () => {
+      const { db, insertOne } = policyDb(null);
+      stubFileStore();
+      const res = createRes();
+
+      await buildController().uploadFile(policyReq(db), res);
+
+      expect(res.status).toHaveBeenCalledWith(201);
+      expect(insertOne.mock.calls[0][0].retentionPolicyId).toBeNull();
+      expect(res.json.mock.calls[0][0].data.retentionPolicyId).toBeNull();
+    });
+
+    it('uploadFile ignores a retentionPolicyId the request names', async () => {
+      const { db, insertOne } = policyDb(null);
+      stubFileStore();
+      const res = createRes();
+
+      await buildController().uploadFile(policyReq(db, { retentionPolicyId: 'forged' }), res);
+
+      expect(res.status).toHaveBeenCalledWith(201);
+      expect(insertOne.mock.calls[0][0].retentionPolicyId).toBeNull();
+    });
+
+    it('listFiles returns each row\'s retentionPolicyId', async () => {
+      const rows = [
+        { _id: new ObjectId(), widgetId: 'w-1', fileName: 'a.csv', retentionPolicyId: POLICY_ID },
+        { _id: new ObjectId(), widgetId: 'w-1', fileName: 'b.csv', retentionPolicyId: null }
+      ];
+      const db = createDb({
+        widgets: { findOne: vi.fn().mockResolvedValue({ widgetId: 'w-1' }) },
+        widgetFiles: { find: vi.fn().mockReturnValue({ toArray: vi.fn().mockResolvedValue(rows) }) }
+      });
+      const res = createRes();
+
+      await buildController().listFiles({ app: { locals: { db } }, params: { widgetId: 'w-1' }, user: null }, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json.mock.calls[0][0].data.map((f) => f.retentionPolicyId)).toEqual([POLICY_ID, null]);
+    });
+
+    it('replaceFile leaves the row\'s retentionPolicyId as it is', async () => {
+      const fileRecord = {
+        _id: new ObjectId(), widgetId: 'w-1', fileName: 'old.csv', retentionPolicyId: POLICY_ID,
+        storagePath: '/tmp/old.csv', storageUri: 'objstore://widgets/w-1/files/old.csv', checksum: OLD_CHECKSUM
+      };
+      const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+      const db = createDb({
+        widgets: { findOne: vi.fn().mockResolvedValue({ widgetId: 'w-1' }) },
+        widgetFiles: { findOne: vi.fn().mockResolvedValue(fileRecord), updateOne },
+        dataFileVersions: createVersionsCollection()
+      });
+      stubFileStore();
+      const req = {
+        app: { locals: { db } },
+        params: { widgetId: 'w-1', fileID: fileRecord._id.toString() },
+        user: null,
+        file: { path: '/tmp/new.csv', originalname: 'new.csv', size: 11 },
+        body: { retentionPolicyId: 'forged' }
+      };
+      const res = createRes();
+
+      await buildController().replaceFile(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(updateOne.mock.calls[0][1].$set).not.toHaveProperty('retentionPolicyId');
+    });
+  });
+
   describe('listFiles', () => {
     it('404s when the parent entity does not exist', async () => {
       const controller = buildController();

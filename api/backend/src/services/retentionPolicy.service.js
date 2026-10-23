@@ -9,13 +9,18 @@ const logger = require('../utils/logger');
 //    and Log;
 //  - specimens (RF026 AC1, #1365): a Specimen, or the legacy Sample, is
 //    destroyed or transferred through a DispositionAction bound to the
-//    policy, executed by a person (RF026 AC4-AC6), never by the sweep.
+//    policy, executed by a person (RF026 AC4-AC6), never by the sweep;
+//  - data files (RF007 AC3, V2E-0475, #1321): a DataFile is acted on by a
+//    DispositionAction a person records and executes with
+//    entityType 'DataFile' (RF026 AC4-AC6), as for specimens, never by the
+//    sweep.
 // Each family keeps its own active policy: activating one deactivates the
 // active policies of the families it names, so a specimen policy never
 // switches off the audit trail's retention.
 const ENTITY_TYPE_FAMILIES = {
   auditTrail: ['AuditEvent', 'Log'],
   specimen: ['Specimen', 'Sample'],
+  dataFile: ['DataFile'],
 };
 const ALLOWED_ENTITY_TYPES = Object.values(ENTITY_TYPE_FAMILIES).flat();
 
@@ -149,6 +154,21 @@ class RetentionPolicyService {
       .toArray();
 
     return policies[0] || null;
+  }
+
+  // V2E-0475 (#1321): the id of a family's one active policy, the form a
+  // DispositionAction's retentionPolicyId stores, or null when none is active.
+  async getActivePolicyId(db, family) {
+    // Own keys only, so a name the table inherits (toString) is unknown too.
+    if (!Object.hasOwn(ENTITY_TYPE_FAMILIES, family)) {
+      throw new Error(`família de política de retenção desconhecida: ${family}`);
+    }
+    const collection = await getCollection(db, 'retentionPolicies');
+    const policy = await collection.findOne(
+      { active: true, applicableEntityTypes: { $in: ENTITY_TYPE_FAMILIES[family] } },
+      { sort: { createdAt: -1 } }
+    );
+    return policy ? String(policy._id) : null;
   }
 
   async getPolicyById(db, policyId) {

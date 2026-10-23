@@ -33,5 +33,5 @@ By the coordinator for #1321, on 2026-10-23:
 
 - **Rows written before this decision** have no `mimeType`, `ownerId` or `linkedEntityRefs`. A workflow link on such a row creates a `linkedEntityRefs` holding only the WorkflowRun reference, without the parent.
 - **Adding a consent, approval or study link after upload:** no route does it.
-- **`retentionPolicyId` (V2E-0475):** a DataFile retention family in `retentionPolicy.service.js`, and what would act on it.
+- **`retentionPolicyId` (V2E-0475):** decided in `2026-10-23-data-file-retention-policy.md`.
 - **`encryptionKeyReference` (V2E-0473).**

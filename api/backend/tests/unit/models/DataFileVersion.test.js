@@ -70,6 +70,13 @@ describe('DataFileVersionModel', () => {
     expect(row).toMatchObject({ encryptionAlgorithm: null, encryptionKeyId: null, encryptionIv: null, encryptionTag: null });
   });
 
+  // BaseRecord ELM-0021 (#1321): the DataFile's policy, outside fieldsOf.
+  it('carries retentionPolicyId on create, never on fieldsOf, and null when none is given', () => {
+    expect(DataFileVersionModel.create(v1({ retentionPolicyId: 'policy-1' })).retentionPolicyId).toBe('policy-1');
+    expect(DataFileVersionModel.create(v1()).retentionPolicyId).toBeNull();
+    expect(DataFileVersionModel.fieldsOf(v1({ retentionPolicyId: 'policy-1' }))).not.toHaveProperty('retentionPolicyId');
+  });
+
   it.each(['fileId', 'objectUri', 'checksum', 'changeReason'])('rejects an empty %s', (field) => {
     expect(() => DataFileVersionModel.create(v1({ [field]: '' }))).toThrow(`${field} é obrigatório`);
   });

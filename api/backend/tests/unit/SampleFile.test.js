@@ -142,6 +142,19 @@ describe('SampleFileModel.validate', () => {
     expect(errors).toEqual([]);
   });
 
+  // V2E-0475 (#1321): optional for older rows, a non-empty string otherwise.
+  it.each([[undefined], [null], ['policy-1']])('accepts retentionPolicyId %j (V2E-0475, #1321)', (retentionPolicyId) => {
+    const { isValid, errors } = SampleFileModel.validate({ ...validData, retentionPolicyId });
+    expect(isValid).toBe(true);
+    expect(errors).toEqual([]);
+  });
+
+  it.each([[''], [123]])('rejects retentionPolicyId %j (V2E-0475, #1321)', (retentionPolicyId) => {
+    const { isValid, errors } = SampleFileModel.validate({ ...validData, retentionPolicyId });
+    expect(isValid).toBe(false);
+    expect(errors).toContain('retentionPolicyId deve ser string não vazia');
+  });
+
   it('accepts a well-formed mimeType and linkedEntityRefs (#1321)', () => {
     const { isValid, errors } = SampleFileModel.validate({
       ...validData,
@@ -237,6 +250,11 @@ describe('SampleFileModel.create', () => {
     expect(result.mimeType).toBeNull();
     expect(result.linkedEntityRefs).toEqual([]);
     expect(SampleFileModel.create(baseInput).ownerId).toBeNull();
+  });
+
+  it('writes retentionPolicyId and defaults it to null (V2E-0475, #1321)', () => {
+    expect(SampleFileModel.create({ ...baseInput, retentionPolicyId: 'policy-1' }).retentionPolicyId).toBe('policy-1');
+    expect(SampleFileModel.create(baseInput).retentionPolicyId).toBeNull();
   });
 
   it('defaults uploaderAnonId to null when not provided', () => {

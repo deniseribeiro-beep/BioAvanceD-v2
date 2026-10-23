@@ -127,6 +127,25 @@ describe('dataFileVersion.service', () => {
       expect(version).toMatchObject({ encryptionAlgorithm: null, encryptionKeyId: null, encryptionIv: null, encryptionTag: null });
     });
 
+    // BaseRecord ELM-0021 (#1321): each version carries its DataFile's policy.
+    it('the baseline and the new version carry the file\'s retentionPolicyId', async () => {
+      const { db } = createDb(null);
+
+      const { baseline, version } = await recordReplacement(db, replacement({ fileRecord: { ...fileRecord, retentionPolicyId: 'policy-1' } }));
+
+      expect(baseline.retentionPolicyId).toBe('policy-1');
+      expect(version.retentionPolicyId).toBe('policy-1');
+    });
+
+    it('a file row with no retentionPolicyId gives its versions null', async () => {
+      const { db } = createDb(null);
+
+      const { baseline, version } = await recordReplacement(db, replacement());
+
+      expect(baseline.retentionPolicyId).toBeNull();
+      expect(version.retentionPolicyId).toBeNull();
+    });
+
     it('an invalid new row throws and inserts nothing for it', async () => {
       const v3 = { dataFileVersionId: 'version-3', fileId: 'file-1', versionNumber: 3 };
       const { db, coll } = createDb(v3);

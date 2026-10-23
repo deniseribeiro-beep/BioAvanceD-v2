@@ -63,7 +63,10 @@ class DataFileVersionModel {
     if (fields.versionNumber > 1 && !fields.previousVersionId) {
       throw new Error('previousVersionId é obrigatório a partir da versão 2 (V2E-0351)');
     }
-    return { ...fields, ...this.envelopeOf(data) };
+    // BaseRecord ELM-0021 (retentionPolicyId, 0..1): the retained binary of a
+    // version is governed by its DataFile's policy (#1321). Kept out of
+    // fieldsOf, which lists DataFileVersion's own catalog fields.
+    return { ...fields, ...this.envelopeOf(data), retentionPolicyId: optionalString(data.retentionPolicyId) };
   }
 }
 

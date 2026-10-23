@@ -102,3 +102,48 @@ describe('#1365 a RetentionPolicy may govern specimens', () => {
     expect(db._c.find).toHaveBeenLastCalledWith({ active: true, applicableEntityTypes: { $in: ['Specimen', 'Sample'] } });
   });
 });
+
+// #1321 (RF007 AC3, V2E-0475): a DataFile records its family's active policy,
+// and its disposition runs through a DispositionAction with entityType
+// 'DataFile', so the type is accepted. The family keeps its own active policy.
+describe('#1321 a RetentionPolicy may govern data files', () => {
+  it('createPolicy accepts ["DataFile"]', async () => {
+    const db = makeDb();
+    const created = await retentionPolicyService.createPolicy(db, { ...payload(['DataFile']), postRetentionAction: 'destroy' });
+    expect(created.applicableEntityTypes).toEqual(['DataFile']);
+    expect(db._c.insertOne).toHaveBeenCalledTimes(1);
+  });
+
+  it('activating a DataFile policy deactivates only active policies naming DataFile', async () => {
+    const db = makeDb();
+    await retentionPolicyService.createPolicy(db, payload(['DataFile']));
+    expect(db._c.updateMany).toHaveBeenCalledWith(
+      { active: true, applicableEntityTypes: { $in: ['DataFile'] } },
+      expect.anything()
+    );
+  });
+
+  it('getActivePolicyId reads the DataFile family only and returns the policy _id as a string, or null', async () => {
+    const db = makeDb();
+    db._c.findOne.mockResolvedValueOnce({ _id: { toString: () => '64b7f0c2a1b2c3d4e5f60718' } });
+    await expect(retentionPolicyService.getActivePolicyId(db, 'dataFile')).resolves.toBe('64b7f0c2a1b2c3d4e5f60718');
+    expect(db._c.findOne).toHaveBeenLastCalledWith(
+      { active: true, applicableEntityTypes: { $in: ['DataFile'] } },
+      { sort: { createdAt: -1 } }
+    );
+    db._c.findOne.mockResolvedValueOnce(null);
+    await expect(retentionPolicyService.getActivePolicyId(db, 'dataFile')).resolves.toBeNull();
+  });
+
+  it('getActivePolicyId throws on an unknown family and reads nothing', async () => {
+    const db = makeDb();
+    await expect(retentionPolicyService.getActivePolicyId(db, 'patient')).rejects.toThrow('família de política de retenção desconhecida: patient');
+    expect(db._c.findOne).not.toHaveBeenCalled();
+  });
+
+  it.each(['toString', 'constructor', '__proto__'])('getActivePolicyId throws on %j, a name the table inherits, and reads nothing', async (family) => {
+    const db = makeDb();
+    await expect(retentionPolicyService.getActivePolicyId(db, family)).rejects.toThrow(`família de política de retenção desconhecida: ${family}`);
+    expect(db._c.findOne).not.toHaveBeenCalled();
+  });
+});

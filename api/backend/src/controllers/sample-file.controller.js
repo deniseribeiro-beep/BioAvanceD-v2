@@ -15,6 +15,7 @@ const { encryptFileBuffer, computeChecksum, assertFileEncryptionConfigured } = r
 const { STORAGE_BASE } = require('../config/uploadConfig');
 const { isMimeAllowedForExtension, checkFileSignature, canonicalMimeType } = require('../utils/uploadFormatPolicy');
 const { resolveLinkedEntityRefs } = require('../services/dataFileLinks.service');
+const retentionPolicyService = require('../services/retentionPolicy.service');
 const { recordReplacement, discardVersion, resolveChangeReason } = require('../services/dataFileVersion.service');
 const objectStorage = require('../infrastructure/objectStorage');
 const malwareScan = require('../infrastructure/malwareScan');
@@ -257,6 +258,10 @@ class SampleFileController {
         });
       }
 
+      // RF007 AC3, V2E-0475 (#1321): the server records the active DataFile
+      // policy; a request field of that name is never read.
+      const retentionPolicyId = await retentionPolicyService.getActivePolicyId(db, 'dataFile');
+
       // RF007 AC#3/AC#4/AC#5 - checksum do conteúdo original, cifra em
       // repouso (RNF029) e URI estável de Object Storage. O conteúdo em
       // disco é substituído pelo ciphertext; o checksum é sempre calculado
@@ -315,6 +320,7 @@ class SampleFileController {
         accessPolicy: { view: 'authenticated', manage: ['admin', 'coordinator'] },
         uploaderAnonId: uploaderAnonId,
         ownerId: uploaderAnonId,
+        retentionPolicyId,
         linkedEntityRefs,
         uploadDate: new Date(),
         createdAt: new Date(),
@@ -355,7 +361,8 @@ class SampleFileController {
             specimenId: sample._id.toString(),
             checksum,
             checksumAlgorithm: 'sha256',
-            linkedEntityRefs: sampleFile.linkedEntityRefs
+            linkedEntityRefs: sampleFile.linkedEntityRefs,
+            retentionPolicyId: sampleFile.retentionPolicyId
             // Não inclui dados sensíveis
           },
           req: req,
@@ -378,6 +385,7 @@ class SampleFileController {
           fileSize: sampleFile.fileSize,
           uploaderAnonId: sampleFile.uploaderAnonId,
           ownerId: sampleFile.ownerId,
+          retentionPolicyId: sampleFile.retentionPolicyId,
           linkedEntityRefs: sampleFile.linkedEntityRefs,
           uploadDate: sampleFile.uploadDate,
           uri: sampleFile.storageUri,
@@ -480,6 +488,7 @@ class SampleFileController {
         accessPolicy: file.accessPolicy,
         uploaderAnonId: file.uploaderAnonId, // Apenas ID anonimizado
         ownerId: file.ownerId,
+        retentionPolicyId: file.retentionPolicyId,
         linkedEntityRefs: file.linkedEntityRefs,
         uploadDate: file.uploadDate,
         createdAt: file.createdAt

@@ -9,6 +9,7 @@ const { encryptFileBuffer, computeChecksum, assertFileEncryptionConfigured } = r
 const { STORAGE_BASE } = require('../config/uploadConfig');
 const { isMimeAllowedForExtension, checkFileSignature, canonicalMimeType } = require('../utils/uploadFormatPolicy');
 const { resolveLinkedEntityRefs } = require('../services/dataFileLinks.service');
+const retentionPolicyService = require('../services/retentionPolicy.service');
 const { recordReplacement, discardVersion, resolveChangeReason } = require('../services/dataFileVersion.service');
 const objectStorage = require('../infrastructure/objectStorage');
 const malwareScan = require('../infrastructure/malwareScan');
@@ -218,6 +219,10 @@ function createLinkedFileController(opts) {
         return res.status(422).json({ success: false, error: 'Vínculo inválido', details: linkErrors });
       }
 
+      // RF007 AC3, V2E-0475 (#1321): the server records the active DataFile
+      // policy; a request field of that name is never read.
+      const retentionPolicyId = await retentionPolicyService.getActivePolicyId(db, 'dataFile');
+
       // #938: fail closed BEFORE the plaintext multer already wrote to disk
       // can be left there. This used to read `if (encryption)` as
       // "skip encryption when no key is configured", so a keyless
@@ -265,6 +270,7 @@ function createLinkedFileController(opts) {
         accessPolicy: { view: 'authenticated', manage: ['administrator', 'coordinator'] },
         uploaderAnonId,
         ownerId: uploaderAnonId,
+        retentionPolicyId,
         linkedEntityRefs,
         uploadDate: new Date(),
         createdAt: new Date(),
@@ -278,7 +284,7 @@ function createLinkedFileController(opts) {
         action: 'file_upload',
         resourceId: insertResult.insertedId.toString(),
         message: `Upload de arquivo: ${file.originalname} (${(file.size / 1024).toFixed(2)} KB)`,
-        payload: { fileName: file.originalname, fileSize: file.size, fileType, [parentIdField]: parentIdValue, checksum, checksumAlgorithm: 'sha256', linkedEntityRefs }
+        payload: { fileName: file.originalname, fileSize: file.size, fileType, [parentIdField]: parentIdValue, checksum, checksumAlgorithm: 'sha256', linkedEntityRefs, retentionPolicyId }
       });
 
       return res.status(201).json({
@@ -293,6 +299,7 @@ function createLinkedFileController(opts) {
           fileSize: fileDoc.fileSize,
           uploaderAnonId: fileDoc.uploaderAnonId,
           ownerId: fileDoc.ownerId,
+          retentionPolicyId: fileDoc.retentionPolicyId,
           linkedEntityRefs: fileDoc.linkedEntityRefs,
           uploadDate: fileDoc.uploadDate,
           uri: fileDoc.storageUri,
@@ -350,6 +357,7 @@ function createLinkedFileController(opts) {
         accessPolicy: file.accessPolicy,
         uploaderAnonId: file.uploaderAnonId,
         ownerId: file.ownerId,
+        retentionPolicyId: file.retentionPolicyId,
         linkedEntityRefs: file.linkedEntityRefs,
         uploadDate: file.uploadDate,
         createdAt: file.createdAt
