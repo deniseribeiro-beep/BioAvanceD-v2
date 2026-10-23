@@ -1226,3 +1226,136 @@ test.describe('Human-paced e2e showcase reel — W9 telemetry and alerts', () =>
     }
   });
 });
+
+// W8 reel (#1399): physical storage and specimen state. An operator moves a
+// stored specimen to another freezer, shelf, rack, box and position through
+// the sample page's storage panel (RF017), reads its derived status (RF006
+// AC2/AC3), and closes it once a total withdrawal has depleted it (RF026
+// AC7). Deliberately not demoed: a disposition run from planned to executed,
+// custody assignment, and the cryovial container, position and
+// rack-to-location chain, because no UI calls them;
+// tests/e2e/physical-chain.spec.ts and tests/e2e/specimen-status-v2.spec.ts
+// cover them at the API.
+test.describe('Human-paced e2e showcase reel — W8 storage and specimen state', () => {
+  const boxes: SeededStorageBox[] = [];
+
+  test.afterAll(async () => {
+    await Promise.all(boxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {})));
+    await closeSeedDb();
+  });
+
+  test('RF017/RF006 an operator moves a specimen through freezer, shelf, rack, box and position, and closes it once depleted', async ({ page, request }) => {
+    const session = await realLogin(request);
+    // Pin the UI language before any goto, as the reel's other cases do: every label asserted here is the pt-BR one.
+    await page.addInitScript(() => {
+      window.localStorage.setItem('app_language', 'pt-BR');
+    });
+    await seedRealAuth(page, session);
+    const headers = { Authorization: `Bearer ${session.token}` };
+    const stamp = `${Date.now()}`.slice(-6);
+
+    const participant = await createRealParticipant(request, apiBaseURL!, session.token);
+    await seedActiveConsent(participant.participantId);
+    const boxA = await seedStorageBoxLocation();
+    const boxB = await seedStorageBoxLocation();
+    boxes.push(boxA, boxB);
+
+    // The destination tree gets readable names, which the storage summary shows.
+    const freezerName = `Freezer -80 °C · Sala 2 ${stamp}`;
+    const shelfName = 'Prateleira 1';
+    const rackName = 'Rack A';
+    const boxName = 'Caixa 01';
+    const client = new MongoClient(process.env.E2E_MONGO_URI || 'mongodb://localhost:27017?directConnection=true');
+    await client.connect();
+    try {
+      const db = client.db(process.env.E2E_MONGO_DB || 'bioavanced_test');
+      const containers = db.collection('storageContainers');
+      await containers.updateOne({ _id: new ObjectId(boxB.freezerId) }, { $set: { name: freezerName } });
+      await containers.updateOne({ _id: new ObjectId(boxB.shelfId) }, { $set: { name: shelfName } });
+      await containers.updateOne({ _id: new ObjectId(boxB.rackId) }, { $set: { name: rackName } });
+      await db.collection('storageBoxes').updateOne({ _id: new ObjectId(boxB.boxId) }, { $set: { name: boxName } });
+    } finally {
+      await client.close();
+    }
+
+    const sample = await request.post(`${apiBaseURL}/api/samples`, {
+      headers,
+      data: {
+        participantId: participant.participantId,
+        sampleType: 'PLASMA',
+        sampleOrigin: 'VENOUS_BLOOD',
+        extractionProtocol: 'TUBE_EDTA',
+        quantity: 5,
+        quality: 'GOOD',
+        linkedProject: 'Showcase W8',
+        registeredAt: new Date().toISOString(),
+        boxId: boxA.boxId,
+        positionCode: boxA.positionCode,
+      },
+    });
+    expect([201, 202]).toContain(sample.status());
+    const specimenId = (await sample.json()).data.specimenId as string;
+    const currentStatus = page.getByText('Status Atual:', { exact: true }).locator('xpath=..');
+
+    // 1. The specimen's page: available, stored in box A at A1.
+    await page.goto(`/samples/${specimenId}`);
+    await beat(page, LARGE);
+    await expect(currentStatus).toContainText('Disponível');
+    await expect(page.getByText(/ \/ Poço A1$/)).toBeVisible();
+
+    // 2. Moved through the picker to the named freezer, shelf, rack and box, at B3.
+    await page.getByRole('button', { name: 'Gerenciar Armazenagem' }).click();
+    await beat(page, MEDIUM);
+    await page.getByLabel('Freezer').selectOption(boxB.freezerId);
+    await beat(page, SMALL);
+    await page.getByLabel('Prateleira').selectOption('0');
+    await beat(page, SMALL);
+    await page.getByLabel('Rack').selectOption('0');
+    await beat(page, SMALL);
+    await page.getByLabel('Caixa').selectOption(boxB.boxId);
+    await beat(page, SMALL);
+    await page.getByLabel('Especificar posição exata').check();
+    await page.getByLabel('Posição de destino').fill('B3');
+    await beat(page, MEDIUM);
+    await page.getByRole('button', { name: 'Confirmar Movimentação' }).click();
+    const summary = page.getByText(`${freezerName}/${shelfName}/${rackName}/${boxName} / Poço B3`, { exact: true });
+    await expect(summary).toBeVisible({ timeout: 15_000 });
+    await summary.scrollIntoViewIfNeeded();
+    await beat(page, LARGE);
+
+    // The move is persisted, not only shown.
+    const location = await request.get(`${apiBaseURL}/api/storage/sample/${specimenId}`, { headers });
+    expect(location.status()).toBe(200);
+    const locationBody = (await location.json()).data;
+    expect(locationBody.box.boxId).toBe(boxB.boxId);
+    expect(locationBody.box.position).toBe('B3');
+
+    // 3. Off camera: a total withdrawal depletes it; the status follows and closing is offered.
+    const withdraw = await request.post(`${apiBaseURL}/api/samples/${specimenId}/withdraw`, {
+      headers,
+      data: {
+        withdrawalType: 'Total',
+        withdrawalResponsible: 'Operadora do Biobanco',
+        linkedProject: 'Showcase W8',
+      },
+    });
+    expect(withdraw.status(), await withdraw.text()).toBe(200);
+    await page.reload();
+    await beat(page, LARGE);
+    await expect(currentStatus).toContainText('Totalmente Retirada');
+    await expect(page.getByTestId('sample-detail-close-button')).toBeVisible();
+
+    // 4. Closed after the confirmation: the status reads closed and the action is gone.
+    page.once('dialog', (dialog) => dialog.accept());
+    await page.getByTestId('sample-detail-close-button').click();
+    await expect(currentStatus).toContainText('Encerrada');
+    await expect(page.getByTestId('sample-detail-close-button')).toHaveCount(0);
+    await beat(page, LARGE);
+
+    const closed = await request.get(`${apiBaseURL}/api/samples/${specimenId}`, { headers });
+    expect(closed.status()).toBe(200);
+    const closedBody = (await closed.json()).data;
+    expect(closedBody.specimenStatus).toBe('closed');
+    expect(closedBody.quantityStatus).toBe('depleted');
+  });
+});
