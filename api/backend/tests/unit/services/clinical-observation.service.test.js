@@ -82,6 +82,46 @@ describe('clinical-observation.service', () => {
     });
   });
 
+  describe('createClinicalObservation diagnosticReportId (#695, ELM-0232)', () => {
+    const base = { participantId: 'PART-1', observationCoding: LOINC_CODING, effectiveDateTime: '2026-01-01', observationStatus: 'final' };
+
+    it('persists a typed DiagnosticReport/dr-1 that resolves to a real report', async () => {
+      const db = createFakeDb({ diagnosticReports: [{ diagnosticReportId: 'dr-1' }] });
+
+      const stored = await createClinicalObservation(db, { ...base, diagnosticReportId: 'DiagnosticReport/dr-1' });
+
+      expect(stored.diagnosticReportId).toBe('DiagnosticReport/dr-1');
+      expect(db.collections.clinicalObservations.docs).toHaveLength(1);
+    });
+
+    it('persists a bare dr-1 that resolves to a real report', async () => {
+      const db = createFakeDb({ diagnosticReports: [{ diagnosticReportId: 'dr-1' }] });
+
+      const stored = await createClinicalObservation(db, { ...base, diagnosticReportId: 'dr-1' });
+
+      expect(stored.diagnosticReportId).toBe('dr-1');
+      expect(db.collections.clinicalObservations.docs).toHaveLength(1);
+    });
+
+    it('rejects a diagnosticReportId that does not resolve, without persisting anything', async () => {
+      const db = createFakeDb({ diagnosticReports: [] });
+
+      await expect(createClinicalObservation(db, { ...base, diagnosticReportId: 'dr-unknown' })).rejects.toThrow(
+        /Referência inexistente.*diagnosticReportId/
+      );
+      expect(db.collections.clinicalObservations?.docs || []).toHaveLength(0);
+    });
+
+    it('rejects DiagnosticReport/ with no id as malformed, without persisting anything', async () => {
+      const db = createFakeDb({ diagnosticReports: [{ diagnosticReportId: 'dr-1' }] });
+
+      await expect(createClinicalObservation(db, { ...base, diagnosticReportId: 'DiagnosticReport/' })).rejects.toThrow(
+        'Referência malformada: diagnosticReportId="DiagnosticReport/"'
+      );
+      expect(db.collections.clinicalObservations?.docs || []).toHaveLength(0);
+    });
+  });
+
   describe('getClinicalObservationsForParticipant', () => {
     it('scopes results to the requested participantId only', async () => {
       const db = createFakeDb({});

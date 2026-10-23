@@ -32,8 +32,10 @@ class PhenotypeObservationModel {
       phenotypeSeverity: data.phenotypeSeverity ?? null,
       phenotypeFrequency: data.phenotypeFrequency ?? null,
       observationMethod: data.observationMethod ?? null,
-      // ELM-0218: Reference[], 0..* -> DiagnosticReport -- stays
-      // unenforced, same pattern as Condition.diagnosisEvidence.
+      // ELM-0218: Reference[], 0..* -> DiagnosticReport (#695) -- same
+      // rule as Condition.diagnosisEvidence: only an entry typed
+      // `DiagnosticReport/<id>` is hard-checked; an untyped entry (an
+      // image or a note, per ELM-0218) is stored unchecked.
       phenotypeEvidence,
       // P1X-0075: Reference, 0..1 -> Encounter (#689) -- joinable-but-
       // unenforced, same pattern as equipmentId/thresholdProfileId

@@ -30,6 +30,7 @@ const CANONICAL_COLLECTIONS = Object.freeze({
   conditions: env.COLL_CONDITIONS || 'conditions',
   phenotypeObservations: env.COLL_PHENOTYPE_OBSERVATIONS || 'phenotypeObservations',
   clinicalObservations: env.COLL_CLINICAL_OBSERVATIONS || 'clinicalObservations',
+  diagnosticReports: env.COLL_DIAGNOSTIC_REPORTS || 'diagnosticReports',
   clinicalOutcomes: env.COLL_CLINICAL_OUTCOMES || 'clinicalOutcomes',
   derivedScores: env.COLL_DERIVED_SCORES || 'derivedScores',
   allergyIntolerances: env.COLL_ALLERGY_INTOLERANCES || 'allergyIntolerances',

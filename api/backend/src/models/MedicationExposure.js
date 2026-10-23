@@ -10,10 +10,10 @@ class MedicationExposureModel {
       ? data.medicationCoding.filter((coding) => coding && coding.systemUri && coding.code)
       : [];
     // ELM-0241: Reference[], 0..* -> Condition (#690) -- stays
-    // joinable-but-unenforced, same pattern as diagnosisEvidence/
-    // phenotypeEvidence elsewhere in this domain (#692's own issue text
-    // doesn't call for a hard reference-check here, unlike #691's
-    // specimenId/deviceId).
+    // joinable-but-unenforced, same pattern as encounterId elsewhere in
+    // this domain (#692's own issue text doesn't call for a hard
+    // reference-check here, unlike #691's specimenId/deviceId and #695's
+    // typed diagnosisEvidence/phenotypeEvidence entries).
     const indication = Array.isArray(data.indication) ? data.indication.map((ref) => String(ref)).filter(Boolean) : [];
 
     return {

@@ -208,6 +208,7 @@ module.exports = {
   COLL_CONDITIONS: process.env.COLL_CONDITIONS || 'conditions',
   COLL_PHENOTYPE_OBSERVATIONS: process.env.COLL_PHENOTYPE_OBSERVATIONS || 'phenotypeObservations',
   COLL_CLINICAL_OBSERVATIONS: process.env.COLL_CLINICAL_OBSERVATIONS || 'clinicalObservations',
+  COLL_DIAGNOSTIC_REPORTS: process.env.COLL_DIAGNOSTIC_REPORTS || 'diagnosticReports',
   COLL_CLINICAL_OUTCOMES: process.env.COLL_CLINICAL_OUTCOMES || 'clinicalOutcomes',
   COLL_DERIVED_SCORES: process.env.COLL_DERIVED_SCORES || 'derivedScores',
   COLL_ALLERGY_INTOLERANCES: process.env.COLL_ALLERGY_INTOLERANCES || 'allergyIntolerances',

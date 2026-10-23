@@ -41,9 +41,10 @@ class ConditionModel {
       // ELM-0208: BackboneElement, 0..1 ("estágio clínico/patológico com
       // sistema e versão") -- stored as given, a nested object.
       stage: data.stage ?? null,
-      // ELM-0209: Reference[], 0..* -> DiagnosticReport -- stays unenforced,
-      // no DiagnosticReport entity exists in this repo yet, same
-      // "optional, joinable" pattern as encounterId/equipmentId elsewhere.
+      // ELM-0209: Reference[], 0..* -> DiagnosticReport (#695) -- the
+      // service layer hard-checks only an entry typed
+      // `DiagnosticReport/<id>`; an untyped entry (a criterion or a
+      // professional, per ELM-0209) is stored unchecked.
       diagnosisEvidence,
       // ELM-0210: dateTime, 0..1.
       recordedDate: data.recordedDate ? new Date(data.recordedDate) : null,

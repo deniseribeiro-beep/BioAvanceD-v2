@@ -1,6 +1,8 @@
 const { getCollection } = require('../utils/collectionResolver');
 const PhenotypeObservationModel = require('../models/PhenotypeObservation');
 const { validateActiveCodes } = require('../ingestion/activeCodeValidator');
+const { assertReferencesExist } = require('../ingestion/canonicalGateway');
+const { diagnosticReportReferenceChecks } = require('./diagnostic-report.service');
 
 /**
  * Persists one PhenotypeObservation (dict-02 ELM-0211..0218 +
@@ -38,6 +40,14 @@ async function createPhenotypeObservation(db, data) {
     if (resolvedVersion) {
       observation.hpoCoding.version = resolvedVersion;
     }
+  }
+
+  // ELM-0218: only an entry typed `DiagnosticReport/<id>` must resolve to a
+  // real DiagnosticReport (#695); an untyped entry is stored unchecked.
+  const evidenceCheck = diagnosticReportReferenceChecks(observation.phenotypeEvidence, 'phenotypeEvidence', { typedOnly: true });
+  const evidenceReferences = await assertReferencesExist(db, evidenceCheck.references);
+  if (evidenceCheck.malformed.length || !evidenceReferences.valid) {
+    throw new Error([...evidenceCheck.malformed, ...evidenceReferences.violations.map((v) => v.message)].join(', '));
   }
 
   const collection = await getCollection(db, 'phenotypeObservations');

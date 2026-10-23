@@ -43,16 +43,16 @@ class ClinicalObservationModel {
       observationStatus: data.observationStatus ? String(data.observationStatus).trim() : null,
       // ELM-0229: CodeableConcept, 0..1.
       method: data.method ?? null,
-      // ELM-0230: Reference, 0..1 -> Device -- unlike diagnosticReportId
-      // below, a real `devices` collection exists (Device.schema.js), so
-      // the service layer hard-checks this reference when supplied.
+      // ELM-0230: Reference, 0..1 -> Device -- a real `devices` collection
+      // exists (Device.schema.js), so the service layer hard-checks this
+      // reference when supplied.
       deviceId: data.deviceId ? String(data.deviceId).trim() : null,
       // ELM-0231: Reference, 0..1 -> Specimen (samples collection) --
       // same hard-check treatment as deviceId, per #691's own scope.
       specimenId: data.specimenId ? String(data.specimenId).trim() : null,
-      // ELM-0232: Reference, 0..1 -> DiagnosticReport -- stays
-      // unenforced, no DiagnosticReport entity exists in this repo, same
-      // pattern as Condition.diagnosisEvidence.
+      // ELM-0232: Reference, 0..1 -> DiagnosticReport (#695) -- the
+      // service layer hard-checks it: every value, typed
+      // `DiagnosticReport/<id>` or a bare id, must resolve.
       diagnosticReportId: data.diagnosticReportId ? String(data.diagnosticReportId).trim() : null,
       // P1X-0078: Reference, 0..1 -> Encounter (#689) -- joinable-but-
       // unenforced, same pattern as PhenotypeObservation.encounterId.

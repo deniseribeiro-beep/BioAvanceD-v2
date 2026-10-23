@@ -1,6 +1,8 @@
 const { getCollection } = require('../utils/collectionResolver');
 const ConditionModel = require('../models/Condition');
 const { validateActiveCodes } = require('../ingestion/activeCodeValidator');
+const { assertReferencesExist } = require('../ingestion/canonicalGateway');
+const { diagnosticReportReferenceChecks } = require('./diagnostic-report.service');
 
 /**
  * Persists one Condition (dict-02 ELM-0200..0210, #690) referenced by
@@ -57,6 +59,14 @@ async function createCondition(db, data) {
       }
     }
   });
+
+  // ELM-0209: only an entry typed `DiagnosticReport/<id>` must resolve to a
+  // real DiagnosticReport (#695); an untyped entry is stored unchecked.
+  const evidenceCheck = diagnosticReportReferenceChecks(condition.diagnosisEvidence, 'diagnosisEvidence', { typedOnly: true });
+  const evidenceReferences = await assertReferencesExist(db, evidenceCheck.references);
+  if (evidenceCheck.malformed.length || !evidenceReferences.valid) {
+    throw new Error([...evidenceCheck.malformed, ...evidenceReferences.violations.map((v) => v.message)].join(', '));
+  }
 
   const collection = await getCollection(db, 'conditions');
   await collection.insertOne(condition);

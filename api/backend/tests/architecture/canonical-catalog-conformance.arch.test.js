@@ -81,6 +81,7 @@ const ENTITY_TARGETS = {
   GovernanceInvariant: () => require('../../src/models/GovernanceInvariantCatalog').invariantFieldsOf(),
   ClinicalOutcome: () => require('../../src/models/ClinicalOutcome').fieldsOf(),
   Condition: () => require('../../src/models/Condition').fieldsOf(),
+  DiagnosticReport: () => require('../../src/models/DiagnosticReport').fieldsOf(),
   DerivedScore: () => require('../../src/models/DerivedScore').fieldsOf(),
   Encounter: () => require('../../src/models/Encounter').fieldsOf(),
   FamilyHistory: () => require('../../src/models/FamilyHistory').fieldsOf(),
