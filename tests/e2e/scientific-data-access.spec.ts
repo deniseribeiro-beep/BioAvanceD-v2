@@ -970,6 +970,40 @@ test.describe('Workflows and omics data (RF027) — real backend', () => {
     });
     expect(empty.status()).toBe(422);
   });
+
+  test('registers imaging-derived data with a segmentation and a feature set (dict ELM-0355/0356, #721)', async ({ request }) => {
+    const admin = await realLogin(request);
+    // A file id per run, so a rerun against the same database is told apart.
+    const segmentationFile = `file-seg-${Date.now()}`;
+    const featureSet = [
+      { software: 'pyradiomics', features: [{ name: 'firstorder_Mean', value: 41.2 }], regionOfInterest: 'tumor' },
+    ];
+
+    const created = await request.post(`${apiBaseURL}/api/imaging-derived-data`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: { segmentationFile, featureSet },
+    });
+    expect(created.status()).toBe(201);
+    const derived = (await created.json()).data;
+    expect(derived.segmentationFile).toBe(segmentationFile);
+    expect(derived.featureSet).toEqual(featureSet);
+    expect(derived.imagingDerivedDataId).toBeTruthy();
+
+    const read = await request.get(`${apiBaseURL}/api/imaging-derived-data/${derived.imagingDerivedDataId}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(read.status()).toBe(200);
+    const readBody = (await read.json()).data;
+    expect(readBody.segmentationFile).toBe(segmentationFile);
+    expect(readBody.featureSet).toEqual(featureSet);
+
+    // ELM-0355 and ELM-0356 are both optional, but a row must fill one.
+    const empty = await request.post(`${apiBaseURL}/api/imaging-derived-data`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+      data: {},
+    });
+    expect(empty.status()).toBe(422);
+  });
 });
 
 // RF008 (Relatórios) — Wave 4 kickoff (#723). The report pipeline

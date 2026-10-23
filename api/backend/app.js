@@ -469,6 +469,12 @@ app.use("/api/omics-runs", createMasterDataRouter({
   idField: "omicsRunId",
   model: require("./src/models/OmicsRun")
 }));
+// ImagingDerivedData, segmentation and feature sets (ELM-0355/0356, #721).
+app.use("/api/imaging-derived-data", createMasterDataRouter({
+  collectionName: "imagingDerivedData",
+  idField: "imagingDerivedDataId",
+  model: require("./src/models/ImagingDerivedData")
+}));
 // ImagingStudy, DICOM study and series metadata (ELM-0353/0354, #721).
 app.use("/api/imaging-studies", createMasterDataRouter({
   collectionName: "imagingStudies",

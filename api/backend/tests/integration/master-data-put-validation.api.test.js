@@ -260,6 +260,18 @@ const MOUNTS = [
     error: 'series é obrigatório',
     validEdit: { dicomStudyUid: '1.2.3' },
   },
+  {
+    path: '/api/imaging-derived-data',
+    collection: 'imagingDerivedData',
+    stored: {
+      imagingDerivedDataId: 'd1',
+      segmentationFile: 'file-1',
+      featureSet: [{ software: 'pyradiomics', features: [{ name: 'firstorder_Mean', value: 41.2 }] }],
+    },
+    refusedEdit: { featureSet: [{ software: 'pyradiomics' }] },
+    error: 'features é obrigatório',
+    validEdit: { segmentationFile: 'file-2' },
+  },
 ];
 
 function givenStoredRow(collection, stored) {

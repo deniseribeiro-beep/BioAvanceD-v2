@@ -17,7 +17,7 @@ Dictionary v2.0.0, "Dados ômicos e imagens", defines ImagingStudy (ELM-0353 `di
 
 ## Not decided here
 
-- **ImagingDerivedData** (ELM-0355/0356).
+- **ImagingDerivedData** (ELM-0355/0356): decided in `2026-10-23-imaging-derived-data-structure.md`.
 - **Uniqueness of `dicomStudyUid`.** v1.3.0 indexed it "Único" and catalog.2.0.0's `uniquenessRule` defers to that; no unique index or 409 check is built here.
 - **A canonical contract schema** in `api/backend/src/contracts/canonical/v1`.
 - **A link from a study to a specimen or participant**: the dictionary has none.

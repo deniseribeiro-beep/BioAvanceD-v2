@@ -76,6 +76,7 @@ const ENTITY_TARGETS = {
   BiomarkerAssociation: () => require('../../src/models/BiomarkerAssociation').fieldsOf(),
   Network: () => require('../../src/models/Network').fieldsOf(),
   ImagingStudy: () => require('../../src/models/ImagingStudy').fieldsOf(),
+  ImagingDerivedData: () => require('../../src/models/ImagingDerivedData').fieldsOf(),
   ConfigurationValidationRun: () => require('../../src/models/ConfigurationValidationRun').fieldsOf(),
   GovernanceInvariantCatalog: () => require('../../src/models/GovernanceInvariantCatalog').fieldsOf(),
   InvariantViolation: () => require('../../src/models/InvariantViolation').fieldsOf(),
@@ -169,6 +170,15 @@ const KNOWN_DRIFT = {
       {
         key: 'imagingStudyId',
         note: "Deliberate: the master-data router's idField, the key GET/PUT /api/imaging-studies/:id looks a study up by. The dictionary gives ImagingStudy no id row (ELM-0353..0354)."
+      }
+    ]
+  },
+  ImagingDerivedData: {
+    absent: [],
+    extra: [
+      {
+        key: 'imagingDerivedDataId',
+        note: "Deliberate: the master-data router's idField, the key GET/PUT /api/imaging-derived-data/:id looks a row up by. The dictionary gives ImagingDerivedData no id row (ELM-0355..0356)."
       }
     ]
   },
