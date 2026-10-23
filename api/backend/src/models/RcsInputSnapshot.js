@@ -7,9 +7,10 @@ const { canonicalJson } = require('./ConfigurationRelease');
 // preanalytical axis inputs, its governance evidence, its sources and its
 // hash. create returns it deep-frozen: the frozen inputs of AC10.
 //
-// No flow writes this model yet. A later #1320 slice wires it into the
-// assessment write, so no score, grade or route changes here (see
-// docs/decisions/2026-10-22-rcs-input-snapshot-structures.md).
+// The RCS assessment write (services/rcs-assessment.service.js) freezes one
+// before each assessment, and no score, grade or route reads it (see
+// docs/decisions/2026-10-22-rcs-input-snapshot-structures.md and
+// 2026-10-23-rcs-input-snapshot-write.md).
 
 // V2E-0510's vocabulary is SHA-256. The synthetic examples write digests as
 // `sha256:<hex>`; a bare 64-hex digest is the same value.
@@ -117,7 +118,8 @@ class RcsInputSnapshotModel {
   // kept outside fieldsOf as RcsAssessment.create keeps assessedAt. A
   // reference no release or event backs yet is null or empty, never
   // fabricated, so a captured snapshot does not pass validate() until a later
-  // slice writes the mapping releases, axis inputs and governance evidence.
+  // slice writes the mapping releases and axis inputs. governanceEvidenceId
+  // names the RCSGovernanceEvidenceSnapshot the write records, or is null.
   // The hash covers every key but itself and the URI, `inputs` included, and
   // the URI names the snapshot by id and pins that hash, as ReadinessReport
   // does (see docs/decisions/2026-10-23-rcs-input-snapshot-write.md).
@@ -129,7 +131,7 @@ class RcsInputSnapshotModel {
       materialTypeCode: null,
       matrixMappingReleaseId: null,
       preanalyticalAxes: [],
-      governanceEvidenceId: null,
+      governanceEvidenceId: isNonEmptyString(data.governanceEvidenceId) ? data.governanceEvidenceId : null,
       sprecVersion: data.sprecVersion ?? null,
       sprecMappingReleaseId: null,
       capturedAt: data.capturedAt || new Date(),

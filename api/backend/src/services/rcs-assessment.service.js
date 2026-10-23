@@ -3,6 +3,8 @@ const { getCollection } = require('../utils/collectionResolver');
 const logger = require('../utils/logger');
 const RcsAssessmentModel = require('../models/RcsAssessment');
 const RcsInputSnapshotModel = require('../models/RcsInputSnapshot');
+const RcsGovernanceEvidenceSnapshotModel = require('../models/RcsGovernanceEvidenceSnapshot');
+const rcsCertificationService = require('./rcs-certification.service');
 
 const isPlainObject = (value) => value !== null && typeof value === 'object'
   && !Array.isArray(value) && !(value instanceof Date);
@@ -16,20 +18,35 @@ const isPlainObject = (value) => value !== null && typeof value === 'object'
  */
 async function recordAssessment(db, specimenId, certificationResult) {
   const rcsAssessmentId = crypto.randomUUID();
-  // RF018 AC3 (#1320): the input the result was computed from is frozen,
-  // and the assessment references it by id, URI and hash. Both documents
-  // are built before either is written, so a build failure writes nothing.
-  // A result with no rcs_input (one computed before the capture existed)
-  // writes no snapshot and carries null references.
-  const snapshot = isPlainObject(certificationResult?.rcs_input)
-    ? RcsInputSnapshotModel.capture({
+  const now = new Date();
+  // RF018 AC3 and AC7 (#1320): the input the result was computed from is
+  // frozen, its six governance criteria are kept in one evidence record the
+  // snapshot references, and the assessment references the snapshot by id,
+  // URI and hash. Every document is built before any is written, so a build
+  // failure writes nothing. A result with no rcs_input (one computed before
+  // the capture existed) writes neither and carries null references.
+  let snapshot = null;
+  let evidence = null;
+  if (isPlainObject(certificationResult?.rcs_input)) {
+    const rcsInputSnapshotId = crypto.randomUUID();
+    const governanceEvidenceSnapshotId = crypto.randomUUID();
+    evidence = RcsGovernanceEvidenceSnapshotModel.capture({
+      ...rcsCertificationService.evaluateGovernanceEvidence(certificationResult.rcs_input),
+      governanceEvidenceSnapshotId,
+      snapshotId: rcsInputSnapshotId,
+      evaluatedAt: now,
+    });
+    snapshot = RcsInputSnapshotModel.capture({
+      rcsInputSnapshotId,
       rcsAssessmentId,
       specimenId: String(specimenId || '').trim(),
       matrix: certificationResult.matrix_type,
       sprecVersion: certificationResult.calculation_trace?.sprec_version ?? null,
+      governanceEvidenceId: governanceEvidenceSnapshotId,
+      capturedAt: now,
       inputs: certificationResult.rcs_input,
-    })
-    : null;
+    });
+  }
   const assessment = RcsAssessmentModel.fromCertificationResult(specimenId, certificationResult, {
     rcsAssessmentId,
     inputSnapshotId: snapshot?.rcsInputSnapshotId ?? null,
@@ -37,25 +54,45 @@ async function recordAssessment(db, specimenId, certificationResult) {
     inputSnapshotHash: snapshot?.snapshotHash ?? null,
   });
 
+  // No snapshot or evidence is left without the assessment it was captured
+  // for. A failed delete is logged, and the insert error stays the one thrown.
+  const removeSnapshot = async (snapshots) => {
+    try {
+      await snapshots.deleteOne({ rcsInputSnapshotId: snapshot.rcsInputSnapshotId });
+    } catch (deleteError) {
+      logger.error(`Falha ao remover o RCSInputSnapshot ${snapshot.rcsInputSnapshotId} sem avaliação:`, deleteError.message || deleteError);
+    }
+  };
+  const removeEvidence = async (evidenceSnapshots) => {
+    try {
+      await evidenceSnapshots.deleteOne({ governanceEvidenceSnapshotId: evidence.governanceEvidenceSnapshotId });
+    } catch (deleteError) {
+      logger.error(`Falha ao remover o RCSGovernanceEvidenceSnapshot ${evidence.governanceEvidenceSnapshotId} sem avaliação:`, deleteError.message || deleteError);
+    }
+  };
+
   let snapshots = null;
+  let evidenceSnapshots = null;
   if (snapshot) {
     snapshots = await getCollection(db, 'rcsInputSnapshots');
     // A shallow copy: the driver writes _id onto the object it is given, and
-    // the snapshot is frozen.
+    // the snapshot and the evidence are frozen.
     await snapshots.insertOne({ ...snapshot });
+    try {
+      evidenceSnapshots = await getCollection(db, 'rcsGovernanceEvidenceSnapshots');
+      await evidenceSnapshots.insertOne({ ...evidence });
+    } catch (error) {
+      await removeSnapshot(snapshots);
+      throw error;
+    }
   }
   try {
     const collection = await getCollection(db, 'rcsAssessments');
     await collection.insertOne(assessment);
   } catch (error) {
-    // No snapshot is left without the assessment it was captured for. A
-    // failed delete is logged, and the insert error stays the one thrown.
     if (snapshot) {
-      try {
-        await snapshots.deleteOne({ rcsInputSnapshotId: snapshot.rcsInputSnapshotId });
-      } catch (deleteError) {
-        logger.error(`Falha ao remover o RCSInputSnapshot ${snapshot.rcsInputSnapshotId} sem avaliação:`, deleteError.message || deleteError);
-      }
+      await removeEvidence(evidenceSnapshots);
+      await removeSnapshot(snapshots);
     }
     throw error;
   }
@@ -67,6 +104,13 @@ async function getInputSnapshotById(db, rcsInputSnapshotId) {
   if (!rcsInputSnapshotId) return null;
   const collection = await getCollection(db, 'rcsInputSnapshots');
   return collection.findOne({ rcsInputSnapshotId });
+}
+
+/** The RCSGovernanceEvidenceSnapshot a snapshot's governanceEvidenceId names (RF018 AC7). */
+async function getGovernanceEvidenceById(db, governanceEvidenceSnapshotId) {
+  if (!governanceEvidenceSnapshotId) return null;
+  const collection = await getCollection(db, 'rcsGovernanceEvidenceSnapshots');
+  return collection.findOne({ governanceEvidenceSnapshotId });
 }
 
 /** All snapshots for a specimen, newest first. */
@@ -175,6 +219,7 @@ async function findSpecimenIdsWithCurrentAssessmentMatching(db, matchFields = {}
 module.exports = {
   recordAssessment,
   getInputSnapshotById,
+  getGovernanceEvidenceById,
   getAssessmentsForSpecimen,
   getAssessmentById,
   getCurrentAssessmentsForSpecimens,

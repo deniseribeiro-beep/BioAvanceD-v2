@@ -253,3 +253,94 @@ describe('readInput', () => {
     expect(input.sprec).not.toBe(F);
   });
 });
+
+// RF018 AC7 (#1320): the six governance criteria, read from the gate's own
+// trace re-run on the frozen input. A flag is true only where the gate
+// checked its inputs, false where it failed them, null with a reason
+// otherwise.
+describe('evaluateGovernanceEvidence', () => {
+  const qualityCompatibility = require('../../src/services/quality-compatibility.service');
+  const { RcsCertificationService } = rcsService;
+  const F = {
+    sampleType: 'PL1', primaryContainer: 'SST', preCentrifugation: 'A', centrifugation: 'A',
+    secondCentrifugation: 'N', postCentrifugationDelay: 'A', longTermStorage: 'A',
+  };
+  const UNREAD = {
+    traceabilityOk: 'identificação, custódia e linhagem não são lidas por este cálculo (V2E-0528)',
+    monitoringOk: 'monitoramento e telemetria não são lidos por este cálculo (V2E-0529)',
+    documentationOk: 'registros, SOPs e evidências documentais não são lidos por este cálculo (V2E-0530)',
+    semanticCompatible: 'eventos não são lidos por este cálculo (V2E-0531)',
+  };
+  const flags = (overrides = {}) => ({
+    metadataComplete: true, terminologyValid: true, traceabilityOk: null,
+    monitoringOk: null, documentationOk: null, semanticCompatible: null, ...overrides,
+  });
+
+  it.each([
+    ['pass', { matrix_type: 'fluid', sprec: F, secondCentrifugationRequired: false }, flags(), null],
+    ['missingWf', { matrix_type: 'fluid', sprec: F }, flags(), null],
+    ['wfMismatch', { matrix_type: 'fluid', sprec: F, workflow_context: { Pcent2: { workflow_rule: 'nope' } } }, flags({ semanticCompatible: false }), 'fail'],
+    ['noMatrix', { sprec: {} }, flags({ metadataComplete: false, terminologyValid: null }), 'fail'],
+    ['noMatrixSemantic', { sprec: {}, semanticIncompatibility: true }, flags({ metadataComplete: false, terminologyValid: null, semanticCompatible: false }), 'fail'],
+    ['missingField', { matrix_type: 'fluid', sprec: { ...F, primaryContainer: '' } }, flags({ metadataComplete: false }), 'fail'],
+    ['unknownCode', { matrix_type: 'fluid', sprec: { ...F, longTermStorage: 'X' } }, flags({ terminologyValid: false }), 'fail'],
+    ['otherCode', { matrix_type: 'fluid', sprec: { ...F, longTermStorage: 'Z' } }, flags({ terminologyValid: false }), 'fail'],
+    ['incompat', { matrix_type: 'fluid', sprec: { ...F, longTermStorage: 'Q9' } }, flags({ semanticCompatible: false }), 'fail'],
+    ['docFalse', { matrix_type: 'fluid', sprec: F, documentationSufficient: false }, flags({ documentationOk: false }), 'fail'],
+    ['trace', { matrix_type: 'fluid', sprec: F, secondCentrifugationRequired: false, traceabilityBroken: true }, flags({ traceabilityOk: false }), 'fail'],
+    ['mon', { matrix_type: 'fluid', sprec: F, secondCentrifugationRequired: false, monitoringRequired: true }, flags({ monitoringOk: false }), 'fail'],
+  ])('reads the six flags of the %s row from the gate', (_name, raw, expectedFlags, gateResult) => {
+    const payload = qualityCompatibility.normalizeSample(raw);
+    const before = rcsService.certify(payload);
+    const input = rcsService.readInput(payload);
+    const evidence = rcsService.evaluateGovernanceEvidence(input);
+
+    expect(Object.fromEntries(Object.keys(expectedFlags).map((flag) => [flag, evidence[flag]]))).toEqual(expectedFlags);
+    expect(evidence.gateResult).toBe(gateResult);
+    const nullFlags = Object.keys(expectedFlags).filter((flag) => expectedFlags[flag] === null);
+    expect(Object.keys(evidence.unresolvedReasons).sort())
+      .toEqual([...nullFlags, ...(gateResult === null ? ['gateResult'] : [])].sort());
+    for (const flag of nullFlags) {
+      expect(evidence.unresolvedReasons[flag]).toBe(UNREAD[flag] || 'códigos SPREC não verificados: matriz não resolvida');
+    }
+    if (gateResult === 'fail') {
+      expect(before.governance_status).toBe(0);
+      expect(evidence.failureReasons).toEqual(before.governance_failure_reasons);
+    } else {
+      expect(evidence.failureReasons).toEqual([]);
+      expect(evidence.unresolvedReasons.gateResult).toBe('nem todos os seis critérios têm evidência; nenhum falhou');
+    }
+    expect(evidence.validationRuleSetVersion).toBe('RCS-GOV-1.0');
+    expect(evidence.validationRuleSetChecksum).toBe(rcsService.governanceRuleSet().checksum);
+    // No mutation of the input and no score change.
+    expect(input).toEqual(rcsService.readInput(payload));
+    expect(rcsService.certify(payload)).toEqual(before);
+  });
+
+  it('names the workflow-context mismatch reason for the wfMismatch row', () => {
+    const input = rcsService.readInput({ matrix_type: 'fluid', sprec: F, workflow_context: { Pcent2: { workflow_rule: 'nope' } } });
+    expect(rcsService.evaluateGovernanceEvidence(input).failureReasons)
+      .toEqual(['Analytical workflow context does not match seeded severity mapping']);
+  });
+
+  it('checksums the rule set as a stable sha256, equal across instances on the same data', () => {
+    const ruleSet = rcsService.governanceRuleSet();
+    expect(ruleSet.version).toBe('RCS-GOV-1.0');
+    expect(ruleSet.checksum).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(new RcsCertificationService(referenceData).governanceRuleSet()).toEqual(ruleSet);
+  });
+
+  it('gives another checksum when a governance rule description changes', () => {
+    const governanceRules = referenceData.governanceRules.map((rule, index) => (
+      index === 0 ? { ...rule, description: `${rule.description} (changed)` } : rule
+    ));
+    const changed = new RcsCertificationService({ ...referenceData, governanceRules });
+    expect(changed.governanceRuleSet().checksum).not.toBe(rcsService.governanceRuleSet().checksum);
+  });
+
+  it('gives another checksum with a fluid catalog entry dropped', () => {
+    const catalogs = { ...referenceData.catalogs, fluid: referenceData.catalogs.fluid.slice(1) };
+    const changed = new RcsCertificationService({ ...referenceData, catalogs });
+    expect(changed.governanceRuleSet().checksum).not.toBe(rcsService.governanceRuleSet().checksum);
+  });
+});

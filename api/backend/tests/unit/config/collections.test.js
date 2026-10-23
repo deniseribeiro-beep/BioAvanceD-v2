@@ -19,7 +19,8 @@ const ENV_KEYS = [
   'COLL_CONFIGURATION_VALIDATION_RUNS',
   'COLL_CANONICAL_MODEL_RELEASES',
   'COLL_GOVERNANCE_INVARIANT_CATALOGS',
-  'COLL_RCS_INPUT_SNAPSHOTS'
+  'COLL_RCS_INPUT_SNAPSHOTS',
+  'COLL_RCS_GOVERNANCE_EVIDENCE_SNAPSHOTS'
 ];
 
 const DEFAULTS = {
@@ -47,6 +48,7 @@ const DEFAULTS = {
   participantIdentities: 'participantIdentities',
   rcsAssessments: 'rcsAssessments',
   rcsInputSnapshots: 'rcsInputSnapshots',
+  rcsGovernanceEvidenceSnapshots: 'rcsGovernanceEvidenceSnapshots',
   encounters: 'encounters',
   conditions: 'conditions',
   phenotypeObservations: 'phenotypeObservations',
@@ -186,6 +188,7 @@ describe('config/collections', () => {
       participantIdentities: 'participantIdentities',
       rcsAssessments: 'rcsAssessments',
       rcsInputSnapshots: 'custom_coll_rcs_input_snapshots',
+      rcsGovernanceEvidenceSnapshots: 'custom_coll_rcs_governance_evidence_snapshots',
       // COLL_ENCOUNTERS/COLL_CONDITIONS/COLL_PHENOTYPE_OBSERVATIONS/
       // COLL_CLINICAL_OBSERVATIONS/COLL_CLINICAL_OUTCOMES/
       // COLL_DERIVED_SCORES/COLL_ALLERGY_INTOLERANCES/

@@ -1,4 +1,6 @@
+const crypto = require('crypto');
 const referenceData = require('./rcs-reference-data');
+const { canonicalJson } = require('../models/ConfigurationRelease');
 
 const AXES = Object.freeze({
   fluid: Object.freeze([
@@ -20,6 +22,7 @@ const AXES = Object.freeze({
 const METADATA_AXES = Object.freeze(['sampleType', 'primaryContainer']);
 const UNKNOWN_CODES = new Set(['X', 'XXX', 'UNKNOWN', 'UNK']);
 const OTHER_CODES = new Set(['Z', 'ZZZ', 'OTHER']);
+const SPREC_CODE_PATTERN = /^[A-Z0-9]{1,12}$/;
 
 const GOVERNANCE_RULE_BY_REASON = Object.freeze({
   'Missing or invalid matrix type': 'MISSING_CRITICAL_METADATA',
@@ -35,6 +38,23 @@ const GOVERNANCE_RULE_BY_REASON = Object.freeze({
   'Missing analytical workflow context': 'MISSING_ANALYTICAL_WORKFLOW',
   'Analytical workflow context does not match seeded severity mapping': 'SEMANTIC_INCOMPATIBILITY',
   'Not scored SPREC condition': 'NOT_SCORED',
+});
+
+// RF018 AC7 (#1320): the rule codes that fail each governance criterion.
+// INFERENCE, not a citation: read off the seeded rule descriptions and the
+// Supplementary File 2 "Controlled terminology and context validation" row
+// (see docs/decisions/2026-10-23-rcs-governance-evidence.md).
+const TERMINOLOGY_FAILURE_CODES = Object.freeze(['UNKNOWN_SPREC_CODE', 'INVALID_SPREC_CODE', 'OTHER_WITHOUT_LOCAL_INTERPRETATION']);
+const SEMANTIC_FAILURE_CODES = Object.freeze(['MATRIX_INCOMPATIBLE_CODE', 'SEMANTIC_INCOMPATIBILITY']);
+
+// Why a criterion this calculation does not read stays null, never true.
+const UNRESOLVED_REASONS = Object.freeze({
+  terminologyValid: 'códigos SPREC não verificados: matriz não resolvida',
+  traceabilityOk: 'identificação, custódia e linhagem não são lidas por este cálculo (V2E-0528)',
+  monitoringOk: 'monitoramento e telemetria não são lidos por este cálculo (V2E-0529)',
+  documentationOk: 'registros, SOPs e evidências documentais não são lidos por este cálculo (V2E-0530)',
+  semanticCompatible: 'eventos não são lidos por este cálculo (V2E-0531)',
+  gateResult: 'nem todos os seis critérios têm evidência; nenhum falhou',
 });
 
 function normalizeString(value) {
@@ -110,6 +130,78 @@ class RcsCertificationService {
       if (samplePayload[key] !== undefined) input[key] = samplePayload[key];
     }
     return JSON.parse(JSON.stringify(input));
+  }
+
+  // RF018 AC7 (#1320): the version and checksum of the rules the gate
+  // applies, as canonical JSON over the seeded rules, the catalogs and the
+  // code constants evaluateGovernance reads. The version is the seed's own
+  // model code, not a SemVer.
+  governanceRuleSet() {
+    if (!this.ruleSet) {
+      const rules = {
+        model_code: this.data.model_code,
+        sprec_version: this.data.sprec_version,
+        governance_rules: this.data.governanceRules,
+        catalogs: this.data.catalogs,
+        metadata_axes: METADATA_AXES,
+        axes: AXES,
+        unknown_codes: [...UNKNOWN_CODES].sort(),
+        other_codes: [...OTHER_CODES].sort(),
+        code_pattern: SPREC_CODE_PATTERN.source,
+      };
+      this.ruleSet = {
+        version: this.data.model_code,
+        checksum: `sha256:${crypto.createHash('sha256').update(canonicalJson(rules)).digest('hex')}`,
+      };
+    }
+    return this.ruleSet;
+  }
+
+  // RF018 AC7 (#1320): the six governance criteria of an input, read from
+  // the gate's own trace and from certify's per-axis workflow-context
+  // mismatch. A criterion is true only where the gate checked every input
+  // its dictionary row names, false where the gate failed it, and otherwise
+  // null with its reason, never true from a client-sent boolean (see
+  // docs/decisions/2026-10-23-rcs-governance-evidence.md).
+  evaluateGovernanceEvidence(input = {}) {
+    const sprec = this.normalizeSprec(input);
+    const matrixType = this.detectMatrixType(input, sprec);
+    const gate = this.evaluateGovernance(input, sprec, matrixType);
+    const result = this.certify(input);
+    const codes = new Set(gate.trace.map((item) => item.rule_code));
+    const failed = (ruleCodes) => ruleCodes.some((ruleCode) => codes.has(ruleCode));
+    const falseOrNull = (isFailed) => (isFailed ? false : null);
+
+    let terminologyValid = null;
+    if (failed(TERMINOLOGY_FAILURE_CODES)) terminologyValid = false;
+    else if (matrixType && AXES[matrixType]) terminologyValid = true;
+
+    const flags = {
+      metadataComplete: !codes.has('MISSING_CRITICAL_METADATA'),
+      terminologyValid,
+      traceabilityOk: falseOrNull(codes.has('INSUFFICIENT_TRACEABILITY')),
+      monitoringOk: falseOrNull(codes.has('MISSING_REQUIRED_MONITORING')),
+      documentationOk: falseOrNull(codes.has('INSUFFICIENT_DOCUMENTATION')),
+      semanticCompatible: falseOrNull(failed(SEMANTIC_FAILURE_CODES)
+        || result.governance_rule_codes.includes('SEMANTIC_INCOMPATIBILITY')),
+    };
+    const unresolvedReasons = {};
+    for (const [flag, value] of Object.entries(flags)) {
+      if (value === null) unresolvedReasons[flag] = UNRESOLVED_REASONS[flag];
+    }
+    // eq:governance_product: one failed criterion fails the gate. With none
+    // failed and some unread, the aggregate stays unresolved, never pass.
+    const gateFailed = Object.values(flags).includes(false);
+    if (!gateFailed) unresolvedReasons.gateResult = UNRESOLVED_REASONS.gateResult;
+    const ruleSet = this.governanceRuleSet();
+    return {
+      ...flags,
+      unresolvedReasons,
+      gateResult: gateFailed ? 'fail' : null,
+      failureReasons: gateFailed ? [...result.governance_failure_reasons] : [],
+      validationRuleSetVersion: ruleSet.version,
+      validationRuleSetChecksum: ruleSet.checksum,
+    };
   }
 
   certify(payload = {}) {
@@ -259,7 +351,7 @@ class RcsCertificationService {
           trace.push({ field, axis_code: axisCode, sprec_code: code, rule_code: 'OTHER_WITHOUT_LOCAL_INTERPRETATION', reason: 'Other SPREC code without validated local interpretation' });
           continue;
         }
-        if (!/^[A-Z0-9]{1,12}$/.test(code)) {
+        if (!SPREC_CODE_PATTERN.test(code)) {
           reasons.push('Invalid SPREC code');
           trace.push({ field, axis_code: axisCode, sprec_code: code, rule_code: 'INVALID_SPREC_CODE', reason: 'Invalid SPREC code' });
           continue;

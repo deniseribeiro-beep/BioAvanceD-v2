@@ -199,6 +199,7 @@ describe('ImportService SPREC import', () => {
       if (name === 'rcsAssessments') return rcsAssessmentsCollection;
       // #1320: recordAssessment first freezes the RCS input in its own collection.
       if (name === 'rcsInputSnapshots') return { insertOne: vi.fn().mockResolvedValue({ insertedId: 'snapshot-1' }), deleteOne: vi.fn() };
+      if (name === 'rcsGovernanceEvidenceSnapshots') return { insertOne: vi.fn().mockResolvedValue({ insertedId: 'evidence-1' }), deleteOne: vi.fn() };
       throw new Error(`Unexpected collection name: ${name}`);
     };
 

@@ -374,8 +374,119 @@ describe('RcsInputSnapshotModel.capture', () => {
       .toThrow(`${field} é obrigatório para RCSInputSnapshot.capture`);
   });
 
+  it('keeps a given governanceEvidenceId inside its hash', () => {
+    const linked = RcsInputSnapshotModel.capture({ ...base(), governanceEvidenceId: 'rcs-gov-evidence-001' });
+    expect(linked.governanceEvidenceId).toBe('rcs-gov-evidence-001');
+    expect(linked.snapshotHash).not.toBe(RcsInputSnapshotModel.capture(base()).snapshotHash);
+    expect(RcsInputSnapshotModel.capture({ ...base(), governanceEvidenceId: '' }).governanceEvidenceId).toBeNull();
+  });
+
   it('throws when inputs is not a plain object', () => {
     expect(() => RcsInputSnapshotModel.capture({ ...base(), inputs: ['matrix_type'] }))
       .toThrow('inputs deve ser um objeto para RCSInputSnapshot.capture');
+  });
+});
+
+// RF018 AC7 (#1320): capture keeps the six criteria the gate evaluated, each
+// true, false or null with its reason, and evidenceRefs empty: no evidence
+// record exists yet to reference.
+describe('RcsGovernanceEvidenceSnapshotModel.capture', () => {
+  const UNREAD = 'não lido por este cálculo';
+  const base = () => ({
+    governanceEvidenceSnapshotId: 'rcs-gov-evidence-001',
+    snapshotId: 'rcs-input-snapshot-001',
+    metadataComplete: true,
+    terminologyValid: true,
+    traceabilityOk: null,
+    monitoringOk: null,
+    documentationOk: false,
+    semanticCompatible: null,
+    unresolvedReasons: { traceabilityOk: UNREAD, monitoringOk: UNREAD, semanticCompatible: UNREAD },
+    validationRuleSetVersion: 'RCS-GOV-1.0',
+    validationRuleSetChecksum: CHECKSUM,
+    evaluatedAt: '2026-10-23T10:00:00.000Z',
+    gateResult: 'fail',
+    failureReasons: ['Insufficient documentation'],
+  });
+  const unresolved = () => ({
+    ...base(),
+    documentationOk: null,
+    unresolvedReasons: { ...base().unresolvedReasons, documentationOk: UNREAD, gateResult: UNREAD },
+    gateResult: null,
+    failureReasons: [],
+  });
+
+  it('keeps the catalog fields and unresolvedReasons, with evidenceRefs empty', () => {
+    const evidence = RcsGovernanceEvidenceSnapshotModel.capture(base());
+    expect(evidence).toEqual({
+      ...RcsGovernanceEvidenceSnapshotModel.fieldsOf({ ...base(), evidenceRefs: [] }),
+      unresolvedReasons: base().unresolvedReasons,
+    });
+    expect(evidence.evidenceRefs).toEqual([]);
+    expect(evidence.evaluatedAt).toEqual(new Date('2026-10-23T10:00:00.000Z'));
+    expect(RcsGovernanceEvidenceSnapshotModel.validate(evidence).isValid).toBe(false);
+  });
+
+  it('ignores a caller evidenceRefs and defaults evaluatedAt to now', () => {
+    const evidence = RcsGovernanceEvidenceSnapshotModel.capture({ ...base(), evidenceRefs: ['custody-1'], evaluatedAt: undefined });
+    expect(evidence.evidenceRefs).toEqual([]);
+    expect(evidence.evaluatedAt).toBeInstanceOf(Date);
+  });
+
+  it('accepts a null gateResult with every null flag and gateResult given a reason', () => {
+    expect(RcsGovernanceEvidenceSnapshotModel.capture(unresolved()).gateResult).toBeNull();
+  });
+
+  it('returns the document frozen at every level, unresolvedReasons included', () => {
+    const evidence = RcsGovernanceEvidenceSnapshotModel.capture(base());
+    expect(Object.isFrozen(evidence)).toBe(true);
+    expect(Object.isFrozen(evidence.unresolvedReasons)).toBe(true);
+    expect(Object.isFrozen(evidence.failureReasons)).toBe(true);
+    expect(Object.isFrozen(evidence.evidenceRefs)).toBe(true);
+  });
+
+  it.each([
+    ['governanceEvidenceSnapshotId', { governanceEvidenceSnapshotId: '' }],
+    ['snapshotId', { snapshotId: 42 }],
+    ['snapshotId', { snapshotId: undefined }],
+  ])('throws when %s is not a non-empty string', (field, override) => {
+    expect(() => RcsGovernanceEvidenceSnapshotModel.capture({ ...base(), ...override }))
+      .toThrow(`${field} é obrigatório para RCSGovernanceEvidenceSnapshot.capture`);
+  });
+
+  it.each([['true'], [0], [undefined]])('throws when a flag is %s, not true, false or null', (value) => {
+    expect(() => RcsGovernanceEvidenceSnapshotModel.capture({ ...base(), metadataComplete: value })).toThrow(/metadataComplete/);
+  });
+
+  it.each([
+    ['not a plain object', { unresolvedReasons: [] }],
+    ['missing a null flag', { unresolvedReasons: { traceabilityOk: UNREAD, monitoringOk: UNREAD } }],
+    ['naming a non-null flag', { unresolvedReasons: { ...base().unresolvedReasons, metadataComplete: UNREAD } }],
+    ['naming gateResult when it is not null', { unresolvedReasons: { ...base().unresolvedReasons, gateResult: UNREAD } }],
+    ['with an empty reason', { unresolvedReasons: { ...base().unresolvedReasons, monitoringOk: ' ' } }],
+  ])('throws when unresolvedReasons is %s', (_label, override) => {
+    expect(() => RcsGovernanceEvidenceSnapshotModel.capture({ ...base(), ...override })).toThrow(/unresolvedReasons/);
+  });
+
+  it('throws when a null gateResult has no reason', () => {
+    const { gateResult: _reason, ...reasons } = unresolved().unresolvedReasons;
+    expect(() => RcsGovernanceEvidenceSnapshotModel.capture({ ...unresolved(), unresolvedReasons: reasons })).toThrow(/unresolvedReasons/);
+  });
+
+  it('throws on a gateResult outside the set', () => {
+    expect(() => RcsGovernanceEvidenceSnapshotModel.capture({ ...base(), gateResult: 'warn' })).toThrow('gateResult inválido: warn');
+  });
+
+  it('throws on a pass with a null flag (G_gov is a product)', () => {
+    const passed = { ...base(), documentationOk: true, gateResult: 'pass', failureReasons: [] };
+    expect(() => RcsGovernanceEvidenceSnapshotModel.capture(passed))
+      .toThrow('gateResult pass exige os seis critérios de governança true');
+  });
+
+  it.each(['fail', 'review_required'])('throws on %s with no failure reason (V2E-0537)', (gateResult) => {
+    expect(() => RcsGovernanceEvidenceSnapshotModel.capture({ ...base(), gateResult, failureReasons: [] }))
+      .toThrow(`failureReasons é obrigatório quando gateResult é ${gateResult}`);
+    expect(() => RcsGovernanceEvidenceSnapshotModel.capture({ ...base(), gateResult, failureReasons: [''] }))
+      .toThrow(`failureReasons é obrigatório quando gateResult é ${gateResult}`);
   });
 });

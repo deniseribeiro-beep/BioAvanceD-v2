@@ -6,9 +6,11 @@ const crypto = require('crypto');
 // the version and checksum of the rule set and the aggregate gate result
 // (eq:governance_product, G_gov = product of g_j).
 //
-// No flow writes this model yet. A later #1320 slice wires it into the
-// assessment write, so no score, grade or route changes here (see
-// docs/decisions/2026-10-22-rcs-input-snapshot-structures.md).
+// capture is what the assessment write records: the six criteria the gate
+// evaluated on the frozen input, each true, false or null with its reason,
+// with no evidence reference yet, so no score, grade or route changes (see
+// docs/decisions/2026-10-22-rcs-input-snapshot-structures.md and
+// docs/decisions/2026-10-23-rcs-governance-evidence.md).
 
 // V2E-0534's vocabulary is SHA-256. The synthetic examples write digests as
 // `sha256:<hex>`; a bare 64-hex digest is the same value.
@@ -103,6 +105,51 @@ class RcsGovernanceEvidenceSnapshotModel {
     const { isValid, errors } = this.validate(fields);
     if (!isValid) throw new Error(errors.join('; '));
     return deepFreeze(fields);
+  }
+
+  // RF018 AC7 (#1320): the evidence an assessment write records. A criterion
+  // the calculation did not read is null with its reason in
+  // `unresolvedReasons`, kept outside fieldsOf as RcsInputSnapshot.capture
+  // keeps `inputs`; a null gateResult carries its reason there too.
+  // evidenceRefs is empty, since no custody, SOP or telemetry record is read
+  // yet, so a captured document does not pass validate().
+  static capture(data = {}) {
+    const fields = this.fieldsOf({ ...data, evidenceRefs: [], evaluatedAt: data.evaluatedAt || new Date() });
+    for (const field of REQUIRED_STRINGS) {
+      if (!isNonEmptyString(data[field])) throw new Error(`${field} é obrigatório para RCSGovernanceEvidenceSnapshot.capture`);
+    }
+    for (const flag of GOVERNANCE_FLAGS) {
+      if (![true, false, null].includes(data[flag])) {
+        throw new Error(`${flag} deve ser true, false ou null para RCSGovernanceEvidenceSnapshot.capture`);
+      }
+    }
+    const { unresolvedReasons } = data;
+    if (!isPlainObject(unresolvedReasons)) {
+      throw new Error('unresolvedReasons deve ser um objeto para RCSGovernanceEvidenceSnapshot.capture');
+    }
+    const expectedKeys = [
+      ...GOVERNANCE_FLAGS.filter((flag) => fields[flag] === null),
+      ...(fields.gateResult === null ? ['gateResult'] : []),
+    ].sort();
+    const keys = Object.keys(unresolvedReasons).sort();
+    if (keys.length !== expectedKeys.length || keys.some((key, index) => key !== expectedKeys[index])) {
+      throw new Error(`unresolvedReasons deve nomear exatamente: ${expectedKeys.join(', ')}`);
+    }
+    if (!Object.values(unresolvedReasons).every(isNonEmptyString)) {
+      throw new Error('unresolvedReasons deve dar uma razão não vazia a cada chave');
+    }
+    if (fields.gateResult !== null) {
+      if (!GATE_RESULTS.includes(fields.gateResult)) throw new Error(`gateResult inválido: ${fields.gateResult}`);
+      if (fields.gateResult === 'pass') {
+        // eq:governance_product: pass needs all six criteria true.
+        if (!GOVERNANCE_FLAGS.every((flag) => fields[flag] === true)) {
+          throw new Error('gateResult pass exige os seis critérios de governança true');
+        }
+      } else if (fields.failureReasons.length === 0 || !fields.failureReasons.every(isNonEmptyString)) {
+        throw new Error(`failureReasons é obrigatório quando gateResult é ${fields.gateResult}`);
+      }
+    }
+    return deepFreeze({ ...fields, unresolvedReasons });
   }
 }
 

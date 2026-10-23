@@ -7,6 +7,7 @@ const RcsAssessmentModel = require('../../../src/models/RcsAssessment');
 const {
   recordAssessment,
   getInputSnapshotById,
+  getGovernanceEvidenceById,
   getAssessmentsForSpecimen,
   getAssessmentById,
   getCurrentAssessmentsForSpecimens,
@@ -69,7 +70,11 @@ function createFakeCollection() {
 }
 
 function createFakeDb() {
-  const collections = { rcsAssessments: createFakeCollection(), rcsInputSnapshots: createFakeCollection() };
+  const collections = {
+    rcsAssessments: createFakeCollection(),
+    rcsInputSnapshots: createFakeCollection(),
+    rcsGovernanceEvidenceSnapshots: createFakeCollection(),
+  };
   return {
     collections,
     collection(name) {
@@ -199,6 +204,99 @@ describe('rcs-assessment.service', () => {
         expect(db.collections.rcsInputSnapshots.docs).toHaveLength(0);
       } finally {
         build.mockRestore();
+      }
+    });
+  });
+
+  // RF018 AC7 (#1320): the six governance criteria are kept in one
+  // RCSGovernanceEvidenceSnapshot the input snapshot references.
+  describe('recordAssessment governance evidence', () => {
+    const rcsCertificationService = require('../../../src/services/rcs-certification.service');
+    const certified = () => {
+      const rcsInput = rcsCertificationService.readInput({
+        matrix_type: 'fluid',
+        sprec: {
+          sampleType: 'PL1', primaryContainer: 'SST', preCentrifugation: 'A', centrifugation: 'A',
+          secondCentrifugation: 'N', postCentrifugationDelay: 'A', longTermStorage: 'A',
+        },
+        secondCentrifugationRequired: false,
+        documentationSufficient: false,
+      });
+      return { ...rcsCertificationService.certify(rcsInput), rcs_input: rcsInput };
+    };
+
+    it('writes one evidence row the snapshot references, resolvable by its id', async () => {
+      const db = createFakeDb();
+      const assessment = await recordAssessment(db, 'SPEC-1', certified());
+
+      const [snapshot] = db.collections.rcsInputSnapshots.docs;
+      const evidenceRows = db.collections.rcsGovernanceEvidenceSnapshots.docs;
+      expect(evidenceRows).toHaveLength(1);
+      const [evidence] = evidenceRows;
+      expect(snapshot.rcsInputSnapshotId).toBe(assessment.inputSnapshotId);
+      expect(evidence.snapshotId).toBe(snapshot.rcsInputSnapshotId);
+      expect(snapshot.governanceEvidenceId).toBe(evidence.governanceEvidenceSnapshotId);
+      expect(evidence).toMatchObject({
+        metadataComplete: true, terminologyValid: true, documentationOk: false,
+        traceabilityOk: null, monitoringOk: null, semanticCompatible: null,
+        gateResult: 'fail', failureReasons: ['Insufficient documentation'], evidenceRefs: [],
+        validationRuleSetVersion: 'RCS-GOV-1.0',
+        validationRuleSetChecksum: rcsCertificationService.governanceRuleSet().checksum,
+      });
+      expect(evidence.evaluatedAt).toEqual(snapshot.capturedAt);
+      expect(await getGovernanceEvidenceById(db, snapshot.governanceEvidenceId)).toBe(evidence);
+      expect(await getGovernanceEvidenceById(db, null)).toBeNull();
+    });
+
+    it('keeps the score, grade, route, governance status, penalties and trace of the result', async () => {
+      const db = createFakeDb();
+      const result = certified();
+      const assessment = await recordAssessment(db, 'SPEC-1', result);
+      expect(assessment).toMatchObject({
+        rcsScore: result.rcs_score,
+        finalGrade: result.final_grade,
+        gradeRoute: result.grade_route,
+        governanceStatus: result.governance_status,
+        axisPenalties: result.axis_penalties,
+        calculationTrace: result.calculation_trace,
+      });
+    });
+
+    it('writes no evidence for a result without rcs_input', async () => {
+      const db = createFakeDb();
+      const { rcs_input: _input, ...legacy } = certified();
+      await recordAssessment(db, 'SPEC-1', legacy);
+      expect(db.collections.rcsGovernanceEvidenceSnapshots.docs).toHaveLength(0);
+    });
+
+    it('deletes the snapshot and rethrows when the evidence insert fails', async () => {
+      const db = createFakeDb();
+      db.collections.rcsGovernanceEvidenceSnapshots.insertOne = async () => { throw new Error('evidence refused'); };
+      await expect(recordAssessment(db, 'SPEC-1', certified())).rejects.toThrow('evidence refused');
+      expect(db.collections.rcsInputSnapshots.docs).toHaveLength(0);
+      expect(db.collections.rcsAssessments.docs).toHaveLength(0);
+    });
+
+    it('deletes the evidence and the snapshot and rethrows when the assessment insert fails', async () => {
+      const db = createFakeDb();
+      db.collections.rcsAssessments.insertOne = async () => { throw new Error('write refused'); };
+      await expect(recordAssessment(db, 'SPEC-1', certified())).rejects.toThrow('write refused');
+      expect(db.collections.rcsGovernanceEvidenceSnapshots.docs).toHaveLength(0);
+      expect(db.collections.rcsInputSnapshots.docs).toHaveLength(0);
+    });
+
+    it('rethrows the insert error, not a compensating delete error, and logs each delete failure', async () => {
+      const db = createFakeDb();
+      db.collections.rcsAssessments.insertOne = async () => { throw new Error('write refused'); };
+      db.collections.rcsGovernanceEvidenceSnapshots.deleteOne = async () => { throw new Error('evidence delete refused'); };
+      db.collections.rcsInputSnapshots.deleteOne = async () => { throw new Error('delete refused'); };
+      const logged = vi.spyOn(logger, 'error').mockImplementation(() => {});
+      try {
+        await expect(recordAssessment(db, 'SPEC-1', certified())).rejects.toThrow('write refused');
+        expect(logged).toHaveBeenCalledWith(expect.any(String), 'evidence delete refused');
+        expect(logged).toHaveBeenCalledWith(expect.any(String), 'delete refused');
+      } finally {
+        logged.mockRestore();
       }
     });
   });

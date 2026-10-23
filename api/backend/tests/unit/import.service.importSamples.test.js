@@ -101,6 +101,7 @@ function makeDb(collection, rcsAssessmentsCollection = makeRcsAssessmentsCollect
   const aggregateVersionsCollection = makeAggregateVersionsCollection();
   // #1320: recordAssessment first freezes the RCS input in its own collection.
   const rcsInputSnapshotsCollection = createMatchingCollection([], { collectionName: 'rcsInputSnapshots' });
+  const rcsGovernanceEvidenceSnapshotsCollection = createMatchingCollection([], { collectionName: 'rcsGovernanceEvidenceSnapshots' });
   const physicalChain = Object.fromEntries(PHYSICAL_CHAIN_COLLECTIONS.map((name) => [name, createMatchingCollection([], { collectionName: name })]));
   return {
     outboxCollection,
@@ -109,6 +110,7 @@ function makeDb(collection, rcsAssessmentsCollection = makeRcsAssessmentsCollect
       if (physicalChain[name]) return physicalChain[name];
       if (name === 'rcsAssessments') return rcsAssessmentsCollection;
       if (name === 'rcsInputSnapshots') return rcsInputSnapshotsCollection;
+      if (name === 'rcsGovernanceEvidenceSnapshots') return rcsGovernanceEvidenceSnapshotsCollection;
       if (name === 'specimenPreanalytics') return specimenPreanalyticsCollection;
       if (name === 'graph_projection_outbox') return outboxCollection;
       if (name === 'graph_projection_outbox_aggregate_versions') return aggregateVersionsCollection;
