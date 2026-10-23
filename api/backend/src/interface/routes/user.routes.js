@@ -1200,6 +1200,19 @@ router.post('/register-sample', authenticate, requirePermission('createSample'),
 
     const sampleService = require('../../services/sample.service');
     const { resolveCallerCreateOrganization } = require('../../services/callerCreateOrganization.service');
+    const { qualificationContextErrors } = require('../../services/quality-domain.service');
+
+    // RF018 AC2 (#1320): this route skips validateCreateSamplePayload, so it
+    // applies the same use-context rule before createSample can store one.
+    const contextErrors = qualificationContextErrors(req.body?.qualificationContext);
+    if (contextErrors.length > 0) {
+      return res.status(422).json({
+        success: false,
+        error: 'Payload inválido',
+        message: contextErrors.join(', '),
+        details: contextErrors
+      });
+    }
 
     // #1376: this route resolves no scope of its own, so the caller's scope
     // decides the organization here, by #1071's create rule POST /api/samples

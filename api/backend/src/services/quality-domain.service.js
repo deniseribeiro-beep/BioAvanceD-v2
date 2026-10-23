@@ -18,6 +18,27 @@ function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date);
 }
 
+function isKeptContextValue(value) {
+  return (typeof value === 'string' && value.trim() !== '') || isPlainObject(value);
+}
+
+// RF018 AC2 (#1320): the fields a sent context lacks, in key order. Reads
+// with the same rule readQualificationContext keeps a value by.
+function missingQualificationContextFields(context) {
+  if (!isPlainObject(context)) return [...QUALIFICATION_CONTEXT_KEYS];
+  return QUALIFICATION_CONTEXT_KEYS.filter((key) => !isKeptContextValue(context[key]));
+}
+
+// RF018 AC2 (#1320): the 422 messages for a request body's use context, one
+// rule for every route that creates a sample. An absent or null one is none.
+function qualificationContextErrors(context) {
+  if (context === undefined || context === null) return [];
+  if (!isPlainObject(context)) return ['qualificationContext deve ser um objeto (RF018 AC2)'];
+  return missingQualificationContextFields(context).map(
+    (field) => `qualificationContext.${field} é obrigatório quando o contexto de uso é informado (RF018 AC2)`
+  );
+}
+
 function readQualificationContext(payload = {}) {
   const source = normalizeObject(payload);
   const context = isPlainObject(source.qualificationContext)
@@ -26,8 +47,7 @@ function readQualificationContext(payload = {}) {
   if (!isPlainObject(context)) return null;
   return Object.fromEntries(QUALIFICATION_CONTEXT_KEYS.map((key) => {
     const value = context[key];
-    const kept = (typeof value === 'string' && value.trim() !== '') || isPlainObject(value);
-    return [key, kept ? value : null];
+    return [key, isKeptContextValue(value) ? value : null];
   }));
 }
 
@@ -131,6 +151,8 @@ module.exports = {
   QUALITY_RULE_VERSION,
   resolveMethodologicalQuality,
   evaluateQuality,
+  missingQualificationContextFields,
+  qualificationContextErrors,
   calculateMethodologyQualityFromSprec,
   buildPenaltyLog,
   buildSprecCode,

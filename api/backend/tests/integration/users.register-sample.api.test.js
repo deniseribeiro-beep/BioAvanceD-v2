@@ -227,6 +227,41 @@ describe('POST /api/users/register-sample - paridade de contrato com /api/sample
     expect(sampleService.createSample).not.toHaveBeenCalled();
   });
 
+  // RF018 AC2 (#1320): this route creates a sample without
+  // validateCreateSamplePayload, so it applies the same use-context rule.
+  it('RF018 AC2: refuses a partial qualificationContext with 422, one message per missing field, and creates nothing', async () => {
+    const response = await whenRegisterSample(
+      buildSamplePayload({ linkedProject: 'Projeto QA Rota Usuário', isRareDisease: false, riskScore: 1, qualificationContext: { targetAnalyte: 'DNA' } })
+    );
+
+    expect(response.status).toBe(422);
+    expect(response.body.success).toBe(false);
+    expect(response.body.details).toEqual(
+      ['intendedUseCode', 'assayFamily', 'workflowProtocolId', 'workflowProtocolVersion'].map(
+        (field) => `qualificationContext.${field} é obrigatório quando o contexto de uso é informado (RF018 AC2)`
+      )
+    );
+    expect(sampleService.createSample).not.toHaveBeenCalled();
+  });
+
+  it('RF018 AC2: passes a complete qualificationContext on to createSample', async () => {
+    const qualificationContext = {
+      intendedUseCode: 'research-sequencing', targetAnalyte: 'cfDNA', assayFamily: 'sequencing',
+      workflowProtocolId: 'p1', workflowProtocolVersion: '1.0',
+    };
+
+    const response = await whenRegisterSample(
+      buildSamplePayload({ linkedProject: 'Projeto QA Rota Usuário', isRareDisease: false, riskScore: 1, qualificationContext })
+    );
+
+    expect([201, 202]).toContain(response.status);
+    expect(sampleService.createSample).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ qualificationContext }),
+      expect.anything()
+    );
+  });
+
   it('deve bloquear em STRICT_MODE_BLOCKED na rota alternativa (403)', async () => {
     // Given
     const enqueueTopologicalTransaction = vi.fn().mockResolvedValue(undefined);

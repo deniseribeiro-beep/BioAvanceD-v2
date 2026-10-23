@@ -14,6 +14,7 @@ const { resolveCallerCreateOrganization } = require('../../services/callerCreate
 const { isSampleInOrganizationScope, applySampleOrganizationScope } = require('../../services/sampleTenancy.service');
 // const { authenticate } = require('../../infrastructure/middleware/auth');
 const sampleService = require('../../services/sample.service');
+const { qualificationContextErrors } = require('../../services/quality-domain.service');
 
 // GET /api/samples/:id/miabis-compliance - MIABIS compliance check for a sample
 router.get('/:id/miabis-compliance', authenticate, requireOrganizationScope, async (req, res) => {
@@ -230,6 +231,10 @@ function validateCreateSamplePayload(req, res, next) {
       || !SPECIMEN_ROLE_VALUES.includes(payload.specimenRole.trim().toLowerCase()))) {
     errors.push('specimenRole deve ser primary, aliquot, derivative, pool ou control');
   }
+
+  // RF018 AC2 (#1320): a use context that is sent names all five fields,
+  // never a partial one stored with silent nulls. An absent one stays null.
+  errors.push(...qualificationContextErrors(payload.qualificationContext));
 
   if (errors.length > 0) {
     return res.status(422).json({

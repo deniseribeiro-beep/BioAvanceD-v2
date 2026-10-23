@@ -133,4 +133,69 @@ describe('RF004/RNF011 - POST /api/samples validações de integridade', () => {
     expect(touchedCollections).not.toContain('samples');
     expect(touchedCollections).not.toContain('amostras');
   });
+
+  // RF018 AC2 (#1320): a use context that is sent names all five fields.
+  describe('qualificationContext (RF018 AC2)', () => {
+    function mountUntouchedDb() {
+      app.locals.db = {
+        collection: (name) => rbacCollections[name] || {
+          findOne: vi.fn().mockResolvedValue(null),
+          insertOne: vi.fn().mockResolvedValue({ insertedId: 'ignored' }),
+        },
+      };
+    }
+
+    function contextMessages(response) {
+      return (response.body.details || []).filter((detail) => String(detail).startsWith('qualificationContext'));
+    }
+
+    it('rejects a partial context with one message per missing field and none for the present one', async () => {
+      mountUntouchedDb();
+      const createSampleSpy = vi.spyOn(sampleService, 'createSample');
+
+      const response = await request(app)
+        .post('/api/samples')
+        .set('Authorization', `Bearer ${createTechnicianToken()}`)
+        .send(buildValidSamplePayload({ qualificationContext: { targetAnalyte: 'DNA' } }));
+
+      expect(response.status).toBe(422);
+      expect(contextMessages(response)).toEqual(
+        ['intendedUseCode', 'assayFamily', 'workflowProtocolId', 'workflowProtocolVersion'].map(
+          (field) => `qualificationContext.${field} é obrigatório quando o contexto de uso é informado (RF018 AC2)`
+        )
+      );
+      expect(createSampleSpy).not.toHaveBeenCalled();
+    });
+
+    it('rejects a context that is not an object', async () => {
+      mountUntouchedDb();
+      const createSampleSpy = vi.spyOn(sampleService, 'createSample');
+
+      const response = await request(app)
+        .post('/api/samples')
+        .set('Authorization', `Bearer ${createTechnicianToken()}`)
+        .send(buildValidSamplePayload({ qualificationContext: 'research-sequencing' }));
+
+      expect(response.status).toBe(422);
+      expect(contextMessages(response)).toEqual(['qualificationContext deve ser um objeto (RF018 AC2)']);
+      expect(createSampleSpy).not.toHaveBeenCalled();
+    });
+
+    it('raises no qualificationContext message for a complete context', async () => {
+      mountUntouchedDb();
+      vi.spyOn(sampleService, 'createSample').mockRejectedValue(new Error('createSample stubbed: validation passed'));
+
+      const response = await request(app)
+        .post('/api/samples')
+        .set('Authorization', `Bearer ${createTechnicianToken()}`)
+        .send(buildValidSamplePayload({
+          qualificationContext: {
+            intendedUseCode: 'research-sequencing', targetAnalyte: 'cfDNA', assayFamily: 'sequencing',
+            workflowProtocolId: 'p1', workflowProtocolVersion: '1.0',
+          },
+        }));
+
+      expect(contextMessages(response)).toEqual([]);
+    });
+  });
 });

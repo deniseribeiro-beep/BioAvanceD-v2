@@ -361,7 +361,11 @@ class SampleService {
       // mirrors import.service.js's CSV/XLSX branch (#383), which is the
       // only other place `sprec` -> RCS-GOV field mapping already exists.
       if (sampleData.sprec && typeof sampleData.sprec === 'object' && Object.keys(sampleData.sprec).length > 0) {
-        const canonicalQualityAssessment = qualityDomain.resolveMethodologicalQuality({ sprec: sampleData.sprec });
+        const canonicalQualityAssessment = qualityDomain.resolveMethodologicalQuality({
+          sprec: sampleData.sprec,
+          // RF018 AC2 (#1320): the use context reaches the assessment only when sent.
+          ...(sampleData.qualificationContext !== undefined ? { qualificationContext: sampleData.qualificationContext } : {}),
+        });
         sampleData.modelVersion = canonicalQualityAssessment.model_version;
         sampleData.matrixType = canonicalQualityAssessment.matrix_type;
         sampleData.governanceStatus = canonicalQualityAssessment.governance_status;

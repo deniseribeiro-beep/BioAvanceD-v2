@@ -1330,6 +1330,49 @@ describe('sample.service', () => {
         expect(result.sealedRcsAssessmentId ?? null).toBeNull();
       });
 
+      // RF018 AC2 (#1320): a body's use context reaches the assessment.
+      const qualificationContext = {
+        intendedUseCode: 'research-sequencing', targetAnalyte: 'cfDNA', assayFamily: 'sequencing',
+        workflowProtocolId: 'p1', workflowProtocolVersion: '1.0'
+      };
+
+      it('passes the body qualificationContext on to resolveMethodologicalQuality (RF018 AC2)', async () => {
+        const db = makeDb();
+        mockOperationalStorage(db);
+        db.collections.rcsAssessments = { insertOne: vi.fn().mockResolvedValue({ insertedId: 'assessment-1' }) };
+        vi.spyOn(qualityDomain, 'resolveMethodologicalQuality').mockReturnValue({
+          governance_status: 1,
+          final_grade: 'A',
+          rcs_score: 87.5
+        });
+
+        const sprec = { matrixType: 'PLASMA', sampleType: 'PLASMA' };
+        await sampleService.createSample(db, validSampleData({ sprec, qualificationContext }));
+
+        expect(qualityDomain.resolveMethodologicalQuality).toHaveBeenCalledWith({ sprec, qualificationContext });
+      });
+
+      it('records the body qualificationContext on the RcsAssessment document (RF018 AC2)', async () => {
+        const db = makeDb();
+        mockOperationalStorage(db);
+        const fakeCollection = () => ({
+          insertOne: vi.fn().mockResolvedValue({ insertedId: 'ignored' }),
+          deleteOne: vi.fn().mockResolvedValue({ deletedCount: 1 })
+        });
+        db.collections.rcsAssessments = fakeCollection();
+        db.collections.rcsInputSnapshots = fakeCollection();
+        db.collections.rcsGovernanceEvidenceSnapshots = fakeCollection();
+        const sprec = {
+          matrixType: 'fluid', sampleType: 'SER', primaryContainer: 'SST', preCentrifugation: 'A', centrifugation: 'B',
+          secondCentrifugation: 'N', postCentrifugationDelay: 'A', longTermStorage: 'A'
+        };
+
+        await sampleService.createSample(db, validSampleData({ sprec, qualificationContext }));
+
+        expect(db.collections.rcsAssessments.insertOne).toHaveBeenCalledTimes(1);
+        expect(db.collections.rcsAssessments.insertOne.mock.calls[0][0].qualificationContext).toEqual(qualificationContext);
+      });
+
       it('does not fail sample creation when recording the RcsAssessment snapshot rejects', async () => {
         const db = makeDb();
         mockOperationalStorage(db);
