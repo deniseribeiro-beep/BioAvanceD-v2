@@ -7,6 +7,7 @@ import Button from '../components/UI/Button';
 import Input from '../components/UI/Input';
 import Select from '../components/UI/Select';
 import Card from '../components/UI/Card';
+import RcsScopeNotice from '../components/RcsScopeNotice';
 import { MIABIS_QUALITY } from '../config/constants/specimen.constants';
 import {
   resolveSpecimenStatus,
@@ -98,6 +99,13 @@ export function getStorageLabel(location: SampleStorageLocationDTO | null): stri
     return position ? `${boxName} / Posição ${position}` : boxName;
   }
   return `Posição ${position}`;
+}
+
+// RF018 AC11 (#1320): the quality row shows an RCS grade, and so the scope notice, only when one is set.
+export function isRcsGradeShown(sample: Sample | null): boolean {
+  if (!sample) return false;
+  const rcs = sample.rcs_evaluation || sample;
+  return String(rcs.final_grade || '').trim() !== '';
 }
 
 export default function SampleWithdrawalReturnPage() {
@@ -524,6 +532,7 @@ export default function SampleWithdrawalReturnPage() {
                   <span className="info-label">Qualidade:</span>
                   <span className="info-value">{getRcsQualityLabel(sample)}</span>
                 </div>
+                {isRcsGradeShown(sample) && <RcsScopeNotice />}
                 {sample.withdrawalDate && (
                   <div className="info-row">
                     <span className="info-label">Última Retirada:</span>

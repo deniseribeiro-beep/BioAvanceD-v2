@@ -4,11 +4,12 @@ import {
   getPendingReturnQuantity,
   getSpecimenStatusColor,
   getStorageLabel,
+  isRcsGradeShown,
   resolveInitialTab,
   resolveSpecimenStatus,
   translateSpecimenStatus,
 } from './SampleWithdrawalReturnPage';
-import type { SampleStorageLocationDTO } from '../types/models';
+import type { Sample, SampleStorageLocationDTO } from '../types/models';
 
 function makeLocation(overrides: Partial<SampleStorageLocationDTO> = {}): SampleStorageLocationDTO {
   return {
@@ -141,5 +142,21 @@ describe('getSpecimenStatusColor / translateSpecimenStatus', () => {
     expect(getSpecimenStatusColor('something-unknown')).toBe('var(--text)');
     expect(translateSpecimenStatus('something-unknown')).toBe('something-unknown');
     expect(translateSpecimenStatus(undefined)).toBe('-');
+  });
+});
+
+// RF018 AC11 (#1320): the scope notice follows the quality row only when it
+// shows an RCS grade.
+describe('isRcsGradeShown', () => {
+  it('is true when the sample carries an RCS final grade', () => {
+    expect(isRcsGradeShown({ final_grade: 'B' } as Sample)).toBe(true);
+    expect(isRcsGradeShown({ rcs_evaluation: { final_grade: 'A' } } as Sample)).toBe(true);
+  });
+
+  it('is false when no RCS grade is shown', () => {
+    expect(isRcsGradeShown(null)).toBe(false);
+    expect(isRcsGradeShown({} as Sample)).toBe(false);
+    expect(isRcsGradeShown({ final_grade: '  ' } as Sample)).toBe(false);
+    expect(isRcsGradeShown({ quality: '1' } as Sample)).toBe(false);
   });
 });
