@@ -145,6 +145,14 @@ describe('rcs-assessment.service', () => {
       expect(await getInputSnapshotById(db, assessment.inputSnapshotId)).toBe(snapshot);
     });
 
+    it('records on the assessment the SPREC version its snapshot stores (V2E-0448)', async () => {
+      const db = createFakeDb();
+      const assessment = await recordAssessment(db, 'SPEC-1', certified());
+      const [snapshot] = db.collections.rcsInputSnapshots.docs;
+      expect(snapshot.sprecVersion).toBe('2.0');
+      expect(assessment.sprecVersion).toBe(snapshot.sprecVersion);
+    });
+
     it('keeps the score, grade, route, penalties and trace of the result on the assessment', async () => {
       const db = createFakeDb();
       const result = certified();
@@ -480,6 +488,26 @@ describe('rcs-assessment.service', () => {
       const { rcs_input: _input, ...result } = certified();
       const assessment = await recordAssessment(createFakeDb(), 'SPEC-1', result);
       expect(assessment).toMatchObject(noPackage);
+    });
+
+    // RF018 AC1 (#1320): the SPREC version is the trace's own, not gated on reproduction (V2E-0448).
+    it('writes the SPREC version of the trace on a reproduced result', async () => {
+      const result = certified();
+      const assessment = await recordAssessment(createFakeDb(), 'SPEC-1', result);
+      expect(assessment.sprecVersion).toBe(result.calculation_trace.sprec_version);
+    });
+
+    it('writes the SPREC version of the trace on a result that is not reproduced', async () => {
+      const result = { ...certified(), rcs_score: 1 };
+      const assessment = await recordAssessment(createFakeDb(), 'SPEC-1', result);
+      expect(assessment).toMatchObject(noPackage);
+      expect(assessment.sprecVersion).toBe(certified().calculation_trace.sprec_version);
+    });
+
+    it('writes the SPREC version of the trace on a result with no rcs_input', async () => {
+      const { rcs_input: _input, ...result } = certified();
+      const assessment = await recordAssessment(createFakeDb(), 'SPEC-1', result);
+      expect(assessment.sprecVersion).toBe(certified().calculation_trace.sprec_version);
     });
 
     it('justifies every assessment with its route reasons and then the scope statement', async () => {

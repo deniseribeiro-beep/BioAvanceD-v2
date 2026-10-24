@@ -30,6 +30,8 @@ class RcsAssessmentModel {
       inputSnapshotId: data.inputSnapshotId ?? null,
       inputSnapshotUri: data.inputSnapshotUri ?? null,
       inputSnapshotHash: data.inputSnapshotHash ?? null,
+      // RF018 AC1 (#1320): the SPREC version the result was computed with (V2E-0448).
+      sprecVersion: data.sprecVersion ?? null,
       // RF018 AC10 and AC11 (#1320): the rule package and environment the
       // result was computed with, and its justifications.
       rulePackageVersion: data.rulePackageVersion ?? null,
@@ -69,6 +71,7 @@ class RcsAssessmentModel {
       axisPenalties: result.axis_penalties,
       calculationTrace: result.calculation_trace,
       qualificationContext: result.qualification_context,
+      sprecVersion: result.calculation_trace?.sprec_version,
     });
   }
 }

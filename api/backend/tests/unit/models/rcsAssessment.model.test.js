@@ -145,3 +145,28 @@ describe('RcsAssessmentModel rule package, environment and justifications', () =
     expect(RcsAssessmentModel.fieldsOf({ justifications: 'x' }).justifications).toEqual([]);
   });
 });
+
+// RF018 AC1 (#1320): the SPREC version the result was computed with.
+describe('RcsAssessmentModel sprecVersion (V2E-0448)', () => {
+  it('defaults to null and keeps a given value', () => {
+    expect(RcsAssessmentModel.fieldsOf({}).sprecVersion).toBeNull();
+    expect(RcsAssessmentModel.fieldsOf({ sprecVersion: 'SPREC-2.0' }).sprecVersion).toBe('SPREC-2.0');
+  });
+
+  it('fromCertificationResult takes the version the trace names', () => {
+    const doc = RcsAssessmentModel.fromCertificationResult('SPEC-1', { calculation_trace: { sprec_version: 'SPREC-2.0' } });
+    expect(doc.sprecVersion).toBe('SPREC-2.0');
+  });
+
+  it('is null for a result with no trace or a trace with no version', () => {
+    expect(RcsAssessmentModel.fromCertificationResult('SPEC-1', {}).sprecVersion).toBeNull();
+    expect(RcsAssessmentModel.fromCertificationResult('SPEC-1', { calculation_trace: { model_code: 'RCS-GOV-1.0' } }).sprecVersion).toBeNull();
+  });
+
+  it('takes the trace over a refs.sprecVersion, as the other result-derived keys do', () => {
+    const doc = RcsAssessmentModel.fromCertificationResult(
+      'SPEC-1', { calculation_trace: { sprec_version: 'SPREC-2.0' } }, { sprecVersion: 'SPREC-9.9' },
+    );
+    expect(doc.sprecVersion).toBe('SPREC-2.0');
+  });
+});
