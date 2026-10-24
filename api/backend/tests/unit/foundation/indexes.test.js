@@ -64,6 +64,14 @@ describe('Foundation index builds', () => {
     });
   });
 
+  // #1402 (ELM-0275): one BiomarkerAssociation row per biomarkerId.
+  it('builds the BiomarkerAssociation unique biomarkerId index by name (#1402)', async () => {
+    const builds = await buildFoundationIndexes(createFakeDb());
+    expect(builds.find((build) => build.name === 'uniq_biomarkerId')).toMatchObject({
+      collection: 'biomarkerAssociations', keys: { biomarkerId: 1 }, unique: true, ok: true,
+    });
+  });
+
   it('reports a build whose index is gone on read-back', async () => {
     const db = createFakeDb();
     const builds = [{ collection: 'facilities', keys: { name: 1 }, name: 'facilities_name_idx_v1', unique: false, ok: true }];

@@ -89,6 +89,30 @@ describe('BiomarkerAssociation mount (/api/biomarker-associations)', () => {
     expect(typeof stored.biomarkerId).toBe('string');
   });
 
+  // #1402: the uniq_biomarkerId index refuses a second row with E11000.
+  it('answers 409 when the store refuses a duplicate biomarkerId (#1402)', async () => {
+    const duplicate = Object.assign(
+      new Error('E11000 duplicate key error collection: biomarkerAssociations index: uniq_biomarkerId'),
+      { code: 11000 }
+    );
+    const coll = associations({ insertOne: vi.fn().mockRejectedValue(duplicate) });
+    app.locals.db = createDbMock({ biomarkerAssociations: coll, ...rbacCollectionsAdmin });
+
+    const res = await post({ biomarkerId: 'bm-1', ...valid });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe('Registro duplicado');
+  });
+
+  it('still answers 500 when the insert fails without a duplicate-key code (#1402)', async () => {
+    const coll = associations({ insertOne: vi.fn().mockRejectedValue(new Error('boom')) });
+    app.locals.db = createDbMock({ biomarkerAssociations: coll, ...rbacCollectionsAdmin });
+
+    const res = await post({ biomarkerId: 'bm-1', ...valid });
+
+    expect(res.status).toBe(500);
+  });
+
   it('returns 422 for a POST without evidenceReferences, and stores nothing', async () => {
     const coll = associations();
     app.locals.db = createDbMock({ biomarkerAssociations: coll, ...rbacCollectionsAdmin });

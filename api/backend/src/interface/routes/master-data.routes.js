@@ -203,6 +203,8 @@ function createMasterDataRouter({ collectionName, idField, model, validateRefere
       const result = await db.collection(collectionName).insertOne(document);
       return res.status(201).json({ success: true, data: { _id: result.insertedId, ...document } });
     } catch (error) {
+      // #1402: a unique index on a master-data collection refuses the insert with E11000; that is a conflict, not a server error.
+      if (error?.code === 11000) return res.status(409).json({ success: false, error: 'Registro duplicado', message: `${idField} já existe` });
       if (error.statusCode) {
         return res.status(error.statusCode).json({ success: false, error: error.message, message: error.message });
       }

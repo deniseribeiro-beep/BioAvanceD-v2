@@ -22,4 +22,4 @@ The v2.0.0 entity BiomarkerAssociation (ELM-0275..0285) had no model, validation
 - **Pointing `disease-profile` and `buildLocalSemanticSuggestions`** at the new store.
 - **Whether `SampleGraphValidator` ever reads it**: no RF requires it (#1206).
 - **The frontend** screen that enters it.
-- **A MongoDB unique index** on `biomarkerId`.
+- **A MongoDB unique index** on `biomarkerId`: decided in `2026-10-24-biomarker-association-unique-index.md` (#1402).
