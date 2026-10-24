@@ -392,6 +392,39 @@ describe('POST /api/ingestion/records (RF029, #1318)', () => {
     })]);
   });
 
+  it('422: a TelemetryReading, an InfluxDB entity, is refused INGESTION_STORE_UNSUPPORTED naming the telemetry route, writes nothing, and one INGESTION_REFUSED row (RF029 AC4)', async () => {
+    const stores = givenDb();
+    const payload = { sensorId: 'sensor-1', metricType: 'temperature', timestamp: '2026-10-01T12:00:00.000Z', value: -80.1, unit: 'Cel' };
+
+    const res = await post({ entityType: 'TelemetryReading', payload, provenance: PROVENANCE, idempotencyKey: 'telemetry-key-1' });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(422);
+    expect(res.body).toMatchObject({ success: false, error: 'INGESTION_STORE_UNSUPPORTED' });
+    expect(res.body.details).toEqual([expect.stringMatching(/InfluxDB.*\/api\/temperature\/reading/)]);
+    expect(res.body.details[0]).not.toContain('sensor-1');
+    expect(stores.ingestionQuarantineRecords.docs).toHaveLength(0);
+    expect(stores.ingestionIdempotencyKeys.docs).toHaveLength(0);
+    expect(stores.missingDataReasons.docs).toHaveLength(0);
+    expect(stores.dataQualityAssessments.docs).toHaveLength(0);
+    expect(stores.graph_projection_outbox.updateOne).not.toHaveBeenCalled();
+    expect(ingestionAuditRows()).toEqual([expect.objectContaining({
+      action: 'INGESTION_REFUSED',
+      severity: 'warning',
+      status: 'warning',
+      resourceType: 'TelemetryReading',
+      payload: expect.objectContaining({ canonicalModelReleaseId: 'release-2.0.0', configurationReleaseId: 'cfg-release-7' }),
+    })]);
+  });
+
+  it('503: a TelemetryReading under a canonical release that is not active answers 503, not the store refusal', async () => {
+    givenDb({ releaseStatus: 'draft' });
+
+    const res = await post({ entityType: 'TelemetryReading', payload: {}, provenance: PROVENANCE });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(503);
+    expect(res.body).toMatchObject({ success: false, error: 'CANONICAL_RELEASE_NOT_ACTIVE' });
+  });
+
   it('422: a missing provenance field quarantines, with details and the quarantine record id', async () => {
     const stores = givenDb();
 

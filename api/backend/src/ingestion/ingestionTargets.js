@@ -56,8 +56,12 @@
  * name and image to Participant's, so neither is ever quarantined as sent
  * (docs/decisions/2026-10-24-ingestion-consent-target.md).
  *
- * Telemetry and binaries are deliberately absent: they have their own stores
- * and paths, and a later slice names them in the refusal.
+ * TelemetryReading is named, not a target (OTHER_STORE_ENTITY_TYPES): its
+ * store is InfluxDB (RF029 AC4), a quarantine would write its fields to
+ * MongoDB, and the route's transaction has no InfluxDB part. It is refused
+ * 422 INGESTION_STORE_UNSUPPORTED naming the telemetry route
+ * (docs/decisions/2026-10-24-ingestion-telemetry-reading-refused.md).
+ * Binaries are still absent.
  */
 const { CANONICAL_COLLECTIONS } = require('../config/collections');
 const { LEGACY_PATIENT_IDENTITY_FIELDS, PARTICIPANT_IDENTITY_ONLY_FIELDS } = require('../utils/legacyPatientIdentityFields');
@@ -162,4 +166,16 @@ function resolveIngestionTarget(entityType) {
   return Object.prototype.hasOwnProperty.call(INGESTION_TARGETS, entityType) ? INGESTION_TARGETS[entityType] : null;
 }
 
-module.exports = { INGESTION_TARGETS, resolveIngestionTarget };
+// RF029 AC4: entity types stored outside MongoDB, each with the trusted
+// route that does write it. The ingestion route refuses them by name.
+const OTHER_STORE_ENTITY_TYPES = Object.freeze({
+  TelemetryReading: Object.freeze({ store: 'influxdb', route: 'POST /api/temperature/reading' }),
+});
+
+/** The other-store entry for `entityType`, or null, by the same own-property check. */
+function resolveOtherStoreEntityType(entityType) {
+  if (typeof entityType !== 'string') return null;
+  return Object.prototype.hasOwnProperty.call(OTHER_STORE_ENTITY_TYPES, entityType) ? OTHER_STORE_ENTITY_TYPES[entityType] : null;
+}
+
+module.exports = { INGESTION_TARGETS, OTHER_STORE_ENTITY_TYPES, resolveIngestionTarget, resolveOtherStoreEntityType };

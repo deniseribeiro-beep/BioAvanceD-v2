@@ -15,7 +15,7 @@ const { CANONICAL_MODEL_RELEASE_ID } = require('../foundation/readiness');
 const { Neo4jOutboxService } = require('../services/neo4jOutbox.service');
 const { withTransactionWhereSupported } = require('../utils/mongoTransaction');
 const { ingestRecord } = require('./ingestionGateway');
-const { resolveIngestionTarget } = require('./ingestionTargets');
+const { resolveIngestionTarget, resolveOtherStoreEntityType } = require('./ingestionTargets');
 const { validateMissingDataReasons, buildMissingDataReasons } = require('./missingness');
 const { assessIngestedRecord, findSourceDuplicate, insertDataQualityAssessment } = require('./dataQualityAssessment');
 const {
@@ -31,6 +31,9 @@ function ingestionError(statusCode, code, message) {
   error.details = [message];
   return error;
 }
+
+// The store names an other-store refusal states.
+const STORE_NAMES = Object.freeze({ influxdb: 'InfluxDB' });
 
 // CFG-004, read as accessRequest.service.js's activeConfigurationReleaseId
 // reads it: null before any release exists.
@@ -167,7 +170,8 @@ async function ingestAndPersist({
   resolveOrganizationScope = null,
 }) {
   const target = resolveIngestionTarget(entityType);
-  if (!target) {
+  const otherStore = target ? null : resolveOtherStoreEntityType(entityType);
+  if (!target && !otherStore) {
     throw ingestionError(422, 'INGESTION_TARGET_UNSUPPORTED', `entityType não suportado pela ingestão: ${String(entityType)}`);
   }
 
@@ -176,6 +180,12 @@ async function ingestAndPersist({
   const releases = { canonicalModelReleaseId, configurationReleaseId };
 
   try {
+    // RF029 AC4: an entity stored elsewhere is refused by name, reading
+    // neither payload nor key and writing nothing, so none of its fields
+    // reaches MongoDB.
+    if (otherStore) {
+      throw ingestionError(422, 'INGESTION_STORE_UNSUPPORTED', `${entityType} é armazenado no ${STORE_NAMES[otherStore.store]}, não suportado pela ingestão; registre a leitura por ${otherStore.route}`);
+    }
     return await ingestUnderRelease({ db, target, entityType, payload, provenance, idempotencyKey, missingDataReasons, actorId, outbox, releases, resolveOrganizationScope });
   } catch (error) {
     // CFG-004: a refusal after the releases were read still names them.

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-const { INGESTION_TARGETS, resolveIngestionTarget } = require('../../../src/ingestion/ingestionTargets');
+const { INGESTION_TARGETS, OTHER_STORE_ENTITY_TYPES, resolveIngestionTarget, resolveOtherStoreEntityType } = require('../../../src/ingestion/ingestionTargets');
 
 describe('ingestion/ingestionTargets (RF029, #1318)', () => {
   it('names exactly the Dataset, WorkflowRun, OmicsQualification, Assay, OmicsRun, Specimen, Participant and Consent targets, frozen', () => {
@@ -126,6 +126,23 @@ describe('ingestion/ingestionTargets (RF029, #1318)', () => {
     'resolves %s to null',
     (entityType) => {
       expect(resolveIngestionTarget(entityType)).toBeNull();
+    }
+  );
+
+  it('names TelemetryReading as an InfluxDB entity type with its telemetry route, frozen, and not as a target (RF029 AC4)', () => {
+    expect(Object.keys(OTHER_STORE_ENTITY_TYPES)).toEqual(['TelemetryReading']);
+    expect(Object.isFrozen(OTHER_STORE_ENTITY_TYPES)).toBe(true);
+    const entry = resolveOtherStoreEntityType('TelemetryReading');
+    expect(entry).toEqual({ store: 'influxdb', route: 'POST /api/temperature/reading' });
+    expect(Object.isFrozen(entry)).toBe(true);
+    expect(INGESTION_TARGETS).not.toHaveProperty('TelemetryReading');
+    expect(resolveIngestionTarget('TelemetryReading')).toBeNull();
+  });
+
+  it.each(['Telemetry', 'dataset', '', undefined, null, '__proto__', 'toString', 'constructor', 'hasOwnProperty'])(
+    'resolves %s to no other-store entity type',
+    (entityType) => {
+      expect(resolveOtherStoreEntityType(entityType)).toBeNull();
     }
   );
 });

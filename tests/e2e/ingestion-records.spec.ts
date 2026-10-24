@@ -283,6 +283,27 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
     expect(rows).toHaveLength(before + 1);
   });
 
+  test('#1318 RF029 AC4: a TelemetryReading, an InfluxDB entity, is refused 422 INGESTION_STORE_UNSUPPORTED naming the telemetry route, persists nothing, and writes one INGESTION_REFUSED row', async ({ request }) => {
+    const sourceRecordId = `rf029-e2e-${Date.now()}-telemetry-reading`;
+    // A delta, not an absolute: the stack's logs persist across runs.
+    const before = (await findIngestionRefusalRows('TelemetryReading')).length;
+
+    const payload = { sensorId: 'rf029-e2e-sensor', metricType: 'temperature', timestamp: new Date().toISOString(), value: -80.1, unit: 'Cel' };
+    const res = await ingest(request, { entityType: 'TelemetryReading', payload, provenance: provenance(sourceRecordId) });
+
+    expect(res.status(), await res.text()).toBe(422);
+    const body = await res.json();
+    expect(body.error).toBe('INGESTION_STORE_UNSUPPORTED');
+    expect(body.details).toEqual([expect.stringContaining('InfluxDB')]);
+    expect(await countIngestedBySourceRecordId('ingestionQuarantineRecords', sourceRecordId)).toBe(0);
+
+    // The route awaits this row before it answers. The rows are unsorted,
+    // so every one names the release in force rather than a newest one.
+    const rows = await findIngestionRefusalRows('TelemetryReading');
+    expect(rows).toHaveLength(before + 1);
+    expect(rows.every((row) => row.payload.canonicalModelReleaseId === CANONICAL_MODEL_RELEASE_ID)).toBe(true);
+  });
+
   // #1318: an Assay's references resolve against real records (#664), so its
   // specimen, study, protocol and laboratory are seeded as
   // specimen-quality-inventory.spec.ts seeds an assay's, by the admin, whose

@@ -1352,4 +1352,42 @@ describe('ingestion/productionIngestion ingestAndPersist (RF029, #1318)', () => 
     expect(db.collections.consentDecisionEvents.docs.map((row) => row.consentId)).toEqual([winner.entityId]);
     expect(db.collections.dataQualityAssessments.docs.map((d) => d.scopeId)).toEqual([`Consent/${winner.entityId}`]);
   });
+
+  const TELEMETRY_READING = { sensorId: 'sensor-1', metricType: 'temperature', timestamp: '2026-10-01T12:00:00.000Z', value: -80.1, unit: 'Cel', idempotencyKey: 'reading-key-1' };
+
+  it.each([
+    ['an empty', {}],
+    ['a schema-valid telemetry', TELEMETRY_READING],
+  ])('60. a TelemetryReading with %s payload, an InfluxDB entity, is refused 422 INGESTION_STORE_UNSUPPORTED naming the telemetry route, and writes nothing (RF029 AC4)', async (_label, payload) => {
+    const db = seededDb();
+    const outbox = fakeOutbox();
+
+    const error = await ingest(db, { outbox, entityType: 'TelemetryReading', payload, idempotencyKey: 'telemetry-key-1' }).catch((e) => e);
+
+    expect(error).toMatchObject({
+      statusCode: 422,
+      code: 'INGESTION_STORE_UNSUPPORTED',
+      details: [expect.stringMatching(/^TelemetryReading .*InfluxDB.*POST \/api\/temperature\/reading$/)],
+      canonicalModelReleaseId: 'release-2.0.0',
+      configurationReleaseId: 'cfg-release-7',
+    });
+    expect(error.details[0]).not.toContain('sensor-1');
+    for (const [name, collection] of Object.entries(db.collections)) {
+      if (name === 'canonicalModelReleases' || name === 'security_config') continue;
+      expect(collection.docs, name).toHaveLength(0);
+    }
+    expect(outbox.appendEvent).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['missing', null],
+    ['retired', { canonicalModelReleaseId: 'release-2.0.0', releaseStatus: 'retired' }],
+  ])('61. a TelemetryReading under a %s CanonicalModelRelease throws 503, not the store refusal', async (_label, release) => {
+    const db = seededDb({ release });
+    const outbox = fakeOutbox();
+
+    await expect(ingest(db, { outbox, entityType: 'TelemetryReading', payload: TELEMETRY_READING })).rejects.toMatchObject({ statusCode: 503, code: 'CANONICAL_RELEASE_NOT_ACTIVE' });
+    expect(db.collections.ingestionQuarantineRecords.docs).toHaveLength(0);
+    expect(outbox.appendEvent).not.toHaveBeenCalled();
+  });
 });
