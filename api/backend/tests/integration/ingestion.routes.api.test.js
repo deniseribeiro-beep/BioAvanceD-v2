@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 const request = require('supertest');
 const jwt = require('jsonwebtoken');
+const { ObjectId } = require('mongodb');
 
 process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
@@ -43,6 +44,8 @@ function ingestionAuditRows() {
 // #1318: a Specimen needs a known participant with an active consent.
 const CONSENTED_PARTICIPANT = '12345678';
 const UNCONSENTED_PARTICIPANT = '23456789';
+// #1318: a Participant needs a known consent template.
+const TEMPLATE_HEX = '64b7f0c2a1b2c3d4e5f60718';
 
 function givenDb({ extraUsers = [], releaseStatus = 'active' } = {}) {
   const stores = {
@@ -58,6 +61,7 @@ function givenDb({ extraUsers = [], releaseStatus = 'active' } = {}) {
     organizations: createMatchingCollection([{ organizationId: 'test-org-default' }, { organizationId: 'org-other' }]),
     patients: createMatchingCollection([{ participantId: CONSENTED_PARTICIPANT }, { participantId: UNCONSENTED_PARTICIPANT }]),
     patientConsents: createMatchingCollection([{ participantId: CONSENTED_PARTICIPANT, status: 'ACTIVE' }]),
+    consent_templates: createMatchingCollection([{ _id: new ObjectId(TEMPLATE_HEX), title: 'TCLE' }]),
     ingestionQuarantineRecords: createMatchingCollection([]),
     ingestionIdempotencyKeys: createFakeCollection([]),
     missingDataReasons: createMatchingCollection([]),
@@ -99,6 +103,8 @@ const SPECIMEN = {
   registeredAt: '2026-10-01T09:00:00.000Z',
   collectionSite: 'test-org-default',
 };
+// The clinicalUnitId is the Coordenador's organization too.
+const PARTICIPANT = { participantId: 'client-claimed', sex: 'F', clinicalUnitId: 'test-org-default', consentTemplateId: TEMPLATE_HEX };
 
 function post(body, caller) {
   return request(app).post('/api/ingestion/records').set('Authorization', `Bearer ${token(caller)}`).send(body);
@@ -255,6 +261,44 @@ describe('POST /api/ingestion/records (RF029, #1318)', () => {
       resourceType: 'Specimen',
       resourceId: res.body.ingestionQuarantineRecordId,
     })]);
+  });
+
+  it('201: an accepted Participant is persisted in patients with a server participantId, PENDING_CONSENT, in one session and one INGESTION_ACCEPTED row (#1318)', async () => {
+    const stores = givenDb();
+
+    const res = await post({ entityType: 'Participant', payload: PARTICIPANT, provenance: PROVENANCE });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(res.body).toMatchObject({ success: true, status: 'accepted', entityType: 'Participant' });
+    expect(res.body.entityId).toMatch(/^[1-9]\d{7}$/);
+    const stored = stores.patients.docs.find((d) => d.participantId === res.body.entityId);
+    expect(stored).toMatchObject({ sex: 'F', status: 'PENDING_CONSENT', clinicalUnitId: 'test-org-default', consentTemplateId: TEMPLATE_HEX });
+    expect(stores.patients.insertOne).toHaveBeenCalledWith(stored, { session: app.locals.db.session });
+    expect(ingestionAuditRows()).toEqual([expect.objectContaining({
+      action: 'INGESTION_ACCEPTED',
+      resourceType: 'Participant',
+      resourceId: res.body.entityId,
+    })]);
+  });
+
+  it('422: a Participant carrying patientName is refused INGESTION_STORE_UNSUPPORTED, writes nothing, and one INGESTION_REFUSED row without the name (#575)', async () => {
+    const stores = givenDb();
+
+    const res = await post({ entityType: 'Participant', payload: { ...PARTICIPANT, patientName: 'Maria Silva' }, provenance: PROVENANCE, idempotencyKey: 'participant-key-1' });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(422);
+    expect(res.body).toMatchObject({ success: false, error: 'INGESTION_STORE_UNSUPPORTED' });
+    expect(res.body.details).toEqual([expect.stringContaining('patientName')]);
+    expect(JSON.stringify(res.body)).not.toContain('Maria Silva');
+    expect(stores.patients.docs.map((d) => d.participantId)).toEqual([CONSENTED_PARTICIPANT, UNCONSENTED_PARTICIPANT]);
+    expect(stores.ingestionQuarantineRecords.docs).toHaveLength(0);
+    expect(stores.ingestionIdempotencyKeys.docs).toHaveLength(0);
+    expect(stores.dataQualityAssessments.docs).toHaveLength(0);
+    const rows = ingestionAuditRows();
+    expect(rows).toEqual([expect.objectContaining({ action: 'INGESTION_REFUSED', severity: 'warning', resourceType: 'Participant' })]);
+    // The row is stored without the request, which auditLogger reads only for its network metadata.
+    const { req: _req, ...row } = rows[0];
+    expect(JSON.stringify(row)).not.toContain('Maria Silva');
   });
 
   it('201: an accepted genomics OmicsRun is persisted in omicsRuns with one INGESTION_ACCEPTED row', async () => {

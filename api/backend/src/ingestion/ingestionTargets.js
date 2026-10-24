@@ -25,18 +25,31 @@
  * Specimen is the sixth, stored in samples. Its `validateReferences` runs the
  * sample mount's participant, consent, site, parent and barcode gates, the
  * consent one failing closed (RF029 AC2), and `scopeField` is
- * `collectionSite`. Three keys only it carries: `organizationField` names the
+ * `collectionSite`. It brought three keys: `organizationField` names the
  * #1192 tenancy field stamped from the in-scope `scopeField` value,
  * `generateId` assigns the mount's 7-digit specimenId instead of a uuid, and
- * `appendProjection` appends SPECIMEN_UPSERTED and LINEAGE_REGISTERED in the
- * insert's transaction (#1313,
+ * `appendProjection`, which only it carries, appends SPECIMEN_UPSERTED and
+ * LINEAGE_REGISTERED in the insert's transaction (#1313,
  * docs/decisions/2026-10-23-ingestion-specimen-target.md).
+ *
+ * Participant is the seventh, stored in patients through the participant
+ * mount's model. Its `validateReferences` runs the mount's clinical unit,
+ * deceased and consent template gates, `scopeField` and `organizationField`
+ * are both `clinicalUnitId`, and `generateId` assigns the mount's 8-digit
+ * participantId. Its `missingnessFields` are empty: every field outside
+ * `required` is refused, required by the model or the scope gate, or
+ * defaulted by PatientModel.create. `identityFields`, which only it
+ * carries, names the civil identity fields that live on ParticipantIdentity
+ * alone (#575): a record holding one is refused, never quarantined as sent
+ * (docs/decisions/2026-10-24-ingestion-participant-target.md).
  *
  * Telemetry and binaries are deliberately absent: they have their own stores
  * and paths, and a later slice names them in the refusal.
  */
 const { CANONICAL_COLLECTIONS } = require('../config/collections');
+const { LEGACY_PATIENT_IDENTITY_FIELDS, PARTICIPANT_IDENTITY_ONLY_FIELDS } = require('../utils/legacyPatientIdentityFields');
 const { generateSpecimenId, validateSpecimenReferences, appendSpecimenProjection } = require('./specimenTarget');
+const { generateParticipantId, validateParticipantReferences } = require('./participantTarget');
 
 const INGESTION_TARGETS = Object.freeze({
   Dataset: Object.freeze({
@@ -94,6 +107,19 @@ const INGESTION_TARGETS = Object.freeze({
     organizationField: 'organizationId',
     generateId: generateSpecimenId,
     appendProjection: appendSpecimenProjection,
+  }),
+  Participant: Object.freeze({
+    schemaId: 'canonical.v1.participant',
+    store: 'mongodb',
+    collection: CANONICAL_COLLECTIONS.patients,
+    idField: 'participantId',
+    model: require('../models/Patient'),
+    missingnessFields: Object.freeze([]),
+    validateReferences: validateParticipantReferences,
+    scopeField: 'clinicalUnitId',
+    organizationField: 'clinicalUnitId',
+    generateId: generateParticipantId,
+    identityFields: Object.freeze([...LEGACY_PATIENT_IDENTITY_FIELDS, ...PARTICIPANT_IDENTITY_ONLY_FIELDS]),
   }),
 });
 

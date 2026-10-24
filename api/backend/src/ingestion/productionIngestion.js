@@ -104,6 +104,19 @@ function assertStoredHere(target, entityType, payload) {
   }
 }
 
+// RF029 AC4, #575: a target with identityFields refuses a record holding any
+// of them, whatever its value, because civil identity lives on
+// ParticipantIdentity alone and a quarantine would store it as sent. The
+// refusal names the fields, never their values.
+function assertNoIdentityFields(target, entityType, payload) {
+  const { identityFields } = target;
+  if (!identityFields || !payload || typeof payload !== 'object' || Array.isArray(payload)) return;
+  const present = identityFields.filter((field) => Object.prototype.hasOwnProperty.call(payload, field));
+  if (present.length > 0) {
+    throw ingestionError(422, 'INGESTION_STORE_UNSUPPORTED', `${entityType} com ${present.join(', ')}: identidade civil é armazenada em ParticipantIdentity, não suportado pela ingestão`);
+  }
+}
+
 // The status codes the master mount's reference check throws (#664, RF019).
 const REFERENCE_VIOLATION_CODES = { 404: 'REFERENCE_NOT_FOUND', 409: 'REFERENCE_NOT_USABLE' };
 
@@ -178,6 +191,7 @@ async function ingestUnderRelease({ db, target, entityType, payload, provenance,
   // Before the replay, so an out-of-scope caller learns nothing of a key.
   await assertInOrganizationScope(target, payload, resolveOrganizationScope);
   assertStoredHere(target, entityType, payload);
+  assertNoIdentityFields(target, entityType, payload);
 
   const scope = { idempotencyKey, scope: entityType };
   if (idempotencyKey) {
@@ -237,7 +251,7 @@ async function ingestUnderRelease({ db, target, entityType, payload, provenance,
 
   // INFERENCE, not a citation: the server always assigns the id, a uuid as
   // #896 settled, or the target's own format (Specimen's 7-digit
-  // specimenId). Unlike master-data POST, which keeps a body id, a body id
+  // specimenId, Participant's 8-digit participantId). Unlike master-data POST, which keeps a body id, a body id
   // is ignored here; the client's own key travels as provenance.sourceRecordId.
   const entityId = target.generateId ? await target.generateId(db) : randomUUID();
   const doc = target.model.create({ ...references.input, [target.idField]: entityId });

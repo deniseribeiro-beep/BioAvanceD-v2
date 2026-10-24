@@ -78,3 +78,20 @@ describe('canonical.v1.intake organizationId (#1376)', () => {
     expect(errors.some((error) => error.instancePath === '/organizationId')).toBe(true);
   });
 });
+
+describe('canonical.v1.intake participant (#1318)', () => {
+  // canonical.v1.participant takes clinicalUnitId and consentTemplateId for
+  // ingestion; the intake keeps its organization and template elsewhere.
+  it('canonical.v1.participant accepts a clinicalUnitId and a consentTemplateId', () => {
+    const { valid, errors } = validate('canonical.v1.participant', { participantId: 'p1', clinicalUnitId: 'org-1', consentTemplateId: 'tpl-1' });
+
+    expect(errors).toEqual([]);
+    expect(valid).toBe(true);
+  });
+
+  it.each(['clinicalUnitId', 'consentTemplateId'])('rejects an intake whose participant carries %s', (field) => {
+    const { valid } = validate('canonical.v1.intake', { ...baseIntake, participant: { participantId: 'p1', [field]: 'x-1' } });
+
+    expect(valid).toBe(false);
+  });
+});

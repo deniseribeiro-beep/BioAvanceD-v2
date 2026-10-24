@@ -15,6 +15,8 @@ import {
   countDataQualityAssessmentsByScope,
   findIngestionRefusalRows,
   countAccessDenialRows,
+  ingestionDb,
+  deleteIngestedParticipants,
   closeIngestionDb,
 } from './helpers/queryIngestion';
 import {
@@ -24,6 +26,7 @@ import {
   seedStudy,
   seedProtocol,
   seedActiveConsent,
+  seedActiveConsentTemplate,
   closeSeedDb,
   type SeededStorageBox,
 } from './helpers/seedParticipant';
@@ -87,11 +90,14 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
   // #1318: what the Assay cases seed for their references.
   const seededStorageBoxes: SeededStorageBox[] = [];
   const organizationIdsToDelete: string[] = [];
+  const participantIdsToDelete: string[] = [];
 
   test.afterAll(async ({ request }) => {
     await Promise.all(
       seededStorageBoxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {}))
     );
+    // Before the organizations their clinicalUnitId names.
+    await deleteIngestedParticipants(participantIdsToDelete);
     await deleteOrganizations(request, apiBaseURL!, organizationIdsToDelete);
     await closeSeedDb();
     await closeIngestionDb();
@@ -450,6 +456,82 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
     const record = await findIngestionQuarantineRecord(body.ingestionQuarantineRecordId);
     expect(record?.violations?.map((v: { code: string }) => v.code)).toEqual(['CONSENT_NOT_ACTIVE']);
     expect(await countIngestedBySourceRecordId('samples', sourceRecordId)).toBe(0);
+  });
+
+  // #1318: a Participant runs the participant mount's clinical unit and
+  // consent template gates against real records: an organization the admin's
+  // global scope holds, and the shared consent template, which is never
+  // removed because every spec upserts it.
+  async function seedParticipantReferences(request: APIRequestContext) {
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const consentTemplateId = await seedActiveConsentTemplate(await ingestionDb());
+
+    const officialName = `RF029 Unit ${suffix}`;
+    const orgRes = await request.post(`${apiBaseURL}/api/organizations`, {
+      headers: auth,
+      data: { officialName, acronym: 'RF029', organizationType: 'biobank', countryCode: 'BR' },
+    });
+    expect(orgRes.status(), await orgRes.text()).toBe(201);
+    const organizationId = (await orgRes.json()).data.organizationId;
+    organizationIdsToDelete.push(organizationId);
+
+    return { officialName, payload: { participantId: 'client-claimed', sex: 'F', clinicalUnitId: organizationId, consentTemplateId } };
+  }
+
+  test('#1318: an accepted Participant is stored in patients with a server participantId, PENDING_CONSENT, its clinical unit, its outbox event and one INGESTION_ACCEPTED row', async ({ request }) => {
+    const sourceRecordId = `rf029-e2e-${Date.now()}-participant`;
+    const { officialName, payload } = await seedParticipantReferences(request);
+
+    const res = await ingest(request, { entityType: 'Participant', payload, provenance: provenance(sourceRecordId) });
+
+    expect(res.status(), await res.text()).toBe(201);
+    const body = await res.json();
+    participantIdsToDelete.push(body.entityId);
+    expect(body).toMatchObject({ success: true, status: 'accepted', entityType: 'Participant', missingDataReasons: [] });
+    expect(body.entityId).toMatch(/^[1-9]\d{7}$/);
+
+    const stored = await findIngestedRecord('patients', 'participantId', body.entityId);
+    expect(stored).toMatchObject({
+      createdBy: `Actor/${admin.user._id}`,
+      sourceRecordId,
+      sex: 'F',
+      status: 'PENDING_CONSENT',
+      clinicalUnitId: payload.clinicalUnitId,
+      clinicalUnit: officialName,
+      unitAcronym: 'RF029',
+      consentTemplateId: payload.consentTemplateId,
+    });
+    expect(stored).not.toHaveProperty('patientName');
+
+    const events = await findOutboxEvents(body.entityId);
+    expect(events).toHaveLength(1);
+    expect(events[0].aggregateType).toBe('Participant');
+
+    expect(await findMissingDataReasons('Participant', body.entityId)).toEqual([]);
+
+    const rows = await findIngestionAuditRows('INGESTION_ACCEPTED', body.entityId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].resourceType).toBe('Participant');
+  });
+
+  test('#1318 #575: a Participant carrying patientName answers 422 INGESTION_STORE_UNSUPPORTED, persists nothing, and audits no name', async ({ request }) => {
+    const sourceRecordId = `rf029-e2e-${Date.now()}-participant-identity`;
+    const patientName = `RF029 e2e civil name ${Date.now()}`;
+    const { payload } = await seedParticipantReferences(request);
+
+    const res = await ingest(request, { entityType: 'Participant', payload: { ...payload, patientName }, provenance: provenance(sourceRecordId) });
+
+    expect(res.status(), await res.text()).toBe(422);
+    const body = await res.json();
+    expect(body).toMatchObject({ success: false, error: 'INGESTION_STORE_UNSUPPORTED' });
+    expect(body.details).toEqual([expect.stringContaining('patientName')]);
+    expect(JSON.stringify(body)).not.toContain(patientName);
+
+    expect(await countIngestedBySourceRecordId('patients', sourceRecordId)).toBe(0);
+    expect(await countIngestedBySourceRecordId('ingestionQuarantineRecords', sourceRecordId)).toBe(0);
+    const refusals = await findIngestionRefusalRows('Participant');
+    expect(refusals.length).toBeGreaterThan(0);
+    expect(JSON.stringify(refusals)).not.toContain(patientName);
   });
 
   test('a quarantined record retried with the same key answers 422 again and writes no second quarantine record', async ({ request }) => {

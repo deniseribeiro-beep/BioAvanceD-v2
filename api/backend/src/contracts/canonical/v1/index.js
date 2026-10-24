@@ -17,7 +17,11 @@ const participantSchema = {
     phone: { type: 'string' },
     identityDocument: { type: 'string' },
     recordNumber: { type: 'string' },
-    isDeceased: { type: 'boolean' }
+    isDeceased: { type: 'boolean' },
+    // The participant's clinical unit, a Reference(Organization) and its tenancy key (#1353).
+    clinicalUnitId: { type: 'string', minLength: 1 },
+    // The consent template PatientModel.validate requires (#1318).
+    consentTemplateId: { type: 'string', minLength: 1 }
   },
   required: ['participantId']
 };
@@ -481,7 +485,13 @@ const intakeSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    participant: { $ref: 'canonical.v1.participant' },
+    // The intake takes its organization from organizationId and its template
+    // from consent, so its participant still refuses both (#1318).
+    participant: {
+      type: 'object',
+      allOf: [{ $ref: 'canonical.v1.participant' }],
+      properties: { clinicalUnitId: false, consentTemplateId: false }
+    },
     legalRepresentative: {
       anyOf: [
         { type: 'null' },

@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest';
 const { INGESTION_TARGETS, resolveIngestionTarget } = require('../../../src/ingestion/ingestionTargets');
 
 describe('ingestion/ingestionTargets (RF029, #1318)', () => {
-  it('names exactly the Dataset, WorkflowRun, OmicsQualification, Assay, OmicsRun and Specimen targets, frozen', () => {
-    expect(Object.keys(INGESTION_TARGETS)).toEqual(['Dataset', 'WorkflowRun', 'OmicsQualification', 'Assay', 'OmicsRun', 'Specimen']);
+  it('names exactly the Dataset, WorkflowRun, OmicsQualification, Assay, OmicsRun, Specimen and Participant targets, frozen', () => {
+    expect(Object.keys(INGESTION_TARGETS)).toEqual(['Dataset', 'WorkflowRun', 'OmicsQualification', 'Assay', 'OmicsRun', 'Specimen', 'Participant']);
     expect(Object.isFrozen(INGESTION_TARGETS)).toBe(true);
     expect(resolveIngestionTarget('Dataset')).toMatchObject({ schemaId: 'canonical.v1.dataset', store: 'mongodb', collection: 'datasets', idField: 'datasetId' });
     expect(resolveIngestionTarget('WorkflowRun')).toMatchObject({ schemaId: 'canonical.v1.workflow', store: 'mongodb', collection: 'workflowRuns', idField: 'workflowRunId' });
@@ -11,6 +11,7 @@ describe('ingestion/ingestionTargets (RF029, #1318)', () => {
     expect(resolveIngestionTarget('Assay')).toMatchObject({ schemaId: 'canonical.v1.assay', store: 'mongodb', collection: 'assays', idField: 'assayId' });
     expect(resolveIngestionTarget('OmicsRun')).toMatchObject({ schemaId: 'canonical.v1.omicsRun', store: 'mongodb', collection: 'omicsRuns', idField: 'omicsRunId' });
     expect(resolveIngestionTarget('Specimen')).toMatchObject({ schemaId: 'canonical.v1.specimen', store: 'mongodb', collection: 'samples', idField: 'specimenId' });
+    expect(resolveIngestionTarget('Participant')).toMatchObject({ schemaId: 'canonical.v1.participant', store: 'mongodb', collection: 'patients', idField: 'participantId' });
     expect(typeof resolveIngestionTarget('Dataset').model.validate).toBe('function');
   });
 
@@ -27,6 +28,8 @@ describe('ingestion/ingestionTargets (RF029, #1318)', () => {
     expect(Object.isFrozen(INGESTION_TARGETS.OmicsRun.missingnessFields)).toBe(true);
     expect(INGESTION_TARGETS.Specimen.missingnessFields).toEqual(['barcode', 'linkedProject', 'parentSpecimenIds', 'merkleRoot', 'sprec']);
     expect(Object.isFrozen(INGESTION_TARGETS.Specimen.missingnessFields)).toBe(true);
+    expect(INGESTION_TARGETS.Participant.missingnessFields).toEqual([]);
+    expect(Object.isFrozen(INGESTION_TARGETS.Participant.missingnessFields)).toBe(true);
   });
 
   it('names the OmicsRun modalities whose v2 entity is stored in Object Storage, frozen (RF029 AC4)', () => {
@@ -34,25 +37,28 @@ describe('ingestion/ingestionTargets (RF029, #1318)', () => {
     expect(otherStore).toEqual({ field: 'modality', values: ['transcriptomics', 'proteomics', 'metabolomics'], store: 'objectStorage' });
     expect(Object.isFrozen(otherStore)).toBe(true);
     expect(Object.isFrozen(otherStore.values)).toBe(true);
-    for (const entityType of ['Dataset', 'WorkflowRun', 'OmicsQualification', 'Assay', 'Specimen']) {
+    for (const entityType of ['Dataset', 'WorkflowRun', 'OmicsQualification', 'Assay', 'Specimen', 'Participant']) {
       expect(INGESTION_TARGETS[entityType]).not.toHaveProperty('otherStore');
     }
   });
 
-  it('gives Assay and Specimen alone their master mount\'s reference check and scope field (#1182, #1219)', () => {
+  it('gives Assay, Specimen and Participant alone their master mount\'s reference check and scope field (#1182, #1219)', () => {
     const { validateAssayReferences } = require('../../../src/services/assayReferenceValidator');
     const { validateSpecimenReferences } = require('../../../src/ingestion/specimenTarget');
+    const { validateParticipantReferences } = require('../../../src/ingestion/participantTarget');
     expect(INGESTION_TARGETS.Assay.validateReferences).toBe(validateAssayReferences);
     expect(INGESTION_TARGETS.Assay.scopeField).toBe('laboratoryId');
     expect(INGESTION_TARGETS.Specimen.validateReferences).toBe(validateSpecimenReferences);
     expect(INGESTION_TARGETS.Specimen.scopeField).toBe('collectionSite');
+    expect(INGESTION_TARGETS.Participant.validateReferences).toBe(validateParticipantReferences);
+    expect(INGESTION_TARGETS.Participant.scopeField).toBe('clinicalUnitId');
     for (const entityType of ['Dataset', 'WorkflowRun', 'OmicsQualification', 'OmicsRun']) {
       expect(INGESTION_TARGETS[entityType]).not.toHaveProperty('validateReferences');
       expect(INGESTION_TARGETS[entityType]).not.toHaveProperty('scopeField');
     }
   });
 
-  it('gives Specimen alone the sample model, a stamped organizationId, the mount\'s id and its graph projection (#1192, #1313)', () => {
+  it('gives Specimen the sample model, a stamped organizationId, the mount\'s id and, alone, its graph projection (#1192, #1313)', () => {
     const { SampleModel } = require('../../../src/models/Sample');
     const { generateSpecimenId, appendSpecimenProjection } = require('../../../src/ingestion/specimenTarget');
     expect(Object.keys(INGESTION_TARGETS.Specimen)).toEqual(['schemaId', 'store', 'collection', 'idField', 'model', 'missingnessFields', 'validateReferences', 'scopeField', 'organizationField', 'generateId', 'appendProjection']);
@@ -64,7 +70,30 @@ describe('ingestion/ingestionTargets (RF029, #1318)', () => {
     for (const entityType of ['Dataset', 'WorkflowRun', 'OmicsQualification', 'Assay', 'OmicsRun']) {
       expect(INGESTION_TARGETS[entityType]).not.toHaveProperty('organizationField');
       expect(INGESTION_TARGETS[entityType]).not.toHaveProperty('generateId');
+    }
+    for (const entityType of ['Dataset', 'WorkflowRun', 'OmicsQualification', 'Assay', 'OmicsRun', 'Participant']) {
       expect(INGESTION_TARGETS[entityType]).not.toHaveProperty('appendProjection');
+    }
+  });
+
+  it('gives Participant the participant model, a stamped clinicalUnitId, the mount\'s 8-digit id and no graph projection', () => {
+    const PatientModel = require('../../../src/models/Patient');
+    const { generateParticipantId } = require('../../../src/ingestion/participantTarget');
+    expect(Object.keys(INGESTION_TARGETS.Participant)).toEqual(['schemaId', 'store', 'collection', 'idField', 'model', 'missingnessFields', 'validateReferences', 'scopeField', 'organizationField', 'generateId', 'identityFields']);
+    expect(Object.isFrozen(INGESTION_TARGETS.Participant)).toBe(true);
+    expect(INGESTION_TARGETS.Participant.model).toBe(PatientModel);
+    expect(INGESTION_TARGETS.Participant.organizationField).toBe('clinicalUnitId');
+    expect(INGESTION_TARGETS.Participant.generateId).toBe(generateParticipantId);
+  });
+
+  it('gives Participant alone the civil identity fields it refuses, the union of the two identity lists, frozen', () => {
+    const { LEGACY_PATIENT_IDENTITY_FIELDS, PARTICIPANT_IDENTITY_ONLY_FIELDS } = require('../../../src/utils/legacyPatientIdentityFields');
+    const { identityFields } = INGESTION_TARGETS.Participant;
+    expect(identityFields).toEqual([...LEGACY_PATIENT_IDENTITY_FIELDS, ...PARTICIPANT_IDENTITY_ONLY_FIELDS]);
+    expect([...identityFields].sort()).toEqual(['birthDate', 'email', 'identityDocument', 'patientName', 'phone', 'recordNumber', 'representativeEmail', 'representativeIdentityDocument', 'representativeName', 'representativePhone']);
+    expect(Object.isFrozen(identityFields)).toBe(true);
+    for (const entityType of ['Dataset', 'WorkflowRun', 'OmicsQualification', 'Assay', 'OmicsRun', 'Specimen']) {
+      expect(INGESTION_TARGETS[entityType]).not.toHaveProperty('identityFields');
     }
   });
 

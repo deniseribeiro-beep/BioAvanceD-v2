@@ -971,4 +971,146 @@ describe('ingestion/productionIngestion ingestAndPersist (RF029, #1318)', () => 
       .toEqual([['INGESTION_RECORD_PERSISTED', winner.entityId], ['SPECIMEN_UPSERTED', String(docs[0]._id)]]);
     expect(db.collections.missingDataReasons.docs.every((r) => r.entityId === winner.entityId)).toBe(true);
   });
+
+  // #1318: Participant, the seventh target, runs the participant mount's
+  // clinical unit, deceased and consent template gates (participantTarget.js)
+  // and #1182 scope on clinicalUnitId, and refuses a record carrying civil
+  // identity, which lives on ParticipantIdentity alone (#575).
+  // consent_templates is a matching collection: its _id is an ObjectId.
+  const TEMPLATE_HEX = '64b7f0c2a1b2c3d4e5f60718';
+  const PARTICIPANT_RECORD = { participantId: 'client-claimed', sex: 'F', clinicalUnitId: 'org-unit-1', consentTemplateId: TEMPLATE_HEX };
+
+  function participantDb({ templates = null } = {}) {
+    const { ObjectId } = require('mongodb');
+    const db = seededDb();
+    db.collection('organizations').docs.push({ organizationId: 'org-unit-1', officialName: 'Hospital Central', acronym: 'HC' });
+    db.collections.consent_templates = createMatchingCollection(templates || [{ _id: new ObjectId(TEMPLATE_HEX), title: 'TCLE' }]);
+    return db;
+  }
+
+  function ingestParticipant(db, overrides = {}) {
+    return ingest(db, { entityType: 'Participant', payload: PARTICIPANT_RECORD, resolveOrganizationScope: GLOBAL_SCOPE, ...overrides });
+  }
+
+  function expectNothingWritten(db) {
+    expect(db.collections.patients.docs).toHaveLength(0);
+    expect(db.collections.ingestionQuarantineRecords.docs).toHaveLength(0);
+    expect(db.collections.ingestionIdempotencyKeys.docs).toHaveLength(0);
+    expect(db.collections.missingDataReasons.docs).toHaveLength(0);
+    expect(db.collections.dataQualityAssessments.docs).toHaveLength(0);
+  }
+
+  it('45. an accepted Participant lands in patients with an 8-digit server participantId, PENDING_CONSENT, the unit\'s snapshot, its outbox event and no MissingDataReason row', async () => {
+    const db = participantDb();
+    const outbox = fakeOutbox();
+
+    const result = await ingestParticipant(db, { outbox });
+
+    expect(result).toMatchObject({ status: 'accepted', entityType: 'Participant', outboxEventId: 'evt-1', missingDataReasons: [] });
+    expect(result.entityId).toMatch(/^[1-9]\d{7}$/);
+    const docs = db.collections.patients.docs;
+    expect(docs).toHaveLength(1);
+    expect(docs[0]).toMatchObject({
+      participantId: result.entityId,
+      sex: 'F',
+      status: 'PENDING_CONSENT',
+      isDeceased: false,
+      clinicalUnitId: 'org-unit-1',
+      clinicalUnit: 'Hospital Central',
+      unitAcronym: 'HC',
+      consentTemplateId: TEMPLATE_HEX,
+      consentTokenHash: null,
+      createdBy: 'Actor/u-1',
+      sourceRecordId: 'LIMS-DS-42',
+      canonicalModelReleaseId: 'release-2.0.0',
+      configurationReleaseId: 'cfg-release-7',
+    });
+    expect(outbox.appendEvent.mock.calls.map(([, event]) => [event.eventType, event.aggregateType, event.aggregateId]))
+      .toEqual([['INGESTION_RECORD_PERSISTED', 'Participant', result.entityId]]);
+    expect(db.collections.missingDataReasons.docs).toHaveLength(0);
+    expect(db.collections.dataQualityAssessments.docs.map((d) => [d.scopeId, d.status])).toEqual([[`Participant/${result.entityId}`, 'passed']]);
+  });
+
+  it.each([
+    ['an unknown clinicalUnitId', { clinicalUnitId: 'org-other' }, {}, 'REFERENCE_NOT_FOUND'],
+    ['a deceased participant', { isDeceased: true }, {}, 'DECEASED_REPRESENTATIVE_REQUIRED'],
+    ['an unknown consentTemplateId', {}, { templates: [] }, 'REFERENCE_NOT_FOUND'],
+    ['a consentTemplateId that is not an ObjectId', { consentTemplateId: 'tcle-1' }, {}, 'REFERENCE_NOT_FOUND'],
+  ])('46. a Participant with %s quarantines with its violation code and writes nothing to patients', async (_label, change, dbOptions, code) => {
+    const db = participantDb(dbOptions);
+    const outbox = fakeOutbox();
+
+    const result = await ingestParticipant(db, { outbox, payload: { ...PARTICIPANT_RECORD, ...change } });
+
+    expect(result.status).toBe('quarantined');
+    expect(result.violations).toEqual([expect.objectContaining({ code, field: null })]);
+    expect(db.collections.patients.docs).toHaveLength(0);
+    expect(outbox.appendEvent).not.toHaveBeenCalled();
+  });
+
+  it('47. a Participant declaring a MissingDataReason quarantines with MISSING_REASON_FIELD_NOT_APPLICABLE: no field takes one', async () => {
+    const db = participantDb();
+
+    const result = await ingestParticipant(db, { missingDataReasons: [{ fieldPath: 'isDeceased', reasonCode: 'unknown' }] });
+
+    expect(result.status).toBe('quarantined');
+    expect(result.violations.map((v) => v.code)).toEqual(['MISSING_REASON_FIELD_NOT_APPLICABLE']);
+  });
+
+  it.each([
+    ['patientName', { patientName: 'Maria Silva' }, ['patientName'], 'Maria Silva'],
+    ['email null', { email: null }, ['email'], null],
+    ['recordNumber', { recordNumber: 'PRONT-0042' }, ['recordNumber'], 'PRONT-0042'],
+    ['an empty birthDate and a representativeName', { birthDate: '', representativeName: 'José Souza' }, ['birthDate', 'representativeName'], 'José Souza'],
+  ])('48. a Participant carrying %s is refused 422 INGESTION_STORE_UNSUPPORTED, naming the fields and never their values, and writes nothing', async (_label, identity, fields, value) => {
+    const db = participantDb();
+    const outbox = fakeOutbox();
+
+    const error = await ingestParticipant(db, { outbox, payload: { ...PARTICIPANT_RECORD, ...identity }, idempotencyKey: 'participant-key-1' }).catch((e) => e);
+
+    expect(error).toMatchObject({ statusCode: 422, code: 'INGESTION_STORE_UNSUPPORTED', canonicalModelReleaseId: 'release-2.0.0', configurationReleaseId: 'cfg-release-7' });
+    expect(error.details).toEqual([`Participant com ${fields.join(', ')}: identidade civil é armazenada em ParticipantIdentity, não suportado pela ingestão`]);
+    if (value) expect(error.message).not.toContain(value);
+    expectNothingWritten(db);
+    expect(outbox.appendEvent).not.toHaveBeenCalled();
+  });
+
+  it('49. an identity-bearing Participant is refused even under a key already recorded, never replayed', async () => {
+    const db = participantDb();
+    const first = await ingestParticipant(db, { idempotencyKey: 'participant-key-1' });
+    expect(first.status).toBe('accepted');
+
+    const error = await ingestParticipant(db, { payload: { ...PARTICIPANT_RECORD, patientName: 'Maria Silva' }, idempotencyKey: 'participant-key-1' }).catch((e) => e);
+
+    expect(error).toMatchObject({ statusCode: 422, code: 'INGESTION_STORE_UNSUPPORTED' });
+    expect(db.collections.patients.docs.map((d) => d.participantId)).toEqual([first.entityId]);
+    expect(db.collections.patients.docs[0]).not.toHaveProperty('patientName');
+  });
+
+  it.each(['organizations', 'consent_templates'])('50. a Participant whose %s lookup fails rejects, and writes no participant, quarantine record or idempotency key', async (collection) => {
+    const db = participantDb();
+    const outage = new Error('connection reset');
+    db.collection(collection).findOne = async () => { throw outage; };
+    const outbox = fakeOutbox();
+
+    await expect(ingestParticipant(db, { outbox, idempotencyKey: 'participant-key-1' })).rejects.toBe(outage);
+
+    expectNothingWritten(db);
+    expect(outbox.appendEvent).not.toHaveBeenCalled();
+  });
+
+  const { clinicalUnitId: _clinicalUnitId, ...PARTICIPANT_WITHOUT_UNIT } = PARTICIPANT_RECORD;
+  it.each([
+    ['an organization caller outside the clinicalUnitId', { resolveOrganizationScope: orgScope('org-other') }],
+    ['a global caller sending no clinicalUnitId', { payload: PARTICIPANT_WITHOUT_UNIT }],
+  ])('51. %s is refused 403 INGESTION_OUT_OF_SCOPE and writes nothing (#1182)', async (_label, overrides) => {
+    const db = participantDb();
+    const outbox = fakeOutbox();
+
+    const error = await ingestParticipant(db, { outbox, ...overrides }).catch((e) => e);
+
+    expect(error).toMatchObject({ statusCode: 403, code: 'INGESTION_OUT_OF_SCOPE' });
+    expectNothingWritten(db);
+    expect(outbox.appendEvent).not.toHaveBeenCalled();
+  });
 });

@@ -44,17 +44,30 @@ export async function findIngestionIdempotencyKey(idempotencyKey: string, scope:
   return db.collection('ingestionIdempotencyKeys').findOne({ idempotencyKey, scope });
 }
 
-export async function findIngestedRecord(collection: 'datasets' | 'workflowRuns' | 'omicsQualifications' | 'assays' | 'omicsRuns' | 'samples', idField: string, id: string): Promise<any> {
+export async function findIngestedRecord(collection: 'datasets' | 'workflowRuns' | 'omicsQualifications' | 'assays' | 'omicsRuns' | 'samples' | 'patients', idField: string, id: string): Promise<any> {
   const db = await getDb();
   return db.collection(collection).findOne({ [idField]: id });
 }
 
 export async function countIngestedBySourceRecordId(
-  collection: 'datasets' | 'workflowRuns' | 'omicsQualifications' | 'assays' | 'omicsRuns' | 'samples' | 'ingestionQuarantineRecords',
+  collection: 'datasets' | 'workflowRuns' | 'omicsQualifications' | 'assays' | 'omicsRuns' | 'samples' | 'patients' | 'ingestionQuarantineRecords',
   sourceRecordId: string
 ): Promise<number> {
   const db = await getDb();
   return db.collection(collection).countDocuments({ sourceRecordId });
+}
+
+// #1318: the shared database handle, for a seed helper that takes a Db
+// (seedParticipant.ts seedActiveConsentTemplate).
+export async function ingestionDb(): Promise<Db> {
+  return getDb();
+}
+
+// #1318: removes the participants a case ingested, which no API deletes.
+export async function deleteIngestedParticipants(participantIds: string[]): Promise<void> {
+  if (participantIds.length === 0) return;
+  const db = await getDb();
+  await db.collection('patients').deleteMany({ participantId: { $in: participantIds } });
 }
 
 export async function findOutboxEvents(aggregateId: string): Promise<any[]> {
