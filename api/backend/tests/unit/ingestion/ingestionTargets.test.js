@@ -130,16 +130,35 @@ describe('ingestion/ingestionTargets (RF029, #1318)', () => {
   );
 
   it('names TelemetryReading as an InfluxDB entity type with its telemetry route, frozen, and not as a target (RF029 AC4)', () => {
-    expect(Object.keys(OTHER_STORE_ENTITY_TYPES)).toEqual(['TelemetryReading']);
+    expect(Object.keys(OTHER_STORE_ENTITY_TYPES)).toEqual(['TelemetryReading', 'DataFile', 'DataFileVersion']);
     expect(Object.isFrozen(OTHER_STORE_ENTITY_TYPES)).toBe(true);
     const entry = resolveOtherStoreEntityType('TelemetryReading');
-    expect(entry).toEqual({ store: 'influxdb', route: 'POST /api/temperature/reading' });
+    expect(entry).toEqual({ store: 'influxdb', route: 'POST /api/temperature/reading', record: 'a leitura' });
     expect(Object.isFrozen(entry)).toBe(true);
     expect(INGESTION_TARGETS).not.toHaveProperty('TelemetryReading');
     expect(resolveIngestionTarget('TelemetryReading')).toBeNull();
   });
 
-  it.each(['Telemetry', 'dataset', '', undefined, null, '__proto__', 'toString', 'constructor', 'hasOwnProperty'])(
+  it.each([
+    ['DataFile', {
+      store: 'objectStorage',
+      route: 'POST /api/samples/:specimenId/files/upload, POST /api/assays/:assayId/files/upload ou POST /api/datasets/:datasetId/files/upload',
+      record: 'o arquivo',
+    }],
+    ['DataFileVersion', {
+      store: 'objectStorage',
+      route: 'PUT /api/samples/:specimenId/files/:fileID/replace, PUT /api/assays/:assayId/files/:fileID/replace ou PUT /api/datasets/:datasetId/files/:fileID/replace',
+      record: 'a nova versão do arquivo',
+    }],
+  ])('names %s as an Object Storage entity type with its trusted file routes, frozen, and not as a target (RF007 AC2, RF029 AC4)', (entityType, expected) => {
+    const entry = resolveOtherStoreEntityType(entityType);
+    expect(entry).toEqual(expected);
+    expect(Object.isFrozen(entry)).toBe(true);
+    expect(INGESTION_TARGETS).not.toHaveProperty(entityType);
+    expect(resolveIngestionTarget(entityType)).toBeNull();
+  });
+
+  it.each(['Telemetry', 'dataset', 'SampleFile', 'dataFile', 'DataFileVersions', '', undefined, null, '__proto__', 'toString', 'constructor', 'hasOwnProperty'])(
     'resolves %s to no other-store entity type',
     (entityType) => {
       expect(resolveOtherStoreEntityType(entityType)).toBeNull();

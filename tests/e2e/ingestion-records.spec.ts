@@ -304,6 +304,25 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
     expect(rows.every((row) => row.payload.canonicalModelReleaseId === CANONICAL_MODEL_RELEASE_ID)).toBe(true);
   });
 
+  test('#1318 RF029 AC4: a DataFile, an Object Storage binary, is refused 422 INGESTION_STORE_UNSUPPORTED naming the trusted upload routes, persists nothing, and writes one INGESTION_REFUSED row', async ({ request }) => {
+    const sourceRecordId = `rf029-e2e-${Date.now()}-data-file`;
+    // A delta, not an absolute: the stack's logs persist across runs.
+    const before = (await findIngestionRefusalRows('DataFile')).length;
+
+    const payload = { fileUri: 'objstore://rf029-e2e/data-file/sha256/ab', checksum: 'ab', fileSizeBytes: 10 };
+    const res = await ingest(request, { entityType: 'DataFile', payload, provenance: provenance(sourceRecordId) });
+
+    expect(res.status(), await res.text()).toBe(422);
+    const body = await res.json();
+    expect(body.error).toBe('INGESTION_STORE_UNSUPPORTED');
+    expect(body.details).toEqual([expect.stringContaining('Object Storage')]);
+    expect(await countIngestedBySourceRecordId('ingestionQuarantineRecords', sourceRecordId)).toBe(0);
+
+    // The route awaits this row before it answers.
+    const rows = await findIngestionRefusalRows('DataFile');
+    expect(rows).toHaveLength(before + 1);
+  });
+
   // #1318: an Assay's references resolve against real records (#664), so its
   // specimen, study, protocol and laboratory are seeded as
   // specimen-quality-inventory.spec.ts seeds an assay's, by the admin, whose

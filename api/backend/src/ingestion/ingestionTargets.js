@@ -59,9 +59,16 @@
  * TelemetryReading is named, not a target (OTHER_STORE_ENTITY_TYPES): its
  * store is InfluxDB (RF029 AC4), a quarantine would write its fields to
  * MongoDB, and the route's transaction has no InfluxDB part. It is refused
- * 422 INGESTION_STORE_UNSUPPORTED naming the telemetry route
+ * 422 INGESTION_STORE_UNSUPPORTED naming the telemetry route, and each entry's
+ * `record` is the noun the refusal tells the caller to register there
  * (docs/decisions/2026-10-24-ingestion-telemetry-reading-refused.md).
- * Binaries are still absent.
+ *
+ * DataFile and DataFileVersion are named the same way: their binary's store
+ * is Object Storage (RF007 AC2, RF029 AC4), and this route carries no bytes,
+ * so a row written from the payload would claim a URI, checksum and size for
+ * an object the server never received. Each is refused naming the trusted
+ * upload or replace routes, which scan, encrypt and write the object
+ * (docs/decisions/2026-10-24-ingestion-data-file-refused.md).
  */
 const { CANONICAL_COLLECTIONS } = require('../config/collections');
 const { LEGACY_PATIENT_IDENTITY_FIELDS, PARTICIPANT_IDENTITY_ONLY_FIELDS } = require('../utils/legacyPatientIdentityFields');
@@ -169,7 +176,17 @@ function resolveIngestionTarget(entityType) {
 // RF029 AC4: entity types stored outside MongoDB, each with the trusted
 // route that does write it. The ingestion route refuses them by name.
 const OTHER_STORE_ENTITY_TYPES = Object.freeze({
-  TelemetryReading: Object.freeze({ store: 'influxdb', route: 'POST /api/temperature/reading' }),
+  TelemetryReading: Object.freeze({ store: 'influxdb', route: 'POST /api/temperature/reading', record: 'a leitura' }),
+  DataFile: Object.freeze({
+    store: 'objectStorage',
+    route: 'POST /api/samples/:specimenId/files/upload, POST /api/assays/:assayId/files/upload ou POST /api/datasets/:datasetId/files/upload',
+    record: 'o arquivo',
+  }),
+  DataFileVersion: Object.freeze({
+    store: 'objectStorage',
+    route: 'PUT /api/samples/:specimenId/files/:fileID/replace, PUT /api/assays/:assayId/files/:fileID/replace ou PUT /api/datasets/:datasetId/files/:fileID/replace',
+    record: 'a nova versão do arquivo',
+  }),
 });
 
 /** The other-store entry for `entityType`, or null, by the same own-property check. */

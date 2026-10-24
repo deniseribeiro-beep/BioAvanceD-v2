@@ -1390,4 +1390,47 @@ describe('ingestion/productionIngestion ingestAndPersist (RF029, #1318)', () => 
     expect(db.collections.ingestionQuarantineRecords.docs).toHaveLength(0);
     expect(outbox.appendEvent).not.toHaveBeenCalled();
   });
+
+  const FILE_METADATA = { fileUri: 'objstore://x/y/sha256/ab', checksum: 'ab', fileSizeBytes: 10 };
+
+  it.each([
+    ['DataFile', 'an empty', {}],
+    ['DataFile', 'a schema-shaped', FILE_METADATA],
+    ['DataFileVersion', 'an empty', {}],
+    ['DataFileVersion', 'a schema-shaped', FILE_METADATA],
+  ])('62. a %s with %s payload, an Object Storage binary, is refused 422 INGESTION_STORE_UNSUPPORTED naming the trusted file routes, and writes nothing (RF007 AC2, RF029 AC4)', async (entityType, _label, payload) => {
+    const db = seededDb();
+    const outbox = fakeOutbox();
+
+    const error = await ingest(db, { outbox, entityType, payload, idempotencyKey: 'file-key-1' }).catch((e) => e);
+
+    expect(error).toMatchObject({
+      statusCode: 422,
+      code: 'INGESTION_STORE_UNSUPPORTED',
+      details: [expect.stringMatching(/^DataFile(Version)? tem seu binário no Object Storage.*(POST|PUT) \/api\/samples\//)],
+      canonicalModelReleaseId: 'release-2.0.0',
+      configurationReleaseId: 'cfg-release-7',
+    });
+    expect(error.details[0].startsWith(`${entityType} `)).toBe(true);
+    expect(error.details[0]).not.toContain('objstore://');
+    for (const [name, collection] of Object.entries(db.collections)) {
+      if (name === 'canonicalModelReleases' || name === 'security_config') continue;
+      expect(collection.docs, name).toHaveLength(0);
+    }
+    expect(outbox.appendEvent).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['DataFile', 'missing', null],
+    ['DataFile', 'retired', { canonicalModelReleaseId: 'release-2.0.0', releaseStatus: 'retired' }],
+    ['DataFileVersion', 'missing', null],
+    ['DataFileVersion', 'retired', { canonicalModelReleaseId: 'release-2.0.0', releaseStatus: 'retired' }],
+  ])('63. a %s under a %s CanonicalModelRelease throws 503, not the store refusal', async (entityType, _label, release) => {
+    const db = seededDb({ release });
+    const outbox = fakeOutbox();
+
+    await expect(ingest(db, { outbox, entityType, payload: FILE_METADATA })).rejects.toMatchObject({ statusCode: 503, code: 'CANONICAL_RELEASE_NOT_ACTIVE' });
+    expect(db.collections.ingestionQuarantineRecords.docs).toHaveLength(0);
+    expect(outbox.appendEvent).not.toHaveBeenCalled();
+  });
 });

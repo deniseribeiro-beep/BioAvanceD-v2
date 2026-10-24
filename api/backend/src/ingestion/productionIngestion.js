@@ -32,8 +32,11 @@ function ingestionError(statusCode, code, message) {
   return error;
 }
 
-// The store names an other-store refusal states.
-const STORE_NAMES = Object.freeze({ influxdb: 'InfluxDB' });
+// What an other-store refusal states of the entity, per store.
+const STORE_PHRASES = Object.freeze({
+  influxdb: 'é armazenado no InfluxDB',
+  objectStorage: 'tem seu binário no Object Storage',
+});
 
 // CFG-004, read as accessRequest.service.js's activeConfigurationReleaseId
 // reads it: null before any release exists.
@@ -184,7 +187,7 @@ async function ingestAndPersist({
     // neither payload nor key and writing nothing, so none of its fields
     // reaches MongoDB.
     if (otherStore) {
-      throw ingestionError(422, 'INGESTION_STORE_UNSUPPORTED', `${entityType} é armazenado no ${STORE_NAMES[otherStore.store]}, não suportado pela ingestão; registre a leitura por ${otherStore.route}`);
+      throw ingestionError(422, 'INGESTION_STORE_UNSUPPORTED', `${entityType} ${STORE_PHRASES[otherStore.store]}, não suportado pela ingestão; registre ${otherStore.record} por ${otherStore.route}`);
     }
     return await ingestUnderRelease({ db, target, entityType, payload, provenance, idempotencyKey, missingDataReasons, actorId, outbox, releases, resolveOrganizationScope });
   } catch (error) {
