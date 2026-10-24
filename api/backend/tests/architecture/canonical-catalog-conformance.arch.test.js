@@ -221,10 +221,7 @@ const KNOWN_DRIFT = {
       { elementId: 'P1X-0070', field: 'evidenceRefs', note: 'TODO(#1320): 0..* Essencial -- not emitted.' },
       { elementId: 'P1X-0071', field: 'calculationStatus', note: 'TODO(#1320): 1..1 Core -- code emits calculationTrace (extra below), a free-form value, not this canonical status field.' },
       { elementId: 'V2E-0440', field: 'intendedUseCode', note: 'TODO(#1320): 1..1 Core -- held as qualificationContext.intendedUseCode, as the v2.0.0 synthetic example (biobankExample.rcsAssessments[0]) nests it; null until a request carries a context.' },
-      { elementId: 'V2E-0441', field: 'targetAnalyte', note: 'TODO(#1320): 1..1 Core -- held as qualificationContext.targetAnalyte, as the v2.0.0 synthetic example (biobankExample.rcsAssessments[0]) nests it; null until a request carries a context.' },
-      { elementId: 'V2E-0442', field: 'assayFamily', note: 'TODO(#1320): 1..1 Core -- held as qualificationContext.assayFamily, as the v2.0.0 synthetic example (biobankExample.rcsAssessments[0]) nests it; null until a request carries a context.' },
-      { elementId: 'V2E-0443', field: 'workflowProtocolId', note: 'TODO(#1320): 1..1 Core -- held as qualificationContext.workflowProtocolId, as the v2.0.0 synthetic example (biobankExample.rcsAssessments[0]) nests it; null until a request carries a context.' },
-      { elementId: 'V2E-0444', field: 'workflowProtocolVersion', note: 'TODO(#1320): 1..1 Core -- held as qualificationContext.workflowProtocolVersion, as the v2.0.0 synthetic example (biobankExample.rcsAssessments[0]) nests it; null until a request carries a context.' }
+      { elementId: 'V2E-0441', field: 'targetAnalyte', note: 'TODO(#1320): 1..1 Core -- held as qualificationContext.targetAnalyte, as the v2.0.0 synthetic example (biobankExample.rcsAssessments[0]) nests it; null until a request carries a context.' }
     ],
     extra: [
       { key: 'modelVersion', note: 'TODO(#1320): no canonical counterpart; likely predecessor of rcsModelVersion (ELM-0161, absent above).' },

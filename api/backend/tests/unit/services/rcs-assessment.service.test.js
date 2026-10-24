@@ -510,6 +510,25 @@ describe('rcs-assessment.service', () => {
       expect(assessment.sprecVersion).toBe(certified().calculation_trace.sprec_version);
     });
 
+    // RF018 AC2 (#1320): the context's assay family and workflow protocol, top-level (V2E-0442..0444).
+    it('writes the context assay family and workflow protocol top-level beside qualificationContext', async () => {
+      const qualificationContext = {
+        intendedUseCode: 'research-sequencing', targetAnalyte: 'cfDNA', assayFamily: 'sequencing',
+        workflowProtocolId: 'p1', workflowProtocolVersion: '1.0',
+      };
+      const assessment = await recordAssessment(createFakeDb(), 'SPEC-1', { ...certified(), qualification_context: { ...qualificationContext } });
+      expect(assessment.qualificationContext).toEqual(qualificationContext);
+      expect(assessment.assayFamily).toBe(qualificationContext.assayFamily);
+      expect(assessment.workflowProtocolId).toBe(qualificationContext.workflowProtocolId);
+      expect(assessment.workflowProtocolVersion).toBe(qualificationContext.workflowProtocolVersion);
+    });
+
+    it('writes null for the three fields on a result with no qualification_context', async () => {
+      const assessment = await recordAssessment(createFakeDb(), 'SPEC-1', certified());
+      expect(assessment.qualificationContext).toBeNull();
+      expect(assessment).toMatchObject({ assayFamily: null, workflowProtocolId: null, workflowProtocolVersion: null });
+    });
+
     // RF018 (#1320): the penalty and score are the result's own p_bio and rcs_score (V2E-0539, V2E-0540).
     it('writes the result p_bio and rcs_score as preanalyticalPenalty and score', async () => {
       const result = certified();

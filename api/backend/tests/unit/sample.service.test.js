@@ -1371,6 +1371,10 @@ describe('sample.service', () => {
 
         expect(db.collections.rcsAssessments.insertOne).toHaveBeenCalledTimes(1);
         expect(db.collections.rcsAssessments.insertOne.mock.calls[0][0].qualificationContext).toEqual(qualificationContext);
+        const inserted = db.collections.rcsAssessments.insertOne.mock.calls[0][0];
+        expect(inserted.assayFamily).toBe(qualificationContext.assayFamily);
+        expect(inserted.workflowProtocolId).toBe(qualificationContext.workflowProtocolId);
+        expect(inserted.workflowProtocolVersion).toBe(qualificationContext.workflowProtocolVersion);
       });
 
       it('does not fail sample creation when recording the RcsAssessment snapshot rejects', async () => {

@@ -171,6 +171,50 @@ describe('RcsAssessmentModel sprecVersion (V2E-0448)', () => {
   });
 });
 
+// RF018 AC2 (#1320): the context's assay family and workflow protocol, top-level beside qualificationContext.
+describe('RcsAssessmentModel assayFamily, workflowProtocolId and workflowProtocolVersion (V2E-0442..0444)', () => {
+  const none = { assayFamily: null, workflowProtocolId: null, workflowProtocolVersion: null };
+
+  it('defaults the three fields to null and keeps given values', () => {
+    expect(RcsAssessmentModel.fieldsOf({})).toMatchObject(none);
+    const given = { assayFamily: 'sequencing', workflowProtocolId: 'p1', workflowProtocolVersion: '1.0' };
+    expect(RcsAssessmentModel.fieldsOf(given)).toMatchObject(given);
+  });
+
+  it('fromCertificationResult takes the three fields from the result qualification_context', () => {
+    const context = {
+      intendedUseCode: 'research-sequencing', targetAnalyte: 'cfDNA', assayFamily: 'sequencing',
+      workflowProtocolId: 'p1', workflowProtocolVersion: '1.0',
+    };
+    const doc = RcsAssessmentModel.fromCertificationResult('SPEC-1', { qualification_context: context });
+    expect(doc).toMatchObject({ assayFamily: 'sequencing', workflowProtocolId: 'p1', workflowProtocolVersion: '1.0' });
+    expect(doc.qualificationContext).toBe(context);
+
+    const assayFamily = { coding: [{ code: 'NGS' }] };
+    const coded = RcsAssessmentModel.fromCertificationResult('SPEC-1', { qualification_context: { ...context, assayFamily } });
+    expect(coded.assayFamily).toBe(assayFamily);
+    expect(coded.assayFamily).toBe(coded.qualificationContext.assayFamily);
+  });
+
+  it('fromCertificationResult gives null with no context or a null field', () => {
+    for (const result of [{}, { qualification_context: null }]) {
+      expect(RcsAssessmentModel.fromCertificationResult('SPEC-1', result)).toMatchObject(none);
+    }
+    const doc = RcsAssessmentModel.fromCertificationResult('SPEC-1', {
+      qualification_context: { intendedUseCode: 'x', targetAnalyte: 'y', assayFamily: null, workflowProtocolId: 'p1', workflowProtocolVersion: '1.0' },
+    });
+    expect(doc.assayFamily).toBeNull();
+    expect(doc.workflowProtocolId).toBe('p1');
+  });
+
+  it('takes the context over refs, as the other result-derived keys do', () => {
+    const refs = { assayFamily: 'refs-family', workflowProtocolId: 'refs-p', workflowProtocolVersion: '9.9' };
+    expect(RcsAssessmentModel.fromCertificationResult('SPEC-1', {}, refs)).toMatchObject(none);
+    const context = { assayFamily: 'sequencing', workflowProtocolId: 'p1', workflowProtocolVersion: '1.0' };
+    expect(RcsAssessmentModel.fromCertificationResult('SPEC-1', { qualification_context: context }, refs)).toMatchObject(context);
+  });
+});
+
 // RF018 (#1320): the result's own P_bio and score, never computed here.
 describe('RcsAssessmentModel preanalyticalPenalty and score (V2E-0539, V2E-0540)', () => {
   it('default to null and keep given values', () => {
