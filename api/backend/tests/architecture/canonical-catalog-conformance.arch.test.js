@@ -127,6 +127,7 @@ const ENTITY_TARGETS = {
   RCSInputSnapshot: () => require('../../src/models/RcsInputSnapshot').fieldsOf(),
   RCSPreanalyticalAxisInput: () => require('../../src/models/RcsPreanalyticalAxisInput').fieldsOf(),
   RCSGovernanceEvidenceSnapshot: () => require('../../src/models/RcsGovernanceEvidenceSnapshot').fieldsOf(),
+  RCSRulePackage: () => require('../../src/models/RcsRulePackage').fieldsOf(),
 };
 
 // Drift measured against catalog.1.3.0.json, 2026-09-02, and re-measured
