@@ -2,7 +2,9 @@
 // stageBundle maps Patient, Specimen, Consent, Condition and Observation onto
 // the staged record's `normalized` fields; this module names, as paths only,
 // the FHIR elements no such field carries and the resources no record
-// attaches, and declares the losses a path list cannot show. It mirrors the
+// attaches, and declares the losses a path list cannot show. Provenance,
+// AuditEvent, DocumentReference and ResearchStudy are mapped by
+// import-mappings.js, not unattached. It mirrors the
 // reads of fhir-import-staging.service.js (normalizeSpecimen and its helpers)
 // and must change with them. It carries no value, id or extension url from a
 // resource: the staged record's `fhir` and `normalized` are sealed at rest,
@@ -245,8 +247,10 @@ function buildRecordRoundTripLoss(fhir = {}, cache = null) {
 }
 
 // The batch's loss: each Bundle resource (its index among the entries'
-// resources) that no staged record attaches.
-function buildBundleRoundTripLoss(resources = [], records = []) {
+// resources) that no staged record attaches. A resource in `mapped` (the Set
+// stageMappedResources returns: a Provenance, AuditEvent, DocumentReference
+// or ResearchStudy) is mapped, not unattached.
+function buildBundleRoundTripLoss(resources = [], records = [], mapped = null) {
   const attached = new Set();
   asArray(records).forEach((record) => {
     const fhir = record?.fhir || {};
@@ -257,6 +261,7 @@ function buildBundleRoundTripLoss(resources = [], records = []) {
   const unattached = [];
   asArray(resources).forEach((resource, resourceIndex) => {
     if (attached.has(resource)) return;
+    if (mapped instanceof Set && mapped.has(resource)) return;
     const resourceType = isPlainObject(resource) && resource.resourceType != null ? String(resource.resourceType) : null;
     unattached.push({ resourceIndex, resourceType });
   });
@@ -266,6 +271,7 @@ function buildBundleRoundTripLoss(resources = [], records = []) {
 
 module.exports = {
   MAX_UNMAPPED_PATHS,
+  leafPaths,
   ROUND_TRIP_LIMITATIONS,
   buildRecordRoundTripLoss,
   buildBundleRoundTripLoss,

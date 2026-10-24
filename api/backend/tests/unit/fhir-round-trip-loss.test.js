@@ -226,4 +226,18 @@ describe('buildBundleRoundTripLoss (RF011 AC6, #1322)', () => {
       ],
     });
   });
+
+  it('leaves out a resource in the mapped set and keeps the Organization', () => {
+    const { patient, specimen } = fixture();
+    const organization = { resourceType: 'Organization', name: 'Biobanco' };
+    const provenance = { resourceType: 'Provenance', id: 'WR-1' };
+    const study = { resourceType: 'ResearchStudy', id: 'ST-1' };
+    const resources = [patient, provenance, organization, specimen, study];
+    const records = [{ fhir: { patient, specimen, consents: [], conditions: [], observations: [] } }];
+
+    expect(buildBundleRoundTripLoss(resources, records, new Set([provenance, study]))).toEqual({
+      unattachedResourceCount: 1,
+      unattached: [{ resourceIndex: 2, resourceType: 'Organization' }],
+    });
+  });
 });

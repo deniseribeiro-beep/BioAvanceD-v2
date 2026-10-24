@@ -319,6 +319,75 @@ describe('FHIR import staging', () => {
     expect(result.records[0].roundTripLoss).toMatchObject(expectedRecordLoss);
   });
 
+  // RF011 AC4 (#1322): a Provenance and a ResearchStudy are mapped on the
+  // batch as field names and paths only, and are not unattached.
+  it('registra mappedResources no batch para Provenance e ResearchStudy, sem valores, e não os lista como não anexados', async () => {
+    const bundle = {
+      resourceType: 'Bundle',
+      entry: [
+        {
+          resource: {
+            resourceType: 'Patient',
+            id: 'P-RT',
+            name: [{ text: 'Paciente Round Trip' }],
+            identifier: [{ value: 'DOC-RT' }],
+            telecom: [{ system: 'email', value: 'rt@example.org' }],
+          },
+        },
+        { resource: { resourceType: 'Organization', name: 'Biobanco RT' } },
+        {
+          resource: {
+            resourceType: 'Specimen',
+            id: 'S-RT',
+            subject: { reference: 'Patient/P-RT' },
+            type: { text: 'SANGUE' },
+            collection: { quantity: { value: 5, unit: 'mL' } },
+          },
+        },
+        {
+          resource: {
+            resourceType: 'Provenance',
+            id: 'WR-PROVENIENCIA-RT',
+            target: [{ reference: 'DocumentReference/F-RT' }],
+            recorded: '2026-10-01T09:00:00.000Z',
+          },
+        },
+        {
+          resource: {
+            resourceType: 'ResearchStudy',
+            id: 'ST-RT',
+            title: 'Estudo Titulo Distintivo RT',
+            status: 'active',
+          },
+        },
+      ],
+    };
+
+    const result = await fhirImportStagingService.stageBundle(db, bundle, { fileName: 'mapped.json' });
+
+    expect(result.batch.roundTripLoss).toEqual({
+      unattachedResourceCount: 1,
+      unattached: [{ resourceIndex: 1, resourceType: 'Organization' }],
+    });
+    expect(result.batch.mappedResources).toMatchObject({
+      mappedResourceCount: 2,
+      truncated: false,
+      mappedResources: [
+        { resourceIndex: 3, resourceType: 'Provenance', mappingId: 'MAP-V2-008', canonicalEntity: 'WorkflowRun', canonicalFields: ['createdAt', 'outputFileIds', 'workflowRunId'], unmappedCount: 0 },
+        { resourceIndex: 4, resourceType: 'ResearchStudy', mappingId: 'MAP-V2-009', canonicalEntity: 'Study', canonicalFields: ['studyId', 'studyStatus', 'studyTitle'], unmappedCount: 0 },
+      ],
+    });
+    const serialized = JSON.stringify(result.batch.mappedResources);
+    expect(serialized).not.toContain('Estudo Titulo Distintivo RT');
+    expect(serialized).not.toContain('WR-PROVENIENCIA-RT');
+    const stored = db.collections.import_batches.docs[0];
+    expect(stored.mappedResources).toEqual(result.batch.mappedResources);
+    expect(stored.roundTripLoss).toEqual(result.batch.roundTripLoss);
+    expect(result.records).toHaveLength(1);
+    expect(db.collections.import_staging_records.docs).toHaveLength(1);
+    expect(result.batch.counts.total).toBe(1);
+  });
+
   // #1322: a large Bundle stores a bounded roundTripLoss on each staged record.
   it('limita roundTripLoss a 50 caminhos por registro num Bundle com 2000 Observations', async () => {
     const observations = Array.from({ length: 2000 }, (_, i) => ({

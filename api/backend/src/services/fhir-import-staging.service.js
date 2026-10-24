@@ -15,6 +15,7 @@ const rcsAssessmentService = require('./rcs-assessment.service');
 const specimenPreanalyticsService = require('./specimen-preanalytics.service');
 const { isRecordInOrganizationScope } = require('./rbac-assignment.service');
 const { buildRecordRoundTripLoss, buildBundleRoundTripLoss } = require('../resources/fhir/round-trip-loss');
+const { stageMappedResources } = require('../resources/fhir/import-mappings');
 
 const STATUS = Object.freeze({
   VALID: 'VALID',
@@ -628,6 +629,7 @@ async function stageBundle(db, payload, metadata = {}) {
   }
 
   const bundleIndex = buildBundleIndex(resources);
+  const { report: mappedResources, mapped } = stageMappedResources(resources);
   const records = bundleIndex.specimens.map((specimen, index) => normalizeSpecimen(specimen, index, bundleIndex));
   if (records.length === 0) {
     throw createBadRequest('Bundle FHIR não contém Specimen para staging.');
@@ -645,8 +647,12 @@ async function stageBundle(db, payload, metadata = {}) {
     counts: summarize(records),
     createdBy: metadata.userID || null,
     organizationId,
-    // RF011 AC6, RNF024 C6 (#1322): the Bundle resources no record attaches.
-    roundTripLoss: buildBundleRoundTripLoss(resources, records),
+    // RF011 AC4 (#1322): the Provenance, AuditEvent, DocumentReference and
+    // ResearchStudy resources mapped, as field names and paths only.
+    mappedResources,
+    // RF011 AC6, RNF024 C6 (#1322): the Bundle resources no record attaches
+    // and no mapping reads.
+    roundTripLoss: buildBundleRoundTripLoss(resources, records, mapped),
     createdAt: now,
     updatedAt: now,
   };

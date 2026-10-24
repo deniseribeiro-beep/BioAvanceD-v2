@@ -324,6 +324,8 @@ module.exports = {
   toFhirResearchStudy,
   EXPORT_ROUND_TRIP_LIMITATIONS,
   EXPORT_MAPPINGS,
+  RESEARCH_STUDY_STATUSES,
+  PROVENANCE_PARTICIPANT_TYPE,
   toFhirExportBundle,
   buildFhirExport,
   validateFHIRResource(resource) {
