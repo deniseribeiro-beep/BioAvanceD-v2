@@ -20,4 +20,4 @@ BiomarkerAssociation (ELM-0275..0285) is stored at `/api/biomarker-associations`
 
 - **Retiring `disease_dictionary`'s other reads**: phenotypes, `name`, `disease_category` and `drug_classes`.
 - **Whether `SampleGraphValidator` ever reads BiomarkerAssociation**: no RF requires it (#1206).
-- **The frontend** screen that enters BiomarkerAssociation.
+- **The frontend** screen that enters it: decided in `2026-10-24-biomarker-association-entry-screen.md` (#1402).

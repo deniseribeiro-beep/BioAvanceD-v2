@@ -134,6 +134,8 @@ const ROUTE_ACCESS: ReadonlyArray<readonly [string, readonly RoleName[]]> = [
   // #1375: revoking a consent and reading its history -- the backend's
   // requireRole(3, 4).
   ['/consents', ADMIN_COORD],
+  // #1402: entering BiomarkerAssociation rows -- the backend's requireRole(3, 4).
+  ['/biomarker-associations', ADMIN_COORD],
 
   // Imports — all three surfaces declare the same staff roles on their routes.
   ['/import', STAFF],

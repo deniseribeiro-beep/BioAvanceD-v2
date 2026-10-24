@@ -29,6 +29,7 @@ import {
   ReportTemplate,
   AccessRequest,
   AccessCheck,
+  BiomarkerAssociation,
 } from '../types/models';
 import { clearClientSession } from '../utils/sessionCleanup';
 
@@ -765,6 +766,16 @@ export const extractionProtocolService = {
   getAll: () => api.get<ApiEnvelope<any[]>>('/extraction-protocols'),
   getById: (id: string) => api.get<any>(`/extraction-protocols/${id}`),
   create: (data: Partial<any>) => api.post<any>('/extraction-protocols', data),
+};
+
+// ========== BIOMARKER ASSOCIATION SERVICES ==========
+// ELM-0275..0285 (#1402): the mount's idField is biomarkerId, which the PUT
+// matches and never writes. No delete: the screen only creates and edits.
+export const biomarkerAssociationService = {
+  getAll: () => api.get<ApiEnvelope<BiomarkerAssociation[]>>('/biomarker-associations'),
+  create: (data: Partial<BiomarkerAssociation>) => api.post<ApiEnvelope<BiomarkerAssociation>>('/biomarker-associations', data),
+  update: (biomarkerId: string, data: Partial<BiomarkerAssociation>) =>
+    api.put<ApiEnvelope<BiomarkerAssociation>>(`/biomarker-associations/${encodeURIComponent(biomarkerId)}`, data),
 };
 
 // ========== LOG SERVICES ==========

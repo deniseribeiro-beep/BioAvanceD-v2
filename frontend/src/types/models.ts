@@ -1136,3 +1136,36 @@ export interface AccessCheck {
   allowed: boolean;
   reason: string;
 }
+
+// ELM-0275..0285 (#1402): BiomarkerAssociation reference data. A Coding is
+// the {systemUri, code, version, display} shape the backend model stores.
+export interface Coding {
+  systemUri: string;
+  code: string;
+  version?: string;
+  display?: string;
+}
+
+export interface BiomarkerEvidenceReference {
+  system: 'DOI' | 'PMID';
+  value: string;
+}
+
+export type BiomarkerRole = 'diagnostic' | 'prognostic' | 'risk' | 'safety' | 'monitoring' | 'response';
+
+export interface BiomarkerAssociation {
+  _id?: string;
+  biomarkerId: string;
+  analyte: Coding;
+  associatedCondition: Coding[];
+  biomarkerRole: BiomarkerRole;
+  contextOfUse: string;
+  evidenceReferences: BiomarkerEvidenceReference[];
+  biospecimenMatrix?: unknown;
+  assayMethod?: unknown;
+  cutoff?: unknown;
+  evidenceLevel?: unknown;
+  regulatoryStatus?: unknown;
+  createdAt?: string;
+  updatedAt?: string;
+}

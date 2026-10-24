@@ -15,5 +15,5 @@ Dictionary ELM-0275. Issue #1402.
 
 ## Not decided here
 
-- **The frontend** screen that enters a BiomarkerAssociation.
+- **The frontend** screen that enters it: decided in `2026-10-24-biomarker-association-entry-screen.md` (#1402).
 - **Deduplicating rows already stored**: a stack already holding duplicate `biomarkerId` rows fails this build, which the Foundation job reports as `ok: false`; no migration is decided.

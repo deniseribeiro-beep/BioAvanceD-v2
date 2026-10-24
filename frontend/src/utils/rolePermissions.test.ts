@@ -48,6 +48,14 @@ describe('canRoleAccessRoute — the restrictive blocks still hold', () => {
     expect(canRoleAccessRoute('Usuário Externo', '/consents')).toBe(false);
   });
 
+  // #1402: the BiomarkerAssociation entry screen matches the backend's requireRole(3, 4).
+  it('grants /biomarker-associations to Administrador and Coordenador only', () => {
+    expect(canRoleAccessRoute('Administrador', '/biomarker-associations')).toBe(true);
+    expect(canRoleAccessRoute('Coordenador', '/biomarker-associations')).toBe(true);
+    expect(canRoleAccessRoute('Técnico', '/biomarker-associations')).toBe(false);
+    expect(canRoleAccessRoute('Usuário Externo', '/biomarker-associations')).toBe(false);
+  });
+
   // #1239: /logs follows the backend's audit-reader rule, which is not a base
   // role, so the role map defers to ProtectedRoute's requireAuditReader.
   it('defers /logs to the audit-reader guard rather than a base role', () => {
