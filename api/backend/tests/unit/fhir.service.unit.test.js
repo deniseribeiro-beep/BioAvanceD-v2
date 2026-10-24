@@ -486,3 +486,86 @@ describe('FHIRService.EXPORT_ROUND_TRIP_LIMITATIONS', () => {
     });
   });
 });
+
+describe('FHIRService.buildFhirExport', () => {
+  const GENERATED_AT = '2026-10-24T12:00:00.000Z';
+  const EXPECTED = [
+    ['Provenance', 'MAP-V2-008', 'WorkflowRun'],
+    ['AuditEvent', 'MAP-V2-006', 'AuditEvent'],
+    ['DocumentReference', 'MAP-V2-007', 'DataFile'],
+    ['ResearchStudy', 'MAP-V2-009', 'Study'],
+  ];
+
+  it('maps exactly the four exported resource types, frozen', () => {
+    const table = fhirService.EXPORT_MAPPINGS;
+    expect(Object.isFrozen(table)).toBe(true);
+    expect(Object.keys(table).sort()).toEqual(Object.keys(fhirService.EXPORT_ROUND_TRIP_LIMITATIONS).sort());
+    Object.values(table).forEach((mapping) => expect(Object.isFrozen(mapping)).toBe(true));
+  });
+
+  for (const [resourceType, mappingId, canonicalEntity] of EXPECTED) {
+    it(`${resourceType}: carries ${mappingId}, no release, no conformance claim`, () => {
+      const result = fhirService.buildFhirExport(resourceType, [{ resourceType, id: 'r-1' }], { generatedAt: GENERATED_AT });
+
+      expect(result).toMatchObject({ standard: 'HL7 FHIR', fhirVersion: '4.0.1', generatedAt: GENERATED_AT });
+      expect(result.mapping).toEqual({
+        mappingId, canonicalEntity, target: resourceType, relationship: 'partial', status: 'prepared Phase 1',
+      });
+      expect(result.mappingReleaseId).toBeNull();
+      expect(result.conformanceClaimed).toBe(false);
+    });
+
+    it(`${resourceType}: carries its own round-trip limitations and no other type's`, () => {
+      const result = fhirService.buildFhirExport(resourceType, [{ resourceType, id: 'r-1' }], { generatedAt: GENERATED_AT });
+      const table = fhirService.EXPORT_ROUND_TRIP_LIMITATIONS;
+
+      expect(result.roundTripLimitations).toEqual([...table[resourceType]]);
+      Object.keys(table).filter((other) => other !== resourceType).forEach((other) => {
+        expect(result.roundTripLimitations).not.toEqual([...table[other]]);
+      });
+    });
+  }
+
+  it('wraps the resources in a collection Bundle stamped generatedAt, entries without fullUrl', () => {
+    const resources = [{ resourceType: 'ResearchStudy', id: 's-1' }, { resourceType: 'ResearchStudy', id: 's-2' }];
+
+    const { bundle } = fhirService.buildFhirExport('ResearchStudy', resources, { generatedAt: GENERATED_AT });
+
+    expect(bundle).toEqual({
+      resourceType: 'Bundle',
+      type: 'collection',
+      timestamp: GENERATED_AT,
+      entry: [{ resource: resources[0] }, { resource: resources[1] }],
+    });
+    expect(bundle).not.toHaveProperty('id');
+    bundle.entry.forEach((entry) => expect(entry).not.toHaveProperty('fullUrl'));
+  });
+
+  it('returns a copy of the mapping and limitations, not the frozen tables', () => {
+    const result = fhirService.buildFhirExport('Provenance', [{ resourceType: 'Provenance', id: 'r-1' }], { generatedAt: GENERATED_AT });
+
+    expect(result.mapping).not.toBe(fhirService.EXPORT_MAPPINGS.Provenance);
+    expect(result.roundTripLimitations).not.toBe(fhirService.EXPORT_ROUND_TRIP_LIMITATIONS.Provenance);
+  });
+
+  it('throws on an unmapped resource type', () => {
+    expect(() => fhirService.buildFhirExport('Patient', [{ resourceType: 'Patient', id: 'p-1' }]))
+      .toThrow('Exportação FHIR não mapeada: Patient');
+  });
+
+  it('throws on an inherited key such as toString', () => {
+    expect(() => fhirService.buildFhirExport('toString', [{ resourceType: 'toString', id: 'x' }]))
+      .toThrow('Exportação FHIR não mapeada: toString');
+  });
+
+  it('throws on an empty or non-array resource list', () => {
+    expect(() => fhirService.buildFhirExport('Provenance', [])).toThrow('Bundle FHIR sem recursos');
+    expect(() => fhirService.buildFhirExport('Provenance', { resourceType: 'Provenance' })).toThrow('Bundle FHIR sem recursos');
+    expect(() => fhirService.toFhirExportBundle(undefined)).toThrow('Bundle FHIR sem recursos');
+  });
+
+  it('throws on a resource of another type', () => {
+    const resources = [{ resourceType: 'Provenance', id: 'r-1' }, { resourceType: 'AuditEvent', id: 'e-1' }];
+    expect(() => fhirService.buildFhirExport('Provenance', resources)).toThrow('Recurso FHIR diferente de Provenance');
+  });
+});

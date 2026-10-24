@@ -420,6 +420,10 @@ app.use("/api/collections", createMasterDataRouter({
 // national extensions and its round-trip loss report. Mounted before
 // /api/biobanks so its GET /:id does not take the path.
 app.use("/api/biobanks/miabis", require("./src/interface/routes/miabis-export.routes"));
+// RF011 AC4 (#1322): a sample file as a FHIR DocumentReference, behind the sample-file FHIR export's gates.
+app.use("/api/export/fhir/samples/:specimenId/files/:fileID", require("./src/interface/routes/fhir-document-reference-export.routes"));
+// RF011 AC4 (#1322): a WorkflowRun, a Study and an audit event as FHIR Provenance, ResearchStudy and AuditEvent.
+app.use("/api/export/fhir", require("./src/interface/routes/fhir-export.routes"));
 // RF020 AC1 (#1322): Network and Biobank, entered by a Coordenador or
 // Administrador; the MIABIS export reads them.
 app.use("/api/biobanks", createMasterDataRouter({

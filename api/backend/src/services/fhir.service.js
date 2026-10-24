@@ -267,6 +267,51 @@ function toFhirResearchStudy(researchStudy) {
   };
 }
 
+// RF011 AC4 (#1322): the envelope /api/export/fhir answers. MAP-V2-006..009
+// read prepared Phase 1, and no approved InteroperabilityMappingRelease is
+// stored, so no release is named and no conformance is claimed (RF011
+// AC5/AC6), as in the MIABIS export. Pure like the transforms (RF011 AC7).
+// See docs/decisions/2026-10-24-fhir-export-route-and-bundle.md.
+const EXPORT_MAPPINGS = Object.freeze({
+  Provenance: Object.freeze({ mappingId: 'MAP-V2-008', canonicalEntity: 'WorkflowRun', target: 'Provenance', relationship: 'partial', status: 'prepared Phase 1' }),
+  AuditEvent: Object.freeze({ mappingId: 'MAP-V2-006', canonicalEntity: 'AuditEvent', target: 'AuditEvent', relationship: 'partial', status: 'prepared Phase 1' }),
+  DocumentReference: Object.freeze({ mappingId: 'MAP-V2-007', canonicalEntity: 'DataFile', target: 'DocumentReference', relationship: 'partial', status: 'prepared Phase 1' }),
+  ResearchStudy: Object.freeze({ mappingId: 'MAP-V2-009', canonicalEntity: 'Study', target: 'ResearchStudy', relationship: 'partial', status: 'prepared Phase 1' }),
+});
+
+// A `collection` Bundle: no `fullUrl` (0..1 in R4, and no base URL is
+// governed yet) and no Bundle `id`.
+function toFhirExportBundle(resources, { generatedAt } = {}) {
+  if (!Array.isArray(resources) || resources.length === 0) {
+    throw new Error('Bundle FHIR sem recursos');
+  }
+  return {
+    resourceType: 'Bundle',
+    type: 'collection',
+    timestamp: generatedAt,
+    entry: resources.map((resource) => ({ resource })),
+  };
+}
+
+function buildFhirExport(resourceType, resources, { generatedAt } = {}) {
+  if (!Object.hasOwn(EXPORT_MAPPINGS, resourceType)) {
+    throw new Error(`Exportação FHIR não mapeada: ${resourceType}`);
+  }
+  if (Array.isArray(resources) && resources.some((resource) => resource?.resourceType !== resourceType)) {
+    throw new Error(`Recurso FHIR diferente de ${resourceType}`);
+  }
+  return {
+    standard: 'HL7 FHIR',
+    fhirVersion: '4.0.1',
+    mapping: { ...EXPORT_MAPPINGS[resourceType] },
+    mappingReleaseId: null,
+    conformanceClaimed: false,
+    generatedAt,
+    roundTripLimitations: [...EXPORT_ROUND_TRIP_LIMITATIONS[resourceType]],
+    bundle: toFhirExportBundle(resources, { generatedAt }),
+  };
+}
+
 module.exports = {
   toFhirPatient,
   toFhirSpecimen,
@@ -278,6 +323,9 @@ module.exports = {
   toFhirDocumentReference,
   toFhirResearchStudy,
   EXPORT_ROUND_TRIP_LIMITATIONS,
+  EXPORT_MAPPINGS,
+  toFhirExportBundle,
+  buildFhirExport,
   validateFHIRResource(resource) {
     if (!resource?.resourceType || !resource?.id) {
       throw new Error('Recurso FHIR inválido');
