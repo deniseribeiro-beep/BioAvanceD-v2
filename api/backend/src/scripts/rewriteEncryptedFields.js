@@ -28,9 +28,12 @@
  * rather than overwritten.
  *
  * File binaries (fileCrypto.js) are encrypted under the same key, with the
- * key id on their metadata row as `encryptionKeyId`. They are not rewritten
- * here, but every collection is counted for rows under another key, so the
- * verdict below covers them.
+ * key id on their metadata row as `encryptionKeyId`. A DataFile binary held
+ * in the object store, and each DataFileVersion binary, is re-encrypted
+ * through services/fileBinaryRewrite.service.js (#1321). Other file rows
+ * (legacy disk rows, backups, import source files) are still only counted:
+ * every collection is counted for rows under another key, so the verdict
+ * below covers them.
  *
  * Usage, from api/backend:
  *   npm run encryption:rewrite              dry run: counts, writes nothing
@@ -49,6 +52,7 @@ const { encryptValue, decryptValue } = require('../utils/fieldEncryption');
 const keyRegistry = require('../config/keyRegistry');
 const { ENCRYPTED_FIELD_REGISTRY } = require('../utils/encryptedFieldRegistry');
 const participantIdentityService = require('../services/participantIdentity.service');
+const { rewriteFileBinaries } = require('../services/fileBinaryRewrite.service');
 
 function isEnvelope(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -160,7 +164,7 @@ async function countFileRowsUnderOtherKey(db, activeKeyId) {
   return counts;
 }
 
-async function rewriteEncryptedFields(db, { apply = false, all = false, registry = ENCRYPTED_FIELD_REGISTRY } = {}) {
+async function rewriteEncryptedFields(db, { apply = false, all = false, registry = ENCRYPTED_FIELD_REGISTRY, objectStore } = {}) {
   if (!keyRegistry.getActiveKey()) {
     throw new Error('ENCRYPTION_KEY nao configurada: nada a reescrever sob uma chave ativa.');
   }
@@ -171,6 +175,7 @@ async function rewriteEncryptedFields(db, { apply = false, all = false, registry
     const label = entry.collectionKey || entry.collectionName;
     fields[label] = await rewriteEntry(db, entry, { apply, all, activeKeyId });
   }
+  const files = await rewriteFileBinaries(db, { apply, all, activeKeyId, objectStore });
   const fileRowsUnderOtherKey = await countFileRowsUnderOtherKey(db, activeKeyId);
 
   // Only a plain dry run can say the slot is safe: its candidates are
@@ -181,6 +186,7 @@ async function rewriteEncryptedFields(db, { apply = false, all = false, registry
     mode: apply ? 'apply' : 'dry-run',
     activeKeyId,
     fields,
+    files,
     fileRowsUnderOtherKey,
     safeToEmptyPreviousSlot: !apply && !all && nothingLeft && Object.keys(fileRowsUnderOtherKey).length === 0,
   };
@@ -191,6 +197,7 @@ async function run(argv = process.argv.slice(2)) {
   const summary = await rewriteEncryptedFields(db, { apply: argv.includes('--apply'), all: argv.includes('--all') });
   console.log(JSON.stringify(summary, null, 2));
   if (Object.values(summary.fields).some((s) => s.unreadable > 0)) process.exitCode = 1;
+  if (Object.values(summary.files).some((s) => s.unreadable > 0 || s.objectMissing > 0)) process.exitCode = 1;
   return summary;
 }
 

@@ -69,8 +69,9 @@ function getPreviousKeyId() {
  * birthDateHash sao casados sob TODA chave registrada, entao um valor
  * indexado antes da rotacao deixa de casar, e uma identidade nao casada
  * gera participante DUPLICADO em vez de erro. A simulacao tambem conta
- * linhas de arquivo (encryptionKeyId) sob a chave antiga, que a reescrita
- * nao recifra.
+ * linhas de arquivo (encryptionKeyId) sob a chave antiga: a reescrita
+ * recifra os binarios de DataFile guardados no Object Storage e ainda so
+ * conta as demais linhas de arquivo.
  */
 function getKeyEntries() {
   const entries = [];

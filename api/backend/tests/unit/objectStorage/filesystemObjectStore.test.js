@@ -71,6 +71,27 @@ describe('createFilesystemObjectStore (RF007 AC2, RNF016 C4)', () => {
     expect((await store.getObject(stored.uri)).equals(body)).toBe(true);
   });
 
+  // #1321: the key-rotation rewrite puts under the owner segment of a stored URI.
+  it('puts under a given owner segment as is, an x- segment included', async () => {
+    const owner = ownerSegment('a b');
+    const body = Buffer.from('rewritten under its owner');
+
+    const stored = await store.putObject({ area: 'assays', owner, body });
+
+    expect(stored.uri).toBe(`objstore://assays/${owner}/sha256/${sha256Hex(body)}`);
+    expect(stored.uri.split('/')[3]).not.toBe(ownerSegment(owner));
+    expect((await store.getObject(stored.uri)).equals(body)).toBe(true);
+  });
+
+  it('refuses an owner outside the plain pattern, or given with an ownerKey', async () => {
+    const body = Buffer.from('x');
+    for (const args of [{ owner: '../x' }, { owner: 'a.b' }, { owner: 'o', ownerKey: 'o' }]) {
+      await expect(store.putObject({ area: 'samples', body, ...args })).rejects.toMatchObject({ code: 'OBJECT_KEY_INVALID' });
+    }
+
+    expect(fs.readdirSync(root)).toEqual([]);
+  });
+
   it('reuses the existing object for a second put of the same bytes', async () => {
     const body = Buffer.from('same bytes');
 

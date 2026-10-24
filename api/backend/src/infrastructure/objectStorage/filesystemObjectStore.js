@@ -47,6 +47,21 @@ function ownerSegment(ownerKey) {
   return `${MAPPED_OWNER_PREFIX}${sha256Hex(ownerKey)}`;
 }
 
+// #1321: a put names its owner either as an ownerKey, mapped by ownerSegment,
+// or as an `owner` segment already mapped and taken from a stored URI, which
+// the key-rotation rewrite writes under again. A given segment must pass the
+// test getObject applies, and is never mapped a second time.
+function resolveOwnerSegment({ ownerKey, owner } = {}) {
+  if (owner === undefined) return ownerSegment(ownerKey);
+  if (ownerKey !== undefined) {
+    throw storeError('OBJECT_KEY_INVALID', 'Informe ownerKey ou owner para o Object Storage, não ambos.');
+  }
+  if (!isValidSegment(owner) || !PLAIN_OWNER_PATTERN.test(owner)) {
+    throw storeError('OBJECT_KEY_INVALID', `owner inválido para o Object Storage: ${owner}.`);
+  }
+  return owner;
+}
+
 function removeQuietly(filePath) {
   try {
     fs.unlinkSync(filePath);
@@ -76,9 +91,9 @@ function createFilesystemObjectStore({ root }) {
     }
   }
 
-  async function putObject({ area, ownerKey, body } = {}) {
+  async function putObject({ area, ownerKey, owner: givenOwner, body } = {}) {
     assertSegment('area', area);
-    const owner = ownerSegment(ownerKey);
+    const owner = resolveOwnerSegment({ ownerKey, owner: givenOwner });
     if (!Buffer.isBuffer(body)) {
       throw storeError('OBJECT_KEY_INVALID', 'O corpo do objeto deve ser um Buffer.');
     }
@@ -125,6 +140,7 @@ function createFilesystemObjectStore({ root }) {
 module.exports = {
   createFilesystemObjectStore,
   ownerSegment,
+  resolveOwnerSegment,
   isValidSegment,
   assertSegment,
   sha256Hex,

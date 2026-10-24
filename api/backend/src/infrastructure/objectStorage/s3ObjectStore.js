@@ -1,5 +1,5 @@
 const {
-  ownerSegment,
+  resolveOwnerSegment,
   isValidSegment,
   assertSegment,
   sha256Hex,
@@ -102,9 +102,9 @@ function createS3ObjectStore({
     return { status: response.status, bytes };
   }
 
-  async function putObject({ area, ownerKey, body } = {}) {
+  async function putObject({ area, ownerKey, owner: givenOwner, body } = {}) {
     assertSegment('area', area);
-    const owner = ownerSegment(ownerKey);
+    const owner = resolveOwnerSegment({ ownerKey, owner: givenOwner });
     if (!Buffer.isBuffer(body)) {
       throw storeError('OBJECT_KEY_INVALID', 'O corpo do objeto deve ser um Buffer.');
     }

@@ -173,6 +173,27 @@ describe('createS3ObjectStore (RF007 AC2, RNF016 C4)', () => {
     expect(fake.objects.has(keyPath('assays', segment, sha256Hex(body)))).toBe(true);
   });
 
+  // #1321: the key-rotation rewrite puts under the owner segment of a stored URI.
+  it('puts under a given owner segment as is, an x- segment included', async () => {
+    const owner = ownerSegment('a b');
+    const body = Buffer.from('rewritten under its owner');
+
+    const stored = await store.putObject({ area: 'assays', owner, body });
+
+    expect(stored.uri).toBe(`objstore://assays/${owner}/sha256/${sha256Hex(body)}`);
+    expect(fake.objects.has(keyPath('assays', owner, sha256Hex(body)))).toBe(true);
+    expect(fake.objects.has(keyPath('assays', ownerSegment(owner), sha256Hex(body)))).toBe(false);
+  });
+
+  it('refuses an owner outside the plain pattern, or given with an ownerKey', async () => {
+    const body = Buffer.from('x');
+    for (const args of [{ owner: '../x' }, { owner: 'a.b' }, { owner: 'o', ownerKey: 'o' }]) {
+      await expect(store.putObject({ area: 'samples', body, ...args })).rejects.toMatchObject({ code: 'OBJECT_KEY_INVALID' });
+    }
+
+    expect(fake.log).toEqual([]);
+  });
+
   it('reports a 500 and a failed fetch as OBJECT_STORE_UNAVAILABLE without naming the secret', async () => {
     fake.failWith = 500;
     const served = await store.putObject({ area: 'samples', ownerKey: 'o', body: Buffer.from('x') }).catch((e) => e);
