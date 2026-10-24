@@ -510,6 +510,23 @@ describe('rcs-assessment.service', () => {
       expect(assessment.sprecVersion).toBe(certified().calculation_trace.sprec_version);
     });
 
+    // RF018 (#1320): the penalty and score are the result's own p_bio and rcs_score (V2E-0539, V2E-0540).
+    it('writes the result p_bio and rcs_score as preanalyticalPenalty and score', async () => {
+      const result = certified();
+      const assessment = await recordAssessment(createFakeDb(), 'SPEC-1', result);
+      expect(typeof result.p_bio).toBe('number');
+      expect(assessment.preanalyticalPenalty).toBe(result.p_bio);
+      expect(assessment.score).toBe(result.rcs_score);
+      expect(assessment.score).toBe(assessment.rcsScore);
+    });
+
+    it('writes a null preanalyticalPenalty and score for a governance failure', async () => {
+      const assessment = await recordAssessment(createFakeDb(), 'SPEC-1', certified({ preCentrifugation: 'X' }));
+      expect(assessment.governanceStatus).toBe(0);
+      expect(assessment.preanalyticalPenalty).toBeNull();
+      expect(assessment.score).toBeNull();
+    });
+
     it('justifies every assessment with its route reasons and then the scope statement', async () => {
       const failure = certified({ preCentrifugation: 'X' });
       const { rcs_input: _input, ...withoutInput } = certified();

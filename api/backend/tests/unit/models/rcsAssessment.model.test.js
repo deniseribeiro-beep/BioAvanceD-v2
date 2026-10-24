@@ -170,3 +170,48 @@ describe('RcsAssessmentModel sprecVersion (V2E-0448)', () => {
     expect(doc.sprecVersion).toBe('SPREC-2.0');
   });
 });
+
+// RF018 (#1320): the result's own P_bio and score, never computed here.
+describe('RcsAssessmentModel preanalyticalPenalty and score (V2E-0539, V2E-0540)', () => {
+  it('default to null and keep given values', () => {
+    const empty = RcsAssessmentModel.fieldsOf({});
+    expect(empty.preanalyticalPenalty).toBeNull();
+    expect(empty.score).toBeNull();
+    const fields = RcsAssessmentModel.fieldsOf({ preanalyticalPenalty: 12.5, score: 87.5 });
+    expect(fields.preanalyticalPenalty).toBe(12.5);
+    expect(fields.score).toBe(87.5);
+  });
+
+  it('fromCertificationResult takes the result p_bio and rcs_score', () => {
+    const doc = RcsAssessmentModel.fromCertificationResult('SPEC-1', { p_bio: 10, rcs_score: 90 });
+    expect(doc.preanalyticalPenalty).toBe(10);
+    expect(doc.score).toBe(90);
+  });
+
+  it('keeps a penalty of 0 and a score of 100 (0 is not null)', () => {
+    const doc = RcsAssessmentModel.fromCertificationResult('SPEC-1', { p_bio: 0, rcs_score: 100 });
+    expect(doc.preanalyticalPenalty).toBe(0);
+    expect(doc.score).toBe(100);
+  });
+
+  it('is null for a governance failure and for a result with neither key', () => {
+    for (const result of [{ p_bio: null, rcs_score: null, axis_penalties: [], calculation_trace: {} }, {}]) {
+      const doc = RcsAssessmentModel.fromCertificationResult('SPEC-1', result);
+      expect(doc.preanalyticalPenalty).toBeNull();
+      expect(doc.score).toBeNull();
+    }
+  });
+
+  it('takes the result over refs.preanalyticalPenalty and refs.score', () => {
+    const doc = RcsAssessmentModel.fromCertificationResult(
+      'SPEC-1', { p_bio: 10, rcs_score: 90 }, { preanalyticalPenalty: 55, score: 45 },
+    );
+    expect(doc.preanalyticalPenalty).toBe(10);
+    expect(doc.score).toBe(90);
+  });
+
+  it('score is the same value as rcsScore', () => {
+    const doc = RcsAssessmentModel.fromCertificationResult('SPEC-1', { p_bio: 10, rcs_score: 90 });
+    expect(doc.score).toBe(doc.rcsScore);
+  });
+});

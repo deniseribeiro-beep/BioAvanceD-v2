@@ -224,9 +224,7 @@ const KNOWN_DRIFT = {
       { elementId: 'V2E-0441', field: 'targetAnalyte', note: 'TODO(#1320): 1..1 Core -- held as qualificationContext.targetAnalyte, as the v2.0.0 synthetic example (biobankExample.rcsAssessments[0]) nests it; null until a request carries a context.' },
       { elementId: 'V2E-0442', field: 'assayFamily', note: 'TODO(#1320): 1..1 Core -- held as qualificationContext.assayFamily, as the v2.0.0 synthetic example (biobankExample.rcsAssessments[0]) nests it; null until a request carries a context.' },
       { elementId: 'V2E-0443', field: 'workflowProtocolId', note: 'TODO(#1320): 1..1 Core -- held as qualificationContext.workflowProtocolId, as the v2.0.0 synthetic example (biobankExample.rcsAssessments[0]) nests it; null until a request carries a context.' },
-      { elementId: 'V2E-0444', field: 'workflowProtocolVersion', note: 'TODO(#1320): 1..1 Core -- held as qualificationContext.workflowProtocolVersion, as the v2.0.0 synthetic example (biobankExample.rcsAssessments[0]) nests it; null until a request carries a context.' },
-      { elementId: 'V2E-0539', field: 'preanalyticalPenalty', note: 'TODO(#1320): 0..1 Conditional -- v2.0.0 element (added), not emitted; RCS v4 builds it.' },
-      { elementId: 'V2E-0540', field: 'score', note: 'TODO(#1320): 0..1 Conditional -- v2.0.0 element (added), not emitted; RCS v4 builds it.' }
+      { elementId: 'V2E-0444', field: 'workflowProtocolVersion', note: 'TODO(#1320): 1..1 Core -- held as qualificationContext.workflowProtocolVersion, as the v2.0.0 synthetic example (biobankExample.rcsAssessments[0]) nests it; null until a request carries a context.' }
     ],
     extra: [
       { key: 'modelVersion', note: 'TODO(#1320): no canonical counterpart; likely predecessor of rcsModelVersion (ELM-0161, absent above).' },

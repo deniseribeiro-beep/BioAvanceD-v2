@@ -32,6 +32,9 @@ class RcsAssessmentModel {
       inputSnapshotHash: data.inputSnapshotHash ?? null,
       // RF018 AC1 (#1320): the SPREC version the result was computed with (V2E-0448).
       sprecVersion: data.sprecVersion ?? null,
+      // RF018 (#1320): the result's P_bio and its 100 - P_bio score (V2E-0539, V2E-0540).
+      preanalyticalPenalty: data.preanalyticalPenalty ?? null,
+      score: data.score ?? null,
       // RF018 AC10 and AC11 (#1320): the rule package and environment the
       // result was computed with, and its justifications.
       rulePackageVersion: data.rulePackageVersion ?? null,
@@ -72,6 +75,8 @@ class RcsAssessmentModel {
       calculationTrace: result.calculation_trace,
       qualificationContext: result.qualification_context,
       sprecVersion: result.calculation_trace?.sprec_version,
+      preanalyticalPenalty: result.p_bio,
+      score: result.rcs_score,
     });
   }
 }
