@@ -28,7 +28,7 @@
  * `collectionSite`. It brought three keys: `organizationField` names the
  * #1192 tenancy field stamped from the in-scope `scopeField` value,
  * `generateId` assigns the mount's 7-digit specimenId instead of a uuid, and
- * `appendProjection`, which only it carries, appends SPECIMEN_UPSERTED and
+ * `appendProjection`, which Consent also carries, appends SPECIMEN_UPSERTED and
  * LINEAGE_REGISTERED in the insert's transaction (#1313,
  * docs/decisions/2026-10-23-ingestion-specimen-target.md).
  *
@@ -38,10 +38,23 @@
  * are both `clinicalUnitId`, and `generateId` assigns the mount's 8-digit
  * participantId. Its `missingnessFields` are empty: every field outside
  * `required` is refused, required by the model or the scope gate, or
- * defaulted by PatientModel.create. `identityFields`, which only it
+ * defaulted by PatientModel.create. `identityFields`, which Consent also
  * carries, names the civil identity fields that live on ParticipantIdentity
  * alone (#575): a record holding one is refused, never quarantined as sent
  * (docs/decisions/2026-10-24-ingestion-participant-target.md).
+ *
+ * Consent is the eighth, stored in patientConsents through the consent
+ * mount's model, with the mount's uuid consentId. Its `validateReferences`
+ * runs the mount's participant, template, validity and responses gates, then
+ * requires a granted consent, a past decision time within the term's
+ * validity, and no consent of the participant in force. It brought two keys:
+ * `prepareDocument` stores the decision's evidence and builds its permission
+ * rows before the write, and `removeProjection` removes those rows and its
+ * decision event when the idempotency race is lost; its `appendProjection`
+ * writes them with CONSENT_UPSERTED in the insert's transaction. Its
+ * `missingnessFields` are empty, and its `identityFields` add the signer's
+ * name and image to Participant's, so neither is ever quarantined as sent
+ * (docs/decisions/2026-10-24-ingestion-consent-target.md).
  *
  * Telemetry and binaries are deliberately absent: they have their own stores
  * and paths, and a later slice names them in the refusal.
@@ -50,6 +63,12 @@ const { CANONICAL_COLLECTIONS } = require('../config/collections');
 const { LEGACY_PATIENT_IDENTITY_FIELDS, PARTICIPANT_IDENTITY_ONLY_FIELDS } = require('../utils/legacyPatientIdentityFields');
 const { generateSpecimenId, validateSpecimenReferences, appendSpecimenProjection } = require('./specimenTarget');
 const { generateParticipantId, validateParticipantReferences } = require('./participantTarget');
+const {
+  validateConsentReferences,
+  prepareConsentDocument,
+  appendConsentProjection,
+  removeConsentProjection,
+} = require('./consentTarget');
 
 const INGESTION_TARGETS = Object.freeze({
   Dataset: Object.freeze({
@@ -120,6 +139,20 @@ const INGESTION_TARGETS = Object.freeze({
     organizationField: 'clinicalUnitId',
     generateId: generateParticipantId,
     identityFields: Object.freeze([...LEGACY_PATIENT_IDENTITY_FIELDS, ...PARTICIPANT_IDENTITY_ONLY_FIELDS]),
+  }),
+  Consent: Object.freeze({
+    schemaId: 'canonical.v1.consent',
+    store: 'mongodb',
+    collection: CANONICAL_COLLECTIONS.consents,
+    idField: 'consentId',
+    model: require('../models/PatientConsent'),
+    missingnessFields: Object.freeze([]),
+    validateReferences: validateConsentReferences,
+    prepareDocument: prepareConsentDocument,
+    appendProjection: appendConsentProjection,
+    removeProjection: removeConsentProjection,
+    // signatureBase64 is the mount's alias for signatureImageBase64.
+    identityFields: Object.freeze([...LEGACY_PATIENT_IDENTITY_FIELDS, ...PARTICIPANT_IDENTITY_ONLY_FIELDS, 'signatureName', 'signatureImageBase64', 'signatureBase64']),
   }),
 });
 

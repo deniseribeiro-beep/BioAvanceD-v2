@@ -81,7 +81,11 @@ const consentSchema = {
   properties: {
     consentTemplateId: { type: 'string' },
     consentGranted: { type: 'boolean' },
-    consentAcceptedAt: { type: 'string' }
+    consentAcceptedAt: { type: 'string' },
+    // The participant and the answers PatientConsentModel.validate requires,
+    // in the consent mount's patientConsentSchema shape (#1318).
+    participantId: { type: 'string', minLength: 1 },
+    responses: { type: 'object', additionalProperties: { type: 'boolean' } }
   }
 };
 
@@ -507,7 +511,13 @@ const intakeSchema = {
         }
       ]
     },
-    consent: { $ref: 'canonical.v1.consent' },
+    // The intake takes its participant from participant and records no
+    // responses, so its consent still refuses both (#1318).
+    consent: {
+      type: 'object',
+      allOf: [{ $ref: 'canonical.v1.consent' }],
+      properties: { participantId: false, responses: false }
+    },
     specimen: { $ref: 'canonical.v1.specimen' },
     // The organization the intake stamps as Sample.organizationId (#1376).
     organizationId: { type: 'string', minLength: 1 },

@@ -44,13 +44,13 @@ export async function findIngestionIdempotencyKey(idempotencyKey: string, scope:
   return db.collection('ingestionIdempotencyKeys').findOne({ idempotencyKey, scope });
 }
 
-export async function findIngestedRecord(collection: 'datasets' | 'workflowRuns' | 'omicsQualifications' | 'assays' | 'omicsRuns' | 'samples' | 'patients', idField: string, id: string): Promise<any> {
+export async function findIngestedRecord(collection: 'datasets' | 'workflowRuns' | 'omicsQualifications' | 'assays' | 'omicsRuns' | 'samples' | 'patients' | 'patientConsents', idField: string, id: string): Promise<any> {
   const db = await getDb();
   return db.collection(collection).findOne({ [idField]: id });
 }
 
 export async function countIngestedBySourceRecordId(
-  collection: 'datasets' | 'workflowRuns' | 'omicsQualifications' | 'assays' | 'omicsRuns' | 'samples' | 'patients' | 'ingestionQuarantineRecords',
+  collection: 'datasets' | 'workflowRuns' | 'omicsQualifications' | 'assays' | 'omicsRuns' | 'samples' | 'patients' | 'patientConsents' | 'ingestionQuarantineRecords',
   sourceRecordId: string
 ): Promise<number> {
   const db = await getDb();
@@ -68,6 +68,22 @@ export async function deleteIngestedParticipants(participantIds: string[]): Prom
   if (participantIds.length === 0) return;
   const db = await getDb();
   await db.collection('patients').deleteMany({ participantId: { $in: participantIds } });
+}
+
+// #1318: removes the consents a case ingested, with their permission and
+// decision rows, which no API deletes.
+export async function deleteIngestedConsents(consentIds: string[]): Promise<void> {
+  if (consentIds.length === 0) return;
+  const db = await getDb();
+  await db.collection('consentPermissions').deleteMany({ consentId: { $in: consentIds } });
+  await db.collection('consentDecisionEvents').deleteMany({ consentId: { $in: consentIds } });
+  await db.collection('patientConsents').deleteMany({ consentId: { $in: consentIds } });
+}
+
+// #1318: an ingested consent's decision events, keyed by its consentId.
+export async function findConsentDecisionEvents(consentId: string): Promise<any[]> {
+  const db = await getDb();
+  return db.collection('consentDecisionEvents').find({ consentId }).toArray();
 }
 
 export async function findOutboxEvents(aggregateId: string): Promise<any[]> {

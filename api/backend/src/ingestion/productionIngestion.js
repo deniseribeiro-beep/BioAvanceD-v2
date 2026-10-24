@@ -268,6 +268,10 @@ async function ingestUnderRelease({ db, target, entityType, payload, provenance,
   // provenanceEnvelope.js's header, so the server's Actor/<id> overrides any
   // payload value (WorkflowRun's schema requires the client to send one).
   doc.createdBy = outcome.provenance.createdBy;
+  // A target's own preparation of the stamped document before its write,
+  // outside the transaction (Consent stores its evidence and builds its
+  // permission rows); what it answers goes to appendProjection.
+  const prepared = target.prepareDocument ? await target.prepareDocument(db, doc) : undefined;
   // RF029 AC7: one MissingDataReason per absent missingness field, read off
   // the stored document, so an absence is recorded and never written as 0.
   const reasons = buildMissingDataReasons({
@@ -312,9 +316,11 @@ async function ingestUnderRelease({ db, target, entityType, payload, provenance,
           schemaVersion: 1,
         }, opts);
         const eventId = event?.eventId || null;
-        // The target's own graph events, in the same transaction (#1313).
+        // The target's own rows and graph events, in the same transaction
+        // (#1313): Specimen's SPECIMEN_UPSERTED and LINEAGE_REGISTERED,
+        // Consent's permissions, decision event and CONSENT_UPSERTED.
         const projectionEventIds = target.appendProjection
-          ? await target.appendProjection(db, { doc, insertedId: inserted?.insertedId, outbox }, opts)
+          ? await target.appendProjection(db, { doc, insertedId: inserted?.insertedId, outbox, prepared }, opts)
           : [];
         // In the document's transaction (RF029 AC6), one call per row.
         for (const row of reasons) {
@@ -350,14 +356,16 @@ async function ingestUnderRelease({ db, target, entityType, payload, provenance,
         const ref = await recordCompletedIdempotentResult(db, key);
         if (ref !== entityId) {
           // A concurrent request with this key recorded first: this
-          // request's document, events, MissingDataReason rows and
-          // DataQualityAssessment are a duplicate of the winner's, so they
-          // are removed before the winner's result is replayed.
+          // request's document, events, the target's own rows,
+          // MissingDataReason rows and DataQualityAssessment are a duplicate
+          // of the winner's, so they are removed before the winner's result
+          // is replayed.
           await db.collection(target.collection).deleteOne({ [target.idField]: entityId });
           if (outboxEventId) await outbox.getCollection(db).deleteOne({ eventId: outboxEventId });
           for (const projectionEventId of projectionEventIds) {
             await outbox.getCollection(db).deleteOne({ eventId: projectionEventId });
           }
+          if (target.removeProjection) await target.removeProjection(db, { entityId });
           await reasonsCollection.deleteMany({ entityType, entityId });
           await db.collection(CANONICAL_COLLECTIONS.dataQualityAssessments).deleteOne({ dataQualityAssessmentId });
           return replayOf(db, entityType, await findCompletedIdempotentEntry(db, scope), releases);

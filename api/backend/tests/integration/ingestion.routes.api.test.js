@@ -61,7 +61,10 @@ function givenDb({ extraUsers = [], releaseStatus = 'active' } = {}) {
     organizations: createMatchingCollection([{ organizationId: 'test-org-default' }, { organizationId: 'org-other' }]),
     patients: createMatchingCollection([{ participantId: CONSENTED_PARTICIPANT }, { participantId: UNCONSENTED_PARTICIPANT }]),
     patientConsents: createMatchingCollection([{ participantId: CONSENTED_PARTICIPANT, status: 'ACTIVE' }]),
-    consent_templates: createMatchingCollection([{ _id: new ObjectId(TEMPLATE_HEX), title: 'TCLE' }]),
+    consent_templates: createMatchingCollection([{ _id: new ObjectId(TEMPLATE_HEX), title: 'TCLE', active: true, version: 1 }]),
+    consentPermissions: createMatchingCollection([]),
+    consentDecisionEvents: createMatchingCollection([]),
+    consentRevocations: createMatchingCollection([]),
     ingestionQuarantineRecords: createMatchingCollection([]),
     ingestionIdempotencyKeys: createFakeCollection([]),
     missingDataReasons: createMatchingCollection([]),
@@ -105,6 +108,10 @@ const SPECIMEN = {
 };
 // The clinicalUnitId is the Coordenador's organization too.
 const PARTICIPANT = { participantId: 'client-claimed', sex: 'F', clinicalUnitId: 'test-org-default', consentTemplateId: TEMPLATE_HEX };
+// #1318: a Consent for the participant with no consent in force, under the
+// active template, which asks for no permission.
+const CONSENT_ACCEPTED_AT = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+const CONSENT = { participantId: UNCONSENTED_PARTICIPANT, consentTemplateId: TEMPLATE_HEX, responses: {}, consentGranted: true, consentAcceptedAt: CONSENT_ACCEPTED_AT };
 
 function post(body, caller) {
   return request(app).post('/api/ingestion/records').set('Authorization', `Bearer ${token(caller)}`).send(body);
@@ -297,6 +304,52 @@ describe('POST /api/ingestion/records (RF029, #1318)', () => {
     const rows = ingestionAuditRows();
     expect(rows).toEqual([expect.objectContaining({ action: 'INGESTION_REFUSED', severity: 'warning', resourceType: 'Participant' })]);
     // The row is stored without the request, which auditLogger reads only for its network metadata.
+    const { req: _req, ...row } = rows[0];
+    expect(JSON.stringify(row)).not.toContain('Maria Silva');
+  });
+
+  it('201: an accepted Consent is persisted in patientConsents with a server consentId, ACTIVE, its decision event and CONSENT_UPSERTED, in one session and one INGESTION_ACCEPTED row (#1318)', async () => {
+    const stores = givenDb();
+    const consentEvidence = require('../../src/services/consentEvidence.service');
+    vi.spyOn(consentEvidence, 'storeConsentEvidence').mockReturnValue({
+      evidenceDocumentUri: 'objstore://consents/stub/evidence.json',
+      evidenceHash: `sha256:${'0'.repeat(64)}`,
+      evidenceMimeType: 'application/json',
+      evidenceEncryption: null,
+    });
+
+    const res = await post({ entityType: 'Consent', payload: CONSENT, provenance: PROVENANCE });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(res.body).toMatchObject({ success: true, status: 'accepted', entityType: 'Consent' });
+    const stored = stores.patientConsents.docs.find((d) => d.consentId === res.body.entityId);
+    expect(stored).toMatchObject({ participantId: UNCONSENTED_PARTICIPANT, consentTemplateId: TEMPLATE_HEX, status: 'ACTIVE', signedAt: new Date(CONSENT_ACCEPTED_AT), consentVersion: '1' });
+    expect(stores.patientConsents.insertOne).toHaveBeenCalledWith(stored, { session: app.locals.db.session });
+    expect(stores.consentDecisionEvents.docs.map((d) => [d.consentId, d.decision])).toEqual([[res.body.entityId, 'accepted']]);
+    expect(stores.graph_projection_outbox.updateOne.mock.calls.map(([, update]) => update?.$setOnInsert?.eventType)).toEqual(['INGESTION_RECORD_PERSISTED', 'CONSENT_UPSERTED']);
+    expect(ingestionAuditRows()).toEqual([expect.objectContaining({
+      action: 'INGESTION_ACCEPTED',
+      resourceType: 'Consent',
+      resourceId: res.body.entityId,
+    })]);
+  });
+
+  it('422: a Consent carrying signatureName is refused INGESTION_STORE_UNSUPPORTED, writes nothing, and one INGESTION_REFUSED row without the name (#1318)', async () => {
+    const stores = givenDb();
+
+    const res = await post({ entityType: 'Consent', payload: { ...CONSENT, signatureName: 'Maria Silva' }, provenance: PROVENANCE, idempotencyKey: 'consent-key-1' });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(422);
+    expect(res.body).toMatchObject({ success: false, error: 'INGESTION_STORE_UNSUPPORTED' });
+    expect(res.body.details).toEqual([expect.stringContaining('signatureName')]);
+    expect(JSON.stringify(res.body)).not.toContain('Maria Silva');
+    expect(stores.patientConsents.docs.map((d) => d.participantId)).toEqual([CONSENTED_PARTICIPANT]);
+    expect(stores.consentDecisionEvents.docs).toHaveLength(0);
+    expect(stores.ingestionQuarantineRecords.docs).toHaveLength(0);
+    expect(stores.ingestionIdempotencyKeys.docs).toHaveLength(0);
+    expect(stores.dataQualityAssessments.docs).toHaveLength(0);
+    const rows = ingestionAuditRows();
+    expect(rows).toEqual([expect.objectContaining({ action: 'INGESTION_REFUSED', severity: 'warning', resourceType: 'Consent' })]);
     const { req: _req, ...row } = rows[0];
     expect(JSON.stringify(row)).not.toContain('Maria Silva');
   });

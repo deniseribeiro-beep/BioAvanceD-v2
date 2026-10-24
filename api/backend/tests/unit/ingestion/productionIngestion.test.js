@@ -1113,4 +1113,243 @@ describe('ingestion/productionIngestion ingestAndPersist (RF029, #1318)', () => 
     expectNothingWritten(db);
     expect(outbox.appendEvent).not.toHaveBeenCalled();
   });
+
+  // #1318: Consent, the eighth target, runs the consent mount's participant,
+  // template, validity and responses gates and its own granted, decision
+  // time and no-consent-in-force gates (consentTarget.js), stores its
+  // evidence, and writes its permissions, decision event and
+  // CONSENT_UPSERTED in the insert's transaction. A signer's name or image
+  // is refused, never quarantined as sent. The consent collections are
+  // matching ones: an inserted consent gets the driver's _id, which the
+  // recomputed state and CONSENT_UPSERTED key on.
+  const DAY = 24 * 60 * 60 * 1000;
+  const CONSENT_ACCEPTED_AT = new Date(Date.now() - DAY).toISOString();
+  const CONSENT_RECORD = {
+    participantId: PARTICIPANT,
+    consentTemplateId: TEMPLATE_HEX,
+    responses: { storage: true, recontact: false },
+    consentGranted: true,
+    consentAcceptedAt: CONSENT_ACCEPTED_AT,
+  };
+  const CONSENT_EVIDENCE = {
+    evidenceDocumentUri: 'objstore://consents/stub/evidence.json',
+    evidenceHash: `sha256:${'0'.repeat(64)}`,
+    evidenceMimeType: 'application/json',
+    evidenceEncryption: null,
+  };
+
+  function consentTemplate(overrides = {}) {
+    const { ObjectId } = require('mongodb');
+    return {
+      _id: new ObjectId(TEMPLATE_HEX),
+      title: 'TCLE',
+      active: true,
+      version: 3,
+      consentModel: 'broad',
+      validFrom: new Date(Date.now() - 30 * DAY).toISOString(),
+      permissions: [{ key: 'storage', required: true, label: 'Armazenamento' }, { key: 'recontact', required: false, label: 'Recontato' }],
+      ...overrides,
+    };
+  }
+
+  function seedConsentReferences(db, { templates = [consentTemplate()], consents = [] } = {}) {
+    db.collection('patients').docs.push({ participantId: PARTICIPANT });
+    db.collections.consent_templates = createMatchingCollection(templates);
+    db.collections.patientConsents = createMatchingCollection(consents);
+    db.collections.consentPermissions = createMatchingCollection([]);
+    db.collections.consentDecisionEvents = createMatchingCollection([]);
+    db.collections.consentRevocations = createMatchingCollection([]);
+  }
+
+  function consentDb(options = {}) {
+    const db = seededDb();
+    seedConsentReferences(db, options);
+    return db;
+  }
+
+  function stubConsentEvidence() {
+    const consentEvidence = require('../../../src/services/consentEvidence.service');
+    return vi.spyOn(consentEvidence, 'storeConsentEvidence').mockReturnValue(CONSENT_EVIDENCE);
+  }
+
+  function ingestConsent(db, overrides = {}) {
+    return ingest(db, { entityType: 'Consent', payload: CONSENT_RECORD, ...overrides });
+  }
+
+  it('52. an accepted Consent lands in patientConsents with a uuid consentId, ACTIVE, signed at the sent time, its evidence, permissions, decision event, INGESTION_RECORD_PERSISTED then CONSENT_UPSERTED, and no MissingDataReason row', async () => {
+    const store = stubConsentEvidence();
+    const db = consentDb();
+    const outbox = fakeOutbox();
+
+    const result = await ingestConsent(db, { outbox });
+
+    expect(result).toMatchObject({ status: 'accepted', entityType: 'Consent', outboxEventId: 'evt-1', missingDataReasons: [] });
+    expect(result.entityId).toMatch(UUID);
+    const docs = db.collections.patientConsents.docs;
+    expect(docs).toHaveLength(1);
+    expect(docs[0]).toMatchObject({
+      consentId: result.entityId,
+      participantId: PARTICIPANT,
+      consentTemplateId: TEMPLATE_HEX,
+      consentVersion: '3',
+      consentModel: 'broad',
+      status: 'ACTIVE',
+      currentStateDerived: 'active',
+      signedAt: new Date(CONSENT_ACCEPTED_AT),
+      responses: { storage: true, recontact: false },
+      signatureName: null,
+      signatureImageBase64: null,
+      ...CONSENT_EVIDENCE,
+      createdBy: 'Actor/u-1',
+      sourceRecordId: 'LIMS-DS-42',
+      canonicalModelReleaseId: 'release-2.0.0',
+      configurationReleaseId: 'cfg-release-7',
+    });
+    expect(store).toHaveBeenCalledTimes(1);
+    expect(store.mock.calls[0][0]).toMatchObject({ consentId: result.entityId, participantId: PARTICIPANT, decisionDateTime: new Date(CONSENT_ACCEPTED_AT) });
+    expect(outbox.appendEvent.mock.calls.map(([, event]) => [event.eventType, event.aggregateId]))
+      .toEqual([['INGESTION_RECORD_PERSISTED', result.entityId], ['CONSENT_UPSERTED', String(docs[0]._id)]]);
+    expect(outbox.appendEvent.mock.calls[1][1]).toMatchObject({ payload: { participantId: PARTICIPANT, status: 'ACTIVE' }, sourceService: 'ingestion-gateway' });
+    expect(db.collections.consentPermissions.docs.map((row) => [row.consentId, row.permissionCode, row.decision]))
+      .toEqual([[result.entityId, 'storage', 'permit'], [result.entityId, 'recontact', 'deny']]);
+    expect(db.collections.consentDecisionEvents.docs.map((row) => [row.consentId, row.decision, row.channel])).toEqual([[result.entityId, 'accepted', 'staff_portal']]);
+    expect(db.collections.missingDataReasons.docs).toHaveLength(0);
+    expect(db.collections.dataQualityAssessments.docs.map((d) => [d.scopeId, d.status])).toEqual([[`Consent/${result.entityId}`, 'passed']]);
+  });
+
+  it('53. on a replica set, the consent, its permissions, its decision event and CONSENT_UPSERTED share the insert\'s session (#1313)', async () => {
+    stubConsentEvidence();
+    const db = consentDb();
+    const session = onReplicaSet(db);
+    const outbox = fakeOutbox();
+
+    const result = await ingestConsent(db, { outbox });
+
+    expect(result.status).toBe('accepted');
+    const stored = db.collections.patientConsents.docs[0];
+    expect(db.collections.patientConsents.insertOne).toHaveBeenCalledWith(stored, { session });
+    expect(db.collections.consentPermissions.insertMany).toHaveBeenCalledWith(expect.any(Array), { session });
+    expect(db.collections.consentDecisionEvents.insertOne).toHaveBeenCalledWith(expect.objectContaining({ decision: 'accepted' }), { session });
+    expect(outbox.appendEvent.mock.calls.map(([, event, opts]) => [event.eventType, opts]))
+      .toEqual([['INGESTION_RECORD_PERSISTED', { session }], ['CONSENT_UPSERTED', { session }]]);
+  });
+
+  it.each([
+    ['an unknown participant', { participantId: '87654321' }, {}, 'REFERENCE_NOT_FOUND'],
+    ['an unknown consentTemplateId', {}, { templates: [] }, 'REFERENCE_NOT_FOUND'],
+    ['an inactive template', {}, { templates: [consentTemplate({ active: false })] }, 'REFERENCE_NOT_USABLE'],
+    ['an expired template', {}, { templates: [consentTemplate({ validTo: new Date(Date.now() - 2 * DAY).toISOString() })] }, 'REFERENCE_NOT_USABLE'],
+    ['a required permission refused', { responses: { storage: false, recontact: true } }, {}, 'CONSENT_RESPONSES_INVALID'],
+    ['consentGranted false', { consentGranted: false }, {}, 'CONSENT_NOT_GRANTED'],
+    ['no consentAcceptedAt', { consentAcceptedAt: undefined }, {}, 'CONSENT_DECISION_TIME_INVALID'],
+    ['a consentAcceptedAt after now', { consentAcceptedAt: new Date(Date.now() + DAY).toISOString() }, {}, 'CONSENT_DECISION_TIME_INVALID'],
+    ['a consent already in force', {}, { consents: [{ participantId: PARTICIPANT, status: 'ACTIVE' }] }, 'CONSENT_ALREADY_ACTIVE'],
+  ])('54. a Consent with %s quarantines with its violation code and writes nothing to patientConsents', async (_label, change, dbOptions, code) => {
+    const store = stubConsentEvidence();
+    const db = consentDb(dbOptions);
+    const seeded = db.collections.patientConsents.docs.length;
+    const outbox = fakeOutbox();
+
+    const result = await ingestConsent(db, { outbox, payload: { ...CONSENT_RECORD, ...change } });
+
+    expect(result.status).toBe('quarantined');
+    expect(result.violations).toEqual([expect.objectContaining({ code, field: null })]);
+    expect(db.collections.patientConsents.docs).toHaveLength(seeded);
+    expect(db.collections.consentPermissions.docs).toHaveLength(0);
+    expect(db.collections.consentDecisionEvents.docs).toHaveLength(0);
+    expect(store).not.toHaveBeenCalled();
+    expect(outbox.appendEvent).not.toHaveBeenCalled();
+  });
+
+  it('55. a Consent declaring a MissingDataReason quarantines with MISSING_REASON_FIELD_NOT_APPLICABLE: no field takes one', async () => {
+    stubConsentEvidence();
+    const db = consentDb();
+
+    const result = await ingestConsent(db, { missingDataReasons: [{ fieldPath: 'consentAcceptedAt', reasonCode: 'unknown' }] });
+
+    expect(result.status).toBe('quarantined');
+    expect(result.violations.map((v) => v.code)).toEqual(['MISSING_REASON_FIELD_NOT_APPLICABLE']);
+  });
+
+  function expectNoConsentWritten(db) {
+    expect(db.collections.patientConsents.docs).toHaveLength(0);
+    expect(db.collections.consentPermissions.docs).toHaveLength(0);
+    expect(db.collections.consentDecisionEvents.docs).toHaveLength(0);
+    expect(db.collections.ingestionQuarantineRecords.docs).toHaveLength(0);
+    expect(db.collections.ingestionIdempotencyKeys.docs).toHaveLength(0);
+    expect(db.collections.missingDataReasons.docs).toHaveLength(0);
+    expect(db.collections.dataQualityAssessments.docs).toHaveLength(0);
+  }
+
+  it.each([
+    ['signatureName', 'Maria Silva'],
+    ['patientName', 'Maria Silva'],
+    ['signatureImageBase64', 'iVBORw0KGgoAAAANSUhEUg'],
+    ['signatureBase64', 'iVBORw0KGgoAAAANSUhEUg'],
+  ])('56. a Consent carrying %s is refused 422 INGESTION_STORE_UNSUPPORTED, naming the field and never its value, and writes nothing', async (field, value) => {
+    const store = stubConsentEvidence();
+    const db = consentDb();
+    const outbox = fakeOutbox();
+
+    const error = await ingestConsent(db, { outbox, payload: { ...CONSENT_RECORD, [field]: value }, idempotencyKey: 'consent-key-1' }).catch((e) => e);
+
+    expect(error).toMatchObject({ statusCode: 422, code: 'INGESTION_STORE_UNSUPPORTED', canonicalModelReleaseId: 'release-2.0.0', configurationReleaseId: 'cfg-release-7' });
+    expect(error.details).toEqual([`Consent com ${field}: identidade civil é armazenada em ParticipantIdentity, não suportado pela ingestão`]);
+    expect(error.message).not.toContain(value);
+    expectNoConsentWritten(db);
+    expect(store).not.toHaveBeenCalled();
+    expect(outbox.appendEvent).not.toHaveBeenCalled();
+  });
+
+  it.each(['signatureName', 'patientName'])('57. a Consent carrying %s is refused even under a key already recorded, never replayed', async (field) => {
+    stubConsentEvidence();
+    const db = consentDb();
+    const first = await ingestConsent(db, { idempotencyKey: 'consent-key-1' });
+    expect(first.status).toBe('accepted');
+
+    const error = await ingestConsent(db, { payload: { ...CONSENT_RECORD, [field]: 'Maria Silva' }, idempotencyKey: 'consent-key-1' }).catch((e) => e);
+
+    expect(error).toMatchObject({ statusCode: 422, code: 'INGESTION_STORE_UNSUPPORTED', details: [expect.stringContaining(field)] });
+    expect(error.message).not.toContain('Maria Silva');
+    expect(db.collections.patientConsents.docs.map((d) => d.consentId)).toEqual([first.entityId]);
+    expect(db.collections.ingestionQuarantineRecords.docs).toHaveLength(0);
+  });
+
+  it.each(['patients', 'consent_templates', 'patientConsents'])('58. a Consent whose %s lookup fails rejects, and writes no consent, quarantine record or idempotency key', async (collection) => {
+    stubConsentEvidence();
+    const db = consentDb();
+    const outage = new Error('connection reset');
+    // patientConsents is read again for a source duplicate (RNF011 C3), so
+    // only its in-force lookup fails: the gate's own rethrow is what rejects.
+    const lookup = db.collection(collection).findOne;
+    db.collection(collection).findOne = async (filter, ...rest) => {
+      if (collection !== 'patientConsents' || filter?.status) throw outage;
+      return lookup(filter, ...rest);
+    };
+    const outbox = fakeOutbox();
+
+    await expect(ingestConsent(db, { outbox, idempotencyKey: 'consent-key-1' })).rejects.toBe(outage);
+
+    expectNoConsentWritten(db);
+    expect(outbox.appendEvent).not.toHaveBeenCalled();
+  });
+
+  it('59. without a session, a concurrent Consent loser leaves no consent and none of its own events, permission or decision rows', async () => {
+    stubConsentEvidence();
+    const { db, winner, loser, docs } = await raceOnOneKey({
+      entityType: 'Consent',
+      payload: CONSENT_RECORD,
+      collection: 'patientConsents',
+      seed: (target) => seedConsentReferences(target),
+    });
+
+    expect(winner.status).toBe('accepted');
+    expect(loser).toMatchObject({ status: 'idempotent_replay', outcome: 'accepted', entityType: 'Consent', resultRef: winner.entityId });
+    expect(docs.map((d) => d.consentId)).toEqual([winner.entityId]);
+    expect(db.collections.graph_projection_outbox.docs.map((e) => [e.eventType, e.aggregateId]))
+      .toEqual([['INGESTION_RECORD_PERSISTED', winner.entityId], ['CONSENT_UPSERTED', String(docs[0]._id)]]);
+    expect(db.collections.consentPermissions.docs.map((row) => row.consentId)).toEqual([winner.entityId, winner.entityId]);
+    expect(db.collections.consentDecisionEvents.docs.map((row) => row.consentId)).toEqual([winner.entityId]);
+    expect(db.collections.dataQualityAssessments.docs.map((d) => d.scopeId)).toEqual([`Consent/${winner.entityId}`]);
+  });
 });

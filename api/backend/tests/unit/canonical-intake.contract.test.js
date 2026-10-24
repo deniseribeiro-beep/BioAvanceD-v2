@@ -95,3 +95,43 @@ describe('canonical.v1.intake participant (#1318)', () => {
     expect(valid).toBe(false);
   });
 });
+
+describe('canonical.v1.intake consent (#1318)', () => {
+  // canonical.v1.consent takes participantId and responses for ingestion;
+  // the intake takes its participant from participant and records no
+  // responses.
+  it('canonical.v1.consent accepts a participantId and boolean responses', () => {
+    const { valid, errors } = validate('canonical.v1.consent', {
+      participantId: '12345678',
+      consentTemplateId: 'tpl-1',
+      responses: { storage: true, recontact: false },
+      consentGranted: true,
+      consentAcceptedAt: '2026-10-01T09:00:00.000Z',
+    });
+
+    expect(errors).toEqual([]);
+    expect(valid).toBe(true);
+  });
+
+  it('canonical.v1.consent rejects a non-boolean response', () => {
+    const { valid } = validate('canonical.v1.consent', { participantId: '12345678', responses: { storage: 'yes' } });
+
+    expect(valid).toBe(false);
+  });
+
+  it.each([
+    ['participantId', '12345678'],
+    ['responses', { storage: true }],
+  ])('rejects an intake whose consent carries %s', (field, value) => {
+    const { valid } = validate('canonical.v1.intake', { ...baseIntake, consent: { consentGranted: true, [field]: value } });
+
+    expect(valid).toBe(false);
+  });
+
+  it('still accepts an intake whose consent carries the template, the grant and its time', () => {
+    const { valid, errors } = validate('canonical.v1.intake', { ...baseIntake, consent: { consentTemplateId: 'tpl-1', consentGranted: true, consentAcceptedAt: '2026-10-01T09:00:00.000Z' } });
+
+    expect(errors).toEqual([]);
+    expect(valid).toBe(true);
+  });
+});

@@ -17,6 +17,8 @@ import {
   countAccessDenialRows,
   ingestionDb,
   deleteIngestedParticipants,
+  deleteIngestedConsents,
+  findConsentDecisionEvents,
   closeIngestionDb,
 } from './helpers/queryIngestion';
 import {
@@ -91,11 +93,13 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
   const seededStorageBoxes: SeededStorageBox[] = [];
   const organizationIdsToDelete: string[] = [];
   const participantIdsToDelete: string[] = [];
+  const consentIdsToDelete: string[] = [];
 
   test.afterAll(async ({ request }) => {
     await Promise.all(
       seededStorageBoxes.map((box) => cleanupStorageBoxLocation(box).catch(() => {}))
     );
+    await deleteIngestedConsents(consentIdsToDelete);
     // Before the organizations their clinicalUnitId names.
     await deleteIngestedParticipants(participantIdsToDelete);
     await deleteOrganizations(request, apiBaseURL!, organizationIdsToDelete);
@@ -532,6 +536,79 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
     const refusals = await findIngestionRefusalRows('Participant');
     expect(refusals.length).toBeGreaterThan(0);
     expect(JSON.stringify(refusals)).not.toContain(patientName);
+  });
+
+  // #1318: a Consent runs the consent mount's participant, template and
+  // responses gates against real records: a real participant with no consent
+  // (createRealParticipant seeds none) and the shared active template, which
+  // asks for no permission, so the responses are empty.
+  async function seedConsentReferences(request: APIRequestContext) {
+    const participant = await createRealParticipant(request, apiBaseURL!, admin.token);
+    const consentTemplateId = await seedActiveConsentTemplate(await ingestionDb());
+    return {
+      participantId: participant.participantId,
+      consentTemplateId,
+      responses: {},
+      consentGranted: true,
+      consentAcceptedAt: new Date(Date.now() - 60_000).toISOString(),
+    };
+  }
+
+  test('#1318: an accepted Consent is stored in patientConsents with a server consentId, ACTIVE, its evidence, its decision event, its outbox event and one INGESTION_ACCEPTED row', async ({ request }) => {
+    const sourceRecordId = `rf029-e2e-${Date.now()}-consent`;
+    const payload = await seedConsentReferences(request);
+
+    const res = await ingest(request, { entityType: 'Consent', payload, provenance: provenance(sourceRecordId) });
+
+    expect(res.status(), await res.text()).toBe(201);
+    const body = await res.json();
+    consentIdsToDelete.push(body.entityId);
+    expect(body).toMatchObject({ success: true, status: 'accepted', entityType: 'Consent', missingDataReasons: [] });
+    expect(body.entityId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+
+    const stored = await findIngestedRecord('patientConsents', 'consentId', body.entityId);
+    expect(stored).toMatchObject({
+      createdBy: `Actor/${admin.user._id}`,
+      sourceRecordId,
+      participantId: payload.participantId,
+      consentTemplateId: payload.consentTemplateId,
+      status: 'ACTIVE',
+      currentStateDerived: 'active',
+      signatureName: null,
+    });
+    expect(new Date(stored.signedAt).toISOString()).toBe(payload.consentAcceptedAt);
+    expect(stored.evidenceHash).toMatch(/^sha256:[0-9a-f]{64}$/);
+
+    const decisions = await findConsentDecisionEvents(body.entityId);
+    expect(decisions.map((row: { decision: string }) => row.decision)).toEqual(['accepted']);
+
+    const events = await findOutboxEvents(body.entityId);
+    expect(events).toHaveLength(1);
+    expect(events[0].aggregateType).toBe('Consent');
+
+    const rows = await findIngestionAuditRows('INGESTION_ACCEPTED', body.entityId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].resourceType).toBe('Consent');
+  });
+
+  test('#1318: a Consent carrying signatureName answers 422 INGESTION_STORE_UNSUPPORTED, persists nothing, and audits no name', async ({ request }) => {
+    const sourceRecordId = `rf029-e2e-${Date.now()}-consent-signature`;
+    const signatureName = `RF029 e2e signer name ${Date.now()}`;
+    const payload = await seedConsentReferences(request);
+
+    const res = await ingest(request, { entityType: 'Consent', payload: { ...payload, signatureName }, provenance: provenance(sourceRecordId) });
+
+    expect(res.status(), await res.text()).toBe(422);
+    const body = await res.json();
+    expect(body).toMatchObject({ success: false, error: 'INGESTION_STORE_UNSUPPORTED' });
+    expect(body.details).toEqual([expect.stringContaining('signatureName')]);
+    expect(JSON.stringify(body)).not.toContain(signatureName);
+
+    expect(await countIngestedBySourceRecordId('patientConsents', sourceRecordId)).toBe(0);
+    expect(await countIngestedBySourceRecordId('ingestionQuarantineRecords', sourceRecordId)).toBe(0);
+    const refusals = await findIngestionRefusalRows('Consent');
+    expect(refusals.length).toBeGreaterThan(0);
+    expect(JSON.stringify(refusals)).not.toContain(signatureName);
   });
 
   test('a quarantined record retried with the same key answers 422 again and writes no second quarantine record', async ({ request }) => {
