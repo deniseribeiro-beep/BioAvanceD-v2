@@ -27,7 +27,9 @@ class RcsAssessmentModel {
       // RF018 AC2 and AC3 (#1320): the use context the request carried, and
       // the RCSInputSnapshot this assessment was computed from.
       qualificationContext: data.qualificationContext ?? null,
-      // RF018 AC2 (#1320): the context's assay family and workflow protocol, top-level as V2E-0442..0444 name them.
+      // RF018 AC2 (#1320): the context's intended use, target analyte, assay family and workflow protocol, top-level as V2E-0440..0444 name them.
+      intendedUseCode: data.intendedUseCode ?? null,
+      targetAnalyte: data.targetAnalyte ?? null,
       assayFamily: data.assayFamily ?? null,
       workflowProtocolId: data.workflowProtocolId ?? null,
       workflowProtocolVersion: data.workflowProtocolVersion ?? null,
@@ -78,6 +80,8 @@ class RcsAssessmentModel {
       axisPenalties: result.axis_penalties,
       calculationTrace: result.calculation_trace,
       qualificationContext: result.qualification_context,
+      intendedUseCode: result.qualification_context?.intendedUseCode,
+      targetAnalyte: result.qualification_context?.targetAnalyte,
       assayFamily: result.qualification_context?.assayFamily,
       workflowProtocolId: result.qualification_context?.workflowProtocolId,
       workflowProtocolVersion: result.qualification_context?.workflowProtocolVersion,

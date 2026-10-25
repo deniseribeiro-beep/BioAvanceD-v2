@@ -523,10 +523,24 @@ describe('rcs-assessment.service', () => {
       expect(assessment.workflowProtocolVersion).toBe(qualificationContext.workflowProtocolVersion);
     });
 
-    it('writes null for the three fields on a result with no qualification_context', async () => {
+    // RF018 AC2 (#1320): the context's intended use and target analyte, top-level (V2E-0440, V2E-0441).
+    it('writes the context intended use and target analyte top-level beside qualificationContext', async () => {
+      const qualificationContext = {
+        intendedUseCode: 'research-sequencing', targetAnalyte: 'cfDNA', assayFamily: 'sequencing',
+        workflowProtocolId: 'p1', workflowProtocolVersion: '1.0',
+      };
+      const assessment = await recordAssessment(createFakeDb(), 'SPEC-1', { ...certified(), qualification_context: { ...qualificationContext } });
+      expect(assessment.qualificationContext).toEqual(qualificationContext);
+      expect(assessment.intendedUseCode).toBe(qualificationContext.intendedUseCode);
+      expect(assessment.targetAnalyte).toBe(qualificationContext.targetAnalyte);
+    });
+
+    it('writes null for the five fields on a result with no qualification_context', async () => {
       const assessment = await recordAssessment(createFakeDb(), 'SPEC-1', certified());
       expect(assessment.qualificationContext).toBeNull();
-      expect(assessment).toMatchObject({ assayFamily: null, workflowProtocolId: null, workflowProtocolVersion: null });
+      expect(assessment).toMatchObject({
+        intendedUseCode: null, targetAnalyte: null, assayFamily: null, workflowProtocolId: null, workflowProtocolVersion: null,
+      });
     });
 
     // RF018 (#1320): the penalty and score are the result's own p_bio and rcs_score (V2E-0539, V2E-0540).

@@ -219,9 +219,7 @@ const KNOWN_DRIFT = {
       { elementId: 'P1X-0067', field: 'governanceChecks', note: 'TODO(#1320): 1..* Core -- code emits governanceRuleCodes (extra below), not this canonical name.' },
       { elementId: 'P1X-0068', field: 'governanceFailureCodes', note: 'TODO(#1320): 0..* Condicional -- code emits governanceFailureReasons (extra below), not this canonical name.' },
       { elementId: 'P1X-0070', field: 'evidenceRefs', note: 'TODO(#1320): 0..* Essencial -- not emitted.' },
-      { elementId: 'P1X-0071', field: 'calculationStatus', note: 'TODO(#1320): 1..1 Core -- code emits calculationTrace (extra below), a free-form value, not this canonical status field.' },
-      { elementId: 'V2E-0440', field: 'intendedUseCode', note: 'TODO(#1320): 1..1 Core -- held as qualificationContext.intendedUseCode, as the v2.0.0 synthetic example (biobankExample.rcsAssessments[0]) nests it; null until a request carries a context.' },
-      { elementId: 'V2E-0441', field: 'targetAnalyte', note: 'TODO(#1320): 1..1 Core -- held as qualificationContext.targetAnalyte, as the v2.0.0 synthetic example (biobankExample.rcsAssessments[0]) nests it; null until a request carries a context.' }
+      { elementId: 'P1X-0071', field: 'calculationStatus', note: 'TODO(#1320): 1..1 Core -- code emits calculationTrace (extra below), a free-form value, not this canonical status field.' }
     ],
     extra: [
       { key: 'modelVersion', note: 'TODO(#1320): no canonical counterpart; likely predecessor of rcsModelVersion (ELM-0161, absent above).' },

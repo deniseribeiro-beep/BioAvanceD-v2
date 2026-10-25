@@ -1375,6 +1375,8 @@ describe('sample.service', () => {
         expect(inserted.assayFamily).toBe(qualificationContext.assayFamily);
         expect(inserted.workflowProtocolId).toBe(qualificationContext.workflowProtocolId);
         expect(inserted.workflowProtocolVersion).toBe(qualificationContext.workflowProtocolVersion);
+        expect(inserted.intendedUseCode).toBe(qualificationContext.intendedUseCode);
+        expect(inserted.targetAnalyte).toBe(qualificationContext.targetAnalyte);
       });
 
       it('does not fail sample creation when recording the RcsAssessment snapshot rejects', async () => {

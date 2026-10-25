@@ -215,6 +215,54 @@ describe('RcsAssessmentModel assayFamily, workflowProtocolId and workflowProtoco
   });
 });
 
+// RF018 AC2 (#1320): the context's intended use and target analyte, top-level beside qualificationContext.
+describe('RcsAssessmentModel intendedUseCode and targetAnalyte (V2E-0440, V2E-0441)', () => {
+  const none = { intendedUseCode: null, targetAnalyte: null };
+
+  it('defaults the two fields to null and keeps given values', () => {
+    expect(RcsAssessmentModel.fieldsOf({})).toMatchObject(none);
+    const given = { intendedUseCode: 'research-sequencing', targetAnalyte: 'cfDNA' };
+    expect(RcsAssessmentModel.fieldsOf(given)).toMatchObject(given);
+  });
+
+  it('fromCertificationResult takes the two fields from the result qualification_context', () => {
+    const context = {
+      intendedUseCode: 'research-sequencing', targetAnalyte: 'cfDNA', assayFamily: 'sequencing',
+      workflowProtocolId: 'p1', workflowProtocolVersion: '1.0',
+    };
+    const doc = RcsAssessmentModel.fromCertificationResult('SPEC-1', { qualification_context: context });
+    expect(doc.intendedUseCode).toBe(context.intendedUseCode);
+    expect(doc.targetAnalyte).toBe(context.targetAnalyte);
+    expect(doc.qualificationContext).toBe(context);
+
+    const intendedUseCode = { coding: [{ code: 'RESEARCH' }] };
+    const targetAnalyte = { coding: [{ code: 'cfDNA' }] };
+    const coded = RcsAssessmentModel.fromCertificationResult('SPEC-1', { qualification_context: { ...context, intendedUseCode, targetAnalyte } });
+    expect(coded.intendedUseCode).toBe(intendedUseCode);
+    expect(coded.intendedUseCode).toBe(coded.qualificationContext.intendedUseCode);
+    expect(coded.targetAnalyte).toBe(targetAnalyte);
+    expect(coded.targetAnalyte).toBe(coded.qualificationContext.targetAnalyte);
+  });
+
+  it('fromCertificationResult gives null with no context or a null field', () => {
+    for (const result of [{}, { qualification_context: null }]) {
+      expect(RcsAssessmentModel.fromCertificationResult('SPEC-1', result)).toMatchObject(none);
+    }
+    const doc = RcsAssessmentModel.fromCertificationResult('SPEC-1', {
+      qualification_context: { intendedUseCode: 'x', targetAnalyte: null, assayFamily: 'sequencing', workflowProtocolId: 'p1', workflowProtocolVersion: '1.0' },
+    });
+    expect(doc.targetAnalyte).toBeNull();
+    expect(doc.intendedUseCode).toBe('x');
+  });
+
+  it('takes the intended use and target analyte from the context over refs', () => {
+    const refs = { intendedUseCode: 'refs-use', targetAnalyte: 'refs-analyte' };
+    expect(RcsAssessmentModel.fromCertificationResult('SPEC-1', {}, refs)).toMatchObject(none);
+    const context = { intendedUseCode: 'research-sequencing', targetAnalyte: 'cfDNA' };
+    expect(RcsAssessmentModel.fromCertificationResult('SPEC-1', { qualification_context: context }, refs)).toMatchObject(context);
+  });
+});
+
 // RF018 (#1320): the result's own P_bio and score, never computed here.
 describe('RcsAssessmentModel preanalyticalPenalty and score (V2E-0539, V2E-0540)', () => {
   it('default to null and keep given values', () => {
