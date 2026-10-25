@@ -10,6 +10,7 @@ const { selectEntries, planSteps, upsertDocs, missingDocsOf } = require('../src/
 const { buildCoverageManifest, assessRelease } = require('../src/reference-data/reference-imports/coverage');
 const { insertDataQualityAssessment } = require('../src/ingestion/dataQualityAssessment');
 const releaseService = require('../src/services/referenceRelease.service');
+const rulePackageService = require('../src/services/rcs-rule-package.service');
 
 // Phase 2 (plano §5, RF028) for the essential reference set: the MIABIS and
 // SPREC minimal sets and the RCS-GOV 1.0 package. Foundation (Phase 1,
@@ -35,6 +36,8 @@ const INITIATED_BY = 'system:essential-reference-load';
 // INFERENCE, not a citation: the essential set accepts no rejected record,
 // since a single keyless doc already fails its run.
 const MAX_REJECTION_RATE = 0;
+
+const RCS_DATASET_CODE = 'rcs-gov-1.0';
 
 function parseArgs(argv) {
   const args = { dryRun: false, only: null };
@@ -255,10 +258,26 @@ async function promoteLoaded(db, { run, release }) {
   };
 }
 
+// RF018 AC10, CFG-006 (#1320): the RCSRulePackage of the running rules is
+// written after the rcs-gov-1.0 release is active, the one positive evidence
+// the load has that those rules are the approved release (plano §7). It is
+// written only when it validates; an unwritten package does not fail the
+// load.
+async function recordRunningRulePackage(db, releases) {
+  const row = releases.find((candidate) => candidate.datasetCode === RCS_DATASET_CODE);
+  if (!row || row.releaseStatus !== 'active') {
+    return { written: false, rcsRulePackageId: null, errors: [`${RCS_DATASET_CODE} release not active`] };
+  }
+  return rulePackageService.recordRulePackage(db, rulePackageService.runningRulePackageFields(undefined, { status: 'active' }));
+}
+
 /**
- * Returns { blocked, runs, releases }. `blocked` names why nothing loaded:
- * no ready ReadinessReport for this environment. `releases` holds one row
- * per full-mode entry: its release, read back after any promotion.
+ * Returns { blocked, runs, releases, rulePackage }. `blocked` names why
+ * nothing loaded: no ready ReadinessReport for this environment. `releases`
+ * holds one row per full-mode entry: its release, read back after any
+ * promotion.
+ * `rulePackage` is the RCSRulePackage write, null on a dry run or a
+ * selection without rcs-gov-1.0.
  */
 async function runLoad({ db, args, environment }) {
   const selected = selectEntries(args.only);
@@ -273,7 +292,10 @@ async function runLoad({ db, args, environment }) {
     runs.push(loaded.run);
     if (!args.dryRun) releases.push(await promoteLoaded(db, loaded));
   }
-  return { blocked: null, runs, releases };
+  const rulePackage = !args.dryRun && selected.some((entry) => entry.key === RCS_DATASET_CODE)
+    ? await recordRunningRulePackage(db, releases)
+    : null;
+  return { blocked: null, runs, releases, rulePackage };
 }
 
 // The job gates the API on the essential set: a completed entry whose
@@ -297,6 +319,7 @@ async function main() {
       blocked: result.blocked,
       runs: result.runs.map(({ datasetCode, importMode, runStatus, recordsRead, recordsInserted, recordsSkipped }) => ({ datasetCode, importMode, runStatus, recordsRead, recordsInserted, recordsSkipped })),
       releases: result.releases,
+      rulePackage: result.rulePackage,
     }, null, 2));
     code = exitCodeFor(result);
   } finally {

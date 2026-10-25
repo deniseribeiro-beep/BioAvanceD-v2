@@ -26,6 +26,7 @@ const CANONICAL_COLLECTIONS = Object.freeze({
   rcsAssessments: env.COLL_RCS_ASSESSMENTS || 'rcsAssessments',
   rcsInputSnapshots: env.COLL_RCS_INPUT_SNAPSHOTS || 'rcsInputSnapshots',
   rcsGovernanceEvidenceSnapshots: env.COLL_RCS_GOVERNANCE_EVIDENCE_SNAPSHOTS || 'rcsGovernanceEvidenceSnapshots',
+  rcsRulePackages: env.COLL_RCS_RULE_PACKAGES || 'rcsRulePackages',
   encounters: env.COLL_ENCOUNTERS || 'encounters',
   conditions: env.COLL_CONDITIONS || 'conditions',
   phenotypeObservations: env.COLL_PHENOTYPE_OBSERVATIONS || 'phenotypeObservations',

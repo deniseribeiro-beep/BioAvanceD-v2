@@ -5,9 +5,12 @@ const crypto = require('crypto');
 // with its SPREC mapping release, its checksum, its governance gate version,
 // its status and its validation evidence.
 //
-// A Phase 1 structure written by no flow: modelled and catalog-conformant,
-// with no collection registered. rcs-certification.service.js#rulePackage()
-// does not use it (see docs/decisions/2026-10-24-rcs-rule-package-model.md).
+// Stored in the rcsRulePackages collection. The Phase 2 essential-reference
+// load writes a package only when it validates, which the running rules do
+// not yet: their version is not a SemVer and no validation evidence exists.
+// rcs-certification.service.js#rulePackage() does not use it (see
+// docs/decisions/2026-10-24-rcs-rule-package-model.md and
+// docs/decisions/2026-10-25-rcs-rule-package-collection-and-writer.md).
 
 // V2E-0357 is a SHA-256 digest, written `sha256:<hex>` as the service writes
 // the package checksum; a bare 64-hex digest is the same value.

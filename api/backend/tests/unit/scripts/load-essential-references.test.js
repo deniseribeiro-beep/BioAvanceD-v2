@@ -3,6 +3,7 @@ const { runLoad, parseArgs, exitCodeFor } = require('../../../scripts/load-essen
 const { runSeed } = require('../../../scripts/seed-essential-reference-data');
 const releaseService = require('../../../src/services/referenceRelease.service');
 const auditLogger = require('../../../src/utils/auditLogger');
+const rulePackageService = require('../../../src/services/rcs-rule-package.service');
 const ReferenceDatasetReleaseModel = require('../../../src/models/ReferenceDatasetRelease');
 const { getManifestByKey } = require('../../../src/reference-data/essential/manifest');
 const miabisSeed = require('../../../src/reference-data/miabis.min.json');
@@ -26,6 +27,14 @@ const runsOf = (db) => db.collection(CANONICAL_COLLECTIONS.referenceImportRuns).
 const releasesOf = (db) => db.collection(CANONICAL_COLLECTIONS.referenceDatasetReleases).docs;
 const manifestsOf = (db) => db.collection(CANONICAL_COLLECTIONS.referenceCoverageManifests).docs;
 const assessmentsOf = (db) => db.collection(CANONICAL_COLLECTIONS.dataQualityAssessments).docs;
+const packagesOf = (db) => db.collection(CANONICAL_COLLECTIONS.rcsRulePackages).docs;
+// Test-only data: the running package fields with a SemVer and a validation
+// evidence id, which the running rules lack.
+const validPackageFields = () => ({
+  ...rulePackageService.runningRulePackageFields(undefined, { status: 'active' }),
+  semanticVersion: '1.0.0',
+  validationEvidenceIds: ['rcs-validation-study-1'],
+});
 const releaseOf = (db, datasetCode) => releasesOf(db).find((release) => release.datasetCode === datasetCode);
 const miabisCount = ['sampleTypes', 'sampleOrigins', 'extractionProtocols', 'qualityDescriptions']
   .reduce((total, key) => total + miabisSeed[key].length, 0);
@@ -106,6 +115,53 @@ describe('essential reference load (Phase 2)', () => {
     })));
     expect(auditLogger.log).toHaveBeenCalledTimes(3);
     for (const [event] of auditLogger.log.mock.calls) expect(event.action).toBe('PROMOTE');
+
+    // RF018 AC10 (#1320): the running rules name no SemVer and have no
+    // validation evidence, so no RCSRulePackage is written.
+    expect(result.rulePackage).toMatchObject({ written: false, rcsRulePackageId: null });
+    expect(result.rulePackage.errors).toHaveLength(2);
+    expect(result.rulePackage.errors).toContain('semanticVersion deve ser SemVer (MAJOR.MINOR.PATCH) para RCSRulePackage (1..1): RCS-GOV-1.0');
+    expect(result.rulePackage.errors).toContain('validationEvidenceIds é obrigatório para RCSRulePackage (1..*, Reference)');
+    expect(packagesOf(db)).toHaveLength(0);
+  });
+
+  it('writes a valid RCSRulePackage once the rcs-gov-1.0 release is active, and a re-run stores still one', async () => {
+    const db = createFakeDb();
+    await foundation(db);
+    const fields = validPackageFields();
+    vi.spyOn(rulePackageService, 'runningRulePackageFields').mockReturnValue(fields);
+    const first = await load(db);
+
+    expect(releaseOf(db, 'rcs-gov-1.0').releaseStatus).toBe('active');
+    expect(packagesOf(db)).toHaveLength(1);
+    expect(packagesOf(db)[0]).toMatchObject({ ...fields, rcsRulePackageId: first.rulePackage.rcsRulePackageId });
+    expect(first.rulePackage).toMatchObject({ written: true, errors: [] });
+
+    const second = await load(db);
+    expect(packagesOf(db)).toHaveLength(1);
+    expect(second.rulePackage).toEqual({ written: false, rcsRulePackageId: first.rulePackage.rcsRulePackageId, errors: [] });
+    expect(exitCodeFor(second)).toBe(0);
+  });
+
+  it('a rcs-gov-1.0 release that is not active writes no RCSRulePackage', async () => {
+    const db = createFakeDb();
+    await foundation(db);
+    vi.spyOn(rulePackageService, 'runningRulePackageFields').mockReturnValue(validPackageFields());
+    vi.spyOn(releaseService, 'promoteRelease').mockResolvedValue({ promoted: false, reason: 'promotion_in_progress' });
+    const result = await load(db, ['--only=rcs-gov-1.0']);
+
+    expect(releaseOf(db, 'rcs-gov-1.0').releaseStatus).toBe('approved');
+    expect(result.rulePackage).toEqual({ written: false, rcsRulePackageId: null, errors: ['rcs-gov-1.0 release not active'] });
+    expect(packagesOf(db)).toHaveLength(0);
+  });
+
+  it('a selection without rcs-gov-1.0 records no RCSRulePackage', async () => {
+    const db = createFakeDb();
+    await foundation(db);
+    const result = await load(db, ['--only=miabis-minimal']);
+
+    expect(result.rulePackage).toBeNull();
+    expect(packagesOf(db)).toHaveLength(0);
   });
 
   it('registers the release before the first upsert', async () => {
@@ -184,6 +240,8 @@ describe('essential reference load (Phase 2)', () => {
     expect(releasesOf(db)).toHaveLength(0);
     expect(manifestsOf(db)).toHaveLength(0);
     expect(db.collection('sampleTypes').docs).toHaveLength(0);
+    expect(result.rulePackage).toBeNull();
+    expect(packagesOf(db)).toHaveLength(0);
     expect(exitCodeFor(result)).toBe(0);
   });
 

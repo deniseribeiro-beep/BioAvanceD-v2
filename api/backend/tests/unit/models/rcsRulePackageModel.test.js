@@ -3,8 +3,8 @@ import { describe, it, expect } from 'vitest';
 // #1320, RF018 AC10 and V2E-0354..0360: the RCSRulePackage model. fieldsOf
 // emits the catalog's fields, validate enforces each 1..1 and 1..* Core
 // field, the SemVer version, the SHA-256 checksum and the release lifecycle
-// status, and create returns the validated document deep-frozen. No
-// collection is registered for it.
+// status, and create returns the validated document deep-frozen. Its
+// collection is rcsRulePackages.
 
 const fs = require('fs');
 const path = require('path');
@@ -95,9 +95,9 @@ describe('RCSRulePackage', () => {
     expect(() => RcsRulePackageModel.create({ ...VALID, status: 'published' })).toThrow('status inválido');
   });
 
-  it('registers no collection', () => {
-    for (const file of ['src/config/collections.js', 'src/config/env.js']) {
-      expect(fs.readFileSync(path.join(BACKEND_ROOT, file), 'utf8')).not.toContain('rcsRulePackages');
-    }
+  it('registers the rcsRulePackages collection', () => {
+    const read = (file) => fs.readFileSync(path.join(BACKEND_ROOT, file), 'utf8');
+    expect(read('src/config/collections.js')).toContain("rcsRulePackages: env.COLL_RCS_RULE_PACKAGES || 'rcsRulePackages',");
+    expect(read('src/config/env.js')).toContain("COLL_RCS_RULE_PACKAGES: process.env.COLL_RCS_RULE_PACKAGES || 'rcsRulePackages',");
   });
 });

@@ -212,6 +212,7 @@ module.exports = {
   COLL_RCS_ASSESSMENTS: process.env.COLL_RCS_ASSESSMENTS || 'rcsAssessments',
   COLL_RCS_INPUT_SNAPSHOTS: process.env.COLL_RCS_INPUT_SNAPSHOTS || 'rcsInputSnapshots',
   COLL_RCS_GOVERNANCE_EVIDENCE_SNAPSHOTS: process.env.COLL_RCS_GOVERNANCE_EVIDENCE_SNAPSHOTS || 'rcsGovernanceEvidenceSnapshots',
+  COLL_RCS_RULE_PACKAGES: process.env.COLL_RCS_RULE_PACKAGES || 'rcsRulePackages',
   COLL_ENCOUNTERS: process.env.COLL_ENCOUNTERS || 'encounters',
   COLL_CONDITIONS: process.env.COLL_CONDITIONS || 'conditions',
   COLL_PHENOTYPE_OBSERVATIONS: process.env.COLL_PHENOTYPE_OBSERVATIONS || 'phenotypeObservations',
