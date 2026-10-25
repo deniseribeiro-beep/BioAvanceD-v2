@@ -5,6 +5,7 @@ const fhirService = require('./fhir.service');
 const fhirValidator = require('./fhir-validator.service');
 const { loadConformanceRegistry } = require('./identifierNamespaceRegistry.service');
 const logger = require('../utils/logger');
+const { withRequestId } = require('../utils/requestContext');
 const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 const fs = require('fs');
@@ -309,7 +310,7 @@ class ImportAsyncService {
       // Adiciona job na fila
       const queueJob = await queue.add(
         'import',
-        {
+        withRequestId({
           jobID,
           userID,
           dataType,
@@ -317,7 +318,7 @@ class ImportAsyncService {
           fileName: file.originalname,
           fileSize: file.size,
           options,
-        },
+        }),
         {
           jobId: jobID,
           priority: options.priority || 0,

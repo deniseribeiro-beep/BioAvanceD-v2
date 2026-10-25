@@ -57,3 +57,53 @@ describe('requestContext', () => {
     expect(arg).toEqual({ password: '[REDACTED]', id: 7 });
   });
 });
+
+// #1323: RNF015 C1 -- a queue job enqueued during a request carries the id
+// into the worker.
+describe('requestContext queue jobs', () => {
+  function inRequest(requestId, fn) {
+    return new Promise((resolve, reject) => {
+      requestContext.middleware({ headers: { 'x-request-id': requestId } }, { setHeader() {} }, () => {
+        Promise.resolve().then(fn).then(resolve, reject);
+      });
+    });
+  }
+
+  it('stamps job data with the current request id', async () => {
+    const data = await inRequest('req-enqueue-0001', () => requestContext.withRequestId({ a: 1 }));
+    expect(data).toEqual({ a: 1, requestId: 'req-enqueue-0001' });
+  });
+
+  it('returns job data unchanged outside a request', () => {
+    const data = { a: 1 };
+    const out = requestContext.withRequestId(data);
+    expect(out).toBe(data);
+    expect(out).not.toHaveProperty('requestId');
+  });
+
+  it('runs a job under its request id, which reaches the log line', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    let seen;
+    await requestContext.withJobRequestContext(async () => {
+      seen = requestContext.currentRequestId();
+      logger.error('falha no job');
+    })({ data: { requestId: 'req-job-0001' } });
+    expect(seen).toBe('req-job-0001');
+    expect(spy.mock.calls[0][0]).toMatch(/\[req:req-job-0001\]/);
+  });
+
+  it('drops a job request id that could inject text into a log line', async () => {
+    let seen = 'unset';
+    await requestContext.withJobRequestContext(async () => {
+      seen = requestContext.currentRequestId();
+    })({ data: { requestId: 'abc\n[ERROR] forged' } });
+    expect(seen).toBeNull();
+  });
+
+  it('does not let a job without an id inherit an outer request id', async () => {
+    const seen = await inRequest('req-outer-0001', () =>
+      requestContext.withJobRequestContext(async () => requestContext.currentRequestId())({ data: {} })
+    );
+    expect(seen).toBeNull();
+  });
+});

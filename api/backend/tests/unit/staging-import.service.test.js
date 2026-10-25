@@ -9,6 +9,7 @@ const StagingImport = require('../../src/services/stagingImport.store');
 const connectionModule = require('../../src/infrastructure/database/mongodb/connection');
 const queueModule = require('../../src/config/queue');
 const logger = require('../../src/utils/logger');
+const requestContext = require('../../src/utils/requestContext');
 
 const SERVICE_PATH = require.resolve('../../src/services/staging-import.service');
 
@@ -267,6 +268,21 @@ describe('staging-import.service', () => {
       expect(updateArg.$set.updatedAt).toBeInstanceOf(Date);
 
       expect(result).toBe(queueJob);
+    });
+
+    // #1323: RNF015 C1 -- the job carries the id of the request that enqueued it.
+    it('stamps the job data with the id of the request that dispatches it', async () => {
+      const addSpy = vi.fn().mockResolvedValue({ id: 'queue-job-id-2' });
+      queueModule.getQueue.mockReturnValue({ add: addSpy });
+      vi.spyOn(StagingImport, 'updateOne').mockResolvedValue({});
+
+      await new Promise((resolve, reject) => {
+        requestContext.middleware({ headers: { 'x-request-id': 'req-batch-0001' } }, { setHeader() {} }, () => {
+          stagingImportService.dispatchBatchJob({ jobId: 'job-req', fileName: 'r.csv' }).then(resolve, reject);
+        });
+      });
+
+      expect(addSpy.mock.calls[0][1]).toMatchObject({ jobId: 'job-req', requestId: 'req-batch-0001' });
     });
   });
 

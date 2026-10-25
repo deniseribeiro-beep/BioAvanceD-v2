@@ -5,6 +5,7 @@ const { v4: uuidv4 } = require('uuid');
 const StagingImport = require('./stagingImport.store');
 const { getQueue } = require('../config/queue');
 const logger = require('../utils/logger');
+const { withRequestId } = require('../utils/requestContext');
 const { UPLOADS_BASE } = require('../config/uploadConfig');
 
 class StagingImportService {
@@ -79,11 +80,11 @@ class StagingImportService {
 
     const queueJob = await queue.add(
       'batch-import',
-      {
+      withRequestId({
         jobId: stagingImport.jobId,
         stagingImportId: stagingImport.jobId,
         fileName: stagingImport.fileName,
-      },
+      }),
       {
         jobId: stagingImport.jobId,
         removeOnComplete: true,

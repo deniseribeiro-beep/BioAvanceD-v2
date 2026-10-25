@@ -5,6 +5,7 @@ const redis = require('../config/redis');
 const { initRedis } = require('../config/queue');
 const { validateRedisOnly } = require('../config/validateEnv');
 const logger = require('../utils/logger');
+const { withJobRequestContext } = require('../utils/requestContext');
 const patientWorker = require('./workers/patient-worker');
 const sampleWorker = require('./workers/sample-worker');
 const resultWorker = require('./workers/result-worker');
@@ -101,7 +102,7 @@ async function initWorker() {
     // Cria worker
     worker = new Worker(
       'import-queue',
-      async (job) => {
+      withJobRequestContext(async (job) => {
         const { jobID, userID, dataType, filePath, fileName, options } = job.data;
         const dataTypeNormalized = (dataType || '').toString().trim().toLowerCase();
         const allowedTypes = new Set(['patients', 'samples', 'results', 'temperature', 'temperature-iot']);
@@ -400,7 +401,7 @@ async function initWorker() {
 
           throw error;
         }
-      },
+      }),
       {
         connection,
         // #971: default 1, NOT 2. Every duplicate check on the import path is a
@@ -454,7 +455,7 @@ async function initWorker() {
     if (!notificationWorker) {
       notificationWorker = new Worker(
         'notification-queue',
-        async (job) => {
+        withJobRequestContext(async (job) => {
           if (job.name !== 'consent-notification') {
             logger.warn(`Job desconhecido em notification-queue: ${job.name}`);
             return null;
@@ -462,7 +463,7 @@ async function initWorker() {
 
           const notificationService = getNotificationService();
           return notificationService.processConsentNotificationJob(job.data, db);
-        },
+        }),
         {
           connection,
           concurrency: parseInt(process.env.NOTIFICATION_WORKER_CONCURRENCY || '3', 10),

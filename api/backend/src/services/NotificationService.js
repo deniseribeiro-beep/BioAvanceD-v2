@@ -3,6 +3,7 @@ const { Queue } = require('bullmq');
 const { Server } = require('socket.io');
 const crypto = require('crypto');
 const logger = require('../utils/logger');
+const { withRequestId } = require('../utils/requestContext');
 const { connectDB } = require('../database/mongo');
 const participantIdentityService = require('./participantIdentity.service');
 const { initRedis } = require('../config/queue');
@@ -576,10 +577,10 @@ class NotificationService {
       if (patientData?.[field] !== undefined) queuedPatientData[field] = patientData[field];
     }
 
-    await queue.add('consent-notification', {
+    await queue.add('consent-notification', withRequestId({
       patientData: queuedPatientData,
       consentLink
-    });
+    }));
 
     return [{ channel: 'queue', success: true, provider: 'bullmq' }];
   }
