@@ -28,6 +28,7 @@ const {
 } = require('../utils/physicalChainIndexes');
 const { ensureParticipantIdentityIndexes } = require('../utils/participantIdentityIndexes');
 const { ensureSampleIndexes } = require('../utils/sampleIndexes');
+const { ensurePatientLookupIndexes } = require('../utils/patientIndexes');
 const { ensureSessionIndexes } = require('../utils/sessionIndexes');
 const { ensureStagingImportIndexes } = require('../utils/stagingImportIndexes');
 const { ensureTelemetryExposureSummaryIndexes } = require('../utils/telemetryExposureSummaryIndexes');
@@ -43,6 +44,7 @@ const { COLLECTION: BIOMARKER_ASSOCIATIONS } = require('../services/biomarkerAss
 const INDEX_TARGETS = [
   { collection: CANONICAL_COLLECTIONS.participantIdentities, ensure: ensureParticipantIdentityIndexes },
   { collection: CANONICAL_COLLECTIONS.samples, ensure: ensureSampleIndexes },
+  { collection: CANONICAL_COLLECTIONS.patients, ensure: ensurePatientLookupIndexes },
   { collection: 'sessions', ensure: ensureSessionIndexes },
   { collection: 'stagingImports', ensure: ensureStagingImportIndexes },
   { collection: 'storageContainers', ensure: ensureStorageContainerIndexes },

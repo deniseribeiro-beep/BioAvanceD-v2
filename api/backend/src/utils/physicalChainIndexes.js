@@ -53,6 +53,14 @@ async function ensureStorageLocationIndexes(collection) {
 // issued inside a caller's transaction relies on this boot-time build.
 async function ensureLabelIdentifierIndexes(collection) {
   if (!canIndex(collection)) return;
+  // RNF002 C1/C2 (#1324): resolveScan matches { encodedValue, status: 'active' }
+  // with no namespace, which the namespace-first unique index cannot serve.
+  // Built first, so duplicate active labels failing the constraint below
+  // do not also cost the lookup plan (#1027).
+  await collection.createIndex(
+    { encodedValue: 1 },
+    { name: 'label_identifiers_encoded_value_active_idx_v1', partialFilterExpression: { status: 'active' } }
+  );
   await collection.createIndex(
     { namespaceRegistryId: 1, encodedValue: 1 },
     { unique: true, name: 'uniq_active_label_value', partialFilterExpression: { status: 'active' } }
