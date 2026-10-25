@@ -47,11 +47,16 @@
  * mount's model, with the mount's uuid consentId. Its `validateReferences`
  * runs the mount's participant, template, validity and responses gates, then
  * requires a granted consent, a past decision time within the term's
- * validity, and no consent of the participant in force. It brought two keys:
+ * validity, and no consent of the participant in force unless the record
+ * names the one in force. It brought three keys:
  * `prepareDocument` stores the decision's evidence and builds its permission
  * rows before the write, and `removeProjection` removes those rows and its
  * decision event when the idempotency race is lost; its `appendProjection`
  * writes them with CONSENT_UPSERTED in the insert's transaction. Its
+ * `appendAfterAccept` supersedes the consent in force the record names, and
+ * runs only once the record has won its idempotency key, in the insert's
+ * transaction where there is one, never on a lost race
+ * (docs/decisions/2026-10-25-ingestion-consent-supersession.md). Its
  * `missingnessFields` are empty, and its `identityFields` add the signer's
  * name and image to Participant's, so neither is ever quarantined as sent
  * (docs/decisions/2026-10-24-ingestion-consent-target.md).
@@ -79,6 +84,7 @@ const {
   prepareConsentDocument,
   appendConsentProjection,
   removeConsentProjection,
+  supersedeConsentInForce,
 } = require('./consentTarget');
 
 const INGESTION_TARGETS = Object.freeze({
@@ -162,6 +168,7 @@ const INGESTION_TARGETS = Object.freeze({
     prepareDocument: prepareConsentDocument,
     appendProjection: appendConsentProjection,
     removeProjection: removeConsentProjection,
+    appendAfterAccept: supersedeConsentInForce,
     // signatureBase64 is the mount's alias for signatureImageBase64.
     identityFields: Object.freeze([...LEGACY_PATIENT_IDENTITY_FIELDS, ...PARTICIPANT_IDENTITY_ONLY_FIELDS, 'signatureName', 'signatureImageBase64', 'signatureBase64']),
   }),

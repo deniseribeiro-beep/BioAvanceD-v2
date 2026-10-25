@@ -283,8 +283,9 @@ async function ingestUnderRelease({ db, target, entityType, payload, provenance,
   doc.createdBy = outcome.provenance.createdBy;
   // A target's own preparation of the stamped document before its write,
   // outside the transaction (Consent stores its evidence and builds its
-  // permission rows); what it answers goes to appendProjection.
-  const prepared = target.prepareDocument ? await target.prepareDocument(db, doc) : undefined;
+  // permission rows), from the stamped document and the create input; what
+  // it answers goes to appendProjection and appendAfterAccept.
+  const prepared = target.prepareDocument ? await target.prepareDocument(db, doc, references.input) : undefined;
   // RF029 AC7: one MissingDataReason per absent missingness field, read off
   // the stored document, so an absence is recorded and never written as 0.
   const reasons = buildMissingDataReasons({
@@ -341,7 +342,13 @@ async function ingestUnderRelease({ db, target, entityType, payload, provenance,
         }
         // RNF011 C3, in the same transaction (RF029 AC6).
         await insertDataQualityAssessment(db, assessment, opts);
-        return { eventId, projectionEventIds };
+        return { eventId, projectionEventIds, insertedId: inserted?.insertedId };
+      };
+      // A target's own writes to another record, made only once this record
+      // has won its key, so a lost race never touches them (Consent
+      // supersedes the consent in force the record names).
+      const appendAfterAccept = async ({ insertedId }, afterOpts) => {
+        if (target.appendAfterAccept) await target.appendAfterAccept(db, { doc, insertedId, prepared }, afterOpts);
       };
       const accepted = (outboxEventId) => ({
         status: 'accepted',
@@ -358,13 +365,16 @@ async function ingestUnderRelease({ db, target, entityType, payload, provenance,
           const ref = await recordCompletedIdempotentResult(db, key, opts);
           if (ref !== entityId) return replayOf(db, entityType, await findCompletedIdempotentEntry(db, scope, opts), releases, opts);
         }
-        return accepted((await persist()).eventId);
+        const persisted = await persist();
+        await appendAfterAccept(persisted, opts);
+        return accepted(persisted.eventId);
       }
 
       // Without a transaction the key is recorded last, so a failed insert
       // leaves no completed key pointing at nothing (idempotency.js's
       // findCompletedIdempotentResult: a key is recorded once its result exists).
-      const { eventId: outboxEventId, projectionEventIds } = await persist();
+      const persisted = await persist();
+      const { eventId: outboxEventId, projectionEventIds } = persisted;
       if (key) {
         const ref = await recordCompletedIdempotentResult(db, key);
         if (ref !== entityId) {
@@ -384,6 +394,7 @@ async function ingestUnderRelease({ db, target, entityType, payload, provenance,
           return replayOf(db, entityType, await findCompletedIdempotentEntry(db, scope), releases);
         }
       }
+      await appendAfterAccept(persisted, {});
       return accepted(outboxEventId);
     });
   } catch (error) {

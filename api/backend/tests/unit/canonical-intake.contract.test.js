@@ -113,6 +113,13 @@ describe('canonical.v1.intake consent (#1318)', () => {
     expect(valid).toBe(true);
   });
 
+  it('canonical.v1.consent accepts the supersedesConsentId of the consent in force it supersedes', () => {
+    const { valid, errors } = validate('canonical.v1.consent', { participantId: '12345678', supersedesConsentId: 'consent-prior' });
+
+    expect(errors).toEqual([]);
+    expect(valid).toBe(true);
+  });
+
   it('canonical.v1.consent rejects a non-boolean response', () => {
     const { valid } = validate('canonical.v1.consent', { participantId: '12345678', responses: { storage: 'yes' } });
 
@@ -122,6 +129,7 @@ describe('canonical.v1.intake consent (#1318)', () => {
   it.each([
     ['participantId', '12345678'],
     ['responses', { storage: true }],
+    ['supersedesConsentId', 'consent-prior'],
   ])('rejects an intake whose consent carries %s', (field, value) => {
     const { valid } = validate('canonical.v1.intake', { ...baseIntake, consent: { consentGranted: true, [field]: value } });
 

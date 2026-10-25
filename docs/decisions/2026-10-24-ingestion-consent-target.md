@@ -30,7 +30,7 @@ C. **Its gates, on a model-valid copy** (`consentTarget.js` `validateConsentRefe
    | `consentAcceptedAt` parses to a time not after now and not before the template's `validFrom` (a time after `validTo` is after now); absent refuses | 409 | `CONSENT_DECISION_TIME_INVALID` |
    | no consent of the participant has status `ACTIVE`, `VALID` or `GRANTED` (the statuses Specimen's gate trusts) | 409 | `CONSENT_ALREADY_ACTIVE` |
 
-   `consentAcceptedAt` is the decision time (ELM-0093). The mount stamps now because it records a live signing; an ingested record is a past one, and an absence never becomes a value (RF029 AC7). The mount supersedes a consent in force; supersession rewrites another consent's state, which the no-transaction loser path cannot undo, so ingestion refuses. No lookup has a catch: a rejected lookup rethrows as a failure, never a verdict an idempotency key would replay for good. On success the mount's create input is written back: the trimmed `consentTemplateId`, `signedAt` = `consentAcceptedAt`, `consentVersion` = the template's `version` as a string or null, `consentModel` = the template's `consentModel` or null.
+   `consentAcceptedAt` is the decision time (ELM-0093). The mount stamps now because it records a live signing; an ingested record is a past one, and an absence never becomes a value (RF029 AC7). *(Superseded by `2026-10-25-ingestion-consent-supersession.md`.)* The mount supersedes a consent in force; supersession rewrites another consent's state, which the no-transaction loser path cannot undo, so ingestion refuses. No lookup has a catch: a rejected lookup rethrows as a failure, never a verdict an idempotency key would replay for good. On success the mount's create input is written back: the trimmed `consentTemplateId`, `signedAt` = `consentAcceptedAt`, `consentVersion` = the template's `version` as a string or null, `consentModel` = the template's `consentModel` or null.
 
 D. **Consent is the eighth target.** It lands where the mount writes, collection `patientConsents`, id field `consentId`, through `PatientConsentModel.validate` and `create`, against `canonical.v1.consent`. `create` sets `status` ACTIVE and drops `consentGranted` and `consentAcceptedAt`, whose value `signedAt` carries.
    - The id is a server uuid, the default, which is the mount's `randomUUID`. No `generateId`.
@@ -49,7 +49,7 @@ E. **What is written in the insert's transaction** (RF029 AC6, RF023 AC3), throu
 
 ## Not decided here
 
-- **Supersession of a consent in force by an ingested one**, and revocation by ingestion.
+- **Supersession of a consent in force by an ingested one**: decided in `2026-10-25-ingestion-consent-supersession.md`. Revocation by ingestion stays open.
 - **The consent's purpose.**
 - **`studyId`.** It is not in `canonical.v1.consent`, so a body that sends it quarantines.
 - **`signatureMimeType`, `signatureHash`, `ipAddress` and `userAgent`.** They are outside the schema and not identity, so a body that sends one quarantines as sent.

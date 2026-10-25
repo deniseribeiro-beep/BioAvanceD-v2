@@ -631,6 +631,30 @@ test.describe('POST /api/ingestion/records (RF029, #1318) — real backend', () 
     expect(rows[0].resourceType).toBe('Consent');
   });
 
+  test('#1318 RF010 AC5: a Consent naming the participant\'s consent in force is accepted and supersedes it through its history', async ({ request }) => {
+    const payload = await seedConsentReferences(request);
+
+    const first = await ingest(request, { entityType: 'Consent', payload, provenance: provenance(`rf029-e2e-${Date.now()}-consent-prior`) });
+    expect(first.status(), await first.text()).toBe(201);
+    const priorId = (await first.json()).entityId;
+    consentIdsToDelete.push(priorId);
+
+    const successor = { ...payload, supersedesConsentId: priorId, consentAcceptedAt: new Date(Date.now() - 30_000).toISOString() };
+    const res = await ingest(request, { entityType: 'Consent', payload: successor, provenance: provenance(`rf029-e2e-${Date.now()}-consent-successor`) });
+
+    expect(res.status(), await res.text()).toBe(201);
+    const body = await res.json();
+    consentIdsToDelete.push(body.entityId);
+    expect(body).toMatchObject({ success: true, status: 'accepted', entityType: 'Consent' });
+
+    const stored = await findIngestedRecord('patientConsents', 'consentId', body.entityId);
+    expect(stored).toMatchObject({ supersedesConsentId: priorId, status: 'ACTIVE', currentStateDerived: 'active' });
+    const prior = await findIngestedRecord('patientConsents', 'consentId', priorId);
+    expect(prior).toMatchObject({ status: 'REVOKED', currentStateDerived: 'superseded', supersededByConsentId: body.entityId });
+    const priorDecisions = await findConsentDecisionEvents(priorId);
+    expect(priorDecisions.map((row: { decision: string }) => row.decision).sort()).toEqual(['accepted', 'superseded']);
+  });
+
   test('#1318: a Consent carrying signatureName answers 422 INGESTION_STORE_UNSUPPORTED, persists nothing, and audits no name', async ({ request }) => {
     const sourceRecordId = `rf029-e2e-${Date.now()}-consent-signature`;
     const signatureName = `RF029 e2e signer name ${Date.now()}`;

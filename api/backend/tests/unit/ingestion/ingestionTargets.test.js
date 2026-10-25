@@ -103,22 +103,24 @@ describe('ingestion/ingestionTargets (RF029, #1318)', () => {
     }
   });
 
-  it('gives Consent the consent model, the mount\'s uuid id, its prepare, projection and removal hooks, and the civil identity fields plus the signer\'s name and image, frozen', () => {
+  it('gives Consent the consent model, the mount\'s uuid id, its prepare, projection, removal and after-accept hooks, and the civil identity fields plus the signer\'s name and image, frozen', () => {
     const PatientConsentModel = require('../../../src/models/PatientConsent');
     const { LEGACY_PATIENT_IDENTITY_FIELDS, PARTICIPANT_IDENTITY_ONLY_FIELDS } = require('../../../src/utils/legacyPatientIdentityFields');
-    const { prepareConsentDocument, appendConsentProjection, removeConsentProjection } = require('../../../src/ingestion/consentTarget');
-    expect(Object.keys(INGESTION_TARGETS.Consent)).toEqual(['schemaId', 'store', 'collection', 'idField', 'model', 'missingnessFields', 'validateReferences', 'prepareDocument', 'appendProjection', 'removeProjection', 'identityFields']);
+    const { prepareConsentDocument, appendConsentProjection, removeConsentProjection, supersedeConsentInForce } = require('../../../src/ingestion/consentTarget');
+    expect(Object.keys(INGESTION_TARGETS.Consent)).toEqual(['schemaId', 'store', 'collection', 'idField', 'model', 'missingnessFields', 'validateReferences', 'prepareDocument', 'appendProjection', 'removeProjection', 'appendAfterAccept', 'identityFields']);
     expect(Object.isFrozen(INGESTION_TARGETS.Consent)).toBe(true);
     expect(INGESTION_TARGETS.Consent.model).toBe(PatientConsentModel);
     expect(INGESTION_TARGETS.Consent.prepareDocument).toBe(prepareConsentDocument);
     expect(INGESTION_TARGETS.Consent.appendProjection).toBe(appendConsentProjection);
     expect(INGESTION_TARGETS.Consent.removeProjection).toBe(removeConsentProjection);
+    expect(INGESTION_TARGETS.Consent.appendAfterAccept).toBe(supersedeConsentInForce);
     const { identityFields } = INGESTION_TARGETS.Consent;
     expect(identityFields).toEqual([...LEGACY_PATIENT_IDENTITY_FIELDS, ...PARTICIPANT_IDENTITY_ONLY_FIELDS, 'signatureName', 'signatureImageBase64', 'signatureBase64']);
     expect(Object.isFrozen(identityFields)).toBe(true);
     for (const entityType of ['Dataset', 'WorkflowRun', 'OmicsQualification', 'Assay', 'OmicsRun', 'Specimen', 'Participant']) {
       expect(INGESTION_TARGETS[entityType]).not.toHaveProperty('prepareDocument');
       expect(INGESTION_TARGETS[entityType]).not.toHaveProperty('removeProjection');
+      expect(INGESTION_TARGETS[entityType]).not.toHaveProperty('appendAfterAccept');
     }
   });
 

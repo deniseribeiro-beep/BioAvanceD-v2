@@ -126,15 +126,37 @@ async function validateConsentReferences(db, payload) {
     throw referenceError(409, 'consentAcceptedAt deve ser uma data válida, não futura e dentro da vigência do template', 'CONSENT_DECISION_TIME_INVALID');
   }
 
-  // The mount supersedes a consent in force; that rewrites another consent's
-  // state, which a lost race without a transaction cannot undo, so ingestion
-  // refuses instead.
-  const inForce = await getCollection(db, 'consents').findOne({
+  // RF010 AC5: the mount supersedes a consent in force through its history;
+  // ingestion does so only for a record naming the one consent in force with
+  // a newer decision, and never silently
+  // (docs/decisions/2026-10-25-ingestion-consent-supersession.md).
+  const inForce = await getCollection(db, 'consents').find({
     participantId: payload.participantId,
     status: { $in: ACTIVE_CONSENT_STATUSES },
-  });
-  if (inForce) {
+  }).toArray();
+  const named = payload.supersedesConsentId;
+  if (inForce.length === 0) {
+    if (named !== undefined) {
+      throw referenceError(409, `supersedesConsentId ${named} não é um consentimento em vigor do participantId ${payload.participantId}`, 'CONSENT_SUPERSESSION_INVALID');
+    }
+  } else if (named === undefined) {
     throw referenceError(409, `participantId ${payload.participantId} já tem consentimento ativo`, 'CONSENT_ALREADY_ACTIVE');
+  } else if (inForce.length > 1) {
+    throw referenceError(409, `participantId ${payload.participantId} tem mais de um consentimento em vigor: ${inForce.map(consentHistory.consentKeyOf).join(', ')}`, 'CONSENT_SUPERSESSION_INVALID');
+  } else {
+    const [prior] = inForce;
+    const priorKey = consentHistory.consentKeyOf(prior);
+    const priorSignedAt = prior.signedAt ? new Date(prior.signedAt) : null;
+    if (typeof named !== 'string'
+      || named !== consentHistory.consentKeyOf(prior)
+      // A claim another record holds, in flight or left by a failure, is
+      // never positive evidence the prior can be superseded.
+      || prior.supersededByConsentId != null
+      || !priorSignedAt
+      || Number.isNaN(priorSignedAt.getTime())
+      || decidedAt.getTime() <= priorSignedAt.getTime()) {
+      throw referenceError(409, `supersedesConsentId ${named} deve ser o consentimento em vigor ${priorKey}, com uma decisão posterior à dele`, 'CONSENT_SUPERSESSION_INVALID');
+    }
   }
 
   // The mount's create input.
@@ -149,12 +171,28 @@ async function validateConsentReferences(db, payload) {
  * insert as the mount stores it, so a keyless deployment refuses rather than
  * record a consent with none, and the permission rows the transaction
  * writes. The template is read again with no catch: one gone since the gates
- * is a failure, never a verdict.
+ * is a failure, never a verdict. A record naming a consent to supersede
+ * (`input`, the create input, since the model's create drops the name) has
+ * it read again the same way, before any evidence is stored, and answered as
+ * `supersedes` for supersedeConsentInForce.
  */
-async function prepareConsentDocument(db, doc) {
+async function prepareConsentDocument(db, doc, input) {
   const template = await findTemplate(db, doc.consentTemplateId);
   if (!template) {
     throw new Error(`consentTemplateId ${doc.consentTemplateId} não encontrado ao registrar a evidência`);
+  }
+  let supersedes = null;
+  if (typeof input?.supersedesConsentId === 'string') {
+    const inForce = await getCollection(db, 'consents').find({
+      participantId: doc.participantId,
+      status: { $in: ACTIVE_CONSENT_STATUSES },
+    }).toArray();
+    supersedes = inForce.find((consent) => consentHistory.consentKeyOf(consent) === input.supersedesConsentId) || null;
+    if (!supersedes) {
+      throw new Error(`supersedesConsentId ${input.supersedesConsentId} não está mais em vigor ao registrar a evidência`);
+    }
+    // As the mount stamps it.
+    doc.supersedesConsentId = input.supersedesConsentId;
   }
   const evidence = consentEvidence.storeConsentEvidence({
     consentId: doc.consentId,
@@ -176,6 +214,7 @@ async function prepareConsentDocument(db, doc) {
       template,
       signedAt: doc.signedAt,
     }),
+    supersedes,
   };
 }
 
@@ -212,9 +251,53 @@ async function removeConsentProjection(db, { entityId }) {
   await getCollection(db, 'consentDecisionEvents').deleteMany({ consentId: entityId });
 }
 
+/**
+ * RF010 AC5: the consent the record named is superseded through its history,
+ * as the mount supersedes it, once the record has won its idempotency key, so
+ * a lost race never touches it. One conditional claim decides: a prior no
+ * longer in force, or already superseded, is never rewritten. In a
+ * transaction that aborts the record; without one the record stays accepted
+ * and nothing is written. Without a transaction, a history write that fails
+ * after the claim releases it and rethrows, so the prior is never left in
+ * force with a claim that refuses every later supersession.
+ */
+async function supersedeConsentInForce(db, { doc, insertedId, prepared }, opts = {}) {
+  const prior = prepared?.supersedes;
+  if (!prior) return;
+  const claim = await getCollection(db, 'consents').updateOne(
+    { _id: prior._id, status: { $in: ACTIVE_CONSENT_STATUSES }, supersededByConsentId: null },
+    { $set: { supersededByConsentId: doc.consentId } },
+    opts,
+  );
+  if (claim?.modifiedCount !== 1) {
+    if (opts.session) {
+      throw new Error(`consentimento ${consentHistory.consentKeyOf(prior)} não está mais em vigor para ser substituído por ${doc.consentId}`);
+    }
+    return;
+  }
+  try {
+    await consentHistory.recordSupersession(
+      db,
+      prior,
+      { _id: insertedId, ...doc },
+      { ...DECISION_ACTOR, signerId: String(doc.participantId) },
+      opts.session || null,
+    );
+  } catch (error) {
+    if (!opts.session) {
+      await getCollection(db, 'consents').updateOne(
+        { _id: prior._id, supersededByConsentId: doc.consentId },
+        { $set: { supersededByConsentId: null } },
+      );
+    }
+    throw error;
+  }
+}
+
 module.exports = {
   validateConsentReferences,
   prepareConsentDocument,
   appendConsentProjection,
   removeConsentProjection,
+  supersedeConsentInForce,
 };

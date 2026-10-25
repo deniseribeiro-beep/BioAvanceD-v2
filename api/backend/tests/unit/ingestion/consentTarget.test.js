@@ -5,6 +5,7 @@ const {
   prepareConsentDocument,
   appendConsentProjection,
   removeConsentProjection,
+  supersedeConsentInForce,
 } = require('../../../src/ingestion/consentTarget');
 const consentEvidence = require('../../../src/services/consentEvidence.service');
 const { createFakeDb } = require('./testHelpers');
@@ -13,7 +14,8 @@ const { createMatchingCollection } = require('../../factories/filter.factory');
 // RF029 (#1318): Consent, the eighth ingestion target, reuses the consent
 // mount's participant, template, validity and responses gates
 // (consent.service.js createPatientConsent), and accepts only a granted,
-// dated decision for a participant with no consent in force.
+// dated decision for a participant with no consent in force, or one naming
+// the one consent in force with a newer decision, which it supersedes.
 
 afterEach(() => { vi.restoreAllMocks(); });
 
@@ -62,6 +64,20 @@ function consentDb({ templates = [template()], consents = [], patients = [{ part
 
 async function refusal(db, payload) {
   return validateConsentReferences(db, payload).then(() => null, (error) => error);
+}
+
+// The participant's one consent in force, signed before ACCEPTED_AT.
+function priorConsent(overrides = {}) {
+  return {
+    _id: new ObjectId(),
+    consentId: 'consent-prior',
+    participantId: PARTICIPANT,
+    consentTemplateId: TEMPLATE_HEX,
+    responses: { storage: true, recontact: false },
+    signedAt: new Date(Date.now() - 10 * DAY),
+    status: 'ACTIVE',
+    ...overrides,
+  };
 }
 
 const EVIDENCE = {
@@ -194,7 +210,7 @@ describe('ingestion/consentTarget validateConsentReferences (RF029, #1318)', () 
     expect(payload.signedAt).toBe(consentAcceptedAt);
   });
 
-  it.each(['ACTIVE', 'VALID', 'GRANTED'])('12. a participant whose consent is %s is 409 CONSENT_ALREADY_ACTIVE: ingestion never supersedes', async (status) => {
+  it.each(['ACTIVE', 'VALID', 'GRANTED'])('12. a participant whose consent is %s is 409 CONSENT_ALREADY_ACTIVE for a record that names no consent to supersede', async (status) => {
     const error = await refusal(consentDb({ consents: [{ participantId: PARTICIPANT, status }] }), { ...CONSENT });
 
     expect(error).toMatchObject({ statusCode: 409, violationCode: 'CONSENT_ALREADY_ACTIVE' });
@@ -206,15 +222,46 @@ describe('ingestion/consentTarget validateConsentReferences (RF029, #1318)', () 
     await expect(validateConsentReferences(db, { ...CONSENT })).resolves.toBeUndefined();
   });
 
-  it.each(['patients', 'consent_templates', 'patientConsents'])('14. a %s lookup that fails rejects with its error, never a 404 or 409 verdict', async (collection) => {
+  it.each([
+    ['patients', 'findOne'],
+    ['consent_templates', 'findOne'],
+    ['patientConsents', 'find'],
+  ])('14. a %s lookup that fails rejects with its error, never a 404 or 409 verdict', async (collection, method) => {
     const db = consentDb();
     const outage = new Error('connection reset');
-    db.collection(collection).findOne = async () => { throw outage; };
+    db.collection(collection)[method] = method === 'find'
+      ? () => ({ toArray: async () => { throw outage; } })
+      : async () => { throw outage; };
 
     const error = await refusal(db, { ...CONSENT });
 
     expect(error).toBe(outage);
     expect(error.statusCode).toBeUndefined();
+  });
+
+  it.each(['ACTIVE', 'VALID', 'GRANTED'])('12b. a record naming the one consent in force, %s, with a newer decision resolves', async (status) => {
+    const payload = { ...CONSENT, supersedesConsentId: 'consent-prior' };
+
+    await expect(validateConsentReferences(consentDb({ consents: [priorConsent({ status })] }), payload)).resolves.toBeUndefined();
+
+    expect(payload).toMatchObject({ supersedesConsentId: 'consent-prior', signedAt: ACCEPTED_AT });
+  });
+
+  it.each([
+    ['a name that is not the consent in force', 'consent-other', () => [priorConsent()]],
+    ['a name that is not a string', 7, () => [priorConsent()]],
+    ['a name with no consent in force', 'consent-prior', () => []],
+    ['a name with two consents in force', 'consent-prior', () => [priorConsent(), priorConsent({ consentId: 'consent-prior-2', status: 'VALID' })]],
+    ['a decision at the prior\'s signedAt', 'consent-prior', () => [priorConsent({ signedAt: new Date(ACCEPTED_AT) })]],
+    ['a decision before the prior\'s signedAt', 'consent-prior', () => [priorConsent({ signedAt: new Date(Date.now() - DAY / 2) })]],
+    ['a prior with no signedAt', 'consent-prior', () => [priorConsent({ signedAt: undefined })]],
+    ['a prior with an unparseable signedAt', 'consent-prior', () => [priorConsent({ signedAt: 'never' })]],
+    ['a prior in force already claimed by another consent', 'consent-prior', () => [priorConsent({ supersededByConsentId: 'consent-other' })]],
+  ])('12c. %s is 409 CONSENT_SUPERSESSION_INVALID, naming ids and never responses', async (_label, supersedesConsentId, consents) => {
+    const error = await refusal(consentDb({ consents: consents() }), { ...CONSENT, supersedesConsentId });
+
+    expect(error).toMatchObject({ statusCode: 409, violationCode: 'CONSENT_SUPERSESSION_INVALID' });
+    expect(error.message).not.toMatch(/storage|recontact/);
   });
 });
 
@@ -259,6 +306,37 @@ describe('ingestion/consentTarget prepareConsentDocument (RF029, #1318)', () => 
     expect(error).toBeInstanceOf(Error);
     expect(error.statusCode).toBeUndefined();
     expect(store).not.toHaveBeenCalled();
+  });
+
+  it('16b. a record naming the consent in force has it stamped as supersedesConsentId and answered as supersedes; one naming none answers null', async () => {
+    vi.spyOn(consentEvidence, 'storeConsentEvidence').mockReturnValue(EVIDENCE);
+    const prior = priorConsent();
+    const db = consentDb({ consents: [prior] });
+    const doc = { ...DOC };
+
+    const prepared = await prepareConsentDocument(db, doc, { supersedesConsentId: 'consent-prior' });
+
+    expect(doc).toEqual({ ...DOC, ...EVIDENCE, supersedesConsentId: 'consent-prior' });
+    expect(prepared.supersedes).toMatchObject({ _id: prior._id, consentId: 'consent-prior' });
+
+    const plain = { ...DOC };
+    expect((await prepareConsentDocument(db, plain, {})).supersedes).toBeNull();
+    expect(plain).not.toHaveProperty('supersedesConsentId');
+  });
+
+  it.each([
+    ['gone', []],
+    ['no longer in force', [priorConsent({ status: 'REVOKED' })]],
+  ])('16c. a named consent %s since the gates is a plain failure, never a verdict, and stores no evidence', async (_label, consents) => {
+    const store = vi.spyOn(consentEvidence, 'storeConsentEvidence').mockReturnValue(EVIDENCE);
+    const doc = { ...DOC };
+
+    const error = await prepareConsentDocument(consentDb({ consents }), doc, { supersedesConsentId: 'consent-prior' }).catch((e) => e);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error.statusCode).toBeUndefined();
+    expect(store).not.toHaveBeenCalled();
+    expect(doc).toEqual(DOC);
   });
 
   it('17. a template lookup that fails rejects with its error', async () => {
@@ -363,5 +441,97 @@ describe('ingestion/consentTarget appendConsentProjection and removeConsentProje
 
     expect(db.collections.consentPermissions.docs).toEqual([{ consentId: 'other' }]);
     expect(db.collections.consentDecisionEvents.docs).toEqual([{ consentId: 'other' }]);
+  });
+});
+
+describe('ingestion/consentTarget supersedeConsentInForce (RF029, RF010 AC5, #1318)', () => {
+  function successor() {
+    return {
+      _id: new ObjectId(),
+      consentId: 'consent-uuid-1',
+      participantId: PARTICIPANT,
+      consentTemplateId: TEMPLATE_HEX,
+      responses: { storage: true, recontact: false },
+      signedAt: new Date(ACCEPTED_AT),
+      status: 'ACTIVE',
+      supersedesConsentId: 'consent-prior',
+      ...EVIDENCE,
+    };
+  }
+
+  it('22. supersedes the named prior through its history: one superseded decision event, supersededByConsentId and the derived state REVOKED', async () => {
+    const prior = priorConsent();
+    const doc = successor();
+    const db = consentDb({ consents: [prior, doc] });
+
+    await supersedeConsentInForce(db, { doc, insertedId: doc._id, prepared: { permissionRows: [], supersedes: prior } });
+
+    expect(db.collections.consentDecisionEvents.docs).toEqual([expect.objectContaining({
+      consentId: 'consent-prior',
+      participantId: PARTICIPANT,
+      decision: 'superseded',
+      channel: 'staff_portal',
+      signerRole: 'participant',
+      signerId: PARTICIPANT,
+      authenticationLevel: 'session',
+      evidenceUri: EVIDENCE.evidenceDocumentUri,
+      evidenceHash: EVIDENCE.evidenceHash,
+    })]);
+    expect(db.collections.patientConsents.docs[0]).toMatchObject({ supersededByConsentId: 'consent-uuid-1', status: 'REVOKED', currentStateDerived: 'superseded' });
+    expect(db.collections.patientConsents.docs[1]).not.toHaveProperty('supersededByConsentId');
+  });
+
+  it('23. a record that names no consent writes nothing', async () => {
+    const prior = priorConsent();
+    const db = consentDb({ consents: [prior] });
+
+    await supersedeConsentInForce(db, { doc: successor(), insertedId: new ObjectId(), prepared: { permissionRows: [], supersedes: null } });
+
+    expect(db.collections.patientConsents.updateOne).not.toHaveBeenCalled();
+    expect(db.collections.consentDecisionEvents.docs).toHaveLength(0);
+  });
+
+  it.each([
+    ['revoked since', { status: 'REVOKED' }],
+    ['superseded by another record since', { supersededByConsentId: 'consent-other' }],
+  ])('24. a prior %s is never rewritten: without a session nothing is written', async (_label, change) => {
+    const prior = priorConsent(change);
+    const before = { ...prior };
+    const doc = successor();
+    const db = consentDb({ consents: [prior, doc] });
+
+    await expect(supersedeConsentInForce(db, { doc, insertedId: doc._id, prepared: { supersedes: priorConsent({ _id: prior._id }) } })).resolves.toBeUndefined();
+
+    expect(db.collections.consentDecisionEvents.docs).toHaveLength(0);
+    expect(db.collections.patientConsents.docs[0]).toEqual(before);
+  });
+
+  it('25. a prior revoked since, in a transaction, throws a plain error so the record aborts', async () => {
+    const prior = priorConsent({ status: 'REVOKED' });
+    const doc = successor();
+    const db = consentDb({ consents: [prior, doc] });
+    const session = { id: 'session-1' };
+
+    const error = await supersedeConsentInForce(db, { doc, insertedId: doc._id, prepared: { supersedes: priorConsent({ _id: prior._id }) } }, { session }).catch((e) => e);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error.statusCode).toBeUndefined();
+    expect(db.collections.patientConsents.updateOne).toHaveBeenCalledTimes(1);
+    expect(db.collections.patientConsents.updateOne.mock.calls[0][2]).toEqual({ session });
+    expect(db.collections.consentDecisionEvents.docs).toHaveLength(0);
+  });
+
+  it('26. without a session, a supersession whose history write fails releases the claim and rethrows, so the prior stays in force and can still be superseded', async () => {
+    const prior = priorConsent();
+    const doc = successor();
+    const db = consentDb({ consents: [prior, doc] });
+    const outage = new Error('network blip');
+    db.collections.consentDecisionEvents.insertOne = vi.fn(async () => { throw outage; });
+
+    const error = await supersedeConsentInForce(db, { doc, insertedId: doc._id, prepared: { supersedes: priorConsent({ _id: prior._id }) } }).catch((e) => e);
+
+    expect(error).toBe(outage);
+    expect(db.collections.patientConsents.docs[0]).toMatchObject({ status: 'ACTIVE', supersededByConsentId: null });
+    expect(db.collections.consentDecisionEvents.docs).toHaveLength(0);
   });
 });

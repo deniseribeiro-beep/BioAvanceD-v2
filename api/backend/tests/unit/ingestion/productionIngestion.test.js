@@ -1320,12 +1320,14 @@ describe('ingestion/productionIngestion ingestAndPersist (RF029, #1318)', () => 
     const db = consentDb();
     const outage = new Error('connection reset');
     // patientConsents is read again for a source duplicate (RNF011 C3), so
-    // only its in-force lookup fails: the gate's own rethrow is what rejects.
-    const lookup = db.collection(collection).findOne;
-    db.collection(collection).findOne = async (filter, ...rest) => {
-      if (collection !== 'patientConsents' || filter?.status) throw outage;
-      return lookup(filter, ...rest);
-    };
+    // only its in-force lookup, a find, fails: the gate's own rethrow is
+    // what rejects.
+    if (collection === 'patientConsents') {
+      const find = db.collection(collection).find;
+      db.collection(collection).find = (filter, ...rest) => (filter?.status ? { toArray: async () => { throw outage; } } : find(filter, ...rest));
+    } else {
+      db.collection(collection).findOne = async () => { throw outage; };
+    }
     const outbox = fakeOutbox();
 
     await expect(ingestConsent(db, { outbox, idempotencyKey: 'consent-key-1' })).rejects.toBe(outage);
@@ -1351,6 +1353,81 @@ describe('ingestion/productionIngestion ingestAndPersist (RF029, #1318)', () => 
     expect(db.collections.consentPermissions.docs.map((row) => row.consentId)).toEqual([winner.entityId, winner.entityId]);
     expect(db.collections.consentDecisionEvents.docs.map((row) => row.consentId)).toEqual([winner.entityId]);
     expect(db.collections.dataQualityAssessments.docs.map((d) => d.scopeId)).toEqual([`Consent/${winner.entityId}`]);
+  });
+
+  // #1318, RF010 AC5: a Consent naming the participant's one consent in
+  // force supersedes it through its history, only once the record has won
+  // its idempotency key (consentTarget.js supersedeConsentInForce).
+  function priorConsent() {
+    const { ObjectId } = require('mongodb');
+    return {
+      _id: new ObjectId(),
+      consentId: 'consent-prior',
+      participantId: PARTICIPANT,
+      consentTemplateId: TEMPLATE_HEX,
+      responses: { storage: true, recontact: false },
+      signedAt: new Date(Date.now() - 10 * DAY),
+      status: 'ACTIVE',
+    };
+  }
+  const SUPERSEDING_RECORD = { ...CONSENT_RECORD, supersedesConsentId: 'consent-prior' };
+
+  it('59b. an accepted Consent naming the consent in force carries supersedesConsentId, and the prior is superseded through one superseded decision event', async () => {
+    stubConsentEvidence();
+    const prior = priorConsent();
+    const db = consentDb({ consents: [prior] });
+
+    const result = await ingestConsent(db, { payload: SUPERSEDING_RECORD });
+
+    expect(result.status).toBe('accepted');
+    const [storedPrior, stored] = db.collections.patientConsents.docs;
+    expect(stored).toMatchObject({ consentId: result.entityId, supersedesConsentId: 'consent-prior', status: 'ACTIVE', currentStateDerived: 'active' });
+    expect(storedPrior).toMatchObject({ consentId: 'consent-prior', supersededByConsentId: result.entityId, status: 'REVOKED', currentStateDerived: 'superseded' });
+    expect(db.collections.consentDecisionEvents.docs.map((row) => [row.consentId, row.decision]))
+      .toEqual([[result.entityId, 'accepted'], ['consent-prior', 'superseded']]);
+  });
+
+  it('59c. on a replica set, the supersession\'s claim, decision event and recomputed state share the insert\'s session', async () => {
+    stubConsentEvidence();
+    const prior = priorConsent();
+    const db = consentDb({ consents: [prior] });
+    const session = onReplicaSet(db);
+
+    const result = await ingestConsent(db, { payload: SUPERSEDING_RECORD });
+
+    expect(result.status).toBe('accepted');
+    const updates = db.collections.patientConsents.updateOne;
+    expect(updates).toHaveBeenCalledWith(
+      { _id: prior._id, status: { $in: ['ACTIVE', 'VALID', 'GRANTED'] }, supersededByConsentId: null },
+      { $set: { supersededByConsentId: result.entityId } },
+      { session },
+    );
+    expect(updates.mock.calls.filter(([filter]) => String(filter._id) === String(prior._id)).length).toBeGreaterThan(1);
+    expect(updates.mock.calls.every(([, , opts]) => opts?.session === session)).toBe(true);
+    expect(db.collections.consentDecisionEvents.insertOne).toHaveBeenCalledWith(expect.objectContaining({ consentId: 'consent-prior', decision: 'superseded' }), { session });
+  });
+
+  it('59d. without a session, two concurrent Consents with one key naming the consent in force supersede it once, for the winner, and the loser never claims it', async () => {
+    stubConsentEvidence();
+    const { db, winner, loser, docs } = await raceOnOneKey({
+      entityType: 'Consent',
+      payload: SUPERSEDING_RECORD,
+      collection: 'patientConsents',
+      seed: (target) => seedConsentReferences(target, { consents: [priorConsent()] }),
+    });
+
+    expect(winner.status).toBe('accepted');
+    expect(loser).toMatchObject({ status: 'idempotent_replay', outcome: 'accepted', entityType: 'Consent', resultRef: winner.entityId });
+    // The loser never even attempts the claim, whichever request reached the key first.
+    const claims = db.collections.patientConsents.updateOne.mock.calls
+      .filter(([, update]) => update?.$set && 'supersededByConsentId' in update.$set);
+    expect(claims.length).toBeGreaterThan(0);
+    expect(claims.map(([, update]) => update.$set.supersededByConsentId)).toEqual(claims.map(() => winner.entityId));
+    expect(docs.map((d) => d.consentId)).toEqual(['consent-prior', winner.entityId]);
+    expect(docs[0]).toMatchObject({ supersededByConsentId: winner.entityId, status: 'REVOKED', currentStateDerived: 'superseded' });
+    expect(db.collections.consentDecisionEvents.docs.map((row) => [row.consentId, row.decision]))
+      .toEqual([[winner.entityId, 'accepted'], ['consent-prior', 'superseded']]);
+    expect(db.collections.consentPermissions.docs.map((row) => row.consentId)).toEqual([winner.entityId, winner.entityId]);
   });
 
   const TELEMETRY_READING = { sensorId: 'sensor-1', metricType: 'temperature', timestamp: '2026-10-01T12:00:00.000Z', value: -80.1, unit: 'Cel', idempotencyKey: 'reading-key-1' };

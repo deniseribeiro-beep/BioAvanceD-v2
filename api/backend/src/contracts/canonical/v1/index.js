@@ -85,7 +85,9 @@ const consentSchema = {
     // The participant and the answers PatientConsentModel.validate requires,
     // in the consent mount's patientConsentSchema shape (#1318).
     participantId: { type: 'string', minLength: 1 },
-    responses: { type: 'object', additionalProperties: { type: 'boolean' } }
+    responses: { type: 'object', additionalProperties: { type: 'boolean' } },
+    // The one consent in force an ingested consent supersedes (#1318).
+    supersedesConsentId: { type: 'string', minLength: 1 }
   }
 };
 
@@ -516,7 +518,7 @@ const intakeSchema = {
     consent: {
       type: 'object',
       allOf: [{ $ref: 'canonical.v1.consent' }],
-      properties: { participantId: false, responses: false }
+      properties: { participantId: false, responses: false, supersedesConsentId: false }
     },
     specimen: { $ref: 'canonical.v1.specimen' },
     // The organization the intake stamps as Sample.organizationId (#1376).
