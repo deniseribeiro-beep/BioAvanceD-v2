@@ -118,6 +118,99 @@ describe('GET /api/export/fhir/workflow-runs/:workflowRunId', () => {
   });
 });
 
+// find and findOne evaluate their filters: the walk's `{ field: { $in } }`
+// levels and `$or` root lookup, and the route's `$or` of `workflowRunId`
+// and `_id` `$in` reads.
+function workflowRunsCollection(docs) {
+  const matchesIn = (doc, filter) => Object.entries(filter).every(([field, condition]) => (
+    (Array.isArray(doc[field]) ? doc[field] : [doc[field]]).some((value) => (
+      condition.$in.some((wanted) => String(wanted) === String(value))
+    ))
+  ));
+  const matchesLookup = (doc, clause) => (
+    ('_id' in clause && String(doc._id) === String(clause._id))
+    || ('workflowRunId' in clause && doc.workflowRunId === clause.workflowRunId)
+  );
+  const matches = (doc, filter) => (filter.$or
+    ? filter.$or.some((clause) => (Object.values(clause)[0]?.$in ? matchesIn(doc, clause) : matchesLookup(doc, clause)))
+    : matchesIn(doc, filter));
+  return createCollectionMock({
+    findOne: vi.fn(async (filter) => docs.find((doc) => matches(doc, filter)) || null),
+    find: vi.fn((filter) => ({ toArray: async () => docs.filter((doc) => matches(doc, filter)) })),
+  });
+}
+
+describe('GET /api/export/fhir/workflow-runs/:workflowRunId/lineage', () => {
+  const chain = [
+    { _id: new ObjectId(), workflowRunId: 'run-A', inputFileIds: [], outputFileIds: ['f1'] },
+    { _id: new ObjectId(), workflowRunId: 'run-B', inputFileIds: ['f1'], outputFileIds: ['f2'] },
+    { _id: new ObjectId(), workflowRunId: 'run-C', inputFileIds: ['f2'], outputFileIds: [] },
+  ];
+
+  it('lineage returns 401 without token', async () => {
+    const res = await request(app).get('/api/export/fhir/workflow-runs/run-B/lineage');
+    expect(res.status).toBe(401);
+  });
+
+  it('lineage returns 403 for a Tecnico (accessType 2)', async () => {
+    const workflowRuns = workflowRunsCollection(chain);
+    givenDb({ workflowRuns });
+
+    const res = await request(app).get('/api/export/fhir/workflow-runs/run-B/lineage').set('Authorization', TECH);
+
+    expect(res.status).toBe(403);
+    expect(workflowRuns.findOne).not.toHaveBeenCalled();
+  });
+
+  it('lineage returns 404 for an unknown run', async () => {
+    givenDb({ workflowRuns: workflowRunsCollection(chain) });
+
+    const res = await request(app).get('/api/export/fhir/workflow-runs/run-404/lineage').set('Authorization', ADMIN);
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ success: false, error: 'run-404 não encontrado' });
+  });
+
+  it('lineage answers the chain as one Provenance per run, root first', async () => {
+    givenDb({ workflowRuns: workflowRunsCollection(chain) });
+
+    const res = await request(app).get('/api/export/fhir/workflow-runs/run-B/lineage').set('Authorization', COORD);
+
+    expect(res.status).toBe(200);
+    const { data } = res.body;
+    expect(data.mapping.mappingId).toBe('MAP-V2-008');
+    expect(data.bundle.entry).toHaveLength(3);
+    expect(data.bundle.entry.map((entry) => entry.resource.id)).toEqual(['run-B', 'run-A', 'run-C']);
+    const runB = data.bundle.entry[0].resource;
+    expect(runB.entity[0].what.reference).toBe('DocumentReference/f1');
+    expect(runB.target[0].reference).toBe('DocumentReference/f2');
+    expect(data.lineage).toEqual({ workflowRunId: 'run-B', truncated: false });
+  });
+
+  it('lineage carries a truncated walk', async () => {
+    const runs = [];
+    for (let k = 0; k < 23; k += 1) {
+      runs.push({ _id: new ObjectId(), workflowRunId: `run-${k}`, inputFileIds: [`f${k - 1}`], outputFileIds: [`f${k}`] });
+    }
+    givenDb({ workflowRuns: workflowRunsCollection(runs) });
+
+    const res = await request(app).get('/api/export/fhir/workflow-runs/run-0/lineage').set('Authorization', COORD);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.lineage.truncated).toBe(true);
+    expect(res.body.data.bundle.entry.length).toBe(21);
+  });
+
+  it('lineage answers 500 when the read fails', async () => {
+    givenDb({ workflowRuns: createCollectionMock({ findOne: vi.fn().mockRejectedValue(new Error('mongo down')) }) });
+
+    const res = await request(app).get('/api/export/fhir/workflow-runs/run-B/lineage').set('Authorization', ADMIN);
+
+    expect(res.status).toBe(500);
+    expect(res.body).toMatchObject({ success: false, error: 'Erro ao exportar FHIR', message: 'mongo down' });
+  });
+});
+
 describe('GET /api/export/fhir/studies/:studyId', () => {
   const PATH = '/api/export/fhir/studies/STU-1';
   const study = { studyId: 'STU-1', studyTitle: 'Estudo', studyStatus: 'active', protocolId: 'PROT-1' };
