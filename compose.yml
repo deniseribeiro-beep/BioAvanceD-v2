@@ -2,7 +2,7 @@ name: bioavanced
 
 services:
   mongodb:
-    image: mongo:7
+    image: mongo:7.0.45
     restart: unless-stopped
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME}
@@ -15,7 +15,7 @@ services:
       start_period: 10s
 
   neo4j:
-    image: neo4j:5-community
+    image: neo4j:5.26.32-community
     restart: unless-stopped
     environment:
       NEO4J_AUTH: ${NEO4J_USERNAME}/${NEO4J_PASSWORD}
@@ -27,7 +27,7 @@ services:
       start_period: 20s
 
   influxdb:
-    image: influxdb:2.7
+    image: influxdb:2.7.12
     restart: unless-stopped
     environment:
       DOCKER_INFLUXDB_INIT_MODE: setup
@@ -44,7 +44,7 @@ services:
       start_period: 20s
 
   redis:
-    image: redis:7-alpine
+    image: redis:7.4.11-alpine
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
