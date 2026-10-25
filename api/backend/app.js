@@ -347,6 +347,7 @@ app.use("/api/extraction-protocols", createMasterDataRouter({
   idField: "id",
   model: require("./src/models/ExtractionProtocol")
 }));
+// #1403: no scopeField on purpose: dict-02 gives Study no owning organization (ELM-0066 is 0..*); docs/decisions/2026-10-25-study-and-workflow-run-organization-scope.md.
 app.use("/api/studies", createMasterDataRouter({
   collectionName: "studies",
   idField: "studyId",
@@ -474,6 +475,7 @@ app.use("/api/fhir-profiles", createMasterDataRouter({
 }));
 app.use("/api/workflow-runs/:workflowRunId/files", require("./src/interface/routes/workflow-run-file-link.routes"));
 app.use("/api/workflow-runs/:workflowRunId/lineage", require("./src/interface/routes/workflow-run-lineage.routes"));
+// #1403: no scopeField on purpose: dict-02 gives WorkflowRun no organization field (ELM-0326..0336, V2E-0477..0480); docs/decisions/2026-10-25-study-and-workflow-run-organization-scope.md.
 app.use("/api/workflow-runs", createMasterDataRouter({
   collectionName: "workflowRuns",
   idField: "workflowRunId",
