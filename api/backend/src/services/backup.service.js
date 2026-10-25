@@ -34,26 +34,26 @@ async function resolveRetentionDays(db) {
   return Number(env.BACKUP_RETENTION_DAYS || DEFAULT_RETENTION_DAYS);
 }
 
-// #734: mirrors resolveRetentionDays's db-optional, fail-open-to-prior-
-// behavior pattern, but for encryptionEnabled rather than retentionDays.
-// "Prior behavior" here is plaintext (encryption never existed before this
-// change), so the no-db and policy-lookup-failed paths both resolve to
-// false -- every existing caller that never threaded a db through keeps
-// writing exactly the bytes it always did. Only a policy actually read
-// (successfully, with an explicit boolean) can turn encryption on.
+// #1325: unlike resolveRetentionDays, this fails closed. A run whose policy
+// cannot be read (no db handle, or the lookup throws) is aborted rather
+// than written in plaintext (RNF010: "cópias criptografadas"). Only a
+// policy actually read with an explicit encryptionEnabled: false turns
+// encryption off; true, a missing field or a non-boolean value encrypts.
+// That last rule is an inference, not a stated one: the policy default is
+// true, validatePolicy admits only booleans, and #734 already aborts
+// rather than write plaintext when the key is missing
+// (assertEncryptionKeyConfigured).
 async function resolveEncryptionEnabled(db) {
-  if (!db) return false;
+  if (!db) throw new Error('Sem conexão com o banco: a política de criptografia de backup não pode ser lida. Backup abortado para não gravar dados em texto plano.');
 
+  let policy;
   try {
-    const policy = await backupPolicyService.getPolicy(db);
-    if (typeof policy?.encryptionEnabled === 'boolean') {
-      return policy.encryptionEnabled;
-    }
+    policy = await backupPolicyService.getPolicy(db);
   } catch (error) {
-    logger.error('Erro ao buscar política de criptografia de backup, usando padrão:', error.message);
+    throw new Error(`Falha ao ler a política de criptografia de backup: ${error.message}. Backup abortado para não gravar dados em texto plano.`);
   }
 
-  return false;
+  return policy?.encryptionEnabled !== false;
 }
 
 // #734: encryptFileBuffer (fileCrypto.js) returns null rather than throwing
@@ -799,7 +799,7 @@ async function writeJsonBackup(backupDir, mongoUri, encryptionEnabled = false) {
   }
 }
 
-async function performBackup(retentionDaysOverride, encryptionEnabled = false) {
+async function performBackup(retentionDaysOverride, encryptionEnabled = true) {
   const mongoUri = env.MONGO_URI;
   if (!mongoUri) {
     logger.warn('Backup ignorado: MONGO_URI não configurado.');
@@ -891,12 +891,20 @@ async function performBackup(retentionDaysOverride, encryptionEnabled = false) {
 // whichever internal branch it takes -- records exactly one history
 // entry, instead of scattering recordBackupHistory calls across each
 // branch of performBackup(). `db` is optional (see recordBackupHistory);
-// existing callers that don't pass one keep their prior behavior exactly.
+// a run without one records nothing, and fails (#1325) because its
+// encryption policy cannot be read.
 async function runBackup(db) {
   const startedAt = new Date();
   const retentionDays = await resolveRetentionDays(db);
-  const encryptionEnabled = await resolveEncryptionEnabled(db);
-  const result = await performBackup(retentionDays, encryptionEnabled);
+  let result;
+  let encryptionEnabled;
+  try {
+    encryptionEnabled = await resolveEncryptionEnabled(db);
+  } catch (err) {
+    logger.error('Erro ao executar backup:', err.message);
+    result = { success: false, error: err.message };
+  }
+  if (!result) result = await performBackup(retentionDays, encryptionEnabled);
 
   await recordBackupHistory(db, {
     startedAt,
@@ -1068,6 +1076,15 @@ async function runControlledRestoreTest(backupPath) {
   // cases, so a random per-file IV never perturbs it.
   const recomputedChecksum = await computeDirChecksum(backupPath);
   const checksumVerified = !!(manifest && manifest.checksum && manifest.checksum === recomputedChecksum);
+  // #1325: a checksum that does not match, or a backup with none to match,
+  // fails the test (RNF010: "validados por checksum"). The restore below
+  // still runs so its counts stay diagnostic.
+  let checksumError = null;
+  if (!checksumVerified) {
+    checksumError = manifest && manifest.checksum
+      ? 'Checksum do backup não confere com o manifest.json: backup alterado ou corrompido.'
+      : 'Backup sem manifest.json com checksum: integridade não verificável.';
+  }
 
   const sourceDbName = (manifest && manifest.dbName) || resolveDatabaseName(mongoUri);
   const scratchDb = `${sourceDbName}_restoretest_${Date.now()}`;
@@ -1109,7 +1126,8 @@ async function runControlledRestoreTest(backupPath) {
       await countScratchContents(mongoUri, scratchDb);
 
     return {
-      success: true,
+      success: checksumVerified,
+      ...(checksumError ? { error: checksumError } : {}),
       testedFrom: path.basename(backupPath),
       testedAt: new Date(),
       mode: 'mongorestore',
@@ -1130,8 +1148,11 @@ async function runControlledRestoreTest(backupPath) {
         // same `restored*` names the mongorestore path reports, so callers
         // and the restoreTestHistory entry see one shape regardless of which
         // path ran.
+        const fallbackError = fallback.error || checksumError;
         return {
           ...fallback,
+          success: fallback.success === true && checksumVerified,
+          ...(fallbackError ? { error: fallbackError } : {}),
           scratchDb,
           checksumVerified,
           restoredCollections: fallback.collections ?? null,

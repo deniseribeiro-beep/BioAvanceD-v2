@@ -472,17 +472,25 @@ describe('scheduler.service - initScheduler / stopScheduler', () => {
       );
     });
 
-    // A restore test that completes but fails checksum verification is the
-    // exact condition RNF010 AC#5 exists to detect -- it must not be logged
-    // as a routine success.
-    it('warns when the restore completed but the checksum did not verify', async () => {
+    // A restore test that fails checksum verification is the exact condition
+    // RNF010 AC#5 exists to detect -- since #1325 it fails the run, which is
+    // logged as an error and never as a routine success.
+    it('logs an error and no success line when the restore test fails', async () => {
       vi.spyOn(backupService, 'getLatestBackupPath').mockReturnValue('/backups/x');
-      vi.spyOn(backupService, 'testRestoreBackup').mockResolvedValue({ success: true, checksumVerified: false });
+      vi.spyOn(backupService, 'testRestoreBackup').mockResolvedValue({
+        success: false,
+        checksumVerified: false,
+        error: 'Checksum do backup não confere'
+      });
 
       scheduler.initScheduler({ db: {}, neo4jDriver: null });
       await scheduledTasks[3].fn();
 
-      expect(loggerWarnSpy).toHaveBeenCalledWith(expect.stringContaining('checksum'));
+      expect(loggerErrorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Teste de restauração periódico falhou'),
+        'Checksum do backup não confere'
+      );
+      expect(loggerInfoSpy).not.toHaveBeenCalledWith(expect.stringContaining('Teste de restauração executado'));
     });
   });
 

@@ -245,10 +245,11 @@ function startRestoreTestSchedule(db) {
       const result = await backupService.testRestoreBackup(backupPath, db);
 
       // The checksum verdict is the point of the exercise (RNF010 AC#5
-      // "validados por checksum"), so a run that restored cleanly but
-      // failed verification must not read as a routine success.
-      if (result?.success && result?.checksumVerified === false) {
-        logger.warn(`Teste de restauração concluído sem validação de checksum: ${backupPath}`);
+      // "validados por checksum"): a failed run, a checksum mismatch or a
+      // missing manifest checksum included (#1325), is logged as an error
+      // and never as a routine success.
+      if (!result?.success) {
+        logger.error(`Teste de restauração periódico falhou: ${backupPath}`, result?.error || 'erro desconhecido');
         return;
       }
 

@@ -21,7 +21,7 @@ Sources: `api/backend/src/services/backup.service.js`, `backup-policy.service.js
 - The BackupPolicy's `encryptionEnabled` defaults to `true`.
 - With encryption on, each dump file is encrypted in place (AES-256-GCM, the same file crypto the uploads use) after `mongodump` finishes and **before** the checksum, so the manifest checksum is over the ciphertext.
 - With encryption on and no `ENCRYPTION_KEY` configured, the backup aborts before `mongodump` runs. It never writes plaintext in that case.
-- **But** when the policy lookup itself fails (for example the `backup_policy` read throws), `resolveEncryptionEnabled` returns `false` and that run is written **unencrypted**, with only an error log line (`Erro ao buscar política de criptografia de backup, usando padrão`). The same applies to a run with no database handle. This is a gap (section 10).
+- A run whose policy cannot be read fails and writes no backup: when the `backup_policy` read throws, it records `status: error` in `backupHistory`; with no database handle it is logged as an error and no history entry is written. Only a policy read with `encryptionEnabled: false` writes plaintext; a policy without a boolean `encryptionEnabled` encrypts.
 - Restoring an encrypted backup needs the key whose id the manifest's `encryptedFiles` entry records: the current pair `ENCRYPTION_KEY` / `ENCRYPTION_KEY_ID`, or, after a rotation, the previous pair `ENCRYPTION_KEY_PREVIOUS` / `ENCRYPTION_KEY_PREVIOUS_ID` (see the rotation steps in `.env.production.example`). Emptying the previous slot makes every backup taken under the old key unreadable.
 - **A lost key makes every encrypted backup unreadable. The key is not in the backup**, and the code escrows it nowhere. Keeping the key safe, apart from the backups, is a deployment duty.
 
@@ -85,7 +85,7 @@ It:
 4. counts the restored collections and documents (`restoredCollections`, `restoredDocuments`);
 5. drops the scratch database on every exit path, and writes one `restoreTestHistory` row (`status`, `mode`, `scratchDb`, `checksumVerified`, `restoredCollections`, `restoredDocuments`, `error`).
 
-A run whose checksum does not match still restores and reports `success: true` with `checksumVerified: false`; the scheduled run only logs a warning (`Teste de restauração concluído sem validação de checksum`). Read `checksumVerified`, not only `success`. When dropping the scratch database fails, the error log names it, for removal by hand.
+A run whose checksum does not match, or whose folder has no manifest checksum, still restores into the scratch database for its counts, but reports `success: false` with `checksumVerified: false` and an `error`, and records `status: error`; the scheduled run logs an error (`Teste de restauração periódico falhou`). When dropping the scratch database fails, the error log names it, for removal by hand.
 
 ## 10. Gaps (RNF010)
 
@@ -100,7 +100,6 @@ RNF010: "A plataforma deve adotar estratégia de backup 3-2-1, com cópias cript
 | Encryption key | The key is not in the backup and the code escrows it nowhere (section 3). | Not implemented: no key escrow. |
 | RNF010 C2, RPO 24 h ("até 24 horas") | `rpoHours` is stored and validated (1-24); nothing measures it. | Not implemented: RPO is not measured or alerted on. |
 | RNF010 C3, RTO 12 h ("até 12 horas") | `rtoHours` is stored and validated (1-12); nothing measures it. | Not implemented: RTO is not measured; no timed full recovery. |
-| RNF010 C5, periodic restore test validated by checksum | Weekly restore test of MongoDB only (section 9); a checksum mismatch only logs a warning. | Not implemented: no restore test of the other stores, no full-system restore has been run, and a mismatch raises no alert. |
+| RNF010 C5, periodic restore test validated by checksum | Weekly restore test of MongoDB only (section 9); a checksum mismatch fails the run and is logged as an error. | Not implemented: no restore test of the other stores, no full-system restore has been run, and no alert is raised beyond the error log. |
 | Schedule from policy (RF013 AC6) | The boot schedule comes from `BACKUP_CRON`; the policy's `cronExpression` applies only after a PUT (section 4). | Not implemented: the stored policy is not applied at boot. |
 | Restore integrity | A restore does not verify the manifest checksum and takes no safety backup (section 8). | Not implemented: no checksum check or safety backup before a live restore. |
-| Encrypted copies | A run whose policy lookup fails is written unencrypted, with only an error log (section 3). | Not implemented: no fail-closed encryption when the policy cannot be read. |

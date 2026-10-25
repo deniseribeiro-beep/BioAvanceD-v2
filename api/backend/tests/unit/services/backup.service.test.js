@@ -44,6 +44,20 @@ describe('backup.service', () => {
     delete require.cache[backupServicePath];
   });
 
+  // #1325: runBackup aborts when its encryption policy cannot be read, so the
+  // cases that exercise performBackup's own paths pass a db whose policy
+  // explicitly turns encryption off.
+  function plaintextPolicyDb() {
+    const backupPolicyFindOne = vi.fn().mockResolvedValue({ encryptionEnabled: false });
+    const insertOne = vi.fn().mockResolvedValue({ insertedId: 'history-1' });
+    return {
+      collection: vi.fn((name) => {
+        if (name === 'backup_policy') return { findOne: backupPolicyFindOne };
+        return { insertOne };
+      }),
+    };
+  }
+
   describe('getBackupBaseDir', () => {
     it('returns env.BACKUP_DIR when set', () => {
       env.BACKUP_DIR = '/custom/backups';
@@ -64,7 +78,7 @@ describe('backup.service', () => {
       env.MONGO_URI = undefined;
       const backupService = freshBackupService();
 
-      const result = await backupService.runBackup();
+      const result = await backupService.runBackup(plaintextPolicyDb());
 
       expect(result).toEqual({ success: false, skipped: true, reason: 'missing_mongo_uri' });
       expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('MONGO_URI'));
@@ -86,7 +100,7 @@ describe('backup.service', () => {
       });
 
       const backupService = freshBackupService();
-      const result = await backupService.runBackup();
+      const result = await backupService.runBackup(plaintextPolicyDb());
 
       expect(result.success).toBe(true);
       expect(result.path).toContain(env.BACKUP_DIR);
@@ -123,7 +137,7 @@ describe('backup.service', () => {
       });
 
       const backupService = freshBackupService();
-      await backupService.runBackup();
+      await backupService.runBackup(plaintextPolicyDb());
 
       expect(cp.exec).toHaveBeenCalledWith(
         expect.stringContaining('--db="mydb"'),
@@ -167,7 +181,7 @@ describe('backup.service', () => {
       vi.spyOn(mongodb, 'MongoClient').mockImplementation(function () { return fakeClient; });
 
       const backupService = freshBackupService();
-      const result = await backupService.runBackup();
+      const result = await backupService.runBackup(plaintextPolicyDb());
 
       expect(result.success).toBe(true);
       expect(result.mode).toBe('json-fallback');
@@ -208,7 +222,7 @@ describe('backup.service', () => {
       vi.spyOn(mongodb, 'MongoClient').mockImplementation(function () { return fakeClient; });
 
       const backupService = freshBackupService();
-      const result = await backupService.runBackup();
+      const result = await backupService.runBackup(plaintextPolicyDb());
 
       expect(result.success).toBe(false);
       expect(result.error).toContain('connection refused');
@@ -229,7 +243,7 @@ describe('backup.service', () => {
       });
 
       const backupService = freshBackupService();
-      const result = await backupService.runBackup();
+      const result = await backupService.runBackup(plaintextPolicyDb());
 
       expect(result).toEqual({ success: false, error: 'authentication failed' });
       expect(logger.error).toHaveBeenCalledWith('Erro ao executar backup:', 'authentication failed');
@@ -242,10 +256,18 @@ describe('backup.service', () => {
   describe('runBackup history persistence (#723, RF013 AC#1/AC#3)', () => {
     function fakeHistoryDb() {
       const insertOne = vi.fn().mockResolvedValue({ insertedId: 'history-1' });
-      return { db: { collection: vi.fn(() => ({ insertOne })) }, insertOne };
+      const backupPolicyFindOne = vi.fn().mockResolvedValue({ encryptionEnabled: false });
+      return {
+        db: {
+          collection: vi.fn((name) => (name === 'backup_policy' ? { findOne: backupPolicyFindOne } : { insertOne })),
+        },
+        insertOne,
+      };
     }
 
-    it('does not touch the db when none is passed (backward-compatible default)', async () => {
+    // #1325: without a db the encryption policy cannot be read, so the run
+    // fails rather than writing a plaintext backup.
+    it('fails the run, writing nothing, when no db is passed', async () => {
       env.MONGO_URI = 'mongodb://localhost:27017/test';
       env.MONGO_DB = undefined;
       env.BACKUP_DIR = path.join('C:', 'tmp', 'backup-service-test-history-1');
@@ -257,7 +279,37 @@ describe('backup.service', () => {
       vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => cb(null, 'ok', ''));
 
       const backupService = freshBackupService();
-      await expect(backupService.runBackup()).resolves.toMatchObject({ success: true });
+      const result = await backupService.runBackup();
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('texto plano');
+      expect(cp.exec).not.toHaveBeenCalled();
+    });
+
+    it('fails the run, writing nothing, when the policy lookup throws', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = undefined;
+      env.BACKUP_DIR = path.join('C:', 'tmp', 'backup-service-test-history-5');
+
+      vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+      vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
+      vi.spyOn(fs.promises, 'readdir').mockResolvedValue([]);
+      vi.spyOn(fs.promises, 'writeFile').mockResolvedValue();
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => cb(null, 'ok', ''));
+
+      const backupService = freshBackupService();
+      const insertOne = vi.fn().mockResolvedValue({ insertedId: 'history-1' });
+      const backupPolicyFindOne = vi.fn().mockRejectedValue(new Error('db unavailable'));
+      const db = {
+        collection: vi.fn((name) => (name === 'backup_policy' ? { findOne: backupPolicyFindOne } : { insertOne })),
+      };
+      const result = await backupService.runBackup(db);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('texto plano');
+      expect(cp.exec).not.toHaveBeenCalled();
+      expect(db.collection).toHaveBeenCalledWith('backupHistory');
+      expect(insertOne).toHaveBeenCalledWith(expect.objectContaining({ status: 'error', error: result.error }));
     });
 
     it('records a success history entry with the run checksum when db is passed', async () => {
@@ -328,7 +380,11 @@ describe('backup.service', () => {
       vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => cb(null, 'ok', ''));
 
       const backupService = freshBackupService();
-      const db = { collection: vi.fn(() => ({ insertOne: vi.fn().mockRejectedValue(new Error('history db down')) })) };
+      const insertOne = vi.fn().mockRejectedValue(new Error('history db down'));
+      const backupPolicyFindOne = vi.fn().mockResolvedValue({ encryptionEnabled: false });
+      const db = {
+        collection: vi.fn((name) => (name === 'backup_policy' ? { findOne: backupPolicyFindOne } : { insertOne })),
+      };
 
       const result = await backupService.runBackup(db);
 
@@ -380,7 +436,7 @@ describe('backup.service', () => {
       vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => cb(null, 'ok', ''));
 
       const backupService = freshBackupService();
-      const db = dbWithPolicy({ retentionDays: 90 });
+      const db = dbWithPolicy({ retentionDays: 90, encryptionEnabled: false });
       await backupService.runBackup(db);
 
       // A 45-day-old dated folder is stale under the env var's 30-day
@@ -404,7 +460,15 @@ describe('backup.service', () => {
       vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => cb(null, 'ok', ''));
 
       const backupService = freshBackupService();
-      const db = { collection: vi.fn(() => { throw new Error('db unavailable'); }) };
+      // Retention is read first and fails; the encryption read then succeeds,
+      // since a policy that cannot be read for encryption aborts the run (#1325).
+      const backupPolicyFindOne = vi.fn()
+        .mockRejectedValueOnce(new Error('db unavailable'))
+        .mockResolvedValueOnce({ encryptionEnabled: false });
+      const historyInsertOne = vi.fn().mockResolvedValue({ insertedId: 'history-1' });
+      const db = {
+        collection: vi.fn((name) => (name === 'backup_policy' ? { findOne: backupPolicyFindOne } : { insertOne: historyInsertOne })),
+      };
       await backupService.runBackup(db);
 
       // 5-day env-var retention against a 45-day-old folder -- stale, gets removed.
@@ -900,7 +964,7 @@ describe('backup.service', () => {
       }
     });
 
-    it('reports checksumVerified=false when the manifest checksum does not match the recomputed one', async () => {
+    it('fails the restore test when the manifest checksum does not match the recomputed one', async () => {
       env.MONGO_URI = 'mongodb://localhost:27017/test';
       env.MONGO_DB = 'mydb';
 
@@ -921,11 +985,12 @@ describe('backup.service', () => {
       const backupService = freshBackupService();
       const result = await backupService.testRestoreBackup(path.join('C:', 'tmp', 'backup'));
 
-      expect(result.success).toBe(true);
+      expect(result.success).toBe(false);
       expect(result.checksumVerified).toBe(false);
+      expect(result.error).toContain('não confere');
     });
 
-    it('reports checksumVerified=false when there is no manifest at all', async () => {
+    it('fails the restore test when there is no manifest at all', async () => {
       env.MONGO_URI = 'mongodb://localhost:27017/test';
 
       vi.spyOn(fs, 'existsSync').mockImplementation((p) => !String(p).endsWith('manifest.json'));
@@ -939,8 +1004,9 @@ describe('backup.service', () => {
       const backupService = freshBackupService();
       const result = await backupService.testRestoreBackup(path.join('C:', 'tmp', 'backup'));
 
-      expect(result.success).toBe(true);
+      expect(result.success).toBe(false);
       expect(result.checksumVerified).toBe(false);
+      expect(result.error).toContain('sem manifest');
     });
 
     it('falls back to a JSON restore into the scratch db when mongorestore binary is missing, and still drops the scratch db', async () => {
@@ -977,6 +1043,43 @@ describe('backup.service', () => {
       expect(result.mode).toBe('json-fallback');
       expect(result.scratchDb).toMatch(/^mydb_restoretest_\d+$/);
       expect(fakeDb.collection).toHaveBeenCalledWith('patients');
+      expect(dropDatabase).toHaveBeenCalled();
+    });
+
+    it('fails the JSON-fallback restore test when the manifest checksum does not match', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = undefined;
+      const backupPath = path.join('C:', 'tmp', 'backup-restoretest-2');
+
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs.promises, 'readFile').mockImplementation(async (p) => {
+        if (String(p).endsWith('manifest.json')) {
+          return JSON.stringify({ dbName: 'mydb', checksum: 'stale', collections: [{ file: 'patients.json' }] });
+        }
+        return JSON.stringify([{ _id: 1, name: 'a' }]);
+      });
+      vi.spyOn(fs.promises, 'readdir').mockResolvedValue([]);
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => {
+        cb({ message: 'mongorestore: not found' }, '', 'not found');
+      });
+
+      const fakeCollection = { deleteMany: vi.fn().mockResolvedValue(), insertMany: vi.fn().mockResolvedValue() };
+      const dropDatabase = vi.fn().mockResolvedValue();
+      const fakeDb = { collection: vi.fn(() => fakeCollection), dropDatabase };
+      const fakeClient = {
+        connect: vi.fn().mockResolvedValue(),
+        db: vi.fn(() => fakeDb),
+        close: vi.fn().mockResolvedValue()
+      };
+      vi.spyOn(mongodb, 'MongoClient').mockImplementation(function () { return fakeClient; });
+
+      const backupService = freshBackupService();
+      const result = await backupService.testRestoreBackup(backupPath);
+
+      expect(result.success).toBe(false);
+      expect(result.mode).toBe('json-fallback');
+      expect(result.checksumVerified).toBe(false);
+      expect(result.error).toContain('não confere');
       expect(dropDatabase).toHaveBeenCalled();
     });
 
@@ -1343,6 +1446,61 @@ describe('backup.service', () => {
         // The failure happens before performBackup ever runs mongodump or
         // writeJsonBackup touches disk -- nothing (plaintext or otherwise)
         // was written under the backup base dir.
+        const entries = await fs.promises.readdir(baseDir, { recursive: true });
+        expect(entries.filter((entry) => String(entry).endsWith('patients.json'))).toHaveLength(0);
+      } finally {
+        if (originalEncryptionKey === undefined) {
+          delete process.env.ENCRYPTION_KEY;
+        } else {
+          process.env.ENCRYPTION_KEY = originalEncryptionKey;
+        }
+        await fs.promises.rm(baseDir, { recursive: true, force: true });
+      }
+    });
+
+    // #1325: only an explicit encryptionEnabled: false writes plaintext. With
+    // no key configured, the no-key failure proves encryption was demanded.
+    it('encrypts when the stored policy has no boolean encryptionEnabled', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = 'mydb';
+      const os = require('os');
+      const baseDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'bioavanced-1325-nofield-'));
+      env.BACKUP_DIR = baseDir;
+
+      const originalEncryptionKey = process.env.ENCRYPTION_KEY;
+      delete process.env.ENCRYPTION_KEY;
+
+      try {
+        mockMongodumpAndMongorestoreMissing();
+
+        const fakeCollection = {
+          find: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([{ _id: 1, ssn: 'x' }]) }))
+        };
+        const fakeBackupDb = {
+          listCollections: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([{ name: 'patients' }]) })),
+          collection: vi.fn(() => fakeCollection)
+        };
+        const fakeClient = {
+          connect: vi.fn().mockResolvedValue(),
+          db: vi.fn(() => fakeBackupDb),
+          close: vi.fn().mockResolvedValue()
+        };
+        vi.spyOn(mongodb, 'MongoClient').mockImplementation(function () { return fakeClient; });
+
+        // A stored policy document with no encryptionEnabled field at all:
+        // getPolicy strips _id and returns {}.
+        const backupPolicyFindOne = vi.fn().mockResolvedValue({ _id: 'main' });
+        const historyInsertOne = vi.fn().mockResolvedValue({ insertedId: 'h1' });
+        const appDb = {
+          collection: vi.fn((name) => (name === 'backup_policy' ? { findOne: backupPolicyFindOne } : { insertOne: historyInsertOne })),
+        };
+
+        const backupService = freshBackupService();
+        const result = await backupService.runBackup(appDb);
+
+        expect(result.success).toBe(false);
+        expect(result.error).toContain('ENCRYPTION_KEY');
+
         const entries = await fs.promises.readdir(baseDir, { recursive: true });
         expect(entries.filter((entry) => String(entry).endsWith('patients.json'))).toHaveLength(0);
       } finally {
