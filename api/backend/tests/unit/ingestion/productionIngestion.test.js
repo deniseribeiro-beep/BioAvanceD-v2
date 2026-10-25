@@ -861,6 +861,26 @@ describe('ingestion/productionIngestion ingestAndPersist (RF029, #1318)', () => 
     expect(rows.map((r) => [r.fieldPath, r.reasonCode])).toEqual([['barcode', 'unknown'], ['linkedProject', 'unknown'], ['parentSpecimenIds', 'unknown'], ['merkleRoot', 'unknown'], ['sprec', 'unknown']]);
     expect(rows.every((r) => r.entityType === 'Specimen' && r.entityId === result.entityId)).toBe(true);
     expect(db.collections.dataQualityAssessments.docs.map((d) => [d.scopeId, d.status])).toEqual([[`Specimen/${result.entityId}`, 'passed']]);
+    expect(db.collection('labelIdentifiers').docs).toHaveLength(0);
+    expect(db.collection('containers').docs).toHaveLength(0);
+  });
+
+  it('37b. an accepted Specimen with a barcode has it issued as its one active label, on the container of its one load, and stays unallocated (#1378)', async () => {
+    const db = specimenDb();
+
+    const result = await ingestSpecimen(db, { payload: { ...SPECIMEN, barcode: 'BC-PROBE-1' } });
+
+    expect(result.status).toBe('accepted');
+    const [stored] = db.collections.samples.docs;
+    expect(stored).toMatchObject({ barcode: 'BC-PROBE-1', storageLocation: null });
+    const loads = db.collection('specimenContainerAssignments').docs;
+    expect(loads).toHaveLength(1);
+    expect(loads[0].specimenId).toBe(result.entityId);
+    const labels = db.collection('labelIdentifiers').docs.filter((label) => label.status === 'active');
+    expect(labels).toHaveLength(1);
+    expect(labels[0]).toMatchObject({ encodedValue: 'BC-PROBE-1', targetType: 'container', targetId: loads[0].containerId, issuedBy: 'u-1', printBatchId: null });
+    expect(db.collection('containers').docs.map((container) => container.containerId)).toEqual([loads[0].containerId]);
+    expect(db.collection('containerPositionAssignments').docs).toHaveLength(0);
   });
 
   it('38. on a replica set, SPECIMEN_UPSERTED and LINEAGE_REGISTERED are appended in the sample insert\'s session (#1313)', async () => {
@@ -928,6 +948,73 @@ describe('ingestion/productionIngestion ingestAndPersist (RF029, #1318)', () => 
     expect(result.status).toBe('quarantined');
     expect(result.violations).toEqual([expect.objectContaining({ code: 'DUPLICATE_BARCODE' })]);
     expect(db.collections.samples.docs).toHaveLength(1);
+  });
+
+  it('41b. a Specimen whose barcode is already an active label quarantines with DUPLICATE_BARCODE and writes no sample, label or container (#1378)', async () => {
+    const db = specimenDb();
+    db.collection('labelIdentifiers').docs.push({ namespaceRegistryId: 'legacy-sample-barcode', encodedValue: 'BC-1', status: 'active', targetType: 'container', targetId: 'ctr-old' });
+
+    const result = await ingestSpecimen(db, { payload: { ...SPECIMEN, barcode: 'BC-1' } });
+
+    expect(result.status).toBe('quarantined');
+    expect(result.violations).toEqual([expect.objectContaining({ code: 'DUPLICATE_BARCODE' })]);
+    expect(db.collections.samples.docs).toHaveLength(0);
+    expect(db.collection('labelIdentifiers').docs).toHaveLength(1);
+    expect(db.collection('containers').docs).toHaveLength(0);
+  });
+
+  it.each([
+    ['whitespace', 'BC 1', 'texto livre'],
+    ['an e-mail', 'a@b.co', 'e-mail'],
+    ['a CPF', '52998224725', 'CPF'],
+  ])('41c. a Specimen whose barcode carries %s is refused 422 BARCODE_PERSONAL_DATA before the gateway, naming the kind and never the value, and writes no sample, label, container or quarantine record (RULE-012)', async (_label, barcode, kind) => {
+    const db = specimenDb();
+    const outbox = fakeOutbox();
+
+    const error = await ingestSpecimen(db, { outbox, payload: { ...SPECIMEN, barcode }, idempotencyKey: 'specimen-key-1' }).catch((e) => e);
+
+    expect(error).toMatchObject({ statusCode: 422, code: 'BARCODE_PERSONAL_DATA', canonicalModelReleaseId: 'release-2.0.0', configurationReleaseId: 'cfg-release-7' });
+    expect(error.message).toContain(kind);
+    expect(JSON.stringify({ message: error.message, details: error.details })).not.toContain(barcode);
+    expect(db.collections.samples.docs).toHaveLength(0);
+    expect(db.collection('labelIdentifiers').docs).toHaveLength(0);
+    expect(db.collection('containers').docs).toHaveLength(0);
+    expect(db.collections.ingestionQuarantineRecords.docs).toHaveLength(0);
+    expect(db.collections.ingestionIdempotencyKeys.docs).toHaveLength(0);
+    expect(db.collections.dataQualityAssessments.docs).toHaveLength(0);
+    expect(outbox.appendEvent).not.toHaveBeenCalled();
+  });
+
+  it('41d. a model-invalid Specimen with a CPF barcode is refused 422 too, never quarantined with the value as sent (RULE-012)', async () => {
+    const db = specimenDb();
+    const { sampleType: _sampleType, ...invalid } = SPECIMEN;
+
+    const error = await ingestSpecimen(db, { payload: { ...invalid, barcode: '52998224725' } }).catch((e) => e);
+
+    expect(error).toMatchObject({ statusCode: 422, code: 'BARCODE_PERSONAL_DATA' });
+    expect(db.collections.ingestionQuarantineRecords.docs).toHaveLength(0);
+    expect(db.collections.samples.docs).toHaveLength(0);
+  });
+
+  it('41d2. a CPF barcode is refused under a key already recorded, never replayed (RULE-012)', async () => {
+    const db = specimenDb();
+    const first = await ingestSpecimen(db, { idempotencyKey: 'specimen-key-1' });
+    expect(first.status).toBe('accepted');
+
+    const error = await ingestSpecimen(db, { payload: { ...SPECIMEN, barcode: '52998224725' }, idempotencyKey: 'specimen-key-1' }).catch((e) => e);
+
+    expect(error).toMatchObject({ statusCode: 422, code: 'BARCODE_PERSONAL_DATA' });
+    expect(db.collections.samples.docs.map((d) => d.specimenId)).toEqual([first.entityId]);
+    expect(db.collections.samples.docs[0].barcode ?? null).toBeNull();
+  });
+
+  it('41e. a Specimen with the all-digit barcode 0001234 is no personal data and is accepted with it as its label', async () => {
+    const db = specimenDb();
+
+    const result = await ingestSpecimen(db, { payload: { ...SPECIMEN, barcode: '0001234' } });
+
+    expect(result.status).toBe('accepted');
+    expect(db.collection('labelIdentifiers').docs.map((label) => label.encodedValue)).toEqual(['0001234']);
   });
 
   it('42. a Specimen sending organizationId quarantines: tenancy is stamped by the server, never taken from a body (#1192)', async () => {

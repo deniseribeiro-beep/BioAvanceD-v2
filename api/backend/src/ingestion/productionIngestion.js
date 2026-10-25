@@ -12,6 +12,7 @@
 const { randomUUID } = require('crypto');
 const { CANONICAL_COLLECTIONS } = require('../config/collections');
 const { CANONICAL_MODEL_RELEASE_ID } = require('../foundation/readiness');
+const LabelIdentifierModel = require('../models/LabelIdentifier');
 const { Neo4jOutboxService } = require('../services/neo4jOutbox.service');
 const { withTransactionWhereSupported } = require('../utils/mongoTransaction');
 const { ingestRecord } = require('./ingestionGateway');
@@ -123,6 +124,24 @@ function assertNoIdentityFields(target, entityType, payload) {
   }
 }
 
+// RULE-012 (#1318): a target with labelFields refuses a record whose label
+// value the LabelIdentifier model refuses (whitespace, an e-mail or a CPF),
+// before the gateway, because a quarantine would store it as sent. The
+// refusal names the kind, never the value.
+function assertNoPersonalDataInLabels(target, entityType, payload) {
+  const { labelFields } = target;
+  if (!labelFields || !payload || typeof payload !== 'object' || Array.isArray(payload)) return;
+  for (const field of labelFields) {
+    const value = payload[field];
+    if (typeof value !== 'string' || value === '') continue;
+    try {
+      LabelIdentifierModel.assertNoPersonalData(value);
+    } catch (error) {
+      throw ingestionError(422, 'BARCODE_PERSONAL_DATA', `${entityType} com ${field}: ${error.message}, não suportado pela ingestão`);
+    }
+  }
+}
+
 // The status codes the master mount's reference check throws (#664, RF019).
 const REFERENCE_VIOLATION_CODES = { 404: 'REFERENCE_NOT_FOUND', 409: 'REFERENCE_NOT_USABLE' };
 
@@ -205,6 +224,7 @@ async function ingestUnderRelease({ db, target, entityType, payload, provenance,
   await assertInOrganizationScope(target, payload, resolveOrganizationScope);
   assertStoredHere(target, entityType, payload);
   assertNoIdentityFields(target, entityType, payload);
+  assertNoPersonalDataInLabels(target, entityType, payload);
 
   const scope = { idempotencyKey, scope: entityType };
   if (idempotencyKey) {

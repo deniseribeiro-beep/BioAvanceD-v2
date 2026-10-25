@@ -35,7 +35,7 @@ Requirement RF029 AC2, AC3, AC6, AC7, AC10, RF023 AC3, RNF011 C3. Dictionary ELM
 
 ## Not decided here
 
-- **Storage allocation**, and the LabelIdentifier the mount issues at registration.
+- **Storage allocation and the LabelIdentifier** are decided in `2026-10-25-ingestion-specimen-storage-and-label.md`.
 - **Consent purpose (finalidade).** The gate asks for an active consent, not one whose purpose covers the use.
 - **RCS/SPREC evaluation of `sprec`.** The value is stored as given; nothing evaluates it.
 - **The `studyId`, `protocolId` and `collectionId` gates** the mount runs. These fields are not in `canonical.v1.specimen`, so a body that sends one quarantines.

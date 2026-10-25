@@ -270,6 +270,26 @@ describe('POST /api/ingestion/records (RF029, #1318)', () => {
     })]);
   });
 
+  it('422: a Specimen whose barcode is a CPF is refused BARCODE_PERSONAL_DATA, persists nothing, and one INGESTION_REFUSED row without the CPF (RULE-012, #1318)', async () => {
+    const stores = givenDb();
+
+    const res = await post({ entityType: 'Specimen', payload: { ...SPECIMEN, barcode: '52998224725' }, provenance: PROVENANCE, idempotencyKey: 'specimen-key-1' });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(422);
+    expect(res.body).toMatchObject({ success: false, error: 'BARCODE_PERSONAL_DATA' });
+    expect(res.body.details).toEqual([expect.stringContaining('CPF')]);
+    expect(JSON.stringify(res.body)).not.toContain('52998224725');
+    expect(stores.samples.docs.map((d) => d.specimenId)).toEqual(['SPC-1']);
+    expect(stores.ingestionQuarantineRecords.docs).toHaveLength(0);
+    expect(stores.ingestionIdempotencyKeys.docs).toHaveLength(0);
+    expect(stores.dataQualityAssessments.docs).toHaveLength(0);
+    const rows = ingestionAuditRows();
+    expect(rows).toEqual([expect.objectContaining({ action: 'INGESTION_REFUSED', severity: 'warning', resourceType: 'Specimen' })]);
+    // The row is stored without the request, which auditLogger reads only for its network metadata.
+    const { req: _req, ...row } = rows[0];
+    expect(JSON.stringify(row)).not.toContain('52998224725');
+  });
+
   it('201: an accepted Participant is persisted in patients with a server participantId, PENDING_CONSENT, in one session and one INGESTION_ACCEPTED row (#1318)', async () => {
     const stores = givenDb();
 

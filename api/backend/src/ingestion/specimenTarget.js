@@ -2,11 +2,14 @@
  * RF029 (#1318): what the Specimen ingestion target reuses from the sample
  * mount (sample.service.js createSample, RegisterSample.js), so ingesting a
  * specimen is never a way around a gate the mount holds
- * (docs/decisions/2026-10-23-ingestion-specimen-target.md).
+ * (docs/decisions/2026-10-23-ingestion-specimen-target.md). A given barcode
+ * is issued as the specimen's LabelIdentifier (#1378); storage is never
+ * allocated here (docs/decisions/2026-10-25-ingestion-specimen-storage-and-label.md).
  */
 const { CANONICAL_COLLECTIONS } = require('../config/collections');
 const { SampleModel } = require('../models/Sample');
 const { GraphProjectionService } = require('../services/graphProjection.service');
+const { SPECIMEN_LABEL_NAMESPACE_ID, issueSpecimenLabel } = require('../services/specimenLabel.service');
 const { getCollection } = require('../utils/collectionResolver');
 const { LEGACY_BARCODE_WRITE_REFUSED, sampleBarcodeWindowOpen } = require('../utils/sampleBarcodeWindow');
 const { generateUniqueSpecimenId } = require('../utils/sampleIDGenerator');
@@ -28,6 +31,13 @@ function parentIdsOf(payload) {
       .filter((parentId) => typeof parentId === 'string' && parentId.trim() !== '')
       .map((parentId) => parentId.trim()))]
     : [];
+}
+
+// The acting user's id from the stamped `Actor/<id>`, else null, so the
+// label's issuer falls back to the stamped organization (V2E-0176).
+function actorIdOf(doc) {
+  const match = typeof doc.createdBy === 'string' ? /^Actor\/(.+)$/.exec(doc.createdBy) : null;
+  return match && match[1] !== 'undefined' && match[1] !== 'null' ? match[1] : null;
 }
 
 /** The mount's 7-digit specimenId, as a string: every reader of samples expects it, not a uuid. */
@@ -92,13 +102,19 @@ async function validateSpecimenReferences(db, payload) {
   }
 
   // #1378: no legacy barcode once the window is closed; while it is open, a
-  // duplicate is a verdict here, never a unique-index 500 at the insert.
+  // duplicate, in samples or among the active labels, is a verdict here,
+  // never a failure at the insert. A value the label model refuses (RULE-012)
+  // never reaches here: productionIngestion.js refuses it 422 first.
   if (typeof payload.barcode === 'string' && payload.barcode !== '') {
     if (!sampleBarcodeWindowOpen()) {
       throw referenceError(409, 'Sample.barcode (ELM-0116) não é mais gravado: o código da amostra é um LabelIdentifier', LEGACY_BARCODE_WRITE_REFUSED);
     }
     if (await samples.findOne({ barcode: payload.barcode })) {
       throw referenceError(409, `barcode ${payload.barcode} já cadastrado`, 'DUPLICATE_BARCODE');
+    }
+    const activeLabel = { namespaceRegistryId: SPECIMEN_LABEL_NAMESPACE_ID, encodedValue: payload.barcode, status: 'active' };
+    if (await getCollection(db, 'labelIdentifiers').findOne(activeLabel)) {
+      throw referenceError(409, `barcode ${payload.barcode} já ativo como etiqueta`, 'DUPLICATE_BARCODE');
     }
   }
 }
@@ -107,8 +123,13 @@ async function validateSpecimenReferences(db, payload) {
  * #1313: the sample's SPECIMEN_UPSERTED and one LINEAGE_REGISTERED per parent,
  * keyed by the inserted _id as the mount keys them, in the insert's session.
  * Answers the appended eventIds, so a lost race can remove them.
+ * #1378: a given barcode is first issued, unprinted, as the LabelIdentifier
+ * on a container loaded for the specimen; none is generated, none is placed.
  */
 async function appendSpecimenProjection(db, { doc, insertedId, outbox }, opts = {}) {
+  if (typeof doc.barcode === 'string' && doc.barcode !== '') {
+    await issueSpecimenLabel(db, { ...doc, _id: insertedId }, { code: doc.barcode, actorId: actorIdOf(doc), at: new Date(), session: opts.session });
+  }
   const projection = new GraphProjectionService({ outbox });
   const specimenId = String(insertedId);
   const events = [await projection.appendSpecimenEvent(db, {

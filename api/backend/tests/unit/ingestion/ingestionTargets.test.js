@@ -67,7 +67,7 @@ describe('ingestion/ingestionTargets (RF029, #1318)', () => {
   it('gives Specimen the sample model, a stamped organizationId, the mount\'s id and, with Consent alone, its graph projection (#1192, #1313)', () => {
     const { SampleModel } = require('../../../src/models/Sample');
     const { generateSpecimenId, appendSpecimenProjection } = require('../../../src/ingestion/specimenTarget');
-    expect(Object.keys(INGESTION_TARGETS.Specimen)).toEqual(['schemaId', 'store', 'collection', 'idField', 'model', 'missingnessFields', 'validateReferences', 'scopeField', 'organizationField', 'generateId', 'appendProjection']);
+    expect(Object.keys(INGESTION_TARGETS.Specimen)).toEqual(['schemaId', 'store', 'collection', 'idField', 'model', 'missingnessFields', 'validateReferences', 'scopeField', 'organizationField', 'generateId', 'appendProjection', 'labelFields']);
     expect(Object.isFrozen(INGESTION_TARGETS.Specimen)).toBe(true);
     expect(INGESTION_TARGETS.Specimen.model).toBe(SampleModel);
     expect(INGESTION_TARGETS.Specimen.organizationField).toBe('organizationId');
@@ -121,6 +121,14 @@ describe('ingestion/ingestionTargets (RF029, #1318)', () => {
       expect(INGESTION_TARGETS[entityType]).not.toHaveProperty('prepareDocument');
       expect(INGESTION_TARGETS[entityType]).not.toHaveProperty('removeProjection');
       expect(INGESTION_TARGETS[entityType]).not.toHaveProperty('appendAfterAccept');
+    }
+  });
+
+  it('gives Specimen alone its label fields, barcode, frozen, so a personal-data value is refused before the gateway (RULE-012, #1318)', () => {
+    expect(INGESTION_TARGETS.Specimen.labelFields).toEqual(['barcode']);
+    expect(Object.isFrozen(INGESTION_TARGETS.Specimen.labelFields)).toBe(true);
+    for (const entityType of ['Dataset', 'WorkflowRun', 'OmicsQualification', 'Assay', 'OmicsRun', 'Participant', 'Consent']) {
+      expect(INGESTION_TARGETS[entityType]).not.toHaveProperty('labelFields');
     }
   });
 

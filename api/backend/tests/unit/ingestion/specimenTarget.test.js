@@ -16,8 +16,9 @@ function specimenDb({
   consents = [{ participantId: PARTICIPANT, status: 'ACTIVE' }],
   organizations = [{ organizationId: 'org-site-1' }],
   samples = [],
+  labelIdentifiers = [],
 } = {}) {
-  return createFakeDb({ patients, patientConsents: consents, organizations, samples });
+  return createFakeDb({ patients, patientConsents: consents, organizations, samples, labelIdentifiers });
 }
 
 const SPECIMEN = { specimenId: 'client-1', participantId: PARTICIPANT, collectionSite: 'org-site-1' };
@@ -138,6 +139,27 @@ describe('ingestion/specimenTarget validateSpecimenReferences (RF029, #1318)', (
       env.SAMPLE_BARCODE_WINDOW_CLOSED = saved;
     }
   });
+
+  it('14b. while the barcode window is open, a barcode no sample holds but active as a label in legacy-sample-barcode is 409 DUPLICATE_BARCODE', async () => {
+    const db = specimenDb({ labelIdentifiers: [{ namespaceRegistryId: 'legacy-sample-barcode', encodedValue: 'BC-1', status: 'active' }] });
+
+    const error = await refusal(db, { ...SPECIMEN, barcode: 'BC-1' });
+
+    expect(error).toMatchObject({ statusCode: 409, message: 'barcode BC-1 já ativo como etiqueta', violationCode: 'DUPLICATE_BARCODE' });
+  });
+
+  it('14c. the same value active as a label in another namespace, or retired in legacy-sample-barcode, resolves', async () => {
+    const db = specimenDb({ labelIdentifiers: [
+      { namespaceRegistryId: 'manufacturer-tube', encodedValue: 'BC-1', status: 'active' },
+      { namespaceRegistryId: 'legacy-sample-barcode', encodedValue: 'BC-1', status: 'retired' },
+    ] });
+
+    await expect(validateSpecimenReferences(db, { ...SPECIMEN, barcode: 'BC-1' })).resolves.toBeUndefined();
+  });
+
+  it('14e. the all-digit barcode 0001234 is no personal data and resolves', async () => {
+    await expect(validateSpecimenReferences(specimenDb(), { ...SPECIMEN, barcode: '0001234' })).resolves.toBeUndefined();
+  });
 });
 
 describe('ingestion/specimenTarget appendSpecimenProjection (RF029 AC6, #1313)', () => {
@@ -176,5 +198,65 @@ describe('ingestion/specimenTarget appendSpecimenProjection (RF029 AC6, #1313)',
     expect(eventIds).toEqual(['evt-1', 'evt-2', 'evt-3']);
     expect(outbox.appendEvent.mock.calls.map(([, event]) => [event.eventType, event.aggregateId, event.payload.parentSpecimenId ?? null]))
       .toEqual([['SPECIMEN_UPSERTED', 'oid-new', null], ['LINEAGE_REGISTERED', 'oid-new', 'oid-p2'], ['LINEAGE_REGISTERED', 'oid-new', 'oid-p1']]);
+  });
+
+  it('17. a doc with a barcode has it issued, unprinted, as one LabelIdentifier on a container loaded for the specimen, in the session, and answers the same eventIds (#1378)', async () => {
+    const db = specimenDb();
+    const writes = ['labelIdentifiers', 'containers', 'specimenContainerAssignments'].map((name) => vi.spyOn(db.collection(name), 'insertOne'));
+    const outbox = fakeOutbox();
+    const session = { id: 'sess-1' };
+    const doc = { specimenId: '7654321', participantId: PARTICIPANT, organizationId: 'org-site-1', barcode: 'BC-1', createdBy: 'Actor/u-1', parentSpecimenIds: [] };
+
+    const eventIds = await appendSpecimenProjection(db, { doc, insertedId: 'oid-new', outbox }, { session });
+
+    expect(eventIds).toEqual(['evt-1']);
+    const labels = db.collections.labelIdentifiers.docs;
+    const containers = db.collections.containers.docs;
+    const loads = db.collections.specimenContainerAssignments.docs;
+    expect(containers).toHaveLength(1);
+    expect(loads).toHaveLength(1);
+    expect(loads[0]).toMatchObject({ specimenId: '7654321', containerId: containers[0].containerId });
+    expect(labels).toHaveLength(1);
+    expect(labels[0]).toMatchObject({
+      encodedValue: 'BC-1',
+      namespaceRegistryId: 'legacy-sample-barcode',
+      targetType: 'container',
+      targetId: containers[0].containerId,
+      status: 'active',
+      printBatchId: null,
+      issuedBy: 'u-1',
+    });
+    for (const write of writes) {
+      expect(write).toHaveBeenCalledTimes(1);
+      expect(write.mock.calls[0][1]).toEqual({ session });
+    }
+  });
+
+  it.each([
+    ['Actor/undefined', 'org-site-1'],
+    [undefined, 'org-site-1'],
+  ])('17b. with createdBy %s the label is issued by the stamped organization (V2E-0176)', async (createdBy, issuedBy) => {
+    const db = specimenDb();
+    const doc = { specimenId: '7654321', participantId: PARTICIPANT, organizationId: 'org-site-1', barcode: 'BC-1', createdBy, parentSpecimenIds: [] };
+
+    await appendSpecimenProjection(db, { doc, insertedId: 'oid-new', outbox: fakeOutbox() }, { session: { id: 'sess-1' } });
+
+    expect(db.collections.labelIdentifiers.docs.map((label) => label.issuedBy)).toEqual([issuedBy]);
+  });
+
+  it.each([
+    ['no barcode', {}],
+    ['a null barcode', { barcode: null }],
+    ['an empty barcode', { barcode: '' }],
+  ])('18. a doc with %s writes no label, container or load, and generates no code', async (_label, barcode) => {
+    const db = specimenDb();
+    const doc = { specimenId: '7654321', participantId: PARTICIPANT, organizationId: 'org-site-1', createdBy: 'Actor/u-1', parentSpecimenIds: [], ...barcode };
+
+    const eventIds = await appendSpecimenProjection(db, { doc, insertedId: 'oid-new', outbox: fakeOutbox() }, {});
+
+    expect(eventIds).toEqual(['evt-1']);
+    expect(db.collection('labelIdentifiers').docs).toHaveLength(0);
+    expect(db.collection('containers').docs).toHaveLength(0);
+    expect(db.collection('specimenContainerAssignments').docs).toHaveLength(0);
   });
 });

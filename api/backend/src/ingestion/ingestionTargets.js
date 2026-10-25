@@ -143,6 +143,8 @@ const INGESTION_TARGETS = Object.freeze({
     organizationField: 'organizationId',
     generateId: generateSpecimenId,
     appendProjection: appendSpecimenProjection,
+    // RULE-012 (#1318): a label value carrying personal data is refused 422, never quarantined.
+    labelFields: Object.freeze(['barcode']),
   }),
   Participant: Object.freeze({
     schemaId: 'canonical.v1.participant',
