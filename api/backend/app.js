@@ -532,6 +532,7 @@ app.use("/api/shipments", require("./src/routes/shipment.js"));
 app.use("/api/access-requests", require("./src/routes/accessRequest.js"));
 app.use("/api/access-policies", require("./src/routes/accessPolicy.js"));
 app.use("/api/reference-releases", require("./src/interface/routes/referenceRelease.routes"));
+app.use("/api/monitoring", require("./src/interface/routes/monitoring.routes"));
 app.use("/api/notification-rules", require("./src/routes/notificationRule.js"));
 app.use("/api/notifications", require("./src/routes/notification.js"));
 app.use("/api/intake-wizard", require("./src/interface/routes/intakeWizard.routes"));
