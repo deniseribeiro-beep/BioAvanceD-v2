@@ -6,6 +6,7 @@ const rateLimit = require("express-rate-limit");
 const logger = require("./src/utils/logger");
 const env = require("./src/config/env");
 const { skipAuthBudget } = require("./src/infrastructure/middleware/authLimiterSkip");
+const dependencyHealth = require("./src/infrastructure/health/dependencyHealth");
 
 const app = express();
 
@@ -548,8 +549,18 @@ app.use("/api/cids", require("./src/interface/routes/cid.routes"));
 app.use("/api/phone-codes", require("./src/interface/routes/phone-codes.routes"));
 app.use("/api/dictionary", require("./src/interface/routes/dictionary.routes"));
 
-app.get("/api/health", (req, res) => {
-  res.json({ status: "OK", db: !!req.app.locals.db });
+// RNF003 AC3 (#1323): 503 only when a check the server cannot serve without is
+// down -- MongoDB always, Neo4j only under fail-closed/NEO4J_REQUIRED, matching
+// the boot posture. Redis and InfluxDB down give degraded: true under 200, so a
+// compose healthcheck never restarts the backend over them (#977).
+app.get("/api/health", async (req, res) => {
+  const report = await dependencyHealth.checkDependencies(dependencyHealth.inputsFrom(req.app));
+  res.status(report.critical ? 503 : 200).json({
+    status: report.critical ? "UNAVAILABLE" : "OK",
+    db: report.checks.mongodb.status === "up",
+    degraded: report.degraded,
+    checks: report.checks,
+  });
 });
 
 module.exports = app;
