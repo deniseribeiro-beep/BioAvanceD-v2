@@ -60,7 +60,7 @@ function createCollection() {
         docs.push(doc);
       }
       if (!doc) return { matchedCount: 0, modifiedCount: 0 };
-      Object.assign(doc, update.$setOnInsert || {}, update.$set || {});
+      Object.assign(doc, isUpsertedInsert ? (update.$setOnInsert || {}) : {}, update.$set || {});
       return isUpsertedInsert
         ? { matchedCount: 0, modifiedCount: 0, upsertedId: doc._id, upsertedCount: 1 }
         : { matchedCount: 1, modifiedCount: 1 };
@@ -383,6 +383,9 @@ describe('FHIR import staging', () => {
     const stored = db.collections.import_batches.docs[0];
     expect(stored.mappedResources).toEqual(result.batch.mappedResources);
     expect(stored.roundTripLoss).toEqual(result.batch.roundTripLoss);
+    // A ResearchStudy with no relatedArtifact has no ethicsApprovalId, so no
+    // Study candidate.
+    expect(stored.studyCandidates).toEqual([]);
     expect(result.records).toHaveLength(1);
     expect(db.collections.import_staging_records.docs).toHaveLength(1);
     expect(result.batch.counts.total).toBe(1);
@@ -851,6 +854,67 @@ describe('FHIR import staging', () => {
     expect(db.collections.samples.docs[0].final_grade).toBe('A');
     expect(db.collections.samples.docs[0].axis_penalties.length).toBeGreaterThan(0);
     expect(db.collections.samples.docs[0].calculation_trace.axes.length).toBeGreaterThan(0);
+  });
+
+  describe('ResearchStudy commit (RF011 AC4, #1322)', () => {
+    const researchStudy = {
+      resourceType: 'ResearchStudy',
+      id: 'ST-FHIR-1',
+      title: 'Estudo Importado',
+      status: 'active',
+      description: 'objetivo não guardado',
+      relatedArtifact: [{ type: 'documentation', label: 'CEP-1' }],
+    };
+    const bundleWithStudy = { ...signedBundle, entry: [...signedBundle.entry, { resource: researchStudy }] };
+
+    it('creates the Study with its four fields and audits it, for a caller who can create one', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, bundleWithStudy, { fileName: 'bundle.json' });
+      const result = await fhirImportStagingService.commitBatch(db, staged.batch._id, { canCreateStudy: true });
+
+      expect(result.committed).toBe(1);
+      expect(result.studies).toEqual({ created: 1, existing: 0, notCreatedReason: null });
+      expect(db.collections.studies.docs).toHaveLength(1);
+      expect(db.collections.studies.docs[0]).toMatchObject({
+        studyId: 'ST-FHIR-1',
+        studyTitle: 'Estudo Importado',
+        studyStatus: 'active',
+        ethicsApprovalId: ['CEP-1'],
+      });
+      expect(db.collections.studies.docs[0]).not.toHaveProperty('studyObjective');
+      expect(db.collections.studies.docs[0]).not.toHaveProperty('resourceIndex');
+      expect(db.collections.audit_logs.docs.filter((doc) => doc.action === 'FHIR_IMPORT_STUDY_COMMITTED')).toEqual([
+        expect.objectContaining({ batchId: staged.batch._id, studyId: 'ST-FHIR-1' }),
+      ]);
+    });
+
+    it('a second commit of the batch counts the Study as existing and creates no other', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, bundleWithStudy, { fileName: 'bundle.json' });
+      await fhirImportStagingService.commitBatch(db, staged.batch._id, { canCreateStudy: true });
+      const again = await fhirImportStagingService.commitBatch(db, staged.batch._id, { canCreateStudy: true });
+
+      expect(again.studies).toEqual({ created: 0, existing: 1, notCreatedReason: null });
+      expect(db.collections.studies.docs).toHaveLength(1);
+    });
+
+    it('never changes an existing Study with the same studyId', async () => {
+      db.collection('studies').docs.push({ _id: 'st-existing', studyId: 'ST-FHIR-1', studyTitle: 'Título Original', studyStatus: 'active', ethicsApprovalId: ['CEP-0'] });
+      const staged = await fhirImportStagingService.stageBundle(db, bundleWithStudy, { fileName: 'bundle.json' });
+      const result = await fhirImportStagingService.commitBatch(db, staged.batch._id, { canCreateStudy: true });
+
+      expect(result.studies).toEqual({ created: 0, existing: 1, notCreatedReason: null });
+      expect(db.collections.studies.docs).toHaveLength(1);
+      expect(db.collections.studies.docs[0]).toMatchObject({ studyTitle: 'Título Original', ethicsApprovalId: ['CEP-0'] });
+    });
+
+    it('without canCreateStudy creates no Study, reports ROLE and still commits the record', async () => {
+      const staged = await fhirImportStagingService.stageBundle(db, bundleWithStudy, { fileName: 'bundle.json' });
+      const result = await fhirImportStagingService.commitBatch(db, staged.batch._id);
+
+      expect(result.committed).toBe(1);
+      expect(result.studies).toEqual({ created: 0, existing: 0, notCreatedReason: 'ROLE' });
+      expect(db.collections.studies?.docs ?? []).toHaveLength(0);
+      expect(db.collections.samples.docs).toHaveLength(1);
+    });
   });
 
   it('#526: registra RcsAssessment e SpecimenPreanalytics referenciados ao comitar amostra nova', async () => {

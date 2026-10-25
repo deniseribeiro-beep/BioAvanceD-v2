@@ -1,6 +1,7 @@
 const multer = require('multer');
 const fhirImportStagingService = require('../services/fhir-import-staging.service');
 const callerCreateOrganization = require('../services/callerCreateOrganization.service');
+const rbacAssignment = require('../services/rbac-assignment.service');
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -107,8 +108,12 @@ class FhirImportStagingController {
 
   async commit(req, res) {
     try {
+      // RF011 AC4 (#1322): a staged ResearchStudy becomes a Study only for a
+      // Coordenador (3) or Administrador (4), as POST /api/studies requires.
+      const level = await rbacAssignment.resolveUserHierarchyLevel(req.app.locals.db, req.user?.userID);
       const result = await fhirImportStagingService.commitBatch(req.app.locals.db, req.params.id, {
         organizationScope: req.organizationScope,
+        canCreateStudy: level === 3 || level === 4,
       });
       return res.status(200).json({ success: true, ...result });
     } catch (error) {

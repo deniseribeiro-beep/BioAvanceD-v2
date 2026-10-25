@@ -3,13 +3,18 @@
 // the export transforms in fhir.service.js. Each is mapped by a pure
 // transform into a canonical candidate; staging records, on the batch, which
 // canonical fields each resource fills and which of its paths no field
-// carries. No candidate value is stored and commitBatch writes no record of
-// these types. The batch document is not sealed at rest (the staged records'
+// carries. The batch document is not sealed at rest (the staged records'
 // `fhir` and `normalized` are, #1191), so the report holds field names and
 // paths only, never a value, id, URI, pseudonym or title. A value outside a
 // closed table is left unmapped, never replaced by a guessed field (RF011
-// AC6, "no forced equivalence"). See
-// docs/decisions/2026-10-24-fhir-import-provenance-auditevent-documentreference-researchstudy.md.
+// AC6, "no forced equivalence"). commitBatch writes no record of Provenance,
+// AuditEvent or DocumentReference. A ResearchStudy whose candidate is a valid
+// Study is the exception: the batch keeps, in studyCandidates, the four
+// fields Study.create stores, which the studies collection holds in
+// plaintext too, and commitBatch creates the Study when none has its
+// studyId. See
+// docs/decisions/2026-10-24-fhir-import-provenance-auditevent-documentreference-researchstudy.md
+// and docs/decisions/2026-10-25-fhir-import-research-study-commit.md.
 
 const {
   EXPORT_MAPPINGS,
@@ -17,6 +22,7 @@ const {
   PROVENANCE_PARTICIPANT_TYPE,
 } = require('../../services/fhir.service');
 const { leafPaths, MAX_UNMAPPED_PATHS } = require('./round-trip-loss');
+const StudyModel = require('../../models/Study');
 
 // A batch stores at most this many mapped resources; mappedResourceCount
 // counts them all. A 20 MB Bundle of AuditEvents must not grow one batch
@@ -49,8 +55,9 @@ const IMPORT_ROUND_TRIP_LIMITATIONS = Object.freeze({
     'A lista de caminhos não mapeados guarda no máximo os primeiros 50; unmappedCount conta todos e truncated indica o corte.',
   ]),
   ResearchStudy: Object.freeze([
-    'Nenhum Study é criado: o commit do staging cria apenas participantes e amostras, e um Study é registrado pela sua própria rota.',
-    'O candidato canônico não é armazenado; o lote guarda apenas nomes de campos e caminhos, nunca valores.',
+    'Um Study é criado no commit do lote apenas quando studyId, studyTitle e ao menos um relatedArtifact documentation com label são lidos, e apenas quando nenhum Study tem esse studyId; um Study existente nunca é alterado.',
+    'Apenas um Coordenador ou Administrador que faz o commit cria o Study.',
+    'O lote guarda studyId, studyTitle, studyStatus e ethicsApprovalId até o commit, e nenhum outro valor.',
     'Um status fora dos códigos de status do ResearchStudy R4 não é mapeado.',
     'A lista de caminhos não mapeados guarda no máximo os primeiros 50; unmappedCount conta todos e truncated indica o corte.',
   ]),
@@ -266,6 +273,15 @@ function fromFhirResearchStudy(resource) {
   return { candidate: r.candidate, mappedPaths: r.mappedPaths };
 }
 
+// Only the four fields Study.create stores; Study.create defaults an absent
+// studyStatus.
+function toStudyCandidate(resourceIndex, candidate) {
+  const entry = { resourceIndex, studyId: candidate.studyId, studyTitle: candidate.studyTitle };
+  if (candidate.studyStatus !== undefined) entry.studyStatus = candidate.studyStatus;
+  entry.ethicsApprovalId = candidate.ethicsApprovalId;
+  return entry;
+}
+
 const IMPORT_TRANSFORMS = Object.freeze({
   Provenance: fromFhirProvenance,
   AuditEvent: fromFhirAuditEvent,
@@ -277,9 +293,12 @@ const IMPORT_TRANSFORMS = Object.freeze({
 // entries' resources) of the four types, with the canonical fields its
 // candidate fills and the paths no field carries. `mapped` holds every such
 // resource, a capped one included, for buildBundleRoundTripLoss.
+// `studyCandidates` holds, for each ResearchStudy whose candidate is a valid
+// Study, the four fields Study.create stores, for commitBatch.
 function stageMappedResources(resources = []) {
   const mapped = new Set();
   const mappedResources = [];
+  const studyCandidates = [];
   let mappedResourceCount = 0;
   asArray(resources).forEach((resource, resourceIndex) => {
     if (!isPlainObject(resource) || typeof resource.resourceType !== 'string') return;
@@ -288,6 +307,9 @@ function stageMappedResources(resources = []) {
     const { candidate, mappedPaths } = IMPORT_TRANSFORMS[resourceType](resource);
     mapped.add(resource);
     mappedResourceCount += 1;
+    if (resourceType === 'ResearchStudy' && studyCandidates.length < MAX_MAPPED_RESOURCES) {
+      if (StudyModel.validate(candidate).isValid) studyCandidates.push(toStudyCandidate(resourceIndex, candidate));
+    }
     if (mappedResources.length >= MAX_MAPPED_RESOURCES) return;
 
     const carried = new Set(mappedPaths);
@@ -309,6 +331,7 @@ function stageMappedResources(resources = []) {
   return {
     report: { mappedResourceCount, mappedResources, truncated: mappedResourceCount > mappedResources.length },
     mapped,
+    studyCandidates,
   };
 }
 

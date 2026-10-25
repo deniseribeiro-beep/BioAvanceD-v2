@@ -6,6 +6,7 @@ const require = createRequire(import.meta.url);
 const controller = require('../../src/controllers/fhir-import-staging.controller');
 const fhirImportStagingService = require('../../src/services/fhir-import-staging.service');
 const callerCreateOrganization = require('../../src/services/callerCreateOrganization.service');
+const rbacAssignment = require('../../src/services/rbac-assignment.service');
 
 // #1385: what requireOrganizationScope sets on the request.
 const ORG_A_SCOPE = { scope: 'organization', organizationIds: ['org-a'] };
@@ -329,6 +330,10 @@ describe('fhir-import-staging.controller', () => {
   });
 
   describe('commit', () => {
+    beforeEach(() => {
+      vi.spyOn(rbacAssignment, 'resolveUserHierarchyLevel').mockResolvedValue(2);
+    });
+
     it('happy path: returns 200 with the commit result', async () => {
       const req = { app: { locals: { db: 'the-db' } }, params: { id: 'batch-5' }, organizationScope: ORG_A_SCOPE };
       const res = createRes();
@@ -337,7 +342,7 @@ describe('fhir-import-staging.controller', () => {
 
       await controller.commit(req, res);
 
-      expect(fhirImportStagingService.commitBatch).toHaveBeenCalledWith('the-db', 'batch-5', { organizationScope: ORG_A_SCOPE });
+      expect(fhirImportStagingService.commitBatch).toHaveBeenCalledWith('the-db', 'batch-5', { organizationScope: ORG_A_SCOPE, canCreateStudy: false });
       expect(res.status).toHaveBeenCalledWith(200);
       expect(res.json).toHaveBeenCalledWith({ success: true, committed: true });
     });
@@ -354,6 +359,32 @@ describe('fhir-import-staging.controller', () => {
 
       expect(res.status).toHaveBeenCalledWith(409);
       expect(res.json).toHaveBeenCalledWith({ success: false, message: 'cannot commit' });
+    });
+
+    // RF011 AC4 (#1322): only a Coordenador or Administrador creates a Study.
+    async function commitAtLevel(level) {
+      rbacAssignment.resolveUserHierarchyLevel.mockResolvedValue(level);
+      vi.spyOn(fhirImportStagingService, 'commitBatch').mockResolvedValue({ committed: 1 });
+      const req = { app: { locals: { db: 'the-db' } }, params: { id: 'batch-5' }, user: { userID: 'u-5' }, organizationScope: ORG_A_SCOPE };
+      await controller.commit(req, createRes());
+      expect(rbacAssignment.resolveUserHierarchyLevel).toHaveBeenCalledWith('the-db', 'u-5');
+      return fhirImportStagingService.commitBatch.mock.calls[0][2];
+    }
+
+    it('a level 3 caller commits with canCreateStudy true', async () => {
+      expect(await commitAtLevel(3)).toEqual({ organizationScope: ORG_A_SCOPE, canCreateStudy: true });
+    });
+
+    it('a level 4 caller commits with canCreateStudy true', async () => {
+      expect(await commitAtLevel(4)).toEqual({ organizationScope: ORG_A_SCOPE, canCreateStudy: true });
+    });
+
+    it('a level 2 caller commits with canCreateStudy false', async () => {
+      expect(await commitAtLevel(2)).toEqual({ organizationScope: ORG_A_SCOPE, canCreateStudy: false });
+    });
+
+    it('a caller with no level commits with canCreateStudy false', async () => {
+      expect(await commitAtLevel(null)).toEqual({ organizationScope: ORG_A_SCOPE, canCreateStudy: false });
     });
   });
 

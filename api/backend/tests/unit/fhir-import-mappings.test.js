@@ -197,4 +197,32 @@ describe('stageMappedResources (RF011 AC4, #1322)', () => {
     expect(mapped.size).toBe(60);
     expect(buildBundleRoundTripLoss(resources, [], mapped)).toEqual({ unattachedResourceCount: 0, unattached: [] });
   });
+
+  it('a valid ResearchStudy gives one studyCandidates entry with only the four Study fields', () => {
+    const resources = [
+      { resourceType: 'Patient', id: 'P-1' },
+      {
+        resourceType: 'ResearchStudy',
+        id: 'ST-1',
+        title: 'Estudo Um',
+        status: 'active',
+        description: 'objetivo',
+        relatedArtifact: [{ type: 'documentation', label: 'CEP-1' }],
+      },
+    ];
+    const { studyCandidates } = stageMappedResources(resources);
+    expect(studyCandidates).toHaveLength(1);
+    expect(Object.keys(studyCandidates[0]).sort()).toEqual(['ethicsApprovalId', 'resourceIndex', 'studyId', 'studyStatus', 'studyTitle']);
+    expect(studyCandidates[0]).toEqual({ resourceIndex: 1, studyId: 'ST-1', studyTitle: 'Estudo Um', studyStatus: 'active', ethicsApprovalId: ['CEP-1'] });
+  });
+
+  it('a ResearchStudy with no relatedArtifact gives no studyCandidates entry', () => {
+    const { studyCandidates, report: batch } = stageMappedResources([{ resourceType: 'ResearchStudy', id: 'ST-2', title: 'Estudo Dois', status: 'active' }]);
+    expect(studyCandidates).toEqual([]);
+    expect(batch.mappedResourceCount).toBe(1);
+  });
+
+  it('a Provenance gives no studyCandidates entry', () => {
+    expect(stageMappedResources([{ resourceType: 'Provenance', id: 'WR-1' }]).studyCandidates).toEqual([]);
+  });
 });

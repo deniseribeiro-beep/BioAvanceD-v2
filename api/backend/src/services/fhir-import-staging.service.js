@@ -7,6 +7,7 @@ const logger = require('../utils/logger');
 const { SampleModel } = require('../models/Sample');
 const ParticipantIdentityModel = require('../models/ParticipantIdentity');
 const PatientModel = require('../models/Patient');
+const StudyModel = require('../models/Study');
 const participantIdentityService = require('./participantIdentity.service');
 const quarantineActionService = require('./quarantine-action.service');
 const operationalStateDecisionService = require('./operationalStateDecision.service');
@@ -629,7 +630,7 @@ async function stageBundle(db, payload, metadata = {}) {
   }
 
   const bundleIndex = buildBundleIndex(resources);
-  const { report: mappedResources, mapped } = stageMappedResources(resources);
+  const { report: mappedResources, mapped, studyCandidates } = stageMappedResources(resources);
   const records = bundleIndex.specimens.map((specimen, index) => normalizeSpecimen(specimen, index, bundleIndex));
   if (records.length === 0) {
     throw createBadRequest('Bundle FHIR não contém Specimen para staging.');
@@ -653,6 +654,10 @@ async function stageBundle(db, payload, metadata = {}) {
     // RF011 AC6, RNF024 C6 (#1322): the Bundle resources no record attaches
     // and no mapping reads.
     roundTripLoss: buildBundleRoundTripLoss(resources, records, mapped),
+    // RF011 AC4 (#1322): each valid ResearchStudy's studyId, studyTitle,
+    // studyStatus and ethicsApprovalId, the plaintext a Study stores, kept
+    // for commitStudyCandidates.
+    studyCandidates,
     createdAt: now,
     updatedAt: now,
   };
@@ -985,7 +990,41 @@ async function getConsentStatus(db, batchIdRaw, { organizationScope } = {}) {
   };
 }
 
-async function commitBatch(db, batchIdRaw, { organizationScope } = {}) {
+// RF011 AC4 (#1322): a staged ResearchStudy becomes a Study only for a
+// caller the controller resolved as Coordenador or Administrador, as POST
+// /api/studies requires. A Study is matched by studyId and only inserted
+// when absent; an existing one is never changed.
+async function commitStudyCandidates(db, batchId, batchInfo, canCreateStudy) {
+  const candidates = Array.isArray(batchInfo?.studyCandidates) ? batchInfo.studyCandidates : [];
+  const studies = { created: 0, existing: 0, notCreatedReason: null };
+  if (candidates.length === 0) return studies;
+  const allowed = canCreateStudy === true;
+  if (!allowed) return { ...studies, notCreatedReason: 'ROLE' };
+
+  for (const entry of candidates) {
+    const fields = {
+      studyId: entry?.studyId,
+      studyTitle: entry?.studyTitle,
+      studyStatus: entry?.studyStatus,
+      ethicsApprovalId: entry?.ethicsApprovalId,
+    };
+    if (!StudyModel.validate(fields).isValid) continue;
+    const result = await collection(db, 'studies').updateOne(
+      { studyId: fields.studyId },
+      { $setOnInsert: StudyModel.create(fields) },
+      { upsert: true }
+    );
+    if (result?.upsertedId) {
+      studies.created += 1;
+      await audit(db, 'FHIR_IMPORT_STUDY_COMMITTED', { batchId, studyId: fields.studyId });
+    } else {
+      studies.existing += 1;
+    }
+  }
+  return studies;
+}
+
+async function commitBatch(db, batchIdRaw, { organizationScope, canCreateStudy } = {}) {
   const batchId = toObjectId(batchIdRaw);
   const { records } = await validateBatch(db, batchId, { organizationScope });
   const patients = collection(db, 'patients');
@@ -1211,8 +1250,9 @@ async function commitBatch(db, batchIdRaw, { organizationScope } = {}) {
     committed += 1;
   }
 
+  const studies = await commitStudyCandidates(db, batchId, batchInfo, canCreateStudy);
   const refreshed = await refreshBatchCounts(db, batchId);
-  return { ...refreshed, committed };
+  return { ...refreshed, committed, studies };
 }
 
 async function attachExternalDocument(db, batchIdRaw, recordIdRaw, options = {}) {
