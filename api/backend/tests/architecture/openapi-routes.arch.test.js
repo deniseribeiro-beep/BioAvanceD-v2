@@ -24,13 +24,26 @@
 // could add a route under a covered mount but that the extraction does not
 // read (a router.route() chain, router.all, a sub-router, a second router,
 // a non-literal or middleware-prefixed mount, a mount below a covered
-// prefix, a route registered on app itself) is refused with its file and
-// line, rather than passed as if it registered nothing.
+// prefix, an uncovered mount above a covered prefix, a route registered on
+// app itself) is refused with its file and line, rather than passed as if it
+// registered nothing.
 //
-// A known gap: a mount whose prefix is a strict ancestor of a covered entry
-// is not checked. app.js mounts /api/biobanks through createMasterDataRouter,
-// whose /:id routes also match /api/biobanks/miabis, and nothing here
-// refuses or documents them.
+// An uncovered mount whose prefix is a strict ancestor of a covered entry,
+// segment by segment with a {param} matching any segment, may register
+// routes that also match the covered entry's paths, so it is refused unless
+// KNOWN_ANCESTORS names it with every covered entry below it. The one named
+// exception: app.js mounts /api/biobanks through createMasterDataRouter,
+// whose /:id routes also match /api/biobanks/miabis and are not documented.
+// An uncovered mount whose prefix holds a path pattern (?, *, + or
+// parentheses) is refused outright, since it cannot be compared segment by
+// segment.
+//
+// Two gaps remain. Prefixes are compared case-sensitively, while Express
+// matches paths case-insensitively by default, so app.use("/API/export")
+// is not seen as above /api/export/fhir. And a route registered on app
+// itself (app.get, app.all, ...) is refused only when its literal path is
+// under a covered prefix; a pattern such as app.get("/api/*") that also
+// matches covered paths is not checked.
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -52,6 +65,11 @@ const HTTP_METHODS = new Set(['get', 'put', 'post', 'delete', 'options', 'head',
 
 // Middleware app.js mounts on a covered prefix that registers no route.
 const KNOWN_LIMITERS = new Set(['authLimiter']);
+// Uncovered mounts above a covered prefix, each with the covered prefixes
+// below it that it is known to overlap. The master-data router mounted at
+// /api/biobanks has /:id routes that also match /api/biobanks/miabis (GET,
+// PUT and DELETE with id `miabis`); they are not documented.
+const KNOWN_ANCESTORS = new Map([['/api/biobanks', ['/api/biobanks/miabis']]]);
 
 const APP_CALL = /\bapp\.(use|get|post|put|patch|delete|all|options|head|route)\s*\(/g;
 const ROUTER_PATH_SHAPE = /\brouter\.(route|all|options|use)\s*\(\s*['"`]/g;
@@ -96,6 +114,15 @@ function literalOf(arg) {
 
 const isUnder = (route, prefix) => route === prefix || route.startsWith(`${prefix}/`);
 const templated = (p) => p.replace(/:([A-Za-z0-9_]+)/g, '{$1}');
+const isParam = (segment) => /^\{[^}]+\}$/.test(segment);
+// Whether `prefix` is a strict ancestor of `covered`, segment by segment, a
+// {param} on either side matching any segment.
+function isAbove(prefix, covered) {
+  const upper = prefix.replace(/\/$/, '').split('/');
+  const lower = covered.split('/');
+  return upper.length < lower.length &&
+    upper.every((segment, i) => segment === lower[i] || isParam(segment) || isParam(lower[i]));
+}
 
 // app.js calls the mount extraction cannot vouch for under a covered prefix.
 function appRefusals(source, label, covered) {
@@ -111,7 +138,18 @@ function appRefusals(source, label, covered) {
     }
     const prefix = templated(literal);
     const mount = covered.filter((p) => isUnder(prefix, p)).sort((a, b) => b.length - a.length)[0];
-    if (!mount) continue;
+    if (!mount) {
+      if (method !== 'use' || (args.length === 2 && KNOWN_LIMITERS.has(args[1]))) continue;
+      if (/[?*()+]/.test(prefix)) {
+        refusals.push(`${at}"${prefix}": a mount pattern (?, *, + or parentheses) the guard cannot compare with the covered prefixes; write it as plain segments`);
+        continue;
+      }
+      const known = KNOWN_ANCESTORS.get(prefix) || [];
+      for (const c of covered.filter((p) => isAbove(prefix, p) && !known.includes(p))) {
+        refusals.push(`${at}"${prefix}": an uncovered mount above the covered ${c}; its routes may match ${c}'s paths; cover it or name it in KNOWN_ANCESTORS`);
+      }
+      continue;
+    }
     if (method !== 'use') {
       refusals.push(`${at}"${prefix}": a route registered on app itself under ${mount}`);
     } else if (prefix !== mount) {
@@ -230,7 +268,14 @@ test('RNF006: every operation registered under a covered mount is documented', (
   const covered = spec['x-covered-mounts'] || [];
   const documented = new Set(specOperations(spec).map((operation) => operation.key));
   const mounts = collectMounts();
-  const misses = appRefusals(readStripped(fs, APP_JS), 'app.js', covered);
+  const appSource = readStripped(fs, APP_JS);
+  const misses = appRefusals(appSource, 'app.js', covered);
+  const usePrefixes = new Set([...appSource.matchAll(APP_CALL)]
+    .filter((match) => match[1] === 'use')
+    .map((match) => templated(literalOf(callArgs(appSource, match.index + match[0].length - 1)[0] || '') || '')));
+  for (const key of KNOWN_ANCESTORS.keys()) {
+    if (!usePrefixes.has(key)) misses.push(`KNOWN_ANCESTORS names ${key}, which app.js no longer mounts`);
+  }
   for (const prefix of covered) {
     const files = mounts.get(prefix);
     if (!files || files.size === 0) {
@@ -279,7 +324,7 @@ test('RNF006: the spec is OpenAPI 3.0 and every path template parameter is decla
 // one the extraction cannot read; each must be refused, and the clean
 // sources, written in the covered files' own shapes, must not be.
 test('RNF006: the guard refuses each route shape it cannot read', () => {
-  const covered = ['/api/auth', '/api/backup', '/api/export/fhir', '/api/export/fhir/samples/{specimenId}/files/{fileID}'];
+  const covered = ['/api/auth', '/api/backup', '/api/biobanks/miabis', '/api/export/fhir', '/api/export/fhir/samples/{specimenId}/files/{fileID}'];
   const sub = 'require("./src/interface/routes/sub.routes")';
   const app = [
     'app.use(globalLimiter);',
@@ -288,6 +333,8 @@ test('RNF006: the guard refuses each route shape it cannot read', () => {
     'app.use("/api/backup", require("./src/interface/routes/backup.routes"));',
     'app.use("/api/export/fhir/samples/:specimenId/files/:fileID", require("./src/interface/routes/fhir-document-reference-export.routes"));',
     'app.use("/api/export/fhir", require("./src/interface/routes/fhir-export.routes"));',
+    'app.use("/api/biobanks/miabis", require("./src/interface/routes/miabis-export.routes"));',
+    'app.use("/api/biobanks", createMasterDataRouter({ collectionName: "biobanks" }));',
     'app.use(\n  cors({ origin: (origin, callback) => callback(null, true) })\n);',
     'app.use("/api/patients", require("./src/interface/routes/patient.routes"));',
     'app.get("/api/health", async (req, res) => { res.status(200).json({ ok: true }); });',
@@ -317,6 +364,19 @@ test('RNF006: the guard refuses each route shape it cannot read', () => {
     'a parameterised mount below a covered prefix': `app.use("/api/backup/:id/files", ${sub});`,
     'app.get under a covered prefix': 'app.get("/api/backup/direct", handler);',
     'app.route under a covered prefix': 'app.route("/api/backup/r").get(handler);',
+    'an uncovered mount above a covered prefix': `app.use("/api/export", ${sub});`,
+    'a parameterised mount above a covered prefix': `app.use("/api/:area", ${sub});`,
+    'a master-data router above a covered prefix': 'app.use("/api/export", createMasterDataRouter({ collectionName: "x" }));',
+    'a known ancestor above an unlisted covered prefix': `app.use("/api/biobanks/other", ${sub});`,
+    'an optional-parameter mount above a covered prefix': `app.use("/api/:area?", ${sub});`,
+    'a literal mount above a parameterised covered prefix': `app.use("/api/x/y", ${sub});`,
+  };
+  // Covered prefixes for one shape only: added to the shared list, the clean
+  // /api/biobanks line would be refused too. /api/x/{id}/files puts the
+  // {param} on the covered side, opposite the shape's literal y.
+  const shapeCovered = {
+    'a known ancestor above an unlisted covered prefix': [...covered, '/api/biobanks/other'],
+    'a literal mount above a parameterised covered prefix': [...covered, '/api/x/{id}/files'],
   };
   const routeShapes = {
     'a router.route chain': "router.route('/chained').get(handler).post(handler);",
@@ -330,7 +390,7 @@ test('RNF006: the guard refuses each route shape it cannot read', () => {
     'a registration with no literal path': 'router.get(paths.list, handler);',
   };
   const unrefused = [
-    ...Object.entries(appShapes).filter(([, text]) => appRefusals(`${app}\n${text}`, 'app.js', covered).length === 0),
+    ...Object.entries(appShapes).filter(([name, text]) => appRefusals(`${app}\n${text}`, 'app.js', shapeCovered[name] || covered).length === 0),
     ...Object.entries(routeShapes).filter(([, text]) => routeFileRefusals(`${route}\n${text}`, 'backup.routes.js').length === 0),
   ].map(([name]) => name);
   assert.deepStrictEqual(unrefused, [], `These shapes pass unrefused: ${unrefused.join(', ')}`);
