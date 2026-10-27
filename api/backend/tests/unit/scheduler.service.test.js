@@ -613,17 +613,114 @@ describe('scheduler.service - initScheduler / stopScheduler', () => {
       expect(cronScheduleSpy.mock.calls[4][0]).toBe('0 3 * * *');
     });
 
-    it('falls back to env.BACKUP_CRON and logs an error when the policy lookup rejects', async () => {
+    // #1325: a failed lookup keeps the running task instead of replacing it
+    // with the BACKUP_CRON one, as the log line says.
+    it('keeps the running backup task and logs an error when the policy lookup rejects', async () => {
       scheduler.initScheduler({ db: {}, neo4jDriver: null });
+      const originalBackupTask = scheduledTasks[1];
       vi.spyOn(backupPolicyService, 'getPolicy').mockRejectedValue(new Error('policy lookup failed'));
 
       await scheduler.reloadBackupSchedule({});
 
-      expect(cronScheduleSpy.mock.calls[4][0]).toBe('0 3 * * *');
+      expect(cronScheduleSpy).toHaveBeenCalledTimes(4);
+      expect(originalBackupTask.stop).not.toHaveBeenCalled();
       expect(loggerErrorSpy).toHaveBeenCalledWith(
         'Erro ao recarregar política de backup, mantendo agendamento anterior:',
         'policy lookup failed'
       );
+    });
+  });
+
+  // #1325 (RF013 AC6): boot applies the stored BackupPolicy through
+  // reloadBackupSchedule, after scheduling env.BACKUP_CRON synchronously.
+  describe('boot applies the stored backup policy (#1325)', () => {
+    function deferred() {
+      let resolve;
+      const promise = new Promise((r) => { resolve = r; });
+      return { promise, resolve };
+    }
+
+    it('boot re-schedules the backup task with the stored policy cronExpression', async () => {
+      vi.spyOn(backupPolicyService, 'getPolicy').mockResolvedValue({ cronExpression: '0 1 * * *' });
+
+      const { backupPolicyApplied } = scheduler.initScheduler({ db: {}, neo4jDriver: null });
+      await backupPolicyApplied;
+
+      expect(cronScheduleSpy).toHaveBeenCalledTimes(5);
+      expect(cronScheduleSpy.mock.calls[4][0]).toBe('0 1 * * *');
+      expect(scheduledTasks[1].stop).toHaveBeenCalledTimes(1);
+    });
+
+    it('boot keeps the BACKUP_CRON task when the policy lookup rejects', async () => {
+      vi.spyOn(backupPolicyService, 'getPolicy').mockRejectedValue(new Error('policy lookup failed'));
+
+      const { backupPolicyApplied } = scheduler.initScheduler({ db: {}, neo4jDriver: null });
+      await backupPolicyApplied;
+
+      expect(cronScheduleSpy).toHaveBeenCalledTimes(4);
+      expect(scheduledTasks[1].stop).not.toHaveBeenCalled();
+      expect(loggerErrorSpy).toHaveBeenCalledWith(
+        'Erro ao recarregar política de backup, mantendo agendamento anterior:',
+        'policy lookup failed'
+      );
+    });
+
+    it('boot with no db reads no policy', async () => {
+      const getPolicySpy = vi.spyOn(backupPolicyService, 'getPolicy').mockResolvedValue({ cronExpression: '0 1 * * *' });
+
+      const { backupPolicyApplied } = scheduler.initScheduler({ db: null, neo4jDriver: null });
+      await backupPolicyApplied;
+
+      expect(getPolicySpy).not.toHaveBeenCalled();
+      expect(cronScheduleSpy).toHaveBeenCalledTimes(4);
+    });
+
+    it('boot keeps the BACKUP_CRON task when the stored expression is one node-cron refuses', async () => {
+      cronScheduleSpy.mockImplementation((expr, fn, opts) => {
+        if (!cron.validate(expr)) throw new Error(`${expr} is a invalid expression`);
+        const task = { stop: vi.fn(), expr, fn, opts };
+        scheduledTasks.push(task);
+        return task;
+      });
+      vi.spyOn(backupPolicyService, 'getPolicy').mockResolvedValue({ cronExpression: '99 99 * * *' });
+
+      const { backupPolicyApplied } = scheduler.initScheduler({ db: {}, neo4jDriver: null });
+      await expect(backupPolicyApplied).resolves.toBeUndefined();
+
+      expect(cronScheduleSpy).toHaveBeenCalledTimes(4);
+      expect(scheduledTasks[1].stop).not.toHaveBeenCalled();
+      expect(loggerErrorSpy).toHaveBeenCalledWith(
+        'Expressão cron inválida na política de backup, mantendo agendamento anterior:',
+        '99 99 * * *'
+      );
+    });
+
+    it('a boot lookup superseded by a newer reload schedules nothing', async () => {
+      const first = deferred();
+      vi.spyOn(backupPolicyService, 'getPolicy')
+        .mockReturnValueOnce(first.promise)
+        .mockResolvedValueOnce({ cronExpression: '0 2 * * *' });
+
+      const { backupPolicyApplied } = scheduler.initScheduler({ db: {}, neo4jDriver: null });
+      await scheduler.reloadBackupSchedule({});
+      first.resolve({ cronExpression: '0 1 * * *' });
+      await backupPolicyApplied;
+
+      const scheduledExprs = cronScheduleSpy.mock.calls.map((call) => call[0]);
+      expect(scheduledExprs[scheduledExprs.length - 1]).toBe('0 2 * * *');
+      expect(scheduledExprs).not.toContain('0 1 * * *');
+    });
+
+    it('a boot lookup still in flight when the scheduler stops schedules nothing', async () => {
+      const first = deferred();
+      vi.spyOn(backupPolicyService, 'getPolicy').mockReturnValueOnce(first.promise);
+
+      const { backupPolicyApplied } = scheduler.initScheduler({ db: {}, neo4jDriver: null });
+      scheduler.stopScheduler();
+      first.resolve({ cronExpression: '0 1 * * *' });
+      await backupPolicyApplied;
+
+      expect(cronScheduleSpy).toHaveBeenCalledTimes(4);
     });
   });
 });

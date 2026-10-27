@@ -19,6 +19,9 @@ let backupTask = null;
 let consentSyncTask = null;
 let retentionSweepTask = null;
 let restoreTestTask = null;
+// #1325: bumped by each reloadBackupSchedule and by stopScheduler, so a
+// policy lookup that a newer reload or a stop has superseded schedules nothing.
+let backupScheduleGeneration = 0;
 
 function normalizeDate(value) {
   if (!value) return null;
@@ -141,12 +144,11 @@ function startTemperatureMonitor(db) {
   logger.info(`⏱️ Monitoramento de temperatura agendado (${cronExpr})`);
 }
 
-// #728: boot-time schedule still resolves from env.BACKUP_CRON only (not
-// the persisted BackupPolicy) -- keeps startup synchronous, matching every
-// existing caller/test of initScheduler. reloadBackupSchedule below is the
-// actual "policy changes apply without a restart" mechanism the design
-// call asked for; it's invoked explicitly by backupPolicy.routes.js right
-// after a policy update, not on every boot.
+// #728, #1325 (RF013 AC6): initScheduler schedules env.BACKUP_CRON
+// synchronously, so a backup schedule exists from the first tick, then
+// applies the stored BackupPolicy's cronExpression through
+// reloadBackupSchedule below -- the same hook backupPolicy.routes.js calls
+// after a policy update -- so a restart no longer reverts to BACKUP_CRON.
 function scheduleBackupTask(db, cronExpr, timezone) {
   return cron.schedule(cronExpr, async () => {
     try {
@@ -166,23 +168,45 @@ function startBackupSchedule(db) {
   logger.info(`🗂️ Backup diário agendado (${cronExpr})`);
 }
 
-// #728 (RF013 AC#5/AC#6): re-creates the running backup cron task against
-// the current BackupPolicy's cronExpression -- called by
-// backupPolicy.routes.js's PUT handler right after a successful update, so
-// an admin's schedule change takes effect immediately, no process restart.
-// Falls back to env.BACKUP_CRON if the policy lookup fails (db down,
-// unexpected error) rather than leaving the schedule unset.
+// #728, #1325 (RF013 AC5/AC6): re-creates the running backup cron task
+// against the current BackupPolicy's cronExpression -- called at boot by
+// initScheduler and by backupPolicy.routes.js's PUT handler right after a
+// successful update, so the policy schedule holds across restarts and an
+// admin's change takes effect with no restart.
+// - A reload superseded by a newer reload or by stopScheduler while its
+//   lookup was in flight stops and schedules nothing.
+// - A failed lookup (db down, unexpected error) or a stored expression
+//   node-cron refuses keeps the running task; env.BACKUP_CRON is used only
+//   when no task is running, so the schedule is never left unset. Keeping
+//   the task on a failed lookup is inferred from the "mantendo agendamento
+//   anterior" log line: before #1325 it was replaced by the BACKUP_CRON one.
+// - A policy with no cronExpression falls back to env.BACKUP_CRON.
 async function reloadBackupSchedule(db) {
+  const generation = ++backupScheduleGeneration;
   const timezone = process.env.TZ || 'America/Sao_Paulo';
-  let cronExpr = env.BACKUP_CRON || '0 3 * * *';
+  const envCronExpr = env.BACKUP_CRON || '0 3 * * *';
 
+  let policy = null;
+  let lookupFailed = false;
   try {
-    const policy = await backupPolicyService.getPolicy(db);
-    if (policy?.cronExpression) {
-      cronExpr = policy.cronExpression;
-    }
+    policy = await backupPolicyService.getPolicy(db);
   } catch (error) {
     logger.error('Erro ao recarregar política de backup, mantendo agendamento anterior:', error.message);
+    lookupFailed = true;
+  }
+
+  if (generation !== backupScheduleGeneration) return;
+
+  let cronExpr = envCronExpr;
+  if (lookupFailed) {
+    if (backupTask) return;
+  } else if (policy?.cronExpression) {
+    if (cron.validate(policy.cronExpression)) {
+      cronExpr = policy.cronExpression;
+    } else {
+      logger.error('Expressão cron inválida na política de backup, mantendo agendamento anterior:', policy.cronExpression);
+      if (backupTask) return;
+    }
   }
 
   if (backupTask) {
@@ -265,14 +289,22 @@ function startRestoreTestSchedule(db) {
 function initScheduler({ db, neo4jDriver }) {
   startTemperatureMonitor(db);
   startBackupSchedule(db);
+  const backupPolicyApplied = db
+    ? reloadBackupSchedule(db).catch((error) => {
+      logger.error('Erro ao aplicar política de backup no boot:', error.message);
+    })
+    : Promise.resolve();
   startConsentSyncSchedule({ db, neo4jDriver });
   startRetentionSweepSchedule(db);
   startRestoreTestSchedule(db);
+  return { backupPolicyApplied };
 }
 
 function stopScheduler() {
   if (temperatureTask) temperatureTask.stop();
   if (backupTask) backupTask.stop();
+  backupScheduleGeneration += 1;
+  backupTask = null;
   if (consentSyncTask) consentSyncTask.stop();
   if (retentionSweepTask) retentionSweepTask.stop();
   if (restoreTestTask) restoreTestTask.stop();

@@ -77,6 +77,17 @@ describe('BackupPolicyService.validatePolicy', () => {
     expect(() => backupPolicyService.validatePolicy({ cronExpression: 'not-a-cron' })).toThrow(/cronExpression/);
   });
 
+  // #1325: the five-field pattern accepts it, but the scheduler could not apply it.
+  it('rejects a five-field cron expression node-cron refuses', () => {
+    expect(() => backupPolicyService.validatePolicy({ cronExpression: '99 99 * * *' })).toThrow(/cronExpression/);
+    expect(() => backupPolicyService.validatePolicy({ cronExpression: '0 3 * * *' })).not.toThrow();
+  });
+
+  // #1325: updatePolicy stores the raw value, so a non-string must not pass.
+  it('rejects a cron expression that is not a string', () => {
+    expect(() => backupPolicyService.validatePolicy({ cronExpression: ['0 1 * * *'] })).toThrow(/cronExpression/);
+  });
+
   it('rejects a non-boolean encryptionEnabled', () => {
     expect(() => backupPolicyService.validatePolicy({ encryptionEnabled: 'yes' })).toThrow(/encryptionEnabled/);
   });
