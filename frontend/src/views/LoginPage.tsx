@@ -150,7 +150,7 @@ export default function LoginPage() {
 
           <form onSubmit={handleSubmit} className="login-form" data-testid="login-form">
             {error && (
-              <div className="error-message" data-testid="login-error">
+              <div className="error-message" data-testid="login-error" role="alert">
                 {error}
               </div>
             )}

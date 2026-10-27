@@ -46,5 +46,9 @@ export default defineConfig({
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
     },
+    // RNF027 C4 (#1324): the interface spec also runs in Firefox and WebKit;
+    // every other spec stays Chromium-only.
+    { name: 'firefox', use: { ...devices['Desktop Firefox'] }, testMatch: /rnf027-interface\.spec\.ts$/ },
+    { name: 'webkit', use: { ...devices['Desktop Safari'] }, testMatch: /rnf027-interface\.spec\.ts$/ },
   ],
 });
