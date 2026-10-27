@@ -19,6 +19,7 @@ let backupTask = null;
 let consentSyncTask = null;
 let retentionSweepTask = null;
 let restoreTestTask = null;
+let platformAlertTask = null;
 // #1325: bumped by each reloadBackupSchedule and by stopScheduler, so a
 // policy lookup that a newer reload or a stop has superseded schedules nothing.
 let backupScheduleGeneration = 0;
@@ -142,6 +143,30 @@ function startTemperatureMonitor(db) {
   }, { timezone });
 
   logger.info(`⏱️ Monitoramento de temperatura agendado (${cronExpr})`);
+}
+
+// RNF015 C2 (#1323): the platform alert check over the request metrics, the
+// queue depths and the graph-outbox DEAD_LETTER count.
+function startPlatformAlertMonitor(db) {
+  const cronExpr = env.PLATFORM_ALERT_CRON || '*/5 * * * *';
+  const timezone = process.env.TZ || 'America/Sao_Paulo';
+
+  platformAlertTask = cron.schedule(cronExpr, async () => {
+    try {
+      if (!db) return;
+      const { runPlatformAlertCheck } = require('./platformAlert.service');
+      const results = await runPlatformAlertCheck(db);
+      if (!results) return;
+      const firing = results.filter((result) => result.state === 'firing').length;
+      logger.info(`🚨 Verificação de alertas da plataforma executada: regras=${results.length} disparadas=${firing}`);
+    } catch (error) {
+      logger.error('Erro na verificação de alertas da plataforma:', error.message);
+    }
+  // noOverlap: a tick that outlasts the cadence (a slow Mongo) is not run
+  // twice at once; runPlatformAlertCheck guards the same for any other caller.
+  }, { timezone, noOverlap: true });
+
+  logger.info(`⏱️ Verificação de alertas da plataforma agendada (${cronExpr})`);
 }
 
 // #728, #1325 (RF013 AC6): initScheduler schedules env.BACKUP_CRON
@@ -297,6 +322,8 @@ function initScheduler({ db, neo4jDriver }) {
   startConsentSyncSchedule({ db, neo4jDriver });
   startRetentionSweepSchedule(db);
   startRestoreTestSchedule(db);
+  // Last, so the tasks above keep their cron.schedule order.
+  startPlatformAlertMonitor(db);
   return { backupPolicyApplied };
 }
 
@@ -308,6 +335,7 @@ function stopScheduler() {
   if (consentSyncTask) consentSyncTask.stop();
   if (retentionSweepTask) retentionSweepTask.stop();
   if (restoreTestTask) restoreTestTask.stop();
+  if (platformAlertTask) platformAlertTask.stop();
 }
 
 module.exports = {

@@ -6,5 +6,6 @@ module.exports = {
   pins: [
     { method: 'GET', path: '/runs', roles: [4] },
     { method: 'GET', path: '/metrics', roles: [4] },
+    { method: 'GET', path: '/alerts', roles: [4] },
   ],
 };

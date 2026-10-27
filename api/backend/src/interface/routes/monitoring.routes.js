@@ -6,6 +6,7 @@ const logger = require('../../utils/logger');
 const runMonitoring = require('../../services/runMonitoring.service');
 const httpMetrics = require('../../infrastructure/metrics/httpMetrics');
 const queueDepth = require('../../infrastructure/metrics/queueDepth');
+const platformAlert = require('../../services/platformAlert.service');
 
 // RNF015 AC5/AC6 (#1323): the recent Foundation, configuration, reference
 // and import runs, failures told apart by phase. Role 4: these are
@@ -36,6 +37,17 @@ router.get('/metrics', authenticate, requireRole(4), async (req, res) => {
   } catch (error) {
     logger.error('Erro ao ler as métricas', { error: error.message, stack: error.stack });
     return res.status(500).json({ success: false, error: 'Erro interno', message: 'Erro ao ler as métricas' });
+  }
+});
+
+// RNF015 C2 (#1323): the last platform alert evaluation and the active episodes.
+router.get('/alerts', authenticate, requireRole(4), async (req, res) => {
+  try {
+    const data = await platformAlert.getAlertState(req.app.locals.db);
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    logger.error('Erro ao ler os alertas', { error: error.message, stack: error.stack });
+    return res.status(500).json({ success: false, error: 'Erro interno', message: 'Erro ao ler os alertas' });
   }
 });
 

@@ -18,6 +18,7 @@ const backupService = require('../../src/services/backup.service');
 const retentionSweepService = require('../../src/services/retentionSweep.service');
 const backupPolicyService = require('../../src/services/backup-policy.service');
 const influxTelemetryReadRepository = require('../../src/infrastructure/persistence/influxdb/InfluxTelemetryReadRepository');
+const platformAlertService = require('../../src/services/platformAlert.service');
 const scheduler = require('../../src/services/scheduler.service');
 
 function makeCollection(overrides = {}) {
@@ -345,7 +346,8 @@ describe('scheduler.service - initScheduler / stopScheduler', () => {
     TEMP_MONITOR_CRON: env.TEMP_MONITOR_CRON,
     BACKUP_CRON: env.BACKUP_CRON,
     RETENTION_SWEEP_CRON: env.RETENTION_SWEEP_CRON,
-    RESTORE_TEST_CRON: env.RESTORE_TEST_CRON
+    RESTORE_TEST_CRON: env.RESTORE_TEST_CRON,
+    PLATFORM_ALERT_CRON: env.PLATFORM_ALERT_CRON
   };
 
   beforeEach(() => {
@@ -365,6 +367,7 @@ describe('scheduler.service - initScheduler / stopScheduler', () => {
     env.BACKUP_CRON = undefined;
     env.RETENTION_SWEEP_CRON = undefined;
     env.RESTORE_TEST_CRON = undefined;
+    env.PLATFORM_ALERT_CRON = undefined;
   });
 
   afterEach(() => {
@@ -374,18 +377,20 @@ describe('scheduler.service - initScheduler / stopScheduler', () => {
     env.BACKUP_CRON = originalEnv.BACKUP_CRON;
     env.RETENTION_SWEEP_CRON = originalEnv.RETENTION_SWEEP_CRON;
     env.RESTORE_TEST_CRON = originalEnv.RESTORE_TEST_CRON;
+    env.PLATFORM_ALERT_CRON = originalEnv.PLATFORM_ALERT_CRON;
   });
 
-  it('schedules the temperature monitor, backup, retention sweep and restore-test jobs; legacy consent sync is a no-op', () => {
+  it('schedules the temperature monitor, backup, retention sweep, restore-test and platform alert jobs; legacy consent sync is a no-op', () => {
     scheduler.initScheduler({ db: {}, neo4jDriver: {} });
 
-    // temperature monitor + backup + retention sweep + restore test (#731);
-    // startConsentSyncSchedule is a logged no-op stub.
-    expect(cronScheduleSpy).toHaveBeenCalledTimes(4);
+    // temperature monitor + backup + retention sweep + restore test (#731)
+    // + platform alerts (#1323); startConsentSyncSchedule is a logged no-op stub.
+    expect(cronScheduleSpy).toHaveBeenCalledTimes(5);
     expect(cronScheduleSpy.mock.calls[0][0]).toBe('*/10 * * * *');
     expect(cronScheduleSpy.mock.calls[1][0]).toBe('0 3 * * *');
     expect(cronScheduleSpy.mock.calls[2][0]).toBe('0 4 * * *');
     expect(cronScheduleSpy.mock.calls[3][0]).toBe('0 5 * * 0');
+    expect(cronScheduleSpy.mock.calls[4][0]).toBe('*/5 * * * *');
     expect(loggerInfoSpy).toHaveBeenCalledWith(
       expect.stringContaining('Sincronização legada de consentimento removida')
     );
@@ -396,22 +401,63 @@ describe('scheduler.service - initScheduler / stopScheduler', () => {
     env.BACKUP_CRON = '0 1 * * *';
     env.RETENTION_SWEEP_CRON = '0 2 * * *';
     env.RESTORE_TEST_CRON = '30 6 * * 1';
+    env.PLATFORM_ALERT_CRON = '*/2 * * * *';
 
     scheduler.initScheduler({ db: {}, neo4jDriver: {} });
 
-    expect(cronScheduleSpy).toHaveBeenCalledTimes(4);
+    expect(cronScheduleSpy).toHaveBeenCalledTimes(5);
     expect(cronScheduleSpy.mock.calls[0][0]).toBe('*/5 * * * *');
     expect(cronScheduleSpy.mock.calls[1][0]).toBe('0 1 * * *');
     expect(cronScheduleSpy.mock.calls[2][0]).toBe('0 2 * * *');
     expect(cronScheduleSpy.mock.calls[3][0]).toBe('30 6 * * 1');
+    expect(cronScheduleSpy.mock.calls[4][0]).toBe('*/2 * * * *');
   });
 
   it('stopScheduler stops all previously scheduled tasks', () => {
     scheduler.initScheduler({ db: {}, neo4jDriver: {} });
     scheduler.stopScheduler();
 
-    expect(scheduledTasks).toHaveLength(4);
+    expect(scheduledTasks).toHaveLength(5);
     scheduledTasks.forEach((task) => expect(task.stop).toHaveBeenCalledTimes(1));
+  });
+
+  // RNF015 C2 (#1323): the platform alert task, scheduled last.
+  describe('platform alert monitor', () => {
+    it('schedules with noOverlap, so a tick that outlasts the cadence never runs twice at once', () => {
+      scheduler.initScheduler({ db: {}, neo4jDriver: {} });
+
+      expect(cronScheduleSpy.mock.calls[4][2]).toMatchObject({ noOverlap: true });
+    });
+
+    it('skips the check when there is no db', async () => {
+      const runSpy = vi.spyOn(platformAlertService, 'runPlatformAlertCheck').mockResolvedValue([]);
+      scheduler.initScheduler({ db: null, neo4jDriver: null });
+
+      await cronScheduleSpy.mock.calls[4][1]();
+
+      expect(runSpy).not.toHaveBeenCalled();
+    });
+
+    it('logs a rejected check and does not throw', async () => {
+      vi.spyOn(platformAlertService, 'runPlatformAlertCheck').mockRejectedValue(new Error('mongo down'));
+      scheduler.initScheduler({ db: {}, neo4jDriver: {} });
+
+      await expect(cronScheduleSpy.mock.calls[4][1]()).resolves.toBeUndefined();
+
+      expect(loggerErrorSpy).toHaveBeenCalledWith('Erro na verificação de alertas da plataforma:', 'mongo down');
+    });
+
+    it('logs the rule and firing counts of a run', async () => {
+      const db = {};
+      const runSpy = vi.spyOn(platformAlertService, 'runPlatformAlertCheck')
+        .mockResolvedValue([{ state: 'firing' }, { state: 'ok' }, { state: 'unknown' }]);
+      scheduler.initScheduler({ db, neo4jDriver: {} });
+
+      await cronScheduleSpy.mock.calls[4][1]();
+
+      expect(runSpy).toHaveBeenCalledWith(db);
+      expect(loggerInfoSpy).toHaveBeenCalledWith(expect.stringContaining('regras=3 disparadas=1'));
+    });
   });
 
   // #731 (RF013 AC#4 / RNF010 AC#5 "Testes de restauração são executados
@@ -599,8 +645,8 @@ describe('scheduler.service - initScheduler / stopScheduler', () => {
       await scheduler.reloadBackupSchedule({});
 
       expect(originalBackupTask.stop).toHaveBeenCalledTimes(1);
-      expect(cronScheduleSpy).toHaveBeenCalledTimes(5); // 4 from initScheduler + this reload
-      expect(cronScheduleSpy.mock.calls[4][0]).toBe('0 5 * * *');
+      expect(cronScheduleSpy).toHaveBeenCalledTimes(6); // 5 from initScheduler + this reload
+      expect(cronScheduleSpy.mock.calls[5][0]).toBe('0 5 * * *');
       expect(loggerInfoSpy).toHaveBeenCalledWith(expect.stringContaining('Backup diário reagendado (0 5 * * *)'));
     });
 
@@ -610,7 +656,7 @@ describe('scheduler.service - initScheduler / stopScheduler', () => {
 
       await scheduler.reloadBackupSchedule({});
 
-      expect(cronScheduleSpy.mock.calls[4][0]).toBe('0 3 * * *');
+      expect(cronScheduleSpy.mock.calls[5][0]).toBe('0 3 * * *');
     });
 
     // #1325: a failed lookup keeps the running task instead of replacing it
@@ -622,7 +668,7 @@ describe('scheduler.service - initScheduler / stopScheduler', () => {
 
       await scheduler.reloadBackupSchedule({});
 
-      expect(cronScheduleSpy).toHaveBeenCalledTimes(4);
+      expect(cronScheduleSpy).toHaveBeenCalledTimes(5);
       expect(originalBackupTask.stop).not.toHaveBeenCalled();
       expect(loggerErrorSpy).toHaveBeenCalledWith(
         'Erro ao recarregar política de backup, mantendo agendamento anterior:',
@@ -646,8 +692,8 @@ describe('scheduler.service - initScheduler / stopScheduler', () => {
       const { backupPolicyApplied } = scheduler.initScheduler({ db: {}, neo4jDriver: null });
       await backupPolicyApplied;
 
-      expect(cronScheduleSpy).toHaveBeenCalledTimes(5);
-      expect(cronScheduleSpy.mock.calls[4][0]).toBe('0 1 * * *');
+      expect(cronScheduleSpy).toHaveBeenCalledTimes(6);
+      expect(cronScheduleSpy.mock.calls[5][0]).toBe('0 1 * * *');
       expect(scheduledTasks[1].stop).toHaveBeenCalledTimes(1);
     });
 
@@ -657,7 +703,7 @@ describe('scheduler.service - initScheduler / stopScheduler', () => {
       const { backupPolicyApplied } = scheduler.initScheduler({ db: {}, neo4jDriver: null });
       await backupPolicyApplied;
 
-      expect(cronScheduleSpy).toHaveBeenCalledTimes(4);
+      expect(cronScheduleSpy).toHaveBeenCalledTimes(5);
       expect(scheduledTasks[1].stop).not.toHaveBeenCalled();
       expect(loggerErrorSpy).toHaveBeenCalledWith(
         'Erro ao recarregar política de backup, mantendo agendamento anterior:',
@@ -672,7 +718,7 @@ describe('scheduler.service - initScheduler / stopScheduler', () => {
       await backupPolicyApplied;
 
       expect(getPolicySpy).not.toHaveBeenCalled();
-      expect(cronScheduleSpy).toHaveBeenCalledTimes(4);
+      expect(cronScheduleSpy).toHaveBeenCalledTimes(5);
     });
 
     it('boot keeps the BACKUP_CRON task when the stored expression is one node-cron refuses', async () => {
@@ -687,7 +733,7 @@ describe('scheduler.service - initScheduler / stopScheduler', () => {
       const { backupPolicyApplied } = scheduler.initScheduler({ db: {}, neo4jDriver: null });
       await expect(backupPolicyApplied).resolves.toBeUndefined();
 
-      expect(cronScheduleSpy).toHaveBeenCalledTimes(4);
+      expect(cronScheduleSpy).toHaveBeenCalledTimes(5);
       expect(scheduledTasks[1].stop).not.toHaveBeenCalled();
       expect(loggerErrorSpy).toHaveBeenCalledWith(
         'Expressão cron inválida na política de backup, mantendo agendamento anterior:',
@@ -720,7 +766,7 @@ describe('scheduler.service - initScheduler / stopScheduler', () => {
       first.resolve({ cronExpression: '0 1 * * *' });
       await backupPolicyApplied;
 
-      expect(cronScheduleSpy).toHaveBeenCalledTimes(4);
+      expect(cronScheduleSpy).toHaveBeenCalledTimes(5);
     });
   });
 });

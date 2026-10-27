@@ -32,7 +32,8 @@ describe('config/env - schedule cron overrides (#749)', () => {
     'BACKUP_CRON',
     'RESTORE_TEST_CRON',
     'TEMP_MONITOR_CRON',
-    'RETENTION_SWEEP_CRON'
+    'RETENTION_SWEEP_CRON',
+    'PLATFORM_ALERT_CRON'
   ];
 
   const originals = {};

@@ -7,6 +7,7 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || 'vitest-secret-key';
 
 const app = require('../../app');
 const sessionService = require('../../src/services/session.service');
+const platformAlert = require('../../src/services/platformAlert.service');
 const { createCollectionMock, createDbMock } = require('../factories/db.factory');
 const { buildRbacCollections } = require('../factories/rbac.factory');
 
@@ -114,6 +115,40 @@ describe('GET /api/monitoring/metrics', () => {
     app.locals.db = createDbMock({ ...rbacCollectionsAdmin });
 
     const res = await request(app).get(METRICS);
+
+    expect(res.status).toBe(401);
+  });
+});
+
+// RNF015 C2 (#1323): GET /api/monitoring/alerts gives the Administrador the
+// last platform alert evaluation and the active episodes.
+describe('GET /api/monitoring/alerts', () => {
+  const ALERTS = '/api/monitoring/alerts';
+
+  it('answers 200 with no evaluation and the active episodes for an Administrador', async () => {
+    platformAlert._resetForTests();
+    app.locals.db = createDbMock({ ...rbacCollectionsAdmin });
+
+    const res = await asAdmin(request(app).get(ALERTS));
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.evaluatedAt).toBeNull();
+    expect(Array.isArray(res.body.data.active)).toBe(true);
+  });
+
+  it('refuses the alerts to a Coordenador with 403', async () => {
+    app.locals.db = createDbMock({ ...rbacCollectionsCoordinator });
+
+    const res = await asCoordinator(request(app).get(ALERTS));
+
+    expect(res.status).toBe(403);
+  });
+
+  it('answers 401 without a token', async () => {
+    app.locals.db = createDbMock({ ...rbacCollectionsAdmin });
+
+    const res = await request(app).get(ALERTS);
 
     expect(res.status).toBe(401);
   });

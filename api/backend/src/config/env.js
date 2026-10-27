@@ -174,6 +174,11 @@ module.exports = {
   RESTORE_TEST_CRON: process.env.RESTORE_TEST_CRON,
   TEMP_MONITOR_CRON: process.env.TEMP_MONITOR_CRON,
   TEMP_STALE_MINUTES: process.env.TEMP_STALE_MINUTES,
+  // RNF015 C2 (#1323): platformAlert.service.js parses the thresholds.
+  PLATFORM_ALERT_CRON: process.env.PLATFORM_ALERT_CRON,
+  ALERT_HTTP_ERROR_RATE: process.env.ALERT_HTTP_ERROR_RATE,
+  ALERT_HTTP_P95_MS: process.env.ALERT_HTTP_P95_MS,
+  ALERT_QUEUE_BACKLOG: process.env.ALERT_QUEUE_BACKLOG,
 
   // Notification
   ALERT_EMAIL_TO: process.env.ALERT_EMAIL_TO,
