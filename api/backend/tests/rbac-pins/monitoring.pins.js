@@ -5,5 +5,6 @@ module.exports = {
   mount: '/api/monitoring',
   pins: [
     { method: 'GET', path: '/runs', roles: [4] },
+    { method: 'GET', path: '/metrics', roles: [4] },
   ],
 };

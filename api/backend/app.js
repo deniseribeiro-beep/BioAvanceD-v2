@@ -94,6 +94,8 @@ app.set("allowAllCors", allowAllCors);
 // #1308: first, so every later middleware's log line and audit event carries
 // the request's id (RNF020 C6, RF012 AC1's correlationId).
 app.use(require("./src/utils/requestContext").middleware);
+// RNF015 C1/C2 (#1323): before helmet, cors and the limiters, so their refusals count too.
+app.use(require("./src/infrastructure/metrics/httpMetrics").middleware);
 
 app.use(
   helmet({

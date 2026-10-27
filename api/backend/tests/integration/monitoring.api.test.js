@@ -83,3 +83,38 @@ describe('GET /api/monitoring/runs', () => {
     }
   });
 });
+
+// RNF015 C1/C2 (#1323): GET /api/monitoring/metrics gives the Administrador
+// the request metrics and the queue depths.
+describe('GET /api/monitoring/metrics', () => {
+  const METRICS = '/api/monitoring/metrics';
+
+  it('answers 200 with the request metrics and both queues for an Administrador', async () => {
+    app.locals.db = createDbMock({ ...rbacCollectionsAdmin });
+    // A request is recorded when it finishes, so one goes first.
+    await request(app).get(METRICS);
+
+    const res = await asAdmin(request(app).get(METRICS));
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.http.totals.requests).toBeGreaterThanOrEqual(1);
+    expect(res.body.data.queues.map((q) => q.name)).toEqual(['import-queue', 'notification-queue']);
+  });
+
+  it('refuses the metrics to a Coordenador with 403', async () => {
+    app.locals.db = createDbMock({ ...rbacCollectionsCoordinator });
+
+    const res = await asCoordinator(request(app).get(METRICS));
+
+    expect(res.status).toBe(403);
+  });
+
+  it('answers 401 without a token', async () => {
+    app.locals.db = createDbMock({ ...rbacCollectionsAdmin });
+
+    const res = await request(app).get(METRICS);
+
+    expect(res.status).toBe(401);
+  });
+});
