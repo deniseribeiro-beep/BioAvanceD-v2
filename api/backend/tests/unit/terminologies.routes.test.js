@@ -2,8 +2,6 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 
-const terminologySyncService = require('../../src/services/terminologySync.service');
-
 function cursor(rows) {
   return {
     sort: vi.fn().mockReturnThis(),
@@ -387,35 +385,10 @@ describe('terminologies.routes', () => {
     });
   });
 
-  describe('POST /sync', () => {
-    it('retorna 503 quando o banco não está disponível', async () => {
-      const app = buildApp(null);
-      const response = await request(app).post('/api/terminologies/sync');
-      expect(response.status).toBe(503);
-      expect(response.body).toEqual({ success: false, error: 'Banco de dados não disponível para sincronização' });
-    });
-
-    it('sincroniza com sucesso e repassa o resultado do serviço', async () => {
-      vi.spyOn(terminologySyncService, 'syncFromOrphadata').mockResolvedValue({ synced: 5 });
-
-      const { db } = buildDb();
-      const app = buildApp(db);
-      const response = await request(app).post('/api/terminologies/sync');
-
-      expect(response.status).toBe(200);
-      expect(response.body).toEqual({ success: true, synced: 5 });
-    });
-
-    it('retorna 500 quando o serviço de sincronização lança erro', async () => {
-      vi.spyOn(terminologySyncService, 'syncFromOrphadata').mockRejectedValue(new Error('sync failed'));
-
-      const { db } = buildDb();
-      const app = buildApp(db);
-      const response = await request(app).post('/api/terminologies/sync');
-
-      expect(response.status).toBe(500);
-      expect(response.body).toEqual({ success: false, error: 'Erro ao sincronizar terminologias' });
-    });
+  it('POST /sync is not served: the Orphadata bulk sync is retired (#115)', async () => {
+    const app = buildApp(buildDb().db);
+    const response = await request(app).post('/api/terminologies/sync');
+    expect(response.status).toBe(404);
   });
 
   describe('branch coverage: helper fallback chains via GET /', () => {
