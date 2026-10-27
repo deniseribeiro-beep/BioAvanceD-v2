@@ -46,7 +46,7 @@ The administration screens come first. The shared staff screens follow with a sh
 | Relatórios de Custódia | `/samples/custody-reports` | Read custody movement reports for a sample. | `requireOrganizationScope` (`sample.routes.js`) |
 | Retirada e Devolução de Amostras | `/samples/withdrawal-return` | Record withdrawals and returns, as for the Técnico. | `requirePermission('withdrawSample')`, `requireOrganizationScope` (`sample.routes.js`) |
 | Arquivos de Análise | `/results` | List and download analysis files, read import jobs, upload an analysis file for a sample (the upload form posts to `/api/analysis-files/upload`). | `requireOrganizationScope` (`result.routes.js`); authenticated only (`import.routes.js` jobs, `analysis-file.routes.js`) |
-| Equipamentos | `/facility-management?tab=equipment` | List equipment; create, edit and delete it. `/equipment` redirects here; `/locations` also opens Gerenciamento de Instalações. | `requirePermission('viewEquipment')`, `requirePermission('manageStorageTopology')`, `requireOrganizationScope` (`equipment.routes.js`) |
+| Equipamentos | `/facility-management?tab=equipment` | List equipment; create, edit and delete it. `/equipment` redirects here; `/locations` also redirects here. | `requirePermission('viewEquipment')`, `requirePermission('manageStorageTopology')`, `requireOrganizationScope` (`equipment.routes.js`) |
 | Controle de Temperatura | `/facility-management?tab=temperature` | Read the stored temperature readings, as cards and a chart. `/temperature` redirects here. | `requirePermission('viewTemperature')` (`temperature.routes.js`) |
 | Histórico de Leituras | `/facility-management?tab=history` | The temperature readings. | `requirePermission('viewTemperature')` (`temperature.routes.js`) |
 | Gerenciamento de Incidentes | `/facility-management?tab=incidents` | Temperature incidents, as for the Técnico. | `requirePermission('viewTemperature')`, `requirePermission('manageTemperature')` (`incident.routes.js`) |
@@ -110,6 +110,8 @@ Some codes in the seed have no screen that calls the routes they gate, so the Ad
 - manageCustody gates the custody routes of `physical-chain.routes.js`; no frontend file calls `/api/physical-chain`.
 - manageSystem gates `POST /api/audit/anchor` (`audit.routes.js`); no frontend file calls it.
 - The Arquivos de Análise screen lists and downloads results but offers no create, edit or delete of a result record, although the seed holds createResult, editResult and deleteResult (`result.routes.js`).
+
+These are API-only by decision, not gaps: see [the role routes and seeded permissions decision](../decisions/2026-10-27-role-routes-and-seeded-permissions.md).
 
 ## Account security
 

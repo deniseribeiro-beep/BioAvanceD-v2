@@ -93,6 +93,11 @@ const STAFF: readonly RoleName[] = ['Administrador', 'Coordenador', 'Técnico'];
  * `Coordenador` — even though both were granted on the `<Route>` itself.
  * Both are resolved here. `/reports/templates` stays Administrador+Coordenador
  * (RF008 AC#6) by sitting ahead of the now-widened `/reports` entry.
+ *
+ * #1408: `/reports` and its children now admit the Técnico too, who holds
+ * viewReports and whom the backend already serves every `/api/reports` read
+ * (RF002, RF008). `/reports/templates` still excludes the Técnico, who lacks
+ * manageReportTemplates.
  */
 const ROUTE_ACCESS: ReadonlyArray<readonly [string, readonly RoleName[]]> = [
   // Self-service security pages — deliberately open to every role.
@@ -113,7 +118,7 @@ const ROUTE_ACCESS: ReadonlyArray<readonly [string, readonly RoleName[]]> = [
 
   // Reporting and audit.
   ['/reports/templates', ADMIN_COORD],
-  ['/reports', [...ADMIN_COORD, 'Usuário Externo']],
+  ['/reports', [...STAFF, 'Usuário Externo']],
   // #1239: /logs is gated by the backend's audit-reader rule (administrator
   // or the additive auditor role), which no base role can express: an auditor
   // may hold any base role, and a Coordenador is refused by every /api/logs

@@ -121,18 +121,18 @@ function App() {
                   <Route path="/users/new/success" element={<ProtectedRoute requiredRole="Administrador"><NewUserSuccessPage /></ProtectedRoute>} />
                   <Route path="/facility-management" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><FacilityManagementPage /></ProtectedRoute>} />
                   <Route path="/equipment" element={<Navigate to="/facility-management?tab=equipment" replace />} />
-                  <Route path="/locations" element={<Navigate to="/facility-management?tab=locations" replace />} />
+                  <Route path="/locations" element={<Navigate to="/facility-management?tab=equipment" replace />} />
                   <Route path="/temperature" element={<Navigate to="/facility-management?tab=temperature" replace />} />
                   <Route path="/sensors" element={<Navigate to="/facility-management?tab=sensors" replace />} />
                   <Route path="/policies" element={<Navigate to="/facility-management?tab=policies" replace />} />
                   <Route path="/logs" element={<ProtectedRoute requireAuditReader><LogsPage /></ProtectedRoute>} />
                   <Route path="/logs/:id" element={<ProtectedRoute requireAuditReader><LogDetailPage /></ProtectedRoute>} />
-                  <Route path="/reports" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Usuário Externo']}><ReportsPage /></ProtectedRoute>} />
+                  <Route path="/reports" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo']}><ReportsPage /></ProtectedRoute>} />
                   {/* #726 (RF008 AC#6): template management is Coordenador+Administrador
                       only (manageReportTemplates), narrower than /reports' own view-only gate. */}
                   <Route path="/reports/templates" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador']}><ReportTemplatesPage /></ProtectedRoute>} />
-                  <Route path="/reports/query/:type" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Usuário Externo']}><ReportQueryPage /></ProtectedRoute>} />
-                  <Route path="/reports/:id" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Usuário Externo']}><ReportViewPage /></ProtectedRoute>} />
+                  <Route path="/reports/query/:type" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo']}><ReportQueryPage /></ProtectedRoute>} />
+                  <Route path="/reports/:id" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo']}><ReportViewPage /></ProtectedRoute>} />
                   <Route path="/quality-descriptions" element={<ProtectedRoute requiredRole={['Administrador', 'Coordenador', 'Técnico']}><QualityDescriptionPage /></ProtectedRoute>} />
                   {/* #808: the LGPD import's own surface. `/import` posts to the
                       *async* importer; #813 landed, so that importer now

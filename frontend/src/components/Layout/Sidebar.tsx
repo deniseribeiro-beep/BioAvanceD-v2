@@ -107,7 +107,7 @@ export default function Sidebar() {
     // ELM-0275..0285 (#1402)
     { path: '/biomarker-associations', icon: Database, label: t('navigation.biomarkerAssociations', 'Associações de Biomarcadores'), roles: ['Administrador', 'Coordenador'] },
     { path: '/user/security', icon: Shield, label: t('navigation.userSecurity'), roles: ['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo'] },
-    { path: '/reports', icon: BarChart3, label: t('navigation.reports'), roles: ['Administrador', 'Coordenador', 'Usuário Externo'] },
+    { path: '/reports', icon: BarChart3, label: t('navigation.reports'), roles: ['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo'] },
     { path: '/reports/templates', icon: FileText, label: t('navigation.reportTemplates'), roles: ['Administrador', 'Coordenador'] },
     { path: '/logs', icon: FileSearch, label: t('navigation.logs'), roles: ['Administrador', 'Coordenador', 'Técnico', 'Usuário Externo'], auditReader: true },
     { path: '/system-management', icon: UserCog, label: t('navigation.systemManagement') || 'Gerenciamento do Sistema', roles: ['Administrador'] },

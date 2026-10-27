@@ -69,11 +69,12 @@ describe('canRoleAccessRoute — the restrictive blocks still hold', () => {
   // #825: /reports widened to include Usuário Externo (declared on its
   // <Route> all along), but /reports/templates -- narrower, RF008 AC#6 --
   // must stay Administrador+Coordenador even though it sits under /reports.
-  it('keeps /reports to Administrador, Coordenador, and Usuário Externo', () => {
+  // #1408: the Técnico holds viewReports, so /reports admits it as well.
+  it('grants /reports to every role (#1408)', () => {
     expect(canRoleAccessRoute('Administrador', '/reports')).toBe(true);
     expect(canRoleAccessRoute('Coordenador', '/reports')).toBe(true);
     expect(canRoleAccessRoute('Usuário Externo', '/reports')).toBe(true);
-    expect(canRoleAccessRoute('Técnico', '/reports')).toBe(false);
+    expect(canRoleAccessRoute('Técnico', '/reports')).toBe(true);
   });
 
   it('keeps /reports/templates to Administrador and Coordenador only', () => {
@@ -114,7 +115,7 @@ describe('canRoleAccessRoute — routes reached with a concrete id', () => {
     expect(canRoleAccessRoute('Técnico', '/samples/68ab12cd34ef56ab78cd90ef')).toBe(true);
     expect(canRoleAccessRoute('Técnico', '/samples/68ab12cd34ef56ab78cd90ef/label')).toBe(true);
     expect(canRoleAccessRoute('Coordenador', '/reports/query/auditoria')).toBe(true);
-    expect(canRoleAccessRoute('Técnico', '/reports/query/auditoria')).toBe(false);
+    expect(canRoleAccessRoute('Técnico', '/reports/query/auditoria')).toBe(true);
     expect(canRoleAccessRoute('Usuário Externo', '/reports/query/auditoria')).toBe(true);
     expect(canRoleAccessRoute('Usuário Externo', '/reports/507f1f77bcf86cd799439011')).toBe(true);
   });
@@ -204,6 +205,28 @@ describe('every route declared in App.tsx is covered by the allow-list', () => {
     }
 
     expect(disagreements).toEqual([]);
+  });
+
+  // #1408: the sweep above checks only that the table grants each role a
+  // <Route> names, never the reverse, so dropping the Técnico from a report
+  // <Route> or from the sidebar item would leave it facing "Acesso Negado".
+  it('names the Técnico on the /reports routes and sidebar item (#1408)', () => {
+    const sidebarSource = fs.readFileSync(
+      path.resolve(__dirname, '..', 'components', 'Layout', 'Sidebar.tsx'),
+      'utf8'
+    );
+    const routeRoles = (route: string) => {
+      const block = Array.from(appSource.matchAll(/<Route\b[\s\S]*?\/>/g))
+        .map((m) => m[0])
+        .find((b) => b.includes(`path="${route}"`));
+      return block?.match(/requiredRole=\{\[([^\]]+)\]\}/)?.[1] ?? '';
+    };
+
+    for (const route of ['/reports', '/reports/query/:type', '/reports/:id']) {
+      expect(routeRoles(route), route).toContain("'Técnico'");
+    }
+    const sidebarItem = sidebarSource.match(/\{ path: '\/reports', [^}]*roles: \[([^\]]+)\]/)?.[1] ?? '';
+    expect(sidebarItem).toContain("'Técnico'");
   });
 });
 

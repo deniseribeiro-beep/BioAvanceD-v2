@@ -542,7 +542,6 @@ export const temperatureService = {
     api.get<any>('/temperature/control', { 
       params: { sensorID, policyID } 
     }), // Implementa User.viewTemperatureControl()
-  create: (data: Partial<Temperature>) => api.post<Temperature>('/temperature', data),
 };
 
 // ========== SENSOR SERVICES ==========

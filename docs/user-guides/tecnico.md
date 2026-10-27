@@ -24,7 +24,7 @@ Part of the per-role user guides (RNF006 C1, #1325); see [README.md](README.md) 
 | Relatórios de Custódia | `/samples/custody-reports` | Read custody movement reports for a sample. | `requireOrganizationScope` (`sample.routes.js`) |
 | Retirada e Devolução de Amostras | `/samples/withdrawal-return` | Find a sample by barcode, record its withdrawal and its return. | `requirePermission('withdrawSample')`, `requireOrganizationScope` (`sample.routes.js`) |
 | Arquivos de Análise | `/results` | List and download analysis files, read import jobs and their reports, upload an analysis file for a sample (the upload form posts to `/api/analysis-files/upload`). | `requireOrganizationScope` (`result.routes.js`); authenticated only (`import.routes.js` jobs, `analysis-file.routes.js`) |
-| Equipamentos | `/facility-management?tab=equipment` | List equipment. Creating, editing or deleting equipment is refused by the backend (403). `/equipment` redirects here; `/locations` also opens Gerenciamento de Instalações. | `requirePermission('viewEquipment')`, `requireOrganizationScope` (`equipment.routes.js`) |
+| Equipamentos | `/facility-management?tab=equipment` | List equipment. Creating, editing or deleting equipment is refused by the backend (403). `/equipment` redirects here; `/locations` also redirects here. | `requirePermission('viewEquipment')`, `requireOrganizationScope` (`equipment.routes.js`) |
 | Controle de Temperatura | `/facility-management?tab=temperature` | Read the stored temperature readings, as cards and a chart. `/temperature` redirects here. | `requirePermission('viewTemperature')`, `requireOrganizationScope` (`temperature.routes.js`) |
 | Histórico de Leituras | `/facility-management?tab=history` | Read the temperature readings. | `requirePermission('viewTemperature')`, `requireOrganizationScope` (`temperature.routes.js`) |
 | Gerenciamento de Incidentes | `/facility-management?tab=incidents` | List temperature incidents, add notes, acknowledge, resolve and escalate them. | `requirePermission('viewTemperature')`, `requirePermission('manageTemperature')` (`incident.routes.js`) |
@@ -34,6 +34,9 @@ Part of the per-role user guides (RNF006 C1, #1325); see [README.md](README.md) 
 | (no page title; batch import form) | `/import` | Upload a batch file, or convert a spreadsheet to a FHIR bundle and stage it. | `requirePermission('uploadFiles')`, `requireOrganizationScope` (`import.routes.js`) |
 | Importação LGPD | `/import/lgpd` | Import samples from a CSV or XLSX file and download the sample templates. Importing participants is refused by the backend (403). | `requirePermission('createSample')`, `requireOrganizationScope` (`import-lgpd.routes.js`) |
 | Quarentena de importação | `/import/quarantine` | List quarantined import batches and resubmit a corrected row. | `requirePermission('createSample')`, `requireOrganizationScope` (`import-lgpd.routes.js`) |
+| Central de Relatórios | `/reports` | Open the report catalogue and generate reports. | `requirePermission('viewReports')` (`reports.routes.js`) |
+| (the report's name) | `/reports/:id` | Read a generated report. Deleting a report is refused by the backend (403, `requireRole(3, 4)`). | `requirePermission('viewReports')`, `requireRole(3, 4)` to delete (`reports.routes.js`) |
+| (the report type's name) | `/reports/query/:type` | Filter, preview and export a report as CSV or PDF. The audit report types (Auditoria, Logs de Acesso) are refused by the backend (403) unless the auditor role is also granted (`AUDIT_READER_HANDLER_KEYS` in `reports.routes.js`). | `requirePermission('viewReports')`, `requireDataExportAllowed` for export (`reports.routes.js`) |
 | Segurança da Conta | `/user/security` | See your account security status, change your password, generate recovery codes, list and revoke your sessions. | authenticated only (`user-security.routes.js`, `auth.routes.js`) |
 | Configurar 2FA | `/security/mfa-setup` | Set up two-factor authentication. | authenticated only (`auth.routes.js`) |
 
@@ -56,7 +59,7 @@ Exactly the Tecnico row of `LEGACY_ROLES_SEED`, with each code's `displayName` a
 
 ## What this role cannot do
 
-The Reports screen is not offered: `/reports` admits Administrador, Coordenador and Usuário Externo in both `frontend/src/App.tsx` and `ROUTE_ACCESS`, although the Tecnico seed holds viewReports. The same holds for `/reports/templates`.
+`/reports/templates` stays closed to the Técnico, who lacks manageReportTemplates (RF008 AC6).
 
 A Técnico gets no user, organization, collection, security, backup, parameter, data dictionary, access request, consent (TCLE) or biomarker association screen, and cannot open `/logs` unless the additive auditor role is also granted.
 
