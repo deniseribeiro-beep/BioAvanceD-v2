@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AxiosHeaders } from 'axios';
-import { REQUEST_ID_HEADER, newRequestId, withRequestId } from './requestId';
+import { REQUEST_ID_HEADER, fetchWithRequestId, newRequestId, withRequestId } from './requestId';
 
 // The backend keeps a caller's X-Request-Id only when it matches this.
 const WELL_FORMED = /^[A-Za-z0-9._-]{8,128}$/;
@@ -56,5 +56,58 @@ describe('withRequestId (RNF015 C1)', () => {
     headers.set('X-Request-Id', 'caller-0002');
     withRequestId({ headers });
     expect(headers.get('x-request-id')).toBe('caller-0002');
+  });
+});
+
+describe('fetchWithRequestId (RNF015 C1)', () => {
+  const stubFetch = () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(null));
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  };
+
+  it('#1323 fetchWithRequestId sends a well-formed id on a call without headers', async () => {
+    const fetchMock = stubFetch();
+    await fetchWithRequestId('/api/x');
+    const sent = new Headers(fetchMock.mock.calls[0][1]?.headers);
+    expect(sent.get(REQUEST_ID_HEADER)).toMatch(WELL_FORMED);
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/x');
+  });
+
+  it('#1323 fetchWithRequestId keeps a caller id set in another letter case', async () => {
+    const fetchMock = stubFetch();
+    await fetchWithRequestId('/api/x', { headers: { 'x-request-id': 'caller-0003' } });
+    const sent = new Headers(fetchMock.mock.calls[0][1]?.headers);
+    expect(sent.get('X-Request-Id')).toBe('caller-0003');
+  });
+
+  it('#1323 fetchWithRequestId keeps the caller headers and body', async () => {
+    const fetchMock = stubFetch();
+    await fetchWithRequestId('/api/x', { method: 'POST', headers: { Authorization: 'Bearer t' }, body: 'b' });
+    const init = fetchMock.mock.calls[0][1];
+    const sent = new Headers(init?.headers);
+    expect(sent.get('authorization')).toBe('Bearer t');
+    expect(init?.method).toBe('POST');
+    expect(init?.body).toBe('b');
+    expect(sent.get(REQUEST_ID_HEADER)).toMatch(WELL_FORMED);
+  });
+
+  it('#1323 fetchWithRequestId keeps the headers of a Request input', async () => {
+    const fetchMock = stubFetch();
+    await fetchWithRequestId(new Request('http://localhost/api/x', { headers: { 'X-Custom': 'v' } }));
+    const sent = new Headers(fetchMock.mock.calls[0][1]?.headers);
+    expect(sent.get('x-custom')).toBe('v');
+    expect(sent.get(REQUEST_ID_HEADER)).toMatch(WELL_FORMED);
+  });
+
+  it('#1323 fetchWithRequestId adds no Content-Type to a FormData body', async () => {
+    const fetchMock = stubFetch();
+    const body = new FormData();
+    body.append('a', '1');
+    await fetchWithRequestId('/api/x', { method: 'POST', body });
+    const init = fetchMock.mock.calls[0][1];
+    const sent = new Headers(init?.headers);
+    expect(sent.has('content-type')).toBe(false);
+    expect(init?.body).toBe(body);
   });
 });

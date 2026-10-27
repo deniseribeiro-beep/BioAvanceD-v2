@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import SignatureCanvas from 'react-signature-canvas';
 import { AlertCircle, CheckCircle2, Loader2, ShieldCheck } from 'lucide-react';
+import { fetchWithRequestId } from '../api/requestId';
 import './AssinaturaDigitalTCLE.css';
 
 const canvasToBlob = (canvas) =>
@@ -89,7 +90,7 @@ export default function AssinaturaDigitalTCLE({
       // 2) Opcionalmente enviar também `assinaturaBase64` caso o backend prefira payload textual.
       // 3) Persistir hash/metadata da assinatura para rastreabilidade LGPD/ISO 20387.
       if (persistirNoBackend) {
-        const response = await fetch(endpoint, {
+        const response = await fetchWithRequestId(endpoint, {
           method: 'POST',
           body: formData,
         });

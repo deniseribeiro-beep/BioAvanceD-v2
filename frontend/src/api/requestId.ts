@@ -34,3 +34,14 @@ export function withRequestId<T extends { headers?: unknown }>(config: T): T {
   (config as { headers?: unknown }).headers = plain;
   return config;
 }
+
+// Raw fetch calls carry the id too (#1323): a caller's own X-Request-Id, in
+// any letter case, is kept; a Request input keeps its own headers.
+export function fetchWithRequestId(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+  const fromRequest = typeof Request !== 'undefined' && input instanceof Request ? input.headers : undefined;
+  const headers = new Headers(init.headers ?? fromRequest);
+  if (!headers.has(REQUEST_ID_HEADER)) {
+    headers.set(REQUEST_ID_HEADER, newRequestId());
+  }
+  return globalThis.fetch(input, { ...init, headers });
+}

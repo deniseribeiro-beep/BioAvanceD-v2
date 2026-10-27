@@ -32,7 +32,7 @@ import {
   BiomarkerAssociation,
 } from '../types/models';
 import { clearClientSession } from '../utils/sessionCleanup';
-import { withRequestId } from '../api/requestId';
+import { fetchWithRequestId, withRequestId } from '../api/requestId';
 
 // Opt-out for background/speculative requests (e.g. a prefetch for a later
 // wizard step) whose failure must not force-logout the user out of an
@@ -225,7 +225,7 @@ api.interceptors.response.use(
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 1000);
             
-            const response = await fetch(testUrl, { 
+            const response = await fetchWithRequestId(testUrl, {
               method: 'GET', 
               signal: controller.signal 
             });
