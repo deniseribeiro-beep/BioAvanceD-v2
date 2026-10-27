@@ -277,4 +277,197 @@ describe('backup-stores.service (#1325)', () => {
     expect(result.influxdb.files).toEqual([{ file: 'influxdb/points.ndjson', encrypted: false }]);
     expect(readNdjson(path.join(backupDir, 'influxdb', 'points.ndjson'))[0].tags).toEqual({ sensorId: 'S-1' });
   });
+
+  // RNF010 C5: the restore test's check of the exports. Each case exports
+  // through the real code, then verifies what landed on disk.
+  describe('verifySecondaryStores', () => {
+    const GRAPH = {
+      nodes: [
+        {
+          id: '4:a:1',
+          labels: ['Sample'],
+          props: { name: 'S-1', count: neo4j.int(7), weight: 1.5, ratio: NaN, at: new neo4j.types.Date(2026, 2, 1), tags: ['x', 'y'], note: null },
+        },
+        { id: '4:a:2', labels: ['Box'], props: {} },
+      ],
+      relationships: [{ id: '5:a:1', type: 'STORED_IN', start: '4:a:1', end: '4:a:2', props: { since: neo4j.int(2026) } }],
+      constraints: ['CREATE CONSTRAINT sample_name FOR (n:Sample) REQUIRE n.name IS UNIQUE'],
+      indexes: ['CREATE INDEX box_code FOR (n:Box) ON (n.code)'],
+    };
+    const INFLUX_DOUBLE_COLUMNS = INFLUX_COLUMNS.map((column) => (column.label === '_value' ? { ...column, dataType: 'double' } : column));
+    const INFLUX_TABLES = [
+      { columns: INFLUX_COLUMNS, rows: [['_result', '0', 's', 'e', '2026-01-01T00:00:00Z', '1', 'count', 'door', 'S-1']] },
+      { columns: INFLUX_DOUBLE_COLUMNS, rows: [['_result', '1', 's', 'e', '2026-01-01T00:00:00.123456789Z', '-21.5', 'value', 'temperature', 'S-2']] },
+    ];
+
+    let scratchBase;
+
+    beforeEach(() => {
+      scratchBase = path.join(backupDir, '.restore-scratch');
+    });
+
+    // Exports both stores, then makes every client throw: the verify step
+    // must open none.
+    async function exportBoth(encryptionEnabled) {
+      configureNeo4j();
+      configureInflux();
+      const neo4jDriver = vi.spyOn(backupStores.clients, 'neo4jDriver').mockReturnValue(fakeNeo4jDriver(GRAPH));
+      const influxQueryApi = vi.spyOn(backupStores.clients, 'influxQueryApi').mockReturnValue(fakeInfluxQueryApi(INFLUX_TABLES));
+      const stores = {
+        neo4j: await backupStores.exportNeo4j(backupDir, encryptionEnabled),
+        influxdb: await backupStores.exportInfluxDB(backupDir, encryptionEnabled),
+      };
+      neo4jDriver.mockImplementation(() => { throw new Error('the restore test opened a Neo4j driver'); });
+      influxQueryApi.mockImplementation(() => { throw new Error('the restore test opened an InfluxDB query API'); });
+      return { stores, neo4jDriver, influxQueryApi };
+    }
+
+    function writeNdjson(relativeFile, records) {
+      fs.writeFileSync(path.join(backupDir, ...relativeFile.split('/')), records.map((record) => `${JSON.stringify(record)}\n`).join(''));
+    }
+
+    const VERIFIED = {
+      neo4j: { status: 'verified', nodes: 2, relationships: 1, constraints: 1, indexes: 1 },
+      influxdb: { status: 'verified', points: 2 },
+    };
+
+    it('verifies an encrypted export of both stores with its counts, opening no client and removing its scratch folder', async () => {
+      const { stores, neo4jDriver, influxQueryApi } = await exportBoth(true);
+      expect(stores.neo4j.files.every((entry) => entry.encrypted === true)).toBe(true);
+
+      const result = await backupStores.verifySecondaryStores(backupDir, stores, scratchBase);
+
+      expect(result).toEqual({ stores: VERIFIED, error: null });
+      expect(neo4jDriver).toHaveBeenCalledTimes(1);
+      expect(influxQueryApi).toHaveBeenCalledTimes(1);
+      expect(fs.readdirSync(scratchBase)).toEqual([]);
+    });
+
+    it('verifies a plaintext export of both stores', async () => {
+      const { stores } = await exportBoth(false);
+
+      const result = await backupStores.verifySecondaryStores(backupDir, stores, scratchBase);
+
+      expect(result).toEqual({ stores: VERIFIED, error: null });
+      expect(fs.readdirSync(scratchBase)).toEqual([]);
+    });
+
+    it('fails Neo4j alone when one ciphertext byte of nodes.ndjson is flipped', async () => {
+      const { stores } = await exportBoth(true);
+      const nodesFile = path.join(backupDir, 'neo4j', 'nodes.ndjson');
+      const bytes = fs.readFileSync(nodesFile);
+      bytes[0] ^= 0xff;
+      fs.writeFileSync(nodesFile, bytes);
+
+      const result = await backupStores.verifySecondaryStores(backupDir, stores, scratchBase);
+
+      expect(result.stores.neo4j.status).toBe('failed');
+      expect(result.stores.influxdb).toEqual(VERIFIED.influxdb);
+      expect(result.error).toContain('Teste de restauração de Neo4j falhou: neo4j/nodes.ndjson não pôde ser descriptografado');
+      expect(result.error).not.toContain('InfluxDB');
+      expect(fs.readdirSync(scratchBase)).toEqual([]);
+    });
+
+    it('fails Neo4j when the manifest node count is off by one', async () => {
+      const { stores } = await exportBoth(true);
+      stores.neo4j.nodes += 1;
+
+      const result = await backupStores.verifySecondaryStores(backupDir, stores, scratchBase);
+
+      expect(result.stores.neo4j).toEqual({ status: 'failed', error: expect.stringContaining('contagem diferente do manifest') });
+      expect(result.stores.influxdb).toEqual(VERIFIED.influxdb);
+    });
+
+    it('fails Neo4j when a relationship ends on a node the export does not hold', async () => {
+      const { stores } = await exportBoth(false);
+      writeNdjson('neo4j/relationships.ndjson', [{ id: '5:a:9', type: 'STORED_IN', start: '4:a:1', end: '4:a:404', props: {} }]);
+
+      const result = await backupStores.verifySecondaryStores(backupDir, stores, scratchBase);
+
+      expect(result.stores.neo4j).toEqual({ status: 'failed', error: expect.stringContaining('4:a:1 -> 4:a:404') });
+    });
+
+    it('fails Neo4j on a property its typed encoding could not have written', async () => {
+      const badValues = [{ $t: 'int', v: '1.5' }, { $t: 'bigint', v: '1' }, 3, { $t: 'float', v: 1, extra: true }];
+      for (const bad of badValues) {
+        // eslint-disable-next-line no-await-in-loop
+        const { stores } = await exportBoth(false);
+        writeNdjson('neo4j/nodes.ndjson', [
+          { id: '4:a:1', labels: ['Sample'], props: { bad } },
+          { id: '4:a:2', labels: ['Box'], props: {} },
+        ]);
+
+        // eslint-disable-next-line no-await-in-loop
+        const result = await backupStores.verifySecondaryStores(backupDir, stores, scratchBase);
+
+        expect(result.stores.neo4j, JSON.stringify(bad)).toEqual({ status: 'failed', error: expect.stringContaining('nodes.ndjson linha 1') });
+      }
+    });
+
+    it('fails InfluxDB on a value that does not match its value type', async () => {
+      const badPoints = [{ valueType: 'long', value: 'abc' }, { valueType: 'double', value: '' }, { valueType: 'decimal', value: '1' }];
+      for (const bad of badPoints) {
+        // eslint-disable-next-line no-await-in-loop
+        const { stores } = await exportBoth(false);
+        writeNdjson('influxdb/points.ndjson', [
+          { measurement: 'door', field: 'count', time: '2026-01-01T00:00:00Z', valueType: 'long', value: '1', tags: {} },
+          { measurement: 'temperature', field: 'value', time: '2026-01-01T00:00:00Z', tags: {}, ...bad },
+        ]);
+
+        // eslint-disable-next-line no-await-in-loop
+        const result = await backupStores.verifySecondaryStores(backupDir, stores, scratchBase);
+
+        expect(result.stores.influxdb, JSON.stringify(bad)).toEqual({ status: 'failed', error: expect.stringContaining('points.ndjson linha 2') });
+        expect(result.stores.neo4j).toEqual(VERIFIED.neo4j);
+        expect(result.error).toMatch(/^Teste de restauração de InfluxDB falhou: /);
+      }
+    });
+
+    it('fails Neo4j when its manifest file list is not exactly its own files', async () => {
+      const { stores } = await exportBoth(false);
+      const escaping = { ...stores.neo4j, files: [stores.neo4j.files[0], stores.neo4j.files[1], { file: '../escape.ndjson', encrypted: false }] };
+      const short = { ...stores.neo4j, files: stores.neo4j.files.slice(0, 2) };
+      const duplicated = { ...stores.neo4j, files: [stores.neo4j.files[0], stores.neo4j.files[0], stores.neo4j.files[1]] };
+
+      for (const entry of [escaping, short, duplicated]) {
+        // eslint-disable-next-line no-await-in-loop
+        const result = await backupStores.verifySecondaryStores(backupDir, { ...stores, neo4j: entry }, scratchBase);
+
+        expect(result.stores.neo4j).toEqual({ status: 'failed', error: expect.stringContaining('arquivos no manifest') });
+      }
+    });
+
+    it('passes skipped stores through, reads no stores record as untested, and fails any other record without throwing', async () => {
+      const skipped = { status: 'skipped', reason: 'not_configured' };
+      await expect(backupStores.verifySecondaryStores(backupDir, { neo4j: skipped, influxdb: skipped }, scratchBase))
+        .resolves.toEqual({ stores: { neo4j: skipped, influxdb: skipped }, error: null });
+      expect(fs.existsSync(scratchBase)).toBe(false);
+
+      await expect(backupStores.verifySecondaryStores(backupDir, undefined, scratchBase))
+        .resolves.toEqual({ stores: null, error: null });
+
+      const weird = await backupStores.verifySecondaryStores(backupDir, { neo4j: { status: 'weird' }, influxdb: skipped }, scratchBase);
+      expect(weird.stores.neo4j.status).toBe('failed');
+      expect(weird.stores.influxdb).toEqual(skipped);
+      expect(weird.error).toContain('Neo4j');
+
+      const notAnObject = await backupStores.verifySecondaryStores(backupDir, 'x', scratchBase);
+      expect(notAnObject.stores.neo4j.status).toBe('failed');
+      expect(notAnObject.stores.influxdb.status).toBe('failed');
+
+      const missingKey = await backupStores.verifySecondaryStores(backupDir, { neo4j: skipped }, scratchBase);
+      expect(missingKey.stores.influxdb.status).toBe('failed');
+    });
+
+    it('returns a failed store, never a throw, when a store file is missing', async () => {
+      const { stores } = await exportBoth(true);
+      fs.rmSync(path.join(backupDir, 'influxdb', 'points.ndjson'));
+
+      const result = await backupStores.verifySecondaryStores(backupDir, stores, scratchBase);
+
+      expect(result.stores.influxdb).toEqual({ status: 'failed', error: expect.stringContaining('ENOENT') });
+      expect(result.stores.neo4j).toEqual(VERIFIED.neo4j);
+      expect(fs.readdirSync(scratchBase)).toEqual([]);
+    });
+  });
 });

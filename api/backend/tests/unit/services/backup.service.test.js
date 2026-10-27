@@ -1354,6 +1354,116 @@ describe('backup.service', () => {
         error: 'MONGO_URI não configurado',
       }));
     });
+
+    // #1325 (RNF010 C5): the restore test also checks the Neo4j and InfluxDB
+    // exports through backupStores.verifySecondaryStores.
+    const NEO4J_FAILED = 'Teste de restauração de Neo4j falhou: neo4j/nodes.ndjson não pôde ser descriptografado';
+    const FAILED_STORES = {
+      stores: { neo4j: { status: 'failed', error: NEO4J_FAILED }, influxdb: { status: 'verified', points: 5 } },
+      error: NEO4J_FAILED,
+    };
+    const VERIFIED_STORES = {
+      stores: {
+        neo4j: { status: 'verified', nodes: 3, relationships: 2, constraints: 0, indexes: 0 },
+        influxdb: { status: 'verified', points: 5 },
+      },
+      error: null,
+    };
+
+    function mockStoresBackup({ restoreBinaryMissing = false } = {}) {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = undefined;
+      vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      vi.spyOn(fs.promises, 'readFile').mockImplementation(async (p) => {
+        if (String(p).endsWith('manifest.json')) {
+          return JSON.stringify({ dbName: 'mydb', checksum: emptyDirChecksum, collections: [{ file: 'patients.json' }], stores: EXPORTED_STORES });
+        }
+        if (restoreBinaryMissing) return JSON.stringify([{ _id: 1, name: 'a' }]);
+        throw new Error(`unexpected readFile: ${p}`);
+      });
+      vi.spyOn(fs.promises, 'readdir').mockResolvedValue([]);
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => {
+        if (restoreBinaryMissing) cb({ message: 'mongorestore: not found' }, '', 'not found');
+        else cb(null, 'restored', '');
+      });
+      const dropDatabase = vi.fn().mockResolvedValue();
+      const fakeDb = {
+        listCollections: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([{ name: 'patients' }]) })),
+        collection: vi.fn(() => ({ countDocuments: vi.fn().mockResolvedValue(4), deleteMany: vi.fn().mockResolvedValue(), insertMany: vi.fn().mockResolvedValue() })),
+        dropDatabase,
+      };
+      vi.spyOn(mongodb, 'MongoClient').mockImplementation(function () {
+        return { connect: vi.fn().mockResolvedValue(), db: vi.fn(() => fakeDb), close: vi.fn().mockResolvedValue() };
+      });
+      return { dropDatabase };
+    }
+
+    it('fails the restore test when a store fails its check with a matching checksum, still restoring and dropping the scratch db', async () => {
+      const { dropDatabase } = mockStoresBackup();
+      const verify = vi.spyOn(backupStores, 'verifySecondaryStores').mockResolvedValue(FAILED_STORES);
+      const backupPath = path.join('C:', 'tmp', 'backup-stores-1');
+
+      const backupService = freshBackupService();
+      const result = await backupService.testRestoreBackup(backupPath);
+
+      expect(verify).toHaveBeenCalledWith(backupPath, EXPORTED_STORES, backupService.getRestoreScratchBaseDir());
+      expect(result.success).toBe(false);
+      expect(result.checksumVerified).toBe(true);
+      expect(result.error).toBe(NEO4J_FAILED);
+      expect(result.stores).toEqual(FAILED_STORES.stores);
+      expect(result.mode).toBe('mongorestore');
+      expect(cp.exec).toHaveBeenCalledTimes(1);
+      expect(result.restoredDocuments).toBe(4);
+      expect(dropDatabase).toHaveBeenCalled();
+    });
+
+    it('fails the JSON-fallback restore test when a store fails its check', async () => {
+      const { dropDatabase } = mockStoresBackup({ restoreBinaryMissing: true });
+      vi.spyOn(backupStores, 'verifySecondaryStores').mockResolvedValue(FAILED_STORES);
+
+      const backupService = freshBackupService();
+      const result = await backupService.testRestoreBackup(path.join('C:', 'tmp', 'backup-stores-2'));
+
+      expect(result.mode).toBe('json-fallback');
+      expect(result.success).toBe(false);
+      expect(result.checksumVerified).toBe(true);
+      expect(result.error).toBe(NEO4J_FAILED);
+      expect(result.stores).toEqual(FAILED_STORES.stores);
+      expect(dropDatabase).toHaveBeenCalled();
+    });
+
+    it('passes the restore test with verified stores, reporting them in the result and the restoreTestHistory row', async () => {
+      mockStoresBackup();
+      vi.spyOn(backupStores, 'verifySecondaryStores').mockResolvedValue(VERIFIED_STORES);
+
+      const backupService = freshBackupService();
+      const { db, insertOne } = fakeHistoryDb();
+      const result = await backupService.testRestoreBackup(path.join('C:', 'tmp', 'backup-stores-3'), db);
+
+      expect(result.success).toBe(true);
+      expect(result.error).toBeUndefined();
+      expect(result.stores).toEqual(VERIFIED_STORES.stores);
+      expect(insertOne).toHaveBeenCalledWith(expect.objectContaining({
+        status: 'success',
+        stores: VERIFIED_STORES.stores,
+        error: null,
+      }));
+    });
+
+    it('fails the restore test, without taking the JSON fallback, when the store check itself throws', async () => {
+      mockStoresBackup();
+      vi.spyOn(backupStores, 'verifySecondaryStores').mockRejectedValue(new Error('ENOENT: no such file or directory'));
+
+      const backupService = freshBackupService();
+      const result = await backupService.testRestoreBackup(path.join('C:', 'tmp', 'backup-stores-4'));
+
+      expect(result.success).toBe(false);
+      expect(result.mode).toBe('mongorestore');
+      expect(result.error).toBe('Teste de restauração dos stores falhou: ENOENT: no such file or directory');
+      expect(result.stores).toBeNull();
+      expect(cp.exec).toHaveBeenCalledTimes(1);
+      expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining('fallback'));
+    });
   });
 
   // #734: encryptionEnabled is read from the admin-editable BackupPolicy

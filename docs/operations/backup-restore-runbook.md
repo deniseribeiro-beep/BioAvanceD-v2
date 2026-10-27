@@ -86,12 +86,13 @@ What it does **not** do: it does not verify the manifest checksum before restori
 It:
 
 1. recomputes the folder checksum and compares it with the manifest's (`checksumVerified`);
-2. decrypts an encrypted backup into a scratch copy, as in section 8;
-3. restores into a scratch database `<db>_restoretest_<ms>`, never the live one;
-4. counts the restored collections and documents (`restoredCollections`, `restoredDocuments`);
-5. drops the scratch database on every exit path, and writes one `restoreTestHistory` row (`status`, `mode`, `scratchDb`, `checksumVerified`, `restoredCollections`, `restoredDocuments`, `error`).
+2. for each store recorded `exported` in `manifest.stores`, decrypts its files into a scratch folder under `RESTORE_SCRATCH_DIR` (removed afterwards), parses every line, and checks the line counts and the relationship endpoints against the manifest, without connecting to Neo4j or InfluxDB. The result field `stores` holds `verified` (with the counts), `skipped` or `failed` (with its `error`) per store, or `null` for a folder written before the exports existed;
+3. decrypts an encrypted backup into a scratch copy, as in section 8;
+4. restores into a scratch database `<db>_restoretest_<ms>`, never the live one;
+5. counts the restored collections and documents (`restoredCollections`, `restoredDocuments`);
+6. drops the scratch database on every exit path, and writes one `restoreTestHistory` row (`status`, `mode`, `scratchDb`, `checksumVerified`, `restoredCollections`, `restoredDocuments`, `stores`, `error`).
 
-A run whose checksum does not match, or whose folder has no manifest checksum, still restores into the scratch database for its counts, but reports `success: false` with `checksumVerified: false` and an `error`, and records `status: error`; the scheduled run logs an error (`Teste de restauração periódico falhou`). When dropping the scratch database fails, the error log names it, for removal by hand.
+A run whose checksum does not match, or whose folder has no manifest checksum, still restores into the scratch database for its counts, but reports `success: false` with `checksumVerified: false` and an `error`, and records `status: error`; the scheduled run logs an error (`Teste de restauração periódico falhou`). A store that fails its check fails the run the same way, with an `error` naming the store. When dropping the scratch database fails, the error log names it, for removal by hand.
 
 ## 10. Gaps (RNF010)
 
@@ -101,11 +102,11 @@ RNF010: "A plataforma deve adotar estratégia de backup 3-2-1, com cópias cript
 |---|---|---|
 | RNF010 C1, 3-2-1 ("pelo menos três cópias, em duas tecnologias ou mídias, com uma cópia fora do ambiente principal") | One copy, in the `backups_data` volume on the same Docker host as the data. | Not implemented: no second copy, no second medium, no off-site copy. |
 | Redis | Not backed up. Its data lives in the `redis_data` volume. | Not implemented: no backup of Redis. |
-| Neo4j and InfluxDB restore | Each run exports both (section 1); the restore test verifies the folder checksum over their files only, and restores MongoDB alone. The Neo4j node and relationship queries run in one read transaction, which is not a point-in-time snapshot across the two. | Not implemented: no restore and no restore test of the Neo4j and InfluxDB exports; the Neo4j export is not a point-in-time snapshot. |
+| Neo4j and InfluxDB restore | Each run exports both (section 1); the restore test decrypts and parses both exports (section 9) but loads them into no database. The Neo4j node and relationship queries run in one read transaction, which is not a point-in-time snapshot across the two. | Not implemented: no restore of either export into Neo4j or InfluxDB, and no load into a scratch instance (Neo4j Community has a single database); the Neo4j export is not a point-in-time snapshot, so a write between its two queries fails the restore test's endpoint check. |
 | File binaries | Uploads and stored files live in `uploads_data` and `storage_data` (and in an object store when `OBJECT_STORE_DRIVER` configures one). Not backed up. | Not implemented: no backup of file binaries. |
 | TSA and witness keys | `tsa_certs`, `tsa_state`, `tsa_secrets` and `witness_secrets` are not backed up; `compose.prod.yml` records that losing them invalidates previously issued timestamps and signatures. | Not implemented: no backup of these volumes. |
 | Encryption key | The key is not in the backup and the code escrows it nowhere (section 3). | Not implemented: no key escrow. |
 | RNF010 C2, RPO 24 h ("até 24 horas") | `rpoHours` is stored and validated (1-24); nothing measures it. | Not implemented: RPO is not measured or alerted on. |
 | RNF010 C3, RTO 12 h ("até 12 horas") | `rtoHours` is stored and validated (1-12); nothing measures it. | Not implemented: RTO is not measured; no timed full recovery. |
-| RNF010 C5, periodic restore test validated by checksum | Weekly restore test of MongoDB only (section 9); a checksum mismatch fails the run and is logged as an error. | Not implemented: no restore test of the other stores, no full-system restore has been run, and no alert is raised beyond the error log. |
+| RNF010 C5, periodic restore test validated by checksum | Weekly restore test of MongoDB, with a parse check of the Neo4j and InfluxDB exports (section 9); a checksum mismatch or a failed store check fails the run and is logged as an error. | Not implemented: no load of the Neo4j and InfluxDB exports, no full-system restore has been run, and no alert is raised beyond the error log. |
 | Restore integrity | A restore does not verify the manifest checksum and takes no safety backup (section 8). | Not implemented: no checksum check or safety backup before a live restore. |

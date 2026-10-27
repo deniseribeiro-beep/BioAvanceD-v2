@@ -1489,8 +1489,10 @@ test.describe('Backup and restore (RF013) — real backend', () => {
   // #1325 (RNF010 C1): the same run exports Neo4j and InfluxDB beside the
   // MongoDB dump, encrypted, and the folder's checksum covers their files,
   // so a restore test of it still verifies. Other writers may run during the
-  // backup, so the counts are bounds, never equalities.
-  test('a backup also exports Neo4j and InfluxDB, encrypted and covered by the checksum a restore test verifies (#1325)', async ({
+  // backup, so the counts are bounds, never equalities. The restore test
+  // also decrypts and parses both exports (RNF010 C5), and its counts must
+  // equal the backup run's exactly.
+  test('a backup also exports Neo4j and InfluxDB, encrypted and covered by the checksum, and a restore test verifies them (#1325)', async ({
     request,
   }) => {
     const admin = await realLogin(request);
@@ -1529,6 +1531,11 @@ test.describe('Backup and restore (RF013) — real backend', () => {
     const result = (await restoreTest.json()).data;
     expect(result.success, result.error).toBe(true);
     expect(result.checksumVerified).toBe(true);
+    expect(result.stores.neo4j.status, result.stores.neo4j.error).toBe('verified');
+    expect(result.stores.neo4j.nodes).toBe(neo4j.nodes);
+    expect(result.stores.neo4j.relationships).toBe(neo4j.relationships);
+    expect(result.stores.influxdb.status, result.stores.influxdb.error).toBe('verified');
+    expect(result.stores.influxdb.points).toBe(influxdb.points);
   });
 
   // AC#2's "autorizada": every backup operation is behind the manageBackup

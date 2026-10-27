@@ -1075,6 +1075,23 @@ async function runControlledRestoreTest(backupPath) {
       : 'Backup sem manifest.json com checksum: integridade não verificável.';
   }
 
+  // #1325 (RNF010 C5): the Neo4j and InfluxDB exports are decrypted and
+  // parsed, never loaded into a database. A store that fails fails the test;
+  // the Mongo restore below still runs for its counts, as with the checksum.
+  // Its own catch, so an unexpected throw (say an ENOENT) can never reach the
+  // catch below and be read as a missing mongorestore binary.
+  let storesCheck;
+  try {
+    storesCheck = await backupStores.verifySecondaryStores(
+      backupPath,
+      manifest ? manifest.stores : undefined,
+      getRestoreScratchBaseDir()
+    );
+  } catch (storesError) {
+    storesCheck = { stores: null, error: `Teste de restauração dos stores falhou: ${storesError?.message || String(storesError)}` };
+  }
+  const testError = [checksumError, storesCheck.error].filter(Boolean).join(' ') || null;
+
   const sourceDbName = (manifest && manifest.dbName) || resolveDatabaseName(mongoUri);
   const scratchDb = `${sourceDbName}_restoretest_${Date.now()}`;
 
@@ -1115,15 +1132,16 @@ async function runControlledRestoreTest(backupPath) {
       await countScratchContents(mongoUri, scratchDb);
 
     return {
-      success: checksumVerified,
-      ...(checksumError ? { error: checksumError } : {}),
+      success: checksumVerified && !storesCheck.error,
+      ...(testError ? { error: testError } : {}),
       testedFrom: path.basename(backupPath),
       testedAt: new Date(),
       mode: 'mongorestore',
       scratchDb,
       checksumVerified,
       restoredCollections,
-      restoredDocuments
+      restoredDocuments,
+      stores: storesCheck.stores
     };
   } catch (err) {
     const details = err && err.error ? err.error.message : err?.message;
@@ -1137,24 +1155,25 @@ async function runControlledRestoreTest(backupPath) {
         // same `restored*` names the mongorestore path reports, so callers
         // and the restoreTestHistory entry see one shape regardless of which
         // path ran.
-        const fallbackError = fallback.error || checksumError;
+        const fallbackError = fallback.error || testError;
         return {
           ...fallback,
-          success: fallback.success === true && checksumVerified,
+          success: fallback.success === true && checksumVerified && !storesCheck.error,
           ...(fallbackError ? { error: fallbackError } : {}),
           scratchDb,
           checksumVerified,
           restoredCollections: fallback.collections ?? null,
-          restoredDocuments: fallback.documents ?? null
+          restoredDocuments: fallback.documents ?? null,
+          stores: storesCheck.stores
         };
       } catch (fallbackError) {
         const fallbackDetails = fallbackError?.message || String(fallbackError);
         logger.error('Erro no fallback de teste de restauração JSON:', fallbackDetails);
-        return { success: false, error: fallbackDetails, checksumVerified };
+        return { success: false, error: fallbackDetails, checksumVerified, stores: storesCheck.stores };
       }
     }
 
-    return { success: false, error: details || 'Erro ao testar restauração', checksumVerified };
+    return { success: false, error: details || 'Erro ao testar restauração', checksumVerified, stores: storesCheck.stores };
   } finally {
     await dropScratch();
     await cleanupDecryptedRestoreCopy(scratchDecryptDir);
@@ -1181,6 +1200,8 @@ async function testRestoreBackup(backupPath, db) {
     // healthy one, so the document count is what makes the record diagnostic
     // rather than merely present.
     restoredDocuments: typeof result.restoredDocuments === 'number' ? result.restoredDocuments : null,
+    // #1325: per-store verified/skipped/failed, null when not tested.
+    stores: result.stores ?? null,
     error: result.error || null
   });
 

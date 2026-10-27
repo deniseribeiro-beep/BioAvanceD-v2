@@ -1,11 +1,13 @@
 const fs = require('fs');
 const path = require('path');
+const readline = require('readline');
 const { once } = require('events');
 const neo4j = require('neo4j-driver');
 const { InfluxDB, flux } = require('@influxdata/influxdb-client');
 const env = require('../config/env');
 const keyRegistry = require('../config/keyRegistry');
-const { encryptFileBuffer } = require('../utils/fileCrypto');
+const logger = require('../utils/logger');
+const { encryptFileBuffer, decryptFileBuffer } = require('../utils/fileCrypto');
 
 // #1325 (RNF010 C1): the Neo4j and InfluxDB exports that run beside the
 // MongoDB dump in the same backup folder, encrypted and checksummed with it.
@@ -338,11 +340,250 @@ async function exportSecondaryStores(backupDir, encryptionEnabled) {
   return { neo4j: neo4jResult, influxdb: influxdbResult };
 }
 
+// #1325 (RNF010 C5): the restore test's check of the two exports above. Each
+// exported store's files are decrypted into a scratch folder, every line is
+// parsed, and the counts and relationship endpoints are checked against the
+// manifest. Nothing connects to Neo4j or InfluxDB: the image's Neo4j
+// Community has a single database, so there is no scratch one to load into,
+// and the restore test never touches the live databases.
+const STORE_FILES = {
+  neo4j: ['neo4j/nodes.ndjson', 'neo4j/relationships.ndjson', 'neo4j/schema.json'],
+  influxdb: ['influxdb/points.ndjson']
+};
+const STORE_LABELS = { neo4j: 'Neo4j', influxdb: 'InfluxDB' };
+const NEO4J_STRING_TAGS = new Set(TEMPORAL_TYPES.map(([tag]) => tag));
+const NEO4J_NON_FINITE_FLOATS = ['NaN', 'Infinity', '-Infinity'];
+const INFLUX_VALUE_PATTERNS = {
+  long: /^-?\d+$/,
+  unsignedLong: /^\d+$/,
+  boolean: /^(true|false)$/
+};
+
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isStringArray(value) {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+// The inverse of typedNeo4jValue: a value it could not have written fails.
+function isDecodableNeo4jValue(value) {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return true;
+  if (Array.isArray(value)) return value.every(isDecodableNeo4jValue);
+  if (!isPlainObject(value)) return false;
+  const keys = Object.keys(value);
+  if (keys.length !== 2 || !keys.includes('$t') || !keys.includes('v')) return false;
+  const { $t: tag, v } = value;
+  if (tag === 'int') return typeof v === 'string' && /^-?\d+$/.test(v);
+  if (tag === 'float') return (typeof v === 'number' && Number.isFinite(v)) || NEO4J_NON_FINITE_FLOATS.includes(v);
+  if (NEO4J_STRING_TAGS.has(tag)) return typeof v === 'string' && v !== '';
+  return false;
+}
+
+function isDecodableNeo4jProperties(props) {
+  return isPlainObject(props) && Object.values(props).every(isDecodableNeo4jValue);
+}
+
+function isInfluxValue(valueType, value) {
+  if (typeof value !== 'string') return false;
+  if (valueType === 'string') return true;
+  if (valueType === 'double') {
+    return ['NaN', '+Inf', '-Inf'].includes(value) || (value !== '' && !Number.isNaN(Number(value)));
+  }
+  return Object.prototype.hasOwnProperty.call(INFLUX_VALUE_PATTERNS, valueType)
+    && INFLUX_VALUE_PATTERNS[valueType].test(value);
+}
+
+// Calls check(record, lineNumber) for every line of an NDJSON file and
+// returns the line count. A trailing newline ends the last line; any other
+// empty line fails JSON.parse.
+async function forEachJsonLine(filePath, check) {
+  const stream = fs.createReadStream(filePath, { encoding: 'utf8' });
+  let failure = null;
+  const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  stream.on('error', (error) => {
+    failure = error;
+    lines.close();
+  });
+  let count = 0;
+  try {
+    for await (const line of lines) {
+      count += 1;
+      let record;
+      try {
+        record = JSON.parse(line);
+      } catch (_) {
+        throw new Error(`${path.basename(filePath)} linha ${count}: não é JSON.`);
+      }
+      check(record, count);
+    }
+    if (failure) throw failure;
+  } finally {
+    lines.close();
+    // Windows refuses to remove an open file, and the scratch folder is
+    // removed right after.
+    if (!stream.closed) {
+      const done = once(stream, 'close').catch(() => {});
+      stream.destroy();
+      await done;
+    }
+  }
+  return count;
+}
+
+// The store's files must be exactly its own set, which also keeps a manifest
+// path like ../x from being read. Each is decrypted (or copied, when stored
+// in plaintext) into the scratch folder.
+async function decryptStoreFiles(storeKey, backupPath, entry, scratchDir) {
+  const expected = STORE_FILES[storeKey];
+  const entries = Array.isArray(entry.files) ? entry.files : [];
+  const names = entries.map((fileEntry) => (isPlainObject(fileEntry) ? fileEntry.file : undefined));
+  const sameSet = names.length === expected.length
+    && new Set(names).size === names.length
+    && expected.every((name) => names.includes(name));
+  if (!sameSet) {
+    throw new Error(`arquivos no manifest (${names.map(String).join(', ')}) diferem de ${expected.join(', ')}.`);
+  }
+
+  await fs.promises.mkdir(path.join(scratchDir, storeKey), { recursive: true });
+  for (const fileEntry of entries) {
+    const parts = fileEntry.file.split('/');
+    // eslint-disable-next-line no-await-in-loop
+    const stored = await fs.promises.readFile(path.join(backupPath, ...parts));
+    let plaintext;
+    if (fileEntry.encrypted === true) {
+      try {
+        plaintext = decryptFileBuffer(stored, fileEntry);
+      } catch (error) {
+        throw new Error(`${fileEntry.file} não pôde ser descriptografado: ${error?.message || String(error)}`);
+      }
+    } else if (fileEntry.encrypted === false) {
+      plaintext = stored;
+    } else {
+      throw new Error(`${fileEntry.file}: campo encrypted inválido no manifest.`);
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await fs.promises.writeFile(path.join(scratchDir, ...parts), plaintext);
+  }
+}
+
+async function verifyNeo4jExport(backupPath, entry, scratchDir) {
+  await decryptStoreFiles('neo4j', backupPath, entry, scratchDir);
+
+  const nodeIds = new Set();
+  const nodes = await forEachJsonLine(path.join(scratchDir, 'neo4j', 'nodes.ndjson'), (record, line) => {
+    if (!isPlainObject(record) || typeof record.id !== 'string' || !isStringArray(record.labels)
+      || !isDecodableNeo4jProperties(record.props)) {
+      throw new Error(`nodes.ndjson linha ${line}: nó inválido.`);
+    }
+    if (nodeIds.has(record.id)) throw new Error(`nodes.ndjson linha ${line}: id ${record.id} repetido.`);
+    nodeIds.add(record.id);
+  });
+
+  const relationships = await forEachJsonLine(path.join(scratchDir, 'neo4j', 'relationships.ndjson'), (record, line) => {
+    if (!isPlainObject(record) || typeof record.id !== 'string' || typeof record.type !== 'string'
+      || typeof record.start !== 'string' || typeof record.end !== 'string'
+      || !isDecodableNeo4jProperties(record.props)) {
+      throw new Error(`relationships.ndjson linha ${line}: relacionamento inválido.`);
+    }
+    // A load could not attach it. A write between the export's two queries
+    // can cause this (the export is not a point-in-time snapshot).
+    if (!nodeIds.has(record.start) || !nodeIds.has(record.end)) {
+      throw new Error(`relationships.ndjson linha ${line}: extremidade ${record.start} -> ${record.end} fora dos nós exportados.`);
+    }
+  });
+
+  let schema;
+  try {
+    schema = JSON.parse(await fs.promises.readFile(path.join(scratchDir, 'neo4j', 'schema.json'), 'utf8'));
+  } catch (_) {
+    throw new Error('schema.json não é JSON.');
+  }
+  if (!isPlainObject(schema) || !isStringArray(schema.constraints) || !isStringArray(schema.indexes)) {
+    throw new Error('schema.json sem as listas constraints e indexes.');
+  }
+
+  if (nodes !== entry.nodes || relationships !== entry.relationships) {
+    throw new Error(`contagem diferente do manifest: ${nodes} nós e ${relationships} relacionamentos lidos, ${entry.nodes} e ${entry.relationships} registrados.`);
+  }
+  return { status: 'verified', nodes, relationships, constraints: schema.constraints.length, indexes: schema.indexes.length };
+}
+
+async function verifyInfluxDBExport(backupPath, entry, scratchDir) {
+  await decryptStoreFiles('influxdb', backupPath, entry, scratchDir);
+
+  const points = await forEachJsonLine(path.join(scratchDir, 'influxdb', 'points.ndjson'), (record, line) => {
+    const valid = isPlainObject(record)
+      && typeof record.measurement === 'string' && record.measurement !== ''
+      && typeof record.field === 'string' && record.field !== ''
+      && typeof record.time === 'string' && record.time !== '' && !Number.isNaN(Date.parse(record.time))
+      && isPlainObject(record.tags) && Object.values(record.tags).every((tag) => typeof tag === 'string')
+      && isInfluxValue(record.valueType, record.value);
+    if (!valid) throw new Error(`points.ndjson linha ${line}: ponto inválido.`);
+  });
+
+  if (points !== entry.points) {
+    throw new Error(`contagem diferente do manifest: ${points} pontos lidos, ${entry.points} registrados.`);
+  }
+  return { status: 'verified', points };
+}
+
+const STORE_VERIFIERS = { neo4j: verifyNeo4jExport, influxdb: verifyInfluxDBExport };
+
+// Never throws: the restore test's catch reads an ENOENT as a missing
+// mongorestore binary, so a missing store file must come back as a result.
+// `stores` undefined is a folder written before the exports existed: there
+// is no store data to test, and `stores: null` says so.
+async function verifySecondaryStores(backupPath, stores, scratchBase) {
+  if (stores === undefined) return { stores: null, error: null };
+
+  const results = {};
+  const errors = [];
+  let scratchDir = null;
+  try {
+    for (const storeKey of ['neo4j', 'influxdb']) {
+      try {
+        if (!isPlainObject(stores)) throw new Error('registro stores do manifest não é um objeto.');
+        const entry = stores[storeKey];
+        if (!isPlainObject(entry)) throw new Error('sem registro no manifest.');
+        if (entry.status === 'skipped') {
+          results[storeKey] = { status: 'skipped', reason: entry.reason };
+          continue;
+        }
+        if (entry.status !== 'exported') throw new Error(`status ${String(entry.status)} desconhecido no manifest.`);
+        if (!scratchDir) {
+          // eslint-disable-next-line no-await-in-loop
+          await fs.promises.mkdir(scratchBase, { recursive: true });
+          // eslint-disable-next-line no-await-in-loop
+          scratchDir = await fs.promises.mkdtemp(path.join(scratchBase, 'bioavanced-restore-stores-'));
+        }
+        // eslint-disable-next-line no-await-in-loop
+        results[storeKey] = await STORE_VERIFIERS[storeKey](backupPath, entry, scratchDir);
+      } catch (error) {
+        const message = `Teste de restauração de ${STORE_LABELS[storeKey]} falhou: ${error?.message || String(error)}`;
+        results[storeKey] = { status: 'failed', error: message };
+        errors.push(message);
+      }
+    }
+  } finally {
+    if (scratchDir) {
+      try {
+        await fs.promises.rm(scratchDir, { recursive: true, force: true });
+      } catch (removeError) {
+        logger.error(`Erro ao remover cópia temporária dos stores ${scratchDir}:`, removeError?.message || String(removeError));
+      }
+    }
+  }
+  return { stores: results, error: errors.length ? errors.join(' ') : null };
+}
+
 module.exports = {
   clients,
   assertEncryptionKeyConfigured,
   encryptFileInPlace,
   exportNeo4j,
   exportInfluxDB,
-  exportSecondaryStores
+  exportSecondaryStores,
+  verifySecondaryStores
 };
