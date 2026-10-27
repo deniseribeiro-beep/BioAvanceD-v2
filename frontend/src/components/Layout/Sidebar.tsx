@@ -152,7 +152,7 @@ export default function Sidebar() {
           <h1 className="sidebar-title">{t('app.title')}</h1>
           <p className="sidebar-subtitle">{t('app.subtitle')}</p>
         </div>
-        <nav className="sidebar-nav">
+        <nav className="sidebar-nav" aria-label={t('layout.mainNavigation', 'Navegação principal')}>
           {menuItems.map((item) => {
             const Icon = item.icon;
             return (

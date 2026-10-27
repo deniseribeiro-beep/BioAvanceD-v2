@@ -20,21 +20,37 @@ async function authenticate(request: APIRequestContext, page: Page): Promise<voi
 }
 
 // An outline or a box-shadow on the focused element counts as a visible focus.
-// Polled, because .input animates its box-shadow over 0.2 s.
+// Polled, because .input animates its box-shadow over 0.2 s. A failure names
+// the focused control and its computed focus style (#1409).
 async function expectVisibleFocus(page: Page): Promise<void> {
   await expect
-    .poll(() =>
-      page.evaluate(() => {
-        const el = document.activeElement;
-        if (!el || el === document.body) return false;
-        const style = window.getComputedStyle(el);
-        return (
-          (style.outlineStyle !== 'none' && style.outlineWidth !== '0px') ||
-          style.boxShadow !== 'none'
-        );
-      })
+    .poll(
+      () =>
+        page.evaluate(() => {
+          const el = document.activeElement;
+          if (!el || el === document.body) return `no focused control (${el ? 'body' : 'null'})`;
+          const style = window.getComputedStyle(el);
+          if (
+            (style.outlineStyle !== 'none' && style.outlineWidth !== '0px') ||
+            style.boxShadow !== 'none'
+          ) {
+            return '';
+          }
+          const testId = el.getAttribute('data-testid');
+          return [
+            el.tagName.toLowerCase(),
+            testId ? `data-testid="${testId}"` : '',
+            `class="${el.getAttribute('class') ?? ''}"`,
+            `outlineStyle=${style.outlineStyle}`,
+            `outlineWidth=${style.outlineWidth}`,
+            `boxShadow=${style.boxShadow}`,
+          ]
+            .filter(Boolean)
+            .join(' ');
+        }),
+      { message: 'the focused control shows an outline or a box-shadow' }
     )
-    .toBe(true);
+    .toBe('');
   await expect(page.locator(':focus')).toHaveAccessibleName(/\S/);
 }
 

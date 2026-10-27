@@ -469,7 +469,8 @@
     }
   },
   "layout": {
-    "toggleMenu": "Alternar menu"
+    "toggleMenu": "Alternar menu",
+    "mainNavigation": "Navegación principal"
   },
   "logs": {
     "action": "Acción",
