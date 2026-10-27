@@ -1,4 +1,5 @@
 import axios, { AxiosError, AxiosInstance } from 'axios';
+import { withRequestId } from './requestId';
 
 export type ApiToastType = 'success' | 'error' | 'warning' | 'info';
 
@@ -63,7 +64,7 @@ apiClient.interceptors.request.use((config) => {
     config.headers = config.headers || {};
     config.headers.Authorization = `Bearer ${token}`;
   }
-  return config;
+  return withRequestId(config);
 });
 
 apiClient.interceptors.response.use(

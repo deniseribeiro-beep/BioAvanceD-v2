@@ -32,6 +32,7 @@ import {
   BiomarkerAssociation,
 } from '../types/models';
 import { clearClientSession } from '../utils/sessionCleanup';
+import { withRequestId } from '../api/requestId';
 
 // Opt-out for background/speculative requests (e.g. a prefetch for a later
 // wizard step) whose failure must not force-logout the user out of an
@@ -189,7 +190,7 @@ api.interceptors.request.use(
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
-    return config;
+    return withRequestId(config);
   },
   (error) => {
     return Promise.reject(error);
