@@ -6,8 +6,11 @@ const { MongoClient, BSON } = require('mongodb');
 const logger = require('../utils/logger');
 const env = require('../config/env');
 const backupPolicyService = require('./backup-policy.service');
-const keyRegistry = require('../config/keyRegistry');
-const { encryptFileBuffer, decryptFileBuffer } = require('../utils/fileCrypto');
+const { decryptFileBuffer } = require('../utils/fileCrypto');
+// #1325: taken as an object, so exportSecondaryStores is looked up per call.
+const backupStores = require('./backup-stores.service');
+
+const { assertEncryptionKeyConfigured, encryptFileInPlace } = backupStores;
 
 const DEFAULT_RETENTION_DAYS = 30;
 
@@ -54,43 +57,6 @@ async function resolveEncryptionEnabled(db) {
   }
 
   return policy?.encryptionEnabled !== false;
-}
-
-// #734: encryptFileBuffer (fileCrypto.js) returns null rather than throwing
-// when ENCRYPTION_KEY isn't configured -- the right behavior for its other
-// caller (sample-file.controller.js), which falls back to storing
-// plaintext. That silent fallback is exactly the defect this issue is
-// about, so backups check for a configured key up front and abort loudly
-// instead of ever reaching that null.
-function assertEncryptionKeyConfigured() {
-  if (!keyRegistry.getActiveKey()) {
-    throw new Error(
-      'Criptografia de backup habilitada (encryptionEnabled) mas nenhuma chave de criptografia está configurada (ENCRYPTION_KEY). Backup abortado para não gravar dados em texto plano.'
-    );
-  }
-}
-
-// Encrypts one file's bytes in place, returning the per-file envelope
-// (algorithm/keyId/iv/tag) to be recorded in manifest.json. Field names
-// match sample-file.controller.js's persisted shape so decryptFileBuffer
-// can be handed the entry object directly on restore.
-async function encryptFileInPlace(filePath) {
-  const plaintext = await fs.promises.readFile(filePath);
-  const encryption = encryptFileBuffer(plaintext);
-  if (!encryption) {
-    // assertEncryptionKeyConfigured() is always called before this, so
-    // reaching here means the key vanished between the two checks -- still
-    // fail loudly rather than silently leaving plaintext on disk.
-    assertEncryptionKeyConfigured();
-  }
-  await fs.promises.writeFile(filePath, encryption.ciphertext);
-  return {
-    encrypted: true,
-    encryptionAlgorithm: encryption.algorithm,
-    encryptionKeyId: encryption.keyId,
-    encryptionIv: encryption.iv,
-    encryptionTag: encryption.tag
-  };
 }
 
 // mongodump path: encrypts every file under dirPath recursively (the dump
@@ -778,6 +744,11 @@ async function writeJsonBackup(backupDir, mongoUri, encryptionEnabled = false) {
       }
     }
 
+    // #1325: the Neo4j and InfluxDB exports, encrypted by their own module
+    // and covered by the checksum below. A throw here fails the run through
+    // performBackup's fallback catch.
+    manifest.stores = await backupStores.exportSecondaryStores(backupDir, encryptionEnabled);
+
     const checksum = await computeDirChecksum(backupDir);
     manifest.checksum = checksum;
 
@@ -792,7 +763,8 @@ async function writeJsonBackup(backupDir, mongoUri, encryptionEnabled = false) {
       path: backupDir,
       mode: 'json-fallback',
       collections: manifest.collections.length,
-      checksum
+      checksum,
+      stores: manifest.stores
     };
   } finally {
     await client.close();
@@ -844,6 +816,22 @@ async function performBackup(retentionDaysOverride, encryptionEnabled = true) {
       encryptedFiles = await encryptDirectoryFilesInPlace(backupDir);
     }
 
+    // #1325: the Neo4j and InfluxDB exports run after the dump tree is
+    // encrypted, so their files are encrypted once, by their own module, and
+    // before the checksum, so it covers them. A store error is answered here,
+    // never by the catch below: its dumpBinaryMissing test matches ENOENT,
+    // which a store's fs or socket error can carry, and would send the run to
+    // the JSON fallback. No manifest.json is written for this folder, so a
+    // restore test of it fails.
+    let stores;
+    try {
+      stores = await backupStores.exportSecondaryStores(backupDir, encryptionEnabled);
+    } catch (storeError) {
+      const storeDetails = storeError?.message || String(storeError);
+      logger.error('Erro ao executar backup:', storeDetails);
+      return { success: false, error: storeDetails };
+    }
+
     const checksum = await computeDirChecksum(backupDir);
     await fs.promises.writeFile(
       path.join(backupDir, 'manifest.json'),
@@ -852,7 +840,8 @@ async function performBackup(retentionDaysOverride, encryptionEnabled = true) {
         dbName: resolveDatabaseName(mongoUri),
         type: 'mongodump',
         checksum,
-        ...(encryptionEnabled ? { encrypted: true, encryptedFiles } : {})
+        ...(encryptionEnabled ? { encrypted: true, encryptedFiles } : {}),
+        stores
       }, null, 2),
       'utf8'
     );
@@ -860,7 +849,7 @@ async function performBackup(retentionDaysOverride, encryptionEnabled = true) {
     const retentionDays = Number.isFinite(Number(retentionDaysOverride)) ? Number(retentionDaysOverride) : Number(env.BACKUP_RETENTION_DAYS || DEFAULT_RETENTION_DAYS);
     await cleanupOldBackups(baseDir, retentionDays);
 
-    return { success: true, path: backupDir, mode: 'mongodump', checksum };
+    return { success: true, path: backupDir, mode: 'mongodump', checksum, stores };
   } catch (err) {
     const details = err && err.error ? err.error.message : err?.message;
     const dumpBinaryMissing = /mongodump: not found|is not recognized|ENOENT/i.test(String(details || ''));

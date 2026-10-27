@@ -74,3 +74,20 @@ export async function queryFreezerReadingIds(
   const rows = await queryApi.collectRows<{ _time: string; _value: string }>(flux);
   return rows.map((row) => ({ time: row._time, telemetryReadingId: row._value }));
 }
+
+/**
+ * #1325: every point in the bucket, over the backup export's range. count()
+ * runs per series first: group() before count() would merge `_value`
+ * columns of different types into one table.
+ */
+export async function countAllPoints(): Promise<number> {
+  const queryApi = getClient().getQueryApi(org);
+  const flux = `from(bucket: "${bucket}")
+    |> range(start: 1678-01-01T00:00:00Z, stop: 2262-01-01T00:00:00Z)
+    |> count()
+    |> group()
+    |> sum()`;
+
+  const rows = await queryApi.collectRows<{ _value: number }>(flux);
+  return rows.length ? Number(rows[0]._value) : 0;
+}

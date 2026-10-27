@@ -385,3 +385,15 @@ export async function countSampleNodes(sampleId: string): Promise<number> {
     await session.close();
   }
 }
+
+/** #1325: every node and relationship in the database, the scope of the backup's Neo4j export. */
+export async function countGraph(): Promise<{ nodes: number; relationships: number }> {
+  const session = getDriver().session({ database });
+  try {
+    const nodes = await session.run('MATCH (n) RETURN count(n) AS n');
+    const relationships = await session.run('MATCH ()-[r]->() RETURN count(r) AS n');
+    return { nodes: Number(nodes.records[0].get('n')), relationships: Number(relationships.records[0].get('n')) };
+  } finally {
+    await session.close();
+  }
+}

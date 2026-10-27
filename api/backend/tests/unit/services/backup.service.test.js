@@ -7,6 +7,7 @@ const cp = require('child_process');
 const mongodb = require('mongodb');
 const logger = require('../../../src/utils/logger');
 const env = require('../../../src/config/env');
+const backupStores = require('../../../src/services/backup-stores.service');
 
 // Note on `exec` and `MongoClient`: backup.service.js does
 // `const { exec } = require('child_process')` and
@@ -33,7 +34,19 @@ describe('backup.service', () => {
     vi.spyOn(logger, 'info').mockImplementation(() => {});
     vi.spyOn(logger, 'warn').mockImplementation(() => {});
     vi.spyOn(logger, 'error').mockImplementation(() => {});
+    // #1325: these cases mock fs, so the Neo4j/InfluxDB exports are replaced
+    // by their not-configured result unless a case says otherwise.
+    vi.spyOn(backupStores, 'exportSecondaryStores').mockResolvedValue({
+      neo4j: { status: 'skipped', reason: 'not_configured' },
+      influxdb: { status: 'skipped', reason: 'not_configured' },
+    });
   });
+
+  // #1325: an exported-shaped stores result, distinct from the default above.
+  const EXPORTED_STORES = {
+    neo4j: { status: 'exported', database: 'neo4j', nodes: 3, relationships: 2, files: [{ file: 'neo4j/nodes.ndjson', encrypted: false }] },
+    influxdb: { status: 'exported', bucket: 'bucket', org: 'org', points: 5, files: [{ file: 'influxdb/points.ndjson', encrypted: false }] },
+  };
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -247,6 +260,101 @@ describe('backup.service', () => {
 
       expect(result).toEqual({ success: false, error: 'authentication failed' });
       expect(logger.error).toHaveBeenCalledWith('Erro ao executar backup:', 'authentication failed');
+    });
+
+    it('records the Neo4j and InfluxDB exports in the mongodump manifest and the run result (#1325)', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = undefined;
+      env.BACKUP_DIR = path.join('C:', 'tmp', 'backup-service-test-basedir-6');
+      env.BACKUP_RETENTION_DAYS = undefined;
+
+      vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+      vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
+      vi.spyOn(fs.promises, 'readdir').mockResolvedValue([]);
+      vi.spyOn(fs.promises, 'writeFile').mockResolvedValue();
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => {
+        cb(null, 'ok stdout', '');
+      });
+      backupStores.exportSecondaryStores.mockResolvedValue(EXPORTED_STORES);
+
+      const backupService = freshBackupService();
+      const result = await backupService.runBackup(plaintextPolicyDb());
+
+      expect(result.success).toBe(true);
+      expect(result.stores).toEqual(EXPORTED_STORES);
+      expect(backupStores.exportSecondaryStores).toHaveBeenCalledWith(result.path, false);
+      const manifestWrite = fs.promises.writeFile.mock.calls.find(([filePath]) => String(filePath).endsWith('manifest.json'));
+      expect(JSON.parse(manifestWrite[1]).stores).toEqual(EXPORTED_STORES);
+    });
+
+    // #1325: the outer catch's dumpBinaryMissing test matches ENOENT, so a
+    // store error carrying it must be answered before that catch.
+    it('fails the run naming the store, with no manifest and no JSON fallback, when a store export rejects with ENOENT (#1325)', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = undefined;
+      env.BACKUP_DIR = path.join('C:', 'tmp', 'backup-service-test-basedir-7');
+      env.BACKUP_RETENTION_DAYS = undefined;
+
+      vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+      vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
+      vi.spyOn(fs.promises, 'readdir').mockResolvedValue([]);
+      vi.spyOn(fs.promises, 'writeFile').mockResolvedValue();
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => {
+        cb(null, 'ok stdout', '');
+      });
+      const storeError = 'Backup de Neo4j falhou: connect ENOENT /run/neo4j.sock';
+      backupStores.exportSecondaryStores.mockRejectedValue(new Error(storeError));
+      const fakeClient = {
+        connect: vi.fn().mockRejectedValue(new Error('the JSON fallback must not run')),
+        db: vi.fn(),
+        close: vi.fn().mockResolvedValue()
+      };
+      vi.spyOn(mongodb, 'MongoClient').mockImplementation(function () { return fakeClient; });
+      const db = plaintextPolicyDb();
+
+      const backupService = freshBackupService();
+      const result = await backupService.runBackup(db);
+
+      expect(result).toEqual({ success: false, error: storeError });
+      expect(mongodb.MongoClient).not.toHaveBeenCalled();
+      expect(fs.promises.writeFile.mock.calls.filter(([filePath]) => String(filePath).endsWith('manifest.json'))).toEqual([]);
+      expect(db.collection('backupHistory').insertOne).toHaveBeenCalledWith(expect.objectContaining({ status: 'error', error: storeError }));
+    });
+
+    it('records the Neo4j and InfluxDB exports in the JSON-fallback manifest and result (#1325)', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = undefined;
+      env.BACKUP_DIR = path.join('C:', 'tmp', 'backup-service-test-basedir-8');
+      env.BACKUP_RETENTION_DAYS = undefined;
+
+      vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+      vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
+      vi.spyOn(fs.promises, 'readdir').mockResolvedValue([]);
+      vi.spyOn(fs.promises, 'writeFile').mockResolvedValue();
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => {
+        cb({ message: "'mongodump' is not recognized as an internal or external command" }, '', 'is not recognized');
+      });
+      const fakeDb = {
+        listCollections: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([]) })),
+        collection: vi.fn()
+      };
+      const fakeClient = {
+        connect: vi.fn().mockResolvedValue(),
+        db: vi.fn(() => fakeDb),
+        close: vi.fn().mockResolvedValue()
+      };
+      vi.spyOn(mongodb, 'MongoClient').mockImplementation(function () { return fakeClient; });
+      backupStores.exportSecondaryStores.mockResolvedValue(EXPORTED_STORES);
+
+      const backupService = freshBackupService();
+      const result = await backupService.runBackup(plaintextPolicyDb());
+
+      expect(result.success).toBe(true);
+      expect(result.mode).toBe('json-fallback');
+      expect(result.stores).toEqual(EXPORTED_STORES);
+      expect(backupStores.exportSecondaryStores).toHaveBeenCalledWith(result.path, false);
+      const manifestWrite = fs.promises.writeFile.mock.calls.find(([filePath]) => String(filePath).endsWith('manifest.json'));
+      expect(JSON.parse(manifestWrite[1]).stores).toEqual(EXPORTED_STORES);
     });
   });
 
@@ -1405,6 +1513,98 @@ describe('backup.service', () => {
           .digest('hex');
         expect(manifest.checksum).toBe(expectedChecksum);
       } finally {
+        await fs.promises.rm(baseDir, { recursive: true, force: true });
+      }
+    });
+
+    // #1325: the store exports run after the dump tree is encrypted (so the
+    // dump encryption never touches their files) and before the checksum (so
+    // it covers them).
+    it('exports the Neo4j and InfluxDB stores after encrypting the mongodump tree and before its checksum (#1325)', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = 'mydb';
+      const os = require('os');
+      const baseDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'bioavanced-1325-order-'));
+      env.BACKUP_DIR = baseDir;
+
+      try {
+        vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => {
+          const outDir = /--out="([^"]+)"/.exec(command)[1];
+          fs.mkdirSync(path.join(outDir, 'mydb'), { recursive: true });
+          fs.writeFileSync(path.join(outDir, 'mydb', 'patients.bson'), 'BSON-PAYLOAD');
+          cb(null, 'ok stdout', '');
+        });
+        const storeLine = '{"id":"4:a:1"}\n';
+        backupStores.exportSecondaryStores.mockImplementation(async (backupDir) => {
+          await fs.promises.mkdir(path.join(backupDir, 'neo4j'), { recursive: true });
+          await fs.promises.writeFile(path.join(backupDir, 'neo4j', 'x.ndjson'), storeLine);
+          return EXPORTED_STORES;
+        });
+
+        const backupService = freshBackupService();
+        const result = await backupService.runBackup(makeAppDbWithPolicy(true));
+
+        expect(result.success).toBe(true);
+        expect(result.mode).toBe('mongodump');
+        expect(backupStores.exportSecondaryStores).toHaveBeenCalledWith(result.path, true);
+
+        const manifest = JSON.parse(await fs.promises.readFile(path.join(result.path, 'manifest.json'), 'utf8'));
+        expect(manifest.encryptedFiles.map((entry) => entry.file)).toEqual(['mydb/patients.bson']);
+        expect(manifest.stores).toEqual(EXPORTED_STORES);
+
+        const storeBytes = await fs.promises.readFile(path.join(result.path, 'neo4j', 'x.ndjson'));
+        expect(storeBytes.toString('utf8')).toBe(storeLine);
+        const dumpBytes = await fs.promises.readFile(path.join(result.path, 'mydb', 'patients.bson'));
+        const expectedChecksum = crypto.createHash('sha256')
+          .update('mydb/patients.bson').update(dumpBytes)
+          .update('neo4j/x.ndjson').update(storeBytes)
+          .digest('hex');
+        expect(manifest.checksum).toBe(expectedChecksum);
+        expect(result.checksum).toBe(expectedChecksum);
+      } finally {
+        await fs.promises.rm(baseDir, { recursive: true, force: true });
+      }
+    });
+
+    // #1325: a store's files are encrypted once all are written, so a store
+    // failing partway must not leave its plaintext in the backup folder.
+    it('leaves no plaintext store file when the Neo4j export fails mid-stream with encryption on (#1325)', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = 'mydb';
+      const os = require('os');
+      const baseDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'bioavanced-1325-midstream-'));
+      env.BACKUP_DIR = baseDir;
+      const storeEnv = { NEO4J_URI: env.NEO4J_URI, NEO4J_USERNAME: env.NEO4J_USERNAME, NEO4J_PASSWORD: env.NEO4J_PASSWORD };
+      Object.assign(env, { NEO4J_URI: 'bolt://neo4j:7687', NEO4J_USERNAME: 'neo4j', NEO4J_PASSWORD: 'secret' });
+
+      try {
+        vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => {
+          const outDir = /--out="([^"]+)"/.exec(command)[1];
+          fs.mkdirSync(path.join(outDir, 'mydb'), { recursive: true });
+          fs.writeFileSync(path.join(outDir, 'mydb', 'patients.bson'), 'BSON-PAYLOAD');
+          cb(null, 'ok stdout', '');
+        });
+        backupStores.exportSecondaryStores.mockRestore();
+        async function* nodeRows() {
+          yield { get: (key) => ({ id: '4:a:1', labels: ['Patient'], props: { name: 'PLAINTEXT-PHI-MARKER' } })[key] };
+        }
+        async function* resetMidStream() {
+          throw new Error('connection reset mid-stream');
+        }
+        const tx = { run: vi.fn((query) => (query.startsWith('MATCH (n)') ? nodeRows() : resetMidStream())), close: vi.fn().mockResolvedValue() };
+        const session = { beginTransaction: vi.fn(() => tx), run: vi.fn(), close: vi.fn().mockResolvedValue() };
+        vi.spyOn(backupStores.clients, 'neo4jDriver').mockReturnValue({ session: vi.fn(() => session), close: vi.fn().mockResolvedValue() });
+
+        const backupService = freshBackupService();
+        const result = await backupService.runBackup(makeAppDbWithPolicy(true));
+
+        expect(result).toEqual({ success: false, error: 'Backup de Neo4j falhou: connection reset mid-stream' });
+        const [folder] = await fs.promises.readdir(baseDir);
+        const backupDir = path.join(baseDir, folder);
+        expect(fs.existsSync(path.join(backupDir, 'neo4j'))).toBe(false);
+        expect(fs.existsSync(path.join(backupDir, 'manifest.json'))).toBe(false);
+      } finally {
+        Object.assign(env, storeEnv);
         await fs.promises.rm(baseDir, { recursive: true, force: true });
       }
     });

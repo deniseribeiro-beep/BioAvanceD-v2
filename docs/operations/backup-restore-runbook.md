@@ -1,25 +1,31 @@
-# MongoDB backup and restore runbook
+# MongoDB, Neo4j and InfluxDB backup and restore runbook
 
 Answers RNF006 C2 ("Documentar ... backup, restauração") and the backup and continuity part of RNF013 C2. Written 2026-10-25. It describes what the code does at this commit, nothing more; everything RNF010 asks for that the code does not do is listed under [Gaps](#10-gaps-rnf010), never as a procedure. Tracking issue: #1325.
 
-Sources: `api/backend/src/services/backup.service.js`, `backup-policy.service.js`, `scheduler.service.js`, `api/backend/src/interface/routes/backup.routes.js`, `backupPolicy.routes.js`, `compose.prod.yml`, `.env.production.example`, `api/backend/Dockerfile.prod`.
+Sources: `api/backend/src/services/backup.service.js`, `backup-stores.service.js`, `backup-policy.service.js`, `scheduler.service.js`, `api/backend/src/interface/routes/backup.routes.js`, `backupPolicy.routes.js`, `compose.prod.yml`, `.env.production.example`, `api/backend/Dockerfile.prod`.
 
 ## 1. What is backed up
 
-**MongoDB only**: the database named by `MONGO_URI` (or `MONGO_DB` when set). Nothing else is backed up; see section 10.
+Three stores, in the same run and the same folder. Nothing else is backed up; see section 10.
 
-`performBackup` runs `mongodump --uri=... --out=<dir>`. When the `mongodump` binary is missing, it falls back to a per-collection JSON export (`writeJsonBackup`, one `<collection>.json` per collection). `Dockerfile.prod` installs `mongodb-tools`, so a production image takes the `mongodump` path, and a restore uses `mongorestore`.
+- **MongoDB**: the database named by `MONGO_URI` (or `MONGO_DB` when set). `performBackup` runs `mongodump --uri=... --out=<dir>`. When the `mongodump` binary is missing, it falls back to a per-collection JSON export (`writeJsonBackup`, one `<collection>.json` per collection). `Dockerfile.prod` installs `mongodb-tools`, so a production image takes the `mongodump` path, and a restore uses `mongorestore`.
+- **Neo4j**: a logical export of the database `NEO4J_DATABASE` (default `neo4j`), through its own driver connection: every node (element id, labels, properties) and every relationship (element id, type, start and end node ids, properties), read in one read transaction, and the `createStatement` of every constraint and of every index that no constraint owns (lookup indexes excluded). Every property value is written with its type (integer as a string, float, date, datetime, localdatetime, localtime, time, duration, point; strings, booleans, null and lists as themselves), so integers past 2^53 and floats like `1.0` keep their exact value. A property of any other type fails the run rather than being written lossily.
+- **InfluxDB**: every point in `INFLUXDB_BUCKET` (org `INFLUXDB_ORG`) from 1678-01-01 to 2262-01-01, so future-stamped points are included: measurement, field, time, tags, the value as the raw string InfluxDB returned, and its type (`double`, `long`, `unsignedLong`, `boolean` or `string`).
+
+The Neo4j and InfluxDB exports run after the MongoDB dump, in both the `mongodump` and the JSON-fallback paths. A store none of whose variables is set (Neo4j: `NEO4J_URI`, `NEO4J_USERNAME`, `NEO4J_PASSWORD`; InfluxDB: `INFLUXDB_URL`, `INFLUXDB_TOKEN`, `INFLUXDB_ORG`, `INFLUXDB_BUCKET`) is skipped, recorded as `{ "status": "skipped", "reason": "not_configured" }`. A store with only some of them set fails the run (section 6).
 
 ## 2. Where it lands
 
 - Base directory: `BACKUP_DIR`. `.env.production.example` sets `/data/backups`, which is the `backups_data` named volume that `compose.prod.yml` mounts into both `backend` and `worker`. Without `BACKUP_DIR` the default is `api/backend/backups`, which is not writable in the read-only production container.
 - One folder per run, named `YYYY-MM-DD`. When that folder already exists (a second run on the same day), the name gets a `_H-M-S` time suffix.
-- Each folder holds a `manifest.json` with `type` (`mongodump` or `json-fallback`), `dbName`, `createdAt`, and `checksum`: a sha256 over every file in the folder except `manifest.json` itself. When the run was encrypted, a `mongodump` manifest also holds `encrypted: true` and `encryptedFiles`, one entry per file with its algorithm, key id, IV and tag.
+- Each folder holds a `manifest.json` with `type` (`mongodump` or `json-fallback`), `dbName`, `createdAt`, and `checksum`: a sha256 over every file in the folder except `manifest.json` itself. When the run was encrypted, a `mongodump` manifest also holds `encrypted: true` and `encryptedFiles`, one entry per dump file with its algorithm, key id, IV and tag.
+- The Neo4j export is in the folder's `neo4j/` subfolder (`nodes.ndjson`, `relationships.ndjson`, one JSON object per line, and `schema.json`), the InfluxDB export in `influxdb/` (`points.ndjson`). The manifest's `stores` field holds one entry per store: `neo4j` (`status`, `database`, `nodes`, `relationships`, `files`) and `influxdb` (`status`, `bucket`, `org`, `points`, `files`), or the skipped result of section 1. The run's response carries the same `stores`. The checksum covers these files too.
 
 ## 3. Encryption
 
 - The BackupPolicy's `encryptionEnabled` defaults to `true`.
 - With encryption on, each dump file is encrypted in place (AES-256-GCM, the same file crypto the uploads use) after `mongodump` finishes and **before** the checksum, so the manifest checksum is over the ciphertext.
+- The Neo4j and InfluxDB files are encrypted the same way, each once its export is complete and before the checksum. Their envelopes are in `stores.<store>.files` (`file`, `encrypted: true`, algorithm, key id, IV, tag), not in `encryptedFiles`. With encryption off, each entry is `{ "file": ..., "encrypted": false }`.
 - With encryption on and no `ENCRYPTION_KEY` configured, the backup aborts before `mongodump` runs. It never writes plaintext in that case.
 - A run whose policy cannot be read fails and writes no backup: when the `backup_policy` read throws, it records `status: error` in `backupHistory`; with no database handle it is logged as an error and no history entry is written. Only a policy read with `encryptionEnabled: false` writes plaintext; a policy without a boolean `encryptionEnabled` encrypts.
 - Restoring an encrypted backup needs the key whose id the manifest's `encryptedFiles` entry records: the current pair `ENCRYPTION_KEY` / `ENCRYPTION_KEY_ID`, or, after a rotation, the previous pair `ENCRYPTION_KEY_PREVIOUS` / `ENCRYPTION_KEY_PREVIOUS_ID` (see the rotation steps in `.env.production.example`). Emptying the previous slot makes every backup taken under the old key unreadable.
@@ -43,6 +49,7 @@ Sources: `api/backend/src/services/backup.service.js`, `backup-policy.service.js
 - Each run writes one `backupHistory` row: `startedAt`, `completedAt`, `status` (`success`, `skipped` or `error`), `mode`, `path`, `checksum`, `error`.
 - `GET /api/backup/list` lists the backup folders, newest first, each with its size, dates and the `status` and `checksum` of its `backupHistory` row.
 - After a manual run, confirm the response has `success: true` and a `checksum`, and that `GET /api/backup/list` shows the new folder with status `success`.
+- A failed Neo4j or InfluxDB export (the store unreachable, partly configured, or holding a value the export cannot type) fails the whole run: the response has `success: false` and an `error` naming the store (`Backup de Neo4j falhou: ...` or `Backup de InfluxDB falhou: ...`), the `backupHistory` row has status `error`, and the folder gets no `manifest.json`, so a restore test of it fails. Retention deletes nothing after such a run (section 5).
 
 ## 7. Policy
 
@@ -94,7 +101,8 @@ RNF010: "A plataforma deve adotar estratégia de backup 3-2-1, com cópias cript
 | Criterion | What the code does today | Gap |
 |---|---|---|
 | RNF010 C1, 3-2-1 ("pelo menos três cópias, em duas tecnologias ou mídias, com uma cópia fora do ambiente principal") | One copy, in the `backups_data` volume on the same Docker host as the data. | Not implemented: no second copy, no second medium, no off-site copy. |
-| Neo4j, InfluxDB, Redis | Not backed up. Their data lives in the `neo4j_data`, `influxdb_data` and `redis_data` volumes. | Not implemented: no backup of these stores. |
+| Redis | Not backed up. Its data lives in the `redis_data` volume. | Not implemented: no backup of Redis. |
+| Neo4j and InfluxDB restore | Each run exports both (section 1); the restore test verifies the folder checksum over their files only, and restores MongoDB alone. The Neo4j node and relationship queries run in one read transaction, which is not a point-in-time snapshot across the two. | Not implemented: no restore and no restore test of the Neo4j and InfluxDB exports; the Neo4j export is not a point-in-time snapshot. |
 | File binaries | Uploads and stored files live in `uploads_data` and `storage_data` (and in an object store when `OBJECT_STORE_DRIVER` configures one). Not backed up. | Not implemented: no backup of file binaries. |
 | TSA and witness keys | `tsa_certs`, `tsa_state`, `tsa_secrets` and `witness_secrets` are not backed up; `compose.prod.yml` records that losing them invalidates previously issued timestamps and signatures. | Not implemented: no backup of these volumes. |
 | Encryption key | The key is not in the backup and the code escrows it nowhere (section 3). | Not implemented: no key escrow. |

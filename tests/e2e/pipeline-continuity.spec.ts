@@ -19,8 +19,10 @@ import {
   waitForTerminologyRelation,
   waitForSampleGovernedBy,
   countSampleNodes,
+  countGraph,
   closeNeo4jDriver,
 } from './helpers/queryNeo4j';
+import { countAllPoints } from './helpers/queryInflux';
 import {
   countEssentialReferenceDocs,
   essentialReferenceImportRuns,
@@ -1354,6 +1356,10 @@ test.describe('Ingestion gateway — workflows, omics data (RF029 slice 6/6) —
 // (`--build`) for this block to pass, and a `json-fallback` mode here is a
 // real signal that it wasn't.
 test.describe('Backup and restore (RF013) — real backend', () => {
+  test.afterAll(async () => {
+    await closeNeo4jDriver();
+  });
+
   async function listDatabaseNames(): Promise<string[]> {
     const client = new MongoClient(process.env.E2E_MONGO_URI || 'mongodb://localhost:27017?directConnection=true');
     try {
@@ -1478,6 +1484,51 @@ test.describe('Backup and restore (RF013) — real backend', () => {
         headers: { Authorization: `Bearer ${admin.token}` },
       });
     }
+  });
+
+  // #1325 (RNF010 C1): the same run exports Neo4j and InfluxDB beside the
+  // MongoDB dump, encrypted, and the folder's checksum covers their files,
+  // so a restore test of it still verifies. Other writers may run during the
+  // backup, so the counts are bounds, never equalities.
+  test('a backup also exports Neo4j and InfluxDB, encrypted and covered by the checksum a restore test verifies (#1325)', async ({
+    request,
+  }) => {
+    const admin = await realLogin(request);
+
+    const graphBefore = await countGraph();
+    const pointsBefore = await countAllPoints();
+    const run = await performBackup(request, admin.token);
+    const graphAfter = await countGraph();
+    const pointsAfter = await countAllPoints();
+
+    const { neo4j, influxdb } = run.stores;
+    expect(neo4j.status).toBe('exported');
+    expect(neo4j.nodes).toBeGreaterThanOrEqual(graphBefore.nodes);
+    expect(neo4j.nodes).toBeLessThanOrEqual(graphAfter.nodes);
+    expect(neo4j.relationships).toBeGreaterThanOrEqual(graphBefore.relationships);
+    expect(neo4j.relationships).toBeLessThanOrEqual(graphAfter.relationships);
+    expect(influxdb.status).toBe('exported');
+    expect(influxdb.points).toBeGreaterThanOrEqual(pointsBefore);
+    expect(influxdb.points).toBeLessThanOrEqual(pointsAfter);
+
+    const files = [...neo4j.files, ...influxdb.files];
+    expect(files.map((entry: { file: string }) => entry.file)).toEqual([
+      'neo4j/nodes.ndjson',
+      'neo4j/relationships.ndjson',
+      'neo4j/schema.json',
+      'influxdb/points.ndjson',
+    ]);
+    for (const entry of files) {
+      expect(entry.encrypted, entry.file).toBe(true);
+    }
+
+    const restoreTest = await request.post(`${apiBaseURL}/api/backup/restore-test/${run.fileName}`, {
+      headers: { Authorization: `Bearer ${admin.token}` },
+    });
+    expect(restoreTest.status(), await restoreTest.text()).toBe(200);
+    const result = (await restoreTest.json()).data;
+    expect(result.success, result.error).toBe(true);
+    expect(result.checksumVerified).toBe(true);
   });
 
   // AC#2's "autorizada": every backup operation is behind the manageBackup
