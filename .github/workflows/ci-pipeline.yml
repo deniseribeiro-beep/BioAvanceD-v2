@@ -257,7 +257,5 @@ jobs:
       - name: Audit frontend dependencies
         run: npm --prefix frontend audit --audit-level=critical
 
-      # #1324: api/backend's lock carries two critical advisories (proxy-addr, tar), so this step reports without blocking until they are fixed; then drop continue-on-error.
       - name: Audit backend dependencies
         run: npm --prefix api/backend audit --audit-level=critical
-        continue-on-error: true
