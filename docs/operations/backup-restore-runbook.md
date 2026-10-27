@@ -33,10 +33,9 @@ The Neo4j and InfluxDB exports run after the MongoDB dump, in both the `mongodum
 
 ## 4. Schedule
 
-- At boot the backend schedules the backup from the env var `BACKUP_CRON` (default `0 3 * * *`), in the timezone `TZ` (default `America/Sao_Paulo`). The scheduler runs wherever the backend runs; there is no `NODE_ENV` gate.
-- The stored BackupPolicy's `cronExpression` takes over **only after** a `PUT /api/backup-policy` (`reloadBackupSchedule`). A restart goes back to `BACKUP_CRON` until the next PUT.
-- The comment in `.env.production.example` saying the policy takes over "once a BackupPolicy row exists" does not match the code; the code is what runs. After a backend restart, a PUT with the same values does not reschedule: the stored `cronExpression` applies only after a PUT that changes it. The working step after a restart is to set `BACKUP_CRON` to the policy's expression (or PUT a different expression and then the intended one).
-- This is a gap against RF013 AC6, not intended behaviour (section 10).
+- At boot the backend starts the backup cron on `BACKUP_CRON` (default `0 3 * * *`), in the timezone `TZ` (default `America/Sao_Paulo`), then applies the stored BackupPolicy's `cronExpression`. A `PUT /api/backup-policy` that changes it re-schedules with no restart. The scheduler runs wherever the backend runs; there is no `NODE_ENV` gate.
+- If the policy lookup fails, or the stored expression is one node-cron refuses, the running schedule is kept and an error is logged; `BACKUP_CRON` is used only when no schedule is running.
+- `BACKUP_CRON` is also the default `cronExpression` of a new policy row, and the PUT rejects an expression that is not a string or that node-cron refuses.
 
 ## 5. Retention
 
@@ -57,7 +56,7 @@ The Neo4j and InfluxDB exports run after the MongoDB dump, in both the `mongodum
 
 | Field | Default | Validation |
 |---|---|---|
-| `cronExpression` | `BACKUP_CRON`, else `0 3 * * *` | five whitespace-separated fields |
+| `cronExpression` | `BACKUP_CRON`, else `0 3 * * *` | five whitespace-separated fields that node-cron accepts |
 | `retentionDays` | `BACKUP_RETENTION_DAYS`, else 30 | number >= 30 |
 | `encryptionEnabled` | `true` | boolean |
 | `rpoHours` | 24 | 1 to 24 |
@@ -109,5 +108,4 @@ RNF010: "A plataforma deve adotar estratégia de backup 3-2-1, com cópias cript
 | RNF010 C2, RPO 24 h ("até 24 horas") | `rpoHours` is stored and validated (1-24); nothing measures it. | Not implemented: RPO is not measured or alerted on. |
 | RNF010 C3, RTO 12 h ("até 12 horas") | `rtoHours` is stored and validated (1-12); nothing measures it. | Not implemented: RTO is not measured; no timed full recovery. |
 | RNF010 C5, periodic restore test validated by checksum | Weekly restore test of MongoDB only (section 9); a checksum mismatch fails the run and is logged as an error. | Not implemented: no restore test of the other stores, no full-system restore has been run, and no alert is raised beyond the error log. |
-| Schedule from policy (RF013 AC6) | The boot schedule comes from `BACKUP_CRON`; the policy's `cronExpression` applies only after a PUT (section 4). | Not implemented: the stored policy is not applied at boot. |
 | Restore integrity | A restore does not verify the manifest checksum and takes no safety backup (section 8). | Not implemented: no checksum check or safety backup before a live restore. |
