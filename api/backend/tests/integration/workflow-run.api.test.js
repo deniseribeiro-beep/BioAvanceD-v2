@@ -131,6 +131,21 @@ describe('POST /api/workflow-runs', () => {
     expect(res.body.data.runStatus).toBe('succeeded');
   });
 
+  // #1405: the uniq_workflowRunId index refuses a second run with one id.
+  it('answers 409 when the store refuses a duplicate workflowRunId (#1405)', async () => {
+    const duplicate = Object.assign(new Error('E11000 duplicate key error collection: workflowRuns index: uniq_workflowRunId'), { code: 11000 });
+    const coll = createCollectionMock({ insertOne: vi.fn().mockRejectedValue(duplicate) });
+    app.locals.db = createDbMock({ workflowRuns: coll, ...rbacCollectionsAdmin });
+
+    const res = await request(app)
+      .post('/api/workflow-runs')
+      .set('Authorization', `Bearer ${makeToken('qa-1', 4)}`)
+      .send({ workflowRunId: 'run-dup-1', ...VALID_WORKFLOW_RUN_PAYLOAD });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe('Registro duplicado');
+  });
+
   it('returns 422 for a failureReason on a succeeded run (RF027 AC6)', async () => {
     const coll = createCollectionMock({ insertOne: vi.fn().mockResolvedValue({ insertedId: '507f1f77bcf86cd799439011' }) });
     app.locals.db = createDbMock({ workflowRuns: coll, ...rbacCollectionsAdmin });

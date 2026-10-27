@@ -72,6 +72,14 @@ describe('Foundation index builds', () => {
     });
   });
 
+  // #1405 (ELM-0326): one WorkflowRun per workflowRunId.
+  it('builds the WorkflowRun unique workflowRunId index by name (#1405)', async () => {
+    const builds = await buildFoundationIndexes(createFakeDb());
+    expect(builds.find((build) => build.name === 'uniq_workflowRunId')).toMatchObject({
+      collection: 'workflowRuns', keys: { workflowRunId: 1 }, unique: true, ok: true,
+    });
+  });
+
   it('reports a build whose index is gone on read-back', async () => {
     const db = createFakeDb();
     const builds = [{ collection: 'facilities', keys: { name: 1 }, name: 'facilities_name_idx_v1', unique: false, ok: true }];

@@ -39,6 +39,8 @@ const {
 } = require('../utils/storageIndexes');
 const { ensureBiomarkerAssociationIndexes } = require('../utils/biomarkerAssociationIndexes');
 const { COLLECTION: BIOMARKER_ASSOCIATIONS } = require('../services/biomarkerAssociation.service');
+const { ensureWorkflowRunIndexes } = require('../utils/workflowRunIndexes');
+const { WORKFLOW_RUN_COLLECTION } = require('../services/workflowRun.service');
 
 // Collection names as each helper's own callers resolve them.
 const INDEX_TARGETS = [
@@ -63,6 +65,7 @@ const INDEX_TARGETS = [
   { collection: CANONICAL_COLLECTIONS.scanEvents, ensure: ensureScanEventIndexes },
   { collection: CANONICAL_COLLECTIONS.telemetryExposureSummaries, ensure: ensureTelemetryExposureSummaryIndexes },
   { collection: BIOMARKER_ASSOCIATIONS, ensure: ensureBiomarkerAssociationIndexes },
+  { collection: WORKFLOW_RUN_COLLECTION, ensure: ensureWorkflowRunIndexes },
 ];
 
 function recordingCollection(collection, builds, collectionName) {
