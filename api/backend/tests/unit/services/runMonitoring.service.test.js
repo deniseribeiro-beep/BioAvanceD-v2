@@ -92,8 +92,15 @@ describe('runMonitoring.listRecentRuns', () => {
     const { phases } = await runMonitoring.listRecentRuns(db, { limit: 20 });
 
     expect(phases.map((p) => [p.phase, p.failedTotal])).toEqual([[1, 0], [2, 3], [3, 0]]);
+    const failedFilterOf = {
+      foundationDataRun: { runStatus: 'failed' },
+      configurationValidationRun: { status: 'failed' },
+      referenceImportRun: { runStatus: 'failed' },
+      referenceImportIssue: { severity: { $in: ['error', 'fatal'] } },
+      importJob: { status: 'failed' },
+    };
     for (const k of runMonitoring.KINDS) {
-      expect(fakes[k.collection].countDocuments).toHaveBeenCalledWith({ [k.statusField]: 'failed' });
+      expect(fakes[k.collection].countDocuments).toHaveBeenCalledWith(failedFilterOf[k.kind]);
     }
   });
 
@@ -116,13 +123,73 @@ describe('runMonitoring.listRecentRuns', () => {
     });
   });
 
+  it('lists ReferenceImportIssue records under phase 2, newest first', async () => {
+    const { db } = fakeDb({
+      referenceImportIssue: {
+        docs: [
+          {
+            referenceImportIssueId: 'i-2', referenceImportRunId: 'r-1', entityType: 'cid10', errorCode: 'DUPLICATE_CODE', severity: 'error',
+            resolutionStatus: 'resolved', detectedAt: '2026-05-02T10:00:00Z', resolvedAt: '2026-05-03T10:00:00Z',
+          },
+          { referenceImportIssueId: 'i-1', severity: 'error', resolutionStatus: 'open' },
+        ],
+      },
+    });
+
+    const { runs } = await runMonitoring.listRecentRuns(db, { limit: 20 });
+
+    expect(runs.referenceImportIssue.map((r) => r.id)).toEqual(['i-2', 'i-1']);
+    for (const row of runs.referenceImportIssue) expect(row).toMatchObject({ kind: 'referenceImportIssue', phase: 2 });
+    expect(runs.referenceImportIssue[0]).toEqual({
+      kind: 'referenceImportIssue', phase: 2, id: 'i-2', status: 'resolved',
+      startedAt: '2026-05-02T10:00:00Z', completedAt: '2026-05-03T10:00:00Z', failed: true, failedStage: null,
+      detail: { referenceImportRunId: 'r-1', entityType: 'cid10', errorCode: 'DUPLICATE_CODE', severity: 'error' },
+    });
+  });
+
+  it('counts an error or fatal ReferenceImportIssue as a phase 2 failure, never a warning', async () => {
+    const { db } = fakeDb({
+      referenceImportRun: { failed: 1 },
+      referenceImportIssue: {
+        docs: [
+          { referenceImportIssueId: 'i-e', severity: 'error' },
+          { referenceImportIssueId: 'i-w', severity: 'warning' },
+          { referenceImportIssueId: 'i-f', severity: 'fatal' },
+        ],
+        failed: 2,
+      },
+    });
+
+    const { runs, phases } = await runMonitoring.listRecentRuns(db, { limit: 20 });
+
+    expect(runs.referenceImportIssue.map((r) => r.failed)).toEqual([true, false, true]);
+    expect(phases[1]).toMatchObject({ phase: 2, failedTotal: 3, failedListed: 2, failedTotalByKind: { referenceImportRun: 1, referenceImportIssue: 2 } });
+    expect(phases[0].failedTotalByKind).toEqual({ foundationDataRun: 0, configurationValidationRun: 0 });
+  });
+
+  it('copies no ReferenceImportIssue field outside the row', async () => {
+    const { db } = fakeDb({
+      referenceImportIssue: {
+        docs: [{
+          referenceImportIssueId: 'i-1', severity: 'error',
+          rawValue: 'secret', errorMessage: 'secret', resolutionNotes: 'secret', resolvedBy: 'secret',
+          quarantinePayloadUri: 'secret', sourceRecordId: 'secret',
+        }],
+      },
+    });
+
+    const result = await runMonitoring.listRecentRuns(db, { limit: 20 });
+
+    expect(JSON.stringify(result)).not.toContain('secret');
+  });
+
   it('asks each collection for at most limit rows, newest first', async () => {
     const { db, fakes } = fakeDb();
 
     const result = await runMonitoring.listRecentRuns(db, { limit: 7 });
 
     expect(result.limit).toBe(7);
-    const sortFieldOf = { foundationDataRun: 'startedAt', configurationValidationRun: 'executedAt', referenceImportRun: 'startedAt', importJob: 'createdAt' };
+    const sortFieldOf = { foundationDataRun: 'startedAt', configurationValidationRun: 'executedAt', referenceImportRun: 'startedAt', referenceImportIssue: 'detectedAt', importJob: 'createdAt' };
     for (const k of runMonitoring.KINDS) {
       const fake = fakes[k.collection];
       expect(fake.find.mock.calls[0][0]).toEqual({});
@@ -137,6 +204,7 @@ describe('runMonitoring.listRecentRuns', () => {
     foundationDataRun: ['foundationDataRunId', 'runStatus', 'startedAt', 'completedAt', 'dryRunResult', 'applyResult', 'verifyResult', 'rollbackResult', 'executionMode'],
     configurationValidationRun: ['configurationValidationRunId', 'status', 'executedAt', 'structuralResult', 'semanticResult', 'dependencyResult', 'securityResult', 'invariantResults.result', 'releaseId'],
     referenceImportRun: ['referenceImportRunId', 'runStatus', 'startedAt', 'completedAt', 'datasetCode', 'importMode'],
+    referenceImportIssue: ['referenceImportIssueId', 'resolutionStatus', 'detectedAt', 'resolvedAt', 'referenceImportRunId', 'entityType', 'errorCode', 'severity'],
     importJob: ['jobID', 'status', 'startedAt', 'completedAt', 'dataType', 'errorCount'],
   };
 
@@ -148,7 +216,7 @@ describe('runMonitoring.listRecentRuns', () => {
     const k = runMonitoring.KINDS.find((entry) => entry.kind === kind);
     const options = fakes[k.collection].find.mock.calls[0][1];
     expect(options && options.projection).toEqual({ _id: 0, ...Object.fromEntries(rowFieldsOf[kind].map((field) => [field, 1])) });
-    for (const payload of ['fhirResources', 'errors', 'userID', 'fileName', 'findings', 'invariantResults', 'reportUri']) {
+    for (const payload of ['fhirResources', 'errors', 'userID', 'fileName', 'findings', 'invariantResults', 'reportUri', 'rawValue', 'errorMessage', 'resolutionNotes', 'resolvedBy', 'quarantinePayloadUri']) {
       expect(options.projection).not.toHaveProperty([payload]);
     }
   });

@@ -58,6 +58,25 @@ describe('GET /api/monitoring/runs', () => {
     expect(res.body.data.phases.map((p) => p.phase)).toEqual([1, 2, 3]);
   });
 
+  it('lists a ReferenceImportIssue under phase 2 for an Administrador', async () => {
+    const referenceImportIssues = createCollectionMock();
+    referenceImportIssues.find.mockImplementation(() => {
+      const cursor = {};
+      cursor.sort = vi.fn(() => cursor);
+      cursor.limit = vi.fn(() => cursor);
+      cursor.toArray = vi.fn().mockResolvedValue([{ referenceImportIssueId: 'i-1', severity: 'fatal', errorCode: 'BAD_CODE', rawValue: 'raw-marker-value' }]);
+      return cursor;
+    });
+    referenceImportIssues.countDocuments.mockResolvedValue(1);
+    app.locals.db = createDbMock({ referenceImportIssues, ...rbacCollectionsAdmin });
+
+    const res = await asAdmin(request(app).get(RUNS));
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.runs.referenceImportIssue[0]).toMatchObject({ id: 'i-1', phase: 2, failed: true });
+    expect(res.text).not.toContain('raw-marker-value');
+  });
+
   it('refuses a Coordenador with 403', async () => {
     app.locals.db = createDbMock({ ...rbacCollectionsCoordinator });
 

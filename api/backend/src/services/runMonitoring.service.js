@@ -2,19 +2,31 @@
 // pipeline, with failures told apart by phase. The phases are the release's
 // (requisitos.md section 8): Fase 1 Foundation is FoundationDataRun and
 // ConfigurationValidationRun, Fase 2 Referências is ReferenceImportRun, and
-// Fase 3 Operacional is the operational async import job. A phase's
-// failedTotal counts the whole collection; failedListed counts only the rows
-// returned. No index is added: every read is bounded by limit.
+// Fase 3 Operacional is the operational async import job. Fase 2 also lists
+// ReferenceImportIssue records (the RF028 AC5 rejections); an issue fails on
+// severity error or fatal, never on warning. A phase's failedTotal counts the
+// whole collection (failedTotalByKind splits it per kind); failedListed counts
+// only the rows returned. No index is added: every read is bounded by limit.
 const { CANONICAL_COLLECTIONS } = require('../config/collections');
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
 
+const ISSUE_FAILED_SEVERITIES = ['error', 'fatal'];
+
+// A run fails when its status field reads 'failed'. Each kind carries both the
+// countDocuments filter and the row predicate, so they cannot disagree.
+const failedOnStatus = (statusField) => ({
+  failedFilter: { [statusField]: 'failed' },
+  isFailed: (doc) => doc[statusField] === 'failed',
+});
+
 const KINDS = Object.freeze([
-  { kind: 'foundationDataRun', phase: 1, collection: CANONICAL_COLLECTIONS.foundationDataRuns, sortField: 'startedAt', statusField: 'runStatus' },
-  { kind: 'configurationValidationRun', phase: 1, collection: CANONICAL_COLLECTIONS.configurationValidationRuns, sortField: 'executedAt', statusField: 'status' },
-  { kind: 'referenceImportRun', phase: 2, collection: CANONICAL_COLLECTIONS.referenceImportRuns, sortField: 'startedAt', statusField: 'runStatus' },
-  { kind: 'importJob', phase: 3, collection: 'importJobs', sortField: 'createdAt', statusField: 'status' },
+  { kind: 'foundationDataRun', phase: 1, collection: CANONICAL_COLLECTIONS.foundationDataRuns, sortField: 'startedAt', statusField: 'runStatus', ...failedOnStatus('runStatus') },
+  { kind: 'configurationValidationRun', phase: 1, collection: CANONICAL_COLLECTIONS.configurationValidationRuns, sortField: 'executedAt', statusField: 'status', ...failedOnStatus('status') },
+  { kind: 'referenceImportRun', phase: 2, collection: CANONICAL_COLLECTIONS.referenceImportRuns, sortField: 'startedAt', statusField: 'runStatus', ...failedOnStatus('runStatus') },
+  { kind: 'referenceImportIssue', phase: 2, collection: CANONICAL_COLLECTIONS.referenceImportIssues, sortField: 'detectedAt', statusField: 'resolutionStatus', failedFilter: { severity: { $in: ISSUE_FAILED_SEVERITIES } }, isFailed: (doc) => ISSUE_FAILED_SEVERITIES.includes(doc.severity) },
+  { kind: 'importJob', phase: 3, collection: 'importJobs', sortField: 'createdAt', statusField: 'status', ...failedOnStatus('status') },
 ]);
 
 const PHASES = Object.freeze([
@@ -39,6 +51,7 @@ const ROW_FIELDS = {
   foundationDataRun: ['foundationDataRunId', 'runStatus', 'startedAt', 'completedAt', ...FOUNDATION_STAGES.map(([, field]) => field), 'executionMode'],
   configurationValidationRun: ['configurationValidationRunId', 'status', 'executedAt', ...CONFIGURATION_GATES.map((name) => `${name}Result`), 'invariantResults.result', 'releaseId'],
   referenceImportRun: ['referenceImportRunId', 'runStatus', 'startedAt', 'completedAt', 'datasetCode', 'importMode'],
+  referenceImportIssue: ['referenceImportIssueId', 'resolutionStatus', 'detectedAt', 'resolvedAt', 'referenceImportRunId', 'entityType', 'errorCode', 'severity'],
   importJob: ['jobID', 'status', 'startedAt', 'completedAt', 'dataType', 'errorCount'],
 };
 
@@ -81,6 +94,19 @@ const ROW_BUILDERS = {
     failedStage: null,
     detail: { datasetCode: orNull(doc.datasetCode), importMode: orNull(doc.importMode) },
   }),
+  referenceImportIssue: (doc) => ({
+    id: orNull(doc.referenceImportIssueId),
+    status: orNull(doc.resolutionStatus),
+    startedAt: orNull(doc.detectedAt),
+    completedAt: orNull(doc.resolvedAt),
+    failedStage: null,
+    detail: {
+      referenceImportRunId: orNull(doc.referenceImportRunId),
+      entityType: orNull(doc.entityType),
+      errorCode: orNull(doc.errorCode),
+      severity: orNull(doc.severity),
+    },
+  }),
   importJob: (doc) => ({
     id: orNull(doc.jobID),
     status: orNull(doc.status),
@@ -100,7 +126,7 @@ function toRow(k, doc) {
     status: built.status,
     startedAt: built.startedAt,
     completedAt: built.completedAt,
-    failed: doc[k.statusField] === 'failed',
+    failed: k.isFailed(doc),
     failedStage: built.failedStage,
     detail: built.detail,
   };
@@ -118,7 +144,7 @@ async function listRecentRuns(db, { limit }) {
     const collection = db.collection(k.collection);
     const [docs, failedTotal] = await Promise.all([
       collection.find({}, { projection: projectionOf(k.kind) }).sort({ [k.sortField]: -1 }).limit(limit).toArray(),
-      collection.countDocuments({ [k.statusField]: 'failed' }),
+      collection.countDocuments(k.failedFilter),
     ]);
     return { k, rows: docs.map((doc) => toRow(k, doc)), failedTotal };
   }));
@@ -133,6 +159,7 @@ async function listRecentRuns(db, { limit }) {
       phase,
       name,
       failedTotal: ofPhase.reduce((sum, { failedTotal }) => sum + failedTotal, 0),
+      failedTotalByKind: Object.fromEntries(ofPhase.map(({ k, failedTotal }) => [k.kind, failedTotal])),
       listed: rows.length,
       failedListed: rows.filter((row) => row.failed).length,
     };
