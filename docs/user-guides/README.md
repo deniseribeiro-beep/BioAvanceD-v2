@@ -29,6 +29,6 @@ The `auditor` role is granted alongside a user's base role, never instead of it.
 |---|---|
 | Administrador | [administrador.md](administrador.md) |
 | Técnico | [tecnico.md](tecnico.md) |
-| Coordenador | not yet written (#1325) |
-| Usuário Externo | not yet written (#1325) |
-| Auditor | not yet written (#1325) |
+| Coordenador | [coordenador.md](coordenador.md) |
+| Usuário Externo | [usuario-externo.md](usuario-externo.md) |
+| Auditor | [auditor.md](auditor.md) |
