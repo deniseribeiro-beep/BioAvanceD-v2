@@ -10,7 +10,12 @@
     "/api/audit",
     "/api/monitoring",
     "/api/backup",
-    "/api/backup-policy"
+    "/api/backup-policy",
+    "/api/ingestion",
+    "/api/reference-releases",
+    "/api/biobanks/miabis",
+    "/api/export/fhir",
+    "/api/export/fhir/samples/{specimenId}/files/{fileID}"
   ],
   "tags": [
     {
@@ -32,6 +37,22 @@
     {
       "name": "backup-policy",
       "description": "/api/backup-policy: the backup schedule, retention and objectives."
+    },
+    {
+      "name": "ingestion",
+      "description": "/api/ingestion: the production ingestion of one record (RF029)."
+    },
+    {
+      "name": "reference-releases",
+      "description": "/api/reference-releases: promotion and rollback of reference releases (RF028)."
+    },
+    {
+      "name": "miabis",
+      "description": "/api/biobanks/miabis: the MIABIS export of Biobank and Collection (RF020)."
+    },
+    {
+      "name": "fhir-export",
+      "description": "/api/export/fhir: FHIR R4 exports of a WorkflowRun, a Study, an audit event and a sample file (RF011)."
     }
   ],
   "paths": {
@@ -2219,6 +2240,856 @@
           },
           "500": {
             "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/ingestion/records": {
+      "post": {
+        "tags": [
+          "ingestion"
+        ],
+        "summary": "Ingest one record: validate it, then persist it or quarantine it, and audit the outcome (RF029)",
+        "description": "Gates: authenticate, applied to the whole router, and requireRole(3, 4). Every outcome is audited, the refusals included.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "entityType": {
+                    "type": "string",
+                    "description": "The ingestion target. One the ingestion does not support, or one stored outside MongoDB, answers 422."
+                  },
+                  "payload": {
+                    "type": "object",
+                    "description": "The record, in the target's canonical shape."
+                  },
+                  "provenance": {
+                    "type": "object",
+                    "description": "The provenance envelope; a missing field quarantines the record.",
+                    "properties": {
+                      "sourceSystem": {
+                        "type": "string"
+                      },
+                      "createdBy": {
+                        "type": "string"
+                      },
+                      "retrievedAt": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "purpose": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "idempotencyKey": {
+                    "type": "string",
+                    "description": "A repeated key answers the first call's outcome again."
+                  },
+                  "missingDataReasons": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "fieldPath": {
+                          "type": "string"
+                        },
+                        "reasonCode": {
+                          "type": "string",
+                          "enum": [
+                            "unknown",
+                            "not_collected",
+                            "not_applicable",
+                            "withheld",
+                            "error"
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "An idempotent replay of an accepted record: the first call's result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "idempotent_replay"
+                          ]
+                        },
+                        "outcome": {
+                          "type": "string"
+                        },
+                        "entityType": {
+                          "type": "string"
+                        },
+                        "resultRef": {
+                          "type": "string"
+                        },
+                        "canonicalModelReleaseId": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "configurationReleaseId": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Accepted and persisted, with its outbox event.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "accepted"
+                          ]
+                        },
+                        "entityType": {
+                          "type": "string"
+                        },
+                        "entityId": {
+                          "type": "string"
+                        },
+                        "outboxEventId": {
+                          "type": "string"
+                        },
+                        "missingDataReasons": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "missingDataReasonId": {
+                                "type": "string"
+                              },
+                              "fieldPath": {
+                                "type": "string"
+                              },
+                              "reasonCode": {
+                                "type": "string"
+                              }
+                            }
+                          }
+                        },
+                        "dataQualityAssessmentId": {
+                          "type": "string"
+                        },
+                        "canonicalModelReleaseId": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "configurationReleaseId": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "requireRole(3, 4) refused, or error INGESTION_OUT_OF_SCOPE: a field of the record is outside the caller's organization scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "error INGESTION_QUARANTINED: the record is quarantined and details lists each violation, also on the replay of a quarantined key; or error INGESTION_TARGET_UNSUPPORTED, INGESTION_STORE_UNSUPPORTED or BARCODE_PERSONAL_DATA.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ValidationError"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        },
+                        "ingestionQuarantineRecordId": {
+                          "type": "string"
+                        },
+                        "dataQualityAssessmentId": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "error INGESTION_FAILED: an unexpected failure, audited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The database is not available, or error CANONICAL_RELEASE_NOT_ACTIVE: the canonical model release in force is absent or not active.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/reference-releases/{id}/promote": {
+      "post": {
+        "tags": [
+          "reference-releases"
+        ],
+        "summary": "Promote a reference release (RF028 AC8)",
+        "description": "Gates: authenticate, requireRole(4). A refused promotion names its reason in error.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The reference release id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The promotion result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "requireRole(4) refused, or error approver_required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "error release_not_found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Refused; error names the reason: release_not_approved, promotion_in_progress, approved_run_not_found, coverage_manifest_missing, coverage_manifest_invalid, coverage_incomplete, quality_assessment_missing or quality_assessment_failed, or any other reason the service returns.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/reference-releases/datasets/{datasetCode}/rollback": {
+      "post": {
+        "tags": [
+          "reference-releases"
+        ],
+        "summary": "Roll a dataset back to its previous reference release (RF028 AC9)",
+        "description": "Gates: authenticate, requireRole(4). A refused rollback names its reason in error.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "datasetCode",
+            "in": "path",
+            "required": true,
+            "description": "The dataset code.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The rollback result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "requireRole(4) refused, or error approver_required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "error no_active_release.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Refused; error names the reason: no_previous_release or previous_release_not_found, or any other reason the service returns.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/biobanks/miabis/export": {
+      "get": {
+        "tags": [
+          "miabis"
+        ],
+        "summary": "The MIABIS export of every stored Biobank and Collection (RF020 AC5-AC7)",
+        "description": "Gates: authenticate, requireRole(3, 4).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The MIABIS export.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "description": "standard, standardVersion, mappings, mappingReleaseId, the exported records and the round-trip loss report."
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/export/fhir/workflow-runs/{workflowRunId}/lineage": {
+      "get": {
+        "tags": [
+          "fhir-export"
+        ],
+        "summary": "A WorkflowRun and every run its lineage walk reaches, as one FHIR Provenance bundle (RF011 AC4)",
+        "description": "Gates: authenticate, requireRole(3, 4).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "workflowRunId",
+            "in": "path",
+            "required": true,
+            "description": "The root run: its workflowRunId or its ObjectId.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The lineage as a FHIR R4 export.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "description": "The Provenance export, as GET /api/export/fhir/workflow-runs/{workflowRunId} gives it, plus lineage.",
+                          "properties": {
+                            "lineage": {
+                              "type": "object",
+                              "properties": {
+                                "workflowRunId": {
+                                  "type": "string"
+                                },
+                                "truncated": {
+                                  "type": "boolean"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/export/fhir/workflow-runs/{workflowRunId}": {
+      "get": {
+        "tags": [
+          "fhir-export"
+        ],
+        "summary": "A WorkflowRun as a FHIR Provenance (RF011 AC4)",
+        "description": "Gates: authenticate, requireRole(3, 4).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "workflowRunId",
+            "in": "path",
+            "required": true,
+            "description": "Its workflowRunId or its ObjectId.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The Provenance as a FHIR R4 export.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "description": "The Provenance: standard, fhirVersion, mapping, mappingReleaseId, conformanceClaimed, generatedAt, roundTripLimitations and the FHIR R4 bundle."
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/export/fhir/studies/{studyId}": {
+      "get": {
+        "tags": [
+          "fhir-export"
+        ],
+        "summary": "A Study as a FHIR ResearchStudy (RF011 AC4)",
+        "description": "Gates: authenticate, requireRole(3, 4).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "studyId",
+            "in": "path",
+            "required": true,
+            "description": "Its studyId or its ObjectId.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The ResearchStudy as a FHIR R4 export.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "description": "The ResearchStudy: standard, fhirVersion, mapping, mappingReleaseId, conformanceClaimed, generatedAt, roundTripLimitations and the FHIR R4 bundle."
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/export/fhir/audit-events/{eventId}": {
+      "get": {
+        "tags": [
+          "fhir-export"
+        ],
+        "summary": "An audit event, live or archived, as a FHIR AuditEvent (RF011 AC4)",
+        "description": "Gates: authenticate, requirePermission('viewReports').",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eventId",
+            "in": "path",
+            "required": true,
+            "description": "The audit event eventId.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The AuditEvent as a FHIR R4 export.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "description": "The AuditEvent: standard, fhirVersion, mapping, mappingReleaseId, conformanceClaimed, generatedAt, roundTripLimitations and the FHIR R4 bundle."
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/export/fhir/samples/{specimenId}/files/{fileID}": {
+      "get": {
+        "tags": [
+          "fhir-export"
+        ],
+        "summary": "A sample file as a FHIR DocumentReference (RF011 AC4)",
+        "description": "Gates, in order: authenticate, requireOrganizationScope, requireDataExportAllowed, enforceCommercialConsent({ resolveSampleId: (req) => req.params.specimenId }), the last on the uso_comercial scope. Then the file, the sample, the link between them and the sample's organization are checked.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "specimenId",
+            "in": "path",
+            "required": true,
+            "description": "The sample, by any of its ids.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "fileID",
+            "in": "path",
+            "required": true,
+            "description": "The sample file's ObjectId.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The DocumentReference as a FHIR R4 export.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "description": "The DocumentReference: standard, fhirVersion, mapping, mappingReleaseId, conformanceClaimed, generatedAt, roundTripLimitations and the FHIR R4 bundle."
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The file is not linked to this sample.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "The caller has no organization assigned (requireOrganizationScope), data export is disabled in the LGPD configuration (requireDataExportAllowed), the sample's consent does not allow commercial use (enforceCommercialConsent), or the sample belongs to another organization.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The file (an invalid, unknown or deleted fileID) or the sample is not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error, or requireOrganizationScope found no database.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"

@@ -16,7 +16,9 @@
 // app.js's `app.use("<prefix>", require("<module>"))` calls; a limiter
 // mounted on a prefix (`app.use("/api/auth", authLimiter)`) registers no
 // route and is not a mount. A prefix mounted more than once takes the union
-// of its files' registrations.
+// of its files' registrations. A parameterised prefix is compared in its
+// `{x}` form, as x-covered-mounts and the spec paths write it, and a mount
+// nested under a covered mount passes only when it is itself covered.
 //
 // The second claim holds only because the guard fails closed: a shape that
 // could add a route under a covered mount but that the extraction does not
@@ -24,6 +26,11 @@
 // a non-literal or middleware-prefixed mount, a mount below a covered
 // prefix, a route registered on app itself) is refused with its file and
 // line, rather than passed as if it registered nothing.
+//
+// A known gap: a mount whose prefix is a strict ancestor of a covered entry
+// is not checked. app.js mounts /api/biobanks through createMasterDataRouter,
+// whose /:id routes also match /api/biobanks/miabis, and nothing here
+// refuses or documents them.
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -88,6 +95,7 @@ function literalOf(arg) {
 }
 
 const isUnder = (route, prefix) => route === prefix || route.startsWith(`${prefix}/`);
+const templated = (p) => p.replace(/:([A-Za-z0-9_]+)/g, '{$1}');
 
 // app.js calls the mount extraction cannot vouch for under a covered prefix.
 function appRefusals(source, label, covered) {
@@ -96,12 +104,13 @@ function appRefusals(source, label, covered) {
     const method = match[1];
     const args = callArgs(source, match.index + match[0].length - 1);
     const at = `${label}:${lineOf(source, match.index)} app.${method}(`;
-    const prefix = literalOf(args[0] || '');
-    if (prefix === null) {
+    const literal = literalOf(args[0] || '');
+    if (literal === null) {
       if (args.length > 1) refusals.push(`${at}: its prefix is not a string literal, so it may fall under a covered mount`);
       continue;
     }
-    const mount = covered.find((p) => isUnder(prefix, p));
+    const prefix = templated(literal);
+    const mount = covered.filter((p) => isUnder(prefix, p)).sort((a, b) => b.length - a.length)[0];
     if (!mount) continue;
     if (method !== 'use') {
       refusals.push(`${at}"${prefix}": a route registered on app itself under ${mount}`);
@@ -153,7 +162,7 @@ function collectMounts() {
   const mounts = new Map();
   const source = readStripped(fs, APP_JS);
   for (const match of source.matchAll(MOUNT)) {
-    const prefix = match[2];
+    const prefix = templated(match[2]);
     const file = resolveModule(match[4]);
     if (!mounts.has(prefix)) mounts.set(prefix, new Set());
     if (file) mounts.get(prefix).add(file);
@@ -162,9 +171,10 @@ function collectMounts() {
 }
 
 function joinPath(prefix, route) {
-  const templated = route.replace(/:([A-Za-z0-9_]+)/g, '{$1}');
-  if (templated === '/' || templated === '') return prefix;
-  return `${prefix.replace(/\/$/, '')}/${templated.replace(/^\//, '')}`;
+  const base = templated(prefix);
+  const tail = templated(route);
+  if (tail === '/' || tail === '') return base;
+  return `${base.replace(/\/$/, '')}/${tail.replace(/^\//, '')}`;
 }
 
 // `METHOD /prefix/path` for every literal-path registration in the files
@@ -197,15 +207,19 @@ test('RNF006: every operation the OpenAPI spec documents is registered under its
   const spec = readSpec();
   const covered = spec['x-covered-mounts'] || [];
   const mounts = collectMounts();
+  // The union over every covered mount: a path under a nested mount is also
+  // under the mount it is nested in, so the first prefix it is under may not
+  // be the one that registers it.
+  const registered = new Set(covered.flatMap((p) => [...collectOperations(p, mounts.get(p) || [])]));
   const misses = [];
   for (const operation of specOperations(spec)) {
-    const prefix = covered.find((p) => isUnder(operation.route, p));
-    if (!prefix) {
+    const prefixes = covered.filter((p) => isUnder(operation.route, p));
+    if (prefixes.length === 0) {
       misses.push(`${operation.key}: its path is under no x-covered-mounts prefix`);
       continue;
     }
-    if (!collectOperations(prefix, mounts.get(prefix) || []).has(operation.key)) {
-      misses.push(`${operation.key}: no such registration under ${prefix} in app.js`);
+    if (!registered.has(operation.key)) {
+      misses.push(`${operation.key}: no such registration under ${prefixes.join(' or ')} in app.js`);
     }
   }
   assert.deepStrictEqual(misses, [], `The spec documents operations the code does not register:\n${misses.join('\n')}`);
@@ -265,13 +279,15 @@ test('RNF006: the spec is OpenAPI 3.0 and every path template parameter is decla
 // one the extraction cannot read; each must be refused, and the clean
 // sources, written in the covered files' own shapes, must not be.
 test('RNF006: the guard refuses each route shape it cannot read', () => {
-  const covered = ['/api/auth', '/api/backup'];
+  const covered = ['/api/auth', '/api/backup', '/api/export/fhir', '/api/export/fhir/samples/{specimenId}/files/{fileID}'];
   const sub = 'require("./src/interface/routes/sub.routes")';
   const app = [
     'app.use(globalLimiter);',
     'app.use("/api/auth", authLimiter);',
     'app.use("/api/backup", require("./src/interface/routes/backup.routes"));',
     'app.use("/api/backup", require("./src/interface/routes/backup.routes"));',
+    'app.use("/api/export/fhir/samples/:specimenId/files/:fileID", require("./src/interface/routes/fhir-document-reference-export.routes"));',
+    'app.use("/api/export/fhir", require("./src/interface/routes/fhir-export.routes"));',
     'app.use(\n  cors({ origin: (origin, callback) => callback(null, true) })\n);',
     'app.use("/api/patients", require("./src/interface/routes/patient.routes"));',
     'app.get("/api/health", async (req, res) => { res.status(200).json({ ok: true }); });',
@@ -297,6 +313,8 @@ test('RNF006: the guard refuses each route shape it cannot read', () => {
     'middleware before the require': `app.use("/api/backup", authenticate, ${sub});`,
     'a variable-held router': `const extra = ${sub};\napp.use("/api/backup", extra);`,
     'a mount below a covered prefix': `app.use("/api/backup/deep", ${sub});`,
+    'a mount below a covered parameterised mount': `app.use("/api/export/fhir/samples/:specimenId/files/:fileID/more", ${sub});`,
+    'a parameterised mount below a covered prefix': `app.use("/api/backup/:id/files", ${sub});`,
     'app.get under a covered prefix': 'app.get("/api/backup/direct", handler);',
     'app.route under a covered prefix': 'app.route("/api/backup/r").get(handler);',
   };
