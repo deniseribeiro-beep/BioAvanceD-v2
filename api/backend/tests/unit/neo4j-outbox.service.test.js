@@ -6,6 +6,7 @@ const {
   MAX_RETRY_BACKOFF_MS,
 } = require('../../src/services/neo4jOutbox.service');
 const { CANONICAL_MODEL_RELEASE_ID } = require('../../src/foundation/readiness');
+const { runWithRequestId } = require('../../src/utils/requestContext');
 
 describe('Neo4jOutboxService', () => {
   beforeEach(() => {
@@ -648,5 +649,27 @@ describe('Neo4jOutboxService', () => {
       const db = makeDb({ counters: [], checkpoints: [], events: [] });
       expect(await new Neo4jOutboxService().requeueDeadLetters(db, [])).toBe(0);
     });
+  });
+});
+
+// #1323: RNF015 C1 -- an outbox event appended during a request carries its
+// id as the P1X-0391 traceId, so the projection worker can tag its write.
+describe('Neo4jOutboxService.buildEvent traceId', () => {
+  const base = { eventType: 'SPECIMEN_UPSERTED', aggregateType: 'Specimen', aggregateId: 's-1', payload: {} };
+
+  it('#1323 takes the current request id as traceId inside a request', () => {
+    const event = runWithRequestId('req-outbox-0001', () => new Neo4jOutboxService().buildEvent(base));
+    expect(event.traceId).toBe('req-outbox-0001');
+  });
+
+  it('#1323 keeps the own traceId of the caller inside a request', () => {
+    const event = runWithRequestId('req-outbox-0001', () =>
+      new Neo4jOutboxService().buildEvent({ ...base, traceId: 't-own' })
+    );
+    expect(event.traceId).toBe('t-own');
+  });
+
+  it('#1323 leaves traceId null outside any request', () => {
+    expect(new Neo4jOutboxService().buildEvent(base).traceId).toBeNull();
   });
 });

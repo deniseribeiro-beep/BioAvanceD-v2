@@ -3,6 +3,7 @@ const { ObjectId } = require('mongodb');
 const env = require('../config/env');
 const logger = require('../utils/logger');
 const { CANONICAL_MODEL_RELEASE_ID } = require('../foundation/readiness');
+const { currentRequestId } = require('../utils/requestContext');
 
 const COLLECTION_NAME = 'graph_projection_outbox';
 const DEFAULT_EVENT_TYPE_VERSION = '1';
@@ -148,7 +149,8 @@ class Neo4jOutboxService {
       leaseUntil: null,
       nextAttemptAt: null,
       sourceService: normalizeText(event.sourceService) || 'unknown',
-      traceId: normalizeText(event.traceId) || null,
+      // #1323 RNF015 C1: the request's id when the caller gives none.
+      traceId: normalizeText(event.traceId) || currentRequestId() || null,
       projectionState: event.projectionState || {},
       createdAt: new Date(),
       updatedAt: new Date(),

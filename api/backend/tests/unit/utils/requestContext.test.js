@@ -107,3 +107,20 @@ describe('requestContext queue jobs', () => {
     expect(seen).toBeNull();
   });
 });
+
+// #1323: RNF015 C1 -- outbound Neo4j and InfluxDB calls carry the id.
+describe('requestContext outbound carriers', () => {
+  it('#1323 neo4jTxConfig gives transaction metadata for a well-formed id only', () => {
+    expect(requestContext.neo4jTxConfig('req-tx-0001')).toEqual({ metadata: { requestId: 'req-tx-0001' } });
+    expect(requestContext.neo4jTxConfig(null)).toBeUndefined();
+    expect(requestContext.neo4jTxConfig('')).toBeUndefined();
+    expect(requestContext.neo4jTxConfig('abc\n[ERROR] x')).toBeUndefined();
+  });
+
+  it('#1323 requestIdHeaders gives an X-Request-Id header for a well-formed id only', () => {
+    expect(requestContext.requestIdHeaders('req-hdr-0001')).toEqual({ 'X-Request-Id': 'req-hdr-0001' });
+    expect(requestContext.requestIdHeaders(null)).toBeNull();
+    expect(requestContext.requestIdHeaders('')).toBeNull();
+    expect(requestContext.requestIdHeaders('abc\n[ERROR] x')).toBeNull();
+  });
+});

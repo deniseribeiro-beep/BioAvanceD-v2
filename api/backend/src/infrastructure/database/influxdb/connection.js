@@ -1,6 +1,7 @@
 const { InfluxDB } = require('@influxdata/influxdb-client');
 const env = require('../../../config/env');
 const logger = require('../../../utils/logger');
+const { currentRequestId, requestIdHeaders } = require('../../../utils/requestContext');
 
 let influxClient = null;
 
@@ -52,13 +53,23 @@ function getInfluxClient() {
   return influxClient;
 }
 
+// #1323 RNF015 C1: a query made for a request sends its X-Request-Id. Each
+// caller builds a fresh query API per query, so the header is that query's.
 function getInfluxQueryApi() {
   const config = getInfluxConfig();
-  return getInfluxClient().getQueryApi(config.org);
+  const api = getInfluxClient().getQueryApi(config.org);
+  const headers = requestIdHeaders(currentRequestId());
+  return headers && typeof api.with === 'function' ? api.with({ headers }) : api;
 }
 
-function getInfluxWriteApi() {
+// Only a writer built for one request's write (requestScoped) sends its id: a
+// shared writer batches several requests' points under one set of headers.
+function getInfluxWriteApi(options = {}) {
   const config = getInfluxConfig();
+  const headers = options.requestScoped === true ? requestIdHeaders(currentRequestId()) : null;
+  if (headers) {
+    return getInfluxClient().getWriteApi(config.org, config.bucket, 'ns', { headers });
+  }
   return getInfluxClient().getWriteApi(config.org, config.bucket, 'ns');
 }
 

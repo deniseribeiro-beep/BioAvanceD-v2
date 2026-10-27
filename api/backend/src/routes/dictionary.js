@@ -7,6 +7,7 @@ const DrugService = require('../services/DrugService');
 const { escapeRegex } = require('../utils/escapeRegex');
 const { checkActiveCode } = require('../ingestion/activeCodeValidator');
 const { findAssociationsForOrpha } = require('../services/biomarkerAssociation.service');
+const { currentRequestId, neo4jTxConfig } = require('../utils/requestContext');
 
 let redisClient = null;
 let redisConnectPromise = null;
@@ -302,7 +303,8 @@ router.get('/search', async (req, res) => {
         ORDER BY d.nome
         LIMIT 20
       `,
-      { query: String(query).trim() }
+      { query: String(query).trim() },
+      neo4jTxConfig(currentRequestId())
     );
     await session.close();
 
@@ -343,7 +345,7 @@ router.get('/suggest', async (req, res) => {
       OPTIONAL MATCH (d)-[:POSSUI_BIOMARCADOR]->(b:Biomarcador)
       RETURN d, collect(DISTINCT h) as fenotipos, collect(DISTINCT b) as biomarcadores
     `;
-    const result = await session.run(cypher, { orphaCode });
+    const result = await session.run(cypher, { orphaCode }, neo4jTxConfig(currentRequestId()));
     await session.close();
     if (!result.records.length) return res.status(404).json({ error: 'Not found' });
     const d = result.records[0].get('d').properties;

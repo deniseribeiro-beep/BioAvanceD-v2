@@ -10,6 +10,10 @@
  * A queue job enqueued during a request carries the id as `requestId` in its
  * data, and the worker runs each job under it, so the worker's log lines and
  * audit events keep the request's correlation (#1323; RNF015 C1).
+ *
+ * Outbound calls carry it too (#1323; RNF015 C1): a Neo4j transaction as its
+ * metadata, an outbox event as its traceId (P1X-0391), and an InfluxDB HTTP
+ * call made for a request as its X-Request-Id header.
  */
 const { AsyncLocalStorage } = require('async_hooks');
 const crypto = require('crypto');
@@ -50,6 +54,22 @@ function runWithRequestId(requestId, fn) {
   return storage.run({ requestId: valid ? requestId : null }, fn);
 }
 
+// The id is passed explicitly, never read from the store here, so a caller
+// without one (an outbox event with no traceId) never picks up an ambient id.
+function isWellFormed(requestId) {
+  return typeof requestId === 'string' && WELL_FORMED.test(requestId);
+}
+
+// Neo4j transaction config: session.run(query, params, neo4jTxConfig(id)).
+function neo4jTxConfig(requestId) {
+  return isWellFormed(requestId) ? { metadata: { requestId } } : undefined;
+}
+
+// Headers for an outbound InfluxDB HTTP call.
+function requestIdHeaders(requestId) {
+  return isWellFormed(requestId) ? { 'X-Request-Id': requestId } : null;
+}
+
 function withJobRequestContext(processor) {
   return (job, ...rest) =>
     runWithRequestId(job && job.data ? job.data.requestId : undefined, () => processor(job, ...rest));
@@ -63,4 +83,6 @@ module.exports = {
   withRequestId,
   runWithRequestId,
   withJobRequestContext,
+  neo4jTxConfig,
+  requestIdHeaders,
 };

@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const { neo4jTxConfig } = require('../utils/requestContext');
 function normalizeText(value) {
   return String(value || '').trim();
 }
@@ -42,7 +43,13 @@ class Neo4jCanonicalProjectionService {
     return `DONOR_${digest.slice(0, 24)}`;
   }
 
-  async applyEvent(session, event) {
+  async applyEvent(rawSession, event) {
+    // #1323 RNF015 C1: the event's traceId rides each write as transaction
+    // metadata; a missing or malformed one leaves the session untouched.
+    const txConfig = neo4jTxConfig(event?.traceId ?? null);
+    const session = txConfig
+      ? { run: (query, params, config) => rawSession.run(query, params, { ...txConfig, ...(config || {}) }) }
+      : rawSession;
     const type = normalizeText(event?.eventType).toUpperCase();
     const payload = event?.payload || {};
 

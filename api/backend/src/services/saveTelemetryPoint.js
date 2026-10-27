@@ -29,7 +29,7 @@ async function saveTelemetryPoint(sensorId, temperature, timestamp, identity = n
     if (identity?.storageLocationId) point.tag('storageLocationId', String(identity.storageLocationId));
 
     await connectInfluxDB();
-    const writeApi = getInfluxWriteApi();
+    const writeApi = getInfluxWriteApi({ requestScoped: true });
 
     writeApi.writePoint(point);
     await writeApi.flush();

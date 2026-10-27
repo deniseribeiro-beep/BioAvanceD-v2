@@ -607,3 +607,33 @@ describe('neo4jCanonicalProjection.service', () => {
     });
   });
 });
+
+// #1323: RNF015 C1 -- the outbox event's traceId rides each projection write
+// as Neo4j transaction metadata.
+describe('neo4jCanonicalProjection.service applyEvent traceId', () => {
+  beforeEach(() => {
+    process.env.NEO4J_CANONICAL_SALT = 'test-salt';
+  });
+
+  it('#1323 passes the traceId as transaction metadata to session.run', async () => {
+    const session = makeSession();
+    await new Neo4jCanonicalProjectionService().applyEvent(session, {
+      eventType: 'SPECIMEN_UPSERTED',
+      traceId: 'req-proj-0001',
+      payload: { specimenId: 's-1' },
+    });
+    expect(session.run).toHaveBeenCalled();
+    expect(session.run.mock.calls[0][2]).toEqual({ metadata: { requestId: 'req-proj-0001' } });
+  });
+
+  it('#1323 adds no transaction config for a malformed traceId', async () => {
+    const session = makeSession();
+    await new Neo4jCanonicalProjectionService().applyEvent(session, {
+      eventType: 'SPECIMEN_UPSERTED',
+      traceId: 'bad id!',
+      payload: { specimenId: 's-1' },
+    });
+    expect(session.run).toHaveBeenCalled();
+    expect(session.run.mock.calls[0].length).toBe(2);
+  });
+});

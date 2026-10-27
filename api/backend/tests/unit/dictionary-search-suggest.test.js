@@ -8,6 +8,7 @@ const require = createRequire(import.meta.url);
 const neo4jModulePath = require.resolve('../../src/database/neo4j');
 const redisModulePath = require.resolve('redis');
 const dictionaryRoutePath = require.resolve('../../src/routes/dictionary');
+const requestContext = require('../../src/utils/requestContext');
 
 // #1394: the first require of the route's module tree costs seconds, so it is
 // paid here, at import time, rather than inside the first case's timeout.
@@ -21,7 +22,7 @@ delete require.cache[dictionaryRoutePath];
 // (see hpo.routes.test.js / testing-conventions' cjs-mocking reference).
 // Clear the cache for both the dependency and the route file, swap in a
 // fake getNeo4jDriver, then require dictionary.js fresh.
-function loadRouteWithMocks({ session, createClientImpl } = {}) {
+function loadRouteWithMocks({ session, createClientImpl, withRequestContext = false } = {}) {
   delete require.cache[neo4jModulePath];
   delete require.cache[dictionaryRoutePath];
 
@@ -45,6 +46,7 @@ function loadRouteWithMocks({ session, createClientImpl } = {}) {
 
   const router = require(dictionaryRoutePath);
   const app = express();
+  if (withRequestContext) app.use(requestContext.middleware);
   app.use('/api/dictionary', router);
   return app;
 }
@@ -264,6 +266,26 @@ describe('dictionary routes - /search and /suggest (Neo4j + redis cache)', () =>
       expect(res.body.results).toEqual([
         { system: 'http://www.orpha.net', code: 'ORPHA:9', display: 'No cache disease' },
       ]);
+    });
+  });
+
+  // #1323: RNF015 C1 -- each request-path Neo4j read carries the request id
+  // as transaction metadata.
+  describe('request id as Neo4j transaction metadata', () => {
+    it('#1323 /search runs its query with the request id as metadata', async () => {
+      const session = fakeSession([]);
+      const app = loadRouteWithMocks({ session, withRequestContext: true });
+      await request(app).get('/api/dictionary/search?query=x').set('X-Request-Id', 'req-dict-0001');
+      expect(session.run).toHaveBeenCalled();
+      expect(session.run.mock.calls[0][2]).toEqual({ metadata: { requestId: 'req-dict-0001' } });
+    });
+
+    it('#1323 /suggest runs its query with the request id as metadata', async () => {
+      const session = fakeSession([]);
+      const app = loadRouteWithMocks({ session, withRequestContext: true });
+      await request(app).get('/api/dictionary/suggest?orphaCode=1').set('X-Request-Id', 'req-dict-0001');
+      expect(session.run).toHaveBeenCalled();
+      expect(session.run.mock.calls[0][2]).toEqual({ metadata: { requestId: 'req-dict-0001' } });
     });
   });
 });
