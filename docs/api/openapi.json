@@ -18,7 +18,14 @@
     "/api/export/fhir/samples/{specimenId}/files/{fileID}",
     "/api/retention-policies",
     "/api/legal-holds",
-    "/api/disposition-actions"
+    "/api/disposition-actions",
+    "/api/access-requests",
+    "/api/access-policies",
+    "/api/access",
+    "/api/notification-rules",
+    "/api/notifications",
+    "/api/incidents",
+    "/api/nonconformances"
   ],
   "tags": [
     {
@@ -68,6 +75,34 @@
     {
       "name": "disposition-actions",
       "description": "/api/disposition-actions: disposition actions, their approval, execution, cancellation and certificate (RF026)."
+    },
+    {
+      "name": "access-requests",
+      "description": "/api/access-requests: access requests, their compatibility evaluation, committee decision, distribution and revocation (RF024)."
+    },
+    {
+      "name": "access-policies",
+      "description": "/api/access-policies: the versioned access policies an access request is evaluated against (RF024)."
+    },
+    {
+      "name": "access",
+      "description": "/api/access: access grants to reports."
+    },
+    {
+      "name": "notification-rules",
+      "description": "/api/notification-rules: the versioned notification rules (RF015)."
+    },
+    {
+      "name": "notifications",
+      "description": "/api/notifications: the notifications the dispatch engine created and their confirmation (RF015)."
+    },
+    {
+      "name": "incidents",
+      "description": "/api/incidents: temperature incidents, their acknowledgement, resolution, escalation and notes."
+    },
+    {
+      "name": "nonconformances",
+      "description": "/api/nonconformances: nonconformances, their corrective action and its effectiveness verification (RF025)."
     }
   ],
   "paths": {
@@ -4524,6 +4559,2870 @@
           }
         }
       }
+    },
+    "/api/access-requests": {
+      "post": {
+        "tags": [
+          "access-requests"
+        ],
+        "summary": "Register an access request (RF024 AC1)",
+        "description": "Gates: authenticate, requirePermission('manageAccessRequests'). The organization and the protocol must exist and the protocol must be approved; a failed field validation answers 422 with details, an unknown organization or protocol or an unapproved protocol answers 422 without details, and any other failure answers 400.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "requesterId",
+                  "organizationId",
+                  "studyId",
+                  "protocolId",
+                  "requestedPurpose",
+                  "requestedItems"
+                ],
+                "properties": {
+                  "accessRequestId": {
+                    "type": "string",
+                    "description": "Optional; a UUID is generated when absent."
+                  },
+                  "requesterId": {
+                    "type": "string"
+                  },
+                  "organizationId": {
+                    "type": "string"
+                  },
+                  "studyId": {
+                    "type": "string"
+                  },
+                  "protocolId": {
+                    "type": "string"
+                  },
+                  "requestedPurpose": {
+                    "type": "string"
+                  },
+                  "duoCode": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "A DUO code, optional."
+                  },
+                  "requestedItems": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "itemType",
+                        "itemId"
+                      ],
+                      "properties": {
+                        "itemType": {
+                          "type": "string",
+                          "enum": [
+                            "specimen",
+                            "dataset",
+                            "file"
+                          ]
+                        },
+                        "itemId": {
+                          "type": "string"
+                        },
+                        "quantity": {
+                          "type": "number",
+                          "nullable": true
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The access request, committee decision pending.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "access-requests"
+        ],
+        "summary": "List the access requests, newest first (RF024)",
+        "description": "Gates: authenticate, requirePermission('manageAccessRequests').",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every access request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "type": "object"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/access-requests/{id}/evaluate": {
+      "post": {
+        "tags": [
+          "access-requests"
+        ],
+        "summary": "Evaluate the compatibility of an access request: consent, DUO, study and access policies (RF024 AC2, AC3)",
+        "description": "Gates: authenticate, requirePermission('manageAccessRequests', 'UPDATE'). An unknown request answers 400, not 404.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The accessRequestId.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The access request after the operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/access-requests/{id}/decision": {
+      "post": {
+        "tags": [
+          "access-requests"
+        ],
+        "summary": "Record the committee decision on an access request (RF024 AC3)",
+        "description": "Gates: authenticate, requirePermission('manageAccessRequests', 'UPDATE'). A failed validation, an unknown request, a request not yet evaluated, an approval or conditioning of an incompatible request or of one the access policy denies, or an approval with no policy decision, answers 400.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The accessRequestId.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "status",
+                  "justification"
+                ],
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "approved",
+                      "rejected",
+                      "conditioned"
+                    ]
+                  },
+                  "justification": {
+                    "type": "string",
+                    "description": "Non-empty."
+                  },
+                  "approvalPeriod": {
+                    "type": "object",
+                    "nullable": true,
+                    "required": [
+                      "start"
+                    ],
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "format": "date-time",
+                        "description": "Defaults to now when approvalPeriod is absent."
+                      },
+                      "end": {
+                        "type": "string",
+                        "format": "date-time"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The access request after the operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/access-requests/{id}/distribute": {
+      "post": {
+        "tags": [
+          "access-requests"
+        ],
+        "summary": "Link an approved access request to its distribution (RF024 AC4)",
+        "description": "Gates: authenticate, requirePermission('manageAccessRequests', 'UPDATE'). Refused with 400 while access is blocked (pending, denied, revoked, incompatible, policy denied, expired or not yet active), while a requested specimen is quarantined, or when the request is unknown.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The accessRequestId.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The access request after the operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/access-requests/{id}/revoke": {
+      "post": {
+        "tags": [
+          "access-requests"
+        ],
+        "summary": "Revoke the access of an approved or conditioned request (RF024 AC5)",
+        "description": "Gates: authenticate, requirePermission('manageAccessRequests', 'UPDATE'). A missing justification, an unknown request, or a request not approved or conditioned answers 400.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The accessRequestId.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "justification"
+                ],
+                "properties": {
+                  "justification": {
+                    "type": "string",
+                    "description": "Non-empty."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The access request after the operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/access-requests/{id}/access-check": {
+      "get": {
+        "tags": [
+          "access-requests"
+        ],
+        "summary": "The live allow or block decision of an access request (RF024 AC5)",
+        "description": "Gates: authenticate, requirePermission('manageAccessRequests'). Registered before /{id}.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The accessRequestId.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Computed now from the stored request, not a stored flag.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "accessRequestId": {
+                              "type": "string"
+                            },
+                            "allowed": {
+                              "type": "boolean"
+                            },
+                            "reason": {
+                              "type": "string",
+                              "description": "pending, denied, revoked, incompatible, policy_denied, expired, not_yet_active, or the decision status (approved, conditioned) when allowed."
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/access-requests/{id}": {
+      "get": {
+        "tags": [
+          "access-requests"
+        ],
+        "summary": "One access request (RF024)",
+        "description": "Gates: authenticate, requirePermission('manageAccessRequests'). Any failure other than an unknown request answers 400, not 500.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The accessRequestId.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The access request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/access-policies": {
+      "post": {
+        "tags": [
+          "access-policies"
+        ],
+        "summary": "Define an access policy, its first version (RF024 AC2, AC3)",
+        "description": "Gates: authenticate, requirePermission('manageAccessRequests'). Any failure that is not a 422 answers 400.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccessPolicyInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The stored policy version.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "description": "A failed validation (details lists each reason), or an organizationScopeIds entry that names no Organization.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "access-policies"
+        ],
+        "summary": "List every stored access policy version, newest first (RF024)",
+        "description": "Gates: authenticate, requirePermission('manageAccessRequests').",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every stored version.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "type": "object"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/access-policies/{id}/versions": {
+      "post": {
+        "tags": [
+          "access-policies"
+        ],
+        "summary": "Add a new, higher version to an access policy (POL-001)",
+        "description": "Gates: authenticate, requirePermission('manageAccessRequests'). A version is never rewritten; an unknown {id} answers 404 and any other failure that is not 422 answers 400.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The accessPolicyId.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccessPolicyInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The new policy version.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "description": "A failed validation (details lists each reason), an organizationScopeIds entry that names no Organization, or, on a new version, a policyVersion not higher than the latest.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/access-policies/{id}": {
+      "get": {
+        "tags": [
+          "access-policies"
+        ],
+        "summary": "Every version of one access policy, newest first (RF024)",
+        "description": "Gates: authenticate, requirePermission('manageAccessRequests').",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The accessPolicyId.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The versions of the policy.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "type": "object"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No version of the policy exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/access": {
+      "get": {
+        "tags": [
+          "access"
+        ],
+        "summary": "List the access grants to reports",
+        "description": "Gates: authenticate, requirePermission('createUser'). A grant leaves under the API names userId and accessID.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every access grant.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "type": "object"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "access"
+        ],
+        "summary": "Create an access grant to a report",
+        "description": "Gates: authenticate, requirePermission('createUser'). grantedBy is the authenticated caller; permissionCodes, if sent, must be exactly [viewReports]. A failed validation answers 422 with details; any other failure answers 400.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "reportID",
+                  "reportType"
+                ],
+                "properties": {
+                  "reportID": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "integer"
+                      }
+                    ],
+                    "description": "The report the grant covers."
+                  },
+                  "reportType": {
+                    "type": "string"
+                  },
+                  "accessType": {
+                    "type": "integer",
+                    "enum": [
+                      1,
+                      2,
+                      3,
+                      4
+                    ],
+                    "description": "1 Visualizador, 2 Operador, 3 Coordenador, 4 Administrador; 1 when absent on create."
+                  },
+                  "userAccountId": {
+                    "type": "string",
+                    "description": "The beneficiary; userId is accepted as an alias."
+                  },
+                  "userId": {
+                    "type": "string",
+                    "description": "Alias of userAccountId."
+                  },
+                  "grantedAt": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "expiresAt": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "accessID": {
+                    "type": "string",
+                    "description": "Optional caller-chosen id; accessGrantId is accepted too."
+                  },
+                  "permissionCodes": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "viewReports"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created grant.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/access/{id}": {
+      "get": {
+        "tags": [
+          "access"
+        ],
+        "summary": "One access grant",
+        "description": "Gates: authenticate, requirePermission('createUser'). A malformed {id} throws inside the handler and answers 500.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The _id of the access grant.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The grant.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "access"
+        ],
+        "summary": "Update an access grant",
+        "description": "Gates: authenticate, requirePermission('createUser'). Only reportID, reportType, accessType, grantedAt, expiresAt and the beneficiary (userAccountId or userId) are read; any other body field is ignored. A malformed {id} or any other failure answers 400.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The _id of the access grant.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reportID": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "integer"
+                      }
+                    ],
+                    "description": "The report the grant covers."
+                  },
+                  "reportType": {
+                    "type": "string"
+                  },
+                  "accessType": {
+                    "type": "integer",
+                    "enum": [
+                      1,
+                      2,
+                      3,
+                      4
+                    ],
+                    "description": "1 Visualizador, 2 Operador, 3 Coordenador, 4 Administrador; 1 when absent on create."
+                  },
+                  "userAccountId": {
+                    "type": "string",
+                    "description": "The beneficiary; userId is accepted as an alias."
+                  },
+                  "userId": {
+                    "type": "string",
+                    "description": "Alias of userAccountId."
+                  },
+                  "grantedAt": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "expiresAt": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The grant was updated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Success"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "access"
+        ],
+        "summary": "Revoke an access grant",
+        "description": "Gates: authenticate, requirePermission('createUser'). A revocation, not a hard delete: the grant stays with grantStatus revoked, revokedAt and revocationReason. Revoking a grant already revoked answers 404; a malformed {id} or any other failure answers 400.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The _id of the access grant.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "revocationReason": {
+                    "type": "string",
+                    "description": "Optional; blank is stored as null."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The grant was revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Success"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/notification-rules": {
+      "post": {
+        "tags": [
+          "notification-rules"
+        ],
+        "summary": "Create a notification rule, a new version for its eventType (RF015 AC1, AC5)",
+        "description": "Gates: authenticate, requireRole(4). The version is server-set; an active rule deactivates the other active rules of its eventType. A failed validation answers 422 with details; any other failure answers 400.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/NotificationRuleInput"
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "eventType"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created rule.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "notification-rules"
+        ],
+        "summary": "List the notification rules, active first (RF015)",
+        "description": "Gates: authenticate, requireRole(4).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eventType",
+            "in": "query",
+            "required": false,
+            "description": "Only the rules of this eventType.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The rules.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "type": "object"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/notification-rules/active": {
+      "get": {
+        "tags": [
+          "notification-rules"
+        ],
+        "summary": "The active notification rule of an event type (RF015)",
+        "description": "Gates: authenticate, requireRole(4). Registered before /{id}, so active is never read as an id.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eventType",
+            "in": "query",
+            "required": false,
+            "description": "The event type; without it no rule matches and the answer is 404.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The active rule.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/notification-rules/{id}": {
+      "put": {
+        "tags": [
+          "notification-rules"
+        ],
+        "summary": "Update a notification rule: a new version is created with previousRuleId set to {id} (RF015)",
+        "description": "Gates: authenticate, requireRole(4). The eventType is carried over from the rule {id}, whatever the body sends. A malformed or unknown {id}, or any other failure that is not a validation failure, answers 400; a failed validation answers 422 with details.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The _id of the notification rule.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotificationRuleInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The new rule version.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "notification-rules"
+        ],
+        "summary": "One notification rule (RF015)",
+        "description": "Gates: authenticate, requireRole(4). A malformed {id} answers 400.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The _id of the notification rule.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The rule.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/notifications": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "List the notifications the dispatch engine created, newest first (RF015 AC3)",
+        "description": "Gates: authenticate, requireRole(4).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eventType",
+            "in": "query",
+            "required": false,
+            "description": "Only the notifications of this eventType.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "description": "Only the notifications in this status.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "The most notifications to return; 50 when absent.",
+            "schema": {
+              "type": "integer",
+              "default": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The notifications.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "type": "object"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/notifications/{id}/confirm": {
+      "put": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Confirm a notification: confirmedAt is set (RF015 AC3)",
+        "description": "Gates: authenticate, requireRole(4). A malformed {id} answers 400; an unknown well-formed {id} answers 200 with data null.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The _id of the notification.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The notification, or null when no notification has the id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "nullable": true
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/incidents/create": {
+      "post": {
+        "tags": [
+          "incidents"
+        ],
+        "summary": "Open a temperature incident, or add to the one open for the sensor",
+        "description": "Gates: none. The route registers no authenticate and no permission, so this operation is unauthenticated. The incident and quarantine answer at the top level, not under data. It does not open the request database (req.app.locals.db), so it never answers 503. An open, acknowledged or escalated incident for the sensorKey is updated; otherwise one is created and the alert recipients are mailed.",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "sensorKey",
+                  "sensorName",
+                  "currentTemperature",
+                  "maxTemperature",
+                  "minTemperature",
+                  "samplesOutOfRange"
+                ],
+                "properties": {
+                  "sensorKey": {
+                    "type": "string"
+                  },
+                  "sensorName": {
+                    "type": "string"
+                  },
+                  "currentTemperature": {
+                    "type": "number"
+                  },
+                  "maxTemperature": {
+                    "type": "number"
+                  },
+                  "minTemperature": {
+                    "type": "number"
+                  },
+                  "samplesOutOfRange": {
+                    "type": "number",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The incident, and the outcome of the cold-chain quarantine.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "incident": {
+                          "type": "object"
+                        },
+                        "quarantine": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "description": "The handler failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "details": {
+                          "type": "string",
+                          "description": "The error message."
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/incidents": {
+      "get": {
+        "tags": [
+          "incidents"
+        ],
+        "summary": "List the temperature incidents, newest first",
+        "description": "Gates: authenticate, requirePermission('viewTemperature'). The incidents answer at the top level, not under data.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "description": "open, acknowledged, escalated or resolved.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sensorKey",
+            "in": "query",
+            "required": false,
+            "description": "Only this sensor.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Page size; 50 when absent.",
+            "schema": {
+              "type": "integer",
+              "default": 50
+            }
+          },
+          {
+            "name": "skip",
+            "in": "query",
+            "required": false,
+            "description": "Incidents to skip; 0 when absent.",
+            "schema": {
+              "type": "integer",
+              "default": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of incidents.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "incidents": {
+                          "type": "array",
+                          "items": {
+                            "type": "object"
+                          }
+                        },
+                        "total": {
+                          "type": "integer"
+                        },
+                        "limit": {
+                          "type": "integer"
+                        },
+                        "skip": {
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "description": "The handler failed, or a gate failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "details": {
+                          "type": "string",
+                          "description": "The error message."
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/incidents/{incidentId}/acknowledge": {
+      "put": {
+        "tags": [
+          "incidents"
+        ],
+        "summary": "Acknowledge a temperature incident",
+        "description": "Gates: authenticate, requirePermission('manageTemperature'). A malformed {incidentId} answers 500.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "incidentId",
+            "in": "path",
+            "required": true,
+            "description": "The _id of the temperature incident.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "userId": {
+                    "type": "string"
+                  },
+                  "notes": {
+                    "type": "string",
+                    "description": "The note text; a default text for the action when absent."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Done.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Success"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "description": "The handler failed, or a gate failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "details": {
+                          "type": "string",
+                          "description": "The error message."
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/incidents/{incidentId}/resolve": {
+      "put": {
+        "tags": [
+          "incidents"
+        ],
+        "summary": "Resolve a temperature incident",
+        "description": "Gates: authenticate, requirePermission('manageTemperature'). The affected samples stay blocked for post-incident review, and the open environmental excursion is closed. A malformed {incidentId} answers 500.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "incidentId",
+            "in": "path",
+            "required": true,
+            "description": "The _id of the temperature incident.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "userId": {
+                    "type": "string"
+                  },
+                  "notes": {
+                    "type": "string",
+                    "description": "The note text; a default text for the action when absent."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Done.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "postIncidentReview": {
+                          "type": "object"
+                        },
+                        "environmentalExcursion": {
+                          "type": "object",
+                          "nullable": true
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "description": "The handler failed, or a gate failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "details": {
+                          "type": "string",
+                          "description": "The error message."
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/incidents/{incidentId}/escalate": {
+      "put": {
+        "tags": [
+          "incidents"
+        ],
+        "summary": "Escalate a temperature incident one level, at most level 2",
+        "description": "Gates: authenticate, requirePermission('manageTemperature'). The alert recipients are mailed. A malformed {incidentId} answers 500.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "incidentId",
+            "in": "path",
+            "required": true,
+            "description": "The _id of the temperature incident.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "userId": {
+                    "type": "string"
+                  },
+                  "notes": {
+                    "type": "string",
+                    "description": "The note text; a default text for the action when absent."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Done.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "escalationLevel": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 2
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "description": "The handler failed, or a gate failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "details": {
+                          "type": "string",
+                          "description": "The error message."
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/incidents/{incidentId}/notes": {
+      "post": {
+        "tags": [
+          "incidents"
+        ],
+        "summary": "Add a note to a temperature incident",
+        "description": "Gates: authenticate, requirePermission('viewTemperature'). A malformed {incidentId} answers 500.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "incidentId",
+            "in": "path",
+            "required": true,
+            "description": "The _id of the temperature incident.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "message"
+                ],
+                "properties": {
+                  "userId": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The note was added.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Success"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "description": "The handler failed, or a gate failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "details": {
+                          "type": "string",
+                          "description": "The error message."
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/nonconformances": {
+      "post": {
+        "tags": [
+          "nonconformances"
+        ],
+        "summary": "Open a nonconformance (RF025 AC5)",
+        "description": "Gates: authenticate, requireRole(2, 3, 4). detectedBy defaults to the authenticated user. The affected specimens go into quarantine. A failed validation answers 422 with details; any other failure answers 400.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "nonconformanceType",
+                  "detectedAt",
+                  "description",
+                  "affectedEntityIds"
+                ],
+                "properties": {
+                  "nonconformanceId": {
+                    "type": "string",
+                    "description": "Optional; a UUID is generated when absent."
+                  },
+                  "nonconformanceType": {
+                    "type": "string"
+                  },
+                  "detectedAt": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "detectedBy": {
+                    "type": "string",
+                    "description": "Defaults to the authenticated user."
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "affectedEntityIds": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "immediateActions": {
+                    "type": "array",
+                    "items": {}
+                  },
+                  "rootCause": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The nonconformance, status open.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "nonconformances"
+        ],
+        "summary": "List the nonconformances, newest first (RF025)",
+        "description": "Gates: authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every nonconformance.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "type": "object"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/nonconformances/{id}/corrective-action": {
+      "post": {
+        "tags": [
+          "nonconformances"
+        ],
+        "summary": "Record the corrective action and its owner (RF025 AC5, AC6)",
+        "description": "Gates: authenticate, requireRole(3, 4). A failed validation (reported as a message, with no details) or an unknown nonconformance answers 400.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The nonconformanceId.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "description",
+                  "responsible"
+                ],
+                "properties": {
+                  "description": {
+                    "type": "string"
+                  },
+                  "responsible": {
+                    "type": "string"
+                  },
+                  "dueDate": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The nonconformance, status corrective_action_recorded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/nonconformances/{id}/verify-effectiveness": {
+      "post": {
+        "tags": [
+          "nonconformances"
+        ],
+        "summary": "Record the verification of the corrective action effectiveness (RF025 AC6)",
+        "description": "Gates: authenticate, requireRole(3, 4). verifiedBy defaults to the authenticated user. An effective outcome closes the nonconformance. A failed validation, an unknown nonconformance, or one with no corrective action recorded answers 400.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The nonconformanceId.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "outcome"
+                ],
+                "properties": {
+                  "verifiedBy": {
+                    "type": "string",
+                    "description": "Defaults to the authenticated user."
+                  },
+                  "outcome": {
+                    "type": "string",
+                    "enum": [
+                      "effective",
+                      "ineffective"
+                    ]
+                  },
+                  "notes": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The nonconformance; status closed when effective, else corrective_action_recorded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/nonconformances/{id}": {
+      "get": {
+        "tags": [
+          "nonconformances"
+        ],
+        "summary": "One nonconformance (RF025)",
+        "description": "Gates: authenticate. Any failure other than an unknown nonconformance answers 400, not 500.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The nonconformanceId.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The nonconformance.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -4745,6 +7644,198 @@
             "type": "string",
             "nullable": true,
             "description": "The legal or regulatory obligation the archive period rests on."
+          }
+        }
+      },
+      "AccessPolicyInput": {
+        "type": "object",
+        "description": "One version of an access policy. The five array fields of applicableEntityTypes, roleCodes, organizationScopeIds, resourceScopes and conditions must be non-empty. An accessPolicyId in the body is ignored.",
+        "required": [
+          "policyName",
+          "policyVersion",
+          "applicableEntityTypes",
+          "decisionEffect",
+          "ruleExpression",
+          "effectivePeriod",
+          "roleCodes",
+          "organizationScopeIds",
+          "resourceScopes",
+          "conditions",
+          "decisionReasonsRequired"
+        ],
+        "properties": {
+          "policyName": {
+            "type": "string"
+          },
+          "policyVersion": {
+            "type": "string",
+            "description": "SemVer, MAJOR.MINOR.PATCH."
+          },
+          "applicableEntityTypes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "purposeCodes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional."
+          },
+          "decisionEffect": {
+            "type": "string",
+            "enum": [
+              "permit",
+              "deny",
+              "review_required"
+            ]
+          },
+          "ruleExpression": {
+            "type": "string",
+            "enum": [
+              "all-conditions",
+              "any-condition"
+            ]
+          },
+          "effectivePeriod": {
+            "type": "object",
+            "required": [
+              "start"
+            ],
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Optional; later than start."
+              }
+            }
+          },
+          "roleCodes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "organizationScopeIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Each must name an Organization."
+          },
+          "resourceScopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "conditions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "A non-empty object of fact -> required value; the facts are consent, duo, study, organizationId, studyId, protocolId, requestedPurpose and duoCode."
+            }
+          },
+          "decisionReasonsRequired": {
+            "type": "boolean"
+          }
+        }
+      },
+      "NotificationRuleInput": {
+        "type": "object",
+        "description": "A notification rule. A version in the body is ignored: the server numbers it (v1, v2, ...).",
+        "required": [
+          "channels",
+          "recipientRoleCodes",
+          "maxDeliveryMinutes"
+        ],
+        "properties": {
+          "eventType": {
+            "type": "string"
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "email",
+                "in_app"
+              ]
+            }
+          },
+          "recipientRoleCodes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "sensitiveFieldsAllowlist": {
+            "type": "array",
+            "items": {},
+            "description": "The payload fields a message may carry; empty or absent means none."
+          },
+          "escalation": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "afterFailures": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Required when enabled."
+              },
+              "channel": {
+                "type": "string",
+                "enum": [
+                  "email",
+                  "in_app"
+                ],
+                "description": "Required when enabled."
+              }
+            }
+          },
+          "purpose": {
+            "type": "string"
+          },
+          "retry": {
+            "type": "object",
+            "properties": {
+              "maxAttempts": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10
+              },
+              "backoffSeconds": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 300
+              }
+            },
+            "required": [
+              "maxAttempts"
+            ]
+          },
+          "maxDeliveryMinutes": {
+            "type": "number",
+            "exclusiveMinimum": true,
+            "minimum": 0
+          },
+          "description": {
+            "type": "string"
+          },
+          "active": {
+            "type": "boolean",
+            "description": "Defaults to true; an active rule deactivates the other active rules of its eventType."
           }
         }
       }
