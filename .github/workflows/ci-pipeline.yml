@@ -6,10 +6,12 @@ on:
   push:
     branches:
       - main
+      - feature/docker-e2e-backend-integration
 
   pull_request:
     branches:
       - main
+      - feature/docker-e2e-backend-integration
 
 permissions:
   contents: read
@@ -259,3 +261,53 @@ jobs:
 
       - name: Audit backend dependencies
         run: npm --prefix api/backend audit --audit-level=critical
+
+  # #284: no job ran Playwright; this one runs the in-container e2e gate the
+  # way it runs locally, on push/PR to main and to the integration branch
+  # (#599). The job's exit is the gate's: 3 build, 4 stack up, 5 one-shot,
+  # 6 projection worker, otherwise the runner's own code.
+  e2e-tests:
+    name: E2E tests (in-container Playwright)
+    runs-on: ubuntu-latest
+    needs: current-state-validation
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Remove previous e2e stack
+        run: |
+          docker compose \
+            --env-file .env.test.example \
+            -f compose.test.yml \
+            down --volumes --remove-orphans
+
+      - name: Run the e2e gate
+        run: bash scripts/e2e-gate.sh e2e-gate-out
+
+      - name: Collect Compose logs on failure
+        if: failure()
+        continue-on-error: true
+        run: |
+          docker compose \
+            --env-file .env.test.example \
+            -f compose.test.yml \
+            logs --no-color > e2e-gate-out/compose-test.log
+
+      - name: Upload e2e gate output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bioavanced-e2e-gate
+          path: e2e-gate-out/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Remove containers and isolated volumes
+        if: always()
+        run: |
+          docker compose \
+            --env-file .env.test.example \
+            -f compose.test.yml \
+            down --volumes --remove-orphans
