@@ -25,7 +25,13 @@
     "/api/notification-rules",
     "/api/notifications",
     "/api/incidents",
-    "/api/nonconformances"
+    "/api/nonconformances",
+    "/api/devices",
+    "/api/device-registrations",
+    "/api/telemetry-datastreams",
+    "/api/sensors",
+    "/api/iot",
+    "/api/temperature"
   ],
   "tags": [
     {
@@ -103,6 +109,30 @@
     {
       "name": "nonconformances",
       "description": "/api/nonconformances: nonconformances, their corrective action and its effectiveness verification (RF025)."
+    },
+    {
+      "name": "devices",
+      "description": "/api/devices: devices and their lifecycle events (RF017)."
+    },
+    {
+      "name": "device-registrations",
+      "description": "/api/device-registrations: devices enrolled on a communication profile, and their deactivation (RF017)."
+    },
+    {
+      "name": "telemetry-datastreams",
+      "description": "/api/telemetry-datastreams: the binding of a sensor to what it observes, and the end of its validity (RF017)."
+    },
+    {
+      "name": "sensors",
+      "description": "/api/sensors: sensors and their maintenance status (RF009)."
+    },
+    {
+      "name": "iot",
+      "description": "/api/iot: telemetry ingest by a device, and the test-support routes of the telemetry monitor (RF009)."
+    },
+    {
+      "name": "temperature",
+      "description": "/api/temperature: temperature readings, their history and alerts (RF009)."
     }
   ],
   "paths": {
@@ -7423,6 +7453,2733 @@
           }
         }
       }
+    },
+    "/api/devices": {
+      "get": {
+        "tags": [
+          "devices"
+        ],
+        "summary": "List the devices",
+        "description": "Gates: authenticate (router-wide), requirePermission('viewEquipment'), requireOrganizationScope. Errors answer { success: false, error: <code>, message }, and a 422 also carries details. An untagged error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every device.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "type": "object"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "devices"
+        ],
+        "summary": "Register a device",
+        "description": "Gates: authenticate (router-wide), requirePermission('manageStorageTopology'), requireOrganizationScope. Errors answer { success: false, error: <code>, message }, and a 422 also carries details. An untagged error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "deviceId",
+                  "deviceType"
+                ],
+                "properties": {
+                  "deviceId": {
+                    "type": "string"
+                  },
+                  "deviceType": {
+                    "type": "string"
+                  },
+                  "manufacturer": {
+                    "type": "string"
+                  },
+                  "modelNumber": {
+                    "type": "string"
+                  },
+                  "serialNumber": {
+                    "type": "string"
+                  },
+                  "firmwareVersion": {
+                    "type": "string"
+                  },
+                  "softwareVersion": {
+                    "type": "string"
+                  },
+                  "calibrationDate": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "ISO 8601."
+                  },
+                  "calibrationDueDate": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "ISO 8601."
+                  },
+                  "maintenanceRecords": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "References to maintenance records."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The device, qualificationStatus pending.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "description": "A device with this deviceId is already registered (error DEVICE_EXISTS).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/devices/{deviceId}": {
+      "get": {
+        "tags": [
+          "devices"
+        ],
+        "summary": "Get a device with its lifecycle history",
+        "description": "Gates: authenticate (router-wide), requirePermission('viewEquipment'), requireOrganizationScope. Errors answer { success: false, error: <code>, message }, and a 422 also carries details. An untagged error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "deviceId",
+            "in": "path",
+            "required": true,
+            "description": "The deviceId of the device.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The device; data carries history, its lifecycle events by occurredAt.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/devices/{deviceId}/events": {
+      "post": {
+        "tags": [
+          "devices"
+        ],
+        "summary": "Append a lifecycle event to a device",
+        "description": "Gates: authenticate (router-wide), requirePermission('manageStorageTopology'), requireOrganizationScope. Errors answer { success: false, error: <code>, message }, and a 422 also carries details. An untagged error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "deviceId",
+            "in": "path",
+            "required": true,
+            "description": "The deviceId of the device.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "eventType"
+                ],
+                "properties": {
+                  "eventType": {
+                    "type": "string",
+                    "enum": [
+                      "installed",
+                      "moved",
+                      "qualified",
+                      "disqualified",
+                      "retired"
+                    ]
+                  },
+                  "locationId": {
+                    "type": "string",
+                    "description": "Required for installed and moved."
+                  },
+                  "reason": {
+                    "type": "string",
+                    "description": "Required for disqualified and retired."
+                  },
+                  "evidenceUri": {
+                    "type": "string",
+                    "description": "Required for qualified."
+                  },
+                  "occurredAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "ISO 8601; now when absent."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The device after the event, and the event.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "device": {
+                              "type": "object"
+                            },
+                            "event": {
+                              "type": "object"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "The device state refuses this transition (for example a retired device, or installing an installed one), or the device changed during the operation (error LIFECYCLE_CONFLICT).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/device-registrations": {
+      "get": {
+        "tags": [
+          "device-registrations"
+        ],
+        "summary": "List the device registrations",
+        "description": "Gates: authenticate (router-wide), requirePermission('viewEquipment'), requireOrganizationScope. Errors answer { success: false, error: <code>, message }, and a 422 also carries details. An untagged error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "deviceId",
+            "in": "query",
+            "required": false,
+            "description": "Only the registrations of this device.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The registrations.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "type": "object"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "device-registrations"
+        ],
+        "summary": "Enrol a device on a communication profile",
+        "description": "Gates: authenticate (router-wide), requirePermission('manageStorageTopology'), requireOrganizationScope. Errors answer { success: false, error: <code>, message }, and a 422 also carries details. An untagged error answers 500 INTERNAL_ERROR. The 503 comes from authenticate. The device is not looked up, so there is no 404; a body carrying a credential field (credential, secret, password, token, apiKey, privateKey, clientSecret) answers 422.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "deviceId",
+                  "communicationProfileId",
+                  "credentialReference"
+                ],
+                "properties": {
+                  "deviceId": {
+                    "type": "string"
+                  },
+                  "communicationProfileId": {
+                    "type": "string"
+                  },
+                  "credentialReference": {
+                    "type": "string",
+                    "description": "An opaque <manager>:<path> reference, never the credential."
+                  },
+                  "registeredAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "ISO 8601; now when absent."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The registration, status active.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/device-registrations/{deviceRegistrationId}": {
+      "get": {
+        "tags": [
+          "device-registrations"
+        ],
+        "summary": "Get a device registration",
+        "description": "Gates: authenticate (router-wide), requirePermission('viewEquipment'), requireOrganizationScope. Errors answer { success: false, error: <code>, message }, and a 422 also carries details. An untagged error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "deviceRegistrationId",
+            "in": "path",
+            "required": true,
+            "description": "The deviceRegistrationId.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The registration.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/device-registrations/{deviceRegistrationId}/deactivate": {
+      "post": {
+        "tags": [
+          "device-registrations"
+        ],
+        "summary": "Suspend or revoke an active device registration",
+        "description": "Gates: authenticate (router-wide), requirePermission('manageStorageTopology'), requireOrganizationScope. Errors answer { success: false, error: <code>, message }, and a 422 also carries details. An untagged error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "deviceRegistrationId",
+            "in": "path",
+            "required": true,
+            "description": "The deviceRegistrationId.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "suspended",
+                      "revoked"
+                    ],
+                    "default": "revoked"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The registration with its new status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "The registration is not active, or changed during the operation (error REGISTRATION_INACTIVE).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/telemetry-datastreams": {
+      "get": {
+        "tags": [
+          "telemetry-datastreams"
+        ],
+        "summary": "List the telemetry datastreams",
+        "description": "Gates: authenticate (router-wide), requirePermission('viewEquipment'), requireOrganizationScope. Errors answer { success: false, error: <code>, message }, and a 422 also carries details. An untagged error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "sensorId",
+            "in": "query",
+            "required": false,
+            "description": "Only the datastreams of this sensor.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The datastreams.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "type": "object"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "telemetry-datastreams"
+        ],
+        "summary": "Bind a sensor to what it observes",
+        "description": "Gates: authenticate (router-wide), requirePermission('manageStorageTopology'), requireOrganizationScope. Errors answer { success: false, error: <code>, message }, and a 422 also carries details. An untagged error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "sensorId",
+                  "equipmentId",
+                  "storageLocationId",
+                  "observedProperty",
+                  "unit",
+                  "samplingPolicyId",
+                  "thresholdProfileId",
+                  "validityPeriod"
+                ],
+                "properties": {
+                  "sensorId": {
+                    "type": "string"
+                  },
+                  "equipmentId": {
+                    "type": "string"
+                  },
+                  "storageLocationId": {
+                    "type": "string"
+                  },
+                  "observedProperty": {
+                    "type": "string"
+                  },
+                  "unit": {
+                    "type": "string",
+                    "description": "A UCUM code, for example Cel."
+                  },
+                  "samplingPolicyId": {
+                    "type": "string"
+                  },
+                  "thresholdProfileId": {
+                    "type": "string"
+                  },
+                  "validityPeriod": {
+                    "type": "object",
+                    "required": [
+                      "start"
+                    ],
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "format": "date-time",
+                        "description": "ISO 8601."
+                      },
+                      "end": {
+                        "type": "string",
+                        "format": "date-time",
+                        "description": "ISO 8601, exclusive; open when absent.",
+                        "nullable": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The datastream; status active, or retired when validityPeriod.end is given.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "description": "The sensor already has a datastream of this observedProperty in that interval (error DATASTREAM_OVERLAP).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/telemetry-datastreams/{telemetryDatastreamId}": {
+      "get": {
+        "tags": [
+          "telemetry-datastreams"
+        ],
+        "summary": "Get a telemetry datastream",
+        "description": "Gates: authenticate (router-wide), requirePermission('viewEquipment'), requireOrganizationScope. Errors answer { success: false, error: <code>, message }, and a 422 also carries details. An untagged error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "telemetryDatastreamId",
+            "in": "path",
+            "required": true,
+            "description": "The telemetryDatastreamId.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The datastream.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/telemetry-datastreams/{telemetryDatastreamId}/end": {
+      "post": {
+        "tags": [
+          "telemetry-datastreams"
+        ],
+        "summary": "End the validity of an open telemetry datastream",
+        "description": "Gates: authenticate (router-wide), requirePermission('manageStorageTopology'), requireOrganizationScope. Errors answer { success: false, error: <code>, message }, and a 422 also carries details. An untagged error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "telemetryDatastreamId",
+            "in": "path",
+            "required": true,
+            "description": "The telemetryDatastreamId.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "end": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "ISO 8601, exclusive; now when absent. It must be after validityPeriod.start."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The datastream, status retired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "The validity already ended, or ended during the operation (error DATASTREAM_ENDED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/sensors": {
+      "post": {
+        "tags": [
+          "sensors"
+        ],
+        "summary": "Create a sensor",
+        "description": "Gates: authenticate, requirePermission('manageSensor'), requireOrganizationScope. The 503 comes from authenticate. The 400 includes a caller of several organizations who names no organizationId, and a thrown 403, which is answered as 400. The 404 is an organizationId that does not resolve. The 422 is a validation failure or an unknown samplingPolicyId.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "sensorId",
+                  "sensorType"
+                ],
+                "properties": {
+                  "sensorType": {
+                    "type": "string"
+                  },
+                  "sensorModel": {
+                    "type": "string"
+                  },
+                  "maintenanceStatus": {
+                    "type": "string",
+                    "enum": [
+                      "operational",
+                      "maintenance",
+                      "calibration",
+                      "error"
+                    ]
+                  },
+                  "lastCalibration": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "ISO 8601."
+                  },
+                  "nextCalibration": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "ISO 8601."
+                  },
+                  "calibrationCertificate": {
+                    "type": "string"
+                  },
+                  "locationId": {
+                    "type": "string"
+                  },
+                  "policyId": {
+                    "type": "string"
+                  },
+                  "macAddress": {
+                    "type": "string"
+                  },
+                  "organizationId": {
+                    "type": "string"
+                  },
+                  "sensorId": {
+                    "type": "string",
+                    "description": "sensorID is read as an alias."
+                  },
+                  "temperaturePolicy": {
+                    "type": "string",
+                    "description": "Needs macAddress."
+                  },
+                  "storageContainer": {
+                    "type": "string",
+                    "description": "Needs macAddress."
+                  },
+                  "samplingPolicyId": {
+                    "type": "string",
+                    "description": "Binds a temperature datastream."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The sensor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or the operation failed; details lists the reasons when present.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "details": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "sensors"
+        ],
+        "summary": "List the sensors in the caller's organization scope",
+        "description": "Gates: authenticate, requirePermission('viewTemperature'), requireOrganizationScope. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "locationId",
+            "in": "query",
+            "required": false,
+            "description": "Only this location; locationID is read as an alias.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "maintenanceStatus",
+            "in": "query",
+            "required": false,
+            "description": "Only this maintenance status.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Page size; 50 when absent.",
+            "schema": {
+              "type": "integer",
+              "default": 50
+            }
+          },
+          {
+            "name": "skip",
+            "in": "query",
+            "required": false,
+            "description": "Sensors to skip; 0 when absent.",
+            "schema": {
+              "type": "integer",
+              "default": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The sensors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "type": "object"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/sensors/{id}": {
+      "get": {
+        "tags": [
+          "sensors"
+        ],
+        "summary": "Get a sensor",
+        "description": "Gates: authenticate, requirePermission('viewTemperature'), requireOrganizationScope. The 503 comes from authenticate. A sensor of another organization answers 403.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The sensorId.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The sensor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "sensors"
+        ],
+        "summary": "Update a sensor",
+        "description": "Gates: authenticate, requirePermission('manageSensor'), requireOrganizationScope. The 503 comes from authenticate. A sensor of another organization, or a refused re-parent of organizationId, answers 403. Every other failure, validation included, answers 400, so there is no 422. status and sensorStatus are read as aliases of maintenanceStatus.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The sensorId.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sensorType": {
+                    "type": "string"
+                  },
+                  "sensorModel": {
+                    "type": "string"
+                  },
+                  "maintenanceStatus": {
+                    "type": "string",
+                    "enum": [
+                      "operational",
+                      "maintenance",
+                      "calibration",
+                      "error"
+                    ]
+                  },
+                  "lastCalibration": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "ISO 8601."
+                  },
+                  "nextCalibration": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "ISO 8601."
+                  },
+                  "calibrationCertificate": {
+                    "type": "string"
+                  },
+                  "locationId": {
+                    "type": "string"
+                  },
+                  "policyId": {
+                    "type": "string"
+                  },
+                  "macAddress": {
+                    "type": "string"
+                  },
+                  "organizationId": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated sensor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "sensors"
+        ],
+        "summary": "Delete a sensor",
+        "description": "Gates: authenticate, requirePermission('manageSensor'), requireOrganizationScope. The 503 comes from authenticate. A sensor of another organization answers 403.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The sensorId.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Success"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/iot/telemetry": {
+      "post": {
+        "tags": [
+          "iot"
+        ],
+        "summary": "Ingest one temperature reading from a device",
+        "description": "Gates: requireMachineIngestSecret (header x-telemetry-ingest-secret). No authenticate, so it never answers 401, and it has no 404. The body is at the top level, not under data. 422 is an invalid timestamp, idempotencyKey, sequenceNumber or optional text field, or a reading the contract rejects. 503 is TELEMETRY_NOT_PERSISTED (the InfluxDB write was not confirmed), or a binding that cannot be verified in enforce mode (no code).",
+        "security": [
+          {
+            "telemetryIngestSecret": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "sensorId",
+                  "temperature"
+                ],
+                "properties": {
+                  "sensorId": {
+                    "type": "string"
+                  },
+                  "temperature": {
+                    "type": "number"
+                  },
+                  "timestamp": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "ISO 8601; the receipt time when absent."
+                  },
+                  "idempotencyKey": {
+                    "type": "string",
+                    "description": "A non-empty text; a replay of an accepted key answers the first reading."
+                  },
+                  "sequenceNumber": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "sourceEventId": {
+                    "type": "string"
+                  },
+                  "deviceMessageId": {
+                    "type": "string"
+                  },
+                  "traceId": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Accepted, or a replay of an idempotencyKey (replayed true, with the first reading's fields).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "accepted": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "replayed": {
+                      "type": "boolean",
+                      "description": "true on a replay of an idempotencyKey."
+                    },
+                    "telemetryReadingId": {
+                      "type": "string"
+                    },
+                    "observedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "receivedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "persistedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "clockStatus": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "sensorId is missing, or temperature is not a finite number.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The machine-ingest secret is missing or wrong.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The reading is invalid; error carries the reason, with no details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The handler failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "TELEMETRY_NOT_PERSISTED (code carries it), or the binding cannot be verified in enforce mode (no code).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/iot/telemetry-monitor/run-cycle": {
+      "post": {
+        "tags": [
+          "iot"
+        ],
+        "summary": "Test support: check for missing readings once",
+        "description": "Gates: requireTestSupportSecret (header x-test-support-secret). No authenticate. Runs the telemetry monitor's missing-readings check. Registered only when NODE_ENV is not production and ENABLE_TEST_SUPPORT_ROUTES is true. A wrong secret answers 403; 503 is \"telemetryMonitor não inicializado\".",
+        "security": [
+          {
+            "testSupportSecret": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Done.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Success"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The test-support secret is missing or wrong.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The monitor failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "telemetryMonitor não inicializado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/iot/telemetry-monitor/find-critical-freezers": {
+      "post": {
+        "tags": [
+          "iot"
+        ],
+        "summary": "Test support: find the freezers in critical state",
+        "description": "Gates: requireTestSupportSecret (header x-test-support-secret). No authenticate. The optional body fields override the monitor's settings for this call only. Registered only when NODE_ENV is not production and ENABLE_TEST_SUPPORT_ROUTES is true. A wrong secret answers 403; 503 is \"telemetryMonitor não inicializado\".",
+        "security": [
+          {
+            "testSupportSecret": []
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "criticalDurationHours": {
+                    "type": "number"
+                  },
+                  "lookbackHours": {
+                    "type": "number"
+                  },
+                  "expectedReadingIntervalMinutes": {
+                    "type": "number"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The critical freezers.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "criticalFreezers": {
+                          "type": "array",
+                          "items": {
+                            "type": "object"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The test-support secret is missing or wrong.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The monitor failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "telemetryMonitor não inicializado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/iot/telemetry-monitor/run-cycle-full": {
+      "post": {
+        "tags": [
+          "iot"
+        ],
+        "summary": "Test support: run a full telemetry monitor cycle",
+        "description": "Gates: requireTestSupportSecret (header x-test-support-secret). No authenticate. Runs the full cycle; the optional body fields override the monitor's settings for this call only. Registered only when NODE_ENV is not production and ENABLE_TEST_SUPPORT_ROUTES is true. A wrong secret answers 403; 503 is \"telemetryMonitor não inicializado\".",
+        "security": [
+          {
+            "testSupportSecret": []
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "criticalDurationHours": {
+                    "type": "number"
+                  },
+                  "lookbackHours": {
+                    "type": "number"
+                  },
+                  "expectedReadingIntervalMinutes": {
+                    "type": "number"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Done.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Success"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The test-support secret is missing or wrong.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The monitor failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "telemetryMonitor não inicializado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/temperature/reading": {
+      "post": {
+        "tags": [
+          "temperature"
+        ],
+        "summary": "Record a temperature reading",
+        "description": "Gates: authenticate, requirePermission('recordTemperature'), requireOrganizationScope. The 503 comes from authenticate. 200 is a replayed idempotencyKey. 400 is an untagged failure, a caller of several organizations who names no organizationId, or a thrown 403. 404 is an unknown organizationId. A 503 is also TELEMETRY_NOT_PERSISTED or TELEMETRY_BINDING_UNVERIFIABLE, with code.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "sensorId",
+                  "temperatureValue"
+                ],
+                "properties": {
+                  "sensorId": {
+                    "type": "string",
+                    "description": "sensorID is read as an alias."
+                  },
+                  "temperatureValue": {
+                    "type": "number"
+                  },
+                  "temperatureUnit": {
+                    "type": "string",
+                    "enum": [
+                      "°C",
+                      "°F",
+                      "K"
+                    ],
+                    "default": "°C"
+                  },
+                  "timestamp": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "ISO 8601; the receipt time when absent."
+                  },
+                  "readingStatus": {
+                    "type": "string",
+                    "enum": [
+                      "valid",
+                      "invalid",
+                      "suspicious"
+                    ],
+                    "default": "valid"
+                  },
+                  "sensorStatus": {
+                    "type": "string",
+                    "enum": [
+                      "normal",
+                      "faulty",
+                      "maintenance"
+                    ],
+                    "default": "normal"
+                  },
+                  "signalQuality": {
+                    "type": "string",
+                    "enum": [
+                      "excellent",
+                      "good",
+                      "poor",
+                      "lost"
+                    ]
+                  },
+                  "maintenanceStatus": {
+                    "type": "string",
+                    "enum": [
+                      "ok",
+                      "pending",
+                      "overdue"
+                    ]
+                  },
+                  "batteryLevel": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 100
+                  },
+                  "dataQualityScore": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "policyId": {
+                    "type": "string",
+                    "description": "When given, the reading is checked against this policy and may raise an alert."
+                  },
+                  "idempotencyKey": {
+                    "type": "string",
+                    "description": "A replay of a recorded key answers 200 with the first reading."
+                  },
+                  "sequenceNumber": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "sourceEventId": {
+                    "type": "string"
+                  },
+                  "deviceMessageId": {
+                    "type": "string"
+                  },
+                  "traceId": {
+                    "type": "string"
+                  },
+                  "organizationId": {
+                    "type": "string",
+                    "description": "Needed by a caller of several organizations."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "A replay: the first reading.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "The reading.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The operation failed; details lists the reasons when present.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "details": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "description": "The database is not available (from authenticate), or the reading was not persisted (TELEMETRY_NOT_PERSISTED) or its binding cannot be verified (TELEMETRY_BINDING_UNVERIFIABLE); code carries those two.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/temperature/system/reading": {
+      "post": {
+        "tags": [
+          "temperature"
+        ],
+        "summary": "Record a temperature reading from a device",
+        "description": "Gates: requireMachineIngestSecret (header x-telemetry-ingest-secret). No authenticate, so it never answers 401, and the controller's catch maps every failure to 400, 404, 422 or 503, so it never answers 500. The organization comes from the sensor, never from the body. 404 is an unknown sensorId or organization. 503 is the controller's own no-database branch, TELEMETRY_NOT_PERSISTED or TELEMETRY_BINDING_UNVERIFIABLE (code carries those two). 200 is a replayed idempotencyKey.",
+        "security": [
+          {
+            "telemetryIngestSecret": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "sensorId",
+                  "temperatureValue"
+                ],
+                "properties": {
+                  "sensorId": {
+                    "type": "string",
+                    "description": "sensorID is read as an alias."
+                  },
+                  "temperatureValue": {
+                    "type": "number"
+                  },
+                  "temperatureUnit": {
+                    "type": "string",
+                    "enum": [
+                      "°C",
+                      "°F",
+                      "K"
+                    ],
+                    "default": "°C"
+                  },
+                  "timestamp": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "ISO 8601; the receipt time when absent."
+                  },
+                  "readingStatus": {
+                    "type": "string",
+                    "enum": [
+                      "valid",
+                      "invalid",
+                      "suspicious"
+                    ],
+                    "default": "valid"
+                  },
+                  "sensorStatus": {
+                    "type": "string",
+                    "enum": [
+                      "normal",
+                      "faulty",
+                      "maintenance"
+                    ],
+                    "default": "normal"
+                  },
+                  "signalQuality": {
+                    "type": "string",
+                    "enum": [
+                      "excellent",
+                      "good",
+                      "poor",
+                      "lost"
+                    ]
+                  },
+                  "maintenanceStatus": {
+                    "type": "string",
+                    "enum": [
+                      "ok",
+                      "pending",
+                      "overdue"
+                    ]
+                  },
+                  "batteryLevel": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 100
+                  },
+                  "dataQualityScore": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  },
+                  "policyId": {
+                    "type": "string",
+                    "description": "When given, the reading is checked against this policy and may raise an alert."
+                  },
+                  "idempotencyKey": {
+                    "type": "string",
+                    "description": "A replay of a recorded key answers 200 with the first reading."
+                  },
+                  "sequenceNumber": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "sourceEventId": {
+                    "type": "string"
+                  },
+                  "deviceMessageId": {
+                    "type": "string"
+                  },
+                  "traceId": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "A replay: the first reading.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "The reading.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The operation failed; details lists the reasons when present.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "details": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The machine-ingest secret is missing or wrong.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "503": {
+            "description": "The database is not available, the reading was not persisted (TELEMETRY_NOT_PERSISTED) or its binding cannot be verified (TELEMETRY_BINDING_UNVERIFIABLE).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/temperature/history": {
+      "get": {
+        "tags": [
+          "temperature"
+        ],
+        "summary": "Temperature reading history",
+        "description": "Gates: authenticate, requirePermission('viewTemperature'), requireOrganizationScope. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "sensorId",
+            "in": "query",
+            "required": false,
+            "description": "Only this sensor; sensorID is read as an alias.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "startDate",
+            "in": "query",
+            "required": false,
+            "description": "From this instant (ISO 8601).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "endDate",
+            "in": "query",
+            "required": false,
+            "description": "Until this instant (ISO 8601).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Page size; 1000 when absent.",
+            "schema": {
+              "type": "integer",
+              "default": 1000
+            }
+          },
+          {
+            "name": "skip",
+            "in": "query",
+            "required": false,
+            "description": "Readings to skip; 0 when absent.",
+            "schema": {
+              "type": "integer",
+              "default": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The readings.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/temperature/alerts": {
+      "get": {
+        "tags": [
+          "temperature"
+        ],
+        "summary": "Active temperature alerts",
+        "description": "Gates: authenticate, requirePermission('viewTemperature'), requireOrganizationScope. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The active alerts.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "type": "object"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/temperature": {
+      "get": {
+        "tags": [
+          "temperature"
+        ],
+        "summary": "List temperature readings",
+        "description": "Gates: authenticate, requirePermission('viewTemperature'), requireOrganizationScope. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "sensorId",
+            "in": "query",
+            "required": false,
+            "description": "Only this sensor.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Page size; 100 when absent.",
+            "schema": {
+              "type": "integer",
+              "default": 100
+            }
+          },
+          {
+            "name": "skip",
+            "in": "query",
+            "required": false,
+            "description": "Readings to skip; 0 when absent.",
+            "schema": {
+              "type": "integer",
+              "default": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The readings.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/temperature/control": {
+      "get": {
+        "tags": [
+          "temperature"
+        ],
+        "summary": "Temperature readings for the control chart",
+        "description": "Gates: authenticate, requirePermission('viewTemperature'), requireOrganizationScope. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "sensorID",
+            "in": "query",
+            "required": false,
+            "description": "Only this sensor; sensorId is read as an alias.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "policyID",
+            "in": "query",
+            "required": false,
+            "description": "Only readings of this policy.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Up to 1000 readings.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "type": "object"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/temperature/{id}": {
+      "get": {
+        "tags": [
+          "temperature"
+        ],
+        "summary": "Get a temperature reading",
+        "description": "Gates: authenticate, requirePermission('viewTemperature'), requireOrganizationScope. The 503 comes from authenticate. An id that is not a UUID answers 404 unread; a reading of another organization answers 403.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The telemetryReadingId, a UUID.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The reading.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -7432,6 +10189,18 @@
         "scheme": "bearer",
         "bearerFormat": "JWT",
         "description": "Authorization: Bearer <access token>, the token login and refresh return."
+      },
+      "telemetryIngestSecret": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-telemetry-ingest-secret",
+        "description": "The machine-ingest secret (TELEMETRY_INGEST_SECRET) a device sends instead of a session."
+      },
+      "testSupportSecret": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-test-support-secret",
+        "description": "The test-support secret (TEST_SUPPORT_SECRET) of the telemetry-monitor test routes."
       }
     },
     "schemas": {
