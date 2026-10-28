@@ -49,7 +49,9 @@
     "/api/storage",
     "/api/equipment",
     "/api/organizations",
-    "/api/physical-chain"
+    "/api/physical-chain",
+    "/api/policies",
+    "/api/shipments"
   ],
   "tags": [
     {
@@ -223,6 +225,14 @@
     {
       "name": "physical-chain",
       "description": "/api/physical-chain: the temporal physical chain of a specimen (container, position, rack location) and its custody, the storage locations, the container labels and the scan resolver, with the exposure summaries (RF016, RF017, RF021)."
+    },
+    {
+      "name": "policies",
+      "description": "/api/policies: the temperature policies, the threshold profiles telemetry is checked against, with their read, active limit, create, update and delete (RF009)."
+    },
+    {
+      "name": "shipments",
+      "description": "/api/shipments: the remessa that carries out an executed transfer or a released distribution, its dispatch, receipt and reads (RF024 AC5, RF026)."
     }
   ],
   "paths": {
@@ -38290,6 +38300,1111 @@
           }
         }
       }
+    },
+    "/api/policies": {
+      "get": {
+        "tags": [
+          "policies"
+        ],
+        "summary": "List the temperature policies",
+        "description": "Gates: authenticate, requirePermission('viewTemperature'); no organization scope. Returns every policy. The 503 comes from authenticate and from the handler (no database). The 500 is also a failure of the read. The route has no 400.",
+        "responses": {
+          "200": {
+            "description": "Every temperature policy.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/TemperaturePolicyRecord"
+                          }
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "policies"
+        ],
+        "summary": "Create a temperature policy",
+        "description": "Gates: authenticate, requirePermission('manageTemperaturePolicy'); no organization scope. The 422 (error \"Dados inválidos\", details a list of reasons) is a name that is not a non-blank string, a minTemp or maxTemp that is not a number, minTemp not below maxTemp, or a truthy temperatureUnit other than °C. An empty temperatureUnit is stored as °C. The handler's catch answers 400 (not 500) when the insert fails, and sends no 500 of its own; the 500 comes from the gates. The 503 comes from authenticate and from the handler (no database).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Non-blank string."
+                  },
+                  "minTemp": {
+                    "type": "number",
+                    "description": "Must be below maxTemp."
+                  },
+                  "maxTemp": {
+                    "type": "number"
+                  },
+                  "temperatureUnit": {
+                    "type": "string",
+                    "enum": [
+                      "°C"
+                    ],
+                    "description": "Celsius only (#1198); an empty value is stored as °C."
+                  },
+                  "hysteresis": {
+                    "type": "number",
+                    "default": 0.5
+                  },
+                  "minimumDuration": {
+                    "type": "number",
+                    "nullable": true,
+                    "description": "Minutes; omitted is stored as null (#1195)."
+                  },
+                  "effectivePeriod": {
+                    "type": "object",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "format": "date-time",
+                        "description": "Defaults to now."
+                      },
+                      "end": {
+                        "type": "string",
+                        "format": "date-time",
+                        "nullable": true
+                      }
+                    }
+                  }
+                },
+                "required": [
+                  "name",
+                  "minTemp",
+                  "maxTemp"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The policy is created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/TemperaturePolicyRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The insert failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        false
+                      ]
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "success"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/policies/{id}": {
+      "get": {
+        "tags": [
+          "policies"
+        ],
+        "summary": "Read a temperature policy",
+        "description": "Gates: authenticate, requirePermission('viewTemperature'); no organization scope. An all-digit id is looked up as the legacy numeric policyId, then a valid ObjectId as _id; any other id, or no match, answers 404. The route has no 400. The 503 comes from authenticate and from the handler (no database).",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The policy: an all-digit legacy numeric policyId, or its _id (24-hex ObjectId).",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The policy.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/TemperaturePolicyRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "policies"
+        ],
+        "summary": "Update a temperature policy",
+        "description": "Gates: authenticate, requirePermission('manageTemperaturePolicy'); no organization scope. The body has no required field: only the fields sent are written (name, minTemp, maxTemp, hysteresis, minimumDuration, temperatureUnit, and effectivePeriod.start and .end each when sent). Only the unit is checked (422, same shape as POST); types and minTemp < maxTemp are not. The id is looked up by _id only: an id that is not a 24-hex ObjectId throws and the catch answers 400, so a legacy numeric policyId cannot be updated; no match answers 404. The success carries a message and no data. The handler sends no 500; the 500 comes from the gates. The 503 comes from authenticate and from the handler (no database).",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The policy _id, a 24-hex ObjectId; any other value (including a legacy numeric policyId) throws and answers 400.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "minTemp": {
+                    "type": "number"
+                  },
+                  "maxTemp": {
+                    "type": "number"
+                  },
+                  "hysteresis": {
+                    "type": "number"
+                  },
+                  "minimumDuration": {
+                    "type": "number",
+                    "nullable": true
+                  },
+                  "temperatureUnit": {
+                    "type": "string",
+                    "enum": [
+                      "°C"
+                    ],
+                    "description": "Celsius only (#1198); another truthy value answers 422."
+                  },
+                  "effectivePeriod": {
+                    "type": "object",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "format": "date-time",
+                        "nullable": true
+                      },
+                      "end": {
+                        "type": "string",
+                        "format": "date-time",
+                        "nullable": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The policy is updated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Success"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The id is not a 24-hex ObjectId, or the update failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        false
+                      ]
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "success"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "policies"
+        ],
+        "summary": "Delete a temperature policy",
+        "description": "Gates: authenticate, requirePermission('manageTemperaturePolicy'); no organization scope. The id is looked up by _id only: an id that is not a 24-hex ObjectId throws and the catch answers 400, so a legacy numeric policyId cannot be deleted; no match answers 404. The handler sends no 500; the 500 comes from the gates. The 503 comes from authenticate and from the handler (no database).",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The policy _id, a 24-hex ObjectId; any other value (including a legacy numeric policyId) throws and answers 400.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The policy is deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Success"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The id is not a 24-hex ObjectId, or the delete failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        false
+                      ]
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "success"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/policies/{id}/active-limit": {
+      "get": {
+        "tags": [
+          "policies"
+        ],
+        "summary": "The active limit of a temperature policy",
+        "description": "Gates: authenticate, requirePermission('viewTemperature'); no organization scope. The id is resolved as in GET /api/policies/{id}; any other id, or no match, answers 404. Query type \"max\" returns maxTemp; any other value or none returns minTemp. The unit falls back to \"C\" when the stored temperatureUnit is empty. The route has no 400. The 503 comes from authenticate and from the handler (no database).",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The policy: an all-digit legacy numeric policyId, or its _id (24-hex ObjectId).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "description": "\"max\" for the upper limit; any other value or none for the lower limit.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The limit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "limit": {
+                              "type": "number"
+                            },
+                            "type": {
+                              "type": "string",
+                              "enum": [
+                                "max",
+                                "min"
+                              ]
+                            },
+                            "unit": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "limit",
+                            "type",
+                            "unit"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/shipments": {
+      "post": {
+        "tags": [
+          "shipments"
+        ],
+        "summary": "Dispatch a shipment",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador or Administrador), requireOrganizationScope. The body is validated first, so every missing or malformed field answers 422 VALIDATION_ERROR (details lists each reason) before any 403 or 404. Exactly one of dispositionActionId and accessRequestId must be a non-blank string: both or neither answer 422, and an empty string counts as not sent (a whitespace-only dispositionActionId passes this check but is still looked up, and answers 404 AUTHORIZATION_NOT_FOUND). Then: 403 OUT_OF_SCOPE when the sender organization is outside the caller's scope; 422 ORGANIZATION_NOT_FOUND when the sender or recipient is unknown; 404 AUTHORIZATION_NOT_FOUND; 422 AUTHORIZATION_NOT_TRANSFER (the disposition action is not a transfer of specimens); 409 AUTHORIZATION_NOT_EXECUTED (transfer not executed) or AUTHORIZATION_NOT_RELEASED (distribution not released); 422 SPECIMEN_NOT_FOUND or SPECIMEN_NOT_AUTHORIZED. The dispatch is audited. The 503 comes from authenticate and from the handler. The 500 is also a failure of the dispatch. The route has no 400 (#660).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "specimenIds": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Non-blank ids; each matched by the specimen's canonical id or its _id."
+                  },
+                  "senderOrganization": {
+                    "type": "string",
+                    "description": "Must be in the caller's organization scope."
+                  },
+                  "recipientOrganization": {
+                    "type": "string",
+                    "description": "Must differ from the sender."
+                  },
+                  "mtaId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Reference of the transfer agreement (ELM-0400)."
+                  },
+                  "packagingType": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "The packaging code."
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "code": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "display": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "code"
+                        ]
+                      }
+                    ]
+                  },
+                  "dispatchDateTime": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "ISO 8601."
+                  },
+                  "carrier": {
+                    "type": "string"
+                  },
+                  "trackingNumber": {
+                    "type": "string"
+                  },
+                  "temperatureLoggerId": {
+                    "type": "string"
+                  },
+                  "dispositionActionId": {
+                    "type": "string",
+                    "description": "An executed transfer disposition action. Send this or accessRequestId, not both."
+                  },
+                  "accessRequestId": {
+                    "type": "string",
+                    "description": "An access request whose distribution was released. Send this or dispositionActionId, not both."
+                  }
+                },
+                "required": [
+                  "specimenIds",
+                  "senderOrganization",
+                  "recipientOrganization",
+                  "mtaId",
+                  "packagingType",
+                  "dispatchDateTime"
+                ],
+                "oneOf": [
+                  {
+                    "required": [
+                      "dispositionActionId"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "accessRequestId"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The shipment is dispatched (shipmentStatus dispatched).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/ShipmentRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "AUTHORIZATION_NOT_FOUND: the disposition action or access request does not exist.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        false
+                      ]
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "success"
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "AUTHORIZATION_NOT_EXECUTED (the transfer is not executed) or AUTHORIZATION_NOT_RELEASED (the distribution is not released).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        false
+                      ]
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "success"
+                  ]
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "VALIDATION_ERROR (details lists each reason), ORGANIZATION_NOT_FOUND, AUTHORIZATION_NOT_TRANSFER, SPECIMEN_NOT_FOUND or SPECIMEN_NOT_AUTHORIZED; error carries the code and details only comes with VALIDATION_ERROR.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        false
+                      ]
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "details": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "success"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "get": {
+        "tags": [
+          "shipments"
+        ],
+        "summary": "List the shipments of the caller's organizations",
+        "description": "Gates: authenticate, requireOrganizationScope. Returns the shipments whose sender or recipient organization is in the caller's scope (all for a global caller), newest dispatchDateTime first. The 503 comes from authenticate and from the handler. The 500 is also a failure of the read. The route has no 400.",
+        "responses": {
+          "200": {
+            "description": "The visible shipments.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/ShipmentRecord"
+                          }
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/shipments/{id}": {
+      "get": {
+        "tags": [
+          "shipments"
+        ],
+        "summary": "Read a shipment",
+        "description": "Gates: authenticate, requireOrganizationScope. The 404 is an unknown shipment (SHIPMENT_NOT_FOUND). The 403 is a shipment whose sender and recipient are both outside the caller's scope (OUT_OF_SCOPE), or a caller with no organization. The 503 comes from authenticate and from the handler. The route has no 400.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The shipmentId (a UUID).",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The shipment.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/ShipmentRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "SHIPMENT_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        false
+                      ]
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "success"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/shipments/{id}/receive": {
+      "post": {
+        "tags": [
+          "shipments"
+        ],
+        "summary": "Record the receipt of a shipment",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador or Administrador), requireOrganizationScope. The checks run in this order: 404 SHIPMENT_NOT_FOUND; 403 OUT_OF_SCOPE (the recipient organization is outside the caller's scope); 409 ALREADY_RECEIVED; then the body, 422 VALIDATION_ERROR (details lists each reason) for a missing or invalid receiptDateTime, one before the dispatch, or a conditionOnReceipt that is not an object or has a key other than integrity, temperature, packaging and discrepancies; then 409 CONCURRENT_UPDATE when the shipment changed meanwhile. So a missing receiptDateTime is answered 422 only after the 404, 403 and 409 checks. The receipt is audited. The 503 comes from authenticate and from the handler. The route has no 400.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The shipmentId (a UUID).",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "receiptDateTime": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "ISO 8601, not before the shipment's dispatchDateTime."
+                  },
+                  "conditionOnReceipt": {
+                    "type": "object",
+                    "nullable": true,
+                    "description": "Integrity, temperature, packaging and discrepancies on arrival (ELM-0407); no other key.",
+                    "properties": {
+                      "integrity": {},
+                      "temperature": {},
+                      "packaging": {},
+                      "discrepancies": {}
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "receiptDateTime"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The receipt is recorded (shipmentStatus received).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/ShipmentRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "SHIPMENT_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        false
+                      ]
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "success"
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ALREADY_RECEIVED (the receipt was recorded before) or CONCURRENT_UPDATE (the shipment changed meanwhile; read it again).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        false
+                      ]
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "success"
+                  ]
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -39690,6 +40805,203 @@
           "code",
           "organizationId",
           "locationStatus"
+        ],
+        "additionalProperties": true
+      },
+      "TemperaturePolicyRecord": {
+        "type": "object",
+        "description": "A temperature policy as the API returns it: the stored document (collection temperaturePolicies), the threshold profile telemetry is checked against (RF009).",
+        "properties": {
+          "_id": {
+            "type": "string"
+          },
+          "policyId": {
+            "type": "integer",
+            "description": "Legacy numeric id; present only on older documents."
+          },
+          "name": {
+            "type": "string"
+          },
+          "minTemp": {
+            "type": "number",
+            "description": "Lower limit, in degrees Celsius."
+          },
+          "maxTemp": {
+            "type": "number",
+            "description": "Upper limit, in degrees Celsius."
+          },
+          "hysteresis": {
+            "type": "number"
+          },
+          "metricType": {
+            "type": "string",
+            "enum": [
+              "temperature"
+            ]
+          },
+          "ruleVersion": {
+            "type": "string"
+          },
+          "effectivePeriod": {
+            "type": "object",
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time",
+                "nullable": true
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time",
+                "nullable": true
+              }
+            }
+          },
+          "minimumDuration": {
+            "type": "number",
+            "nullable": true,
+            "description": "Minutes; null (or a non-positive value) falls back to the global threshold (#1195)."
+          },
+          "temperatureUnit": {
+            "type": "string",
+            "description": "°C for a policy written since #1198; an older document may hold another unit or none (the active-limit handler falls back to C for an empty one)."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "_id"
+        ],
+        "additionalProperties": true
+      },
+      "ShipmentRecord": {
+        "type": "object",
+        "description": "A shipment (remessa) as the API returns it (RF024 AC5, RF026; ELM-0396..0407).",
+        "properties": {
+          "shipmentId": {
+            "type": "string",
+            "description": "A UUID; the id the routes take."
+          },
+          "specimenIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The canonical ids of the shipped specimens."
+          },
+          "senderOrganization": {
+            "type": "string"
+          },
+          "recipientOrganization": {
+            "type": "string"
+          },
+          "mtaId": {
+            "type": "string",
+            "description": "Reference of the transfer agreement; nothing resolves it."
+          },
+          "carrier": {
+            "type": "string",
+            "nullable": true
+          },
+          "trackingNumber": {
+            "type": "string",
+            "nullable": true
+          },
+          "packagingType": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "display": {
+                "type": "string",
+                "nullable": true
+              }
+            },
+            "required": [
+              "code",
+              "display"
+            ]
+          },
+          "temperatureLoggerId": {
+            "type": "string",
+            "nullable": true
+          },
+          "dispatchDateTime": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "receiptDateTime": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "conditionOnReceipt": {
+            "type": "object",
+            "nullable": true,
+            "description": "Set by the receipt; a key the receipt did not send is null.",
+            "properties": {
+              "integrity": {
+                "nullable": true
+              },
+              "temperature": {
+                "nullable": true
+              },
+              "packaging": {
+                "nullable": true
+              },
+              "discrepancies": {
+                "nullable": true
+              }
+            }
+          },
+          "shipmentStatus": {
+            "type": "string",
+            "enum": [
+              "dispatched",
+              "received"
+            ]
+          },
+          "dispositionActionId": {
+            "type": "string",
+            "nullable": true
+          },
+          "accessRequestId": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdBy": {
+            "type": "string",
+            "nullable": true
+          },
+          "receivedBy": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "shipmentId",
+          "specimenIds",
+          "senderOrganization",
+          "recipientOrganization",
+          "mtaId",
+          "packagingType",
+          "dispatchDateTime",
+          "shipmentStatus"
         ],
         "additionalProperties": true
       }
