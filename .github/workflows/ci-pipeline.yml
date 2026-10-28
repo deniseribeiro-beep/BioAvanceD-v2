@@ -118,6 +118,10 @@ jobs:
             -f compose.test.yml \
             ps
 
+      # #1413: the essential reference load that backend-app-test waits for
+      # (essential-reference-bootstrap-test, RF022 AC7 Phase 2) writes the
+      # SPREC minimal set into terminologies by design. Only a terminology
+      # outside that set counts as application data.
       - name: Verify empty MongoDB application collections
         run: |
           docker compose \
@@ -132,7 +136,6 @@ jobs:
                 "consents",
                 "medication_dictionary",
                 "orphanet_diseases",
-                "terminologies",
                 "hpo_terms",
                 "biomarker_observations",
                 "sensors",
@@ -148,6 +151,12 @@ jobs:
                 print(name + ": " + count);
                 total += count;
               }
+
+              const essentialTerminology = { sistema: "SPREC", fonte: "seed-essential-sprec-v1" };
+              const terminologies = db.getCollection("terminologies");
+              const otherTerminologies = terminologies.countDocuments({ $nor: [essentialTerminology] });
+              print("terminologies: " + otherTerminologies + " (essential SPREC set: " + terminologies.countDocuments(essentialTerminology) + ")");
+              total += otherTerminologies;
 
               if (total !== 0) {
                 print("Application collections are not empty.");
