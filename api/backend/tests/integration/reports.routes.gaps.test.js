@@ -1203,6 +1203,7 @@ describe('reports.routes.js gaps', () => {
       ['sampleanalysis', '/api/reports/sample_analysis/preview'],
       ['tissueoriginhistory', '/api/reports/tissue_origin_history/preview'],
       ['resultado', '/api/reports/results/preview'],
+      ['withdrawalhistory', '/api/reports/withdrawal_history/preview'],
       ['sensor', '/api/reports/sensors/preview'],
       ['equipamento', '/api/reports/equipment/preview'],
       ['temperatura', '/api/reports/temperature/preview'],
@@ -1216,11 +1217,11 @@ describe('reports.routes.js gaps', () => {
     });
 
     // #636: every entity-rooted report type this repo currently scopes
-    // (sample/patient-rooted, Result, Sensor, Equipment, Temperature) is
-    // now covered by the it.each above -- no "deliberately unscoped"
-    // types remain in this file's own coverage (access-log/withdrawal-
-    // history are unscoped by design but tested separately elsewhere,
-    // see the #620 describe block below).
+    // (sample/patient-rooted, Result, withdrawal history (#1410), Sensor,
+    // Equipment, Temperature) is now covered by the it.each above -- no
+    // "deliberately unscoped" types remain in this file's own coverage
+    // (access-log types are unscoped by design but tested separately
+    // elsewhere).
 
     it('amostra: filtra a query pela chave de tenancy para um usuário organization-scoped', async () => {
       const { db, capturedQueries } = buildCollectionDb({ ...ORG_SCOPED_RBAC, samples: [{ sampleID: 'S1', collectionSite: 'org-1' }] });
@@ -1343,6 +1344,33 @@ describe('reports.routes.js gaps', () => {
       expect(response.status).toBe(200);
       expect(capturedQueries.results).toEqual({});
     });
+
+    // #1410: a withdrawal movement has no organization of its own -- it is
+    // scoped through its sample's tenancy key, the same join as Result.
+    it('withdrawalhistory: filtra por amostras da organização via join specimenId -> Sample.specimenId', async () => {
+      const { db, capturedQueries } = buildCollectionDb({
+        ...ORG_SCOPED_RBAC,
+        samples: [{ specimenId: 'SPX-1', collectionSite: 'org-1' }],
+        sample_movements: [{ type: 'withdraw', specimenId: 'SPX-1', createdAt: new Date('2026-01-05') }],
+      });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).post('/api/reports/withdrawal_history/preview').send({ filters: {} });
+
+      expect(response.status).toBe(200);
+      expect(capturedQueries.samples).toEqual(ORG_1_SAMPLE_SCOPE);
+      expect(capturedQueries.sample_movements).toEqual({ type: 'withdraw', specimenId: { $in: ['SPX-1'] } });
+    });
+
+    it('withdrawalhistory: Administrador (scope global) não recebe filtro de specimenId', async () => {
+      const { db, capturedQueries } = buildCollectionDb({ sample_movements: [{ type: 'withdraw', specimenId: 'SPX-1' }] });
+      const testApp = appWithDb(db);
+
+      const response = await request(testApp).post('/api/reports/withdrawal_history/preview').send({ filters: {} });
+
+      expect(response.status).toBe(200);
+      expect(capturedQueries.sample_movements).toEqual({ type: 'withdraw' });
+    });
   });
 
   // #637: saved Report documents get their own organizationIds (an array
@@ -1379,11 +1407,12 @@ describe('reports.routes.js gaps', () => {
       const { db } = buildCollectionDb(ORG_SCOPED_RBAC);
       const testApp = appWithDb(db);
 
-      // #1056: `withdrawal_history` rather than `audit`. Both are absent from
-      // SCOPED_HANDLER_KEYS, which is the property this case actually needs --
-      // but the accessLogs handler is now admin-or-auditor only and this caller
-      // is a plain Coordenador. Swapping the type keeps the fixture honest
-      // instead of granting it a role it was never meant to have.
+      // #1056: `withdrawal_history` rather than `audit`. This case needs a
+      // type a plain Coordenador may build, and the accessLogs handler is
+      // admin-or-auditor only. Swapping the type keeps the fixture honest
+      // instead of granting it a role it was never meant to have; the
+      // caller's usable org scope passes the scope gate withdrawal_history
+      // has carried since #1410.
       const response = await request(testApp).post('/api/reports/generate').send({ reportType: 'withdrawal_history' });
 
       expect(response.status).toBe(201);
@@ -1394,7 +1423,8 @@ describe('reports.routes.js gaps', () => {
       const { db } = buildCollectionDb(MULTI_ORG_SCOPED_RBAC);
       const testApp = appWithDb(db);
 
-      // #1056: same swap, same reason as the case above.
+      // #1056: same swap, same reason as the case above; this caller's
+      // two-organization scope is usable too, so the #1410 gate passes.
       const response = await request(testApp).post('/api/reports/generate').send({ reportType: 'withdrawal_history' });
 
       expect(response.status).toBe(201);

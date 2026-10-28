@@ -327,10 +327,12 @@ async function getMatchingPatientIds(samplesCollection, sampleQuery) {
 
 // #341 (RF003 AC#3): only report types rooted in the samples/patients
 // collections (plus, per #621, Result — scoped via a join through its
-// linked Sample's tenancy key (#1192); per #634/#635/#636, Sensor/Equipment/
-// Temperature — scoped directly by their own organizationId) carry an
-// organization reference to scope by — confirmed with Dennis 2026-08-18.
-// access-log/withdrawal-history report types, and saved Report documents
+// linked Sample's tenancy key (#1192); per #1410, withdrawal history —
+// scoped the same way, through each withdrawal movement's sample tenancy
+// key; per #634/#635/#636, Sensor/Equipment/Temperature — scoped directly
+// by their own organizationId) carry an organization reference to scope
+// by — confirmed with Dennis 2026-08-18.
+// access-log report types, and saved Report documents
 // themselves, have no organization concept anywhere yet and are
 // deliberately left unscoped (see the follow-up filed alongside this
 // issue, #621, and its #629/#634-#637 split). Keyed by `handlerKey` now
@@ -344,6 +346,7 @@ const SCOPED_HANDLER_KEYS = new Set([
   'sensor',
   'equipment',
   'result',
+  'withdrawalHistory',
   'tissueOriginHistory',
   'extracellularNetwork',
 ]);
@@ -800,6 +803,19 @@ async function handleEquipment(db, filters) {
   return { total, equipment, previewLimited: total > 100 };
 }
 
+// The specimenIds (as strings) of the samples inside an organization
+// scope — the join key Result (#621, #1192) and withdrawal history
+// (#1410) scope by, since neither carries an organization of its own.
+async function scopedSampleSpecimenIds(db, organizationScope) {
+  const samplesCollection = resolveCollection(db, ['samples', 'amostras']);
+  const sampleScopeClause = sampleOrganizationScopeClause(organizationScope);
+  const scopedSamples = await samplesCollection.find(sampleScopeClause).toArray();
+  return scopedSamples
+    .map((sample) => sample.specimenId)
+    .filter((value) => value !== undefined && value !== null)
+    .map((value) => String(value));
+}
+
 async function handleResult(db, filters) {
   const collection = resolveCollection(db, ['results']);
   let query = {};
@@ -810,13 +826,7 @@ async function handleResult(db, filters) {
     // write path writes it, and the #628 migration backfilled existing
     // documents) — a single-shape match, not the dual _id/specimenId
     // check #621 originally needed while the field was still stale.
-    const samplesCollection = resolveCollection(db, ['samples', 'amostras']);
-    const sampleScopeClause = sampleOrganizationScopeClause(filters.organizationScope);
-    const scopedSamples = await samplesCollection.find(sampleScopeClause).toArray();
-    const scopedSpecimenIds = scopedSamples
-      .map((sample) => sample.specimenId)
-      .filter((value) => value !== undefined && value !== null)
-      .map((value) => String(value));
+    const scopedSpecimenIds = await scopedSampleSpecimenIds(db, filters.organizationScope);
     query = { specimenId: { $in: scopedSpecimenIds } };
   }
   const results = await collection.find(query).limit(100).toArray();
@@ -829,11 +839,20 @@ async function handleWithdrawalHistory(db, filters) {
   // path — the real withdrawal record lives in the sample movement
   // ledger (sample.service.js#withdrawSample writes type: 'withdraw'),
   // the same source GET /:id/movements already surfaces per-sample.
+  // #1410: a movement has no organization of its own — an
+  // organization-scoped caller sees only withdrawals whose specimenId
+  // names a sample inside its scope (the Result join, #621/#1192); a
+  // movement with no specimenId or an out-of-scope sample is left out.
   const collection = resolveCollection(db, ['sample_movements', 'sampleMovements']);
   const dateRange = buildDateQuery(filters);
-  const query = dateRange
+  const baseQuery = dateRange
     ? { type: 'withdraw', createdAt: dateRange }
     : { type: 'withdraw' };
+  let query = baseQuery;
+  if (filters.organizationScope && filters.organizationScope.scope === 'organization') {
+    const scopedSpecimenIds = await scopedSampleSpecimenIds(db, filters.organizationScope);
+    query = { ...baseQuery, specimenId: { $in: scopedSpecimenIds } };
+  }
 
   const withdrawals = await collection.find(query).sort({ createdAt: -1 }).limit(100).toArray();
   const total = await collection.countDocuments(query);
