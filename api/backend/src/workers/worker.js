@@ -8,7 +8,7 @@ require('dotenv').config({ path: require('path').join(__dirname, '..', '..', '.e
 const fs = require('fs');
 const { initWorker } = require('./import-worker');
 const { testConnection } = require('../config/queue');
-const { validateEncryptionAndHalt, validateAuditSigningAndWarn } = require('../config/validateEnv');
+const { validateEncryptionAndHalt, validateAuditSigningAndWarn, validateRedisOnly } = require('../config/validateEnv');
 const logger = require('../utils/logger');
 
 // #992: heartbeat file probed by the container healthcheck (mtime-based).
@@ -17,6 +17,15 @@ const logger = require('../utils/logger');
 // writable in every compose variant this runs under (prod is read_only with
 // a /tmp tmpfs; dev/test have no read_only at all).
 const HEARTBEAT_PATH = '/tmp/worker-heartbeat';
+// #979: backoff between Redis connectivity attempts at boot. Constants, not
+// env vars, for the same reason as HEARTBEAT_PATH above.
+const REDIS_RETRY_BASE_MS = 1000;
+const REDIS_RETRY_MAX_MS = 30000;
+// #979: client errors that no wait can cure -- bad or missing credentials,
+// a wrong-type reply, or a non-Redis service on the port. Any other error
+// (ECONNREFUSED, ETIMEDOUT, ENOTFOUND, EAI_AGAIN, a closed connection) is
+// retried.
+const REDIS_FATAL_ERROR_PATTERN = /^(WRONGPASS|NOAUTH|WRONGTYPE)\b|^Protocol error/;
 
 // #1040: observability-only, matching this file's own fatal-error style
 // (logger.error + optional stack line + process.exit(1), same as the catch
@@ -63,17 +72,18 @@ try {
   logger.warn('Job daily-merkle não registrado:', err.message || err);
 }
 
-// #977: deliberate posture -- for THIS process any Redis failure is fatal,
-// whether it is a configuration policy failure (validateRedisOnly), an
-// uninitialised client (initRedis) or plain connectivity
-// (testRedisConnection). The worker has no job other than draining BullMQ
-// queues, so staying up without Redis would be a "healthy" container that
-// processes nothing. Hence the process.exit(1) calls below plus the compose
-// restart policy, rather than a degraded mode.
-//
-// The backend makes the OPPOSITE choice over the same three checks and only
-// logs (server.js, the "Iniciar fila (Redis)" block). Read #977 before
-// aligning the two ends, and change both or neither.
+// #977/#979: deliberate posture. A Redis configuration fault is fatal whether
+// or not Redis answers: validateRedisOnly() and getRedisInstance() run before
+// the connectivity loop, so an invalid REDIS_URL, a missing production
+// REDIS_PASSWORD or a missing REDIS_HOST/REDIS_PORT reaches the catch in
+// startWorker() and process.exit(1), as does initRedis failing inside
+// initWorker(). So is a client error no wait can cure (WRONGPASS, NOAUTH,
+// WRONGTYPE, a protocol error; REDIS_FATAL_ERROR_PATTERN). A connectivity
+// loss at boot (testRedisConnection() false) is not: the worker waits for Redis with a
+// capped backoff, and since the heartbeat below starts only once Redis
+// answers, the heartbeat file stays stale and the container healthcheck
+// reports the worker unhealthy meanwhile (#979). The backend likewise keeps
+// serving through a down Redis (server.js, the "Iniciar fila (Redis)" block).
 /**
  * Inicializa worker com testes automáticos
  */
@@ -104,14 +114,44 @@ async function startWorker() {
     // Testa conexão Redis diretamente (sem precisar da fila)
     logger.info('[INFO] Testando conexão Redis...');
     const { testRedisConnection, getRedisInstance } = require('../config/redis');
-    const redisTest = await testRedisConnection();
-    
-    if (!redisTest) {
-      logger.error('[ERROR] Teste de conexão Redis falhou. Worker não será iniciado.');
-      logger.error('[ERROR] Verifique:');
-      logger.error('[ERROR]   1. Verifique se REDIS_HOST e REDIS_PORT estão configurados corretamente no .env para ambiente local/dev.');
-      process.exit(1);
+    // #979: a configuration fault throws here and lands in the fatal catch
+    // below, whether or not Redis answers: the same validateRedisOnly() call
+    // initWorker() makes, then the client itself (no REDIS_HOST/REDIS_URL/
+    // REDIS_PORT). testRedisConnection() would swallow either into `false`
+    // and the loop would wait forever.
+    if (!validateRedisOnly(process.env.NODE_ENV === 'development', true)) {
+      throw new Error('Redis não configurado');
     }
+    const redisClient = getRedisInstance();
+    let lastRedisError = null;
+    const recordRedisError = (err) => { lastRedisError = err; };
+    redisClient.on('error', recordRedisError);
+    let redisAttempt = 0;
+    while (!(await testRedisConnection())) {
+      // #979: NOAUTH and WRONGTYPE come back as a command reply, never as an
+      // 'error' event, and testRedisConnection() swallows its PING's
+      // rejection; so ask again. Only on a ready client: on any other status
+      // ping() would queue until the connection returns.
+      if (redisClient.status === 'ready') {
+        await redisClient.ping().catch((err) => { lastRedisError = err; });
+      }
+      if (lastRedisError && REDIS_FATAL_ERROR_PATTERN.test(String(lastRedisError.message))) {
+        redisClient.removeListener('error', recordRedisError);
+        throw new Error(`Falha permanente do Redis, não será repetida: ${lastRedisError.message}`);
+      }
+      redisAttempt += 1;
+      const delayMs = Math.min(REDIS_RETRY_BASE_MS * 2 ** (redisAttempt - 1), REDIS_RETRY_MAX_MS);
+      logger.warn(`[WARN] Redis indisponível; worker aguardando reconexão (tentativa ${redisAttempt}, próxima em ${delayMs}ms)`);
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      // #979: a client that disconnect() ended (the local-dev ECONNREFUSED
+      // handler in ../config/redis) never retries by itself. Only `end`:
+      // on `reconnecting`, connect() would open a second stream beside
+      // ioredis's own retry.
+      if (redisClient.status === 'end') {
+        redisClient.connect().catch(() => {});
+      }
+    }
+    redisClient.removeListener('error', recordRedisError);
 
     logger.info('[INFO] ✅ Conexão Redis testada com sucesso');
 

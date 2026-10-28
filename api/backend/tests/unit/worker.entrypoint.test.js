@@ -1,11 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-// #977: src/workers/worker.js is the worker process entrypoint and had NO test
-// at all, on either half of the decision it makes. That matters because the
-// decision is an asymmetry: this process treats ANY Redis failure as fatal
-// (process.exit(1)), while server.js logs the same failure and keeps serving.
-// A comment alone can be silently contradicted by the next edit, so the fatal
-// posture is pinned here.
+// #977/#979: src/workers/worker.js is the worker process entrypoint, and the
+// Redis posture it takes has two halves: a configuration fault (validateRedisOnly
+// or the client failing before the connectivity loop, initRedis inside
+// initWorker) or a permanent client error (WRONGPASS, NOAUTH, WRONGTYPE, a
+// protocol error) is fatal (process.exit(1)), while a Redis that is merely
+// down at boot is retried with backoff, the heartbeat staying stale so the
+// container healthcheck reports it. A comment alone can be silently
+// contradicted by the next edit, so both halves are pinned here.
 //
 // worker.js runs startWorker() at module load and pulls its collaborators in
 // with require()-based destructuring, so — same as tests/unit/import-worker.test.js
@@ -29,6 +31,13 @@ const envModulePath = require.resolve('../../src/config/env');
 
 let fakeInitWorker;
 let fakeTestRedisConnection;
+let fakeRedisClient;
+let fakeGetRedisInstance;
+let redisErrorHandlers;
+let envBefore;
+// #979: worker.js runs the real validateRedisOnly() before the connectivity
+// loop, which reads these straight from process.env.
+const ENV_KEYS = ['NODE_ENV', 'ENCRYPTION_KEY', 'REDIS_HOST', 'REDIS_PORT', 'REDIS_URL', 'REDIS_PASSWORD'];
 let exitSpy;
 let signalListenersBefore;
 
@@ -46,7 +55,7 @@ async function loadWorker() {
   await new Promise((resolve) => setImmediate(resolve));
 }
 
-describe('#977 src/workers/worker.js — the worker treats every Redis failure as fatal', () => {
+describe('#979 src/workers/worker.js — Redis connectivity loss is retried, configuration faults stay fatal', () => {
   beforeEach(() => {
     // #1160: uncaughtException/unhandledRejection are in this set too, not just
     // the signals. worker.js registers all four at load, afterEach dropped only
@@ -65,6 +74,23 @@ describe('#977 src/workers/worker.js — the worker treats every Redis failure a
 
     fakeInitWorker = vi.fn().mockResolvedValue({});
     fakeTestRedisConnection = vi.fn().mockResolvedValue(true);
+    envBefore = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
+    process.env.REDIS_HOST = '127.0.0.1';
+    process.env.REDIS_PORT = '6379';
+    delete process.env.REDIS_URL;
+    delete process.env.REDIS_PASSWORD;
+
+    redisErrorHandlers = [];
+    fakeRedisClient = {
+      status: 'ready',
+      connect: vi.fn().mockResolvedValue(undefined),
+      ping: vi.fn().mockResolvedValue('PONG'),
+      on: vi.fn((event, handler) => { if (event === 'error') redisErrorHandlers.push(handler); }),
+      removeListener: vi.fn((event, handler) => {
+        if (event === 'error') redisErrorHandlers = redisErrorHandlers.filter((h) => h !== handler);
+      }),
+    };
+    fakeGetRedisInstance = vi.fn(() => fakeRedisClient);
 
     exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined);
 
@@ -72,7 +98,7 @@ describe('#977 src/workers/worker.js — the worker treats every Redis failure a
     stub(loggerPath, { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() });
     stub(importWorkerPath, { initWorker: fakeInitWorker, closeWorker: vi.fn() });
     stub(queueConfigPath, { testConnection: vi.fn().mockResolvedValue(true) });
-    stub(redisConfigPath, { testRedisConnection: fakeTestRedisConnection });
+    stub(redisConfigPath, { testRedisConnection: fakeTestRedisConnection, getRedisInstance: fakeGetRedisInstance });
     stub(dailyMerkleJobPath, { scheduleNextRun: vi.fn() });
   });
 
@@ -102,19 +128,160 @@ describe('#977 src/workers/worker.js — the worker treats every Redis failure a
       }
     }
     vi.restoreAllMocks();
+    vi.useRealTimers();
+    for (const key of ENV_KEYS) {
+      if (envBefore[key] === undefined) delete process.env[key];
+      else process.env[key] = envBefore[key];
+    }
   });
 
-  it('exits(1) when the Redis connectivity test fails, without initialising the worker', async () => {
+  // #979: the backoff waits run on faked setTimeout; setImmediate stays real so
+  // loadWorker's drain and the one below still turn the event loop.
+  async function drain() {
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+
+  it('keeps running and retries while the Redis connectivity test fails, without initialising the worker', async () => {
     fakeTestRedisConnection.mockResolvedValue(false);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+
+    await loadWorker();
+    expect(fakeTestRedisConnection).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await drain();
+    expect(fakeTestRedisConnection).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(2000);
+    await drain();
+    expect(fakeTestRedisConnection).toHaveBeenCalledTimes(3);
+
+    await vi.advanceTimersByTimeAsync(4000);
+    await drain();
+    expect(fakeTestRedisConnection).toHaveBeenCalledTimes(4);
+
+    expect(exitSpy).not.toHaveBeenCalled();
+    expect(fakeInitWorker).not.toHaveBeenCalled();
+    const warnings = require.cache[loggerPath].exports.warn.mock.calls.map((args) => String(args[0]));
+    expect(warnings.some((message) => message.includes('Redis indisponível'))).toBe(true);
+  });
+
+  it('initialises the worker once Redis comes back, without exiting', async () => {
+    fakeTestRedisConnection.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+
+    await loadWorker();
+    await vi.advanceTimersByTimeAsync(1000);
+    await drain();
+
+    expect(fakeInitWorker).toHaveBeenCalledTimes(1);
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it('exits(1) on a Redis configuration fault without testing connectivity', async () => {
+    fakeGetRedisInstance.mockImplementation(() => {
+      throw new Error('REDIS_HOST ou REDIS_URL não está definido no .env');
+    });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
 
     await loadWorker();
 
     expect(exitSpy).toHaveBeenCalledWith(1);
-    // A real process.exit(1) never returns, so initWorker is unreachable in
-    // production. The spy DOES return, so assert the ordering that termination
-    // guarantees rather than the absence a stub cannot reproduce.
-    expect(exitSpy.mock.invocationCallOrder[0])
-      .toBeLessThan(fakeInitWorker.mock.invocationCallOrder[0]);
+    expect(fakeTestRedisConnection).not.toHaveBeenCalled();
+    expect(fakeInitWorker).not.toHaveBeenCalled();
+  });
+
+  it('reconnects a client that ioredis left ended before the next attempt', async () => {
+    fakeRedisClient.status = 'end';
+    fakeTestRedisConnection.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+
+    await loadWorker();
+    await vi.advanceTimersByTimeAsync(1000);
+    await drain();
+
+    expect(fakeRedisClient.connect).toHaveBeenCalledTimes(1);
+  });
+
+  // #979: a fault validateRedisOnly() detects must not wait behind the
+  // connectivity loop -- a missing production password for a remote host
+  // usually also keeps Redis from answering.
+  it('exits(1) on a Redis configuration fault while Redis is down, without retrying', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.ENCRYPTION_KEY = 'chave-de-teste';
+    process.env.REDIS_HOST = 'redis.example.internal';
+    fakeTestRedisConnection.mockResolvedValue(false);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+
+    await loadWorker();
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(fakeTestRedisConnection).not.toHaveBeenCalled();
+    expect(fakeInitWorker).not.toHaveBeenCalled();
+  });
+
+  it('exits(1) on an invalid REDIS_URL without testing connectivity', async () => {
+    process.env.REDIS_URL = 'not a url';
+    fakeTestRedisConnection.mockResolvedValue(false);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+
+    await loadWorker();
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(fakeTestRedisConnection).not.toHaveBeenCalled();
+    expect(fakeInitWorker).not.toHaveBeenCalled();
+  });
+
+  function failWithClientError(message, code) {
+    fakeTestRedisConnection.mockImplementation(async () => {
+      const err = new Error(message);
+      if (code) err.code = code;
+      for (const handler of redisErrorHandlers) handler(err);
+      return false;
+    });
+  }
+
+  it('exits(1) on a WRONGPASS client error instead of retrying', async () => {
+    failWithClientError('WRONGPASS invalid username-password pair or user is disabled.');
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+
+    await loadWorker();
+    await vi.advanceTimersByTimeAsync(1000);
+    await drain();
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(fakeTestRedisConnection).toHaveBeenCalledTimes(1);
+    expect(fakeInitWorker).not.toHaveBeenCalled();
+  });
+
+  // #979: a server that wants a password ioredis did not send answers PING
+  // with NOAUTH as a command reply, which never reaches the 'error' listener.
+  it('exits(1) on a NOAUTH reply to PING instead of retrying', async () => {
+    fakeTestRedisConnection.mockResolvedValue(false);
+    fakeRedisClient.ping.mockRejectedValue(new Error('NOAUTH Authentication required.'));
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+
+    await loadWorker();
+    await vi.advanceTimersByTimeAsync(1000);
+    await drain();
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(fakeTestRedisConnection).toHaveBeenCalledTimes(1);
+    expect(fakeInitWorker).not.toHaveBeenCalled();
+  });
+
+  it('keeps retrying on an ECONNREFUSED client error', async () => {
+    failWithClientError('connect ECONNREFUSED 127.0.0.1:6379', 'ECONNREFUSED');
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+
+    await loadWorker();
+    await vi.advanceTimersByTimeAsync(1000);
+    await drain();
+
+    expect(fakeTestRedisConnection).toHaveBeenCalledTimes(2);
+    expect(exitSpy).not.toHaveBeenCalled();
+    expect(fakeInitWorker).not.toHaveBeenCalled();
   });
 
   it('exits(1) when initWorker rejects — the validateRedisOnly / initRedis policy failures land here', async () => {
@@ -192,9 +359,9 @@ describe('#977 src/workers/worker.js — the worker treats every Redis failure a
   // #1154: the audit-signing boot check sits beside #1085's encryption gate in
   // this same startup sequence, and is deliberately the OPPOSITE severity.
   // That asymmetry is the whole point of direction 1 -- it is what keeps the
-  // change independent of #979's open fatal-vs-degrade decision -- and a
-  // comment cannot stop the next edit from quietly escalating it, which is the
-  // same reasoning #977 used to pin the fatal posture above.
+  // change independent of how this process treats Redis (#979, pinned above)
+  // -- and a comment cannot stop the next edit from quietly escalating it,
+  // which is the same reasoning #977 used to pin the fatal posture above.
   describe('#1154 the audit-signing boot check warns and never exits', () => {
     const crypto = require('crypto');
     const fs = require('fs');

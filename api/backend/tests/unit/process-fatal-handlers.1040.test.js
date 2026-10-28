@@ -387,6 +387,11 @@ describe('#1040 process-level fatal-error handlers (observability-only, still te
     // is faked away here too -- its own #1040 registration is covered by its
     // own describe block above; this block is only about worker.js's.
     let fakeLogger;
+    // #979: worker.js now runs the real validateRedisOnly() before its
+    // connectivity loop, and vitest sets no Redis address; without one the
+    // check throws and startWorker() calls the real process.exit(1).
+    const REDIS_ENV_KEYS = ['REDIS_HOST', 'REDIS_PORT', 'REDIS_URL'];
+    let redisEnvBefore;
 
     function stub(path, exports) {
       require.cache[path] = { id: path, filename: path, loaded: true, exports };
@@ -394,18 +399,26 @@ describe('#1040 process-level fatal-error handlers (observability-only, still te
 
     beforeEach(() => {
       fakeLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+      redisEnvBefore = Object.fromEntries(REDIS_ENV_KEYS.map((key) => [key, process.env[key]]));
+      process.env.REDIS_HOST = '127.0.0.1';
+      process.env.REDIS_PORT = '6379';
+      delete process.env.REDIS_URL;
       stub(dotenvPath, { config: vi.fn() });
       stub(loggerPath, fakeLogger);
       stub(importWorkerPath, { initWorker: vi.fn().mockResolvedValue({}), closeWorker: vi.fn() });
       stub(queueConfigPath, { testConnection: vi.fn().mockResolvedValue(true) });
       stub(redisConfigPath, {
         testRedisConnection: vi.fn().mockResolvedValue(true),
-        getRedisInstance: vi.fn(() => ({ ping: vi.fn().mockResolvedValue('PONG') })),
+        getRedisInstance: vi.fn(() => ({ ping: vi.fn().mockResolvedValue('PONG'), on: vi.fn(), removeListener: vi.fn() })),
       });
       stub(dailyMerkleJobPath, { scheduleNextRun: vi.fn() });
     });
 
     afterEach(() => {
+      for (const key of REDIS_ENV_KEYS) {
+        if (redisEnvBefore[key] === undefined) delete process.env[key];
+        else process.env[key] = redisEnvBefore[key];
+      }
       vi.restoreAllMocks();
       for (const path of [workerPath, importWorkerPath, queueConfigPath, redisConfigPath, loggerPath, dailyMerkleJobPath, dotenvPath]) {
         delete require.cache[path];

@@ -302,11 +302,11 @@ async function startServer() {
     // getQueue() retries on demand. Hence the catch below logs and falls
     // through to listen(), leaving the container healthy.
     //
-    // The worker process makes the OPPOSITE choice (src/workers/worker.js,
-    // process.exit(1)) over exactly the same three checks -- validateRedisOnly,
-    // initRedis and testRedisConnection. The divergence is intentional, not an
-    // oversight: read #977 before changing either end, and change both or
-    // neither.
+    // The worker process (src/workers/worker.js) also survives a connectivity
+    // loss: a failed testRedisConnection is retried with backoff (#979). It
+    // differs only on a configuration fault -- validateRedisOnly, initRedis or
+    // a permanent client error -- which is fatal there (process.exit(1)) and
+    // logged here. Read #977 and #979 before changing either end.
     // Iniciar fila (Redis)
     try {
       const { initQueue, testConnection } = require("./src/config/queue");

@@ -325,10 +325,11 @@ describe('#1098 server.js startServer() -- pinning the pre-I/O boot prologue', (
     });
   });
 
-  // #977: the backend's deliberate posture is the OPPOSITE of
-  // src/workers/worker.js's (pinned in tests/unit/worker.entrypoint.test.js)
-  // -- a Redis configuration or connectivity failure here is logged and
-  // swallowed, never fatal, and the HTTP server still starts.
+  // #977/#979: a Redis configuration or connectivity failure here is logged
+  // and swallowed, never fatal, and the HTTP server still starts. Both
+  // processes survive a Redis connectivity loss; src/workers/worker.js alone
+  // stays fatal on a configuration fault (pinned in
+  // tests/unit/worker.entrypoint.test.js).
   describe('#977 Redis failures are not fatal for this process', () => {
     it('does not exit and still calls listen() when initQueue throws', async () => {
       fakeInitQueue.mockImplementation(() => {
