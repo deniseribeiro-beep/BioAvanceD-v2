@@ -31,7 +31,10 @@
     "/api/telemetry-datastreams",
     "/api/sensors",
     "/api/iot",
-    "/api/temperature"
+    "/api/temperature",
+    "/api/users",
+    "/api/security",
+    "/api/user/security"
   ],
   "tags": [
     {
@@ -133,6 +136,18 @@
     {
       "name": "temperature",
       "description": "/api/temperature: temperature readings, their history and alerts (RF009)."
+    },
+    {
+      "name": "users",
+      "description": "/api/users: user accounts, their organizations, MFA and sessions, and the register-patient, register-sample, register-sensor, record-withdrawal and generate-report routes (RF003)."
+    },
+    {
+      "name": "security",
+      "description": "/api/security: the security configuration and its releases, the permission list, the consent queue and the log export, Administrador only (RF014)."
+    },
+    {
+      "name": "user-security",
+      "description": "/api/user/security: the caller's own security status, password, sessions, recovery codes and password reset (RF001)."
     }
   ],
   "paths": {
@@ -10180,6 +10195,3606 @@
           }
         }
       }
+    },
+    "/api/users/register": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Register a user",
+        "description": "Gates: authenticate, requirePermission('createUser'), requirePermission('assignRole'), requireOrganizationScope. The 503 comes from authenticate. The 201 returns the created user without any credential field. The 400 is an unknown organizationId, a duplicate email or username, an invalid accessType, a caller of several organizations who names no organizationId, or any other untagged error. The 422 is a UserModel.validate failure and carries details. A caller below the level of the role it grants answers 403.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "email": {
+                    "type": "string"
+                  },
+                  "username": {
+                    "type": "string"
+                  },
+                  "password": {
+                    "type": "string",
+                    "description": "Checked against the password policy."
+                  },
+                  "phone": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "organizationId": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "Required of a caller of several organizations; an organization-scoped caller registers into its own."
+                  },
+                  "status": {
+                    "type": "string",
+                    "description": "active/Ativo, inactive/Inativo, blocked/Bloqueado or suspended/Suspenso."
+                  },
+                  "accessType": {
+                    "type": "integer",
+                    "description": "The hierarchy level of the role granted."
+                  },
+                  "roleName": {
+                    "type": "string",
+                    "description": "Tecnico when none is named."
+                  },
+                  "mfaEnabled": {
+                    "type": "boolean"
+                  },
+                  "roleValidFrom": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "roleValidUntil": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                },
+                "required": [
+                  "name",
+                  "email",
+                  "username",
+                  "password"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created user.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/UserRecord"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/users": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "List users",
+        "description": "Gates: authenticate, requirePermission('createUser'), requireOrganizationScope. The 503 comes from authenticate. An organization-scoped caller lists the users of its own organizations only. Each user goes through UserModel.stripSecrets.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The users.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/UserRecord"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/users/logs": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Read the audit logs",
+        "description": "Gates: authenticate only; the handler then answers 403 unless the caller is an Administrador or an Auditor (isAuditReader). The 503 comes from authenticate. An invalid source is a 422-tagged error that this handler's catch answers 500, so there is no 422 here.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "query",
+            "required": false,
+            "description": "Also read as userID or user.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "userName",
+            "in": "query",
+            "required": false,
+            "description": "Case-insensitive regular expression on the anonymised user identifier.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "action",
+            "in": "query",
+            "required": false,
+            "description": "Filters logs by action.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "query",
+            "required": false,
+            "description": "Filters logs by entity.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resourceType",
+            "in": "query",
+            "required": false,
+            "description": "Filters logs by resourceType.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "severity",
+            "in": "query",
+            "required": false,
+            "description": "Filters logs by severity.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "result",
+            "in": "query",
+            "required": false,
+            "description": "Filters logs by result.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "description": "Filters logs by status.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "ip",
+            "in": "query",
+            "required": false,
+            "description": "Filters logs by ip.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "ipSource",
+            "in": "query",
+            "required": false,
+            "description": "Filters logs by ipSource.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sourceIP",
+            "in": "query",
+            "required": false,
+            "description": "Filters logs by sourceIP.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "module",
+            "in": "query",
+            "required": false,
+            "description": "Filters logs by module.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "startDate",
+            "in": "query",
+            "required": false,
+            "description": "Start of the range.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "endDate",
+            "in": "query",
+            "required": false,
+            "description": "End of the range.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "description": "Free-text search.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "description": "live (default) reads logs, archive reads logs_archive. Any other value is read by getLogs as a 422-tagged error that this handler answers as 500.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "live",
+                "archive"
+              ]
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "description": "Page number.",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Page size.",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "skip",
+            "in": "query",
+            "required": false,
+            "description": "Rows to skip.",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "sortBy",
+            "in": "query",
+            "required": false,
+            "description": "One of the sortable log fields; an unrecognised one is ignored.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sortOrder",
+            "in": "query",
+            "required": false,
+            "description": "asc or desc.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of the logs.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "logs": {
+                              "type": "array",
+                              "items": {
+                                "type": "object"
+                              }
+                            },
+                            "total": {
+                              "type": "integer"
+                            },
+                            "limit": {
+                              "type": "integer"
+                            },
+                            "skip": {
+                              "type": "integer"
+                            },
+                            "page": {
+                              "type": "integer"
+                            },
+                            "totalPages": {
+                              "type": "integer"
+                            },
+                            "sortBy": {
+                              "type": "string",
+                              "description": "The ordering actually applied."
+                            },
+                            "sortOrder": {
+                              "type": "string"
+                            }
+                          },
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/users/{id}": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Get a user",
+        "description": "Gates: authenticate, requirePermission('createUser'), requireOrganizationScope. The 503 comes from authenticate. A user outside the caller's organizations answers 403. The user goes through UserModel.stripSecrets.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The user: its _id, id or userID.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The user.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/UserRecord"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Update a user",
+        "description": "Gates: authenticate, requirePermission('createUser'), requireOrganizationScope. The 503 comes from authenticate. A user outside the caller's organizations answers 403. The 403 is also a move of the user to an organization outside the caller's, a level above the caller's own, and a role change by a caller without assignRole. The 422 is a non-empty password in the body (the password is set by POST /api/users/{id}/set-password) or a validation failure. Every other failure, an unknown organizationId included, answers 400. The MFA fields are dropped from the body.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The user: its _id, id or userID.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "email": {
+                    "type": "string"
+                  },
+                  "phone": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "organizationId": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "The home organization."
+                  },
+                  "organizationIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "username": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string"
+                  },
+                  "roleValidFrom": {
+                    "type": "string",
+                    "format": "date-time",
+                    "nullable": true
+                  },
+                  "roleValidUntil": {
+                    "type": "string",
+                    "format": "date-time",
+                    "nullable": true
+                  },
+                  "accessType": {
+                    "type": "integer",
+                    "description": "A role change."
+                  },
+                  "roleName": {
+                    "type": "string",
+                    "description": "A role change."
+                  },
+                  "auditorRole": {
+                    "type": "boolean",
+                    "description": "Grants or revokes the additive auditor role."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated user.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/UserRecord"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Deactivate a user",
+        "description": "Gates: authenticate, requirePermission('createUser'), requireOrganizationScope. The 503 comes from authenticate. A user outside the caller's organizations answers 403. A deactivation: the account is set inactive and its sessions are revoked; the document is kept. The 403 is also a target of a higher level than the caller's.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The user: its _id, id or userID.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The user is deactivated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {}
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/users/{id}/validate-status": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Read a user's account status",
+        "description": "Gates: authenticate, requirePermission('createUser'), requireOrganizationScope. The 503 comes from authenticate. A user outside the caller's organizations answers 403.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The user: its _id, id or userID.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The account status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "description": "active, inactive, blocked or suspended."
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/users/{id}/organizations": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "List a user's organizations",
+        "description": "Gates: authenticate, requirePermission('createUser'), requireOrganizationScope. The 503 comes from authenticate. A user outside the caller's organizations answers 403.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The user: its _id, id or userID.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The organization scopes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/UserOrganizationScopes"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Grant a user an organization",
+        "description": "Gates: authenticate, requirePermission('createUser'), requirePermission('assignRole'), requireOrganizationScope. The 503 comes from authenticate. The 201 is a new grant and the 200 an organization already held. The 403 is also an organization outside the caller's. The 404 is a user or an organization not found. The 409 is a target who is an Administrador (global scope) or has no organization-scoped role. The 422 is no organizationId from a global caller (a non-global caller who names none gets 403). The error body is {success, error, message}, with no details.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The user: its _id, id or userID.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "organizationId": {
+                    "type": "string",
+                    "description": "An existing organization."
+                  }
+                },
+                "required": [
+                  "organizationId"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The organization was already held.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/UserOrganizationScopes"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "The organization was granted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/UserOrganizationScopes"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "The user, or the organization, was not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The target is an Administrador or has no organization-scoped role.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "No organizationId was named.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/users/{id}/organizations/{organizationId}": {
+      "delete": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Revoke a user organization",
+        "description": "Gates: authenticate, requirePermission('createUser'), requirePermission('assignRole', 'UPDATE'), requireOrganizationScope. The 503 comes from authenticate. The 403 is also an organization outside the caller's. The 409 is the user's home organization (changed by PUT /api/users/{id}) or its last organization. An organization the user does not hold answers 200 and changes nothing.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The user: its _id, id or userID.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "organizationId",
+            "in": "path",
+            "required": true,
+            "description": "The organization to remove.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The remaining organization scopes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/UserOrganizationScopes"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "The home organization, or the last organization, cannot be removed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/users/register-patient": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Register a participant",
+        "description": "Gates: authenticate, requirePermission('createPatient'), requireOrganizationScope. The 503 comes from authenticate. clinicalUnitId is resolved by the create rule for an organization-scoped caller. The 400 is any untagged failure or a caller of several organizations who names no clinicalUnitId; the 422 carries details.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "participantId": {
+                    "type": "string"
+                  },
+                  "patientName": {
+                    "type": "string",
+                    "description": "Civil identity, stored on the participant identity only. Required and non-blank."
+                  },
+                  "birthDate": {
+                    "type": "string",
+                    "description": "Civil identity, stored on the participant identity only. Required; an ISO date (YYYY-MM-DD). The value is stored with new Date(), so a DD/MM/YYYY value is not stored correctly."
+                  },
+                  "identityDocument": {
+                    "type": "string",
+                    "description": "Civil identity document, normalised and checked for a duplicate (a conflict answers 400). Optional."
+                  },
+                  "sex": {
+                    "type": "string"
+                  },
+                  "consentTemplateId": {
+                    "type": "string",
+                    "description": "An existing consent template."
+                  },
+                  "clinicalUnitId": {
+                    "type": "string"
+                  },
+                  "clinicalUnit": {
+                    "type": "string"
+                  },
+                  "unitAcronym": {
+                    "type": "string"
+                  },
+                  "isDeceased": {
+                    "type": "boolean"
+                  },
+                  "email": {
+                    "type": "string"
+                  },
+                  "phone": {
+                    "type": "string"
+                  },
+                  "recordNumber": {
+                    "type": "string"
+                  },
+                  "representativeName": {
+                    "type": "string"
+                  },
+                  "representativeEmail": {
+                    "type": "string"
+                  },
+                  "representativeIdentityDocument": {
+                    "type": "string"
+                  },
+                  "representativePhone": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string"
+                  },
+                  "studyId": {
+                    "type": "string"
+                  },
+                  "anamneseGeral": {
+                    "type": "object"
+                  },
+                  "dadosEspecificos": {
+                    "type": "array",
+                    "items": {
+                      "type": "object"
+                    }
+                  },
+                  "alphaGal": {
+                    "description": "Folded into dadosEspecificos."
+                  },
+                  "lysoGb3": {
+                    "description": "Folded into dadosEspecificos."
+                  }
+                },
+                "required": [
+                  "participantId",
+                  "patientName",
+                  "birthDate",
+                  "sex",
+                  "consentTemplateId"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created participant.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "_id": {
+                              "type": "string"
+                            },
+                            "participantId": {
+                              "type": "string"
+                            },
+                            "sex": {
+                              "type": "string"
+                            },
+                            "email": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "phone": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "recordNumber": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "clinicalUnitId": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "clinicalUnit": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "unitAcronym": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "isDeceased": {
+                              "type": "boolean"
+                            },
+                            "consentTemplateId": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "type": "string"
+                            },
+                            "studyId": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "anamneseGeral": {
+                              "type": "object",
+                              "nullable": true
+                            },
+                            "dadosEspecificos": {
+                              "type": "array",
+                              "items": {
+                                "type": "object"
+                              }
+                            },
+                            "createdAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "updatedAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            }
+                          },
+                          "additionalProperties": true
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/users/register-sample": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Register a sample",
+        "description": "Gates: authenticate, requirePermission('createSample'), requireOrganizationScope. The 503 comes from authenticate. The 201 is complete; the 202 sets partialSuccess true because the topology integration was queued. The 403 is also STRICT_MODE_BLOCKED. The 404 is an organizationId a global caller names that does not exist. The 422 is a qualificationContext error or a 422-tagged failure and carries details; every other failure is 400.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "participantId": {
+                    "type": "string",
+                    "pattern": "^\\d{8}$",
+                    "description": "An existing participant (400 when unknown)."
+                  },
+                  "sampleType": {
+                    "type": "string",
+                    "description": "A MIABIS specimen type id."
+                  },
+                  "sampleOrigin": {
+                    "type": "string",
+                    "description": "A MIABIS sample origin id."
+                  },
+                  "extractionProtocol": {
+                    "type": "string",
+                    "description": "A MIABIS extraction protocol id."
+                  },
+                  "registeredAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "Required by the sample validation."
+                  },
+                  "quantity": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "description": "Greater than zero."
+                  },
+                  "boxId": {
+                    "type": "string",
+                    "description": "The storage box (an object id); required."
+                  },
+                  "positionCode": {
+                    "type": "string",
+                    "description": "The position in the box; required."
+                  },
+                  "specimenId": {
+                    "type": "string",
+                    "description": "Generated when omitted; an existing one is refused."
+                  },
+                  "unit": {
+                    "type": "string"
+                  },
+                  "quality": {
+                    "type": "string",
+                    "description": "GOOD, COMPROMISED or UNKNOWN."
+                  },
+                  "specimenStatus": {
+                    "type": "string",
+                    "description": "closed cannot be assigned at registration."
+                  },
+                  "parentSpecimenIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "specimenRole": {
+                    "type": "string"
+                  },
+                  "studyId": {
+                    "type": "string",
+                    "description": "An existing, active study."
+                  },
+                  "protocolId": {
+                    "type": "string",
+                    "description": "An existing, approved protocol."
+                  },
+                  "collectionId": {
+                    "type": "string",
+                    "description": "An existing collection."
+                  },
+                  "barcode": {
+                    "type": "string"
+                  },
+                  "organizationId": {
+                    "type": "string",
+                    "description": "Resolved by the create rule; never stored from the body as such."
+                  },
+                  "collectionSite": {
+                    "type": "string",
+                    "description": "Defaults to the resolved organization."
+                  },
+                  "qualificationContext": {
+                    "type": "object",
+                    "description": "The use context checked by RF018 AC2."
+                  }
+                },
+                "additionalProperties": true,
+                "required": [
+                  "participantId",
+                  "sampleType",
+                  "sampleOrigin",
+                  "extractionProtocol",
+                  "registeredAt",
+                  "quantity",
+                  "boxId",
+                  "positionCode"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The registered sample.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "sampleID": {
+                              "type": "string"
+                            },
+                            "operationMode": {
+                              "type": "string",
+                              "description": "STRICT or PERMISSIVE.",
+                              "enum": [
+                                "STRICT",
+                                "PERMISSIVE"
+                              ]
+                            },
+                            "topology": {
+                              "type": "object",
+                              "properties": {
+                                "synced": {
+                                  "type": "boolean"
+                                },
+                                "fallbackQueued": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "required": [
+                                "synced",
+                                "fallbackQueued"
+                              ]
+                            }
+                          },
+                          "additionalProperties": true,
+                          "required": [
+                            "sampleID",
+                            "operationMode",
+                            "topology"
+                          ]
+                        },
+                        "partialSuccess": {
+                          "type": "boolean",
+                          "description": "False."
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "The sample was registered and its topology integration queued.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "sampleID": {
+                              "type": "string"
+                            },
+                            "operationMode": {
+                              "type": "string",
+                              "description": "STRICT or PERMISSIVE.",
+                              "enum": [
+                                "STRICT",
+                                "PERMISSIVE"
+                              ]
+                            },
+                            "topology": {
+                              "type": "object",
+                              "properties": {
+                                "synced": {
+                                  "type": "boolean"
+                                },
+                                "fallbackQueued": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "required": [
+                                "synced",
+                                "fallbackQueued"
+                              ]
+                            }
+                          },
+                          "additionalProperties": true,
+                          "required": [
+                            "sampleID",
+                            "operationMode",
+                            "topology"
+                          ]
+                        },
+                        "partialSuccess": {
+                          "type": "boolean",
+                          "description": "True."
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/users/record-withdrawal": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Record a sample withdrawal",
+        "description": "Gates: authenticate, requirePermission('withdrawSample', 'UPDATE'), requireOrganizationScope. The 503 comes from authenticate. The 403 is also a sample of another organization. The 400 is a missing sampleID, a consent refusal, or any failure of the withdrawal.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sampleID": {
+                    "type": "string",
+                    "description": "The sample to withdraw."
+                  },
+                  "requiredScope": {
+                    "type": "string",
+                    "description": "The consent scope to check; consentScope is read as an alias."
+                  },
+                  "consentScope": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "sampleID"
+                ],
+                "additionalProperties": true,
+                "description": "Every other field is passed to sampleService.withdrawSample."
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The withdrawal result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/users/generate-report": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Request a report",
+        "description": "Gates: authenticate, requirePermission('viewReports'), requireOrganizationScope. The 503 comes from authenticate. The report is stored as pending, stamped with the caller's organizations.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reportType": {
+                    "type": "string"
+                  },
+                  "filters": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The stored report.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/users/register-sensor": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Register a sensor",
+        "description": "Gates: authenticate, requirePermission('manageSensor'), requireOrganizationScope. The 503 comes from authenticate. The 400 includes a caller of several organizations who names no organizationId and an unknown organization; there is no 404. The 422 is a validation failure and carries details.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sensorId": {
+                    "type": "string"
+                  },
+                  "sensorType": {
+                    "type": "string"
+                  },
+                  "sensorModel": {
+                    "type": "string"
+                  },
+                  "maintenanceStatus": {
+                    "type": "string",
+                    "enum": [
+                      "operational",
+                      "maintenance",
+                      "calibration",
+                      "error"
+                    ]
+                  },
+                  "lastCalibration": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "nextCalibration": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "calibrationCertificate": {
+                    "type": "string"
+                  },
+                  "locationId": {
+                    "type": "string"
+                  },
+                  "policyId": {
+                    "type": "string"
+                  },
+                  "macAddress": {
+                    "type": "string"
+                  },
+                  "organizationId": {
+                    "type": "string"
+                  },
+                  "temperaturePolicy": {
+                    "type": "string",
+                    "description": "Needs macAddress."
+                  },
+                  "storageContainer": {
+                    "type": "string",
+                    "description": "Needs macAddress."
+                  },
+                  "samplingPolicyId": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "sensorId",
+                  "sensorType"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The sensor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/users/{id}/reset-mfa": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Reset or unlock the MFA of a user",
+        "description": "Gates: authenticate, requirePermission('resetMFA', 'UPDATE'), requireOrganizationScope. The 503 comes from authenticate. A user outside the caller's organizations answers 403. For an Administrador target the enrolment is kept and only the lock counters are cleared (unlockedOnly true); for any other target the second factor is removed and the sessions are revoked.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The user: its _id, id or userID.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The MFA was unlocked (Administrador target) or reset.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Success"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "unlockedOnly": {
+                              "type": "boolean",
+                              "enum": [
+                                true
+                              ]
+                            },
+                            "message": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "unlockedOnly"
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/Success"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "message": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/users/{id}/revoke-sessions": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Revoke the sessions of a user",
+        "description": "Gates: authenticate, requirePermission('revokeSessions', 'UPDATE'), requireOrganizationScope. The 503 comes from authenticate. A user outside the caller's organizations answers 403. The 422 is a reason other than admin_action or risk.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The user: its _id, id or userID.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "description": "admin_action (default) or risk.",
+                    "enum": [
+                      "admin_action",
+                      "risk"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The sessions are revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "revoked": {
+                              "type": "integer",
+                              "description": "The sessions revoked."
+                            },
+                            "reason": {
+                              "type": "string",
+                              "enum": [
+                                "admin_action",
+                                "risk"
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/users/{id}/force-password-reset": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Force a password reset at the next login",
+        "description": "Gates: authenticate, requirePermission('forcePasswordReset', 'UPDATE'), requireOrganizationScope. The 503 comes from authenticate. A user outside the caller's organizations answers 403.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The user: its _id, id or userID.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The account is flagged.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {}
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/users/{id}/set-password": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Set the password of a user",
+        "description": "Gates: authenticate, requirePermission('setUserPassword', 'UPDATE'), requireOrganizationScope. The 503 comes from authenticate. A user outside the caller's organizations answers 403. The password is checked for strength and reuse (422), the user must replace it at next login, and the sessions are revoked.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The user: its _id, id or userID.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "password": {
+                    "type": "string",
+                    "description": "The new password."
+                  }
+                },
+                "required": [
+                  "password"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The password is set.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "forceReset": {
+                              "type": "boolean",
+                              "enum": [
+                                true
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/users/{id}/disable-mfa": {
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Disable the MFA of an Administrador",
+        "description": "Gates: authenticate, requirePermission('disableMFA', 'UPDATE'), requireOrganizationScope. The 503 comes from authenticate. A user outside the caller's organizations answers 403. The 403 is also a caller who is not an Administrador, and a target who is not an Administrador. The enrolment is kept for re-activation.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The user: its _id, id or userID.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The MFA is disabled.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {}
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/security/config": {
+      "get": {
+        "tags": [
+          "security"
+        ],
+        "summary": "Get the security configuration",
+        "description": "Gates: authenticate, requireRole(4), both as router.use: Administrador only. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The current configuration.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "security"
+        ],
+        "summary": "Update the security configuration",
+        "description": "Gates: authenticate, requireRole(4), both as router.use: Administrador only. The 503 comes from authenticate. The 400 and 422 are a refused validation run (422 when a governance invariant is violated, 400 otherwise) and add configurationValidationRunId and violatedInvariants; any other untagged failure is also 400. The 409 is another change activated first.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "authentication": {
+                    "type": "object"
+                  },
+                  "passwordRules": {
+                    "type": "object"
+                  },
+                  "session": {
+                    "type": "object"
+                  },
+                  "loginAttempts": {
+                    "type": "object"
+                  },
+                  "logging": {
+                    "type": "object"
+                  },
+                  "privacy": {
+                    "type": "object"
+                  },
+                  "enhancedSecurity": {
+                    "type": "object"
+                  },
+                  "lgpd": {
+                    "type": "object"
+                  }
+                },
+                "description": "Any of the eight groups; other top-level keys are not stored."
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The stored configuration.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or a refused validation run.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        false
+                      ]
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "configurationValidationRunId": {
+                      "type": "string"
+                    },
+                    "violatedInvariants": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  },
+                  "required": [
+                    "success"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "description": "Another change was activated first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A governance invariant is violated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        false
+                      ]
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "configurationValidationRunId": {
+                      "type": "string"
+                    },
+                    "violatedInvariants": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  },
+                  "required": [
+                    "success"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/security/config/catalog": {
+      "get": {
+        "tags": [
+          "security"
+        ],
+        "summary": "Get the setting catalog",
+        "description": "Gates: authenticate, requireRole(4), both as router.use: Administrador only. The 503 comes from authenticate. One entry per configuration key.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The catalog.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "type": "object"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/security/config/releases": {
+      "get": {
+        "tags": [
+          "security"
+        ],
+        "summary": "List the configuration releases",
+        "description": "Gates: authenticate, requireRole(4), both as router.use: Administrador only. The 503 comes from authenticate. Newest first.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Rows returned; default 50, at most 200.",
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "maximum": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The releases.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "type": "object"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/security/config/rollback": {
+      "post": {
+        "tags": [
+          "security"
+        ],
+        "summary": "Roll the configuration back to a release",
+        "description": "Gates: authenticate, requireRole(4), both as router.use: Administrador only. The 503 comes from authenticate. The rollback is recorded as a new release. The 400 is a missing configurationReleaseId or a refused validation run, the 422 an invariant violation as in PUT /api/security/config. The 404 is a release not found for this profile. The 409 is a release never activated, already active, or a concurrent activation.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "configurationReleaseId": {
+                    "type": "string",
+                    "description": "The release to restore."
+                  }
+                },
+                "required": [
+                  "configurationReleaseId"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The restored configuration.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "The release was never activated, is already active, or a concurrent activation won.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A governance invariant is violated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/security/permissions": {
+      "get": {
+        "tags": [
+          "security"
+        ],
+        "summary": "List the permissions by profile",
+        "description": "Gates: authenticate, requireRole(4), both as router.use: Administrador only. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The permissions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/security/consent-queue": {
+      "get": {
+        "tags": [
+          "security"
+        ],
+        "summary": "Get the consent notification queue status",
+        "description": "Gates: authenticate, requireRole(4), both as router.use: Administrador only. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The queue statistics.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/security/logs/export": {
+      "get": {
+        "tags": [
+          "security"
+        ],
+        "summary": "Export the logs",
+        "description": "Gates: authenticate, requireRole(4), both as router.use: Administrador only. The 503 comes from authenticate. The 200 is not wrapped in Success: text/csv by default, an application/json array for any other format, both with Content-Disposition: attachment. The 422 is a source other than live or archive and carries details.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "csv (default); any other value gives JSON.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "severity",
+            "in": "query",
+            "required": false,
+            "description": "Filters by severity.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "module",
+            "in": "query",
+            "required": false,
+            "description": "Filters by module.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "startDate",
+            "in": "query",
+            "required": false,
+            "description": "Start of the range.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "endDate",
+            "in": "query",
+            "required": false,
+            "description": "End of the range.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "action",
+            "in": "query",
+            "required": false,
+            "description": "Filters by action.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "query",
+            "required": false,
+            "description": "Filters by entity.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "description": "live (default) or archive.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "live",
+                "archive"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The exported logs, as an attachment.",
+            "headers": {
+              "Content-Disposition": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "attachment; filename=logs_<date>.csv or .json."
+              }
+            },
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/user/security/status": {
+      "get": {
+        "tags": [
+          "user-security"
+        ],
+        "summary": "Get the security status",
+        "description": "Gates: authenticate, applied with router.use. The 503 comes from authenticate. It acts on the caller's own account.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The security status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "securityScore": {
+                              "type": "integer"
+                            },
+                            "overallLevel": {
+                              "type": "string"
+                            },
+                            "alternativeMethodsCount": {
+                              "type": "integer"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/user/security/mfa": {
+      "get": {
+        "tags": [
+          "user-security"
+        ],
+        "summary": "Get the MFA status",
+        "description": "Gates: authenticate, applied with router.use. The 503 comes from authenticate. It acts on the caller's own account. The recovery codes themselves are never listed.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The MFA status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "primaryEnabled": {
+                              "type": "boolean"
+                            },
+                            "primarySetupDate": {
+                              "type": "string",
+                              "format": "date-time",
+                              "nullable": true
+                            },
+                            "recoveryCodes": {
+                              "type": "object",
+                              "properties": {
+                                "remaining": {
+                                  "type": "integer"
+                                },
+                                "codes": {
+                                  "nullable": true,
+                                  "description": "Always null."
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/user/security/password": {
+      "get": {
+        "tags": [
+          "user-security"
+        ],
+        "summary": "Get the password status",
+        "description": "Gates: authenticate, applied with router.use. The 503 comes from authenticate. It acts on the caller's own account.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The password status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "lastChanged": {
+                              "type": "string",
+                              "format": "date-time",
+                              "nullable": true
+                            },
+                            "expiresAt": {
+                              "type": "string",
+                              "format": "date-time",
+                              "nullable": true
+                            },
+                            "strength": {
+                              "type": "string"
+                            },
+                            "strengthScore": {
+                              "type": "integer"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "user-security"
+        ],
+        "summary": "Change the password",
+        "description": "Gates: authenticate, applied with router.use. The 503 comes from authenticate. It acts on the caller's own account. The other sessions are revoked. Every failure of the service answers 400.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "currentPassword": {
+                    "type": "string"
+                  },
+                  "newPassword": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "currentPassword",
+                  "newPassword"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The password is changed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/user/security/sessions": {
+      "get": {
+        "tags": [
+          "user-security"
+        ],
+        "summary": "List the active sessions",
+        "description": "Gates: authenticate, applied with router.use. The 503 comes from authenticate. It acts on the caller's own account. No session token is returned.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The sessions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "deviceName": {
+                                "type": "string"
+                              },
+                              "browser": {
+                                "type": "string"
+                              },
+                              "os": {
+                                "type": "string"
+                              },
+                              "location": {
+                                "type": "string"
+                              },
+                              "lastAccess": {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              "isCurrent": {
+                                "type": "boolean"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "user-security"
+        ],
+        "summary": "Revoke every session but the current",
+        "description": "Gates: authenticate, applied with router.use. The 503 comes from authenticate. It acts on the caller's own account.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The other sessions are revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {}
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/user/security/activities": {
+      "get": {
+        "tags": [
+          "user-security"
+        ],
+        "summary": "List recent activities",
+        "description": "Gates: authenticate, applied with router.use. The 503 comes from authenticate. It acts on the caller's own account.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Rows returned; default 20.",
+            "schema": {
+              "type": "integer",
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The activities.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "type": {
+                                "type": "string"
+                              },
+                              "description": {
+                                "type": "string"
+                              },
+                              "timestamp": {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              "location": {
+                                "type": "string"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/user/security/recovery-codes": {
+      "post": {
+        "tags": [
+          "user-security"
+        ],
+        "summary": "Generate recovery codes",
+        "description": "Gates: authenticate, applied with router.use. The 503 comes from authenticate. It acts on the caller's own account. The plaintext codes are shown once; the stored hashes are never returned.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "The new codes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "codes": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "remaining": {
+                              "type": "integer"
+                            }
+                          }
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/user/security/sessions/{id}": {
+      "delete": {
+        "tags": [
+          "user-security"
+        ],
+        "summary": "Revoke a session",
+        "description": "Gates: authenticate, applied with router.use. The 503 comes from authenticate. It acts on the caller's own account.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The session id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The session is revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {}
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/user/security/password-reset/request": {
+      "post": {
+        "tags": [
+          "user-security"
+        ],
+        "summary": "Request a password reset",
+        "description": "Gates: authenticate, applied with router.use. The 503 comes from authenticate. It acts on the caller's own account. The 403 is also a deployment where password reset is disabled (the body is PASSWORD_RESET_DISABLED). The 400 is an expirationHours outside 0.25 to 24 or a failure of the service.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "expirationHours": {
+                    "type": "number",
+                    "minimum": 0.25,
+                    "maximum": 24,
+                    "default": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The reset is requested.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "expiresAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "expirationHours": {
+                              "type": "number"
+                            }
+                          }
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -10607,6 +14222,114 @@
             "description": "Defaults to true; an active rule deactivates the other active rules of its eventType."
           }
         }
+      },
+      "UserRecord": {
+        "type": "object",
+        "properties": {
+          "_id": {
+            "type": "string",
+            "description": "The stored id."
+          },
+          "id": {
+            "type": "string",
+            "description": "The same id as a string."
+          },
+          "userID": {
+            "type": "string",
+            "description": "The business key."
+          },
+          "name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          },
+          "phone": {
+            "type": "string",
+            "nullable": true
+          },
+          "organizationId": {
+            "type": "string",
+            "nullable": true,
+            "description": "The home organization."
+          },
+          "organizationIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "type": "string",
+            "description": "Translated for the client (Ativo, Inativo, Bloqueado, Suspenso)."
+          },
+          "roleName": {
+            "type": "string",
+            "description": "Resolved from the active role assignment."
+          },
+          "auditorRole": {
+            "type": "boolean",
+            "description": "Whether the additive auditor role is held."
+          },
+          "roleValidFrom": {
+            "type": "string",
+            "description": "Start of the role validity window.",
+            "format": "date-time",
+            "nullable": true
+          },
+          "roleValidUntil": {
+            "type": "string",
+            "description": "End of the role validity window.",
+            "format": "date-time",
+            "nullable": true
+          },
+          "mfaEnabled": {
+            "type": "boolean"
+          },
+          "mfaLocked": {
+            "type": "boolean"
+          },
+          "forcePasswordReset": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": true,
+        "description": "A user account as the routes return it, after UserModel.stripSecrets: no credential, hash, MFA secret, password history or reset-token field is present."
+      },
+      "UserOrganizationScopes": {
+        "type": "object",
+        "properties": {
+          "homeOrganizationId": {
+            "type": "string",
+            "nullable": true
+          },
+          "global": {
+            "type": "boolean",
+            "description": "True for an Administrador, whose scope is every organization."
+          },
+          "organizationIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "homeOrganizationId",
+          "global",
+          "organizationIds"
+        ]
       }
     },
     "responses": {
