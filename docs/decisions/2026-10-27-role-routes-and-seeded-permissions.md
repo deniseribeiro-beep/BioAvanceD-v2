@@ -1,6 +1,6 @@
 # 2026-10-27: the Técnico reaches the report screens, and seeded codes whose routes no screen calls stay API-only for now
 
-Requirement RF002, RF008. Issue #1408.
+Requirement RF002, RF008, RF010. Issue #1408, #1325.
 
 ## The question
 
@@ -16,6 +16,7 @@ The per-role user guides (`docs/user-guides/administrador.md`, `docs/user-guides
 4. **`createResult`, `editResult` and `deleteResult` have no UI on `/results`: intended.** Results are created through `POST /api/results/upload` (`uploadFiles`). `POST /api/results`, `PUT /api/results/:id` and `DELETE /api/results/:id` are API-only for now. The frontend client and `useResults` keep their wrappers.
 5. **`temperatureService.create` posted to a route that does not exist: fixed.** `temperature.routes.js` has no `POST /`, only `/reading` and `/system/reading`, and nothing called the method. It is removed.
 6. **Two pt-BR sidebar labels were in English: fixed.** `navigation.dataDictionary` is "Dicionário de Dados" and `navigation.tcleBuilder` is "Construtor de TCLE", the sidebar's own pt fallbacks.
+7. **The Coordenador opens the TCLE builder but could not save or edit a term: fixed, the backend admits it.** RF010 names no staff role for ConsentTemplate management, and RF002 AC5 makes the backend the authority. The backend already let the Coordenador publish a term: `POST /consent-policies` and `PUT /consent-policies/:id` are `requireRole(3, 4)` and write through the same `createTemplate` and `updateTemplate` service calls, and #825 admitted the Coordenador to `/admin/tcle/*` on the frontend. So `POST /consent-templates`, `GET /consent-templates/:id` and `PUT /consent-templates/:id` are now `requireRole(3, 4)`, which gives level 3 no write it lacked. A case in `eConsent.routes.test.js` checks that every e-consent route the builder calls admits every role `App.tsx` admits to `/admin/tcle`.
 
 ## Not decided here
 

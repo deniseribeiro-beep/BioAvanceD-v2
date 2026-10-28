@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 import { createRequire } from 'module';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import express from 'express';
 import request from 'supertest';
 import jwt from 'jsonwebtoken';
@@ -1019,10 +1022,10 @@ describe('eConsent.routes RBAC gate argument pinning (issue #921)', () => {
   // requirePermission call, is pinned separately below.
   const ROLE_CASES = [
     { label: 'GET /consent-policies/:id/pending-patients', method: 'get', path: '/consent-policies/cp1/pending-patients', expectedArgs: [3, 4] },
-    { label: 'POST /consent-templates', method: 'post', path: '/consent-templates', expectedArgs: [4] },
+    { label: 'POST /consent-templates', method: 'post', path: '/consent-templates', expectedArgs: [3, 4] },
     { label: 'GET /consent-templates', method: 'get', path: '/consent-templates', expectedArgs: [3, 4] },
-    { label: 'GET /consent-templates/:id', method: 'get', path: '/consent-templates/tmpl-1', expectedArgs: [4] },
-    { label: 'PUT /consent-templates/:id', method: 'put', path: '/consent-templates/tmpl-1', expectedArgs: [4] },
+    { label: 'GET /consent-templates/:id', method: 'get', path: '/consent-templates/tmpl-1', expectedArgs: [3, 4] },
+    { label: 'PUT /consent-templates/:id', method: 'put', path: '/consent-templates/tmpl-1', expectedArgs: [3, 4] },
     { label: 'POST /consent-policies', method: 'post', path: '/consent-policies', expectedArgs: [3, 4] },
     { label: 'PUT /consent-policies/:id', method: 'put', path: '/consent-policies/cp1', expectedArgs: [3, 4] },
     { label: 'GET /consent-policies/history', method: 'get', path: '/consent-policies/history', expectedArgs: [3, 4] },
@@ -1064,5 +1067,64 @@ describe('eConsent.routes RBAC gate argument pinning (issue #921)', () => {
     expect(res.status).toBe(403);
     expect(res.body.gate).toBe('permission');
     expect(requirePermissionImpl.recordedCalls).toEqual([['requestConsent']]);
+  });
+});
+
+// #1325: App.tsx admitted the Coordenador to the TCLE builder while three of
+// the e-consent routes the builder calls were requireRole(4), so its save and
+// edit answered 403. RF002 AC5 makes the backend the authority; this sweep
+// fails when a role a /admin/tcle route admits is refused by one of them.
+describe('eConsent.routes: the TCLE builder\'s calls admit every role the frontend admits to /admin/tcle (#1325)', () => {
+  it('every e-consent route the TCLE builder calls admits every role App.tsx admits to /admin/tcle', () => {
+    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..');
+    const appSource = fs.readFileSync(path.join(repoRoot, 'frontend', 'src', 'App.tsx'), 'utf8');
+
+    // The seed's hierarchyLevel per role name (rbac.js's header comment).
+    const LEVEL_BY_ROLE = { 'Usuário Externo': 1, 'Técnico': 2, 'Coordenador': 3, 'Administrador': 4 };
+
+    // The calls TcleBuilderPage.tsx makes, through the consentService URLs
+    // in frontend/src/services/api.ts, relative to the /api/e-consent mount.
+    const BUILDER_CALLS = [
+      { method: 'GET', path: '/purpose-codes' },
+      { method: 'GET', path: '/consent-templates' },
+      { method: 'GET', path: '/consent-templates/:id' },
+      { method: 'POST', path: '/consent-templates' },
+      { method: 'PUT', path: '/consent-templates/:id' },
+    ];
+
+    const tcleRoutes = Array.from(appSource.matchAll(/<Route\b[\s\S]*?\/>/g))
+      .map((match) => match[0])
+      .map((block) => ({ block, routePath: (block.match(/path="([^"]+)"/) || [])[1] }))
+      .filter(({ routePath }) => routePath && routePath.startsWith('/admin/tcle'));
+
+    // Guards the regex: a refactor of the <Route> shape must not make this
+    // case vacuously green.
+    expect(tcleRoutes.map(({ routePath }) => routePath).sort()).toEqual(['/admin/tcle/edit/:templateId', '/admin/tcle/new']);
+
+    const { pins } = require('../rbac-pins/eConsent.pins.js');
+    const disagreements = [];
+    for (const { block, routePath } of tcleRoutes) {
+      const roleList = (block.match(/requiredRole=\{\[([^\]]*)\]\}/) || [])[1] || '';
+      const roleNames = Array.from(roleList.matchAll(/'([^']+)'|"([^"]+)"/g)).map((match) => match[1] || match[2]);
+      expect(roleNames, `requiredRole of ${routePath}`).not.toEqual([]);
+
+      for (const roleName of roleNames) {
+        const level = LEVEL_BY_ROLE[roleName];
+        if (level === undefined) {
+          disagreements.push(`unmapped role ${roleName} (admitted on ${routePath})`);
+          continue;
+        }
+        for (const call of BUILDER_CALLS) {
+          const pin = pins.find((row) => row.method === call.method && row.path === call.path);
+          if (!pin) {
+            disagreements.push(`no pin for ${call.method} ${call.path}`);
+          } else if (!(pin.roles || []).includes(level)) {
+            disagreements.push(`${level} refused ${call.method} ${call.path} (admitted on ${routePath})`);
+          }
+        }
+      }
+    }
+
+    expect(disagreements).toEqual([]);
   });
 });

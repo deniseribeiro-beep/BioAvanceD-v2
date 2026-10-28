@@ -24,8 +24,8 @@ The administration screens come first. The shared staff screens follow with a sh
 | Gerenciamento de Backup | `/backup` | Run a backup, list backups, restore one, read and change the backup policy. The procedure is in `docs/operations/backup-restore-runbook.md`. | `requirePermission('manageBackup')` (`backup.routes.js`); `requireRole(4)` (`backupPolicy.routes.js`) |
 | Parâmetros | `/settings/parameters` | List analysis types and create one. | authenticated only for the list; `requireRole(4)` (`analysis-type.routes.js`) |
 | Dicionário de Dados Integrado | `/admin/dicionario` | Read, print and export the built-in data dictionary reference; makes no API call. `/admin/dictionary` and `/admin/master-data` redirect here. | none (no API call) |
-| Construtor de TCLE | `/admin/tcle/new` | List consent templates and purpose codes; create a consent template. | `requireRole(3, 4)` for the list and purpose codes; `requireRole(4)` to create (`api/backend/src/routes/eConsent.js`) |
-| Construtor de TCLE | `/admin/tcle/edit/:templateId` | Open and update an existing consent template. | `requireRole(4)` (`api/backend/src/routes/eConsent.js`) |
+| Construtor de TCLE | `/admin/tcle/new` | List consent templates and purpose codes; create a consent template. | `requireRole(3, 4)` (`api/backend/src/routes/eConsent.js`) |
+| Construtor de TCLE | `/admin/tcle/edit/:templateId` | Open and update an existing consent template. | `requireRole(3, 4)` (`api/backend/src/routes/eConsent.js`) |
 | Consentimentos (TCLE) | `/consents` | Read a participant's consent, revoke it, read its history. | `requireOrganizationScope` (`patient.routes.js`); `requireRole(3, 4)` (`api/backend/src/routes/eConsent.js`) |
 | Associações de Biomarcadores | `/biomarker-associations` | List biomarker associations; create and edit them. | authenticated only for the list; `requireRole(3, 4)` (`master-data.routes.js`, mounted at `/api/biomarker-associations` in `api/backend/app.js`) |
 | Central de Relatórios | `/reports` | Open the report catalogue and generate reports. | `requirePermission('viewReports')` (`reports.routes.js`) |
