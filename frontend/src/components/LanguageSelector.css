@@ -47,3 +47,9 @@
   box-shadow: 0 0 0 2px rgba(var(--primary-rgb), 0.2);
 }
 
+/* #1409, RNF027: WebKit's native select drops the box-shadow, so keyboard focus needs an outline. */
+.language-select:focus-visible {
+  outline: 3px solid var(--color-action);
+  outline-offset: 2px;
+}
+
