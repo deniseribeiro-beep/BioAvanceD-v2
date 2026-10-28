@@ -869,6 +869,11 @@ services:
       # /docs/docs-7-27-2026/extracted/dict-02_DICIONARIO.md. Hence /docs,
       # not /app/docs -- mounting it under the workdir would not be found.
       - ./docs:/docs:ro
+      # #1413: mock-return-keys.arch.test.js reads tests/unit and
+      # tests/integration, which api/backend/.dockerignore keeps out of the
+      # image for #947, so they are mounted read-only from the checkout.
+      - ./api/backend/tests/unit:/app/tests/unit:ro
+      - ./api/backend/tests/integration:/app/tests/integration:ro
     command: ["npm", "run", "current-state:ci"]
     depends_on:
       mongodb-test:

@@ -20,7 +20,6 @@ const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
 const { readStripped } = require('./helpers/strip-comments');
 
 const BACKEND_ROOT = path.resolve(__dirname, '..', '..');
@@ -32,10 +31,15 @@ function allowedSeverities() {
   return match[1].split(',').map((s) => s.trim().replace(/^['"]|['"]$/g, ''));
 }
 
-function trackedSourceFiles() {
-  return execFileSync('git', ['ls-files', 'src'], { cwd: BACKEND_ROOT, encoding: 'utf8' })
-    .split('\n')
-    .filter((f) => f.endsWith('.js'));
+// src/'s .js files, by a filesystem walk rather than git ls-files: the
+// backend-unit-runner image has no git binary and no .git (#1413).
+function sourceFiles(dir = path.join(BACKEND_ROOT, 'src'), out = []) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) sourceFiles(full, out);
+    else if (entry.name.endsWith('.js')) out.push(path.relative(BACKEND_ROOT, full).split(path.sep).join('/'));
+  }
+  return out;
 }
 
 // Each call's argument text: from the opening parenthesis to its matching
@@ -56,7 +60,7 @@ function callArguments(source, start) {
 function severityLiteralsPassedToAuditLogger() {
   const found = [];
   const callPattern = /\b(?:auditLogger\.log|logAudit)\s*\(/g;
-  for (const file of trackedSourceFiles()) {
+  for (const file of sourceFiles()) {
     const source = readStripped(fs, path.join(BACKEND_ROOT, file));
     let call;
     while ((call = callPattern.exec(source)) !== null) {

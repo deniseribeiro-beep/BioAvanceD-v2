@@ -128,6 +128,8 @@ function scan() {
 
 test('the scan reaches the mock calls it is meant to read', () => {
   // A guard that finds no calls would pass by reading nothing.
+  const missing = SCANNED_DIRS.filter((d) => !fs.existsSync(d)).map((d) => path.relative(TESTS_ROOT, d));
+  assert.deepEqual(missing, [], `scanned test directories missing: ${missing.join(', ')}`);
   const { calls } = scan();
   assert.ok(calls > 1000, `only ${calls} mock calls with a literal argument found`);
 });
