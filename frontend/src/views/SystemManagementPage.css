@@ -116,7 +116,7 @@
 
 .role-coordenador {
 	background: rgba(37, 99, 235, 0.1);
-	color: var(--info);
+	color: #1c5cea; /* RNF027 C2 (#1324): --info on this tint is 4.3:1 at 12px; this is 4.7:1. */
 	border-color: rgba(37, 99, 235, 0.22);
 }
 

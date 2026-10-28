@@ -124,8 +124,8 @@ button.success,
 .btn-danger,
 button.danger,
 .action-button.danger {
-  background-color: var(--color-danger);
-  border-color: var(--color-danger);
+  background-color: #dc2626; /* RNF027 C2 (#1324): white on --color-danger is 3.8:1; this is 4.8:1. */
+  border-color: #dc2626;
   color: #fff;
 }
 

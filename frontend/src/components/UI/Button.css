@@ -36,17 +36,17 @@
   color: var(--primary-dark);
 }
 
-.btn-danger {
-  background-color: var(--danger);
-  border-color: var(--danger);
+.btn-danger { /* RNF027 C2 (#1324): white on --danger is 3.8:1; #dc2626 is 4.8:1, and hover darkens to #b91c1c. */
+  background-color: #dc2626;
+  border-color: #dc2626;
   color: white;
   /* Adiciona ícone visual para pessoas daltônicas */
   position: relative;
 }
 
 .btn-danger:hover {
-  background-color: #dc2626;
-  border-color: #dc2626;
+  background-color: #b91c1c;
+  border-color: #b91c1c;
 }
 
 .btn-danger::before {
