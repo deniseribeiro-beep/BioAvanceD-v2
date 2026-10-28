@@ -51,7 +51,16 @@
     "/api/organizations",
     "/api/physical-chain",
     "/api/policies",
-    "/api/shipments"
+    "/api/shipments",
+    "/api/file-access",
+    "/api/quality",
+    "/api/analysis-files",
+    "/api/analysis-types",
+    "/api/diagnostic-reports",
+    "/api/_test-support/ingestion",
+    "/api/terminologies",
+    "/api/cids",
+    "/api/phone-codes"
   ],
   "tags": [
     {
@@ -233,6 +242,42 @@
     {
       "name": "shipments",
       "description": "/api/shipments: the remessa that carries out an executed transfer or a released distribution, its dispatch, receipt and reads (RF024 AC5, RF026)."
+    },
+    {
+      "name": "file-access",
+      "description": "/api/file-access: the download of one file by a short-lived access token, the token being the credential (RNF029 C5)."
+    },
+    {
+      "name": "quality",
+      "description": "/api/quality: the preview of a sample's quality assessment, stored nowhere (RF018)."
+    },
+    {
+      "name": "analysis-files",
+      "description": "/api/analysis-files: the eligibility check of a sample and the upload of an analysis file to it (RF007 AC1)."
+    },
+    {
+      "name": "analysis-types",
+      "description": "/api/analysis-types: the analysis types, their active list and their creation."
+    },
+    {
+      "name": "diagnostic-reports",
+      "description": "/api/diagnostic-reports: the DiagnosticReport, registered, read one at a time and listed per participant (P1X-0168..0174)."
+    },
+    {
+      "name": "test-support-ingestion",
+      "description": "/api/_test-support/ingestion: the test-support probe of the ingestion gateway, registered only where test-support routes are enabled (RF029)."
+    },
+    {
+      "name": "terminologies",
+      "description": "/api/terminologies: the search of the terminology codes (CID, ORPHA, OMIM and others)."
+    },
+    {
+      "name": "cids",
+      "description": "/api/cids: the CID catalogue, its read, its search, and its read-only write routes that answer 405."
+    },
+    {
+      "name": "phone-codes",
+      "description": "/api/phone-codes: the search of the country phone codes."
     }
   ],
   "paths": {
@@ -39405,6 +39450,1567 @@
           }
         ]
       }
+    },
+    "/api/file-access": {
+      "get": {
+        "tags": [
+          "file-access"
+        ],
+        "summary": "Download a file by its access token",
+        "description": "Gates: none. No authenticate, so it never answers 401 and never 400: the token query parameter is the credential (RNF029 C5, #1321), a short-lived token the download handlers issue for one file. An expired token answers 403 with code FILE_ACCESS_TOKEN_EXPIRED; a missing, tampered or superseded token (the file's stored object changed since the token was issued) answers 403 with FILE_ACCESS_TOKEN_INVALID. Each refusal is audited. 404 is a deleted or unknown file row, or bytes missing in storage. 500 is a failure reading or decrypting the stored object, or any other failure. 503 is no database. The 200 is the file's bytes (decrypted when stored encrypted), not JSON, with Content-Disposition and Cache-Control: no-store.",
+        "security": [],
+        "parameters": [
+          {
+            "name": "token",
+            "in": "query",
+            "required": true,
+            "description": "The file access token. A request without it is refused with 403 FILE_ACCESS_TOKEN_INVALID.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The file's bytes.",
+            "headers": {
+              "Content-Disposition": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The token is expired (code FILE_ACCESS_TOKEN_EXPIRED), or missing, tampered or superseded (code FILE_ACCESS_TOKEN_INVALID).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The file row is deleted or unknown, or its bytes are missing in storage.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/quality/preview": {
+      "post": {
+        "tags": [
+          "quality"
+        ],
+        "summary": "Preview the quality assessment of a sample payload",
+        "description": "Gates: authenticate. Evaluates the quality of the posted sample without storing anything; no body field is required and any body is assessed. The 500 is only authenticate's (or an unexpected throw in the evaluation); the 503 is authenticate's.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true,
+                "description": "The sample fields to assess; legacy quality fields are normalized to the canonical ones."
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The assessment.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "additionalProperties": true,
+                          "description": "The certification result, with rcs_input, deprecated_legacy_fields and, when the payload carried one, qualification_context."
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/analysis-files/validate/{sampleIdentifier}": {
+      "get": {
+        "tags": [
+          "analysis-files"
+        ],
+        "summary": "Check that a sample can receive an analysis file",
+        "description": "Gates: authenticate; no organization scope. 404 is any eligibility failure (an unknown or ambiguous sample, a sample without a participant, an unknown participant, a consent without an acceptance date, or a database failure, which the service reports as a failure too) except a patient whose status is exactly PENDING_CONSENT, which is 409. The body's code is CONSENT_PENDING whenever the failure carries a patient status (so a 404 can carry CONSENT_PENDING, for a status other than ACCEPTED_CONSENT that is not PENDING_CONSENT), otherwise SAMPLE_NOT_FOUND. The handler sends no 500 of its own; the 500 is authenticate's. Compare POST /api/analysis-files/upload, which answers 400 where this answers 404.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "sampleIdentifier",
+            "in": "path",
+            "required": true,
+            "description": "The sample: its _id, specimenId or barcode.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The sample is eligible.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "eligible": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "sample": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "patient": {
+                      "type": "object",
+                      "properties": {
+                        "participantId": {
+                          "type": "string"
+                        },
+                        "consentStatus": {
+                          "type": "string"
+                        },
+                        "consentAcceptedAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "eligible"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "The sample is not eligible (code SAMPLE_NOT_FOUND, or CONSENT_PENDING when the failure carries a patient status other than PENDING_CONSENT).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The patient's status is PENDING_CONSENT (code CONSENT_PENDING).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/analysis-files/upload": {
+      "post": {
+        "tags": [
+          "analysis-files"
+        ],
+        "summary": "Upload an analysis file to a sample",
+        "description": "Gates: authenticate, then the multipart parser for the file field named file (at most 500 MB), then a check that the file's leading bytes match its extension (RF007 AC1, RNF029 C1, #1321); no organization scope. A parser error (a blocked or disallowed extension or MIME type, a file over 500 MB) goes to Express's default error handler, which answers 500 (the app registers no error handler of its own), not 400. A file whose content does not match its extension answers 400 (Invalid file content). The handler answers 503 with no database; 400 with no file, or with no specimenId; 409 (code CONSENT_PENDING) when the sample's patient has any status other than ACCEPTED_CONSENT; 400 (code SAMPLE_NOT_FOUND) for any other eligibility failure; 201 on success. The handler's catch answers 400 (not 500) for any other failure. Compare GET /api/analysis-files/validate/{sampleIdentifier}, which answers 404 for the same failure and 409 only for PENDING_CONSENT.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "The analysis file, at most 500 MB, with an allowed extension and MIME type and leading bytes that match the extension."
+                  },
+                  "specimenId": {
+                    "type": "string",
+                    "description": "The sample: its _id, specimenId or barcode."
+                  }
+                },
+                "required": [
+                  "file",
+                  "specimenId"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The stored analysis file record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "_id": {
+                              "type": "string"
+                            },
+                            "specimenId": {
+                              "type": "string",
+                              "description": "The sample's specimenId."
+                            },
+                            "barcode": {
+                              "type": "string"
+                            },
+                            "fileName": {
+                              "type": "string"
+                            },
+                            "fileSize": {
+                              "type": "integer"
+                            },
+                            "uploadedAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            }
+                          }
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No file, no specimenId, content that does not match the extension (Invalid file content), an unknown or ineligible sample (code SAMPLE_NOT_FOUND), or any other failure of the handler.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "description": "The patient's status is not ACCEPTED_CONSENT (code CONSENT_PENDING).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "A parser error (blocked or disallowed type, file over 500 MB) answered by the default error handler, or authenticate's failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/analysis-types": {
+      "get": {
+        "tags": [
+          "analysis-types"
+        ],
+        "summary": "List the active analysis types",
+        "description": "Gates: authenticate. Returns the active types sorted by name. The 503 comes from authenticate and from the handler (no database); the 500 is also a failure of the read.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The active analysis types.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "_id": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "code": {
+                                "type": "string"
+                              },
+                              "active": {
+                                "type": "boolean"
+                              },
+                              "createdAt": {
+                                "type": "string",
+                                "format": "date-time"
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "analysis-types"
+        ],
+        "summary": "Create an analysis type",
+        "description": "Gates: authenticate, requireRole(4) (Administrador). The code defaults to the slug of name and is lower-cased. The 422 (error \"Dados inválidos\", details a list of reasons) is a name that is not a non-empty string, or a resulting code that is empty or not a string (a name whose slug is empty answers 422). The 409 is a code that already exists. The handler's catch answers 400 (not 500) when the insert fails; the 500 comes from the gates. The 503 comes from authenticate and from the handler (no database).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "code": {
+                    "type": "string",
+                    "description": "Defaults to the slug of name; stored lower-cased."
+                  },
+                  "active": {
+                    "type": "boolean",
+                    "default": true
+                  }
+                },
+                "required": [
+                  "name"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The analysis type is created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "_id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "code": {
+                              "type": "string"
+                            },
+                            "active": {
+                              "type": "boolean"
+                            },
+                            "createdAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            }
+                          }
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The insert failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "description": "The code already exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/diagnostic-reports": {
+      "post": {
+        "tags": [
+          "diagnostic-reports"
+        ],
+        "summary": "Register a DiagnosticReport",
+        "description": "Gates: authenticate, requirePermission('createPatient'), requireOrganizationScope (P1X-0168..0174, #695). Only participantId, encounterId, reportStatus, issuedDateTime, resultIds and documentUri are read; diagnosticReportId is always assigned. The order is: 503 with no database; 422 for a shape error (resultIds not a list, reportStatus not a string, issuedDateTime not a date); then 403 when a non-blank participantId names a patient outside the caller's organization scope (an unknown patient is not refused); then 422 for a blank participantId or reportStatus; then 422 for a resultIds entry that is no ClinicalObservation; 201. So a missing reportStatus beside an out-of-scope participantId answers 403, not 422. Any other failure answers 500.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "participantId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "encounterId": {
+                    "type": "string"
+                  },
+                  "reportStatus": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "issuedDateTime": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "resultIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Each entry must be an existing ClinicalObservation."
+                  },
+                  "documentUri": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "participantId",
+                  "reportStatus"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The report is registered.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/DiagnosticReportRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "The participant's patient record lies outside the caller's organization scope (Acesso negado), or a gate refused (no organization assigned, missing permission, or authenticate's 403).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "diagnostic-reports"
+        ],
+        "summary": "List a participant's DiagnosticReports",
+        "description": "Gates: authenticate, requireOrganizationScope. The list is per participant: the participantId query parameter is required and a blank one answers 400 (the only 400 among the diagnostic report routes). 403 when the participant's patient record lies outside the caller's organization scope. 503 comes from the gates and from the handler (no database).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "participantId",
+            "in": "query",
+            "required": true,
+            "description": "The participant whose reports are listed.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The participant's reports.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/DiagnosticReportRecord"
+                          }
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "participantId is missing or blank.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "The participant's patient record lies outside the caller's organization scope (Acesso negado), or a gate refused (no organization assigned, missing permission, or authenticate's 403).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/diagnostic-reports/{diagnosticReportId}": {
+      "get": {
+        "tags": [
+          "diagnostic-reports"
+        ],
+        "summary": "Read a DiagnosticReport",
+        "description": "Gates: authenticate, requireOrganizationScope. The path value is the report's own diagnosticReportId (uuid), not the _id. 404 (Registro não encontrado) comes first, then 403 when the report's participant lies outside the caller's organization scope. The route has no 400. 503 comes from the gates and from the handler (no database).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "diagnosticReportId",
+            "in": "path",
+            "required": true,
+            "description": "The report's diagnosticReportId (uuid), not its _id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The report.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/DiagnosticReportRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "The participant's patient record lies outside the caller's organization scope (Acesso negado), or a gate refused (no organization assigned, missing permission, or authenticate's 403).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/_test-support/ingestion/probe": {
+      "post": {
+        "tags": [
+          "test-support-ingestion"
+        ],
+        "summary": "Probe the ingestion gateway",
+        "description": "Gates: requireTestSupportSecret (header x-test-support-secret). No authenticate, so it never answers 401. Runs the real ingestion gateway on the posted record and audits the attempt (RF029, #669). Registered only when NODE_ENV is not production and ENABLE_TEST_SUPPORT_ROUTES is true (#675); otherwise the route does not exist. A wrong or missing secret answers 403. 503 is no database. Every error of the gateway is a 500 (it sets no status code), including a missing entityType. The 200 carries status accepted, quarantined, or idempotent_replay (the replay of an idempotencyKey already claimed).",
+        "security": [
+          {
+            "testSupportSecret": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "entityType": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "schemaId": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "aliasMap": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "payload": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "provenance": {
+                    "type": "object",
+                    "additionalProperties": true
+                  },
+                  "idempotencyKey": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "references": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  },
+                  "referenceCodes": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                },
+                "required": [
+                  "entityType"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The gateway's outcome.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "accepted",
+                        "quarantined",
+                        "idempotent_replay"
+                      ]
+                    },
+                    "entityType": {
+                      "type": "string"
+                    },
+                    "violations": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    },
+                    "quarantineRecord": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "provenance": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "payload": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "idempotencyKey": {
+                      "type": "string"
+                    },
+                    "resultRef": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "status"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The secret is wrong or missing (Não autorizado).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The gateway failed, including a missing entityType.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/terminologies": {
+      "get": {
+        "tags": [
+          "terminologies"
+        ],
+        "summary": "Search the terminologies",
+        "description": "Gates: none. No authenticate, so it never answers 401 or 403 (the code carries no session check). The filter is sistema (upper-cased) and a text search; limit is 1..500. When nothing matches, it may hydrate the local store from a remote Orphanet source before answering. 503 is no database; 500 is any failure of the read. The route has no 400.",
+        "security": [],
+        "parameters": [
+          {
+            "name": "sistema",
+            "in": "query",
+            "required": false,
+            "description": "The terminology system; upper-cased.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "description": "Text to search in code, description, label, synonyms and relations; the alias search is read when q is empty.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "description": "Alias of q.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "A value outside 1..500 is clamped.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The matching terminologies.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "codigo": {
+                                "type": "string"
+                              },
+                              "sistema": {
+                                "type": "string"
+                              },
+                              "descricao": {
+                                "type": "string"
+                              },
+                              "label": {
+                                "type": "string"
+                              },
+                              "lang": {
+                                "type": "string"
+                              },
+                              "sinonimos": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "aliases": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "relacoes": {
+                                "type": "object",
+                                "additionalProperties": true
+                              },
+                              "ativo": {
+                                "type": "boolean"
+                              },
+                              "sincronizadoEm": {
+                                "type": "string",
+                                "format": "date-time"
+                              }
+                            }
+                          }
+                        },
+                        "pagination": {
+                          "type": "object",
+                          "properties": {
+                            "total": {
+                              "type": "integer"
+                            },
+                            "limit": {
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "total",
+                            "limit"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "data",
+                        "pagination"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/cids": {
+      "get": {
+        "tags": [
+          "cids"
+        ],
+        "summary": "List the CIDs",
+        "description": "Gates: authenticate, requireRole(4) (Administrador). Returns every CID sorted by code. The 503 comes from authenticate and from the handler (no database); the 500 is also a failure of the read.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every CID.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "_id": {
+                                "type": "string"
+                              },
+                              "Capitulo": {
+                                "type": "string"
+                              },
+                              "Codigo_Tabulacao": {
+                                "type": "string"
+                              },
+                              "Descricao": {
+                                "type": "string"
+                              },
+                              "Codigos_CID10": {
+                                "type": "string"
+                              },
+                              "ORPHA": {
+                                "type": "string"
+                              },
+                              "OMIM": {
+                                "type": "string"
+                              },
+                              "active": {
+                                "type": "boolean"
+                              },
+                              "createdAt": {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              "updatedAt": {
+                                "type": "string",
+                                "format": "date-time"
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "cids"
+        ],
+        "summary": "Create a CID (not allowed)",
+        "description": "Gates: authenticate, requireRole(4) (Administrador). The CID routes are read-only: after the gates it always answers 405 (Método não permitido). It reads no request body.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "405": {
+            "description": "Método não permitido: the CID routes are read-only.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/cids/search": {
+      "get": {
+        "tags": [
+          "cids"
+        ],
+        "summary": "Search the CIDs",
+        "description": "Gates: authenticate. A q shorter than 2 characters answers 200 with an empty list. The 200 body is { items, pagination } without success. The 503 comes from authenticate and from the handler (no database); the 500 is also a failure of the search.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "description": "The search text; under 2 characters answers an empty list.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Capped at 100 by the search.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 10
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The matching CIDs and the page.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true,
+                        "description": "A CID document with its code, description and aliases normalized."
+                      }
+                    },
+                    "pagination": {
+                      "type": "object",
+                      "properties": {
+                        "page": {
+                          "type": "integer"
+                        },
+                        "limit": {
+                          "type": "integer"
+                        },
+                        "total": {
+                          "type": "integer"
+                        },
+                        "totalPages": {
+                          "type": "integer"
+                        },
+                        "hasNext": {
+                          "type": "boolean"
+                        },
+                        "hasPrev": {
+                          "type": "boolean"
+                        },
+                        "query": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "pagination"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/cids/{id}": {
+      "put": {
+        "tags": [
+          "cids"
+        ],
+        "summary": "Replace a CID (not allowed)",
+        "description": "Gates: authenticate, requireRole(4) (Administrador). The CID routes are read-only: after the gates it always answers 405 (Método não permitido). It reads no request body.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "A CID id; it is not read.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "405": {
+            "description": "Método não permitido: the CID routes are read-only.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "cids"
+        ],
+        "summary": "Update a CID (not allowed)",
+        "description": "Gates: authenticate, requireRole(4) (Administrador). The CID routes are read-only: after the gates it always answers 405 (Método não permitido). It reads no request body.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "A CID id; it is not read.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "405": {
+            "description": "Método não permitido: the CID routes are read-only.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/phone-codes/search": {
+      "get": {
+        "tags": [
+          "phone-codes"
+        ],
+        "summary": "Search the country phone codes",
+        "description": "Gates: authenticate. Without q it lists the first countries by dial code; limit is 1..50. The handler has no database check: a missing database throws into its catch and answers 500, so it has no 503 of its own (authenticate's 503 stays).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "description": "Country name, ISO code or dial code.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "A value outside 1..50 is clamped.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The matching phone codes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "_id": {
+                                "type": "string"
+                              },
+                              "countryName": {
+                                "type": "string"
+                              },
+                              "iso2": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "dialCode": {
+                                "type": "string"
+                              },
+                              "searchLabel": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "_id",
+                              "countryName",
+                              "dialCode",
+                              "searchLabel"
+                            ]
+                          }
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -41004,6 +42610,57 @@
           "shipmentStatus"
         ],
         "additionalProperties": true
+      },
+      "DiagnosticReportRecord": {
+        "type": "object",
+        "properties": {
+          "_id": {
+            "type": "string"
+          },
+          "diagnosticReportId": {
+            "type": "string",
+            "description": "The report's own uuid (P1X-0168), assigned on create."
+          },
+          "participantId": {
+            "type": "string"
+          },
+          "encounterId": {
+            "type": "string",
+            "nullable": true
+          },
+          "reportStatus": {
+            "type": "string"
+          },
+          "issuedDateTime": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "resultIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "ClinicalObservation ids."
+          },
+          "documentUri": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "diagnosticReportId",
+          "participantId",
+          "reportStatus"
+        ]
       }
     },
     "responses": {
