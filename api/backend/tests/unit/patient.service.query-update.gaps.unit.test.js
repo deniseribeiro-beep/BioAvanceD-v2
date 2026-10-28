@@ -210,19 +210,13 @@ describe('PatientService.searchPatients', () => {
 
     await patientService.searchPatients(db, '1990-06-15');
 
-    // The source parses the term with `new Date(term)` (UTC midnight) then reconstructs
-    // start/end from its *local* year/month/date components, so the expected value must
-    // be derived the same way rather than assuming the literal calendar date survives.
-    const parsedUtc = new Date('1990-06-15');
-    const expectedStart = new Date(parsedUtc.getFullYear(), parsedUtc.getMonth(), parsedUtc.getDate());
-
+    // #1412: the term is its literal calendar day in every zone, not
+    // new Date(term)'s UTC midnight read back through local getters.
     const participantIdentityService = require('../../src/services/participantIdentity.service');
     const identityQueryArg = identitiesCollection.find.mock.calls[0][0];
-    // #1104: as above -- the hash of the expected calendar day pins the same
-    // local/UTC reconstruction the comment above describes.
     const hashClause = identityQueryArg.$or.find((clause) => clause.birthDateHash);
     expect(hashClause.birthDateHash.$in).toContain(
-      participantIdentityService.computeBlindIndex('birthDate', expectedStart)
+      participantIdentityService.computeBlindIndex('birthDate', '15/06/1990')
     );
     expect(identityQueryArg.$or.some((clause) => clause.birthDate)).toBe(false);
 

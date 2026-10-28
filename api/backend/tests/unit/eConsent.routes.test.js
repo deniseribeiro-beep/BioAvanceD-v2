@@ -341,7 +341,8 @@ describe('eConsent.routes GET /validate/:token', () => {
     expect(res.status).toBe(200);
     expect(res.body.patient.patientName).toBe('Jane Doe');
     expect(res.body.patient.identityDocument).toBe('11144477735');
-    expect(new Date(res.body.patient.birthDate).toISOString()).toBe(new Date('1990-01-20').toISOString());
+    // #1412: stored as noon UTC of the day.
+    expect(new Date(res.body.patient.birthDate).toISOString()).toBe('1990-01-20T12:00:00.000Z');
   });
 
   it('returns the raw patient unchanged when no ParticipantIdentity record exists yet', async () => {

@@ -2,6 +2,7 @@ const { getCollection } = require('../utils/collectionResolver');
 const { encryptValue, decryptValue, hmacBlindIndex, hmacBlindIndexCandidates } = require('../utils/fieldEncryption');
 const { fieldMapFor, legacyFieldMapFor } = require('../utils/encryptedFieldRegistry');
 const logger = require('../utils/logger');
+const { parseBirthDateDay, birthDateKey } = require('../utils/birthDate');
 
 // RF005/RNF007 (#560): read access to ParticipantIdentity, the segregated
 // civil-identity collection created by #363. Kept separate from
@@ -80,6 +81,15 @@ class ParticipantIdentityService {
     // update never touched it.
     if (Object.prototype.hasOwnProperty.call(doc, 'recordNumber')) {
       doc.recordNumber = this.normalizeRecordNumber(doc.recordNumber);
+    }
+
+    // #1412: the birth date as noon UTC of its calendar day, so the stored
+    // instant, the ciphertext and birthDateHash name one day in every zone.
+    // An unparseable value is left as it was.
+    if (Object.prototype.hasOwnProperty.call(doc, 'birthDate')
+        && doc.birthDate !== null && doc.birthDate !== undefined && doc.birthDate !== '') {
+      const day = parseBirthDateDay(doc.birthDate);
+      if (day) doc.birthDate = day;
     }
 
     const encryptedFieldMap = this.getEncryptedFieldMap();
@@ -232,10 +242,9 @@ class ParticipantIdentityService {
 
   // Normalizes a raw value into the exact string that gets hashed, so the
   // same input always produces the same blind-index value at write time and
-  // at query time. birthDate normalizes to the local calendar date
-  // (YYYY-MM-DD) to match the existing day-range query semantics these
-  // fields replace -- not a UTC ISO slice, which could shift the date near
-  // local midnight.
+  // at query time. birthDate normalizes to the UTC calendar day (YYYY-MM-DD)
+  // of its noon-UTC value (#1412), so an ISO and a DD/MM/YYYY spelling of one
+  // day, and a legacy midnight instant, hash alike on a host in any zone.
   normalizeForHash(field, value) {
     if (value === null || value === undefined || value === '') return null;
 
@@ -274,12 +283,7 @@ class ParticipantIdentityService {
     }
 
     if (field === 'birthDate') {
-      const date = value instanceof Date ? value : new Date(value);
-      if (Number.isNaN(date.getTime())) return null;
-      const y = date.getFullYear();
-      const m = String(date.getMonth() + 1).padStart(2, '0');
-      const d = String(date.getDate()).padStart(2, '0');
-      return `${y}-${m}-${d}`;
+      return birthDateKey(value);
     }
 
     return String(value).trim();

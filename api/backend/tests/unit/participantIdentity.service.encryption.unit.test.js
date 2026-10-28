@@ -72,9 +72,11 @@ describe('ParticipantIdentityService.computeBlindIndex', () => {
     expect(a).not.toBe(b);
   });
 
+  // #1412: an instant that is neither noon UTC nor a local midnight is read
+  // as its UTC calendar day.
   it('is deterministic for the same birthDate calendar day regardless of time-of-day', () => {
-    const a = participantIdentityService.computeBlindIndex('birthDate', new Date(1990, 0, 20, 3, 15));
-    const b = participantIdentityService.computeBlindIndex('birthDate', new Date(1990, 0, 20, 23, 59));
+    const a = participantIdentityService.computeBlindIndex('birthDate', new Date(Date.UTC(1990, 0, 20, 3, 15)));
+    const b = participantIdentityService.computeBlindIndex('birthDate', new Date(Date.UTC(1990, 0, 20, 23, 59)));
     expect(a).toBe(b);
   });
 
@@ -138,8 +140,8 @@ describe('ParticipantIdentityService.computeBlindIndexCandidates', () => {
   });
 
   it('applies the SAME normalization as computeBlindIndex -- birthDate calendar day (#1099)', () => {
-    const a = participantIdentityService.computeBlindIndexCandidates('birthDate', new Date(1990, 0, 20, 3, 15));
-    const b = participantIdentityService.computeBlindIndexCandidates('birthDate', new Date(1990, 0, 20, 23, 59));
+    const a = participantIdentityService.computeBlindIndexCandidates('birthDate', new Date(Date.UTC(1990, 0, 20, 3, 15)));
+    const b = participantIdentityService.computeBlindIndexCandidates('birthDate', new Date(Date.UTC(1990, 0, 20, 23, 59)));
     expect(a).toEqual(b);
     expect(a).toContain(participantIdentityService.computeBlindIndex('birthDate', new Date(1990, 0, 20)));
   });
@@ -346,7 +348,8 @@ describe('ParticipantIdentityService.decryptIdentity', () => {
     expect(decrypted.patientName).toBe('Paciente QA Teste');
     expect(decrypted.identityDocument).toBe('11144477735');
     expect(decrypted.birthDate).toBeInstanceOf(Date);
-    expect(decrypted.birthDate.toISOString()).toBe(new Date('1990-01-20').toISOString());
+    // #1412: stored as noon UTC of the day.
+    expect(decrypted.birthDate.toISOString()).toBe('1990-01-20T12:00:00.000Z');
   });
 
   it('falls back to the existing plaintext for legacy records with no ciphertext (pre-#566)', () => {

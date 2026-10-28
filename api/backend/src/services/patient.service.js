@@ -1,6 +1,13 @@
 const PatientModel = require('../models/Patient');
 const ParticipantIdentityModel = require('../models/ParticipantIdentity');
-const { parseDayMonthYear, parseBirthDateInput } = require('../utils/birthDate');
+const {
+  parseDayMonthYear,
+  parseYearMonthDay,
+  parseBirthDateInput,
+  parseBirthDateDay,
+  birthDateKey,
+  birthDateDayRange,
+} = require('../utils/birthDate');
 const participantIdentityService = require('./participantIdentity.service');
 const OrganizationModel = require('../models/Organization');
 const logger = require('../utils/logger');
@@ -463,24 +470,12 @@ class PatientService {
       // Normaliza nome (remove espaços extras, converte para minúsculas)
       const normalizedName = patientData.patientName.trim().toLowerCase().replace(/\s+/g, ' ');
 
-      // Normaliza data de nascimento (converte para Date se necessário)
-      let birthDate;
-      if (patientData.birthDate instanceof Date) {
-        birthDate = patientData.birthDate;
-      } else if (typeof patientData.birthDate === 'string') {
-        // DD/MM/YYYY é dia primeiro, lido como no armazenamento (#1411)
-        birthDate = parseBirthDateInput(patientData.birthDate);
-      } else {
-        birthDate = patientData.birthDate;
-      }
-
-      // Garante que birthDate é um objeto Date válido
-      if (!(birthDate instanceof Date) || isNaN(birthDate.getTime())) {
+      // Normaliza a data de nascimento para o dia do calendário, 12:00 UTC
+      // (#1411 DD/MM/YYYY dia primeiro, #1412 o mesmo dia em todo fuso)
+      const normalizedBirthDate = parseBirthDateDay(patientData.birthDate);
+      if (!normalizedBirthDate) {
         return null; // Data inválida, não pode verificar
       }
-
-      // Normaliza a data para comparar apenas dia/mês/ano (ignora hora)
-      const normalizedBirthDate = new Date(birthDate.getFullYear(), birthDate.getMonth(), birthDate.getDate());
 
       // Busca todas as identidades e verifica manualmente (mais confiável para comparação de strings)
       // Alternativa: usar índice composto se necessário para performance
@@ -499,8 +494,7 @@ class PatientService {
       // PatientIdentityService.js).
       // #1099: match under EVERY registered key, so a hash written before an
       // ENCRYPTION_KEY rotation stays matchable.
-      const startOfDay = new Date(normalizedBirthDate.getFullYear(), normalizedBirthDate.getMonth(), normalizedBirthDate.getDate());
-      const endOfDay = new Date(normalizedBirthDate.getFullYear(), normalizedBirthDate.getMonth(), normalizedBirthDate.getDate() + 1);
+      const { start: startOfDay, end: endOfDay } = birthDateDayRange(normalizedBirthDate);
       const birthDateHashes = participantIdentityService.computeBlindIndexCandidates('birthDate', normalizedBirthDate);
       // #1104: birthDate is ciphertext-only as of this change, so the plaintext
       // range arm can never match a row written since. Removed rather than kept
@@ -523,12 +517,8 @@ class PatientService {
         const identity = participantIdentityService.decryptIdentity(rawIdentity);
         if (identity.patientName && identity.birthDate) {
           const existingName = identity.patientName.trim().toLowerCase().replace(/\s+/g, ' ');
-          const existingDate = identity.birthDate instanceof Date
-            ? new Date(identity.birthDate.getFullYear(), identity.birthDate.getMonth(), identity.birthDate.getDate())
-            : new Date(identity.birthDate);
-
           if (existingName === normalizedName &&
-              existingDate.getTime() === normalizedBirthDate.getTime()) {
+              birthDateKey(identity.birthDate) === birthDateKey(normalizedBirthDate)) {
             return rawIdentity;
           }
         }
@@ -852,39 +842,18 @@ class PatientService {
       // RF005/RNF007 (#561): birthDate is civil identity — resolved via
       // ParticipantIdentity, not matched directly on the Patient document.
       if (term.includes('/') || term.includes('-')) {
-        let searchDate;
-        let startDate;
-        let endDate;
-        if (term.includes('/')) {
-          // Formato DD/MM/YYYY, dia primeiro (#1411)
-          const parsed = parseDayMonthYear(term);
-          if (parsed) {
-            const year = parsed.getFullYear();
-            const month = parsed.getMonth();
-            const day = parsed.getDate();
-            searchDate = parsed;
-            // Busca por data exata (ignora hora)
-            startDate = new Date(year, month, day);
-            endDate = new Date(year, month, day + 1);
-          }
-        } else if (term.includes('-')) {
-          // Formato YYYY-MM-DD
-          searchDate = new Date(term);
-          if (!isNaN(searchDate.getTime())) {
-            const year = searchDate.getFullYear();
-            const month = searchDate.getMonth();
-            const day = searchDate.getDate();
-            startDate = new Date(year, month, day);
-            endDate = new Date(year, month, day + 1);
-          }
-        }
+        // DD/MM/YYYY dia primeiro (#1411); YYYY-MM-DD o mesmo dia, não a
+        // meia-noite UTC de new Date() (#1412)
+        const searchDate = term.includes('/') ? parseDayMonthYear(term) : parseYearMonthDay(term);
 
-        if (startDate && endDate) {
+        if (searchDate) {
+          // Busca por data exata (ignora hora)
+          const { start: startDate, end: endDate } = birthDateDayRange(searchDate);
           const identityCollection = await this.getIdentityCollection(db);
           // RF005/RNF007 (#1104): sixth participantIdentities matching site,
           // same shape as checkIdentifierConflict's -- a plaintext range query
           // with no blind-index arm. #1099: match under every registered key.
-          const birthDateHashes = participantIdentityService.computeBlindIndexCandidates('birthDate', startDate);
+          const birthDateHashes = participantIdentityService.computeBlindIndexCandidates('birthDate', searchDate);
           // #1104: birthDate is ciphertext-only as of this change, so the plaintext
           // range arm can never match a row written since. Removed rather than kept
           // as a fallback because Mongo serves an $or from indexes only when EVERY
@@ -1156,7 +1125,7 @@ class PatientService {
           identityUpdate.patientName = identityFieldsFromUpdate.patientName;
         }
         if (Object.prototype.hasOwnProperty.call(identityFieldsFromUpdate, 'birthDate')) {
-          identityUpdate.birthDate = identityFieldsFromUpdate.birthDate ? new Date(identityFieldsFromUpdate.birthDate) : null;
+          identityUpdate.birthDate = identityFieldsFromUpdate.birthDate ? parseBirthDateInput(identityFieldsFromUpdate.birthDate) : null;
         }
         if (Object.prototype.hasOwnProperty.call(identityFieldsFromUpdate, 'identityDocument')) {
           identityUpdate.identityDocument = identityFieldsFromUpdate.identityDocument;

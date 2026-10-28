@@ -5,7 +5,7 @@ const { generateUniqueParticipantId } = require('../utils/patientAnonymization')
 // files -- see participantIdentity.service.js's own top-of-file comment).
 const identityCryptoService = require('./participantIdentity.service');
 const ParticipantIdentityModel = require('../models/ParticipantIdentity');
-const { parseBirthDateDay } = require('../utils/birthDate');
+const { parseBirthDateDay, birthDateDayRange } = require('../utils/birthDate');
 
 function normalizeString(value) {
   return String(value || '').trim();
@@ -47,8 +47,7 @@ class participantIdentityService {
     let matchedParticipantId = validParticipantId;
     const matchedBySuppliedId = Boolean(validParticipantId);
     if (!matchedParticipantId) {
-      const startOfDay = new Date(birthDate.getFullYear(), birthDate.getMonth(), birthDate.getDate());
-      const endOfDay = new Date(startOfDay.getFullYear(), startOfDay.getMonth(), startOfDay.getDate() + 1);
+      const { start: startOfDay, end: endOfDay } = birthDateDayRange(birthDate);
       // RF005/RNF007 (#574, done for this field in #1104): birthDate is
       // ciphertext-only, so this narrows by day of birth on the blind index
       // alone. The plaintext range condition below is NOT a fallback for old

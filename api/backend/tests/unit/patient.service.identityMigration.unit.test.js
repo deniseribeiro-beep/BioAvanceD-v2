@@ -459,7 +459,8 @@ describe('patient.service.js identity resolution migrated to ParticipantIdentity
     const identity = await participantIdentities.findOne({ participantId: '11111111' });
     expect(identity.birthDate).toBeNull();
     expect(identity.birthDateHash).toBe(participantIdentityService.computeBlindIndex('birthDate', newDate));
-    expect(participantIdentityService.decryptIdentity(identity).birthDate.getTime()).toBe(newDate.getTime());
+    // #1412: stored as noon UTC of the day.
+    expect(participantIdentityService.decryptIdentity(identity).birthDate.toISOString()).toBe('1985-06-01T12:00:00.000Z');
   });
 
   it('updatePatient stores identityDocument digits-only with a matching hash (#1109)', async () => {

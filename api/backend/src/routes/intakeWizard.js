@@ -21,7 +21,7 @@ const clinicalOutcomeService = require('../services/clinical-outcome.service');
 const derivedScoreService = require('../services/derived-score.service');
 const { computeCharlsonScore, ALGORITHM_VERSION: CCI_ALGORITHM_VERSION, SCORE_TYPE: CCI_SCORE_TYPE } = require('../services/charlsonComorbidityIndex');
 const logger = require('../utils/logger');
-const { parseBirthDateDay } = require('../utils/birthDate');
+const { parseBirthDateDay, birthDateDayRange } = require('../utils/birthDate');
 const { isRecordInOrganizationScope } = require('../services/rbac-assignment.service');
 const { resolveCallerCreateOrganization } = require('../services/callerCreateOrganization.service');
 const { validate } = require('../contracts/canonical/v1');
@@ -1035,8 +1035,7 @@ router.get('/patient-match', async (req, res) => {
     let identity = rawIdentityById ? participantIdentityService.decryptIdentity(rawIdentityById) : null;
 
     if (!identity && patientNameNormalized && birthDate) {
-      const startOfDay = new Date(birthDate.getFullYear(), birthDate.getMonth(), birthDate.getDate());
-      const endOfDay = new Date(startOfDay.getFullYear(), startOfDay.getMonth(), startOfDay.getDate() + 1);
+      const { start: startOfDay, end: endOfDay } = birthDateDayRange(birthDate);
       // RF005/RNF007 (#574, done for this field in #1104): birthDate is
       // ciphertext-only, so this narrows by day of birth on the blind index
       // alone. The plaintext range condition below is NOT a fallback for old

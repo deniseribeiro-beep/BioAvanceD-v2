@@ -19,6 +19,7 @@ const {
 } = require('../utils/legacyPatientIdentityFields');
 const ParticipantIdentityModel = require('../models/ParticipantIdentity');
 const participantIdentityService = require('./participantIdentity.service');
+const { parseBirthDateInput } = require('../utils/birthDate');
 const SampleGraphValidator = require('./SampleGraphValidator');
 const qualityDomain = require('./quality-domain.service');
 const qualityCompatibility = require('./quality-compatibility.service');
@@ -459,7 +460,7 @@ class ImportService {
               }
             }
             if (Object.prototype.hasOwnProperty.call(merged, 'patientName')) identityUpdate.patientName = merged.patientName;
-            if (Object.prototype.hasOwnProperty.call(merged, 'birthDate')) identityUpdate.birthDate = merged.birthDate ? new Date(merged.birthDate) : null;
+            if (Object.prototype.hasOwnProperty.call(merged, 'birthDate')) identityUpdate.birthDate = merged.birthDate ? parseBirthDateInput(merged.birthDate) : null;
             if (Object.prototype.hasOwnProperty.call(merged, 'identityDocument')) identityUpdate.identityDocument = merged.identityDocument;
 
             const identityCollection = getCollection(db, 'participantIdentities');
@@ -876,7 +877,7 @@ class ImportService {
   parsePatientCSV(row) {
     return {
       patientName: row.patientName,
-      birthDate: new Date(row.birthDate),
+      birthDate: parseBirthDateInput(row.birthDate),
       sex: row.sex,
       email: row.email || null,
       consentTemplateId: row.consentTemplateId || null,

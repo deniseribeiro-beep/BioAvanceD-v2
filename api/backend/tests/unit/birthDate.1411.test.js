@@ -10,7 +10,8 @@ const { parseDayMonthYear, parseBirthDateInput, parseBirthDateDay } = require('.
 // participant identity is stored, by the duplicate check and by the search.
 // Edges: 5/12/1990 is 5 December (a one-digit day is accepted); 31/02/1990
 // is invalid, never rolled to 3 March; 25/12/90 is no DD/MM/YYYY (a 4-digit
-// year only). An ISO date keeps new Date()'s reading.
+// year only). #1412: every date, ISO included, is stored as 12:00 UTC of its
+// calendar day.
 
 function expectDay(date, year, month, day) {
   expect(date.getFullYear()).toBe(year);
@@ -45,19 +46,19 @@ describe('birth date DD/MM/YYYY (#1411)', () => {
     expect(parseDayMonthYear('1990-12-25')).toBeNull();
   });
 
-  it('parseBirthDateInput keeps an ISO string as new Date did', () => {
-    expect(parseBirthDateInput('1990-12-25').getTime()).toBe(new Date('1990-12-25').getTime());
+  it('parseBirthDateInput reads an ISO string as its day at noon UTC (#1412)', () => {
+    expect(parseBirthDateInput('1990-12-25').toISOString()).toBe('1990-12-25T12:00:00.000Z');
   });
 
-  it('parseBirthDateDay normalizes a Date and a DD/MM string to local midnight', () => {
+  it('parseBirthDateDay normalizes a Date and a DD/MM string to noon UTC (#1412)', () => {
     const fromDate = parseBirthDateDay(new Date(1990, 11, 25, 15, 30));
     expectDay(fromDate, 1990, 11, 25);
-    expect(fromDate.getHours()).toBe(0);
-    expect(fromDate.getMinutes()).toBe(0);
+    expect(fromDate.getUTCHours()).toBe(12);
+    expect(fromDate.getUTCMinutes()).toBe(0);
 
     const fromString = parseBirthDateDay(' 25/12/1990 ');
     expectDay(fromString, 1990, 11, 25);
-    expect(fromString.getHours()).toBe(0);
+    expect(fromString.getUTCHours()).toBe(12);
 
     expect(parseBirthDateDay('')).toBeNull();
     expect(parseBirthDateDay('garbage')).toBeNull();
