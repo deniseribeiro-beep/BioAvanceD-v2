@@ -11279,7 +11279,7 @@
                   },
                   "birthDate": {
                     "type": "string",
-                    "description": "Civil identity, stored on the participant identity only. Required; an ISO date (YYYY-MM-DD). The value is stored with new Date(), so a DD/MM/YYYY value is not stored correctly."
+                    "description": "Civil identity, stored on the participant identity only. Required; DD/MM/YYYY (day first, read the same way as the duplicate check and search) or an ISO date (YYYY-MM-DD)."
                   },
                   "identityDocument": {
                     "type": "string",

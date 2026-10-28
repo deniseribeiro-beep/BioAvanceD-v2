@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const { parseBirthDateInput } = require('../utils/birthDate');
 
 // RF005/RNF007 (#363): civil identity fields segregated off the Participant
 // resource. Which dict-02 ParticipantIdentity elements (P1X-0348..0364) are
@@ -28,7 +29,7 @@ class ParticipantIdentityModel {
       participantIdentityId: null,
       participantId: String(data.participantId || '').trim(),
       patientName: data.patientName ? String(data.patientName).trim() : null,
-      birthDate: data.birthDate ? new Date(data.birthDate) : null,
+      birthDate: data.birthDate ? parseBirthDateInput(data.birthDate) : null,
       identityDocument: data.identityDocument ? String(data.identityDocument).trim() : null,
       identityDocumentCiphertext: null,
       email: data.email ? String(data.email).trim().toLowerCase() : null,

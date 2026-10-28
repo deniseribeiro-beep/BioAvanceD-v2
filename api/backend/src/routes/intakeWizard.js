@@ -21,6 +21,7 @@ const clinicalOutcomeService = require('../services/clinical-outcome.service');
 const derivedScoreService = require('../services/derived-score.service');
 const { computeCharlsonScore, ALGORITHM_VERSION: CCI_ALGORITHM_VERSION, SCORE_TYPE: CCI_SCORE_TYPE } = require('../services/charlsonComorbidityIndex');
 const logger = require('../utils/logger');
+const { parseBirthDateDay } = require('../utils/birthDate');
 const { isRecordInOrganizationScope } = require('../services/rbac-assignment.service');
 const { resolveCallerCreateOrganization } = require('../services/callerCreateOrganization.service');
 const { validate } = require('../contracts/canonical/v1');
@@ -382,31 +383,6 @@ function buildIdVariants(...values) {
   return [...new Set(variants)];
 }
 
-function parseBirthDate(value) {
-  if (!value) return null;
-  if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    return new Date(value.getFullYear(), value.getMonth(), value.getDate());
-  }
-
-  const raw = normalizeString(value);
-  if (!raw) return null;
-
-  const ddmmyyyy = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(raw);
-  if (ddmmyyyy) {
-    const day = Number(ddmmyyyy[1]);
-    const month = Number(ddmmyyyy[2]) - 1;
-    const year = Number(ddmmyyyy[3]);
-    const date = new Date(year, month, day);
-    if (!Number.isNaN(date.getTime()) && date.getDate() === day && date.getMonth() === month && date.getFullYear() === year) {
-      return date;
-    }
-  }
-
-  const iso = new Date(raw);
-  if (Number.isNaN(iso.getTime())) return null;
-  return new Date(iso.getFullYear(), iso.getMonth(), iso.getDate());
-}
-
 function buildFallbackPatientID() {
   const digits = String(Date.now()).replace(/\D/g, '').slice(-8);
   return digits.padStart(8, '0');
@@ -527,7 +503,7 @@ async function resolveMatchedPatient(db, data = {}, { organizationId = null, org
   const result = await patientIdentityService.matchOrUpsertParticipant(db, {
     participantId: participant.participantId,
     patientName: participant.patientName,
-    birthDate: parseBirthDate(participant.birthDate),
+    birthDate: parseBirthDateDay(participant.birthDate),
     identityDocument: normalizeString(participant.identityDocument) || null,
     clinicalUnitId: organizationId,
   }, { organizationScope });
@@ -1028,7 +1004,7 @@ router.get('/patient-match', async (req, res) => {
   }
 
   const patientName = normalizeString(req.query?.patientName || req.query?.name);
-  const birthDate = parseBirthDate(req.query?.birthDate);
+  const birthDate = parseBirthDateDay(req.query?.birthDate);
   const participantIdQuery = normalizeString(req.query?.patientID || req.query?.patientId);
 
   if (!participantIdQuery && (!patientName || !birthDate)) {
@@ -1158,7 +1134,7 @@ router._test = {
   normalizeNumber,
   normalizeArray,
   normalizeObject,
-  parseBirthDate,
+  parseBirthDate: parseBirthDateDay,
   buildFallbackPatientID,
   resolvePatientID,
   buildClinicalData,

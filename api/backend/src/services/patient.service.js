@@ -1,5 +1,6 @@
 const PatientModel = require('../models/Patient');
 const ParticipantIdentityModel = require('../models/ParticipantIdentity');
+const { parseDayMonthYear, parseBirthDateInput } = require('../utils/birthDate');
 const participantIdentityService = require('./participantIdentity.service');
 const OrganizationModel = require('../models/Organization');
 const logger = require('../utils/logger');
@@ -467,13 +468,8 @@ class PatientService {
       if (patientData.birthDate instanceof Date) {
         birthDate = patientData.birthDate;
       } else if (typeof patientData.birthDate === 'string') {
-        // Tenta parsear formato DD/MM/YYYY
-        const parts = patientData.birthDate.split('/');
-        if (parts.length === 3) {
-          birthDate = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
-        } else {
-          birthDate = new Date(patientData.birthDate);
-        }
+        // DD/MM/YYYY é dia primeiro, lido como no armazenamento (#1411)
+        birthDate = parseBirthDateInput(patientData.birthDate);
       } else {
         birthDate = patientData.birthDate;
       }
@@ -860,18 +856,16 @@ class PatientService {
         let startDate;
         let endDate;
         if (term.includes('/')) {
-          // Formato DD/MM/YYYY
-          const parts = term.split('/');
-          if (parts.length === 3) {
-            const day = parseInt(parts[0], 10);
-            const month = parseInt(parts[1], 10) - 1;
-            const year = parseInt(parts[2], 10);
-            if (!isNaN(day) && !isNaN(month) && !isNaN(year)) {
-              searchDate = new Date(year, month, day);
-              // Busca por data exata (ignora hora)
-              startDate = new Date(year, month, day);
-              endDate = new Date(year, month, day + 1);
-            }
+          // Formato DD/MM/YYYY, dia primeiro (#1411)
+          const parsed = parseDayMonthYear(term);
+          if (parsed) {
+            const year = parsed.getFullYear();
+            const month = parsed.getMonth();
+            const day = parsed.getDate();
+            searchDate = parsed;
+            // Busca por data exata (ignora hora)
+            startDate = new Date(year, month, day);
+            endDate = new Date(year, month, day + 1);
           }
         } else if (term.includes('-')) {
           // Formato YYYY-MM-DD

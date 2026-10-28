@@ -5,6 +5,7 @@ const { generateUniqueParticipantId } = require('../utils/patientAnonymization')
 // files -- see participantIdentity.service.js's own top-of-file comment).
 const identityCryptoService = require('./participantIdentity.service');
 const ParticipantIdentityModel = require('../models/ParticipantIdentity');
+const { parseBirthDateDay } = require('../utils/birthDate');
 
 function normalizeString(value) {
   return String(value || '').trim();
@@ -14,38 +15,13 @@ function normalizeName(value) {
   return normalizeString(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ');
 }
 
-function parseBirthDate(value) {
-  if (!value) return null;
-  if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    return new Date(value.getFullYear(), value.getMonth(), value.getDate());
-  }
-
-  const raw = normalizeString(value);
-  if (!raw) return null;
-
-  const ddmmyyyy = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(raw);
-  if (ddmmyyyy) {
-    const day = Number(ddmmyyyy[1]);
-    const month = Number(ddmmyyyy[2]) - 1;
-    const year = Number(ddmmyyyy[3]);
-    const date = new Date(year, month, day);
-    if (!Number.isNaN(date.getTime()) && date.getDate() === day && date.getMonth() === month && date.getFullYear() === year) {
-      return date;
-    }
-  }
-
-  const iso = new Date(raw);
-  if (Number.isNaN(iso.getTime())) return null;
-  return new Date(iso.getFullYear(), iso.getMonth(), iso.getDate());
-}
-
 class participantIdentityService {
   async matchOrUpsertParticipant(db, payload = {}, { organizationScope = null } = {}) {
     const participants = await getCollection(db, 'patients');
     const identities = await getCollection(db, 'participantIdentities');
     const participantId = normalizeString(payload.participantId);
     const patientName = normalizeString(payload.patientName);
-    const birthDate = parseBirthDate(payload.birthDate);
+    const birthDate = parseBirthDateDay(payload.birthDate);
     const normalizedName = normalizeName(patientName);
     const identityDocument = normalizeString(payload.identityDocument);
     const email = normalizeString(payload.email);
