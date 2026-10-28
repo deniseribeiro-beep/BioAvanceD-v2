@@ -46,7 +46,10 @@
     "/api/import-lgpd",
     "/api/e-consent",
     "/api/compliance",
-    "/api/storage"
+    "/api/storage",
+    "/api/equipment",
+    "/api/organizations",
+    "/api/physical-chain"
   ],
   "tags": [
     {
@@ -208,6 +211,18 @@
     {
       "name": "storage",
       "description": "/api/storage: the physical storage of samples: freezers, boxes and positions, allocation, movement and release, the occupancy and integrity reads, and the authoring of the container tree (RF006, RF017)."
+    },
+    {
+      "name": "equipment",
+      "description": "/api/equipment: the equipment inventory of the caller's organizations, its analytical subset, and its create, update with sample quarantine, and delete (RF025)."
+    },
+    {
+      "name": "organizations",
+      "description": "/api/organizations: the organization registry, the caller's own organization scope, and the delete refused while a record references the organization."
+    },
+    {
+      "name": "physical-chain",
+      "description": "/api/physical-chain: the temporal physical chain of a specimen (container, position, rack location) and its custody, the storage locations, the container labels and the scan resolver, with the exposure summaries (RF016, RF017, RF021)."
     }
   ],
   "paths": {
@@ -34415,6 +34430,3866 @@
           }
         }
       }
+    },
+    "/api/equipment": {
+      "get": {
+        "tags": [
+          "equipment"
+        ],
+        "summary": "List the equipment in the caller's organizations",
+        "description": "Gates: authenticate, requirePermission('viewEquipment'), requireOrganizationScope. A global caller sees every equipment; any other caller sees only the equipment of its organizations, so unscoped legacy equipment is left out. Each read is audited. The 503 comes from authenticate; the handler has no handle check.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The equipment.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/EquipmentRecord"
+                          }
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "equipment"
+        ],
+        "summary": "Create an equipment",
+        "description": "Gates: authenticate, requirePermission('manageStorageTopology'), requireOrganizationScope. The body is validated first (422), then the organization is resolved from the caller's scope, then an organizationId that names no organization answers 404, then a sent equipmentID that already exists answers 400. The handler maps only a 404 from its own steps; every other error answers 500, the organization resolution's refusal included. The 503 comes from authenticate; the handler has no handle check.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "equipmentDescription": {
+                    "type": "string",
+                    "description": "Required."
+                  },
+                  "equipmentID": {
+                    "type": "number",
+                    "description": "Generated when absent; refused with 400 when another equipment already has it."
+                  },
+                  "name": {
+                    "type": "string",
+                    "description": "A non-empty string when sent."
+                  },
+                  "model": {
+                    "type": "string"
+                  },
+                  "serialNumber": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "Freezer",
+                      "Analytical",
+                      "Storage",
+                      "Processing",
+                      "Other"
+                    ]
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "Calibrado",
+                      "Maintenance",
+                      "Active",
+                      "Inactive",
+                      "Needs Calibration"
+                    ]
+                  },
+                  "purchaseDate": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "organizationId": {
+                    "type": "string",
+                    "description": "A caller of one organization gets that organization whatever is sent; a caller of several must name one of theirs; a global caller may name any existing one or none. An unknown one answers 404."
+                  }
+                },
+                "required": [
+                  "equipmentDescription"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The equipment is created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/EquipmentRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The sent equipmentID is already in use.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "The organizationId names no organization.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "description": "Internal error. Also the organization resolution's refusal of a caller of several organizations who names no organizationId, or names one that is not theirs: it is raised as a 400 but the handler answers it as 500.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/equipment/analytical": {
+      "get": {
+        "tags": [
+          "equipment"
+        ],
+        "summary": "List the analytical equipment not in maintenance",
+        "description": "Gates: authenticate, requirePermission('viewEquipment'), requireOrganizationScope. Equipment of type Analytical whose status is not Maintenance, filtered to the caller's organizations as GET /api/equipment is. Each read is audited. The 503 comes from authenticate; the handler has no handle check.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The analytical equipment.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/EquipmentRecord"
+                          }
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/equipment/{id}": {
+      "get": {
+        "tags": [
+          "equipment"
+        ],
+        "summary": "Read one equipment",
+        "description": "Gates: authenticate, requirePermission('viewEquipment'), requireOrganizationScope. An id that is neither an ObjectId nor an integer answers 400. A missing equipment answers 404 and one outside the caller's organizations 403; legacy equipment with no organization is out of scope for anyone but a global caller. The 503 comes from authenticate; the handler has no handle check.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The equipment: its Mongo _id (24 hex) or its numeric equipmentID.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The equipment.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/EquipmentRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The id is neither an ObjectId nor an integer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Access denied: the permission or role gate refused, or the equipment belongs to another organization.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The equipment is not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "equipment"
+        ],
+        "summary": "Update an equipment",
+        "description": "Gates: authenticate, requirePermission('manageStorageTopology'), requireOrganizationScope. A partial update: only equipmentDescription, name, model, serialNumber, type, status, purchaseDate and organizationId are written, and a field left out keeps its stored value. A sent organizationId is checked first: one that names no organization answers 404 before the equipment is read. The 422 lists only the validation errors this request introduces, read on the stored record merged with the body; an error the stored record already had is not held against it. A status that triggers quarantine also quarantines the equipment's samples. The 500 is an update that matched no record after the lookup found one; any other error (the quarantine step's included) answers 400. The 503 comes from authenticate; the handler has no handle check.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The equipment: its Mongo _id (24 hex) or its numeric equipmentID.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "equipmentDescription": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string",
+                    "description": "A non-empty string when sent."
+                  },
+                  "model": {
+                    "type": "string"
+                  },
+                  "serialNumber": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "Freezer",
+                      "Analytical",
+                      "Storage",
+                      "Processing",
+                      "Other"
+                    ]
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "Calibrado",
+                      "Maintenance",
+                      "Active",
+                      "Inactive",
+                      "Needs Calibration"
+                    ]
+                  },
+                  "purchaseDate": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "organizationId": {
+                    "type": "string",
+                    "description": "Must name an existing organization (404 otherwise). A caller of organization scope may send only the value the equipment already has (403 otherwise); a global caller may move it."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The equipment is updated; quarantine says whether its samples were quarantined.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "quarantine": {
+                          "type": "object",
+                          "properties": {
+                            "triggered": {
+                              "type": "boolean"
+                            },
+                            "matched": {
+                              "type": "integer"
+                            },
+                            "quarantined": {
+                              "type": "integer"
+                            },
+                            "movements": {
+                              "type": "integer"
+                            },
+                            "reason": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "triggered"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The id is neither an ObjectId nor an integer, or the update failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Access denied: the permission or role gate refused, the equipment belongs to another organization, or a caller of organization scope sent an organizationId other than the one the equipment has.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The organizationId names no organization, or the equipment is not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "description": "Internal error, or the update matched no record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "equipment"
+        ],
+        "summary": "Delete an equipment",
+        "description": "Gates: authenticate, requirePermission('manageStorageTopology'), requireOrganizationScope. A hard delete, audited. An id that is neither an ObjectId nor an integer finds nothing and answers 404, not 400. An equipment outside the caller's organizations answers 403. Any error in the handler answers 400; the 500 comes only from the gates. The 503 comes from authenticate; the handler has no handle check.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The equipment: its Mongo _id (24 hex) or its numeric equipmentID.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The equipment is deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Success"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The delete failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Access denied: the permission or role gate refused, or the equipment belongs to another organization.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The equipment is not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/organizations": {
+      "get": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "List the organizations",
+        "description": "Gates: authenticate. No permission gate: every authenticated caller reads every organization. Sorted by officialName, then _id, so consecutive pages neither repeat nor skip a row. The 503 comes from authenticate or from the handler's own handle check.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Integer from 1 to 500; 100 when absent or not a positive number.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            }
+          },
+          {
+            "name": "skip",
+            "in": "query",
+            "required": false,
+            "description": "The rows to skip; 0 when absent or not a number.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of organizations.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/OrganizationRecord"
+                          }
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Create an organization, or return the one of the same name",
+        "description": "Gates: authenticate, requirePermission('manageOrganizations'). The body is validated before the database is read (422). A name that already exists, compared without accents, case or extra spaces, answers 200 with the existing organization and message 'Organização já existente', also when a concurrent create wins the race; a new one answers 201. There is no 400 or 409. The 503 comes from authenticate or from the handler's own handle check.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "officialName": {
+                    "type": "string",
+                    "minLength": 2,
+                    "description": "Required. At least 2 characters after trimming; unique by its normalized form."
+                  },
+                  "acronym": {
+                    "type": "string"
+                  },
+                  "organizationType": {
+                    "type": "string",
+                    "enum": [
+                      "biobank",
+                      "university",
+                      "hospital",
+                      "laboratory",
+                      "network"
+                    ]
+                  },
+                  "countryCode": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z]{2}$",
+                    "description": "Required. ISO 3166-1 alpha-2; stored upper-cased."
+                  },
+                  "website": {
+                    "type": "string",
+                    "format": "uri",
+                    "description": "A valid URI when sent."
+                  },
+                  "contact": {
+                    "description": "Stored as sent."
+                  },
+                  "qualityStandards": {
+                    "type": "array",
+                    "items": {},
+                    "description": "A list when sent."
+                  }
+                },
+                "required": [
+                  "officialName",
+                  "countryCode"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "An organization of the same name already exists; it is returned unchanged.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/OrganizationRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "The organization is created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/OrganizationRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/organizations/mine": {
+      "get": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "The caller's own organization scope",
+        "description": "Gates: authenticate. For the create forms' organization picker (#1354). A caller of organization scope gets its organizations with their names; any other scope gets an empty list. A caller with no organization gets scope none rather than a 403. The 503 comes from authenticate or from the handler's own handle check.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "scope": {
+                              "type": "string",
+                              "enum": [
+                                "global",
+                                "organization",
+                                "none",
+                                "unassigned"
+                              ]
+                            },
+                            "organizations": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "organizationId": {
+                                    "type": "string"
+                                  },
+                                  "officialName": {
+                                    "type": "string",
+                                    "nullable": true,
+                                    "description": "Null when no organization record carries the id."
+                                  }
+                                },
+                                "required": [
+                                  "organizationId",
+                                  "officialName"
+                                ]
+                              }
+                            }
+                          },
+                          "required": [
+                            "scope",
+                            "organizations"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/organizations/{id}": {
+      "get": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Read one organization",
+        "description": "Gates: authenticate. No permission gate. The 503 comes from authenticate or from the handler's own handle check.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The organization: its Mongo _id or its organizationId.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The organization.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/OrganizationRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "The organization is not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Update an organization",
+        "description": "Gates: authenticate, requirePermission('manageOrganizations'). Every field left out keeps its stored value, and the merged record is validated (422) as the create validates its body. A new officialName that another organization already has answers 409. There is no 400. The 503 comes from authenticate or from the handler's own handle check.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The organization: its Mongo _id or its organizationId.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "officialName": {
+                    "type": "string",
+                    "minLength": 2,
+                    "description": "At least 2 characters after trimming; unique by its normalized form."
+                  },
+                  "acronym": {
+                    "type": "string"
+                  },
+                  "organizationType": {
+                    "type": "string",
+                    "enum": [
+                      "biobank",
+                      "university",
+                      "hospital",
+                      "laboratory",
+                      "network"
+                    ]
+                  },
+                  "countryCode": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z]{2}$",
+                    "description": "ISO 3166-1 alpha-2; stored upper-cased."
+                  },
+                  "website": {
+                    "type": "string",
+                    "format": "uri",
+                    "description": "A valid URI when sent."
+                  },
+                  "contact": {
+                    "description": "Stored as sent."
+                  },
+                  "qualityStandards": {
+                    "type": "array",
+                    "items": {},
+                    "description": "A list when sent."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated organization.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/OrganizationRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "The organization is not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another organization already has this name.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "organizations"
+        ],
+        "summary": "Delete an organization no record references",
+        "description": "Gates: authenticate, requirePermission('manageOrganizations'). Refused with 409 while any equipment, sensor, alert, sample (by organizationId or collectionSite), assay, user, report, patient or organization-scoped role assignment names the organization (#1284); references lists which. The 503 comes from authenticate or from the handler's own handle check.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The organization: its Mongo _id or its organizationId.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The organization is deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Success"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "The organization is not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The organization is still referenced.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "references": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "enum": [
+                              "equipment",
+                              "sensors",
+                              "alerts",
+                              "samples",
+                              "assays",
+                              "users",
+                              "reports",
+                              "patients",
+                              "userRoleAssignments"
+                            ]
+                          }
+                        }
+                      },
+                      "required": [
+                        "references"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/physical-chain/custody": {
+      "post": {
+        "tags": [
+          "physical-chain"
+        ],
+        "summary": "Assign a specimen to an organization's custody",
+        "description": "Gates: authenticate (router.use), requirePermission('manageCustody'), requireOrganizationScope. RF021 AC4-AC6. A caller of organization scope may assign custody only to one of its organizations (CUSTODIAN_OUT_OF_SCOPE), and only of a specimen it holds in custody or, for its first custody, of its own organization's sample (SPECIMEN_OUT_OF_SCOPE). The 404 is an unknown specimen (SPECIMEN_NOT_FOUND), custodian organization (ORGANIZATION_NOT_FOUND) or approval (APPROVAL_NOT_FOUND); a missing specimenId is answered 404 SPECIMEN_NOT_FOUND, and for a caller of organization scope a missing custodianOrganizationId is answered 403 CUSTODIAN_OUT_OF_SCOPE first. The 422 is any other missing field, an unknown assignmentStatus, a bad or inverted effectivePeriod, a biorepository specimen with no responsibleInvestigatorId (VALIDATION_ERROR), or an approval of another collection, revoked, or not in force at the start of an active custody (APPROVAL_INCOMPATIBLE). The 409 is an interval that overlaps another custody of the specimen, history included (ASSIGNMENT_OVERLAP). The failures are coded: the error is the code and message the reason; a 422 also lists the reason in details. Any other error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "specimenId": {
+                    "type": "string",
+                    "description": "The specimen: its _id or its specimenId."
+                  },
+                  "custodianOrganizationId": {
+                    "type": "string",
+                    "description": "The organizationId of the custodian."
+                  },
+                  "authorizationId": {
+                    "type": "string",
+                    "description": "The approvalId of the CollectionGovernanceApproval."
+                  },
+                  "responsibleInvestigatorId": {
+                    "type": "string",
+                    "description": "Required for a specimen of a biorepository collection (V2E-0108)."
+                  },
+                  "locationId": {
+                    "type": "string"
+                  },
+                  "effectivePeriod": {
+                    "type": "object",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "format": "date-time",
+                        "description": "Now when absent."
+                      },
+                      "end": {
+                        "type": "string",
+                        "format": "date-time",
+                        "description": "After start; an assignment sent with its end is recorded as ended."
+                      }
+                    }
+                  },
+                  "assignmentStatus": {
+                    "type": "string",
+                    "enum": [
+                      "planned",
+                      "active",
+                      "ended"
+                    ],
+                    "description": "active when absent."
+                  }
+                },
+                "required": [
+                  "specimenId",
+                  "custodianOrganizationId",
+                  "authorizationId"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The custody is assigned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/CustodianshipAssignmentRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Access denied: the permission or role gate refused, or the custodian or the specimen is outside the caller's organizations (CUSTODIAN_OUT_OF_SCOPE, SPECIMEN_OUT_OF_SCOPE).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The specimen, the custodian organization or the approval is not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The interval overlaps another custody of the specimen (ASSIGNMENT_OVERLAP).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid custody, or an incompatible approval (VALIDATION_ERROR, APPROVAL_INCOMPATIBLE).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error; the error is INTERNAL_ERROR when the handler raised it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/physical-chain/custody/{custodianshipAssignmentId}/end": {
+      "post": {
+        "tags": [
+          "physical-chain"
+        ],
+        "summary": "End a custody",
+        "description": "Gates: authenticate (router.use), requirePermission('manageCustody'), requireOrganizationScope. Closes the interval at endAt; the record stays. Only the custodian may end it (CUSTODIAN_OUT_OF_SCOPE). The 409 is a custody already ended (ASSIGNMENT_ENDED); the 422 an endAt not after the start (VALIDATION_ERROR). The failures are coded: the error is the code and message the reason; a 422 also lists the reason in details. Any other error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "custodianshipAssignmentId",
+            "in": "path",
+            "required": true,
+            "description": "The custody assignment.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "endAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "The exclusive end; now when absent. It must fall after the start (422)."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The custody is ended.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/CustodianshipAssignmentRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Access denied: the permission or role gate refused, or the custody belongs to another organization (CUSTODIAN_OUT_OF_SCOPE).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The assignment is not found (ASSIGNMENT_NOT_FOUND).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The custody is already ended (ASSIGNMENT_ENDED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "endAt is not after the start (VALIDATION_ERROR).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error; the error is INTERNAL_ERROR when the handler raised it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/physical-chain/specimens/{specimenId}/custody": {
+      "get": {
+        "tags": [
+          "physical-chain"
+        ],
+        "summary": "The custody holding a specimen at an instant",
+        "description": "Gates: authenticate (router.use), requirePermission('viewStorageTopology'), requireOrganizationScope. A caller of organization scope reads only a specimen one of its organizations holds in custody at the instant (SPECIMEN_OUT_OF_SCOPE), so an unknown specimen answers 403 to it; a global caller gets data null. There is no 404. The failures are coded: the error is the code and message the reason; a 422 also lists the reason in details. Any other error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "specimenId",
+            "in": "path",
+            "required": true,
+            "description": "The specimen's specimenId.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "at",
+            "in": "query",
+            "required": false,
+            "description": "The instant to read at, an ISO 8601 date; now when absent. One that does not parse answers 400 INVALID_INPUT.",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The custody at the instant, or null.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "allOf": [
+                            {
+                              "$ref": "#/components/schemas/CustodianshipAssignmentRecord"
+                            }
+                          ],
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "at is not an ISO 8601 date (INVALID_INPUT).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Access denied: the permission or role gate refused, or the specimen is not in the custody of the caller's organizations at the instant (SPECIMEN_OUT_OF_SCOPE).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error; the error is INTERNAL_ERROR when the handler raised it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/physical-chain/locations": {
+      "post": {
+        "tags": [
+          "physical-chain"
+        ],
+        "summary": "Create a storage location",
+        "description": "Gates: authenticate (router.use), requirePermission('manageStorageTopology'), requireOrganizationScope. RF017 AC1/AC3. The organizationId must be one of the caller's (LOCATION_OUT_OF_SCOPE; a global caller may name any). The 404 is an unknown organization (ORGANIZATION_NOT_FOUND) or parent (LOCATION_NOT_FOUND). The 422 is a missing field, an unknown locationStatus, a location that is its own parent, or a parent of another organization (VALIDATION_ERROR). The 409 is a storageLocationId already in use (LOCATION_EXISTS). The failures are coded: the error is the code and message the reason; a 422 also lists the reason in details. Any other error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "storageLocationId": {
+                    "type": "string",
+                    "description": "Minted when absent."
+                  },
+                  "locationType": {
+                    "type": "string",
+                    "description": "Stored lower-cased."
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "code": {
+                    "type": "string"
+                  },
+                  "organizationId": {
+                    "type": "string"
+                  },
+                  "parentLocationId": {
+                    "type": "string",
+                    "description": "A location of the same organization."
+                  },
+                  "locationStatus": {
+                    "type": "string",
+                    "enum": [
+                      "active",
+                      "unavailable",
+                      "interdicted"
+                    ],
+                    "description": "active when absent."
+                  }
+                },
+                "required": [
+                  "locationType",
+                  "name",
+                  "code",
+                  "organizationId"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The location is created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/StorageLocationRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Access denied: the permission or role gate refused, or the organization is not the caller's (LOCATION_OUT_OF_SCOPE).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The organization or the parent location is not found (ORGANIZATION_NOT_FOUND, LOCATION_NOT_FOUND).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The storageLocationId is already in use (LOCATION_EXISTS).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid location (VALIDATION_ERROR).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error; the error is INTERNAL_ERROR when the handler raised it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "physical-chain"
+        ],
+        "summary": "List the caller's storage locations",
+        "description": "Gates: authenticate (router.use), requirePermission('viewStorageTopology'), requireOrganizationScope. Every location for a global caller, else those of the caller's organizations. Any error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The locations.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/StorageLocationRecord"
+                          }
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "description": "Internal error; the error is INTERNAL_ERROR when the handler raised it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/physical-chain/locations/{storageLocationId}/status": {
+      "post": {
+        "tags": [
+          "physical-chain"
+        ],
+        "summary": "Change a storage location's status",
+        "description": "Gates: authenticate (router.use), requirePermission('manageStorageTopology'), requireOrganizationScope. RF017 AC8: the record and its hierarchy stay, and each change is audited with the status it left and the reason. The 404 is an unknown location (LOCATION_NOT_FOUND), the 403 one of another organization (LOCATION_OUT_OF_SCOPE), the 422 a missing or unknown locationStatus (VALIDATION_ERROR). The failures are coded: the error is the code and message the reason; a 422 also lists the reason in details. Any other error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "storageLocationId",
+            "in": "path",
+            "required": true,
+            "description": "The location.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "locationStatus": {
+                    "type": "string",
+                    "enum": [
+                      "active",
+                      "unavailable",
+                      "interdicted"
+                    ],
+                    "description": "Read case-insensitively."
+                  },
+                  "reason": {
+                    "type": "string",
+                    "description": "Kept in the audit entry."
+                  }
+                },
+                "required": [
+                  "locationStatus"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The location with its new status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "allOf": [
+                            {
+                              "$ref": "#/components/schemas/StorageLocationRecord"
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "previousStatus": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Access denied: the permission or role gate refused, or the location belongs to another organization (LOCATION_OUT_OF_SCOPE).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The location is not found (LOCATION_NOT_FOUND).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "locationStatus is missing or unknown (VALIDATION_ERROR).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error; the error is INTERNAL_ERROR when the handler raised it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/physical-chain/specimens/{specimenId}/location": {
+      "get": {
+        "tags": [
+          "physical-chain"
+        ],
+        "summary": "Where a specimen was at an instant",
+        "description": "Gates: authenticate (router.use), requirePermission('viewStorageTopology'), requireOrganizationScope. RF016 AC3: the chain walked link by link, specimen to container to position to rack location; a missing link leaves the rest null. The scope rule and the absent 404 are those of GET .../custody. The failures are coded: the error is the code and message the reason; a 422 also lists the reason in details. Any other error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "specimenId",
+            "in": "path",
+            "required": true,
+            "description": "The specimen's specimenId.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "at",
+            "in": "query",
+            "required": false,
+            "description": "The instant to read at, an ISO 8601 date; now when absent. One that does not parse answers 400 INVALID_INPUT.",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The location at the instant.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "specimenId": {
+                              "type": "string"
+                            },
+                            "at": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "containerId": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "storagePositionId": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "storageRackId": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "storageLocationId": {
+                              "type": "string",
+                              "nullable": true
+                            }
+                          },
+                          "required": [
+                            "specimenId",
+                            "at",
+                            "containerId",
+                            "storagePositionId",
+                            "storageRackId",
+                            "storageLocationId"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "at is not an ISO 8601 date (INVALID_INPUT).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Access denied: the permission or role gate refused, or the specimen is not in the custody of the caller's organizations at the instant (SPECIMEN_OUT_OF_SCOPE).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error; the error is INTERNAL_ERROR when the handler raised it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/physical-chain/specimens/{specimenId}/telemetry-exposure-summaries": {
+      "post": {
+        "tags": [
+          "physical-chain"
+        ],
+        "summary": "Summarize a specimen's temperature exposure",
+        "description": "Gates: authenticate (router.use), requirePermission('viewStorageTopology', 'READ'), requireOrganizationScope. RF009 AC5/AC6 (#1392): one TelemetryExposureSummary per piece of the specimen's chain inside [windowStart, windowEnd), each stored and audited; nothing is stored unless every piece is summarized. The scope is read now, not at the window (SPECIMEN_OUT_OF_SCOPE). The 400 is a window bound that does not parse or a windowEnd not after windowStart (INVALID_INPUT). The 422 is no chain piece in the window (EXPOSURE_PATH_EMPTY), which is also a global caller's answer for an unknown specimen, or a piece that cannot name its datastreams, their limits or its readings' datastreams (EXPOSURE_NOT_REPRODUCIBLE). The failures are coded: the error is the code and message the reason; a 422 also lists the reason in details. Any other error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "specimenId",
+            "in": "path",
+            "required": true,
+            "description": "The specimen's specimenId.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "windowStart": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "The epoch when absent."
+                  },
+                  "windowEnd": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "Now when absent."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The summaries.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "telemetryExposureSummaryId": {
+                                "type": "string"
+                              },
+                              "specimenId": {
+                                "type": "string"
+                              },
+                              "windowStart": {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              "windowEnd": {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              "observationCount": {
+                                "type": "integer"
+                              },
+                              "calculationVersion": {
+                                "type": "string"
+                              },
+                              "calculatedAt": {
+                                "type": "string",
+                                "format": "date-time"
+                              },
+                              "specimenContainerAssignmentId": {
+                                "type": "string"
+                              },
+                              "containerPositionAssignmentId": {
+                                "type": "string"
+                              },
+                              "rackLocationAssignmentId": {
+                                "type": "string"
+                              },
+                              "exposurePathHash": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "telemetryExposureSummaryId",
+                              "specimenId"
+                            ],
+                            "additionalProperties": true
+                          }
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A window bound is not an ISO 8601 date, or windowEnd is not after windowStart (INVALID_INPUT).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Access denied: the permission or role gate refused, or the specimen is not in the custody of the caller's organizations (SPECIMEN_OUT_OF_SCOPE).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "No chain piece in the window, or a piece that cannot be reproduced (EXPOSURE_PATH_EMPTY, EXPOSURE_NOT_REPRODUCIBLE).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error; the error is INTERNAL_ERROR when the handler raised it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/physical-chain/containers": {
+      "post": {
+        "tags": [
+          "physical-chain"
+        ],
+        "summary": "Create a container",
+        "description": "Gates: authenticate (router.use), requirePermission('manageStorageTopology'), requireOrganizationScope. A Container (V2E-0646..0654), always created empty; it carries no organization. The 422 is a missing containerType or a status other than active (VALIDATION_ERROR); the 409 a containerId already in use (CONTAINER_EXISTS). The failures are coded: the error is the code and message the reason; a 422 also lists the reason in details. Any other error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "containerId": {
+                    "type": "string",
+                    "description": "Minted when absent."
+                  },
+                  "containerType": {
+                    "type": "string"
+                  },
+                  "manufacturerMetadata": {
+                    "description": "Stored as sent."
+                  },
+                  "catalogReference": {
+                    "type": "string"
+                  },
+                  "lotIdentifier": {
+                    "type": "string"
+                  },
+                  "capacity": {
+                    "type": "number"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "active"
+                    ],
+                    "description": "active when absent."
+                  },
+                  "createdAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "Now when absent."
+                  }
+                },
+                "required": [
+                  "containerType"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The container is created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "containerId": {
+                              "type": "string"
+                            },
+                            "containerType": {
+                              "type": "string"
+                            },
+                            "emptyStatus": {
+                              "type": "string",
+                              "enum": [
+                                "empty",
+                                "occupied",
+                                "unconfirmed"
+                              ]
+                            },
+                            "manufacturerMetadata": {
+                              "nullable": true
+                            },
+                            "catalogReference": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "lotIdentifier": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "capacity": {
+                              "type": "number",
+                              "nullable": true
+                            },
+                            "status": {
+                              "type": "string"
+                            },
+                            "createdAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            }
+                          },
+                          "required": [
+                            "containerId",
+                            "containerType",
+                            "emptyStatus",
+                            "status",
+                            "createdAt"
+                          ],
+                          "additionalProperties": true
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "description": "The containerId is already in use (CONTAINER_EXISTS).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid container (VALIDATION_ERROR).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error; the error is INTERNAL_ERROR when the handler raised it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/physical-chain/containers/{containerId}/specimens": {
+      "post": {
+        "tags": [
+          "physical-chain"
+        ],
+        "summary": "Load a specimen into a container",
+        "description": "Gates: authenticate (router.use), requirePermission('manageStorageAllocation'), requireOrganizationScope. RF017 AC3/AC4. The specimen must exist (SPECIMEN_NOT_FOUND), be in the custody of the caller's organizations at loadedAt (SPECIMEN_OUT_OF_SCOPE), be held in custody under an approval in force then (422 CUSTODY_INACTIVE, RF021 AC6) and be under no active legal hold (409 LEGAL_HOLD_ACTIVE, RF006 AC6). The 404 is also an unknown container (CONTAINER_NOT_FOUND); the 409 also an interval that overlaps another load of the specimen, history included (ASSIGNMENT_OVERLAP); the 422 also an unknown assignmentStatus or an unloadedAt not after loadedAt (VALIDATION_ERROR). The container becomes occupied. The failures are coded: the error is the code and message the reason; a 422 also lists the reason in details. Any other error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "containerId",
+            "in": "path",
+            "required": true,
+            "description": "The container.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "specimenId": {
+                    "type": "string",
+                    "description": "The specimen: its _id or its specimenId; the assignment is keyed by the specimenId."
+                  },
+                  "loadedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "Now when absent."
+                  },
+                  "unloadedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "After loadedAt; an assignment sent with it is recorded as ended."
+                  },
+                  "assignmentStatus": {
+                    "type": "string",
+                    "enum": [
+                      "active",
+                      "ended"
+                    ]
+                  },
+                  "sourceEventId": {
+                    "type": "string",
+                    "description": "The audit entry's source event id (V2E-0683, V2E-0690); minted when absent."
+                  }
+                },
+                "required": [
+                  "specimenId"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The specimen is loaded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "description": "A SpecimenContainerAssignment over the half-open interval [loadedAt, unloadedAt).",
+                          "properties": {
+                            "specimenContainerAssignmentId": {
+                              "type": "string"
+                            },
+                            "specimenId": {
+                              "type": "string"
+                            },
+                            "containerId": {
+                              "type": "string"
+                            },
+                            "loadedAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "unloadedAt": {
+                              "type": "string",
+                              "format": "date-time",
+                              "nullable": true
+                            },
+                            "assignmentStatus": {
+                              "type": "string",
+                              "enum": [
+                                "active",
+                                "ended"
+                              ]
+                            },
+                            "sourceEventId": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "specimenContainerAssignmentId",
+                            "specimenId",
+                            "containerId",
+                            "loadedAt",
+                            "assignmentStatus"
+                          ],
+                          "additionalProperties": true
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Access denied: the permission or role gate refused, or the specimen is not in the custody of the caller's organizations (SPECIMEN_OUT_OF_SCOPE).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The specimen or the container is not found (SPECIMEN_NOT_FOUND, CONTAINER_NOT_FOUND).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The specimen is under an active legal hold, or the interval overlaps another load (LEGAL_HOLD_ACTIVE, ASSIGNMENT_OVERLAP).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "No custody in force at loadedAt, or an invalid assignment (CUSTODY_INACTIVE, VALIDATION_ERROR).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error; the error is INTERNAL_ERROR when the handler raised it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/physical-chain/specimen-assignments/{specimenContainerAssignmentId}/unload": {
+      "post": {
+        "tags": [
+          "physical-chain"
+        ],
+        "summary": "Unload a specimen from its container",
+        "description": "Gates: authenticate (router.use), requirePermission('manageStorageAllocation'), requireOrganizationScope. Closes the assignment at unloadedAt; the record stays and the container's emptyStatus follows. The specimen must be in the custody of the caller's organizations now (SPECIMEN_OUT_OF_SCOPE). The 409 is an assignment already ended (ASSIGNMENT_ENDED); the 422 an unloadedAt not after loadedAt (VALIDATION_ERROR). The failures are coded: the error is the code and message the reason; a 422 also lists the reason in details. Any other error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "specimenContainerAssignmentId",
+            "in": "path",
+            "required": true,
+            "description": "The specimen-container assignment.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "unloadedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "The exclusive end; now when absent. It must fall after the start (422)."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The assignment is closed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "description": "A SpecimenContainerAssignment over the half-open interval [loadedAt, unloadedAt).",
+                          "properties": {
+                            "specimenContainerAssignmentId": {
+                              "type": "string"
+                            },
+                            "specimenId": {
+                              "type": "string"
+                            },
+                            "containerId": {
+                              "type": "string"
+                            },
+                            "loadedAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "unloadedAt": {
+                              "type": "string",
+                              "format": "date-time",
+                              "nullable": true
+                            },
+                            "assignmentStatus": {
+                              "type": "string",
+                              "enum": [
+                                "active",
+                                "ended"
+                              ]
+                            },
+                            "sourceEventId": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "specimenContainerAssignmentId",
+                            "specimenId",
+                            "containerId",
+                            "loadedAt",
+                            "assignmentStatus"
+                          ],
+                          "additionalProperties": true
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Access denied: the permission or role gate refused, or the specimen is not in the custody of the caller's organizations (SPECIMEN_OUT_OF_SCOPE).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The assignment is not found (ASSIGNMENT_NOT_FOUND).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The assignment is already ended (ASSIGNMENT_ENDED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "unloadedAt is not after loadedAt (VALIDATION_ERROR).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error; the error is INTERNAL_ERROR when the handler raised it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/physical-chain/containers/{containerId}/position": {
+      "post": {
+        "tags": [
+          "physical-chain"
+        ],
+        "summary": "Place a container at a storage position",
+        "description": "Gates: authenticate (router.use), requirePermission('manageStorageAllocation'), requireOrganizationScope. RF017 AC2, RULE-030. A container is in scope through the specimen it holds (SPECIMEN_OUT_OF_SCOPE) or, empty, through the location its position's rack is at (CONTAINER_OUT_OF_SCOPE); an empty, unplaced one may be placed by the holder of the target position's rack location. The 404 is an unknown container (CONTAINER_NOT_FOUND); the 409 a container or position already assigned over the interval, history included (ASSIGNMENT_OVERLAP); the 422 a missing storagePositionId, an unknown assignmentStatus or a removedAt not after placedAt (VALIDATION_ERROR). The failures are coded: the error is the code and message the reason; a 422 also lists the reason in details. Any other error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "containerId",
+            "in": "path",
+            "required": true,
+            "description": "The container.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "storagePositionId": {
+                    "type": "string",
+                    "description": "<storageRackId>:<position>."
+                  },
+                  "placedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "Now when absent."
+                  },
+                  "removedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "After placedAt; an assignment sent with it is recorded as ended."
+                  },
+                  "assignmentStatus": {
+                    "type": "string",
+                    "enum": [
+                      "active",
+                      "ended"
+                    ]
+                  },
+                  "sourceScanEventId": {
+                    "type": "string"
+                  },
+                  "sourceEventId": {
+                    "type": "string",
+                    "description": "The audit entry's source event id (V2E-0683, V2E-0690); minted when absent."
+                  }
+                },
+                "required": [
+                  "storagePositionId"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The container is placed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "description": "A ContainerPositionAssignment over the half-open interval [placedAt, removedAt).",
+                          "properties": {
+                            "containerPositionAssignmentId": {
+                              "type": "string"
+                            },
+                            "containerId": {
+                              "type": "string"
+                            },
+                            "storagePositionId": {
+                              "type": "string",
+                              "description": "<storageRackId>:<position>."
+                            },
+                            "placedAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "removedAt": {
+                              "type": "string",
+                              "format": "date-time",
+                              "nullable": true
+                            },
+                            "assignmentStatus": {
+                              "type": "string",
+                              "enum": [
+                                "active",
+                                "ended"
+                              ]
+                            },
+                            "sourceScanEventId": {
+                              "type": "string",
+                              "nullable": true
+                            }
+                          },
+                          "required": [
+                            "containerPositionAssignmentId",
+                            "containerId",
+                            "storagePositionId",
+                            "placedAt",
+                            "assignmentStatus"
+                          ],
+                          "additionalProperties": true
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Access denied: the permission or role gate refused, or the container is outside the caller's organizations (SPECIMEN_OUT_OF_SCOPE, CONTAINER_OUT_OF_SCOPE).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The container is not found (CONTAINER_NOT_FOUND).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The container or the position is already assigned over the interval (ASSIGNMENT_OVERLAP).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid assignment (VALIDATION_ERROR).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error; the error is INTERNAL_ERROR when the handler raised it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/physical-chain/position-assignments/{containerPositionAssignmentId}/remove": {
+      "post": {
+        "tags": [
+          "physical-chain"
+        ],
+        "summary": "Remove a container from its position",
+        "description": "Gates: authenticate (router.use), requirePermission('manageStorageAllocation'), requireOrganizationScope. Closes the assignment at removedAt; the record stays. The container must be in scope as for placing it (SPECIMEN_OUT_OF_SCOPE, CONTAINER_OUT_OF_SCOPE). The 409 is an assignment already ended (ASSIGNMENT_ENDED); the 422 a removedAt not after placedAt (VALIDATION_ERROR). The failures are coded: the error is the code and message the reason; a 422 also lists the reason in details. Any other error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "containerPositionAssignmentId",
+            "in": "path",
+            "required": true,
+            "description": "The container-position assignment.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "removedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "The exclusive end; now when absent. It must fall after the start (422)."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The assignment is closed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "description": "A ContainerPositionAssignment over the half-open interval [placedAt, removedAt).",
+                          "properties": {
+                            "containerPositionAssignmentId": {
+                              "type": "string"
+                            },
+                            "containerId": {
+                              "type": "string"
+                            },
+                            "storagePositionId": {
+                              "type": "string",
+                              "description": "<storageRackId>:<position>."
+                            },
+                            "placedAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "removedAt": {
+                              "type": "string",
+                              "format": "date-time",
+                              "nullable": true
+                            },
+                            "assignmentStatus": {
+                              "type": "string",
+                              "enum": [
+                                "active",
+                                "ended"
+                              ]
+                            },
+                            "sourceScanEventId": {
+                              "type": "string",
+                              "nullable": true
+                            }
+                          },
+                          "required": [
+                            "containerPositionAssignmentId",
+                            "containerId",
+                            "storagePositionId",
+                            "placedAt",
+                            "assignmentStatus"
+                          ],
+                          "additionalProperties": true
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Access denied: the permission or role gate refused, or the container is outside the caller's organizations (SPECIMEN_OUT_OF_SCOPE, CONTAINER_OUT_OF_SCOPE).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The assignment is not found (ASSIGNMENT_NOT_FOUND).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The assignment is already ended (ASSIGNMENT_ENDED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "removedAt is not after placedAt (VALIDATION_ERROR).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error; the error is INTERNAL_ERROR when the handler raised it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/physical-chain/racks/{storageRackId}/location": {
+      "post": {
+        "tags": [
+          "physical-chain"
+        ],
+        "summary": "Locate a rack at a storage location",
+        "description": "Gates: authenticate (router.use), requirePermission('manageStorageTopology'), requireOrganizationScope. RULE-035: a rack is in one location at a time. The rack is in scope through the location: 404 LOCATION_NOT_FOUND, 403 LOCATION_OUT_OF_SCOPE, and 422 LOCATION_UNUSABLE when the location or an ancestor is not active (RF017 AC8). The 409 is an interval that overlaps another location of the rack, history included (ASSIGNMENT_OVERLAP); the 422 is also a missing storageLocationId, an unknown assignmentStatus or a removedAt not after placedAt (VALIDATION_ERROR). The rack itself is not looked up. The failures are coded: the error is the code and message the reason; a 422 also lists the reason in details. Any other error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "storageRackId",
+            "in": "path",
+            "required": true,
+            "description": "The rack.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "storageLocationId": {
+                    "type": "string",
+                    "description": "An active location under active ancestors."
+                  },
+                  "placedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "Now when absent."
+                  },
+                  "removedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "After placedAt; an assignment sent with it is recorded as ended."
+                  },
+                  "assignmentStatus": {
+                    "type": "string",
+                    "enum": [
+                      "active",
+                      "ended"
+                    ]
+                  },
+                  "sourceEventId": {
+                    "type": "string",
+                    "description": "The audit entry's source event id (V2E-0683, V2E-0690); minted when absent."
+                  }
+                },
+                "required": [
+                  "storageLocationId"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The rack is located.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "description": "A RackLocationAssignment over the half-open interval [placedAt, removedAt).",
+                          "properties": {
+                            "rackLocationAssignmentId": {
+                              "type": "string"
+                            },
+                            "storageRackId": {
+                              "type": "string"
+                            },
+                            "storageLocationId": {
+                              "type": "string"
+                            },
+                            "placedAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "removedAt": {
+                              "type": "string",
+                              "format": "date-time",
+                              "nullable": true
+                            },
+                            "assignmentStatus": {
+                              "type": "string",
+                              "enum": [
+                                "active",
+                                "ended"
+                              ]
+                            },
+                            "sourceEventId": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "rackLocationAssignmentId",
+                            "storageRackId",
+                            "storageLocationId",
+                            "placedAt",
+                            "assignmentStatus"
+                          ],
+                          "additionalProperties": true
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Access denied: the permission or role gate refused, or the location belongs to another organization (LOCATION_OUT_OF_SCOPE).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The location is not found (LOCATION_NOT_FOUND).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The interval overlaps another location of the rack (ASSIGNMENT_OVERLAP).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The location is not usable, or the assignment is invalid (LOCATION_UNUSABLE, VALIDATION_ERROR).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error; the error is INTERNAL_ERROR when the handler raised it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/physical-chain/rack-assignments/{rackLocationAssignmentId}/remove": {
+      "post": {
+        "tags": [
+          "physical-chain"
+        ],
+        "summary": "Remove a rack from its location",
+        "description": "Gates: authenticate (router.use), requirePermission('manageStorageTopology'), requireOrganizationScope. Closes the assignment at removedAt; the record stays. A caller of organization scope must hold the rack's location (LOCATION_OUT_OF_SCOPE), and a location no record names answers it 404 LOCATION_NOT_FOUND; a global caller may close any. The 409 is an assignment already ended (ASSIGNMENT_ENDED); the 422 a removedAt not after placedAt (VALIDATION_ERROR). The failures are coded: the error is the code and message the reason; a 422 also lists the reason in details. Any other error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "rackLocationAssignmentId",
+            "in": "path",
+            "required": true,
+            "description": "The rack-location assignment.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "removedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "The exclusive end; now when absent. It must fall after the start (422)."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The assignment is closed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "description": "A RackLocationAssignment over the half-open interval [placedAt, removedAt).",
+                          "properties": {
+                            "rackLocationAssignmentId": {
+                              "type": "string"
+                            },
+                            "storageRackId": {
+                              "type": "string"
+                            },
+                            "storageLocationId": {
+                              "type": "string"
+                            },
+                            "placedAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "removedAt": {
+                              "type": "string",
+                              "format": "date-time",
+                              "nullable": true
+                            },
+                            "assignmentStatus": {
+                              "type": "string",
+                              "enum": [
+                                "active",
+                                "ended"
+                              ]
+                            },
+                            "sourceEventId": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "rackLocationAssignmentId",
+                            "storageRackId",
+                            "storageLocationId",
+                            "placedAt",
+                            "assignmentStatus"
+                          ],
+                          "additionalProperties": true
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Access denied: the permission or role gate refused, or the location belongs to another organization (LOCATION_OUT_OF_SCOPE).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The assignment, or for a caller of organization scope its location, is not found (ASSIGNMENT_NOT_FOUND, LOCATION_NOT_FOUND).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The assignment is already ended (ASSIGNMENT_ENDED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "removedAt is not after placedAt (VALIDATION_ERROR).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error; the error is INTERNAL_ERROR when the handler raised it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/physical-chain/containers/{containerId}/labels": {
+      "post": {
+        "tags": [
+          "physical-chain"
+        ],
+        "summary": "Issue a container's label identifier",
+        "description": "Gates: authenticate (router.use), requirePermission('manageStorageTopology'), requireOrganizationScope. RF016 AC4/AC5. The target is the container, the status active, and issuedAt and issuedBy are set here from the request; those four are never read from the body. The container must exist (CONTAINER_NOT_FOUND) and be in scope as for placing it (SPECIMEN_OUT_OF_SCOPE, CONTAINER_OUT_OF_SCOPE). The 422 is a missing or unknown field, a non-boolean immutableAtSource, an institution_applied label without templateVersionId and printBatchId, or an encodedValue holding a CPF, an e-mail or whitespace (VALIDATION_ERROR, RULE-012). The 409 is a value already active in the namespace (LABEL_EXISTS). The failures are coded: the error is the code and message the reason; a 422 also lists the reason in details. Any other error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "containerId",
+            "in": "path",
+            "required": true,
+            "description": "The container.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "encodedValue": {
+                    "type": "string",
+                    "description": "No CPF, e-mail or whitespace."
+                  },
+                  "symbology": {
+                    "type": "string",
+                    "enum": [
+                      "data_matrix",
+                      "code_128",
+                      "qr_code"
+                    ],
+                    "description": "Read case-insensitively."
+                  },
+                  "identifierOrigin": {
+                    "type": "string",
+                    "enum": [
+                      "manufacturer_applied",
+                      "institution_applied"
+                    ],
+                    "description": "Read case-insensitively."
+                  },
+                  "namespaceRegistryId": {
+                    "type": "string"
+                  },
+                  "carrierPlacement": {
+                    "type": "string"
+                  },
+                  "immutableAtSource": {
+                    "type": "boolean"
+                  },
+                  "templateVersionId": {
+                    "type": "string",
+                    "description": "Required for an institution_applied label."
+                  },
+                  "printBatchId": {
+                    "type": "string",
+                    "description": "Required for an institution_applied label."
+                  },
+                  "checksum": {
+                    "type": "string"
+                  },
+                  "replacesIdentifierId": {
+                    "type": "string"
+                  },
+                  "labelIdentifierId": {
+                    "type": "string",
+                    "description": "Minted when absent."
+                  }
+                },
+                "required": [
+                  "encodedValue",
+                  "symbology",
+                  "identifierOrigin",
+                  "namespaceRegistryId",
+                  "carrierPlacement",
+                  "immutableAtSource"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The label is issued.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "labelIdentifierId": {
+                              "type": "string"
+                            },
+                            "encodedValue": {
+                              "type": "string"
+                            },
+                            "symbology": {
+                              "type": "string"
+                            },
+                            "targetType": {
+                              "type": "string",
+                              "enum": [
+                                "container"
+                              ]
+                            },
+                            "targetId": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "type": "string",
+                              "enum": [
+                                "active"
+                              ]
+                            },
+                            "issuedAt": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "issuedBy": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "identifierOrigin": {
+                              "type": "string"
+                            },
+                            "namespaceRegistryId": {
+                              "type": "string"
+                            },
+                            "carrierPlacement": {
+                              "type": "string"
+                            },
+                            "immutableAtSource": {
+                              "type": "boolean"
+                            },
+                            "templateVersionId": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "printBatchId": {
+                              "type": "string",
+                              "nullable": true
+                            }
+                          },
+                          "required": [
+                            "labelIdentifierId",
+                            "encodedValue",
+                            "symbology",
+                            "targetType",
+                            "targetId",
+                            "status"
+                          ],
+                          "additionalProperties": true
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Access denied: the permission or role gate refused, or the container is outside the caller's organizations (SPECIMEN_OUT_OF_SCOPE, CONTAINER_OUT_OF_SCOPE).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The container is not found (CONTAINER_NOT_FOUND).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The value is already active in the namespace (LABEL_EXISTS).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid label (VALIDATION_ERROR).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error; the error is INTERNAL_ERROR when the handler raised it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/physical-chain/scan": {
+      "post": {
+        "tags": [
+          "physical-chain"
+        ],
+        "summary": "Resolve a scanned code to its container and specimen",
+        "description": "Gates: authenticate (router.use), requirePermission('manageStorageAllocation'), requireOrganizationScope. RF016 AC6. The value is normalized (an AIM symbology prefix and surrounding whitespace dropped) and resolved through its active label to a container and through the container's open load to a specimen, or, while the migration window is open, as a legacy sample barcode. Only a resolved scan is recorded as a ScanEvent. An unresolved one answers 200 with resolved false and a reason: UNKNOWN_IDENTIFIER, NOT_A_CONTAINER or EMPTY_CONTAINER. The 400 is a missing rawValue, symbology or deviceId (INVALID_INPUT); the 422 a scanner that is not a registered, homologated, unretired device (DEVICE_UNUSABLE, RF017 AC8); the 403 a specimen of another organization, with no ScanEvent written (SPECIMEN_OUT_OF_SCOPE). Any other error answers 500 INTERNAL_ERROR. The 503 comes from authenticate.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "rawValue": {
+                    "type": "string",
+                    "description": "The value as the scanner read it."
+                  },
+                  "symbology": {
+                    "type": "string"
+                  },
+                  "deviceId": {
+                    "type": "string",
+                    "description": "A registered, homologated, unretired device."
+                  },
+                  "locationId": {
+                    "type": "string"
+                  },
+                  "correlationId": {
+                    "type": "string",
+                    "description": "Minted when absent."
+                  },
+                  "occurredAt": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                },
+                "required": [
+                  "rawValue",
+                  "symbology",
+                  "deviceId"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The resolution.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "resolved": {
+                              "type": "boolean"
+                            },
+                            "reason": {
+                              "type": "string",
+                              "enum": [
+                                "UNKNOWN_IDENTIFIER",
+                                "NOT_A_CONTAINER",
+                                "EMPTY_CONTAINER"
+                              ],
+                              "description": "Present when resolved is false."
+                            },
+                            "source": {
+                              "type": "string",
+                              "enum": [
+                                "label",
+                                "legacy_barcode"
+                              ],
+                              "description": "Present when resolved is true."
+                            },
+                            "normalizedValue": {
+                              "type": "string"
+                            },
+                            "label": {
+                              "type": "object",
+                              "nullable": true,
+                              "additionalProperties": true
+                            },
+                            "containerId": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "specimenId": {
+                              "type": "string"
+                            },
+                            "scanEvent": {
+                              "type": "object",
+                              "additionalProperties": true,
+                              "description": "The recorded ScanEvent, when resolved is true."
+                            }
+                          },
+                          "required": [
+                            "resolved",
+                            "normalizedValue"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "rawValue, symbology or deviceId is missing (INVALID_INPUT).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Access denied: the permission or role gate refused, or the container holds a specimen of another organization (SPECIMEN_OUT_OF_SCOPE).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The scanner is not usable (DEVICE_UNUSABLE).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error; the error is INTERNAL_ERROR when the handler raised it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -35584,6 +39459,238 @@
           }
         },
         "description": "A participant consent as the routes return it; fields beyond those named (signature, evidence and withdrawal fields) are stored on the document and returned as they are.",
+        "additionalProperties": true
+      },
+      "EquipmentRecord": {
+        "type": "object",
+        "description": "An equipment document as the API returns it; fields beyond those named are stored on the document and returned as they are.",
+        "properties": {
+          "_id": {
+            "type": "string"
+          },
+          "equipmentID": {
+            "description": "The numeric business id, generated when the create sends none. A document written before the model checked it may hold a string."
+          },
+          "equipmentDescription": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "nullable": true
+          },
+          "model": {
+            "type": "string",
+            "nullable": true
+          },
+          "serialNumber": {
+            "type": "string",
+            "nullable": true
+          },
+          "type": {
+            "type": "string",
+            "description": "One of Freezer, Analytical, Storage, Processing, Other; Other by default."
+          },
+          "status": {
+            "type": "string",
+            "description": "One of Calibrado, Maintenance, Active, Inactive, Needs Calibration; Active by default. A document written before the model checked it may hold another value."
+          },
+          "purchaseDate": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "organizationId": {
+            "type": "string",
+            "nullable": true,
+            "description": "The Organization.organizationId it belongs to; null on unscoped legacy equipment, which only a global caller sees."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "_id"
+        ],
+        "additionalProperties": true
+      },
+      "OrganizationRecord": {
+        "type": "object",
+        "description": "An organization document as the API returns it.",
+        "properties": {
+          "_id": {
+            "type": "string"
+          },
+          "organizationId": {
+            "type": "string",
+            "description": "A UUID; the id every other record names the organization by."
+          },
+          "officialName": {
+            "type": "string"
+          },
+          "normalizedName": {
+            "type": "string",
+            "description": "The official name trimmed, without accents and upper-cased; unique."
+          },
+          "acronym": {
+            "type": "string",
+            "nullable": true
+          },
+          "organizationType": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "biobank",
+              "university",
+              "hospital",
+              "laboratory",
+              "network",
+              null
+            ]
+          },
+          "countryCode": {
+            "type": "string",
+            "description": "ISO 3166-1 alpha-2, upper-cased."
+          },
+          "website": {
+            "type": "string",
+            "nullable": true
+          },
+          "contact": {
+            "description": "Stored as sent, or null.",
+            "nullable": true
+          },
+          "qualityStandards": {
+            "type": "array",
+            "items": {}
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "_id",
+          "organizationId",
+          "officialName",
+          "normalizedName",
+          "countryCode"
+        ],
+        "additionalProperties": true
+      },
+      "CustodianshipAssignmentRecord": {
+        "type": "object",
+        "description": "A CustodianshipAssignment (V2E-0105..0112): the organization holding a specimen in custody over the half-open effectivePeriod [start, end).",
+        "properties": {
+          "custodianshipAssignmentId": {
+            "type": "string"
+          },
+          "specimenId": {
+            "type": "string"
+          },
+          "custodianOrganizationId": {
+            "type": "string"
+          },
+          "responsibleInvestigatorId": {
+            "type": "string",
+            "nullable": true
+          },
+          "locationId": {
+            "type": "string",
+            "nullable": true
+          },
+          "effectivePeriod": {
+            "type": "object",
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time",
+                "nullable": true
+              }
+            },
+            "required": [
+              "start"
+            ]
+          },
+          "assignmentStatus": {
+            "type": "string",
+            "enum": [
+              "planned",
+              "active",
+              "ended"
+            ]
+          },
+          "authorizationId": {
+            "type": "string",
+            "description": "The CollectionGovernanceApproval approvalId."
+          }
+        },
+        "required": [
+          "custodianshipAssignmentId",
+          "specimenId",
+          "custodianOrganizationId",
+          "effectivePeriod",
+          "assignmentStatus",
+          "authorizationId"
+        ],
+        "additionalProperties": true
+      },
+      "StorageLocationRecord": {
+        "type": "object",
+        "description": "A StorageLocation (P1X-0098..0104) a rack is located at.",
+        "properties": {
+          "_id": {
+            "type": "string"
+          },
+          "storageLocationId": {
+            "type": "string"
+          },
+          "locationType": {
+            "type": "string",
+            "description": "Lower-cased."
+          },
+          "name": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "parentLocationId": {
+            "type": "string",
+            "nullable": true
+          },
+          "organizationId": {
+            "type": "string"
+          },
+          "locationStatus": {
+            "type": "string",
+            "enum": [
+              "active",
+              "unavailable",
+              "interdicted"
+            ]
+          }
+        },
+        "required": [
+          "storageLocationId",
+          "locationType",
+          "name",
+          "code",
+          "organizationId",
+          "locationStatus"
+        ],
         "additionalProperties": true
       }
     },
