@@ -411,7 +411,7 @@ export default function PatientsPage() {
     <div className="page patients-page" data-testid="patients-page">
       <div className="page-header">
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-          <Button data-testid="patients-back-button" onClick={() => navigate('/dashboard')} variant="secondary" style={{ minWidth: 'auto' }}>
+          <Button data-testid="patients-back-button" aria-label={t('common.back')} onClick={() => navigate('/dashboard')} variant="secondary" style={{ minWidth: 'auto' }}>
             <ArrowLeft size={18} />
           </Button>
           <div>
@@ -511,7 +511,8 @@ export default function PatientsPage() {
           border: '1px solid #fca5a5', 
           borderRadius: '6px', 
           marginBottom: '1rem',
-          color: '#dc2626'
+          // RNF027 C2 (#1324): #dc2626 on #fee2e2 is 3.9:1; this is 6.8:1.
+          color: '#991b1b'
         }}>
           <strong>{t('patients.loadErrorLabel')}:</strong> {error}
         </div>
@@ -524,7 +525,8 @@ export default function PatientsPage() {
           border: '1px solid #fca5a5', 
           borderRadius: '6px', 
           marginBottom: '1rem',
-          color: '#dc2626'
+          // RNF027 C2 (#1324): #dc2626 on #fee2e2 is 3.9:1; this is 6.8:1.
+          color: '#991b1b'
         }}>
           <strong>{t('patients.connectionErrorTitle')}:</strong> {t('patients.connectionErrorMessage')}
         </div>

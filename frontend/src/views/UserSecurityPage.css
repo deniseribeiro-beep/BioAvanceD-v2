@@ -224,14 +224,16 @@
 
 .mfa-status.active {
 	background: rgba(0, 158, 115, 0.14);
-	color: var(--success);
+	/* RNF027 C2 (#1324): --success on this tint is 2.9:1 at 12px; this is 6.5:1. */
+	color: #065f46;
 	border-color: rgba(0, 158, 115, 0.22);
 }
 
 .mfa-status.inactive,
 .mfa-status.danger {
 	background: rgba(239, 68, 68, 0.12);
-	color: var(--danger);
+	/* RNF027 C2 (#1324): --danger on this tint is 3.2:1 at 12px; this is 7.1:1. */
+	color: #991b1b;
 	border-color: rgba(239, 68, 68, 0.22);
 }
 

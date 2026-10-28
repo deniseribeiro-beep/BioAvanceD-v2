@@ -190,7 +190,8 @@ export default function SamplesPageView({
               </tr>
             ) : error ? (
               <tr>
-                <td colSpan={10} style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--danger)' }}>
+                {/* RNF027 C2 (#1324): --danger on white is 3.8:1; this is 8.3:1. */}
+                <td colSpan={10} style={{ textAlign: 'center', padding: '1.5rem', color: '#991b1b' }}>
                   {error}
                 </td>
               </tr>

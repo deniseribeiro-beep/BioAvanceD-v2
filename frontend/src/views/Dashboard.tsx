@@ -36,8 +36,9 @@ function DashboardTemperatureChart() {
   const { readings, loading, error } = useTemperatureReadings();
 
   if (error) {
+    // RNF027 C2 (#1324): --danger on white is 3.8:1; this is 8.3:1.
     return (
-      <div role="alert" data-testid="dashboard-temperature-error" style={{ color: 'var(--danger)' }}>
+      <div role="alert" data-testid="dashboard-temperature-error" style={{ color: '#991b1b' }}>
         Falha ao carregar as leituras de temperatura: {error}
       </div>
     );
