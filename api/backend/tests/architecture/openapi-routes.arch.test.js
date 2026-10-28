@@ -14,8 +14,9 @@
 // It READS the code, never requires it: app.js and the route files load the
 // database, queue and config modules at require time. The mounts come from
 // app.js's `app.use("<prefix>", require("<module>"))` calls; a limiter
-// mounted on a prefix (`app.use("/api/auth", authLimiter)`) registers no
-// route and is not a mount. A prefix mounted more than once takes the union
+// mounted on or below a covered prefix (`app.use("/api/auth", authLimiter)`)
+// registers no route and is not a mount; each such name must be declared in
+// app.js with `rateLimit(`. A prefix mounted more than once takes the union
 // of its files' registrations. A parameterised prefix is compared in its
 // `{x}` form, as x-covered-mounts and the spec paths write it, and a mount
 // nested under a covered mount passes only when it is itself covered.
@@ -63,8 +64,9 @@ const MOUNT = /\bapp\.use\(\s*(['"])([^'"]+)\1\s*,\s*require\(\s*(['"])([^'"]+)\
 const ROUTE_START = /\brouter\.(get|post|put|patch|delete|head)\s*\(\s*(?:(['"`])([^'"`]*)\2)?/gi;
 const HTTP_METHODS = new Set(['get', 'put', 'post', 'delete', 'options', 'head', 'patch', 'trace']);
 
-// Middleware app.js mounts on a covered prefix that registers no route.
-const KNOWN_LIMITERS = new Set(['authLimiter']);
+// Middleware app.js mounts on or below a covered prefix that registers no
+// route. Each name is declared in app.js as `const <name> = rateLimit(`.
+const KNOWN_LIMITERS = new Set(['authLimiter', 'consentLimiter']);
 // Uncovered mounts above a covered prefix, each with the covered prefixes
 // below it that it is known to overlap. The master-data router mounted at
 // /api/biobanks has /:id routes that also match /api/biobanks/miabis (GET,
@@ -153,6 +155,8 @@ function appRefusals(source, label, covered) {
     if (method !== 'use') {
       refusals.push(`${at}"${prefix}": a route registered on app itself under ${mount}`);
     } else if (prefix !== mount) {
+      // A known limiter registers no route, so it may sit below a covered mount.
+      if (args.length === 2 && KNOWN_LIMITERS.has(args[1])) continue;
       refusals.push(`${at}"${prefix}": a mount below the covered ${mount}; cover the mount itself or move the routes`);
     } else if (!(args.length === 2 && (/^require\(\s*(['"])[^'"]+\1\s*\)$/.test(args[1]) || KNOWN_LIMITERS.has(args[1])))) {
       refusals.push(`${at}"${prefix}", ...): neither app.use(prefix, require(module)) nor a known limiter`);
@@ -276,6 +280,11 @@ test('RNF006: every operation registered under a covered mount is documented', (
   for (const key of KNOWN_ANCESTORS.keys()) {
     if (!usePrefixes.has(key)) misses.push(`KNOWN_ANCESTORS names ${key}, which app.js no longer mounts`);
   }
+  for (const name of KNOWN_LIMITERS) {
+    if (!new RegExp(`\\bconst\\s+${name}\\s*=\\s*rateLimit\\s*\\(`).test(appSource)) {
+      misses.push(`KNOWN_LIMITERS names ${name}, which app.js does not declare as const ${name} = rateLimit(...)`);
+    }
+  }
   for (const prefix of covered) {
     const files = mounts.get(prefix);
     if (!files || files.size === 0) {
@@ -329,6 +338,7 @@ test('RNF006: the guard refuses each route shape it cannot read', () => {
   const app = [
     'app.use(globalLimiter);',
     'app.use("/api/auth", authLimiter);',
+    'app.use("/api/backup/restore", authLimiter);',
     'app.use("/api/backup", require("./src/interface/routes/backup.routes"));',
     'app.use("/api/backup", require("./src/interface/routes/backup.routes"));',
     'app.use("/api/export/fhir/samples/:specimenId/files/:fileID", require("./src/interface/routes/fhir-document-reference-export.routes"));',
@@ -360,6 +370,8 @@ test('RNF006: the guard refuses each route shape it cannot read', () => {
     'middleware before the require': `app.use("/api/backup", authenticate, ${sub});`,
     'a variable-held router': `const extra = ${sub};\napp.use("/api/backup", extra);`,
     'a mount below a covered prefix': `app.use("/api/backup/deep", ${sub});`,
+    'a known limiter beside a router below a covered prefix': `app.use("/api/backup/deep", authLimiter, ${sub});`,
+    'an unknown middleware below a covered prefix': 'app.use("/api/backup/deep", otherLimiter);',
     'a mount below a covered parameterised mount': `app.use("/api/export/fhir/samples/:specimenId/files/:fileID/more", ${sub});`,
     'a parameterised mount below a covered prefix': `app.use("/api/backup/:id/files", ${sub});`,
     'app.get under a covered prefix': 'app.get("/api/backup/direct", handler);',
