@@ -60,9 +60,7 @@ jobs:
         run: npm --prefix api/backend run test:architecture
 
       - name: Essential reference seed validation
-        run: |
-          npm --prefix api/backend run seed:validate:essential
-          npm --prefix api/backend run seed:essential:dry-run
+        run: npm --prefix api/backend run seed:validate:essential
 
       # #960: and no "Frontend lint" step, because there is no linter. There
       # is no eslint config or dependency anywhere in this repo -- the
@@ -177,6 +175,16 @@ jobs:
 
           echo "Neo4j node count: ${NODE_COUNT}"
           test "${NODE_COUNT}" = "0"
+
+      # #1413: the dry run records a FoundationDataRun (RF022), so it needs
+      # the stack's MongoDB and runs here, not before the stack exists.
+      - name: Essential reference seed dry run
+        run: |
+          docker compose \
+            --env-file .env.test.example \
+            -f compose.test.yml \
+            run --rm --no-deps foundation-bootstrap-test \
+            npm run seed:essential:dry-run
 
       - name: Run backend test suite
         run: |
