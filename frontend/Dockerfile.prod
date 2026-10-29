@@ -2,11 +2,6 @@ FROM node:22.23.4-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
-# Same npm/cli#4828 fallback Dockerfile.dev carries, and this stage needs it at
-# least as much: `vite build` is the rollup-invoking step, so a missing
-# @rollup/rollup-linux-x64-musl fails here rather than at dev-server start.
-# No-op when npm ci already installed the musl binary. (#891)
-RUN node -e "require('@rollup/rollup-linux-x64-musl')" 2>/dev/null || npm install @rollup/rollup-linux-x64-musl --no-save --no-audit --no-fund
 # A static bundle has no server-side env, so the API base is baked in here.
 # Defaults to empty, which is falsy in import.meta.env and leaves the runtime
 # hostname fallback in charge -- i.e. compose.prod.yml's behaviour is unchanged.
