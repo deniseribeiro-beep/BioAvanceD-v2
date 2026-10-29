@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 const net = require('net');
 const childProcess = require('child_process');
 const { spawn } = childProcess;
+const { promisify } = require('util');
 
 vi.mock('../../src/utils/logger', () => ({
   info: vi.fn(),
@@ -60,6 +61,24 @@ function spawnPortHolder(port) {
     child.on('error', reject);
   });
 }
+
+/**
+ * #1417: some Windows hosts (a sandboxed shell, Docker Desktop's networking)
+ * leave a live listener out of `netstat -ano`, so the win32 lookup cannot find
+ * it. Reads netstat on its own, apart from the code under test, and says
+ * whether any TCP row names `port` as its local port. Outside win32 it answers
+ * true, so the POSIX lookup runs as before.
+ */
+async function netstatListsPort(port) {
+  if (process.platform !== 'win32') return true;
+  const { stdout } = await promisify(childProcess.exec)('netstat -ano');
+  return stdout.split('\n').some((line) => {
+    const parts = line.trim().split(/\s+/);
+    return parts[0] === 'TCP' && parts[1].endsWith(`:${port}`);
+  });
+}
+
+const NETSTAT_BLIND = "netstat -ano does not list this test's own listener on this host (#1417)";
 
 async function getFreePort() {
   const probe = await occupyPort(0);
@@ -138,10 +157,11 @@ describe('portManager', () => {
       expect(result).toBeNull();
     });
 
-    it('returns the pid (and usually process name) of the real process bound to the port', async () => {
+    it('returns the pid (and usually process name) of the real process bound to the port', async (ctx) => {
       const port = await getFreePort();
       const holder = await spawnPortHolder(port);
       try {
+        ctx.skip(!(await netstatListsPort(port)), NETSTAT_BLIND);
         const result = await portManager.getProcessUsingPort(port);
         expect(result).not.toBeNull();
         expect(result.pid).toBe(String(holder.pid));
@@ -158,18 +178,24 @@ describe('portManager', () => {
       expect(result).toBe(false);
     });
 
-    it('kills the real process bound to the port and frees it', async () => {
+    it('kills the real process bound to the port and frees it', async (ctx) => {
       const port = await getFreePort();
       const holder = await spawnPortHolder(port);
+      try {
+        ctx.skip(!(await netstatListsPort(port)), NETSTAT_BLIND);
 
-      // Sanity check: the port is genuinely occupied before we try to free it.
-      expect(await portManager.isPortAvailable(port)).toBe(false);
+        // Sanity check: the port is genuinely occupied before we try to free it.
+        expect(await portManager.isPortAvailable(port)).toBe(false);
 
-      const result = await portManager.killProcessOnPort(port);
-      expect(result).toBe(true);
+        const result = await portManager.killProcessOnPort(port);
+        expect(result).toBe(true);
 
-      const nowAvailable = await portManager.isPortAvailable(port);
-      expect(nowAvailable).toBe(true);
+        const nowAvailable = await portManager.isPortAvailable(port);
+        expect(nowAvailable).toBe(true);
+      } finally {
+        // A no-op after a real kill; on a skip it frees the port.
+        holder.kill();
+      }
     }, 15000);
   });
 
