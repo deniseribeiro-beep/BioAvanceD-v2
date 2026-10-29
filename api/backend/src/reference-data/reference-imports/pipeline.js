@@ -9,6 +9,7 @@ const { insertDataQualityAssessment } = require('../../ingestion/dataQualityAsse
 const { buildCoverageManifest, assessRelease } = require('./coverage');
 const { STORAGE_BASE } = require('../../config/uploadConfig');
 const { preserveReferenceAsset } = require('./preserveAsset');
+const { resolveSourceAsset } = require('./resolveSourceAsset');
 
 // AC 10-style gate: a batch this bad blocks promotion outright rather than
 // letting a mostly-broken parse silently become an "active" release.
@@ -45,10 +46,22 @@ async function runImport({
   const staging = db.collection(CANONICAL_COLLECTIONS.referenceImportStaging);
   const coverageManifests = db.collection(CANONICAL_COLLECTIONS.referenceCoverageManifests);
 
-  // 7.2 step 2 "Acquire" + step 3 "Integrity"
-  const { checksum, fileSize } = await checksumFile(source.fixturePath);
+  // 7.2 step 2 "Acquire": default = bundled fixture; full-lab = preplaced/converted
+  // asset via resolveSourceAsset (no fetch in this file — lab converters only).
+  const acquired = await resolveSourceAsset(source);
+  const effectiveSource = {
+    ...source,
+    fixturePath: acquired.path,
+    expectedChecksum: acquired.expectedChecksum,
+    retrievalUri: acquired.retrievalUri,
+    datasetVersion: acquired.datasetVersion,
+    accessMethod: acquired.accessMethod,
+  };
+
+  // 7.2 step 3 "Integrity"
+  const { checksum, fileSize } = await checksumFile(effectiveSource.fixturePath);
   const importMode = dryRun ? 'dry_run' : 'full';
-  const idempotencyKey = `${source.datasetCode}:${source.datasetVersion}:sha256:${checksum}`;
+  const idempotencyKey = `${effectiveSource.datasetCode}:${effectiveSource.datasetVersion}:sha256:${checksum}`;
 
   // AC 7 idempotency vs. resume: an existing *terminal* attempt (same
   // source content, version, and mode) is not re-processed at all —
@@ -67,7 +80,7 @@ async function runImport({
     return { run: existingRun, idempotent: true };
   }
 
-  const integrityOk = checksum === source.expectedChecksum;
+  const integrityOk = checksum === effectiveSource.expectedChecksum;
 
   if (!integrityOk) {
     // No staging/checkpoint machinery needed for a doomed run — nothing was
@@ -76,14 +89,14 @@ async function runImport({
       {
         entityType: 'ReferenceDatasetRelease',
         errorCode: 'CHECKSUM_MISMATCH',
-        errorMessage: `Checksum calculado (${checksum}) diverge do checksum esperado (${source.expectedChecksum}) para ${source.datasetCode}.`,
+        errorMessage: `Checksum calculado (${checksum}) diverge do checksum esperado (${effectiveSource.expectedChecksum}) para ${effectiveSource.datasetCode}.`,
         severity: 'fatal',
-        rawValue: { checksum, expectedChecksum: source.expectedChecksum },
+        rawValue: { checksum, expectedChecksum: effectiveSource.expectedChecksum },
       },
     ];
     const runDoc = ReferenceImportRunModel.create({
       referenceDatasetReleaseId: null,
-      datasetCode: source.datasetCode,
+      datasetCode: effectiveSource.datasetCode,
       importMode,
       idempotencyKey,
       startedAt: new Date(),
@@ -119,20 +132,20 @@ async function runImport({
   // registration is validated on every run, a dry run included, so a source
   // that could never be registered stages nothing.
   const registration = {
-    sourceId: source.sourceId,
-    datasetCode: source.datasetCode,
-    datasetName: source.datasetName,
-    systemUri: source.systemUri,
-    datasetVersion: source.datasetVersion,
-    retrievalUri: source.retrievalUri,
-    accessMethod: source.accessMethod,
-    sourceFormat: source.sourceFormat,
-    license: source.license,
-    licenseUri: source.licenseUri,
+    sourceId: effectiveSource.sourceId,
+    datasetCode: effectiveSource.datasetCode,
+    datasetName: effectiveSource.datasetName,
+    systemUri: effectiveSource.systemUri,
+    datasetVersion: effectiveSource.datasetVersion,
+    retrievalUri: effectiveSource.retrievalUri,
+    accessMethod: effectiveSource.accessMethod,
+    sourceFormat: effectiveSource.sourceFormat,
+    license: effectiveSource.license,
+    licenseUri: effectiveSource.licenseUri,
     sourceChecksum: checksum,
     fileSize,
-    parserVersion: source.parserVersion,
-    mappingVersion: source.mappingVersion,
+    parserVersion: effectiveSource.parserVersion,
+    mappingVersion: effectiveSource.mappingVersion,
     releaseStatus: 'downloaded',
     previousReleaseId: null,
   };
@@ -142,7 +155,7 @@ async function runImport({
       runs,
       issuesCollection,
       existingRun: resuming ? existingRun : null,
-      newRun: { datasetCode: source.datasetCode, importMode, idempotencyKey, inputChecksum: checksum, initiatedBy },
+      newRun: { datasetCode: effectiveSource.datasetCode, importMode, idempotencyKey, inputChecksum: checksum, initiatedBy },
       releaseId: null,
       issue: {
         entityType: 'ReferenceDatasetRelease',
@@ -161,12 +174,12 @@ async function runImport({
   let releaseDoc = null;
   let asset = null;
   if (!dryRun) {
-    releaseDoc = await resolveRelease({ releases, source, checksum, registration, existingRun: resuming ? existingRun : null });
+    releaseDoc = await resolveRelease({ releases, source: effectiveSource, checksum, registration, existingRun: resuming ? existingRun : null });
     // RF028 AC2 / RNF032 C2: the source asset is preserved after its release
     // is registered and before the run's first staging write.
     asset = await preserveReferenceAsset({
-      sourcePath: source.fixturePath,
-      datasetCode: source.datasetCode,
+      sourcePath: effectiveSource.fixturePath,
+      datasetCode: effectiveSource.datasetCode,
       checksum,
       storageRoot: assetStorageRoot,
     });
@@ -180,7 +193,7 @@ async function runImport({
       runs,
       issuesCollection,
       existingRun: resuming ? existingRun : null,
-      newRun: { datasetCode: source.datasetCode, importMode, idempotencyKey, inputChecksum: checksum, initiatedBy },
+      newRun: { datasetCode: effectiveSource.datasetCode, importMode, idempotencyKey, inputChecksum: checksum, initiatedBy },
       releaseId,
       issue: {
         entityType: 'ReferenceDatasetRelease',
@@ -209,7 +222,7 @@ async function runImport({
   if (!runDoc) {
     runDoc = ReferenceImportRunModel.create({
       referenceDatasetReleaseId: releaseId,
-      datasetCode: source.datasetCode,
+      datasetCode: effectiveSource.datasetCode,
       importMode,
       idempotencyKey,
       startedAt: new Date(),
@@ -229,7 +242,7 @@ async function runImport({
   // between a fresh run and a resumed one.
   const rawLines = [];
   // A full run parses the preserved copy, the bytes whose hash was verified.
-  for await (const entry of streamJsonLines((asset && asset.assetPath) || source.fixturePath)) {
+  for await (const entry of streamJsonLines((asset && asset.assetPath) || effectiveSource.fixturePath)) {
     rawLines.push(entry);
   }
   const { recordsRead, concepts: parsedConcepts, relations: parsedRelations, issues } = processRecords(rawLines, normalizeRecord);
@@ -253,7 +266,7 @@ async function runImport({
     await staging.insertMany(
       chunk.map((item) => ({
         referenceImportRunId: runDoc.referenceImportRunId,
-        datasetCode: source.datasetCode,
+        datasetCode: effectiveSource.datasetCode,
         entityType: item.entityType,
         stagedAt: new Date(),
         candidate: item.candidate,
@@ -283,7 +296,7 @@ async function runImport({
 
   const fatalIssues = issues.filter((issue) => issue.severity === 'fatal');
   const rejectionRate = recordsRead > 0 ? issues.length / recordsRead : 0;
-  const approved = fatalIssues.length === 0 && rejectionRate <= REJECTION_RATE_BLOCK_THRESHOLD && Boolean(source.license);
+  const approved = fatalIssues.length === 0 && rejectionRate <= REJECTION_RATE_BLOCK_THRESHOLD && Boolean(effectiveSource.license);
 
   // RF028 AC6/AC7, RNF032 C7: the release's coverage manifest and quality
   // assessment are written before its status flip, which names both. A
@@ -294,7 +307,7 @@ async function runImport({
     const manifest = buildCoverageManifest({
       releaseId,
       runId: runDoc.referenceImportRunId,
-      datasetCode: source.datasetCode,
+      datasetCode: effectiveSource.datasetCode,
       assetUri: asset.assetUri,
       recordsRead,
       obtainedCount: stagedConcepts.size,

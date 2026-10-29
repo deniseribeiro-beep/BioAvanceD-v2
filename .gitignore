@@ -169,3 +169,18 @@ frontend/playwright/.auth/
 # above would otherwise drop it from git add silently.
 !frontend/src/**/logs/
 !api/backend/src/**/logs/
+
+# =========================
+# Lab full-reference dumps / local secrets (SCP → VM; do not version)
+# =========================
+/ref-full/
+/ref-cache/
+/public-key.txt
+/public-key.txt.pub
+**/__pycache__/
+*.py[cod]
+
+# Heavy local research / mestrado artifacts (keep out of lab slice)
+docs/mestrado/*.docx
+docs/research/IEEE-ACCESS/
+docs/research/FIGURAS/

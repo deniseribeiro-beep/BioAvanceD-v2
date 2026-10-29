@@ -5,7 +5,7 @@ import { LanguageProvider } from '../../../contexts/LanguageContext';
 import { apiClient } from '../../../api/client';
 import { consentService } from '../../../services/api';
 
-const { buildSubmissionPayload, applyIntakeOrganization } = _test;
+const { buildSubmissionPayload, applyIntakeOrganization, createClinicalStepSchema } = _test;
 
 // #871's mocking approach: replace apiClient/consentService at the network
 // boundary (not useSemanticCascade itself) so the real hook runs end to end
@@ -18,6 +18,35 @@ vi.mock('../../../api/client', () => ({
 vi.mock('../../../services/api', () => ({
   consentService: { getTemplates: vi.fn() },
 }));
+
+describe('ClinicalIntakeWizard createClinicalStepSchema contracts', () => {
+  const t = (_key, fallback) => fallback;
+
+  it('rejects a selected diagnosis that has neither CID-10 nor ORPHA code', () => {
+    const schema = createClinicalStepSchema(t, []);
+    const result = schema.safeParse({
+      isHealthyControl: false,
+      diagnosisCidId: 'local-row-42',
+      diagnosisCidCode: '',
+      diagnosisOrphaCode: '',
+      treatmentStatus: 'NAIVE',
+    });
+    expect(result.success).toBe(false);
+    expect(result.error.issues.some((issue) => String(issue.message).includes('ICD-10') || String(issue.message).includes('ORPHA'))).toBe(true);
+  });
+
+  it('accepts autofill when ORPHA is present without CID-10', () => {
+    const schema = createClinicalStepSchema(t, []);
+    const result = schema.safeParse({
+      isHealthyControl: false,
+      diagnosisCidId: 'ORPHA:324',
+      diagnosisCidCode: '',
+      diagnosisOrphaCode: 'ORPHA:324',
+      treatmentStatus: 'NAIVE',
+    });
+    expect(result.success).toBe(true);
+  });
+});
 
 describe('ClinicalIntakeWizard buildSubmissionPayload', () => {
   it('#167: diagnosis payload only carries canonical camelCase keys, no legacy snake_case duplicates', () => {

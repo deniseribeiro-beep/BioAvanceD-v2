@@ -1111,11 +1111,13 @@ function createClinicalStepSchema(t, clinicalItems = []) {
     }
 
     if (!data.isHealthyControl) {
-      const hasDiagnosisCode = [data.diagnosisCidId, data.diagnosisCidCode, data.diagnosisOrphaCode].some((value) => String(value || '').trim().length > 0);
+      // Contract: autofill must leave a real ICD-10 or ORPHA code, not just the
+      // list-row id (diagnosisCidId can be an opaque local id with neither code).
+      const hasDiagnosisCode = [data.diagnosisCidCode, data.diagnosisOrphaCode].some((value) => String(value || '').trim().length > 0);
       if (!hasDiagnosisCode) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          path: ['diagnosisCidId'],
+          path: ['diagnosisCidCode'],
           message: t('wizard.validation.requireCidOrOrpha', 'Disease search must fill ICD-10 or ORPHA'),
         });
       }
@@ -1609,7 +1611,7 @@ function applyIntakeOrganization(payload, intakeOrganizationId) {
   return payload;
 }
 
-export const _test = { buildSubmissionPayload, applyIntakeOrganization };
+export const _test = { buildSubmissionPayload, applyIntakeOrganization, createClinicalStepSchema };
 
 export default function ClinicalIntakeWizard(props) {
   const { t } = useLanguage();

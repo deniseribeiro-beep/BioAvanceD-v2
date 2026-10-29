@@ -30,9 +30,30 @@ test('HPO importer reads a bundled fixture, not a live network source (#367 firs
   // systemUri/relationSystem are canonical URI *values* the dictionary
   // requires (dict-02_DICIONARIO.md P1X-0418/P1X-0497) — checking for those
   // would false-positive. What must stay absent is an actual network call.
+  // resolveSourceAsset is allowed in the acquire path but must also stay
+  // offline (full-lab uses preplaced dumps; lab/download* may fetch later).
   const networkCallPatterns = [/\bfetch\(/, /require\(['"]https?['"]\)/, /require\(['"]axios['"]\)/, /\baxios\./, /XMLHttpRequest/];
-  for (const file of ['pipeline.js', 'sources/hpo.js', 'parseJsonLines.js']) {
+  for (const file of ['pipeline.js', 'sources/hpo.js', 'parseJsonLines.js', 'resolveSourceAsset.js']) {
     const contents = read(path.join(importDir, file));
+    for (const pattern of networkCallPatterns) {
+      assert.doesNotMatch(contents, pattern);
+    }
+  }
+});
+
+test('full-lab helpers may live under lab/ but default sources stay fixture-only', () => {
+  const labDir = path.join(importDir, 'lab');
+  assert.strictEqual(fs.existsSync(labDir), true);
+  const hpoSource = require(path.join(importDir, 'sources', 'hpo.js'));
+  assert.strictEqual(hpoSource.fixturePath.includes(`${path.sep}fixtures${path.sep}`), true);
+  // ATC uses convert (local CSV→JSONL); still offline — no scrape in lab/.
+  const atcEntry = require(path.join(labDir, 'fullLabSources.js')).ATC;
+  assert.strictEqual(atcEntry.strategy, 'convert');
+  assert.strictEqual(atcEntry.convert, 'atc-csv');
+  const networkCallPatterns = [/\bfetch\(/, /require\(['"]https?['"]\)/, /require\(['"]axios['"]\)/, /\baxios\./, /XMLHttpRequest/];
+  for (const name of fs.readdirSync(labDir)) {
+    if (!name.endsWith('.js')) continue;
+    const contents = read(path.join(labDir, name));
     for (const pattern of networkCallPatterns) {
       assert.doesNotMatch(contents, pattern);
     }
