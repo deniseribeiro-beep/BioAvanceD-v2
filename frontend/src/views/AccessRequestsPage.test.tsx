@@ -106,6 +106,15 @@ function pendingRequest(overrides: Partial<AccessRequest> = {}): AccessRequest {
   };
 }
 
+type User = ReturnType<typeof userEvent.setup>;
+
+// One input event per field: a user.type per keystroke re-renders the whole form
+// each key, which ran past the 5 s test timeout under a loaded parallel run (#1414).
+async function fill(user: User, field: HTMLElement, text: string) {
+  await user.click(field);
+  await user.paste(text);
+}
+
 describe('AccessRequestsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -119,17 +128,17 @@ describe('AccessRequestsPage', () => {
       .mockResolvedValueOnce({ data: { success: true, data: [] } } as any)
       .mockResolvedValueOnce({ data: { success: true, data: [created] } } as any);
     vi.mocked(accessRequestService.create).mockResolvedValue({ data: { success: true, data: created } } as any);
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(<AccessRequestsPage />);
 
-    await user.type(screen.getByTestId('access-request-requester-input'), 'researcher-1');
+    await fill(user, screen.getByTestId('access-request-requester-input'), 'researcher-1');
     await user.selectOptions(screen.getByTestId('access-request-organization-select'), 'org-1');
-    await user.type(screen.getByTestId('access-request-study-input'), 'study-1');
-    await user.type(screen.getByTestId('access-request-protocol-input'), 'protocol-1');
-    await user.type(screen.getByTestId('access-request-purpose-input'), 'Pesquisa');
+    await fill(user, screen.getByTestId('access-request-study-input'), 'study-1');
+    await fill(user, screen.getByTestId('access-request-protocol-input'), 'protocol-1');
+    await fill(user, screen.getByTestId('access-request-purpose-input'), 'Pesquisa');
     await waitFor(() => expect(screen.getByRole('option', { name: /DUO:0000006/ })).toBeTruthy());
     await user.selectOptions(screen.getByTestId('access-request-duo-select'), 'DUO:0000006');
-    await user.type(screen.getByTestId('access-request-item-id-1'), 'SP-1');
+    await fill(user, screen.getByTestId('access-request-item-id-1'), 'SP-1');
     await user.click(screen.getByTestId('access-request-submit'));
 
     await waitFor(() => expect(accessRequestService.create).toHaveBeenCalledWith({
@@ -159,7 +168,7 @@ describe('AccessRequestsPage', () => {
     vi.mocked(accessRequestService.getAll).mockResolvedValue({ data: { success: true, data: [pendingRequest()] } } as any);
     vi.mocked(accessRequestService.evaluate).mockResolvedValue({ data: { success: true, data: evaluated } } as any);
     vi.mocked(accessRequestService.decide).mockRejectedValue({ response: { data: { message: 'Uma solicitação incompatível não pode ser aprovada' } } });
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     render(<AccessRequestsPage />);
 
     await user.click(await screen.findByTestId('access-request-open-ar-1'));
@@ -169,7 +178,7 @@ describe('AccessRequestsPage', () => {
     expect(screen.getByTestId('access-request-item-SP-1').textContent).toContain('permissão revogada');
     expect(screen.getByTestId('access-request-policy-effect').textContent).toBe('deny');
 
-    await user.type(screen.getByTestId('access-decision-justification-input'), 'tentativa');
+    await fill(user, screen.getByTestId('access-decision-justification-input'), 'tentativa');
     await user.click(screen.getByTestId('access-decision-submit'));
     expect((await screen.findByTestId('access-request-detail-error')).textContent).toContain('incompatível');
   });

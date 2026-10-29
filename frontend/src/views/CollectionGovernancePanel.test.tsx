@@ -152,6 +152,15 @@ const GOVERNANCE: CollectionGovernance = {
   }],
 };
 
+type User = ReturnType<typeof userEvent.setup>;
+
+// One input event per field: a user.type per keystroke re-renders the whole form
+// each key, which ran past the 5 s test timeout under a loaded parallel run (#1414).
+async function fill(user: User, field: HTMLElement, text: string) {
+  await user.click(field);
+  await user.paste(text);
+}
+
 function renderPanel() {
   return render(
     <LanguageProvider>
@@ -183,7 +192,7 @@ describe('CollectionGovernancePanel', () => {
   });
 
   it('moves an approval through POST .../status and reloads', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     renderPanel();
     await user.click(await screen.findByTestId('governance-approval-suspended-ap-1'));
     await waitFor(() => expect(collectionGovernanceService.setApprovalStatus).toHaveBeenCalledWith('col-1', 'ap-1', { status: 'suspended' }));
@@ -191,13 +200,13 @@ describe('CollectionGovernancePanel', () => {
   });
 
   it('registers an approval from the form', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     renderPanel();
     await screen.findByTestId('governance-approval-row-ap-1');
-    await user.type(screen.getByTestId('governance-approval-authority-input'), 'CONEP');
-    await user.type(screen.getByTestId('governance-approval-document-uri-input'), 'https://docs.example.org/conep.pdf');
-    await user.type(screen.getByTestId('governance-approval-checksum-input'), `sha256:${'b'.repeat(64)}`);
-    await user.type(screen.getByTestId('governance-approval-start-input'), '2026-02-01');
+    await fill(user, screen.getByTestId('governance-approval-authority-input'), 'CONEP');
+    await fill(user, screen.getByTestId('governance-approval-document-uri-input'), 'https://docs.example.org/conep.pdf');
+    await fill(user, screen.getByTestId('governance-approval-checksum-input'), `sha256:${'b'.repeat(64)}`);
+    await fill(user, screen.getByTestId('governance-approval-start-input'), '2026-02-01');
     await user.selectOptions(screen.getByTestId('governance-approval-organization-select'), 'org-1');
     await user.click(screen.getByTestId('governance-approval-submit'));
     await waitFor(() => expect(collectionGovernanceService.createApproval).toHaveBeenCalledWith('col-1', expect.objectContaining({
@@ -212,19 +221,19 @@ describe('CollectionGovernancePanel', () => {
     vi.mocked(collectionGovernanceService.recordEvent).mockRejectedValue({
       response: { data: { message: 'governancePolicyId policy-x não encontrado' } },
     });
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     renderPanel();
     await screen.findByTestId('governance-approval-row-ap-1');
     await user.selectOptions(screen.getByTestId('governance-event-regime-select'), 'biobank');
-    await user.type(screen.getByTestId('governance-context-broad-purpose-input'), 'Doenças raras');
-    await user.type(screen.getByTestId('governance-context-policy-input'), 'policy-x');
-    await user.type(screen.getByTestId('governance-context-committee-input'), 'committee-1');
+    await fill(user, screen.getByTestId('governance-context-broad-purpose-input'), 'Doenças raras');
+    await fill(user, screen.getByTestId('governance-context-policy-input'), 'policy-x');
+    await fill(user, screen.getByTestId('governance-context-committee-input'), 'committee-1');
     await user.selectOptions(screen.getByTestId('governance-context-custodian-select'), 'org-1');
-    await user.type(screen.getByTestId('governance-context-future-use-input'), 'DUO:0000042');
+    await fill(user, screen.getByTestId('governance-context-future-use-input'), 'DUO:0000042');
     await user.click(screen.getByTestId('governance-context-consent-model-broad'));
     await user.selectOptions(screen.getByTestId('governance-context-ethics-rule-select'), 'always');
     await user.click(screen.getByTestId('governance-event-approval-ap-1'));
-    await user.type(screen.getByTestId('governance-event-justification-input'), 'Conversão para biobanco');
+    await fill(user, screen.getByTestId('governance-event-justification-input'), 'Conversão para biobanco');
     await user.click(screen.getByTestId('governance-event-submit'));
     await waitFor(() => expect(collectionGovernanceService.recordEvent).toHaveBeenCalledWith('col-1', expect.objectContaining({
       newRegime: 'biobank',
