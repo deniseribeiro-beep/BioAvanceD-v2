@@ -10,6 +10,7 @@ const { searchHpoLocal, searchHpoExternal, isExternalHpoLookupEnabled } = requir
 const logger = require('../utils/logger');
 router.get('/search', async (req, res) => {
   const { q = '' } = req.query;
+  if (typeof q !== 'string') return res.status(400).json({ error: 'Invalid query' });
   if (!q.trim()) return res.status(400).json({ error: 'Missing query' });
   try {
     let results = await searchHpoLocal(q, req.app.locals.db);

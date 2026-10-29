@@ -83,6 +83,15 @@ describe('dictionary routes - /search and /suggest (Neo4j + redis cache)', () =>
       expect(res.status).toBe(400);
     });
 
+    it('returns 400 when query is repeated (#1415)', async () => {
+      const session = fakeSession([]);
+      const app = loadRouteWithMocks({ session });
+      const res = await request(app).get('/api/dictionary/search?query=a&query=b').timeout(2000);
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual({ error: 'Invalid query' });
+      expect(session.run).not.toHaveBeenCalled();
+    });
+
     it('queries Neo4j, normalizes results, and caches the payload on a cache miss', async () => {
       const session = fakeSession([
         record({ d: { properties: { code: 'ORPHA:558', nome: 'Fabry disease' } } }),

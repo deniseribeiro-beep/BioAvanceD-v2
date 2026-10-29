@@ -285,6 +285,7 @@ router.get('/atc/search', async (req, res) => {
 // Busca ORPHA/HPO com cache
 router.get('/search', async (req, res) => {
   const { query = '' } = req.query;
+  if (typeof query !== 'string') return res.status(400).json({ error: 'Invalid query' });
   if (!query.trim()) return res.status(400).json({ error: 'Missing query' });
   const cacheKey = `orpha:search:${String(query).toLowerCase()}`;
   try {
