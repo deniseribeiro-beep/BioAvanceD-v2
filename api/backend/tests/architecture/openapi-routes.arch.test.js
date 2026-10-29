@@ -11,10 +11,18 @@
 //   - every registration under a covered mount is in the spec, so a new
 //     route on a documented mount cannot ship undocumented.
 //
-// It READS the code and requires none of it but the router factories below
-// and the modules their mounts' option literals require: app.js and the
-// route files load the database, queue and config modules at require time.
-// The mounts come from
+// It READS app.js and requires none of it. It requires the router factories
+// below and the modules their mounts' option literals require, and since
+// #1416 also each covered plain route file (and each KNOWN_SUBROUTERS router
+// module) fresh, with express.Router swapped for the same recording stub the
+// factories get and the test-support gate held open (NODE_ENV=test,
+// ENABLE_TEST_SUPPORT_ROUTES=true) while it loads. Every covered plain route
+// file loads; none is kept on the text reading alone. Each file's record and
+// its text are compared, and a registration one reading has and the other
+// lacks is refused, so one on a second handle, a computed or spaced member,
+// or a variable path is seen. The three KNOWN_SUBROUTERS route files
+// themselves (orphanet, hpo and dictionary .routes.js) are read by their exact
+// text alone, and their router modules recorded. The mounts come from
 // app.js's `app.use("<prefix>", require("<module>"))` calls; a limiter
 // mounted on or below a covered prefix (`app.use("/api/auth", authLimiter)`)
 // registers no route and is not a mount; each such name must be declared in
@@ -99,7 +107,13 @@
 // reading, and neither is a router hidden by router.use(<name>(...)) where
 // that call returns a plain function wrapping the router. And a module other
 // than its route file that requires a router module a KNOWN_SUBROUTERS file
-// hands off to, and registers on it, is in neither reading.
+// hands off to, and registers on it, is in neither reading. Nor, in a plain
+// route file, is a registration the text cannot read (a second handle, a
+// computed or spaced member, a variable path) that runs only later, inside a
+// handler, or on a branch the load skips (one gated on an environment value
+// other than the test-support gate). And a registration skipped while the
+// test-support gate is open, or one made only by a file that detects the
+// stub, is in neither reading.
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -629,6 +643,13 @@ function routerCallRefusals(source, label) {
 // path and no router; any other property of the router (route, all, options,
 // param, stack, ...) is refused, as is a throw.
 function recordFactory(factory, options, expressModule, label) {
+  return recordRouter(() => factory(options), expressModule, label, 'the factory', 'return');
+}
+
+// The shared stub record behind recordFactory and recordRouteFile: `run`
+// builds the router and gives back what should be it (a factory's return, a
+// route file's module.exports); `subject` and `gives` word the refusals.
+function recordRouter(run, expressModule, label, subject, gives) {
   const operations = [];
   const refusals = [];
   let stub = null;
@@ -665,15 +686,77 @@ function recordFactory(factory, options, expressModule, label) {
   };
   let returned;
   try {
-    returned = factory(options);
+    returned = run();
   } catch (error) {
-    refusals.push(`${label}: the factory threw ${error && error.message}`);
+    refusals.push(`${label}: ${subject} threw ${error && error.message}`);
   } finally {
     expressModule.Router = realRouter;
   }
-  if (built !== 1) refusals.push(`${label}: the factory built ${built} routers through express.Router(); expected exactly 1`);
-  else if (returned !== stub) refusals.push(`${label}: the factory did not return the router it built`);
+  if (built !== 1) refusals.push(`${label}: ${subject} built ${built} routers through express.Router(); expected exactly 1`);
+  else if (returned !== stub) refusals.push(`${label}: ${subject} did not ${gives} the router it built`);
   return { operations, refusals };
+}
+
+// Loads a plain route file with expressModule.Router swapped for the record's
+// stub: `load` requires it fresh and gives back its module.exports. The
+// test-support gate is held open while it loads (NODE_ENV not production,
+// ENABLE_TEST_SUPPORT_ROUTES=true), so the routes registered behind it are
+// recorded as the text reads them; both are restored after.
+function recordRouteFile(load, expressModule, label) {
+  const saved = { NODE_ENV: process.env.NODE_ENV, ENABLE_TEST_SUPPORT_ROUTES: process.env.ENABLE_TEST_SUPPORT_ROUTES };
+  process.env.NODE_ENV = 'test';
+  process.env.ENABLE_TEST_SUPPORT_ROUTES = 'true';
+  try {
+    return recordRouter(load, expressModule, label, 'the route file', 'export');
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
+// Both readings of one plain route file, `METHOD <path>` as written: every
+// literal registration the text reads must be in the record (else it runs on
+// a branch the load skips, or later, inside a handler), and every recorded one
+// must be in the text (else it was registered through a second handle, a
+// computed or spaced member access, or a variable path).
+function routeRecordRefusals(source, label, record) {
+  const refusals = [...record.refusals];
+  const recorded = new Set(record.operations.map((op) => `${op.method} ${op.path}`));
+  const read = new Set();
+  for (const match of source.matchAll(ROUTE_START)) {
+    if (match[3] === undefined) continue;
+    const key = `${match[1].toUpperCase()} ${match[3]}`;
+    read.add(key);
+    if (!recorded.has(key)) refusals.push(`${label}:${lineOf(source, match.index)} ${key} is not registered when the file loads, so it runs on a branch or later`);
+  }
+  for (const key of recorded) {
+    if (!read.has(key)) refusals.push(`${label}: ${key} is registered when the file loads, but no router.<method>('<path>' in its text reads it`);
+  }
+  return refusals;
+}
+
+// The record of the route file `file`, required fresh with express.Router
+// swapped, memoised so a file mounted twice loads once. Its require.cache
+// entry is put back as it was after, throw or not, so no later require of the
+// file gets the stub (which has no `stack`) as its router.
+const routeRecords = new Map();
+function routeFileRecord(file) {
+  if (!routeRecords.has(file)) {
+    const prior = require.cache[file];
+    const load = () => {
+      delete require.cache[file];
+      return require(file);
+    };
+    try {
+      routeRecords.set(file, recordRouteFile(load, createRequire(file)('express'), relOf(file)));
+    } finally {
+      delete require.cache[file];
+      if (prior) require.cache[file] = prior;
+    }
+  }
+  return routeRecords.get(file);
 }
 
 // The registrations, as `METHOD /prefix/path`, the factory mounts at `prefix`
@@ -828,6 +911,15 @@ test('RNF006: every operation registered under a covered mount is documented', (
     const recorded = factoryOperations(prefix, entries);
     misses.push(...recorded.refusals);
     const operations = new Set([...collectOperations(prefix, expanded.files), ...recorded.operations]);
+    // A KNOWN_SUBROUTERS file is read by its exact text alone: its router
+    // module, in expanded.files too, is the one recorded.
+    for (const file of expanded.files) {
+      const source = readStripped(fs, file);
+      if (delegationOf(source, relOf(file))) continue;
+      const record = routeFileRecord(file);
+      misses.push(...routeRecordRefusals(source, relOf(file), record));
+      for (const op of record.operations) operations.add(`${op.method} ${joinPath(prefix, op.path)}`);
+    }
     if (operations.size === 0) misses.push(`${prefix}: its route files register no operation`);
     for (const key of operations) {
       if (!documented.has(key)) misses.push(`${key}: registered but not in docs/api/openapi.json`);
@@ -1078,7 +1170,35 @@ test('RNF006: the guard refuses each route shape it cannot read', () => {
     'a target with a second module.exports assignment': `${target} module.exports = require('./secret');`,
     ...Object.fromEntries(Object.entries(handleLines).map(([name, line]) => [`${name} in the target`, target.replace(' module.exports', ` const P = '/x'; ${line} module.exports`)])),
   };
+  // A plain route file is also loaded with a stand-in express and its
+  // registrations recorded; each shape here is one the text alone passes.
+  const recordShape = (text) => {
+    const stand = { Router: () => ({ stack: [], get() { return this; }, use() { return this; } }) };
+    const load = () => {
+      const module = { exports: {} };
+      new Function('require', 'module', 'handler', 'requirePermission', 'other', text)(
+        (id) => (id === 'express' ? stand : { authenticate: () => {} }), module, () => {}, () => () => {}, Object.assign(() => {}, { stack: [] })
+      );
+      return module.exports;
+    };
+    return routeRecordRefusals(text, 'backup.routes.js', recordRouteFile(load, stand, 'backup.routes.js'));
+  };
+  assert.deepStrictEqual(recordShape(route), []);
+  // After its record, a covered route file required again is its real router,
+  // not the stub left in require.cache.
+  const backupRoutes = path.join(backendRoot, 'src', 'interface', 'routes', 'backup.routes.js');
+  routeFileRecord(backupRoutes);
+  assert.ok(Array.isArray(require(backupRoutes).stack), 'backup.routes.js required after its record is not an express router');
+  const recordShapes = {
+    'a second handle with a variable path': "const r = router;\nconst P = '/alias';\nr.get(P, handler);",
+    'a computed member registration': "router['post']('/computed', handler);",
+    'a spaced member registration': "router .get('/spaced', handler);",
+    'a registration on a branch the load skips': "if (Math.random() > 2) router.get('/branch', handler);",
+    'a registration inside a handler': "router.post('/late', (req, res) => { router.get('/later', handler); });",
+    'a route file exporting another router': 'module.exports = other;',
+  };
   const unrefused = [
+    ...Object.entries(recordShapes).filter(([, text]) => recordShape(`${route}\n${text}`).length === 0),
     ...Object.entries(appShapes).filter(([name, text]) => appRefusals(`${app}\n${text}`, 'app.js', shapeCovered[name] || covered).length === 0),
     ...Object.entries(routeShapes).filter(([, text]) => routeFileRefusals(`${route}\n${text}`, 'backup.routes.js').length === 0),
     ...Object.entries(factoryShapes).filter(([, text]) => checkShape(text).refusals.length === 0),
