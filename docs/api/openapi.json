@@ -83,7 +83,10 @@
     "/api/collections/{collectionId}/governance",
     "/api/workflow-runs",
     "/api/workflow-runs/{workflowRunId}/files",
-    "/api/workflow-runs/{workflowRunId}/lineage"
+    "/api/workflow-runs/{workflowRunId}/lineage",
+    "/api/orphanet",
+    "/api/hpo",
+    "/api/dictionary"
   ],
   "tags": [
     {
@@ -393,6 +396,18 @@
     {
       "name": "workflow-run-lineage",
       "description": "/api/workflow-runs/{workflowRunId}/lineage: the runs upstream and downstream of a workflow run."
+    },
+    {
+      "name": "orphanet",
+      "description": "/api/orphanet: the Orphanet disease search, over the local stores and the Orphadata API."
+    },
+    {
+      "name": "hpo",
+      "description": "/api/hpo: the HPO term search and lookup."
+    },
+    {
+      "name": "dictionary",
+      "description": "/api/dictionary: the ORPHA, phenotype, disease-profile and medication dictionaries the intake reads."
     }
   ],
   "paths": {
@@ -50406,6 +50421,1084 @@
           },
           "500": {
             "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/orphanet/search": {
+      "get": {
+        "tags": [
+          "orphanet"
+        ],
+        "summary": "Search the Orphanet diseases",
+        "description": "Gates: none. No authenticate, at the mount or in the router, so it never answers 401 or 403. It searches the local cids and terminologies stores; when nothing matches, it asks the Orphadata API (only when external terminology sync is enabled and ORPHADATA_BASE_URL is set), and a remote failure is logged and read as no result. When the local search throws it runs once more, and answers 500 only when that fails too. An empty result is 200 with []. 400 is a missing q; 503 is no database.",
+        "security": [],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "description": "The search text: a name, an ORPHA code or an OMIM code.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "lang",
+            "in": "query",
+            "required": false,
+            "description": "The language of the local names.",
+            "schema": {
+              "type": "string",
+              "default": "pt"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "A value outside 1..50 is clamped; a missing or non-numeric one is 20.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The matching diseases, a bare array.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "code": {
+                        "type": "string",
+                        "description": "The numeric ORPHA code."
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "label": {
+                        "type": "string"
+                      },
+                      "description": {
+                        "type": "string"
+                      },
+                      "orphaCode": {
+                        "type": "string",
+                        "description": "ORPHA:<code>."
+                      },
+                      "ORPHA": {
+                        "type": "string"
+                      },
+                      "ORPHAcode": {
+                        "type": "string"
+                      },
+                      "Codigos_CID10": {
+                        "type": "string"
+                      },
+                      "OMIM": {
+                        "type": "string"
+                      },
+                      "synonyms": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "aliases": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "lang": {
+                        "type": "string"
+                      },
+                      "source": {
+                        "type": "string",
+                        "description": "Where the record came from: the local store or orphadata-live."
+                      },
+                      "relacoes": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A missing q (error Missing query).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The local search failed twice.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The database is not available (error Database unavailable).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/hpo/search": {
+      "get": {
+        "tags": [
+          "hpo"
+        ],
+        "summary": "Search the HPO terms",
+        "description": "Gates: none. No authenticate, at the mount or in the router, so it never answers 401 or 403. It searches the local hpo_terms store (label, hpoId or synonyms, obsolete terms left out, at most 20); when that finds nothing, or throws, it asks the external HPO API only when external HPO lookup is enabled. A local failure with the external lookup disabled is 200 with []. 400 is a missing or blank q; 500 is a failure of the external lookup after a local failure.",
+        "security": [],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "description": "The search text.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The matching HPO terms, a bare array.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "An HPO term (hpoId, label, synonyms, ...)."
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A missing or blank q (error Missing query).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Both the local and the external search failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/hpo/{id}": {
+      "get": {
+        "tags": [
+          "hpo"
+        ],
+        "summary": "Read one HPO term",
+        "description": "Gates: none. No authenticate, at the mount or in the router, so it never answers 401 or 403. It reads the hpo_terms record whose hpoId is id. 404 is no such term; 500 is a failure of the read, a missing database included.",
+        "security": [],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The HPO id, e.g. HP:0001250.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The HPO term record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such term (error Not found).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The read failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/dictionary/atc/search": {
+      "get": {
+        "tags": [
+          "dictionary"
+        ],
+        "summary": "Search the ATC medications",
+        "description": "Gates: authenticate. It searches through the drug service, which caches what it finds in medication_dictionary. 400 is a missing query; the 503 comes from authenticate only; 500 is any failure of the search.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "query",
+            "in": "query",
+            "required": false,
+            "description": "The search text.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "description": "Alias of query.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "A value outside 1..50 is clamped.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 10
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The matching medications.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "medications": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "code": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "generic_name": {
+                            "type": "string"
+                          },
+                          "atc_code": {
+                            "type": "string"
+                          },
+                          "atc_level_1": {
+                            "type": "string"
+                          },
+                          "atc_classifications": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "synonyms": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "drug_class": {
+                            "type": "string"
+                          },
+                          "disease_categories": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "active": {
+                            "type": "boolean"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "medications"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A missing query (error Missing query).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "description": "The search failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/dictionary/search": {
+      "get": {
+        "tags": [
+          "dictionary"
+        ],
+        "summary": "Search the ORPHA diseases in the graph",
+        "description": "Gates: authenticate. It matches the Doenca_ORPHA nodes in Neo4j by name or code (at most 20), through a Redis cache of an hour. 400 is a missing or blank query; 500 is any failure of the graph read. The 503 comes from authenticate only.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "query",
+            "in": "query",
+            "required": true,
+            "description": "The search text.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The matching diseases as codings.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "results": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "system": {
+                            "type": "string"
+                          },
+                          "code": {
+                            "type": "string"
+                          },
+                          "display": {
+                            "type": "string"
+                          },
+                          "version": {
+                            "type": "string",
+                            "description": "The active release version of the concept, when it resolves active."
+                          }
+                        },
+                        "required": [
+                          "system",
+                          "code",
+                          "display"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "results"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A missing or blank query (error Missing query).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "description": "The graph read failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/dictionary/suggest": {
+      "get": {
+        "tags": [
+          "dictionary"
+        ],
+        "summary": "Suggest the phenotypes and biomarkers of a disease",
+        "description": "Gates: authenticate. It reads the disease, its HPO phenotypes and its biomarkers from Neo4j through a Redis cache of an hour; when the graph read fails it builds them from the local stores (disease_dictionary, terminologies and the valid biomarker associations). Each answer is checked against the active reference releases: only active phenotypes are offered, the others are listed in releaseGate.excluded. 400 is a missing orphaCode; 404 is no such disease; 500 is a failure of the local fallback, of the release check, or a graph failure with no database. The 503 comes from authenticate only.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "orphaCode",
+            "in": "query",
+            "required": true,
+            "description": "The ORPHA code.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The disease, its phenotypes and its biomarkers as codings.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "disease": {
+                      "type": "object",
+                      "properties": {
+                        "system": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string"
+                        },
+                        "display": {
+                          "type": "string"
+                        },
+                        "version": {
+                          "type": "string",
+                          "description": "The active release version of the concept, when it resolves active."
+                        }
+                      },
+                      "required": [
+                        "system",
+                        "code",
+                        "display"
+                      ],
+                      "nullable": true
+                    },
+                    "phenotypes": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "system": {
+                            "type": "string"
+                          },
+                          "code": {
+                            "type": "string"
+                          },
+                          "display": {
+                            "type": "string"
+                          },
+                          "version": {
+                            "type": "string",
+                            "description": "The active release version of the concept, when it resolves active."
+                          }
+                        },
+                        "required": [
+                          "system",
+                          "code",
+                          "display"
+                        ]
+                      }
+                    },
+                    "biomarkers": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "system": {
+                            "type": "string"
+                          },
+                          "code": {
+                            "type": "string"
+                          },
+                          "display": {
+                            "type": "string"
+                          },
+                          "version": {
+                            "type": "string",
+                            "description": "The active release version of the concept, when it resolves active."
+                          }
+                        },
+                        "required": [
+                          "system",
+                          "code",
+                          "display"
+                        ]
+                      }
+                    },
+                    "releaseGate": {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "applied"
+                          ]
+                        },
+                        "excluded": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "system": {
+                                "type": "string"
+                              },
+                              "code": {
+                                "type": "string"
+                              },
+                              "display": {
+                                "type": "string"
+                              },
+                              "status": {
+                                "type": "string"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "disease",
+                    "phenotypes",
+                    "biomarkers"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A missing orphaCode (error Missing orphaCode).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No such disease (error Not found).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The suggestion failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/dictionary/disease-profile": {
+      "get": {
+        "tags": [
+          "dictionary"
+        ],
+        "summary": "Read the disease profile of an ORPHA code",
+        "description": "Gates: authenticate. It reads the active disease_dictionary record of the code, a store no stack seeds, so 404 is the expected answer; the intake wizard reads it as no disease profile. Its biomarker requirements are not served. 400 is a missing orphaCode; the 503 comes from authenticate only; 500 is a failure of the read.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "orphaCode",
+            "in": "query",
+            "required": true,
+            "description": "The ORPHA code, with or without the ORPHA: prefix.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The disease profile.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "disease": {
+                      "type": "object",
+                      "properties": {
+                        "orpha_code": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "disease_category": {
+                          "type": "string"
+                        },
+                        "validation_requirements": {
+                          "type": "object",
+                          "additionalProperties": true
+                        },
+                        "drug_classes": {
+                          "type": "array",
+                          "items": {}
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "disease"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A missing orphaCode (error Missing orphaCode).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No profile for the code (error Disease profile not found).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The read failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/dictionary/medications/search": {
+      "get": {
+        "tags": [
+          "dictionary"
+        ],
+        "summary": "Search the medication dictionary",
+        "description": "Gates: authenticate. It filters the active medication_dictionary records by text (name, generic name, synonyms, code or ATC code), disease category and drug classes, sorted by name. Every filter is optional, so the route has no 400. The 503 comes from authenticate only; 500 is a failure of the read.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "query",
+            "in": "query",
+            "required": false,
+            "description": "The search text.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "description": "Alias of query.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "diseaseCategory",
+            "in": "query",
+            "required": false,
+            "description": "One disease category.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "drugClasses",
+            "in": "query",
+            "required": false,
+            "description": "Drug classes, comma-separated.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "A value outside 1..50 is clamped.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The matching medications.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "medications": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "code": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "generic_name": {
+                            "type": "string"
+                          },
+                          "atc_code": {
+                            "type": "string"
+                          },
+                          "atc_level_1": {
+                            "type": "string"
+                          },
+                          "atc_classifications": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "synonyms": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "drug_class": {
+                            "type": "string"
+                          },
+                          "disease_categories": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "active": {
+                            "type": "boolean"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "medications"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "description": "The read failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
           },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"

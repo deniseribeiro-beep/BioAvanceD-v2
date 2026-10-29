@@ -23,6 +23,26 @@
 // `{x}` form, as x-covered-mounts and the spec paths write it, and a mount
 // nested under a covered mount passes only when it is itself covered.
 //
+// A route file KNOWN_SUBROUTERS names may hand all its routes to one router
+// module, and that module's registrations are then read at the route file's
+// own mount, since router.use with no path mounts there. Two texts are read
+// as that hand-off, and nothing else: the whole file, whitespace collapsed,
+// is `const router = require('<module>'); module.exports = router;` (with
+// an optional `const express = require('express');` first); or the whole
+// file, whitespace collapsed, is exactly the one the map records: its require
+// lines, `const router = express.Router();`, one router.use(...) with the
+// recorded arguments, the module's binding last, and `module.exports =
+// router;`. In either text every require is also a call with one string
+// literal, exactly one of them resolves to the module by any spelling, and
+// module.exports is named once. The module must itself be a plain route
+// file, with no refusal of its own, no import(, createRequire, module[,
+// defineProperty(module, module.constructor, module.parent or mainModule,
+// and module named only in its one module.exports = router;, so a module
+// that hands off again is refused. This fails closed: a file not in the map,
+// or one in it whose text is not exactly a modeled shape, gets the refusals
+// below unchanged, and the reading removes no refusal but the one for that
+// router.use argument.
+//
 // The second claim holds only because the guard fails closed: a shape that
 // could add a route under a covered mount but that the extraction does not
 // read (a router.route() chain, router.all, a sub-router, a second router,
@@ -77,7 +97,9 @@
 // matches covered paths is not checked. A factory's registration built from
 // a string at run time (eval, new Function) inside a handler is in neither
 // reading, and neither is a router hidden by router.use(<name>(...)) where
-// that call returns a plain function wrapping the router.
+// that call returns a plain function wrapping the router. And a module other
+// than its route file that requires a router module a KNOWN_SUBROUTERS file
+// hands off to, and registers on it, is in neither reading.
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -109,6 +131,23 @@ const KNOWN_ANCESTORS = new Map([['/api/biobanks', ['/api/biobanks/miabis']]]);
 // Router factories app.js mounts as app.use("<prefix>", <name>({ ... })), each
 // with the module app.js must declare it from, as const <name> = require("<module>").
 const KNOWN_FACTORIES = new Map([['createMasterDataRouter', './src/interface/routes/master-data.routes']]);
+// Route files, relative to backendRoot, that hand every route to one router
+// module: the exact require() string of that module, and, for a file that is
+// not a bare re-export (use: null), its require lines in order and the whole
+// argument list of its one router.use( call, the module's binding last.
+const KNOWN_SUBROUTERS = new Map([
+  ['src/interface/routes/orphanet.routes.js', { request: '../../routes/orphanet', use: null }],
+  ['src/interface/routes/hpo.routes.js', { request: '../../routes/hpo', use: null }],
+  ['src/interface/routes/dictionary.routes.js', {
+    request: '../../../src/routes/dictionary',
+    requires: [
+      "const express = require('express');",
+      "const { authenticate } = require('../../infrastructure/middleware/auth');",
+      "const dictionaryRouter = require('../../../src/routes/dictionary');",
+    ],
+    use: 'authenticate, dictionaryRouter',
+  }],
+]);
 
 const APP_CALL = /\bapp\.(use|get|post|put|patch|delete|all|options|head|route)\s*\(/g;
 const ROUTER_PATH_SHAPE = /\brouter\.(route|all|options|use)\s*\(\s*['"`]/g;
@@ -387,8 +426,11 @@ function appRefusals(source, label, covered) {
 }
 
 // Shapes in a covered route file that could register a route the
-// ROUTE_START extraction does not read.
-function routeFileRefusals(source, label) {
+// ROUTE_START extraction does not read. A `delegation` from delegationOf
+// lifts the refusal of its own router.use argument only, or, for a bare
+// re-export, every refusal, since the whole text is the modeled one.
+function routeFileRefusals(source, label, delegation = null) {
+  if (delegation && delegation.kind === 'reexport') return [];
   const refusals = [];
   const at = (index) => `${label}:${lineOf(source, index)}`;
   for (const match of source.matchAll(ROUTE_START)) {
@@ -401,7 +443,8 @@ function routeFileRefusals(source, label) {
     for (const arg of callArgs(source, match.index + match[0].length - 1)) {
       const required = arg.includes('require(') || (/^[A-Za-z_$][\w$]*$/.test(arg) &&
         new RegExp(`\\b(?:const|let|var)\\s+${arg.replace(/[$]/g, '\\$&')}\\s*=\\s*require\\s*\\(`).test(source));
-      if (required) refusals.push(`${at(match.index)} router.use(${arg}) mounts a required module, maybe a sub-router`);
+      const delegated = delegation && match.index === delegation.index && arg === delegation.name;
+      if (required && !delegated) refusals.push(`${at(match.index)} router.use(${arg}) mounts a required module, maybe a sub-router`);
     }
   }
   const routers = [...source.matchAll(ANY_ROUTER)];
@@ -412,6 +455,92 @@ function routeFileRefusals(source, label) {
     if (match[1] !== 'router') refusals.push(`${at(match.index)} ${match[1]}.${match[2]}('/...' registers on a receiver other than router`);
   }
   return refusals;
+}
+
+const EXPORTS_ROUTER = /\bmodule\.exports\s*=\s*router\s*;/;
+const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const relOf = (file) => path.relative(backendRoot, file).split(path.sep).join('/');
+// Whether `source` names module.exports once, as module.exports = router;, so
+// no later assignment swaps in a router nothing reads.
+const exportsOnlyRouter = (source) => [...source.matchAll(/\bmodule\s*\.\s*exports\b/g)].length === 1 && EXPORTS_ROUTER.test(source);
+
+// Whether every require in `source`, the text of the route file `rel`, is a
+// call with one string literal, and exactly one of them resolves, from that
+// file's directory, to the module `request` names, by whatever spelling
+// (./x, ./x.js, ../dir/x), so no second handle can register on it.
+function requiresModuleOnce(source, rel, request) {
+  const dir = path.dirname(path.join(backendRoot, rel));
+  const moduleOf = (text) => path.resolve(dir, text).replace(/\.js$/, '').replace(/[\\/]index$/, '');
+  const target = moduleOf(request);
+  let count = 0;
+  for (const match of source.matchAll(/\brequire\b(\s*\()?/g)) {
+    if (!match[1]) return false;
+    const args = callArgs(source, match.index + match[0].length - 1);
+    const literal = args.length === 1 ? literalOf(args[0]) : null;
+    if (literal === null) return false;
+    if (moduleOf(literal) === target) count += 1;
+  }
+  return count === 1;
+}
+
+// The hand-off of the route file `rel` (relative to backendRoot) to the one
+// router module KNOWN_SUBROUTERS names for it, read from its stripped text:
+// a bare re-export, or exactly the file the entry records, whitespace
+// collapsed: its require lines, the router, its one router.use(...) and the
+// export. Null for any other text.
+function delegationOf(source, rel) {
+  const entry = KNOWN_SUBROUTERS.get(rel);
+  if (!entry) return null;
+  if (!requiresModuleOnce(source, rel, entry.request) || !exportsOnlyRouter(source)) return null;
+  const request = escapeRegExp(entry.request);
+  const collapsed = source.replace(/\s+/g, ' ').trim();
+  const reexport = new RegExp(`^(?:const express = require\\((['"])express\\1\\); )?const router = require\\((['"])${request}\\2\\); module\\.exports = router;$`);
+  if (reexport.test(collapsed)) return { kind: 'reexport', request: entry.request };
+  if (entry.use === null) return null;
+  const template = [...entry.requires, 'const router = express.Router();', `router.use(${entry.use});`, 'module.exports = router;'].join(' ');
+  if (collapsed !== template) return null;
+  const uses = [...source.matchAll(ROUTER_USE)];
+  return { kind: 'use', request: entry.request, name: entry.use.split(', ').pop(), index: uses[0].index };
+}
+
+// Ways a module can reach a router or module.exports other than through its
+// own `router` and `module.exports = router;`.
+const TARGET_HANDLES = /\bimport\s*\(|\bcreateRequire\b|\bmodule\s*\[|\bdefineProperty\s*\(\s*module\b|\bmodule\s*\.\s*constructor\b|\bmodule\s*\.\s*parent\b|\bmainModule\b/g;
+
+// A router module a route file hands off to must be a plain route file: no
+// refusal of its own (so one that hands off again is refused), none of
+// TARGET_HANDLES, and `module` named only in its one export, as
+// module.exports = router;.
+function delegateRefusals(source, label) {
+  const refusals = [...routeFileRefusals(source, label)];
+  if (!exportsOnlyRouter(source)) refusals.push(`${label}: does not export its router once, as module.exports = router;`);
+  for (const match of source.matchAll(TARGET_HANDLES)) {
+    refusals.push(`${label}:${lineOf(source, match.index)} ${match[0]} may reach a router or the export out of the reading's sight`);
+  }
+  if ([...source.matchAll(/(?<![\w$.])module(?![\w$])/g)].length !== 1) {
+    refusals.push(`${label}: names module other than in its one module.exports = router;`);
+  }
+  return refusals;
+}
+
+// The mounted files plus the router module each hand-off names, read at the
+// same prefix, and the refusals of those modules.
+function expandFiles(files) {
+  const expanded = [...files];
+  const refusals = [];
+  for (const file of files) {
+    const delegation = delegationOf(readStripped(fs, file), relOf(file));
+    if (!delegation) continue;
+    const base = path.resolve(path.dirname(file), delegation.request);
+    const target = [base, `${base}.js`].find((candidate) => fs.existsSync(candidate) && fs.statSync(candidate).isFile());
+    if (!target) {
+      refusals.push(`${relOf(file)}: ${delegation.request} does not resolve`);
+      continue;
+    }
+    expanded.push(target);
+    refusals.push(...delegateRefusals(readStripped(fs, target), relOf(target)));
+  }
+  return { files: expanded, refusals };
 }
 
 function resolveModule(request) {
@@ -636,7 +765,7 @@ test('RNF006: every operation the OpenAPI spec documents is registered under its
   // be the one that registers it.
   const factoryMounts = collectFactoryMounts(readStripped(fs, APP_JS));
   const registered = new Set(covered.flatMap((p) => [
-    ...collectOperations(p, mounts.get(p) || []),
+    ...collectOperations(p, expandFiles(mounts.get(p) || []).files),
     ...factoryOperations(p, factoryMounts.get(p) || []).operations,
   ]));
   const misses = [];
@@ -676,6 +805,12 @@ test('RNF006: every operation registered under a covered mount is documented', (
       misses.push(`KNOWN_FACTORIES names ${name}, which app.js does not bind once as const ${name} = require("${KNOWN_FACTORIES.get(name)}")`);
     }
   }
+  const mountedFiles = new Set([...mounts.values()].flatMap((files) => [...files].map(relOf)));
+  for (const [rel, entry] of KNOWN_SUBROUTERS) {
+    if (!mountedFiles.has(rel) || !delegationOf(readStripped(fs, path.join(backendRoot, rel)), rel)) {
+      misses.push(`KNOWN_SUBROUTERS names ${rel}, which app.js does not mount or which no longer hands its routes to ${entry.request} in a modeled shape`);
+    }
+  }
   const factoryMounts = collectFactoryMounts(appSource);
   for (const prefix of covered) {
     const files = mounts.get(prefix) || new Set();
@@ -684,10 +819,15 @@ test('RNF006: every operation registered under a covered mount is documented', (
       misses.push(`${prefix}: not mounted with require() or a known factory in app.js`);
       continue;
     }
-    for (const file of files) misses.push(...routeFileRefusals(readStripped(fs, file), path.relative(backendRoot, file)));
+    for (const file of files) {
+      const s = readStripped(fs, file);
+      misses.push(...routeFileRefusals(s, path.relative(backendRoot, file), delegationOf(s, relOf(file))));
+    }
+    const expanded = expandFiles(files);
+    misses.push(...expanded.refusals);
     const recorded = factoryOperations(prefix, entries);
     misses.push(...recorded.refusals);
-    const operations = new Set([...collectOperations(prefix, files), ...recorded.operations]);
+    const operations = new Set([...collectOperations(prefix, expanded.files), ...recorded.operations]);
     if (operations.size === 0) misses.push(`${prefix}: its route files register no operation`);
     for (const key of operations) {
       if (!documented.has(key)) misses.push(`${key}: registered but not in docs/api/openapi.json`);
@@ -878,10 +1018,80 @@ test('RNF006: the guard refuses each route shape it cannot read', () => {
       'createMasterDataRouter = ((f) => (o) => { f(o); return other; })(createMasterDataRouter);\nmodule.exports = createMasterDataRouter;'
     ),
   };
+  // A route file handing its routes to one router module, written as
+  // hpo.routes.js and dictionary.routes.js are, checked under their map keys.
+  const HPO = 'src/interface/routes/hpo.routes.js';
+  const DICTIONARY = 'src/interface/routes/dictionary.routes.js';
+  const reexportText = ["const router = require('../../routes/hpo');", 'module.exports = router;'].join('\n');
+  const useCall = 'router.use(authenticate, dictionaryRouter);';
+  const useText = [
+    "const express = require('express');",
+    "const { authenticate } = require('../../infrastructure/middleware/auth');",
+    "const dictionaryRouter = require('../../../src/routes/dictionary');",
+    '',
+    'const router = express.Router();',
+    useCall,
+    '',
+    'module.exports = router;',
+  ].join('\n');
+  const delegated = (text, key) => routeFileRefusals(text, 'sub.routes.js', delegationOf(text, key));
+  assert.deepStrictEqual(delegated(reexportText, HPO), []);
+  assert.deepStrictEqual(delegated(useText, DICTIONARY), []);
+  const target = "const router = express.Router(); router.get('/search', h); module.exports = router;";
+  assert.deepStrictEqual(delegateRefusals(target, 'sub.js'), []);
+  const inUse = (text) => useText.replace(useCall, text);
+  // A second handle to a router, or a swapped export, each with a variable
+  // path so no literal-path reading sees it.
+  const handleLines = {
+    'import() with a variable path': "import('../../../src/routes/dictionary').then((m) => m.default.get(P, h));",
+    createRequire: "createRequire(__filename)('../../../src/routes/dictionary').get(P, h);",
+    'module.constructor._load': "module.constructor._load('../../../src/routes/dictionary').get(P, h);",
+    'module.parent.require': "module.parent.require('./src/routes/dictionary').get(P, h);",
+    'process.mainModule.require': "process.mainModule.require('./src/routes/dictionary').get(P, h);",
+    "module['exports'] =": "module['exports'] = sub;",
+    'an alias of module': 'const m = module;\nm.exports = sub;',
+    'Object.defineProperty(module, exports)': "Object.defineProperty(module, 'exports', { value: sub });",
+  };
+  const delegationShapes = {
+    'a use text under a key not in the map': [useText, 'src/interface/routes/other.routes.js'],
+    'a re-export followed by router.use with a path': [`${reexportText}\nrouter.use('/sub', x);`, HPO],
+    'an aliased sub-router': [inUse(`const alias = dictionaryRouter;\n${useCall}`), DICTIONARY],
+    'a use call inside a block': [inUse('if (flag) { x(); router.use(authenticate, dictionaryRouter); }'), DICTIONARY],
+    'a path variable before the sub-router': [inUse("const p = '/sub';\nrouter.use(p, dictionaryRouter);"), DICTIONARY],
+    'an added middleware': [inUse('router.use(authenticate, other, dictionaryRouter);'), DICTIONARY],
+    'the sub-router not the last argument': [inUse('router.use(dictionaryRouter, authenticate);'), DICTIONARY],
+    'a second use of the sub-router': [inUse(`${useCall}\n${useCall}`), DICTIONARY],
+    'a require of another module under the same name': [useText.replace("'../../../src/routes/dictionary'", "'./other'"), DICTIONARY],
+    'a second const require of the sub-router': [inUse(`${useCall}\nconst d2 = require('../../../src/routes/dictionary');\nd2.get('/x', h);`), DICTIONARY],
+    'a let require of the sub-router': [inUse(`${useCall}\nlet d3 = require('../../../src/routes/dictionary');\nd3.get(P, h);`), DICTIONARY],
+    'an inline require of the sub-router': [inUse(`${useCall}\nrequire('../../../src/routes/dictionary').get('/x', h);`), DICTIONARY],
+    'a require of the sub-router by another spelling': [inUse(`${useCall}\nconst d2 = require('../../routes/dictionary.js');\nd2['get']('/x', h);`), DICTIONARY],
+    'a require with no string literal': [inUse(`${useCall}\nconst m = '../../../src/routes/dictionary';\nrequire(m).get('/x', h);`), DICTIONARY],
+    'a second module.exports assignment': [`${useText}\nmodule.exports = require('./secret');`, DICTIONARY],
+    ...Object.fromEntries(Object.entries(handleLines).map(([name, line]) => [`${name} in the route file`, [inUse(`${useCall}\nconst P = '/x';\n${line}`), DICTIONARY]])),
+    'a router.stack handle': [inUse(`${useCall}\nconst P = '/x';\nrouter.stack[0].handle.get(P, h);`), DICTIONARY],
+  };
+  const targetShapes = {
+    'a target with a second Router': target.replace(' module.exports', ' const r2 = express.Router(); module.exports'),
+    'a target that hands off again': target.replace(' module.exports', " router.use(require('./x')); module.exports"),
+    'a target with no module.exports = router;': target.replace(' module.exports = router;', ''),
+    'a target with a second module.exports assignment': `${target} module.exports = require('./secret');`,
+    ...Object.fromEntries(Object.entries(handleLines).map(([name, line]) => [`${name} in the target`, target.replace(' module.exports', ` const P = '/x'; ${line} module.exports`)])),
+  };
   const unrefused = [
     ...Object.entries(appShapes).filter(([name, text]) => appRefusals(`${app}\n${text}`, 'app.js', shapeCovered[name] || covered).length === 0),
     ...Object.entries(routeShapes).filter(([, text]) => routeFileRefusals(`${route}\n${text}`, 'backup.routes.js').length === 0),
     ...Object.entries(factoryShapes).filter(([, text]) => checkShape(text).refusals.length === 0),
+    ...Object.entries(delegationShapes).filter(([, [text, key]]) => delegated(text, key).length === 0),
+    ...Object.entries(targetShapes).filter(([, text]) => delegateRefusals(text, 'sub.js').length === 0),
+    // The exact text and the module count refuse these first, so each extra
+    // check is held on its own.
+    ...['a let require of the sub-router', 'an inline require of the sub-router', 'a require of the sub-router by another spelling', 'a require with no string literal']
+      .filter((name) => requiresModuleOnce(delegationShapes[name][0], DICTIONARY, '../../../src/routes/dictionary'))
+      .map((name) => [`${name}, read by requiresModuleOnce`]),
+    ...[delegationShapes['a second module.exports assignment'][0], targetShapes['a target with a second module.exports assignment']]
+      .filter((text) => exportsOnlyRouter(text))
+      .map((text) => [`a second module.exports assignment, read by exportsOnlyRouter: ${text.slice(-40)}`]),
   ].map(([name]) => name);
   assert.deepStrictEqual(unrefused, [], `These shapes pass unrefused: ${unrefused.join(', ')}`);
 });
