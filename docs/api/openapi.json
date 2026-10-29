@@ -74,7 +74,16 @@
     "/api/imaging-derived-data",
     "/api/imaging-studies",
     "/api/networks",
-    "/api/biomarker-associations"
+    "/api/biomarker-associations",
+    "/api/assays",
+    "/api/assays/{assayId}/files",
+    "/api/datasets",
+    "/api/datasets/{datasetId}/files",
+    "/api/collections",
+    "/api/collections/{collectionId}/governance",
+    "/api/workflow-runs",
+    "/api/workflow-runs/{workflowRunId}/files",
+    "/api/workflow-runs/{workflowRunId}/lineage"
   ],
   "tags": [
     {
@@ -348,6 +357,42 @@
     {
       "name": "biomarker-associations",
       "description": "/api/biomarker-associations: the biomarker associations (analyte, conditions, role, context of use and evidence)."
+    },
+    {
+      "name": "assays",
+      "description": "/api/assays: the assays (study, specimens, protocol, operator, laboratory, controls, reagent lots and equipment), scoped to the caller's organization by laboratoryId."
+    },
+    {
+      "name": "assay-files",
+      "description": "/api/assays/{assayId}/files: the scientific files of an assay (upload, list, download, delete and replace)."
+    },
+    {
+      "name": "datasets",
+      "description": "/api/datasets: the datasets (title, version, creators, license and distribution files)."
+    },
+    {
+      "name": "dataset-files",
+      "description": "/api/datasets/{datasetId}/files: the scientific files of a dataset (upload, list, download, delete and replace)."
+    },
+    {
+      "name": "collections",
+      "description": "/api/collections: the collections (name, status, governance regime, counts and concept lists)."
+    },
+    {
+      "name": "collection-governance",
+      "description": "/api/collections/{collectionId}/governance: a collection's approvals, governance context and decisions."
+    },
+    {
+      "name": "workflow-runs",
+      "description": "/api/workflow-runs: the workflow runs (workflow, version, executor, hardware, environment, status and resume link)."
+    },
+    {
+      "name": "workflow-run-files",
+      "description": "/api/workflow-runs/{workflowRunId}/files: the input and output files linked to a workflow run."
+    },
+    {
+      "name": "workflow-run-lineage",
+      "description": "/api/workflow-runs/{workflowRunId}/lineage: the runs upstream and downstream of a workflow run."
     }
   ],
   "paths": {
@@ -46644,6 +46689,3729 @@
           }
         }
       }
+    },
+    "/api/assays": {
+      "get": {
+        "tags": [
+          "assays"
+        ],
+        "summary": "List the assays",
+        "description": "Gates: authenticate, requireOrganizationScope. Returns the records whose laboratoryId is one of the caller's organizations (an Administrador, global scope, gets every record), newest createdAt first. The 401, 403 and 503 come from the gates. The 500 is also a failure of the read.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The assays records.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/AssayRecord"
+                          }
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "assays"
+        ],
+        "summary": "Create an Assay",
+        "description": "Gates: authenticate, requireOrganizationScope, requireRole(3, 4) (Coordenador, Administrador). Stores the fields the model keeps, never the whole body; assayId is the body's, else a generated UUID. laboratoryId is set from the caller's scope: an account scoped to one organization has it stamped to that organization, whatever the body names, and an Administrador (global scope) keeps the body's value. An account scoped to more than one organization must send a laboratoryId that is one of them; with none, or one outside them, the answer is a 400 (error 'Informe organizationId: a sua conta pertence a mais de uma organização.'). The 422 (error \"Payload inválido\", details a list of reasons) is a body the model refuses: a studyId, assayType, protocolId, operatorId, laboratoryId or intendedUse that is not a non-empty string, specimenIds that is missing, empty or holds an entry that is not a non-empty string, an assayDateTime that is not a valid date, an omicsDomain that is not a string, controls that is not a list of objects each with a controlType of positive, negative, blank or standard, or reagentLotIds or equipmentIds that is not a list of non-empty strings. The references are checked after the 422, in this order: specimenIds, protocolId, operatorId, laboratoryId, reagentLotIds, equipmentIds. The 404 is a reference that resolves to no record (a sample, protocol, user, organization, reagent lot or equipment); the 409 is a specimen in quarantine (RF019 AC3). The 409 is not a duplicate assayId. The 400 is that multi-organization case and is answered before the 422 check. The 401, 403 and 503 come from the gates. The 500 is also a failure of the write.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "assayId": {
+                    "type": "string",
+                    "description": "A UUID is generated when the body sends none."
+                  },
+                  "studyId": {
+                    "type": "string",
+                    "description": "Required, a non-empty string.",
+                    "minLength": 1
+                  },
+                  "specimenIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "minItems": 1,
+                    "description": "Required, a non-empty array of non-empty strings; each must name a stored sample (its specimenId or _id) and is stored as the canonical specimenId."
+                  },
+                  "assayType": {
+                    "type": "string",
+                    "description": "Required, a non-empty string.",
+                    "minLength": 1
+                  },
+                  "omicsDomain": {
+                    "type": "string",
+                    "description": "A string; stored as null when absent.",
+                    "nullable": true
+                  },
+                  "protocolId": {
+                    "type": "string",
+                    "description": "Required, a non-empty string naming a stored protocol.",
+                    "minLength": 1
+                  },
+                  "operatorId": {
+                    "type": "string",
+                    "description": "Required, a non-empty string naming a stored user (their _id).",
+                    "minLength": 1
+                  },
+                  "laboratoryId": {
+                    "type": "string",
+                    "description": "The organization (its organizationId) that ran the assay. Required by the model. An account scoped to one organization has it stamped to that organization on create whatever the body names; an Administrador (global scope) must send it. An account scoped to more than one organization must send one of them, else the answer is a 400.",
+                    "minLength": 1
+                  },
+                  "assayDateTime": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "Required, a valid date."
+                  },
+                  "assayBatchId": {
+                    "type": "string",
+                    "description": "Stored as null when absent.",
+                    "nullable": true
+                  },
+                  "controls": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "controlType": {
+                          "type": "string",
+                          "enum": [
+                            "positive",
+                            "negative",
+                            "blank",
+                            "standard"
+                          ]
+                        },
+                        "result": {
+                          "nullable": true,
+                          "description": "Any value; stored as null when absent."
+                        },
+                        "reagentLotId": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "notes": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "controlType"
+                      ]
+                    },
+                    "description": "Each entry is an object with a controlType of positive, negative, blank or standard."
+                  },
+                  "reagentLotIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Each must name a stored reagent lot (its reagentId)."
+                  },
+                  "equipmentIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Each must name a stored equipment (its equipmentID)."
+                  },
+                  "intendedUse": {
+                    "type": "string",
+                    "description": "Required, a non-empty string.",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "studyId",
+                  "specimenIds",
+                  "assayType",
+                  "protocolId",
+                  "operatorId",
+                  "assayDateTime",
+                  "intendedUse"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The Assay is created; data is the stored document with its _id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/AssayRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The account is scoped to more than one organization and laboratoryId is missing or names none of them (error and message: 'Informe organizationId: a sua conta pertence a mais de uma organização.').",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "A reference is unresolved: specimenIds, protocolId, operatorId, laboratoryId, reagentLotIds or equipmentIds names no stored record (error and message name the entry).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A specimen in specimenIds is in quarantine and cannot be processed (RF019).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/assays/{id}": {
+      "get": {
+        "tags": [
+          "assays"
+        ],
+        "summary": "Read an Assay",
+        "description": "Gates: authenticate, requireOrganizationScope. The id is resolved by buildIdQuery, one $or query handed to findOne that matches the _id, the assayId as a number, the assayId as a string, or the id property as a string, with no order of precedence among them. The record is fetched first and its laboratoryId checked after, so a record of another organization answers 403 and not 404; an Administrador (global scope) reads any record, and a record with no laboratoryId is out of scope for everyone else. The 401, 403 and 503 come from the gates. The 500 is also a failure of the read.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The record: its Mongo _id (24 hex), its assayId (matched as a number and as a string), or its string id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The Assay.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/AssayRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Access denied: the role gate refused, the account has no organization assigned, or (by id) the record belongs to another organization (error \"Acesso negado\", message \"Este registro pertence a outra organização\").",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "assays"
+        ],
+        "summary": "Update an Assay",
+        "description": "Gates: authenticate, requireOrganizationScope, requireRole(3, 4) (Coordenador, Administrador). Reads the stored record first (404 when none matches; 403 when it belongs to another organization) and refuses a laboratoryId in the body that differs from the stored one unless the caller is global (403). Keeps the allowed keys the body names (assayId, _id and the dates are never changed), and answers 422 (error \"Payload inválido\", details) when the stored record merged with them fails the model's rules. The references the body names are checked after the 422, as on create: the 404 is also a reference that resolves to no record, and the 409 a specimen in quarantine. There is no 409 for a duplicate. The 401, 403 and 503 come from the gates. The 500 is also a failure of the write.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The record: its Mongo _id (24 hex), its assayId (matched as a number and as a string), or its string id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "Only these keys are kept; assayId, _id and the dates are never changed by an update. The stored record merged with the update is validated as a create is.",
+                "properties": {
+                  "studyId": {
+                    "type": "string",
+                    "description": "Required, a non-empty string.",
+                    "minLength": 1
+                  },
+                  "specimenIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "minItems": 1,
+                    "description": "Required, a non-empty array of non-empty strings; each must name a stored sample (its specimenId or _id) and is stored as the canonical specimenId."
+                  },
+                  "assayType": {
+                    "type": "string",
+                    "description": "Required, a non-empty string.",
+                    "minLength": 1
+                  },
+                  "omicsDomain": {
+                    "type": "string",
+                    "description": "A string; stored as null when absent.",
+                    "nullable": true
+                  },
+                  "protocolId": {
+                    "type": "string",
+                    "description": "Required, a non-empty string naming a stored protocol.",
+                    "minLength": 1
+                  },
+                  "operatorId": {
+                    "type": "string",
+                    "description": "Required, a non-empty string naming a stored user (their _id).",
+                    "minLength": 1
+                  },
+                  "laboratoryId": {
+                    "type": "string",
+                    "description": "The organization (its organizationId) that ran the assay. Required by the model. An account scoped to one organization has it stamped to that organization on create whatever the body names; an Administrador (global scope) must send it.",
+                    "minLength": 1
+                  },
+                  "assayDateTime": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "Required, a valid date."
+                  },
+                  "assayBatchId": {
+                    "type": "string",
+                    "description": "Stored as null when absent.",
+                    "nullable": true
+                  },
+                  "controls": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "controlType": {
+                          "type": "string",
+                          "enum": [
+                            "positive",
+                            "negative",
+                            "blank",
+                            "standard"
+                          ]
+                        },
+                        "result": {
+                          "nullable": true,
+                          "description": "Any value; stored as null when absent."
+                        },
+                        "reagentLotId": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "notes": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "controlType"
+                      ]
+                    },
+                    "description": "Each entry is an object with a controlType of positive, negative, blank or standard."
+                  },
+                  "reagentLotIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Each must name a stored reagent lot (its reagentId)."
+                  },
+                  "equipmentIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Each must name a stored equipment (its equipmentID)."
+                  },
+                  "intendedUse": {
+                    "type": "string",
+                    "description": "Required, a non-empty string.",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The Assay is updated; data is the stored document after the update.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/AssayRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Access denied: the role gate refused, the account has no organization assigned, or (by id) the record belongs to another organization (error \"Acesso negado\", message \"Este registro pertence a outra organização\"). It is also a laboratoryId in the body that differs from the stored one, for an account that is not global (error \"Acesso negado\", message \"Não é permitido alterar laboratoryId para outra organização\").",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No record matches the id, or a reference the body names resolves to no record (a sample, protocol, user, organization, reagent lot or equipment).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A specimen in specimenIds is in quarantine and cannot be processed (RF019).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "assays"
+        ],
+        "summary": "Delete an Assay",
+        "description": "Gates: authenticate, requireOrganizationScope, requireRole(3, 4) (Coordenador, Administrador). The record is fetched first and its laboratoryId checked, so a record of another organization answers 403. Answers message \"Registro removido\". The 401, 403 and 503 come from the gates. The 500 is also a failure of the delete.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The record: its Mongo _id (24 hex), its assayId (matched as a number and as a string), or its string id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The Assay is deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Success"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Access denied: the role gate refused, the account has no organization assigned, or (by id) the record belongs to another organization (error \"Acesso negado\", message \"Este registro pertence a outra organização\").",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/datasets": {
+      "get": {
+        "tags": [
+          "datasets"
+        ],
+        "summary": "List the datasets",
+        "description": "Gates: authenticate. Returns every record, newest createdAt first. The 401, 403 and 503 come from the gates. The 500 is also a failure of the read.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The datasets records.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/DatasetRecord"
+                          }
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "datasets"
+        ],
+        "summary": "Create a Dataset",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). Stores the fields the model keeps, never the whole body; datasetId is the body's, else a generated UUID. The 422 (error \"Payload inválido\", details a list of reasons) is a body the model refuses: a datasetTitle, datasetVersion or license that is not a non-empty string, creators that is missing or empty, a doi or roCrateManifest that is not a string, or a distributionFiles that is not an array. The 401, 403 and 503 come from the gates. The 500 is also a failure of the write.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "datasetId": {
+                    "type": "string",
+                    "description": "A UUID is generated when the body sends none."
+                  },
+                  "datasetTitle": {
+                    "type": "string",
+                    "description": "Required, a non-empty string.",
+                    "minLength": 1
+                  },
+                  "datasetVersion": {
+                    "type": "string",
+                    "description": "Required, a non-empty string.",
+                    "minLength": 1
+                  },
+                  "creators": {
+                    "type": "array",
+                    "items": {},
+                    "minItems": 1,
+                    "description": "Required, a non-empty array; the entries are not validated."
+                  },
+                  "doi": {
+                    "type": "string",
+                    "description": "A string; stored as null when absent.",
+                    "nullable": true
+                  },
+                  "license": {
+                    "type": "string",
+                    "description": "Required, a non-empty string.",
+                    "minLength": 1
+                  },
+                  "distributionFiles": {
+                    "type": "array",
+                    "items": {},
+                    "description": "An array; empty when absent. The entries are not validated."
+                  },
+                  "roCrateManifest": {
+                    "type": "string",
+                    "description": "A string; stored as null when absent.",
+                    "nullable": true
+                  }
+                },
+                "required": [
+                  "datasetTitle",
+                  "datasetVersion",
+                  "creators",
+                  "license"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The Dataset is created; data is the stored document with its _id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/DatasetRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/datasets/{id}": {
+      "get": {
+        "tags": [
+          "datasets"
+        ],
+        "summary": "Read a Dataset",
+        "description": "Gates: authenticate. The id is resolved by buildIdQuery, one $or query handed to findOne that matches the _id, the datasetId as a number, the datasetId as a string, or the id property as a string, with no order of precedence among them. The 401, 403 and 503 come from the gates. The 500 is also a failure of the read.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The record: its Mongo _id (24 hex), its datasetId (matched as a number and as a string), or its string id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The Dataset.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/DatasetRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "datasets"
+        ],
+        "summary": "Update a Dataset",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). Reads the stored record first (404 when none matches), keeps the allowed keys the body names, and answers 422 (error \"Payload inválido\", details) when the stored record merged with them fails the model's rules. There is no 409. The 401, 403 and 503 come from the gates. The 500 is also a failure of the write.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The record: its Mongo _id (24 hex), its datasetId (matched as a number and as a string), or its string id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "Only these keys are kept; datasetId, _id and the dates are never changed by an update. The stored record merged with the update is validated as a create is.",
+                "properties": {
+                  "datasetTitle": {
+                    "type": "string",
+                    "description": "Required, a non-empty string.",
+                    "minLength": 1
+                  },
+                  "datasetVersion": {
+                    "type": "string",
+                    "description": "Required, a non-empty string.",
+                    "minLength": 1
+                  },
+                  "creators": {
+                    "type": "array",
+                    "items": {},
+                    "minItems": 1,
+                    "description": "Required, a non-empty array; the entries are not validated."
+                  },
+                  "doi": {
+                    "type": "string",
+                    "description": "A string; stored as null when absent.",
+                    "nullable": true
+                  },
+                  "license": {
+                    "type": "string",
+                    "description": "Required, a non-empty string.",
+                    "minLength": 1
+                  },
+                  "distributionFiles": {
+                    "type": "array",
+                    "items": {},
+                    "description": "An array; empty when absent. The entries are not validated."
+                  },
+                  "roCrateManifest": {
+                    "type": "string",
+                    "description": "A string; stored as null when absent.",
+                    "nullable": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The Dataset is updated; data is the stored document after the update.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/DatasetRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "datasets"
+        ],
+        "summary": "Delete a Dataset",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). Answers message \"Registro removido\". The 401, 403 and 503 come from the gates. The 500 is also a failure of the delete.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The record: its Mongo _id (24 hex), its datasetId (matched as a number and as a string), or its string id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The Dataset is deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Success"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/collections": {
+      "get": {
+        "tags": [
+          "collections"
+        ],
+        "summary": "List the collections",
+        "description": "Gates: authenticate. Returns every record, newest createdAt first. The 401, 403 and 503 come from the gates. The 500 is also a failure of the read.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The collections records.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/CollectionRecord"
+                          }
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "collections"
+        ],
+        "summary": "Create a Collection",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). Stores the fields the model keeps, never the whole body; collectionId is the body's, else a generated UUID. The governance context is not set here: it is written only by POST /api/collections/{collectionId}/governance/events. The 422 (error \"Payload inválido\", details a list of reasons) is a body the model refuses: a collectionId or collectionName that is not a non-empty string, a governanceRegime that is not biobank or biorepository, a sampleTypes, datasetTypes, diseaseScope, inclusionCriteriaCategories, miabisUseAccessConditions, storageTemperatureCategories or relatedPublications that is not a list, an exclusionCriteria that is not a string, or a participantCount or sampleCount that is not a non-negative integer. The 401, 403 and 503 come from the gates. The 500 is also a failure of the write.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "collectionId": {
+                    "type": "string",
+                    "description": "A UUID is generated when the body sends none; a value that is not a non-empty string answers 422."
+                  },
+                  "collectionName": {
+                    "type": "string",
+                    "description": "Required, a non-empty string.",
+                    "minLength": 1
+                  },
+                  "collectionStatus": {
+                    "type": "string",
+                    "description": "Defaults to active.",
+                    "default": "active"
+                  },
+                  "governanceRegime": {
+                    "type": "string",
+                    "enum": [
+                      "biobank",
+                      "biorepository"
+                    ],
+                    "description": "Required on create. Once stored, an update that names it with a different value answers 422; the same value, or a stored null, passes. A conversion is made through POST /api/collections/{collectionId}/governance/events."
+                  },
+                  "exclusionCriteria": {
+                    "type": "string",
+                    "description": "A string; stored as null when absent.",
+                    "nullable": true
+                  },
+                  "participantCount": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "nullable": true,
+                    "description": "A non-negative integer (a numeric string is accepted and stored as a number); null when absent."
+                  },
+                  "sampleCount": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "nullable": true,
+                    "description": "A non-negative integer (a numeric string is accepted and stored as a number); null when absent."
+                  },
+                  "relatedPublications": {
+                    "type": "array",
+                    "items": {},
+                    "description": "An array, empty when absent; the entries are not validated."
+                  },
+                  "sampleTypes": {
+                    "type": "array",
+                    "items": {},
+                    "description": "The sample types. An array of codes or codeable concepts, empty when absent; the entries are not validated."
+                  },
+                  "datasetTypes": {
+                    "type": "array",
+                    "items": {},
+                    "description": "The dataset types. An array of codes or codeable concepts, empty when absent; the entries are not validated."
+                  },
+                  "diseaseScope": {
+                    "type": "array",
+                    "items": {},
+                    "description": "The disease scope. An array of codes or codeable concepts, empty when absent; the entries are not validated."
+                  },
+                  "inclusionCriteriaCategories": {
+                    "type": "array",
+                    "items": {},
+                    "description": "The inclusion criteria categories. An array of codes or codeable concepts, empty when absent; the entries are not validated."
+                  },
+                  "miabisUseAccessConditions": {
+                    "type": "array",
+                    "items": {},
+                    "description": "The MIABIS use and access conditions. An array of codes or codeable concepts, empty when absent; the entries are not validated."
+                  },
+                  "storageTemperatureCategories": {
+                    "type": "array",
+                    "items": {},
+                    "description": "The storage temperature categories. An array of codes or codeable concepts, empty when absent; the entries are not validated."
+                  }
+                },
+                "required": [
+                  "collectionName",
+                  "governanceRegime"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The Collection is created; data is the stored document with its _id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/CollectionRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/collections/{id}": {
+      "get": {
+        "tags": [
+          "collections"
+        ],
+        "summary": "Read a Collection",
+        "description": "Gates: authenticate. The id is resolved by buildIdQuery, one $or query handed to findOne that matches the _id, the collectionId as a number, the collectionId as a string, or the id property as a string, with no order of precedence among them. The 401, 403 and 503 come from the gates. The 500 is also a failure of the read.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The record: its Mongo _id (24 hex), its collectionId (matched as a number and as a string), or its string id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The Collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/CollectionRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "collections"
+        ],
+        "summary": "Update a Collection",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). Reads the stored record first (404 when none matches). Answers 422 (error \"Campo imutável\", message and details naming the field) when the body names governanceRegime, the stored value is set and the body's value differs from it; the same value, or a stored null, passes. Then keeps the allowed keys the body names and answers 422 (error \"Payload inválido\", details) when the stored record merged with them fails the model's rules. There is no 409. The 401, 403 and 503 come from the gates. The 500 is also a failure of the write.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The record: its Mongo _id (24 hex), its collectionId (matched as a number and as a string), or its string id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "Only these keys are kept; collectionId, _id and the dates are never changed by an update. The stored record merged with the update is validated as a create is.",
+                "properties": {
+                  "collectionName": {
+                    "type": "string",
+                    "description": "Required, a non-empty string.",
+                    "minLength": 1
+                  },
+                  "collectionStatus": {
+                    "type": "string",
+                    "description": "Defaults to active.",
+                    "default": "active"
+                  },
+                  "governanceRegime": {
+                    "type": "string",
+                    "enum": [
+                      "biobank",
+                      "biorepository"
+                    ],
+                    "description": "Required on create. Once stored, an update that names it with a different value answers 422; the same value, or a stored null, passes. A conversion is made through POST /api/collections/{collectionId}/governance/events."
+                  },
+                  "exclusionCriteria": {
+                    "type": "string",
+                    "description": "A string; stored as null when absent.",
+                    "nullable": true
+                  },
+                  "participantCount": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "nullable": true,
+                    "description": "A non-negative integer (a numeric string is accepted and stored as a number); null when absent."
+                  },
+                  "sampleCount": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "nullable": true,
+                    "description": "A non-negative integer (a numeric string is accepted and stored as a number); null when absent."
+                  },
+                  "relatedPublications": {
+                    "type": "array",
+                    "items": {},
+                    "description": "An array, empty when absent; the entries are not validated."
+                  },
+                  "sampleTypes": {
+                    "type": "array",
+                    "items": {},
+                    "description": "The sample types. An array of codes or codeable concepts, empty when absent; the entries are not validated."
+                  },
+                  "datasetTypes": {
+                    "type": "array",
+                    "items": {},
+                    "description": "The dataset types. An array of codes or codeable concepts, empty when absent; the entries are not validated."
+                  },
+                  "diseaseScope": {
+                    "type": "array",
+                    "items": {},
+                    "description": "The disease scope. An array of codes or codeable concepts, empty when absent; the entries are not validated."
+                  },
+                  "inclusionCriteriaCategories": {
+                    "type": "array",
+                    "items": {},
+                    "description": "The inclusion criteria categories. An array of codes or codeable concepts, empty when absent; the entries are not validated."
+                  },
+                  "miabisUseAccessConditions": {
+                    "type": "array",
+                    "items": {},
+                    "description": "The MIABIS use and access conditions. An array of codes or codeable concepts, empty when absent; the entries are not validated."
+                  },
+                  "storageTemperatureCategories": {
+                    "type": "array",
+                    "items": {},
+                    "description": "The storage temperature categories. An array of codes or codeable concepts, empty when absent; the entries are not validated."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The Collection is updated; data is the stored document after the update.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/CollectionRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "collections"
+        ],
+        "summary": "Delete a Collection",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). Answers message \"Registro removido\". The 401, 403 and 503 come from the gates. The 500 is also a failure of the delete.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The record: its Mongo _id (24 hex), its collectionId (matched as a number and as a string), or its string id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The Collection is deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Success"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/workflow-runs": {
+      "get": {
+        "tags": [
+          "workflow-runs"
+        ],
+        "summary": "List the workflow-runs",
+        "description": "Gates: authenticate. Returns every record, newest createdAt first. The 401, 403 and 503 come from the gates. The 500 is also a failure of the read.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The workflow-runs records.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/WorkflowRunRecord"
+                          }
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "workflow-runs"
+        ],
+        "summary": "Create a WorkflowRun",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). Stores the fields the model keeps, never the whole body; workflowRunId is the body's, else a generated UUID. There is no organization scope on this mount. The 422 (error \"Payload inválido\", details a list of reasons) is a body the model refuses: a workflowId, workflowVersion or createdBy that is not a non-empty string, a startedAt that is not a valid date, a completedAt that is not a valid date, a runStatus outside queued, running, succeeded, failed and cancelled, a containerImageDigest that is not a string, softwareDependencies that is not a list of objects, parameters that is not an object, inputFileIds or outputFileIds that is not a list of non-empty strings, a hardwareProfile that is not a non-empty object, an environmentManifestUri that is not an absolute URI, a randomSeed that is not a safe integer, a datasetSnapshotId, failureReason or resumesWorkflowRunId that is not a non-empty string, or a failureReason on a run that is not failed or cancelled. The resume link is checked after those: the 422 (error and message, no details) is also a resumesWorkflowRunId that names the run itself, a stored run that is not failed or cancelled, or one with a different workflowId or workflowVersion. The 404 is a resumesWorkflowRunId that names no stored run. The 409 is a workflowRunId that is already stored (error \"Registro duplicado\", unique index uniq_workflowRunId). The 401, 403 and 503 come from the gates. The 500 is also a failure of the write.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "workflowRunId": {
+                    "type": "string",
+                    "description": "A UUID is generated when the body sends none."
+                  },
+                  "workflowId": {
+                    "type": "string",
+                    "description": "Required, a non-empty string.",
+                    "minLength": 1
+                  },
+                  "workflowVersion": {
+                    "type": "string",
+                    "description": "Required, a non-empty string.",
+                    "minLength": 1
+                  },
+                  "createdBy": {
+                    "type": "string",
+                    "description": "Required, a non-empty string: the executor.",
+                    "minLength": 1
+                  },
+                  "containerImageDigest": {
+                    "type": "string",
+                    "description": "A string; stored as null when absent.",
+                    "nullable": true
+                  },
+                  "softwareDependencies": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "description": "Each entry is an object; empty when absent."
+                  },
+                  "parameters": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "nullable": true,
+                    "description": "An object (not an array); stored as null when absent."
+                  },
+                  "inputFileIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Non-empty strings; empty when absent. The entries are not resolved here; POST /api/workflow-runs/{workflowRunId}/files links a file that exists."
+                  },
+                  "outputFileIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Non-empty strings; empty when absent. The entries are not resolved here; POST /api/workflow-runs/{workflowRunId}/files links a file that exists."
+                  },
+                  "hardwareProfile": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "minProperties": 1,
+                    "description": "Required, a non-empty object."
+                  },
+                  "randomSeed": {
+                    "type": "integer",
+                    "nullable": true,
+                    "description": "A safe integer, 0 kept; null when absent."
+                  },
+                  "datasetSnapshotId": {
+                    "type": "string",
+                    "description": "A non-empty string; accepted and not resolved.",
+                    "nullable": true
+                  },
+                  "environmentManifestUri": {
+                    "type": "string",
+                    "description": "Required, an absolute URI (a scheme of two or more characters, then a colon); a drive-letter path is not one."
+                  },
+                  "failureReason": {
+                    "type": "string",
+                    "description": "A non-empty string, allowed only when runStatus is failed or cancelled.",
+                    "nullable": true
+                  },
+                  "resumesWorkflowRunId": {
+                    "type": "string",
+                    "description": "A non-empty string naming a stored failed or cancelled run with the same workflowId and workflowVersion; never the run itself. It is registered on create and cannot be named by an update, not even as null (422).",
+                    "nullable": true
+                  },
+                  "startedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "Required, a valid date."
+                  },
+                  "completedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "A valid date; null when absent.",
+                    "nullable": true
+                  },
+                  "runStatus": {
+                    "type": "string",
+                    "enum": [
+                      "queued",
+                      "running",
+                      "succeeded",
+                      "failed",
+                      "cancelled"
+                    ],
+                    "description": "Required."
+                  }
+                },
+                "required": [
+                  "workflowId",
+                  "workflowVersion",
+                  "createdBy",
+                  "hardwareProfile",
+                  "environmentManifestUri",
+                  "startedAt",
+                  "runStatus"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The WorkflowRun is created; data is the stored document with its _id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/WorkflowRunRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "resumesWorkflowRunId names no stored run.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The workflowRunId is already stored (error \"Registro duplicado\", unique index uniq_workflowRunId).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/workflow-runs/{id}": {
+      "get": {
+        "tags": [
+          "workflow-runs"
+        ],
+        "summary": "Read a WorkflowRun",
+        "description": "Gates: authenticate. The id is resolved by buildIdQuery, one $or query handed to findOne that matches the _id, the workflowRunId as a number, the workflowRunId as a string, or the id property as a string, with no order of precedence among them. The 401, 403 and 503 come from the gates. The 500 is also a failure of the read.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The record: its Mongo _id (24 hex), its workflowRunId (matched as a number and as a string), or its string id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The WorkflowRun.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/WorkflowRunRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "workflow-runs"
+        ],
+        "summary": "Update a WorkflowRun",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). Reads the stored record first (404 when none matches), keeps the allowed keys the body names, and answers 422 (error \"Payload inválido\", details) when the stored record merged with them fails the model's rules. A body that names resumesWorkflowRunId, even as null, answers 422 (error and message, no details): the link is registered on create and cannot be edited. There is no 409. The 401, 403 and 503 come from the gates. The 500 is also a failure of the write.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The record: its Mongo _id (24 hex), its workflowRunId (matched as a number and as a string), or its string id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "Only these keys are kept; workflowRunId, _id and the dates are never changed by an update. The stored record merged with the update is validated as a create is. resumesWorkflowRunId is accepted by the allowlist but any update that names it answers 422.",
+                "properties": {
+                  "workflowId": {
+                    "type": "string",
+                    "description": "Required, a non-empty string.",
+                    "minLength": 1
+                  },
+                  "workflowVersion": {
+                    "type": "string",
+                    "description": "Required, a non-empty string.",
+                    "minLength": 1
+                  },
+                  "createdBy": {
+                    "type": "string",
+                    "description": "Required, a non-empty string: the executor.",
+                    "minLength": 1
+                  },
+                  "containerImageDigest": {
+                    "type": "string",
+                    "description": "A string; stored as null when absent.",
+                    "nullable": true
+                  },
+                  "softwareDependencies": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "description": "Each entry is an object; empty when absent."
+                  },
+                  "parameters": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "nullable": true,
+                    "description": "An object (not an array); stored as null when absent."
+                  },
+                  "inputFileIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Non-empty strings; empty when absent. The entries are not resolved here; POST /api/workflow-runs/{workflowRunId}/files links a file that exists."
+                  },
+                  "outputFileIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Non-empty strings; empty when absent. The entries are not resolved here; POST /api/workflow-runs/{workflowRunId}/files links a file that exists."
+                  },
+                  "hardwareProfile": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "minProperties": 1,
+                    "description": "Required, a non-empty object."
+                  },
+                  "randomSeed": {
+                    "type": "integer",
+                    "nullable": true,
+                    "description": "A safe integer, 0 kept; null when absent."
+                  },
+                  "datasetSnapshotId": {
+                    "type": "string",
+                    "description": "A non-empty string; accepted and not resolved.",
+                    "nullable": true
+                  },
+                  "environmentManifestUri": {
+                    "type": "string",
+                    "description": "Required, an absolute URI (a scheme of two or more characters, then a colon); a drive-letter path is not one."
+                  },
+                  "failureReason": {
+                    "type": "string",
+                    "description": "A non-empty string, allowed only when runStatus is failed or cancelled.",
+                    "nullable": true
+                  },
+                  "resumesWorkflowRunId": {
+                    "type": "string",
+                    "description": "A non-empty string naming a stored failed or cancelled run with the same workflowId and workflowVersion; never the run itself. It is registered on create and cannot be named by an update, not even as null (422).",
+                    "nullable": true
+                  },
+                  "startedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "Required, a valid date."
+                  },
+                  "completedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "A valid date; null when absent.",
+                    "nullable": true
+                  },
+                  "runStatus": {
+                    "type": "string",
+                    "enum": [
+                      "queued",
+                      "running",
+                      "succeeded",
+                      "failed",
+                      "cancelled"
+                    ],
+                    "description": "Required."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The WorkflowRun is updated; data is the stored document after the update.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/WorkflowRunRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "workflow-runs"
+        ],
+        "summary": "Delete a WorkflowRun",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). Answers message \"Registro removido\". The 401, 403 and 503 come from the gates. The 500 is also a failure of the delete.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The record: its Mongo _id (24 hex), its workflowRunId (matched as a number and as a string), or its string id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The WorkflowRun is deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Success"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/assays/{assayId}/files/upload": {
+      "post": {
+        "tags": [
+          "assay-files"
+        ],
+        "summary": "Upload a file to an Assay",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador), requireOrganizationScope, then the multipart parser for the file field named file. The 503 comes from authenticate, from the handler, and from the malware scan being unavailable or its driver unknown. A assay of another organization answers 403 (message \"Este registro pertence a outra organização\"), as does an account with no organization assigned. The 400 is a missing file or one the parser refuses (an extension outside the list, a MIME type not allowed for it, a size over 500 MB, content that does not match its extension), and any other failure. The 404 is an unknown assay. The 422 is a consentId, approvalId or studyId that is not a non-empty string of at most 128 characters or names no stored record (details), or a file the malware scan reports as infected. The 500 is also a missing file encryption key. The file is encrypted, stored write-once and audited, and the response carries no storage path.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "assayId",
+            "in": "path",
+            "required": true,
+            "description": "The assay: its _id or its assayId.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "One of .raw, .zip, .csv, .tsv, .xls, .xlsx, .pdf, .txt, .json, .fastq, .fastq.gz, .bam, .sam, .vcf, .vcf.gz or .h5, at most 500 MB, with a MIME type allowed for the extension and leading bytes that match it."
+                  },
+                  "consentId": {
+                    "type": "string",
+                    "description": "An existing consent to link the file to."
+                  },
+                  "approvalId": {
+                    "type": "string",
+                    "description": "An existing collection governance approval to link the file to."
+                  },
+                  "studyId": {
+                    "type": "string",
+                    "description": "An existing study to link the file to."
+                  }
+                },
+                "required": [
+                  "file"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The stored file record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/AssayFileRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Access denied: a gate refused, the account has no organization assigned, or the parent belongs to another organization.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/assays/{assayId}/files": {
+      "get": {
+        "tags": [
+          "assay-files"
+        ],
+        "summary": "List the files of an Assay",
+        "description": "Gates: authenticate, requireOrganizationScope. The 503 comes from authenticate, from the handler. A assay of another organization answers 403 (message \"Este registro pertence a outra organização\"), as does an account with no organization assigned. The files not logically deleted, without their storage paths, and the query is audited. The route has no 400 and no 422. The 404 is an unknown assay.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "assayId",
+            "in": "path",
+            "required": true,
+            "description": "The assay: its _id or its assayId.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The files not deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/AssayFileRecord"
+                          }
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Access denied: a gate refused, the account has no organization assigned, or the parent belongs to another organization.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/assays/{assayId}/files/{fileID}/download": {
+      "get": {
+        "tags": [
+          "assay-files"
+        ],
+        "summary": "Download a file of an Assay",
+        "description": "Gates: authenticate, requireOrganizationScope. The 503 comes from authenticate and from the handler. The 200 does not exist: a successful call answers 302, redirecting to /api/file-access with a short-lived access token (Cache-Control no-store), and the download is audited. The 400 is a fileID that is not an object id. The 403 is a file that does not belong to the assay, or a record of another organization, or an account with no organization assigned. The 404 is an unknown or deleted file, or a file missing from the store. The route has no 422.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "assayId",
+            "in": "path",
+            "required": true,
+            "description": "The assay: its _id or its assayId.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "fileID",
+            "in": "path",
+            "required": true,
+            "description": "The id of the file record (an object id).",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Redirect to /api/file-access?token=<access token>.",
+            "headers": {
+              "Location": {
+                "description": "/api/file-access with the one-file access token in the query string.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Cache-Control": {
+                "description": "no-store.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Access denied: a gate refused, the account has no organization assigned, or the parent belongs to another organization, or the file does not belong to the parent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/assays/{assayId}/files/{fileID}": {
+      "delete": {
+        "tags": [
+          "assay-files"
+        ],
+        "summary": "Delete a file of an Assay",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador), requireOrganizationScope. The 503 comes from authenticate and from the handler. A logical delete: the record is marked deleted and the stored binary is kept as evidence. The 400 is a fileID that is not an object id. The 403 is a file that does not belong to the assay, or a record of another organization, or an account with no organization assigned. The 404 is an unknown or already deleted file. The route has no 422.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "assayId",
+            "in": "path",
+            "required": true,
+            "description": "The assay: its _id or its assayId.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "fileID",
+            "in": "path",
+            "required": true,
+            "description": "The id of the file record (an object id).",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The file is deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Success"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Access denied: a gate refused, the account has no organization assigned, or the parent belongs to another organization, or the file does not belong to the parent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/assays/{assayId}/files/{fileID}/replace": {
+      "put": {
+        "tags": [
+          "assay-files"
+        ],
+        "summary": "Replace the content of a file of an Assay",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador), requireOrganizationScope, then the multipart parser for the file field named file. The 503 comes from authenticate, from the handler, and from the malware scan being unavailable or its driver unknown. The 400 is a missing file or one the parser refuses (an extension outside the list, a MIME type not allowed for it, a size over 500 MB, content that does not match its extension), a fileID that is not an object id, and any other failure. The 403 is a file that does not belong to the assay, or a record of another organization, or an account with no organization assigned. The 404 is an unknown or deleted file. The 422 is a file the malware scan reports as infected. The 500 is also a missing file encryption key. The previous binary is kept as a version.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "assayId",
+            "in": "path",
+            "required": true,
+            "description": "The assay: its _id or its assayId.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "fileID",
+            "in": "path",
+            "required": true,
+            "description": "The id of the file record (an object id).",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "One of .raw, .zip, .csv, .tsv, .xls, .xlsx, .pdf, .txt, .json, .fastq, .fastq.gz, .bam, .sam, .vcf, .vcf.gz or .h5, at most 500 MB, with a MIME type allowed for the extension and leading bytes that match it."
+                  },
+                  "changeReason": {
+                    "type": "string",
+                    "description": "The reason recorded with the new version; a default is used when absent or blank."
+                  }
+                },
+                "required": [
+                  "file"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated file record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/AssayFileRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Access denied: a gate refused, the account has no organization assigned, or the parent belongs to another organization, or the file does not belong to the parent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/datasets/{datasetId}/files/upload": {
+      "post": {
+        "tags": [
+          "dataset-files"
+        ],
+        "summary": "Upload a file to a Dataset",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador), then the multipart parser for the file field named file. The 503 comes from authenticate, from the handler, and from the malware scan being unavailable or its driver unknown. The 400 is a missing file or one the parser refuses (an extension outside the list, a MIME type not allowed for it, a size over 500 MB, content that does not match its extension), and any other failure. The 404 is an unknown dataset. The 422 is a consentId, approvalId or studyId that is not a non-empty string of at most 128 characters or names no stored record (details), or a file the malware scan reports as infected. The 500 is also a missing file encryption key. The file is encrypted, stored write-once and audited, and the response carries no storage path.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "datasetId",
+            "in": "path",
+            "required": true,
+            "description": "The dataset: its _id or its datasetId.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "One of .raw, .zip, .csv, .tsv, .xls, .xlsx, .pdf, .txt, .json, .fastq, .fastq.gz, .bam, .sam, .vcf, .vcf.gz or .h5, at most 500 MB, with a MIME type allowed for the extension and leading bytes that match it."
+                  },
+                  "consentId": {
+                    "type": "string",
+                    "description": "An existing consent to link the file to."
+                  },
+                  "approvalId": {
+                    "type": "string",
+                    "description": "An existing collection governance approval to link the file to."
+                  },
+                  "studyId": {
+                    "type": "string",
+                    "description": "An existing study to link the file to."
+                  }
+                },
+                "required": [
+                  "file"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The stored file record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/DatasetFileRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Access denied: a gate refused.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/datasets/{datasetId}/files": {
+      "get": {
+        "tags": [
+          "dataset-files"
+        ],
+        "summary": "List the files of a Dataset",
+        "description": "Gates: authenticate. The 503 comes from authenticate, from the handler. The files not logically deleted, without their storage paths, and the query is audited. The route has no 400 and no 422. The 404 is an unknown dataset.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "datasetId",
+            "in": "path",
+            "required": true,
+            "description": "The dataset: its _id or its datasetId.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The files not deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/DatasetFileRecord"
+                          }
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Access denied: a gate refused.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/datasets/{datasetId}/files/{fileID}/download": {
+      "get": {
+        "tags": [
+          "dataset-files"
+        ],
+        "summary": "Download a file of a Dataset",
+        "description": "Gates: authenticate. The 503 comes from authenticate and from the handler. The 200 does not exist: a successful call answers 302, redirecting to /api/file-access with a short-lived access token (Cache-Control no-store), and the download is audited. The 400 is a fileID that is not an object id. The 403 is a file that does not belong to the dataset. The 404 is an unknown or deleted file, or a file missing from the store. The route has no 422.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "datasetId",
+            "in": "path",
+            "required": true,
+            "description": "The dataset: its _id or its datasetId.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "fileID",
+            "in": "path",
+            "required": true,
+            "description": "The id of the file record (an object id).",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Redirect to /api/file-access?token=<access token>.",
+            "headers": {
+              "Location": {
+                "description": "/api/file-access with the one-file access token in the query string.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Cache-Control": {
+                "description": "no-store.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Access denied: a gate refused, or the file does not belong to the parent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/datasets/{datasetId}/files/{fileID}": {
+      "delete": {
+        "tags": [
+          "dataset-files"
+        ],
+        "summary": "Delete a file of a Dataset",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). The 503 comes from authenticate and from the handler. A logical delete: the record is marked deleted and the stored binary is kept as evidence. The 400 is a fileID that is not an object id. The 403 is a file that does not belong to the dataset. The 404 is an unknown or already deleted file. The route has no 422.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "datasetId",
+            "in": "path",
+            "required": true,
+            "description": "The dataset: its _id or its datasetId.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "fileID",
+            "in": "path",
+            "required": true,
+            "description": "The id of the file record (an object id).",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The file is deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Success"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Access denied: a gate refused, or the file does not belong to the parent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/datasets/{datasetId}/files/{fileID}/replace": {
+      "put": {
+        "tags": [
+          "dataset-files"
+        ],
+        "summary": "Replace the content of a file of a Dataset",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador), then the multipart parser for the file field named file. The 503 comes from authenticate, from the handler, and from the malware scan being unavailable or its driver unknown. The 400 is a missing file or one the parser refuses (an extension outside the list, a MIME type not allowed for it, a size over 500 MB, content that does not match its extension), a fileID that is not an object id, and any other failure. The 403 is a file that does not belong to the dataset. The 404 is an unknown or deleted file. The 422 is a file the malware scan reports as infected. The 500 is also a missing file encryption key. The previous binary is kept as a version.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "datasetId",
+            "in": "path",
+            "required": true,
+            "description": "The dataset: its _id or its datasetId.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "fileID",
+            "in": "path",
+            "required": true,
+            "description": "The id of the file record (an object id).",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "One of .raw, .zip, .csv, .tsv, .xls, .xlsx, .pdf, .txt, .json, .fastq, .fastq.gz, .bam, .sam, .vcf, .vcf.gz or .h5, at most 500 MB, with a MIME type allowed for the extension and leading bytes that match it."
+                  },
+                  "changeReason": {
+                    "type": "string",
+                    "description": "The reason recorded with the new version; a default is used when absent or blank."
+                  }
+                },
+                "required": [
+                  "file"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated file record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/DatasetFileRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Access denied: a gate refused, or the file does not belong to the parent.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/collections/{collectionId}/governance": {
+      "get": {
+        "tags": [
+          "collection-governance"
+        ],
+        "summary": "Read the governance of a collection",
+        "description": "Gates: authenticate. Returns the collection's regime and governance context, its approvals (newest createdAt first) and its events (oldest first). The 404 is an unknown collection. The 503 comes from authenticate and from the handler. The 401 and 403 come from the gate. The route has no 400, 409 or 422. The 500 is also a failure of the read.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "collectionId",
+            "in": "path",
+            "required": true,
+            "description": "The collection: its collectionId (an _id is not matched).",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The governance of the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/CollectionGovernance"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "collectionId names no stored collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/collections/{collectionId}/governance/approvals": {
+      "post": {
+        "tags": [
+          "collection-governance"
+        ],
+        "summary": "Register an approval of a collection",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). Stores a governance approval for the collection; the collectionId is the path's whatever the body names, and an approvalId or statusHistory in the body is discarded (a UUID is generated, the history starts empty). The 404 is an unknown collection. The 422 (error is the message, details a list of reasons) is a body the model refuses: an authority that is not a non-empty string, a caae that is present and not a non-empty string, a documentUri that is not a URI, a documentChecksum that is not a SHA-256, an effectivePeriod without a valid start or with an end before it, a status outside draft, active, suspended and revoked, or a responsibleOrganizationId that is not a non-empty string; or a responsibleOrganizationId that names no stored organization. The route has no 409. The 401, 403 and 503 come from the gates and from the handler. The 500 is also a failure of the write or of its audit entry.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "collectionId",
+            "in": "path",
+            "required": true,
+            "description": "The collection: its collectionId (an _id is not matched).",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "authority": {
+                    "type": "string",
+                    "description": "Required, a non-empty string.",
+                    "minLength": 1
+                  },
+                  "caae": {
+                    "type": "string",
+                    "description": "A non-empty string when sent; stored as null when absent.",
+                    "nullable": true
+                  },
+                  "documentUri": {
+                    "type": "string",
+                    "description": "Required, a URI.",
+                    "format": "uri"
+                  },
+                  "documentChecksum": {
+                    "type": "string",
+                    "description": "Required, a SHA-256 (64 hex, optionally prefixed sha256:)."
+                  },
+                  "effectivePeriod": {
+                    "type": "object",
+                    "description": "Required.",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "format": "date-time",
+                        "description": "Required, a date."
+                      },
+                      "end": {
+                        "type": "string",
+                        "format": "date-time",
+                        "description": "A date not before start; stored as null when absent.",
+                        "nullable": true
+                      }
+                    },
+                    "required": [
+                      "start"
+                    ]
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "draft",
+                      "active",
+                      "suspended",
+                      "revoked"
+                    ],
+                    "default": "draft"
+                  },
+                  "responsibleOrganizationId": {
+                    "type": "string",
+                    "description": "Required, the organizationId of a stored organization.",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "authority",
+                  "documentUri",
+                  "documentChecksum",
+                  "effectivePeriod",
+                  "responsibleOrganizationId"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The approval is registered; data is the stored approval.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/CollectionGovernanceApproval"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "collectionId names no stored collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/collections/{collectionId}/governance/approvals/{approvalId}/status": {
+      "post": {
+        "tags": [
+          "collection-governance"
+        ],
+        "summary": "Change the status of an approval of a collection",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). Moves the approval along draft to active or revoked, active to suspended or revoked, suspended to active or revoked; revoked is final. A history entry records the change. The 404 is an approval of that collection that is not stored (the collection itself is not looked up). The 422 (error is the message, details a list) is a status that is missing or not an allowed move from the current one. The 409 is an approval that changed state while the move was being made. The 401, 403 and 503 come from the gates and from the handler. The 500 is also a failure of the write or of its audit entry.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "collectionId",
+            "in": "path",
+            "required": true,
+            "description": "The collection: its collectionId (an _id is not matched).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "approvalId",
+            "in": "path",
+            "required": true,
+            "description": "The approval: its approvalId, as the collection stores it.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "draft",
+                      "active",
+                      "suspended",
+                      "revoked"
+                    ],
+                    "description": "Required, the status to move to."
+                  },
+                  "reason": {
+                    "type": "string",
+                    "description": "Recorded in the history entry; null when absent."
+                  }
+                },
+                "required": [
+                  "status"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The status is changed; data is the stored approval.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/CollectionGovernanceApproval"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No approval with that approvalId is stored for the collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The approval changed state during the operation; try again.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/collections/{collectionId}/governance/events": {
+      "post": {
+        "tags": [
+          "collection-governance"
+        ],
+        "summary": "Record a governance decision of a collection",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). The one writer of a collection's regime and governance context (RF020 AC4). The first context is a created decision; a newRegime different from the stored one is a regime_change, with the new regime's context. A collection that already has a context answers 422 for a created decision. Each names a justification and at least one approval of this collection that is active and inside its effective period; for a biorepository the context's ethicsApprovalId is added to approvalIds. The 404 is an unknown collection. The 422 (error is the message, details a list where there are several) is a newRegime outside biobank and biorepository, a context the regime refuses (missing or foreign fields), a reference that names no stored study, protocol, organization, access policy or ethics approval of the collection, a protocolVersion that differs from the protocol's, an event the model refuses (no approval, no justification), or an approval that is missing or not in force. The 409 is a collection whose governance changed while the decision was being recorded. The 401, 403 and 503 come from the gates and from the handler. The 500 is also a failure of the write or of its audit entry.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "collectionId",
+            "in": "path",
+            "required": true,
+            "description": "The collection: its collectionId (an _id is not matched).",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "newRegime": {
+                    "type": "string",
+                    "enum": [
+                      "biobank",
+                      "biorepository"
+                    ],
+                    "description": "The regime to set; the stored regime when absent, which must then be one of the two."
+                  },
+                  "governanceContext": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Required. For biorepository: studyId, protocolId, protocolVersion, caae, responsibleOrganizationId, responsibleInvestigatorId, ethicsApprovalId (an approval of this collection), validityPeriod { start, end? } and plannedEndDate or closureCondition. For biobank: broadPurpose, governancePolicyId, accessCommitteeId, institutionalCustodianId, futureUseConditions (non-empty list), applicableConsentModel (a non-empty list of specific, broad, tiered or dynamic) and newEthicsReviewRule (always or when_required_by_policy). The other regime's fields are refused."
+                  },
+                  "justification": {
+                    "type": "string",
+                    "description": "Required, a non-empty string.",
+                    "minLength": 1
+                  },
+                  "approvalIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "The approvals of this collection the decision rests on; at least one is needed, counting the ethics approval of a biorepository context."
+                  }
+                },
+                "required": [
+                  "governanceContext",
+                  "justification"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The decision is recorded; data holds the event and the collection's new regime and context.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "event": {
+                              "$ref": "#/components/schemas/CollectionGovernanceEvent"
+                            },
+                            "governanceRegime": {
+                              "type": "string",
+                              "enum": [
+                                "biobank",
+                                "biorepository"
+                              ]
+                            },
+                            "governanceContext": {
+                              "type": "object",
+                              "additionalProperties": true
+                            }
+                          },
+                          "required": [
+                            "event",
+                            "governanceRegime",
+                            "governanceContext"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "collectionId names no stored collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The governance of the collection changed during the operation; try again.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/workflow-runs/{workflowRunId}/files": {
+      "get": {
+        "tags": [
+          "workflow-run-files"
+        ],
+        "summary": "List the files linked to a workflow run",
+        "description": "Gates: authenticate. Returns the ids of the files linked as inputs and as outputs, empty lists when none. The 404 is an unknown workflow run. The route has no 400 and no 422. The 401, 403 and 503 come from the gates. The 500 is also a failure of the read.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "workflowRunId",
+            "in": "path",
+            "required": true,
+            "description": "The workflow run: its _id or its workflowRunId.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The linked file ids.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "inputFileIds": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "outputFileIds": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": [
+                            "inputFileIds",
+                            "outputFileIds"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "workflowRunId names no stored workflow run.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "workflow-run-files"
+        ],
+        "summary": "Link a file to a workflow run",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). Adds the file id to the run's inputFileIds or outputFileIds (a repeated link adds nothing) and records the run on the file's linkedEntityRefs. The file is a stored sample file, assay file or dataset file. The 422 (error is the message, details a list) is a direction outside input and output, or a fileId that is missing or not a non-empty string; direction is checked first. The 404 is an unknown workflow run, or a fileId that is not an object id of a stored file. The 401, 403 and 503 come from the gates. The 500 is also a failure of the write or of its audit entry.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "workflowRunId",
+            "in": "path",
+            "required": true,
+            "description": "The workflow run: its _id or its workflowRunId.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "fileId": {
+                    "type": "string",
+                    "description": "Required, the _id of a stored sample file, assay file or dataset file.",
+                    "minLength": 1
+                  },
+                  "direction": {
+                    "type": "string",
+                    "enum": [
+                      "input",
+                      "output"
+                    ],
+                    "description": "Required."
+                  }
+                },
+                "required": [
+                  "fileId",
+                  "direction"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The file is linked; data holds the run's file ids after the link.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "object",
+                          "properties": {
+                            "inputFileIds": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "outputFileIds": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": [
+                            "inputFileIds",
+                            "outputFileIds"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "workflowRunId names no stored workflow run, or fileId names no stored file.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/workflow-runs/{workflowRunId}/lineage": {
+      "get": {
+        "tags": [
+          "workflow-run-lineage"
+        ],
+        "summary": "Read the lineage of a workflow run",
+        "description": "Gates: authenticate. Walks, breadth first, the runs that produced the run's inputs (upstream) and consumed its outputs (downstream), derived from file ids shared between outputFileIds and inputFileIds; nothing is stored. The walk stops at depth 20 or 200 runs and then truncated is true. The 404 is an unknown workflow run. The route has no 400 and no 422. The 401, 403 and 503 come from the gates. The 500 is also a failure of the read.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "workflowRunId",
+            "in": "path",
+            "required": true,
+            "description": "The workflow run: its _id or its workflowRunId.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The lineage.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/WorkflowRunLineage"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "workflowRunId names no stored workflow run.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -49108,6 +52876,929 @@
         },
         "required": [
           "_id"
+        ]
+      },
+      "AssayRecord": {
+        "type": "object",
+        "description": "An Assay document as the API returns it.",
+        "properties": {
+          "_id": {
+            "type": "string",
+            "description": "The Mongo ObjectId, as a string."
+          },
+          "assayId": {
+            "type": "string",
+            "description": "The business key; a UUID is generated when the body sends none."
+          },
+          "studyId": {
+            "type": "string",
+            "description": "Required, a non-empty string.",
+            "minLength": 1
+          },
+          "specimenIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 1,
+            "description": "Required, a non-empty array of non-empty strings; each must name a stored sample (its specimenId or _id) and is stored as the canonical specimenId."
+          },
+          "assayType": {
+            "type": "string",
+            "description": "Required, a non-empty string.",
+            "minLength": 1
+          },
+          "omicsDomain": {
+            "type": "string",
+            "description": "A string; stored as null when absent.",
+            "nullable": true
+          },
+          "protocolId": {
+            "type": "string",
+            "description": "Required, a non-empty string naming a stored protocol.",
+            "minLength": 1
+          },
+          "operatorId": {
+            "type": "string",
+            "description": "Required, a non-empty string naming a stored user (their _id).",
+            "minLength": 1
+          },
+          "laboratoryId": {
+            "type": "string",
+            "description": "The organization (its organizationId) that ran the assay."
+          },
+          "assayDateTime": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Required, a valid date."
+          },
+          "assayBatchId": {
+            "type": "string",
+            "description": "Stored as null when absent.",
+            "nullable": true
+          },
+          "controls": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "controlType": {
+                  "type": "string",
+                  "enum": [
+                    "positive",
+                    "negative",
+                    "blank",
+                    "standard"
+                  ]
+                },
+                "result": {
+                  "nullable": true,
+                  "description": "Any value; stored as null when absent."
+                },
+                "reagentLotId": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "notes": {
+                  "type": "string",
+                  "nullable": true
+                }
+              },
+              "required": [
+                "controlType"
+              ]
+            },
+            "description": "Each entry is an object with a controlType of positive, negative, blank or standard."
+          },
+          "reagentLotIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Each must name a stored reagent lot (its reagentId)."
+          },
+          "equipmentIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Each must name a stored equipment (its equipmentID)."
+          },
+          "intendedUse": {
+            "type": "string",
+            "description": "Required, a non-empty string.",
+            "minLength": 1
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "_id"
+        ]
+      },
+      "DatasetRecord": {
+        "type": "object",
+        "description": "A Dataset document as the API returns it.",
+        "properties": {
+          "_id": {
+            "type": "string",
+            "description": "The Mongo ObjectId, as a string."
+          },
+          "datasetId": {
+            "type": "string",
+            "description": "The business key; a UUID is generated when the body sends none."
+          },
+          "datasetTitle": {
+            "type": "string",
+            "description": "Required, a non-empty string.",
+            "minLength": 1
+          },
+          "datasetVersion": {
+            "type": "string",
+            "description": "Required, a non-empty string.",
+            "minLength": 1
+          },
+          "creators": {
+            "type": "array",
+            "items": {},
+            "minItems": 1,
+            "description": "Required, a non-empty array; the entries are not validated."
+          },
+          "doi": {
+            "type": "string",
+            "description": "A string; stored as null when absent.",
+            "nullable": true
+          },
+          "license": {
+            "type": "string",
+            "description": "Required, a non-empty string.",
+            "minLength": 1
+          },
+          "distributionFiles": {
+            "type": "array",
+            "items": {},
+            "description": "An array; empty when absent. The entries are not validated."
+          },
+          "roCrateManifest": {
+            "type": "string",
+            "description": "A string; stored as null when absent.",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "_id"
+        ]
+      },
+      "CollectionRecord": {
+        "type": "object",
+        "description": "A Collection document as the API returns it. governanceContext is present once a governance decision has set it.",
+        "properties": {
+          "_id": {
+            "type": "string",
+            "description": "The Mongo ObjectId, as a string."
+          },
+          "collectionId": {
+            "type": "string",
+            "description": "The business key; a UUID is generated when the body sends none."
+          },
+          "collectionName": {
+            "type": "string",
+            "description": "Required, a non-empty string.",
+            "minLength": 1
+          },
+          "collectionStatus": {
+            "type": "string",
+            "description": "Defaults to active.",
+            "default": "active"
+          },
+          "governanceRegime": {
+            "type": "string",
+            "enum": [
+              "biobank",
+              "biorepository"
+            ],
+            "nullable": true
+          },
+          "exclusionCriteria": {
+            "type": "string",
+            "description": "A string; stored as null when absent.",
+            "nullable": true
+          },
+          "participantCount": {
+            "type": "integer",
+            "minimum": 0,
+            "nullable": true,
+            "description": "A non-negative integer (a numeric string is accepted and stored as a number); null when absent."
+          },
+          "sampleCount": {
+            "type": "integer",
+            "minimum": 0,
+            "nullable": true,
+            "description": "A non-negative integer (a numeric string is accepted and stored as a number); null when absent."
+          },
+          "relatedPublications": {
+            "type": "array",
+            "items": {},
+            "description": "An array, empty when absent; the entries are not validated."
+          },
+          "sampleTypes": {
+            "type": "array",
+            "items": {},
+            "description": "The sample types. An array of codes or codeable concepts, empty when absent; the entries are not validated."
+          },
+          "datasetTypes": {
+            "type": "array",
+            "items": {},
+            "description": "The dataset types. An array of codes or codeable concepts, empty when absent; the entries are not validated."
+          },
+          "diseaseScope": {
+            "type": "array",
+            "items": {},
+            "description": "The disease scope. An array of codes or codeable concepts, empty when absent; the entries are not validated."
+          },
+          "inclusionCriteriaCategories": {
+            "type": "array",
+            "items": {},
+            "description": "The inclusion criteria categories. An array of codes or codeable concepts, empty when absent; the entries are not validated."
+          },
+          "miabisUseAccessConditions": {
+            "type": "array",
+            "items": {},
+            "description": "The MIABIS use and access conditions. An array of codes or codeable concepts, empty when absent; the entries are not validated."
+          },
+          "storageTemperatureCategories": {
+            "type": "array",
+            "items": {},
+            "description": "The storage temperature categories. An array of codes or codeable concepts, empty when absent; the entries are not validated."
+          },
+          "governanceContext": {
+            "type": "object",
+            "additionalProperties": true,
+            "nullable": true,
+            "description": "Written only by POST /api/collections/{collectionId}/governance/events."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "_id"
+        ]
+      },
+      "WorkflowRunRecord": {
+        "type": "object",
+        "description": "A WorkflowRun document as the API returns it.",
+        "properties": {
+          "_id": {
+            "type": "string",
+            "description": "The Mongo ObjectId, as a string."
+          },
+          "workflowRunId": {
+            "type": "string",
+            "description": "The business key; a UUID is generated when the body sends none."
+          },
+          "workflowId": {
+            "type": "string",
+            "description": "Required, a non-empty string.",
+            "minLength": 1
+          },
+          "workflowVersion": {
+            "type": "string",
+            "description": "Required, a non-empty string.",
+            "minLength": 1
+          },
+          "createdBy": {
+            "type": "string",
+            "description": "Required, a non-empty string: the executor.",
+            "minLength": 1
+          },
+          "containerImageDigest": {
+            "type": "string",
+            "description": "A string; stored as null when absent.",
+            "nullable": true
+          },
+          "softwareDependencies": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            },
+            "description": "Each entry is an object; empty when absent."
+          },
+          "parameters": {
+            "type": "object",
+            "additionalProperties": true,
+            "nullable": true,
+            "description": "An object (not an array); stored as null when absent."
+          },
+          "inputFileIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Non-empty strings; empty when absent. The entries are not resolved here; POST /api/workflow-runs/{workflowRunId}/files links a file that exists."
+          },
+          "outputFileIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Non-empty strings; empty when absent. The entries are not resolved here; POST /api/workflow-runs/{workflowRunId}/files links a file that exists."
+          },
+          "hardwareProfile": {
+            "type": "object",
+            "additionalProperties": true,
+            "minProperties": 1,
+            "description": "Required, a non-empty object."
+          },
+          "randomSeed": {
+            "type": "integer",
+            "nullable": true,
+            "description": "A safe integer, 0 kept; null when absent."
+          },
+          "datasetSnapshotId": {
+            "type": "string",
+            "description": "A non-empty string; accepted and not resolved.",
+            "nullable": true
+          },
+          "environmentManifestUri": {
+            "type": "string",
+            "description": "Required, an absolute URI (a scheme of two or more characters, then a colon); a drive-letter path is not one."
+          },
+          "failureReason": {
+            "type": "string",
+            "description": "A non-empty string, allowed only when runStatus is failed or cancelled.",
+            "nullable": true
+          },
+          "resumesWorkflowRunId": {
+            "type": "string",
+            "description": "A non-empty string naming a stored failed or cancelled run with the same workflowId and workflowVersion; never the run itself. It is registered on create and cannot be named by an update, not even as null (422).",
+            "nullable": true
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Required, a valid date."
+          },
+          "completedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "A valid date; null when absent.",
+            "nullable": true
+          },
+          "runStatus": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "succeeded",
+              "failed",
+              "cancelled"
+            ],
+            "description": "Required."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "_id"
+        ]
+      },
+      "AssayFileRecord": {
+        "type": "object",
+        "description": "A file of an Assay as the upload, list and replace responses carry it; the descriptions of the fields say which response omits one. No storage path is returned.",
+        "properties": {
+          "_id": {
+            "type": "string",
+            "description": "The id of the file record."
+          },
+          "assayId": {
+            "type": "string",
+            "description": "The assayId of the assay."
+          },
+          "fileName": {
+            "type": "string",
+            "description": "The uploaded name."
+          },
+          "fileType": {
+            "type": "string",
+            "description": "The extension without its dot, upper case (CSV, FASTQ.GZ...)."
+          },
+          "mimeType": {
+            "type": "string",
+            "description": "The canonical MIME type of the extension."
+          },
+          "fileSize": {
+            "type": "integer"
+          },
+          "uploaderAnonId": {
+            "type": "string",
+            "description": "The anonymized id of the uploader."
+          },
+          "ownerId": {
+            "type": "string",
+            "description": "Not carried by the replace response."
+          },
+          "retentionPolicyId": {
+            "type": "string",
+            "description": "Not carried by the replace response.",
+            "nullable": true
+          },
+          "linkedEntityRefs": {
+            "type": "array",
+            "description": "The parent first, then any consent, approval or study the upload named. Not carried by the replace response.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "entityType": {
+                  "type": "string"
+                },
+                "entityId": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "uploadDate": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Not carried by the list response."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Carried only by the list response."
+          },
+          "uri": {
+            "type": "string",
+            "description": "The object-store URI of the file."
+          },
+          "storageObjectVersion": {
+            "type": "string",
+            "description": "Carried by the upload and replace responses."
+          },
+          "checksum": {
+            "type": "string",
+            "description": "SHA-256 of the original content."
+          },
+          "checksumAlgorithm": {
+            "type": "string",
+            "description": "sha256."
+          },
+          "versionNumber": {
+            "type": "integer",
+            "description": "Carried only by the replace response: the version the previous binary was kept as."
+          },
+          "encryption": {
+            "type": "object",
+            "properties": {
+              "encrypted": {
+                "type": "boolean"
+              },
+              "algorithm": {
+                "type": "string",
+                "nullable": true
+              }
+            }
+          },
+          "accessPolicy": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "_id",
+          "assayId",
+          "fileName"
+        ]
+      },
+      "DatasetFileRecord": {
+        "type": "object",
+        "description": "A file of a Dataset as the upload, list and replace responses carry it; the descriptions of the fields say which response omits one. No storage path is returned.",
+        "properties": {
+          "_id": {
+            "type": "string",
+            "description": "The id of the file record."
+          },
+          "datasetId": {
+            "type": "string",
+            "description": "The datasetId of the dataset."
+          },
+          "fileName": {
+            "type": "string",
+            "description": "The uploaded name."
+          },
+          "fileType": {
+            "type": "string",
+            "description": "The extension without its dot, upper case (CSV, FASTQ.GZ...)."
+          },
+          "mimeType": {
+            "type": "string",
+            "description": "The canonical MIME type of the extension."
+          },
+          "fileSize": {
+            "type": "integer"
+          },
+          "uploaderAnonId": {
+            "type": "string",
+            "description": "The anonymized id of the uploader."
+          },
+          "ownerId": {
+            "type": "string",
+            "description": "Not carried by the replace response."
+          },
+          "retentionPolicyId": {
+            "type": "string",
+            "description": "Not carried by the replace response.",
+            "nullable": true
+          },
+          "linkedEntityRefs": {
+            "type": "array",
+            "description": "The parent first, then any consent, approval or study the upload named. Not carried by the replace response.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "entityType": {
+                  "type": "string"
+                },
+                "entityId": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "uploadDate": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Not carried by the list response."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Carried only by the list response."
+          },
+          "uri": {
+            "type": "string",
+            "description": "The object-store URI of the file."
+          },
+          "storageObjectVersion": {
+            "type": "string",
+            "description": "Carried by the upload and replace responses."
+          },
+          "checksum": {
+            "type": "string",
+            "description": "SHA-256 of the original content."
+          },
+          "checksumAlgorithm": {
+            "type": "string",
+            "description": "sha256."
+          },
+          "versionNumber": {
+            "type": "integer",
+            "description": "Carried only by the replace response: the version the previous binary was kept as."
+          },
+          "encryption": {
+            "type": "object",
+            "properties": {
+              "encrypted": {
+                "type": "boolean"
+              },
+              "algorithm": {
+                "type": "string",
+                "nullable": true
+              }
+            }
+          },
+          "accessPolicy": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "_id",
+          "datasetId",
+          "fileName"
+        ]
+      },
+      "CollectionGovernanceApproval": {
+        "type": "object",
+        "description": "An approval a collection's governance rests on.",
+        "properties": {
+          "_id": {
+            "type": "string",
+            "description": "The Mongo ObjectId, as a string."
+          },
+          "approvalId": {
+            "type": "string",
+            "description": "A UUID."
+          },
+          "collectionId": {
+            "type": "string"
+          },
+          "authority": {
+            "type": "string"
+          },
+          "caae": {
+            "type": "string",
+            "nullable": true
+          },
+          "documentUri": {
+            "type": "string"
+          },
+          "documentChecksum": {
+            "type": "string"
+          },
+          "effectivePeriod": {
+            "type": "object",
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time",
+                "nullable": true
+              }
+            }
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "active",
+              "suspended",
+              "revoked"
+            ]
+          },
+          "responsibleOrganizationId": {
+            "type": "string"
+          },
+          "statusHistory": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "from": {
+                  "type": "string"
+                },
+                "to": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "changedBy": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "changedAt": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              }
+            }
+          },
+          "createdBy": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "approvalId",
+          "collectionId",
+          "status"
+        ]
+      },
+      "CollectionGovernanceEvent": {
+        "type": "object",
+        "description": "An append-only governance decision of a collection.",
+        "properties": {
+          "_id": {
+            "type": "string",
+            "description": "The Mongo ObjectId, as a string."
+          },
+          "collectionGovernanceEventId": {
+            "type": "string",
+            "description": "A UUID."
+          },
+          "collectionId": {
+            "type": "string"
+          },
+          "previousRegime": {
+            "type": "string",
+            "enum": [
+              "biobank",
+              "biorepository"
+            ],
+            "nullable": true
+          },
+          "newRegime": {
+            "type": "string",
+            "enum": [
+              "biobank",
+              "biorepository"
+            ]
+          },
+          "decisionType": {
+            "type": "string",
+            "enum": [
+              "created",
+              "regime_change"
+            ]
+          },
+          "approvalIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "justification": {
+            "type": "string"
+          },
+          "occurredAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "recordedBy": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "collectionGovernanceEventId",
+          "collectionId",
+          "newRegime",
+          "decisionType"
+        ]
+      },
+      "CollectionGovernance": {
+        "type": "object",
+        "description": "A collection's governance: its regime, its one context and the approvals and events behind them.",
+        "properties": {
+          "collectionId": {
+            "type": "string"
+          },
+          "governanceRegime": {
+            "type": "string",
+            "enum": [
+              "biobank",
+              "biorepository"
+            ],
+            "nullable": true
+          },
+          "governanceContext": {
+            "type": "object",
+            "additionalProperties": true,
+            "nullable": true
+          },
+          "approvals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CollectionGovernanceApproval"
+            }
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CollectionGovernanceEvent"
+            }
+          }
+        },
+        "required": [
+          "collectionId",
+          "approvals",
+          "events"
+        ]
+      },
+      "WorkflowRunLineage": {
+        "type": "object",
+        "description": "The runs upstream and downstream of a workflow run, and the shared files linking them.",
+        "properties": {
+          "workflowRunId": {
+            "type": "string"
+          },
+          "runs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "workflowRunId": {
+                  "type": "string"
+                },
+                "workflowId": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "workflowVersion": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "runStatus": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "datasetSnapshotId": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "inputFileIds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "outputFileIds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "relation": {
+                  "type": "string",
+                  "enum": [
+                    "root",
+                    "upstream",
+                    "downstream"
+                  ]
+                },
+                "depth": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "workflowRunId",
+                "relation",
+                "depth"
+              ]
+            }
+          },
+          "edges": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "fromWorkflowRunId": {
+                  "type": "string"
+                },
+                "toWorkflowRunId": {
+                  "type": "string"
+                },
+                "fileId": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "True when the depth or run cap stopped the walk."
+          }
+        },
+        "required": [
+          "workflowRunId",
+          "runs",
+          "edges",
+          "truncated"
         ]
       }
     },
