@@ -167,6 +167,12 @@ module.exports = {
   OBJECT_STORE_S3_TIMEOUT_MS: process.env.OBJECT_STORE_S3_TIMEOUT_MS,
   BACKUP_CRON: process.env.BACKUP_CRON,
   BACKUP_RETENTION_DAYS: process.env.BACKUP_RETENTION_DAYS,
+  // #1325 (RNF010 C1): off-site copy of each encrypted run; unset keeps it off.
+  BACKUP_OFFSITE_S3_ENDPOINT: process.env.BACKUP_OFFSITE_S3_ENDPOINT,
+  BACKUP_OFFSITE_S3_BUCKET: process.env.BACKUP_OFFSITE_S3_BUCKET,
+  BACKUP_OFFSITE_S3_REGION: process.env.BACKUP_OFFSITE_S3_REGION,
+  BACKUP_OFFSITE_S3_ACCESS_KEY_ID: process.env.BACKUP_OFFSITE_S3_ACCESS_KEY_ID,
+  BACKUP_OFFSITE_S3_SECRET_ACCESS_KEY: process.env.BACKUP_OFFSITE_S3_SECRET_ACCESS_KEY,
   // #749: read by scheduler.service.js#startRetentionSweepSchedule since it
   // was written, but never registered here -- so the override was dead and
   // the sweep was pinned to its 0 4 * * * fallback no matter what was set.

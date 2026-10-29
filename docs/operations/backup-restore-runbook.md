@@ -2,7 +2,7 @@
 
 Answers RNF006 C2 ("Documentar ... backup, restauração") and the backup and continuity part of RNF013 C2. Written 2026-10-25. It describes what the code does at this commit, nothing more; everything RNF010 asks for that the code does not do is listed under [Gaps](#10-gaps-rnf010), never as a procedure. Tracking issue: #1325.
 
-Sources: `api/backend/src/services/backup.service.js`, `backup-stores.service.js`, `backup-policy.service.js`, `scheduler.service.js`, `api/backend/src/interface/routes/backup.routes.js`, `backupPolicy.routes.js`, `compose.prod.yml`, `.env.production.example`, `api/backend/Dockerfile.prod`.
+Sources: `api/backend/src/services/backup.service.js`, `backup-stores.service.js`, `backup-offsite.service.js`, `backup-policy.service.js`, `scheduler.service.js`, `api/backend/src/interface/routes/backup.routes.js`, `backupPolicy.routes.js`, `compose.prod.yml`, `.env.production.example`, `api/backend/Dockerfile.prod`.
 
 ## 1. What is backed up
 
@@ -20,6 +20,14 @@ The Neo4j and InfluxDB exports run after the MongoDB dump, in both the `mongodum
 - One folder per run, named `YYYY-MM-DD`. When that folder already exists (a second run on the same day), the name gets a `_H-M-S` time suffix.
 - Each folder holds a `manifest.json` with `type` (`mongodump` or `json-fallback`), `dbName`, `createdAt`, and `checksum`: a sha256 over every file in the folder except `manifest.json` itself. When the run was encrypted, a `mongodump` manifest also holds `encrypted: true` and `encryptedFiles`, one entry per dump file with its algorithm, key id, IV and tag.
 - The Neo4j export is in the folder's `neo4j/` subfolder (`nodes.ndjson`, `relationships.ndjson`, one JSON object per line, and `schema.json`), the InfluxDB export in `influxdb/` (`points.ndjson`). The manifest's `stores` field holds one entry per store: `neo4j` (`status`, `database`, `nodes`, `relationships`, `files`) and `influxdb` (`status`, `bucket`, `org`, `points`, `files`), or the skipped result of section 1. The run's response carries the same `stores`. The checksum covers these files too.
+- Off-site copy (`backup-offsite.service.js`), run after `manifest.json` is written and before retention, in both the `mongodump` and the JSON-fallback paths:
+  - Settings: `BACKUP_OFFSITE_S3_ENDPOINT`, `BACKUP_OFFSITE_S3_BUCKET`, `BACKUP_OFFSITE_S3_ACCESS_KEY_ID`, `BACKUP_OFFSITE_S3_SECRET_ACCESS_KEY`, and `BACKUP_OFFSITE_S3_REGION` (default `us-east-1`). None of the four set: the copy is off, recorded as `{ "status": "skipped", "reason": "not_configured" }`. Only some of them set: every run fails (section 6). An endpoint with a query, a fragment or credentials, or a bucket name S3 does not allow, fails the run too.
+  - Only an encrypted run is copied. A run with encryption off is recorded as `{ "status": "skipped", "reason": "not_encrypted" }`, with a warning logged, and nothing is sent.
+  - Each file of the run's folder is sent by a signed `PUT` (AWS Signature Version 4, path-style `<endpoint>/<bucket>/<key>`) to the key `backups/<folder>/<path>`, one file at a time, with `manifest.json` last: a manifest present in the bucket means every other file of the run is there. The manifest is plaintext metadata (names, counts, checksum, encryption envelopes), no record data.
+  - Only files the run's `manifest.json` accounts for are sent: the manifest itself, the files listed in its `encryptedFiles` (`mongodump`) or `collections` (JSON fallback), and each store's `stores.<store>.files`. Before any request, a file in the folder that the manifest does not list fails the copy, and with it the run (`Cópia off-site falhou: <path> não consta do manifest.json.`), and nothing is sent. This covers a plaintext dump file that a failed `mongodump` run left behind in a folder the JSON fallback then reused. A `manifest.json` that cannot be parsed fails the copy too.
+  - Every `PUT` carries `If-None-Match: *`, so an object already in the bucket is never overwritten; the bucket answering 412 fails the run.
+  - On success the result is `{ "status": "uploaded", "bucket": ..., "prefix": "backups/<folder>/", "files": <count> }`. The run's response and its `backupHistory` row carry it in the field `offsite`.
+  - The code deletes nothing in the bucket and reads nothing back from it. Off-site retention is a lifecycle rule set on the bucket.
 
 ## 3. Encryption
 
@@ -45,10 +53,11 @@ The Neo4j and InfluxDB exports run after the MongoDB dump, in both the `mongodum
 ## 6. Run a backup by hand
 
 - `POST /api/backup/perform`: authenticated, permission `manageBackup`, which the RBAC seed grants to the Administrador role. Or the Backup page (`/backup`, Administrador only).
-- Each run writes one `backupHistory` row: `startedAt`, `completedAt`, `status` (`success`, `skipped` or `error`), `mode`, `path`, `checksum`, `error`.
+- Each run writes one `backupHistory` row: `startedAt`, `completedAt`, `status` (`success`, `skipped` or `error`), `mode`, `path`, `checksum`, `error`, `offsite`.
 - `GET /api/backup/list` lists the backup folders, newest first, each with its size, dates and the `status` and `checksum` of its `backupHistory` row.
 - After a manual run, confirm the response has `success: true` and a `checksum`, and that `GET /api/backup/list` shows the new folder with status `success`.
 - A failed Neo4j or InfluxDB export (the store unreachable, partly configured, or holding a value the export cannot type) fails the whole run: the response has `success: false` and an `error` naming the store (`Backup de Neo4j falhou: ...` or `Backup de InfluxDB falhou: ...`), the `backupHistory` row has status `error`, and the folder gets no `manifest.json`, so a restore test of it fails. Retention deletes nothing after such a run (section 5).
+- A failed off-site copy (partial settings, an invalid endpoint or bucket, the bucket unreachable, or a `PUT` answered with any status but 200) fails the whole run, at the first failed file: the response has `success: false` and an `error` starting `Cópia off-site falhou`, which names neither the endpoint nor a credential, and the `backupHistory` row has status `error`, with the run's `path` and `checksum` in the `mongodump` path (the JSON-fallback path records neither). The local folder and its `manifest.json` stay, and retention deletes nothing after such a run (section 5).
 
 ## 7. Policy
 
@@ -67,6 +76,8 @@ The Neo4j and InfluxDB exports run after the MongoDB dump, in both the `mongodum
 ## 8. Restore
 
 `POST /api/backup/restore/:fileName` (permission `manageBackup`), where `fileName` is a folder name from `GET /api/backup/list`.
+
+A restore or restore test reads only a folder under `BACKUP_DIR`, never the bucket: an off-site copy is first copied back into `BACKUP_DIR/<folder>` with any S3 client (prefix `backups/<folder>/`), then restore-tested (section 9) like any other folder.
 
 What it does:
 
@@ -100,7 +111,7 @@ RNF010: "A plataforma deve adotar estratégia de backup 3-2-1, com cópias cript
 
 | Criterion | What the code does today | Gap |
 |---|---|---|
-| RNF010 C1, 3-2-1 ("pelo menos três cópias, em duas tecnologias ou mídias, com uma cópia fora do ambiente principal") | One copy, in the `backups_data` volume on the same Docker host as the data. | Not implemented: no second copy, no second medium, no off-site copy. |
+| RNF010 C1, 3-2-1 ("pelo menos três cópias, em duas tecnologias ou mídias, com uma cópia fora do ambiente principal") | One copy in the `backups_data` volume on the same Docker host as the data; when the `BACKUP_OFFSITE_S3_*` settings are set, a second copy of each encrypted run in an S3-compatible bucket (section 2). | Not implemented: the off-site copy is not live until the bucket, endpoint and credentials are set, and they have not been provided; a plaintext run is not copied; that is still two copies, not three; the code sets no off-site retention and never verifies the off-site copy. |
 | Redis | Not backed up. Its data lives in the `redis_data` volume. | Not implemented: no backup of Redis. |
 | Neo4j and InfluxDB restore | Each run exports both (section 1); the restore test decrypts and parses both exports (section 9) but loads them into no database. The Neo4j node and relationship queries run in one read transaction, which is not a point-in-time snapshot across the two. | Not implemented: no restore of either export into Neo4j or InfluxDB, and no load into a scratch instance (Neo4j Community has a single database); the Neo4j export is not a point-in-time snapshot, so a write between its two queries fails the restore test's endpoint check. |
 | File binaries | Uploads and stored files live in `uploads_data` and `storage_data` (and in an object store when `OBJECT_STORE_DRIVER` configures one). Not backed up. | Not implemented: no backup of file binaries. |
@@ -108,5 +119,5 @@ RNF010: "A plataforma deve adotar estratégia de backup 3-2-1, com cópias cript
 | Encryption key | The key is not in the backup and the code escrows it nowhere (section 3). | Not implemented: no key escrow. |
 | RNF010 C2, RPO 24 h ("até 24 horas") | `rpoHours` is stored and validated (1-24); nothing measures it. | Not implemented: RPO is not measured or alerted on. |
 | RNF010 C3, RTO 12 h ("até 12 horas") | `rtoHours` is stored and validated (1-12); nothing measures it. | Not implemented: RTO is not measured; no timed full recovery. |
-| RNF010 C5, periodic restore test validated by checksum | Weekly restore test of MongoDB, with a parse check of the Neo4j and InfluxDB exports (section 9); a checksum mismatch or a failed store check fails the run and is logged as an error. | Not implemented: no load of the Neo4j and InfluxDB exports, no full-system restore has been run, and no alert is raised beyond the error log. |
+| RNF010 C5, periodic restore test validated by checksum | Weekly restore test of MongoDB, with a parse check of the Neo4j and InfluxDB exports (section 9); a checksum mismatch or a failed store check fails the run and is logged as an error. | Not implemented: no load of the Neo4j and InfluxDB exports, no full-system restore has been run, no restore test reads the off-site copy (it must be copied back first, section 8), and no alert is raised beyond the error log. |
 | Restore integrity | A restore does not verify the manifest checksum and takes no safety backup (section 8). | Not implemented: no checksum check or safety backup before a live restore. |

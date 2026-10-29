@@ -8,6 +8,7 @@ const mongodb = require('mongodb');
 const logger = require('../../../src/utils/logger');
 const env = require('../../../src/config/env');
 const backupStores = require('../../../src/services/backup-stores.service');
+const backupOffsite = require('../../../src/services/backup-offsite.service');
 
 // Note on `exec` and `MongoClient`: backup.service.js does
 // `const { exec } = require('child_process')` and
@@ -40,6 +41,9 @@ describe('backup.service', () => {
       neo4j: { status: 'skipped', reason: 'not_configured' },
       influxdb: { status: 'skipped', reason: 'not_configured' },
     });
+    // #1325 (RNF010 C1): the off-site upload is replaced by its
+    // not-configured result unless a case says otherwise.
+    vi.spyOn(backupOffsite, 'uploadBackupRunOffsite').mockResolvedValue({ status: 'skipped', reason: 'not_configured' });
   });
 
   // #1325: an exported-shaped stores result, distinct from the default above.
@@ -356,6 +360,100 @@ describe('backup.service', () => {
       const manifestWrite = fs.promises.writeFile.mock.calls.find(([filePath]) => String(filePath).endsWith('manifest.json'));
       expect(JSON.parse(manifestWrite[1]).stores).toEqual(EXPORTED_STORES);
     });
+
+    it('uploads the run off-site after the manifest is written and returns its result (#1325)', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = undefined;
+      env.BACKUP_DIR = path.join('C:', 'tmp', 'backup-service-test-basedir-9');
+      env.BACKUP_RETENTION_DAYS = undefined;
+
+      vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+      vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
+      vi.spyOn(fs.promises, 'readdir').mockResolvedValue([]);
+      vi.spyOn(fs.promises, 'writeFile').mockResolvedValue();
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => cb(null, 'ok', ''));
+
+      const backupService = freshBackupService();
+      const result = await backupService.runBackup(plaintextPolicyDb());
+
+      expect(result.success).toBe(true);
+      expect(backupOffsite.uploadBackupRunOffsite).toHaveBeenCalledTimes(1);
+      expect(backupOffsite.uploadBackupRunOffsite).toHaveBeenCalledWith(result.path, false);
+      const manifestIndex = fs.promises.writeFile.mock.calls.findIndex(([filePath]) => String(filePath).endsWith('manifest.json'));
+      expect(manifestIndex).toBeGreaterThanOrEqual(0);
+      expect(backupOffsite.uploadBackupRunOffsite.mock.invocationCallOrder[0])
+        .toBeGreaterThan(fs.promises.writeFile.mock.invocationCallOrder[manifestIndex]);
+      expect(result.offsite).toEqual({ status: 'skipped', reason: 'not_configured' });
+    });
+
+    // #1325: the outer catch's dumpBinaryMissing test matches ENOENT, so an
+    // off-site error carrying it must be answered before that catch.
+    it('fails the run keeping path and checksum, with no retention and no JSON fallback, when the off-site upload rejects with ENOENT (#1325)', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = undefined;
+      env.BACKUP_DIR = path.join('C:', 'tmp', 'backup-service-test-basedir-10');
+      env.BACKUP_RETENTION_DAYS = undefined;
+
+      vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+      vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
+      vi.spyOn(fs.promises, 'readdir').mockResolvedValue([]);
+      vi.spyOn(fs.promises, 'writeFile').mockResolvedValue();
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => cb(null, 'ok', ''));
+      const offsiteError = 'Cópia off-site falhou: PUT de x falhou (ENOENT).';
+      backupOffsite.uploadBackupRunOffsite.mockRejectedValue(new Error(offsiteError));
+      vi.spyOn(mongodb, 'MongoClient').mockImplementation(function () {
+        throw new Error('the JSON fallback must not run');
+      });
+      const db = plaintextPolicyDb();
+
+      const backupService = freshBackupService();
+      const result = await backupService.runBackup(db);
+
+      expect(result).toEqual({ success: false, error: offsiteError, path: expect.any(String), checksum: expect.stringMatching(/^[0-9a-f]{64}$/) });
+      expect(result.path).toContain(env.BACKUP_DIR);
+      expect(mongodb.MongoClient).not.toHaveBeenCalled();
+      // ensureDirSync(baseDir) at the start; cleanupOldBackups would be the second.
+      expect(fs.existsSync.mock.calls.filter(([dirPath]) => dirPath === env.BACKUP_DIR)).toHaveLength(1);
+      expect(db.collection('backupHistory').insertOne).toHaveBeenCalledWith(expect.objectContaining({
+        status: 'error', error: offsiteError, path: result.path, checksum: result.checksum
+      }));
+    });
+
+    it('uploads the JSON-fallback run off-site and fails the run when that upload rejects (#1325)', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = undefined;
+      env.BACKUP_DIR = path.join('C:', 'tmp', 'backup-service-test-basedir-11');
+      env.BACKUP_RETENTION_DAYS = undefined;
+
+      vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+      vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
+      vi.spyOn(fs.promises, 'readdir').mockResolvedValue([]);
+      vi.spyOn(fs.promises, 'writeFile').mockResolvedValue();
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => {
+        cb({ message: "'mongodump' is not recognized as an internal or external command" }, '', 'is not recognized');
+      });
+      const fakeDb = {
+        listCollections: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([]) })),
+        collection: vi.fn()
+      };
+      const fakeClient = {
+        connect: vi.fn().mockResolvedValue(),
+        db: vi.fn(() => fakeDb),
+        close: vi.fn().mockResolvedValue()
+      };
+      vi.spyOn(mongodb, 'MongoClient').mockImplementation(function () { return fakeClient; });
+      const offsiteError = 'Cópia off-site falhou: PUT de manifest.json respondeu 500.';
+      backupOffsite.uploadBackupRunOffsite.mockRejectedValue(new Error(offsiteError));
+
+      const backupService = freshBackupService();
+      const result = await backupService.runBackup(plaintextPolicyDb());
+
+      expect(result).toEqual({ success: false, error: offsiteError });
+      expect(backupOffsite.uploadBackupRunOffsite).toHaveBeenCalledTimes(1);
+      expect(backupOffsite.uploadBackupRunOffsite.mock.calls[0][1]).toBe(false);
+      // ensureDirSync(baseDir) at the start; cleanupOldBackups would be the second.
+      expect(fs.existsSync.mock.calls.filter(([dirPath]) => dirPath === env.BACKUP_DIR)).toHaveLength(1);
+    });
   });
 
   // #723 (RF013 AC#1): runBackup(db) persists one history entry per run,
@@ -498,6 +596,27 @@ describe('backup.service', () => {
 
       expect(result.success).toBe(true);
       expect(logger.error).toHaveBeenCalledWith('Erro ao registrar histórico de backup:', 'history db down');
+    });
+
+    it('records the off-site result in the backupHistory row (#1325)', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = undefined;
+      env.BACKUP_DIR = path.join('C:', 'tmp', 'backup-service-test-history-6');
+
+      vi.spyOn(fs, 'existsSync').mockReturnValue(false);
+      vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
+      vi.spyOn(fs.promises, 'readdir').mockResolvedValue([]);
+      vi.spyOn(fs.promises, 'writeFile').mockResolvedValue();
+      vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => cb(null, 'ok', ''));
+      const uploaded = { status: 'uploaded', bucket: 'biobank-backups', prefix: 'backups/x/', files: 3 };
+      backupOffsite.uploadBackupRunOffsite.mockResolvedValue(uploaded);
+
+      const backupService = freshBackupService();
+      const { db, insertOne } = fakeHistoryDb();
+      const result = await backupService.runBackup(db);
+
+      expect(result.offsite).toEqual(uploaded);
+      expect(insertOne).toHaveBeenCalledWith(expect.objectContaining({ status: 'success', offsite: uploaded }));
     });
   });
 
@@ -1819,6 +1938,77 @@ describe('backup.service', () => {
         } else {
           process.env.ENCRYPTION_KEY = originalEncryptionKey;
         }
+        await fs.promises.rm(baseDir, { recursive: true, force: true });
+      }
+    });
+
+    // #1325 (RNF010 C1): mongodump writes a plaintext dump file, its
+    // encryption throws ENOENT, and the JSON fallback reuses the folder. The
+    // leftover dump file is in no manifest entry, so the off-site copy sends
+    // nothing and the run fails.
+    it('sends no leftover plaintext dump file off-site when the JSON fallback reuses the folder (#1325)', async () => {
+      env.MONGO_URI = 'mongodb://localhost:27017/test';
+      env.MONGO_DB = 'mydb';
+      const os = require('os');
+      const http = require('http');
+      const baseDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'bioavanced-1325-offsite-'));
+      env.BACKUP_DIR = baseDir;
+      const offsiteNames = ['BACKUP_OFFSITE_S3_ENDPOINT', 'BACKUP_OFFSITE_S3_BUCKET', 'BACKUP_OFFSITE_S3_ACCESS_KEY_ID', 'BACKUP_OFFSITE_S3_SECRET_ACCESS_KEY'];
+      const offsiteEnv = Object.fromEntries(offsiteNames.map((name) => [name, env[name]]));
+      const requests = [];
+      const server = http.createServer((req, res) => {
+        req.resume();
+        req.on('end', () => {
+          requests.push(`${req.method} ${req.url}`);
+          res.statusCode = 200;
+          res.end();
+        });
+      });
+      await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+
+      try {
+        env.BACKUP_OFFSITE_S3_ENDPOINT = `http://127.0.0.1:${server.address().port}`;
+        env.BACKUP_OFFSITE_S3_BUCKET = 'biobank-backups';
+        env.BACKUP_OFFSITE_S3_ACCESS_KEY_ID = 'TESTACCESSKEY';
+        env.BACKUP_OFFSITE_S3_SECRET_ACCESS_KEY = 'test-secret-key-never-logged';
+        backupOffsite.uploadBackupRunOffsite.mockRestore();
+
+        vi.spyOn(cp, 'exec').mockImplementation((command, opts, cb) => {
+          const outDir = /--out="([^"]+)"/.exec(command)[1];
+          fs.mkdirSync(path.join(outDir, 'biobank'), { recursive: true });
+          fs.writeFileSync(path.join(outDir, 'biobank', 'patients.bson'), 'PLAINTEXT-PATIENT-RECORD');
+          cb(null, 'ok', '');
+        });
+        vi.spyOn(backupStores, 'encryptFileInPlace')
+          .mockRejectedValueOnce(new Error('ENOENT: no such file or directory, open patients.bson'));
+        const fakeCollection = {
+          find: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([{ _id: 1, name: 'x' }]) }))
+        };
+        const fakeBackupDb = {
+          listCollections: vi.fn(() => ({ toArray: vi.fn().mockResolvedValue([{ name: 'patients' }]) })),
+          collection: vi.fn(() => fakeCollection)
+        };
+        const fakeClient = {
+          connect: vi.fn().mockResolvedValue(),
+          db: vi.fn(() => fakeBackupDb),
+          close: vi.fn().mockResolvedValue()
+        };
+        vi.spyOn(mongodb, 'MongoClient').mockImplementation(function () { return fakeClient; });
+
+        const backupService = freshBackupService();
+        const appDb = makeAppDbWithPolicy(true);
+        const result = await backupService.runBackup(appDb);
+
+        expect(mongodb.MongoClient).toHaveBeenCalled();
+        expect(result.success).toBe(false);
+        expect(result.error).toBe('Cópia off-site falhou: biobank/patients.bson não consta do manifest.json.');
+        expect(requests).toEqual([]);
+        expect(appDb.collection('backupHistory').insertOne).toHaveBeenCalledWith(expect.objectContaining({
+          status: 'error', error: result.error
+        }));
+      } finally {
+        Object.assign(env, offsiteEnv);
+        await new Promise((resolve) => server.close(resolve));
         await fs.promises.rm(baseDir, { recursive: true, force: true });
       }
     });

@@ -9,6 +9,8 @@ const backupPolicyService = require('./backup-policy.service');
 const { decryptFileBuffer } = require('../utils/fileCrypto');
 // #1325: taken as an object, so exportSecondaryStores is looked up per call.
 const backupStores = require('./backup-stores.service');
+// #1325 (RNF010 C1): taken as an object too, so uploadBackupRunOffsite is looked up per call.
+const backupOffsite = require('./backup-offsite.service');
 
 const { assertEncryptionKeyConfigured, encryptFileInPlace } = backupStores;
 
@@ -846,10 +848,23 @@ async function performBackup(retentionDaysOverride, encryptionEnabled = true) {
       'utf8'
     );
 
+    // #1325 (RNF010 C1): the off-site copy runs once the manifest is written
+    // and before retention. Its error is answered here, as a store error is,
+    // so an ENOENT in its message never starts the JSON fallback. The local
+    // copy is complete, so the run keeps its path and checksum.
+    let offsite;
+    try {
+      offsite = await backupOffsite.uploadBackupRunOffsite(backupDir, encryptionEnabled);
+    } catch (offsiteError) {
+      const offsiteDetails = offsiteError?.message || String(offsiteError);
+      logger.error('Erro ao executar backup:', offsiteDetails);
+      return { success: false, error: offsiteDetails, path: backupDir, checksum };
+    }
+
     const retentionDays = Number.isFinite(Number(retentionDaysOverride)) ? Number(retentionDaysOverride) : Number(env.BACKUP_RETENTION_DAYS || DEFAULT_RETENTION_DAYS);
     await cleanupOldBackups(baseDir, retentionDays);
 
-    return { success: true, path: backupDir, mode: 'mongodump', checksum, stores };
+    return { success: true, path: backupDir, mode: 'mongodump', checksum, stores, offsite };
   } catch (err) {
     const details = err && err.error ? err.error.message : err?.message;
     const dumpBinaryMissing = /mongodump: not found|is not recognized|ENOENT/i.test(String(details || ''));
@@ -858,12 +873,14 @@ async function performBackup(retentionDaysOverride, encryptionEnabled = true) {
       try {
         logger.warn('mongodump indisponível. Usando fallback de backup em JSON.');
         const fallbackResult = await writeJsonBackup(backupDir, mongoUri, encryptionEnabled);
+        // #1325 (RNF010 C1): a throw here is answered by the catch below.
+        const fallbackOffsite = await backupOffsite.uploadBackupRunOffsite(backupDir, encryptionEnabled);
 
         const retentionDays = Number.isFinite(Number(retentionDaysOverride)) ? Number(retentionDaysOverride) : Number(env.BACKUP_RETENTION_DAYS || DEFAULT_RETENTION_DAYS);
         await cleanupOldBackups(baseDir, retentionDays);
 
         logger.info(`✅ Backup fallback concluído: ${backupDir}`);
-        return fallbackResult;
+        return { ...fallbackResult, offsite: fallbackOffsite };
       } catch (fallbackError) {
         const fallbackDetails = fallbackError?.message || String(fallbackError);
         logger.error('Erro no fallback de backup JSON:', fallbackDetails);
@@ -902,7 +919,8 @@ async function runBackup(db) {
     mode: result.mode || null,
     path: result.path || null,
     checksum: result.checksum || null,
-    error: result.error || null
+    error: result.error || null,
+    offsite: result.offsite || null
   });
 
   return result;
