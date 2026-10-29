@@ -38,6 +38,13 @@ function renderPage() {
   );
 }
 
+// One input event per field: a user.type per keystroke re-renders the whole form
+// each key, which ran past the 5 s test timeout under a loaded parallel run (#1414).
+async function fill(user: User, field: HTMLElement, text: string) {
+  await user.click(field);
+  await user.paste(text);
+}
+
 async function openCreateForm(user: User) {
   await screen.findByText('bm-1');
   await user.click(screen.getByRole('button', { name: 'Nova Associação' }));
@@ -45,17 +52,17 @@ async function openCreateForm(user: User) {
 }
 
 async function fillRequired(user: User) {
-  await user.type(screen.getByLabelText('Sistema do analito'), ' http://loinc.org ');
-  await user.type(screen.getByLabelText('Código do analito'), '1234-5');
-  await user.type(screen.getByLabelText('Código da condição 1'), 'ORPHA:558');
-  await user.type(screen.getByLabelText('Nome da condição 1'), 'Marfan');
+  await fill(user, screen.getByLabelText('Sistema do analito'), ' http://loinc.org ');
+  await fill(user, screen.getByLabelText('Código do analito'), '1234-5');
+  await fill(user, screen.getByLabelText('Código da condição 1'), 'ORPHA:558');
+  await fill(user, screen.getByLabelText('Nome da condição 1'), 'Marfan');
   await user.click(screen.getByRole('button', { name: 'Adicionar condição' }));
   await user.selectOptions(screen.getByLabelText('Sistema da condição 2'), MONDO);
-  await user.type(screen.getByLabelText('Código da condição 2'), 'MONDO:0007947');
+  await fill(user, screen.getByLabelText('Código da condição 2'), 'MONDO:0007947');
   await user.selectOptions(screen.getByLabelText('Papel do biomarcador'), 'prognostic');
-  await user.type(screen.getByLabelText('Contexto de uso'), '  Acompanhamento  ');
+  await fill(user, screen.getByLabelText('Contexto de uso'), '  Acompanhamento  ');
   await user.selectOptions(screen.getByLabelText('Sistema da evidência 1'), 'DOI');
-  await user.type(screen.getByLabelText('Valor da evidência 1'), '10.1000/xyz');
+  await fill(user, screen.getByLabelText('Valor da evidência 1'), '10.1000/xyz');
 }
 
 describe('BiomarkerAssociationsPage (#1402, ELM-0275..0285)', () => {
@@ -78,7 +85,7 @@ describe('BiomarkerAssociationsPage (#1402, ELM-0275..0285)', () => {
   });
 
   it('creates with the typed fields and leaves a blank biomarkerId out', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     renderPage();
     const form = await openCreateForm(user);
     expect(screen.getByRole('button', { name: 'Remover condição 1' })).toBeDisabled();
@@ -106,10 +113,10 @@ describe('BiomarkerAssociationsPage (#1402, ELM-0275..0285)', () => {
     mocked.create.mockRejectedValue({
       response: { status: 409, data: { success: false, error: 'Registro duplicado', message: 'biomarkerId já existe' } },
     });
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     renderPage();
     const form = await openCreateForm(user);
-    await user.type(screen.getByLabelText('biomarkerId'), 'bm-dup');
+    await fill(user, screen.getByLabelText('biomarkerId'), 'bm-dup');
     await fillRequired(user);
     await user.click(within(form).getByRole('button', { name: 'Salvar' }));
 
@@ -124,7 +131,7 @@ describe('BiomarkerAssociationsPage (#1402, ELM-0275..0285)', () => {
     mocked.create.mockRejectedValue({
       response: { status: 422, data: { success: false, error: 'Payload inválido', details: ['a', 'b'] } },
     });
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     renderPage();
     const form = await openCreateForm(user);
     await fillRequired(user);
@@ -138,7 +145,7 @@ describe('BiomarkerAssociationsPage (#1402, ELM-0275..0285)', () => {
   });
 
   it('edits without sending biomarkerId', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     renderPage();
     await screen.findByText('bm-1');
     await user.click(screen.getByTitle('Editar'));
@@ -153,7 +160,7 @@ describe('BiomarkerAssociationsPage (#1402, ELM-0275..0285)', () => {
 
     const context = screen.getByLabelText('Contexto de uso');
     await user.clear(context);
-    await user.type(context, 'Diagnóstico precoce');
+    await fill(user, context, 'Diagnóstico precoce');
     const form = context.closest('form') as HTMLFormElement;
     await user.click(within(form).getByRole('button', { name: 'Salvar' }));
 
