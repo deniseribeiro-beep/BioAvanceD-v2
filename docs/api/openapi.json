@@ -86,7 +86,11 @@
     "/api/workflow-runs/{workflowRunId}/lineage",
     "/api/orphanet",
     "/api/hpo",
-    "/api/dictionary"
+    "/api/dictionary",
+    "/api/biobanks",
+    "/api/identifier-namespaces",
+    "/api/interoperability-mapping-releases",
+    "/api/fhir-profiles"
   ],
   "tags": [
     {
@@ -408,6 +412,22 @@
     {
       "name": "dictionary",
       "description": "/api/dictionary: the ORPHA, phenotype, disease-profile and medication dictionaries the intake reads."
+    },
+    {
+      "name": "biobanks",
+      "description": "/api/biobanks: the biobanks (name, legal entity, country, contact and capabilities)."
+    },
+    {
+      "name": "identifier-namespaces",
+      "description": "/api/identifier-namespaces: the identifier namespaces (namespace key, system URI, authority, target types and vigência)."
+    },
+    {
+      "name": "interoperability-mapping-releases",
+      "description": "/api/interoperability-mapping-releases: the versioned FHIR R4 mapping releases (coverage, loss report, approval and vigência)."
+    },
+    {
+      "name": "fhir-profiles",
+      "description": "/api/fhir-profiles: the FHIR profiles (canonical URL, version, identifier systems) registered under a mapping release."
     }
   ],
   "paths": {
@@ -51505,6 +51525,2209 @@
           }
         }
       }
+    },
+    "/api/biobanks": {
+      "get": {
+        "tags": [
+          "biobanks"
+        ],
+        "summary": "List the biobanks",
+        "description": "Gates: authenticate. Returns every record, newest createdAt first. The 401, 403 and 503 come from the gates. The 500 is also a failure of the read.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The biobanks records.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/BiobankRecord"
+                          }
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "biobanks"
+        ],
+        "summary": "Create a Biobank",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). Stores the fields the model keeps, never the whole body; biobankId is the body's, else a generated UUID. The 422 (error \"Payload inválido\", details a list of reasons) is a body the model refuses: a biobankName, biobankDescription, legalEntityId or biobankStatus that is not a non-empty string, a countryCode that is missing or not ISO 3166-1 alpha-2, a contactInformation without a filled contact, an infrastructureCapabilities, bioprocessingCapabilities, qualityManagementStandards, infrastructuralCapabilities, organisationalCapabilities or bioprocessingAnalyticalCapabilities that is not a list, a code list holding an empty or non-string code, or a url that is not a URI. The 404 is checked after the 422: legalEntityId names no organization (the organizationId is looked up in organizations). The 401, 403 and 503 come from the gates. The 500 is also a failure of the write.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "biobankId": {
+                    "description": "The business key; a UUID is generated when the body sends none. It is not validated."
+                  },
+                  "biobankName": {
+                    "type": "string",
+                    "description": "Required, a non-empty string.",
+                    "minLength": 1
+                  },
+                  "biobankDescription": {
+                    "type": "string",
+                    "description": "Required, a non-empty string.",
+                    "minLength": 1
+                  },
+                  "legalEntityId": {
+                    "type": "string",
+                    "description": "Required, the organizationId of an existing organization.",
+                    "minLength": 1
+                  },
+                  "biobankStatus": {
+                    "type": "string",
+                    "description": "Required, a non-empty string (an open code).",
+                    "minLength": 1
+                  },
+                  "countryCode": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z]{2}$",
+                    "description": "Required, an ISO 3166-1 alpha-2 code (trimmed); stored upper-cased."
+                  },
+                  "contactInformation": {
+                    "type": "object",
+                    "description": "Required, an object with at least one non-empty string value.",
+                    "properties": {}
+                  },
+                  "acronym": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "url": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "A URI that new URL() accepts when sent."
+                  },
+                  "infrastructureCapabilities": {
+                    "type": "array",
+                    "items": {},
+                    "description": "A list of codeable concepts, empty when absent; a value that is not a list answers 422, the entries are not validated."
+                  },
+                  "bioprocessingCapabilities": {
+                    "type": "array",
+                    "items": {},
+                    "description": "A list of codeable concepts, empty when absent; a value that is not a list answers 422, the entries are not validated."
+                  },
+                  "qualityManagementStandards": {
+                    "type": "array",
+                    "items": {},
+                    "description": "A list of codeable concepts, empty when absent; a value that is not a list answers 422, the entries are not validated."
+                  },
+                  "infrastructuralCapabilities": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Non-empty codes; stored as [] when omitted."
+                  },
+                  "organisationalCapabilities": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Non-empty codes; stored as [] when omitted."
+                  },
+                  "bioprocessingAnalyticalCapabilities": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Non-empty codes; stored as [] when omitted."
+                  }
+                },
+                "required": [
+                  "biobankName",
+                  "biobankDescription",
+                  "legalEntityId",
+                  "biobankStatus",
+                  "countryCode",
+                  "contactInformation"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The Biobank is created; data is the stored document with its _id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/BiobankRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "The organization reference is unresolved: legalEntityId names no organization (the organizationId is looked up in organizations).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/biobanks/{id}": {
+      "get": {
+        "tags": [
+          "biobanks"
+        ],
+        "summary": "Read a Biobank",
+        "description": "Gates: authenticate. The id is resolved by buildIdQuery, one $or query handed to findOne that matches the _id, the biobankId as a number, the biobankId as a string, or the id property as a string, with no order of precedence among them. The bare path /api/biobanks/miabis is read as this id (the id \"miabis\"), since the MIABIS export mounted before this router registers only GET /export; /api/biobanks/miabis/export is served by that export, not by this operation. The 401, 403 and 503 come from the gates. The 500 is also a failure of the read.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The record: its Mongo _id (24 hex), its biobankId (matched as a number and as a string), or its string id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The Biobank.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/BiobankRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "biobanks"
+        ],
+        "summary": "Update a Biobank",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). Reads the stored record first (404 when none matches). Then keeps the allowed keys the body names and answers 422 (error \"Payload inválido\", details) when the stored record merged with them fails the model's rules. The 404 is also legalEntityId names no organization (the organizationId is looked up in organizations), checked on the keys the body sends. There is no immutable field and no 409. The 401, 403 and 503 come from the gates. The 500 is also a failure of the write.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The record: its Mongo _id (24 hex), its biobankId (matched as a number and as a string), or its string id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "Only these keys are kept; biobankId, _id and the dates are never changed by an update. The stored record merged with the update is validated as a create is.",
+                "properties": {
+                  "biobankName": {
+                    "type": "string",
+                    "description": "Required, a non-empty string.",
+                    "minLength": 1
+                  },
+                  "biobankDescription": {
+                    "type": "string",
+                    "description": "Required, a non-empty string.",
+                    "minLength": 1
+                  },
+                  "legalEntityId": {
+                    "type": "string",
+                    "description": "Required, the organizationId of an existing organization.",
+                    "minLength": 1
+                  },
+                  "biobankStatus": {
+                    "type": "string",
+                    "description": "Required, a non-empty string (an open code).",
+                    "minLength": 1
+                  },
+                  "countryCode": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z]{2}$",
+                    "description": "Required, an ISO 3166-1 alpha-2 code (trimmed); stored upper-cased."
+                  },
+                  "contactInformation": {
+                    "type": "object",
+                    "description": "Required, an object with at least one non-empty string value.",
+                    "properties": {}
+                  },
+                  "acronym": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "url": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "A URI that new URL() accepts when sent."
+                  },
+                  "infrastructureCapabilities": {
+                    "type": "array",
+                    "items": {},
+                    "description": "A list of codeable concepts, empty when absent; a value that is not a list answers 422, the entries are not validated."
+                  },
+                  "bioprocessingCapabilities": {
+                    "type": "array",
+                    "items": {},
+                    "description": "A list of codeable concepts, empty when absent; a value that is not a list answers 422, the entries are not validated."
+                  },
+                  "qualityManagementStandards": {
+                    "type": "array",
+                    "items": {},
+                    "description": "A list of codeable concepts, empty when absent; a value that is not a list answers 422, the entries are not validated."
+                  },
+                  "infrastructuralCapabilities": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Non-empty codes; stored as [] when omitted."
+                  },
+                  "organisationalCapabilities": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Non-empty codes; stored as [] when omitted."
+                  },
+                  "bioprocessingAnalyticalCapabilities": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Non-empty codes; stored as [] when omitted."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The Biobank is updated; data is the stored document after the update.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/BiobankRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No record matches the id, or the organization reference is unresolved: legalEntityId names no organization (the organizationId is looked up in organizations).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "biobanks"
+        ],
+        "summary": "Delete a Biobank",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). Answers message \"Registro removido\". The 401, 403 and 503 come from the gates. The 500 is also a failure of the delete.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The record: its Mongo _id (24 hex), its biobankId (matched as a number and as a string), or its string id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The Biobank is deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Success"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/identifier-namespaces": {
+      "get": {
+        "tags": [
+          "identifier-namespaces"
+        ],
+        "summary": "List the identifier namespaces",
+        "description": "Gates: authenticate. Returns every record, by the sort on createdAt then _id, which for these rows (they carry no createdAt) is newest _id first. The 401, 403 and 503 come from the gates. The 500 is also a failure of the read.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The identifier namespaces records.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/IdentifierNamespaceRegistryRecord"
+                          }
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "identifier-namespaces"
+        ],
+        "summary": "Create a IdentifierNamespaceRegistry",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). Stores the fields the model keeps, never the whole body; identifierNamespaceRegistryId is the body's, else a generated UUID. The 422 comes from two places. The model's refusal (error \"Payload inválido\", details holding the one reason it stops at) is a namespaceKey, systemUri, authorityDomain, semanticVersion or configurationReleaseId that is missing or empty, targetTypes that is missing or empty, a semanticVersion that is not SemVer, a status other than active, an effectivePeriod without a start or whose end is not later than start, or a systemUri that is not a valid HTTPS URI under bioadvanced.dev (RULE-036; this route passes no approved external authorities). The 422 after it (error and message are the reason, no details) is a namespaceKey or systemUri that is carried but is not a non-empty string. The 409 (error and message \"systemUri do namespace <key> não pode mudar entre versões (RULE-036)\") is checked last: a stored row has the same namespaceKey and a different systemUri. A POST that repeats both keys of a stored row passes. There is no unique index, so no duplicate-key 409. The 401, 403 and 503 come from the gates. The 500 is also a failure of the write.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "identifierNamespaceRegistryId": {
+                    "description": "The business key; a UUID is generated when the body sends none. It is not validated."
+                  },
+                  "namespaceKey": {
+                    "type": "string",
+                    "description": "Required, a non-empty string. Immutable: an update that names it with a different value answers 422.",
+                    "minLength": 1
+                  },
+                  "systemUri": {
+                    "type": "string",
+                    "description": "Required, an HTTPS URI under bioadvanced.dev (RULE-036). This route passes no approved external authorities, so any other host is refused. Immutable: an update that names it with a different value answers 422.",
+                    "minLength": 1
+                  },
+                  "authorityDomain": {
+                    "type": "string",
+                    "description": "Required, a non-empty string.",
+                    "minLength": 1
+                  },
+                  "targetTypes": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "minItems": 1,
+                    "description": "Required, a non-empty array; each entry is stored lower-cased."
+                  },
+                  "semanticVersion": {
+                    "type": "string",
+                    "pattern": "^\\d+\\.\\d+\\.\\d+(?:[-+][0-9A-Za-z.-]+)?$",
+                    "description": "Required, a SemVer string."
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "active"
+                    ],
+                    "default": "active",
+                    "description": "Lower-cased on store; active is the one value accepted, and it is the default."
+                  },
+                  "effectivePeriod": {
+                    "type": "object",
+                    "description": "Required, half-open [start, end). start is required; a set end must be later than start.",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "end": {
+                        "type": "string",
+                        "format": "date-time",
+                        "nullable": true,
+                        "description": "Open-ended when null."
+                      }
+                    }
+                  },
+                  "configurationReleaseId": {
+                    "type": "string",
+                    "description": "Required, a non-empty string.",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "namespaceKey",
+                  "systemUri",
+                  "authorityDomain",
+                  "targetTypes",
+                  "semanticVersion",
+                  "effectivePeriod",
+                  "configurationReleaseId"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The IdentifierNamespaceRegistry is created; data is the stored document with its _id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/IdentifierNamespaceRegistryRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "description": "A stored row has the same namespaceKey with a different systemUri: a new version of a namespace keeps its URI (RULE-036).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The body is refused: either the model refuses it (error \"Payload inválido\", details the one reason it stops at), or namespaceKey or systemUri is carried but is not a non-empty string (RULE-036; error and message are the reason).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ValidationError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/identifier-namespaces/{id}": {
+      "get": {
+        "tags": [
+          "identifier-namespaces"
+        ],
+        "summary": "Read a IdentifierNamespaceRegistry",
+        "description": "Gates: authenticate. The id is resolved by buildIdQuery, one $or query handed to findOne that matches the _id, the identifierNamespaceRegistryId as a number, the identifierNamespaceRegistryId as a string, or the id property as a string, with no order of precedence among them. The 401, 403 and 503 come from the gates. The 500 is also a failure of the read.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The record: its Mongo _id (24 hex), its identifierNamespaceRegistryId (matched as a number and as a string), or its string id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The IdentifierNamespaceRegistry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/IdentifierNamespaceRegistryRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "identifier-namespaces"
+        ],
+        "summary": "Update a IdentifierNamespaceRegistry",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). Reads the stored record first (404 when none matches). Answers 422 (error \"Campo imutável\", message and details naming the field) when the body names namespaceKey or systemUri and the stored value is set and differs from the body's; the same value, or a stored null or missing value, passes (and the key is then dropped, since an update keeps only the keys listed below). Then keeps the allowed keys the body names and answers 422 (error \"Payload inválido\", details) when the stored record merged with them fails the model's rules. There is no 409: the update carries neither namespaceKey nor systemUri, so the namespace validator has nothing to refuse, and there is no reference to resolve. The 401, 403 and 503 come from the gates. The 500 is also a failure of the write.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The record: its Mongo _id (24 hex), its identifierNamespaceRegistryId (matched as a number and as a string), or its string id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "Only these keys are kept; identifierNamespaceRegistryId, _id, namespaceKey and systemUri and the dates are never changed by an update. The stored record merged with the update is validated as a create is.",
+                "properties": {
+                  "authorityDomain": {
+                    "type": "string",
+                    "description": "Required, a non-empty string.",
+                    "minLength": 1
+                  },
+                  "targetTypes": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "minItems": 1,
+                    "description": "Required, a non-empty array; each entry is stored lower-cased."
+                  },
+                  "semanticVersion": {
+                    "type": "string",
+                    "pattern": "^\\d+\\.\\d+\\.\\d+(?:[-+][0-9A-Za-z.-]+)?$",
+                    "description": "Required, a SemVer string."
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "active"
+                    ],
+                    "default": "active",
+                    "description": "Lower-cased on store; active is the one value accepted, and it is the default."
+                  },
+                  "effectivePeriod": {
+                    "type": "object",
+                    "description": "Required, half-open [start, end). start is required; a set end must be later than start.",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "end": {
+                        "type": "string",
+                        "format": "date-time",
+                        "nullable": true,
+                        "description": "Open-ended when null."
+                      }
+                    }
+                  },
+                  "configurationReleaseId": {
+                    "type": "string",
+                    "description": "Required, a non-empty string.",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The IdentifierNamespaceRegistry is updated; data is the stored document after the update.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/IdentifierNamespaceRegistryRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No record matches the id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "identifier-namespaces"
+        ],
+        "summary": "Delete a IdentifierNamespaceRegistry",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). Answers message \"Registro removido\". The 401, 403 and 503 come from the gates. The 500 is also a failure of the delete.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The record: its Mongo _id (24 hex), its identifierNamespaceRegistryId (matched as a number and as a string), or its string id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The IdentifierNamespaceRegistry is deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Success"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/interoperability-mapping-releases": {
+      "get": {
+        "tags": [
+          "interoperability-mapping-releases"
+        ],
+        "summary": "List the interoperability mapping releases",
+        "description": "Gates: authenticate. Returns every record, by the sort on createdAt then _id, which for these rows (they carry no createdAt) is newest _id first. The 401, 403 and 503 come from the gates. The 500 is also a failure of the read.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The interoperability mapping releases records.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/InteroperabilityMappingReleaseRecord"
+                          }
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "interoperability-mapping-releases"
+        ],
+        "summary": "Create a InteroperabilityMappingRelease",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). Stores the fields the model keeps, never the whole body; interoperabilityMappingReleaseId is the body's, else a generated UUID. The 422 comes from two places. The model's refusal (error \"Payload inválido\", details a list of reasons) is a required string (standard, mappingVersion, mappingUri, checksum, authorId, status, roundTripLossReportUri, canonicalModelReleaseId, fhirVersion, mappingDefinitionUri, mappingDefinitionHash, conformanceTestReportUri) that is not a non-empty string, a coverageNumerator or coverageDenominator that is not an integer >= 0, a coverageRatio outside [0, 1] or that differs from numerator / denominator, a coverageNumerator above coverageDenominator, a roundTripLossesPresent that is not a boolean, a profileRegistryIds, resourceTypes, identifierNamespaceRegistryIds or approvedBy that is empty or holds an empty entry, a standard, fhirVersion, status or resourceTypes entry outside its closed set, a checksum or mappingDefinitionHash that is not SHA-256, an implementationGuideCanonical without an implementationGuideVersion, a profile without an implementationGuideCanonical, a jurisdiction entry that is not a Coding with systemUri and code, an effectivePeriod whose end is not later than start, a supersedesReleaseId equal to the release's own id, or a status of approved, active or superseded without approvedAt or without an effectivePeriod start (RULE-035). The 422 after it (error and message are the reason, no details) is a supersedesReleaseId that is carried but is neither null nor a non-empty string. The 404 is checked after the 422s: an identifierNamespaceRegistryIds entry names no stored identifier namespace (looked up by identifierNamespaceRegistryId), or supersedesReleaseId names no stored release. There is no unique index, so no duplicate-key 409. The 401, 403 and 503 come from the gates. The 500 is also a failure of the write.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "interoperabilityMappingReleaseId": {
+                    "description": "The business key; a UUID is generated when the body sends none. It is not validated."
+                  },
+                  "mappingVersion": {
+                    "type": "string",
+                    "description": "Required, a non-empty string. Immutable: an update that names it with a different value answers 422; a new mapping version is a new row naming the old one in supersedesReleaseId.",
+                    "minLength": 1
+                  },
+                  "standard": {
+                    "type": "string",
+                    "enum": [
+                      "FHIR R4"
+                    ],
+                    "description": "Required."
+                  },
+                  "profile": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "When set, implementationGuideCanonical is required."
+                  },
+                  "mappingUri": {
+                    "type": "string",
+                    "description": "Required, a non-empty string.",
+                    "minLength": 1
+                  },
+                  "checksum": {
+                    "type": "string",
+                    "description": "Required, a SHA-256 digest, bare 64 hex digits or prefixed sha256:."
+                  },
+                  "authorId": {
+                    "type": "string",
+                    "description": "Required, a non-empty string.",
+                    "minLength": 1
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "draft",
+                      "candidate",
+                      "approved",
+                      "active",
+                      "superseded",
+                      "retired"
+                    ],
+                    "description": "Required. approved, active and superseded also require approvedAt and effectivePeriod.start (RULE-035)."
+                  },
+                  "roundTripLossReportUri": {
+                    "type": "string",
+                    "description": "Required, a non-empty string.",
+                    "minLength": 1
+                  },
+                  "canonicalModelReleaseId": {
+                    "type": "string",
+                    "description": "Required, a non-empty string; not resolved against the store.",
+                    "minLength": 1
+                  },
+                  "fhirVersion": {
+                    "type": "string",
+                    "enum": [
+                      "4.0.1",
+                      "R4"
+                    ],
+                    "description": "Required."
+                  },
+                  "implementationGuideCanonical": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "When set, implementationGuideVersion is required."
+                  },
+                  "implementationGuideVersion": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "jurisdiction": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "systemUri": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string"
+                        },
+                        "version": {
+                          "type": "string"
+                        },
+                        "display": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "systemUri",
+                        "code"
+                      ]
+                    },
+                    "description": "Codings; each needs a non-empty systemUri and code. Empty when absent."
+                  },
+                  "profileRegistryIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Required, a non-empty array of non-empty strings; not resolved against the store."
+                  },
+                  "resourceTypes": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "Patient",
+                        "Specimen",
+                        "Consent",
+                        "Observation",
+                        "DiagnosticReport",
+                        "Provenance",
+                        "AuditEvent",
+                        "DocumentReference",
+                        "ResearchStudy"
+                      ]
+                    },
+                    "description": "Required, a non-empty array."
+                  },
+                  "identifierNamespaceRegistryIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Required, a non-empty array; each id must name a stored identifier namespace (the identifierNamespaceRegistryId), else 404."
+                  },
+                  "terminologyReleaseIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Non-empty references, empty when absent; not resolved against the store."
+                  },
+                  "mappingDefinitionUri": {
+                    "type": "string",
+                    "description": "Required, a non-empty string.",
+                    "minLength": 1
+                  },
+                  "mappingDefinitionHash": {
+                    "type": "string",
+                    "description": "Required, a SHA-256 digest, bare 64 hex digits or prefixed sha256:."
+                  },
+                  "conformanceTestReportUri": {
+                    "type": "string",
+                    "description": "Required, a non-empty string.",
+                    "minLength": 1
+                  },
+                  "coverageNumerator": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Required, not above coverageDenominator."
+                  },
+                  "coverageDenominator": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Required."
+                  },
+                  "coverageRatio": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1,
+                    "description": "Required, equal to coverageNumerator / coverageDenominator (0 when the denominator is 0)."
+                  },
+                  "roundTripLossesPresent": {
+                    "type": "boolean",
+                    "description": "Required."
+                  },
+                  "approvedBy": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Required, a non-empty array of non-empty strings."
+                  },
+                  "approvedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "nullable": true,
+                    "description": "Required when status is approved, active or superseded."
+                  },
+                  "effectivePeriod": {
+                    "type": "object",
+                    "nullable": true,
+                    "description": "A half-open [start, end); a set end must be later than start. start is required when status is approved, active or superseded.",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "format": "date-time",
+                        "nullable": true
+                      },
+                      "end": {
+                        "type": "string",
+                        "format": "date-time",
+                        "nullable": true
+                      }
+                    }
+                  },
+                  "supersedesReleaseId": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "The interoperabilityMappingReleaseId of the release this one replaces, or null. A value that is neither null nor a non-empty string answers 422; a release that does not exist answers 404; the release's own id is refused by the model."
+                  }
+                },
+                "required": [
+                  "standard",
+                  "mappingVersion",
+                  "mappingUri",
+                  "checksum",
+                  "authorId",
+                  "status",
+                  "roundTripLossReportUri",
+                  "canonicalModelReleaseId",
+                  "fhirVersion",
+                  "profileRegistryIds",
+                  "resourceTypes",
+                  "identifierNamespaceRegistryIds",
+                  "mappingDefinitionUri",
+                  "mappingDefinitionHash",
+                  "conformanceTestReportUri",
+                  "coverageNumerator",
+                  "coverageDenominator",
+                  "coverageRatio",
+                  "roundTripLossesPresent",
+                  "approvedBy"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The InteroperabilityMappingRelease is created; data is the stored document with its _id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/InteroperabilityMappingReleaseRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "A reference is unresolved: an identifierNamespaceRegistryIds entry names no stored identifier namespace, or supersedesReleaseId names no stored release.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The body is refused: either the model refuses it (error \"Payload inválido\", details a list of reasons), or supersedesReleaseId is carried as something other than null or a non-empty string (error and message are the reason).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ValidationError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/interoperability-mapping-releases/{id}": {
+      "get": {
+        "tags": [
+          "interoperability-mapping-releases"
+        ],
+        "summary": "Read a InteroperabilityMappingRelease",
+        "description": "Gates: authenticate. The id is resolved by buildIdQuery, one $or query handed to findOne that matches the _id, the interoperabilityMappingReleaseId as a number, the interoperabilityMappingReleaseId as a string, or the id property as a string, with no order of precedence among them. The 401, 403 and 503 come from the gates. The 500 is also a failure of the read.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The record: its Mongo _id (24 hex), its interoperabilityMappingReleaseId (matched as a number and as a string), or its string id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The InteroperabilityMappingRelease.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/InteroperabilityMappingReleaseRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "interoperability-mapping-releases"
+        ],
+        "summary": "Update a InteroperabilityMappingRelease",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). Reads the stored record first (404 when none matches). Answers 422 (error \"Campo imutável\", message and details naming the field) when the body names mappingVersion and the stored value is set and differs from the body's; the same value, or a stored null or missing value, passes (and the key is then dropped, since an update keeps only the keys listed below). Then keeps the allowed keys the body names and answers 422 (error \"Payload inválido\", details) when the stored record merged with them fails the model's rules. After that merged check, the release validator answers 422 (error and message are the reason) for a supersedesReleaseId that is carried as something other than null or a non-empty string, then 404 for an identifierNamespaceRegistryIds entry that names no stored identifier namespace or a supersedesReleaseId that names no stored release, checked on the keys the body sends. There is no 409. The 401, 403 and 503 come from the gates. The 500 is also a failure of the write.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The record: its Mongo _id (24 hex), its interoperabilityMappingReleaseId (matched as a number and as a string), or its string id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "Only these keys are kept; interoperabilityMappingReleaseId, _id, mappingVersion and the dates are never changed by an update. The stored record merged with the update is validated as a create is.",
+                "properties": {
+                  "standard": {
+                    "type": "string",
+                    "enum": [
+                      "FHIR R4"
+                    ],
+                    "description": "Required."
+                  },
+                  "profile": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "When set, implementationGuideCanonical is required."
+                  },
+                  "mappingUri": {
+                    "type": "string",
+                    "description": "Required, a non-empty string.",
+                    "minLength": 1
+                  },
+                  "checksum": {
+                    "type": "string",
+                    "description": "Required, a SHA-256 digest, bare 64 hex digits or prefixed sha256:."
+                  },
+                  "authorId": {
+                    "type": "string",
+                    "description": "Required, a non-empty string.",
+                    "minLength": 1
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "draft",
+                      "candidate",
+                      "approved",
+                      "active",
+                      "superseded",
+                      "retired"
+                    ],
+                    "description": "Required. approved, active and superseded also require approvedAt and effectivePeriod.start (RULE-035)."
+                  },
+                  "roundTripLossReportUri": {
+                    "type": "string",
+                    "description": "Required, a non-empty string.",
+                    "minLength": 1
+                  },
+                  "canonicalModelReleaseId": {
+                    "type": "string",
+                    "description": "Required, a non-empty string; not resolved against the store.",
+                    "minLength": 1
+                  },
+                  "fhirVersion": {
+                    "type": "string",
+                    "enum": [
+                      "4.0.1",
+                      "R4"
+                    ],
+                    "description": "Required."
+                  },
+                  "implementationGuideCanonical": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "When set, implementationGuideVersion is required."
+                  },
+                  "implementationGuideVersion": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "jurisdiction": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "systemUri": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string"
+                        },
+                        "version": {
+                          "type": "string"
+                        },
+                        "display": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "systemUri",
+                        "code"
+                      ]
+                    },
+                    "description": "Codings; each needs a non-empty systemUri and code. Empty when absent."
+                  },
+                  "profileRegistryIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Required, a non-empty array of non-empty strings; not resolved against the store."
+                  },
+                  "resourceTypes": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "Patient",
+                        "Specimen",
+                        "Consent",
+                        "Observation",
+                        "DiagnosticReport",
+                        "Provenance",
+                        "AuditEvent",
+                        "DocumentReference",
+                        "ResearchStudy"
+                      ]
+                    },
+                    "description": "Required, a non-empty array."
+                  },
+                  "identifierNamespaceRegistryIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Required, a non-empty array; each id must name a stored identifier namespace (the identifierNamespaceRegistryId), else 404."
+                  },
+                  "terminologyReleaseIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Non-empty references, empty when absent; not resolved against the store."
+                  },
+                  "mappingDefinitionUri": {
+                    "type": "string",
+                    "description": "Required, a non-empty string.",
+                    "minLength": 1
+                  },
+                  "mappingDefinitionHash": {
+                    "type": "string",
+                    "description": "Required, a SHA-256 digest, bare 64 hex digits or prefixed sha256:."
+                  },
+                  "conformanceTestReportUri": {
+                    "type": "string",
+                    "description": "Required, a non-empty string.",
+                    "minLength": 1
+                  },
+                  "coverageNumerator": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Required, not above coverageDenominator."
+                  },
+                  "coverageDenominator": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Required."
+                  },
+                  "coverageRatio": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1,
+                    "description": "Required, equal to coverageNumerator / coverageDenominator (0 when the denominator is 0)."
+                  },
+                  "roundTripLossesPresent": {
+                    "type": "boolean",
+                    "description": "Required."
+                  },
+                  "approvedBy": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Required, a non-empty array of non-empty strings."
+                  },
+                  "approvedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "nullable": true,
+                    "description": "Required when status is approved, active or superseded."
+                  },
+                  "effectivePeriod": {
+                    "type": "object",
+                    "nullable": true,
+                    "description": "A half-open [start, end); a set end must be later than start. start is required when status is approved, active or superseded.",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "format": "date-time",
+                        "nullable": true
+                      },
+                      "end": {
+                        "type": "string",
+                        "format": "date-time",
+                        "nullable": true
+                      }
+                    }
+                  },
+                  "supersedesReleaseId": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "The interoperabilityMappingReleaseId of the release this one replaces, or null. A value that is neither null nor a non-empty string answers 422; a release that does not exist answers 404; the release's own id is refused by the model."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The InteroperabilityMappingRelease is updated; data is the stored document after the update.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/InteroperabilityMappingReleaseRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No record matches the id, or a reference is unresolved: an identifierNamespaceRegistryIds entry names no stored identifier namespace, or supersedesReleaseId names no stored release.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The update is refused: the body names mappingVersion with a value that differs from the stored one (error \"Campo imutável\"), the stored record merged with the update fails the model (error \"Payload inválido\", details), or supersedesReleaseId is carried as something other than null or a non-empty string (error and message are the reason).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ValidationError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "interoperability-mapping-releases"
+        ],
+        "summary": "Delete a InteroperabilityMappingRelease",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). Answers message \"Registro removido\". The 401, 403 and 503 come from the gates. The 500 is also a failure of the delete.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The record: its Mongo _id (24 hex), its interoperabilityMappingReleaseId (matched as a number and as a string), or its string id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The InteroperabilityMappingRelease is deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Success"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/fhir-profiles": {
+      "get": {
+        "tags": [
+          "fhir-profiles"
+        ],
+        "summary": "List the FHIR profiles",
+        "description": "Gates: authenticate. Returns every record, by the sort on createdAt then _id, which for these rows (they carry no createdAt) is newest _id first. The 401, 403 and 503 come from the gates. The 500 is also a failure of the read.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The FHIR profiles records.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/FhirProfileRegistryRecord"
+                          }
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "fhir-profiles"
+        ],
+        "summary": "Create a FHIRProfileRegistry",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). Stores the fields the model keeps, never the whole body; fhirProfileRegistryId is the body's, else a generated UUID. The 422 (error \"Payload inválido\", details a list of reasons) is a body the model refuses: a canonicalUrl, fhirVersion, profileVersion, mappingReleaseId or status that is not a non-empty string, a fhirVersion or status outside its closed set, or an identifierSystems entry that is not a non-empty string. The 404 is checked after the 422: mappingReleaseId names no stored release (the interoperabilityMappingReleaseId is looked up in interoperabilityMappingReleases). The profile validator answers 404 only. There is no unique index, so no duplicate-key 409. The 401, 403 and 503 come from the gates. The 500 is also a failure of the write.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "fhirProfileRegistryId": {
+                    "description": "The business key; a UUID is generated when the body sends none. It is not validated."
+                  },
+                  "canonicalUrl": {
+                    "type": "string",
+                    "description": "Required, a non-empty string. Immutable: an update that names it with a different value answers 422.",
+                    "minLength": 1
+                  },
+                  "profileVersion": {
+                    "type": "string",
+                    "description": "Required, a non-empty string. Immutable: an update that names it with a different value answers 422.",
+                    "minLength": 1
+                  },
+                  "fhirVersion": {
+                    "type": "string",
+                    "enum": [
+                      "4.0.1",
+                      "R4"
+                    ],
+                    "description": "Required."
+                  },
+                  "identifierSystems": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Non-empty URIs; stored as [] when omitted."
+                  },
+                  "capabilityStatementUri": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "mappingReleaseId": {
+                    "type": "string",
+                    "description": "Required, the interoperabilityMappingReleaseId of a stored release, else 404.",
+                    "minLength": 1
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "draft",
+                      "candidate",
+                      "approved",
+                      "active",
+                      "superseded",
+                      "retired"
+                    ],
+                    "description": "Required."
+                  }
+                },
+                "required": [
+                  "canonicalUrl",
+                  "fhirVersion",
+                  "profileVersion",
+                  "mappingReleaseId",
+                  "status"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The FHIRProfileRegistry is created; data is the stored document with its _id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/FhirProfileRegistryRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "The release reference is unresolved: mappingReleaseId names no stored release (the interoperabilityMappingReleaseId is looked up in interoperabilityMappingReleases).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/fhir-profiles/{id}": {
+      "get": {
+        "tags": [
+          "fhir-profiles"
+        ],
+        "summary": "Read a FHIRProfileRegistry",
+        "description": "Gates: authenticate. The id is resolved by buildIdQuery, one $or query handed to findOne that matches the _id, the fhirProfileRegistryId as a number, the fhirProfileRegistryId as a string, or the id property as a string, with no order of precedence among them. The 401, 403 and 503 come from the gates. The 500 is also a failure of the read.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The record: its Mongo _id (24 hex), its fhirProfileRegistryId (matched as a number and as a string), or its string id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The FHIRProfileRegistry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/FhirProfileRegistryRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "fhir-profiles"
+        ],
+        "summary": "Update a FHIRProfileRegistry",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). Reads the stored record first (404 when none matches). Answers 422 (error \"Campo imutável\", message and details naming the field) when the body names canonicalUrl or profileVersion and the stored value is set and differs from the body's; the same value, or a stored null or missing value, passes (and the key is then dropped, since an update keeps only the keys listed below). Then keeps the allowed keys the body names and answers 422 (error \"Payload inválido\", details) when the stored record merged with them fails the model's rules. The 404 is also mappingReleaseId names no stored release (the interoperabilityMappingReleaseId is looked up in interoperabilityMappingReleases), checked on the keys the body sends; the profile validator answers 404 only. There is no 409. The 401, 403 and 503 come from the gates. The 500 is also a failure of the write.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The record: its Mongo _id (24 hex), its fhirProfileRegistryId (matched as a number and as a string), or its string id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "Only these keys are kept; fhirProfileRegistryId, _id, canonicalUrl and profileVersion and the dates are never changed by an update. The stored record merged with the update is validated as a create is.",
+                "properties": {
+                  "fhirVersion": {
+                    "type": "string",
+                    "enum": [
+                      "4.0.1",
+                      "R4"
+                    ],
+                    "description": "Required."
+                  },
+                  "identifierSystems": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Non-empty URIs; stored as [] when omitted."
+                  },
+                  "capabilityStatementUri": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "mappingReleaseId": {
+                    "type": "string",
+                    "description": "Required, the interoperabilityMappingReleaseId of a stored release, else 404.",
+                    "minLength": 1
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "draft",
+                      "candidate",
+                      "approved",
+                      "active",
+                      "superseded",
+                      "retired"
+                    ],
+                    "description": "Required."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The FHIRProfileRegistry is updated; data is the stored document after the update.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Success"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/FhirProfileRegistryRecord"
+                        }
+                      },
+                      "required": [
+                        "data"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No record matches the id, or the release reference is unresolved: mappingReleaseId names no stored release.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/UnprocessableEntity"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "fhir-profiles"
+        ],
+        "summary": "Delete a FHIRProfileRegistry",
+        "description": "Gates: authenticate, requireRole(3, 4) (Coordenador, Administrador). Answers message \"Registro removido\". The 401, 403 and 503 come from the gates. The 500 is also a failure of the delete.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The record: its Mongo _id (24 hex), its fhirProfileRegistryId (matched as a number and as a string), or its string id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The FHIRProfileRegistry is deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Success"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -54892,6 +57115,480 @@
           "runs",
           "edges",
           "truncated"
+        ]
+      },
+      "BiobankRecord": {
+        "type": "object",
+        "description": "A Biobank document as the API returns it.",
+        "properties": {
+          "_id": {
+            "type": "string",
+            "description": "The Mongo ObjectId, as a string."
+          },
+          "biobankId": {
+            "description": "The business key; a UUID is generated when the body sends none. It is not validated."
+          },
+          "biobankName": {
+            "type": "string",
+            "description": "Required, a non-empty string.",
+            "minLength": 1
+          },
+          "biobankDescription": {
+            "type": "string",
+            "description": "Required, a non-empty string.",
+            "minLength": 1
+          },
+          "legalEntityId": {
+            "type": "string",
+            "description": "Required, the organizationId of an existing organization.",
+            "minLength": 1
+          },
+          "biobankStatus": {
+            "type": "string",
+            "description": "Required, a non-empty string (an open code).",
+            "minLength": 1
+          },
+          "countryCode": {
+            "type": "string",
+            "pattern": "^[A-Za-z]{2}$",
+            "description": "Required, an ISO 3166-1 alpha-2 code (trimmed); stored upper-cased."
+          },
+          "contactInformation": {
+            "type": "object",
+            "description": "Required, an object with at least one non-empty string value.",
+            "properties": {}
+          },
+          "acronym": {
+            "type": "string",
+            "nullable": true
+          },
+          "url": {
+            "type": "string",
+            "nullable": true,
+            "description": "A URI that new URL() accepts when sent."
+          },
+          "infrastructureCapabilities": {
+            "type": "array",
+            "items": {},
+            "description": "A list of codeable concepts, empty when absent; a value that is not a list answers 422, the entries are not validated."
+          },
+          "bioprocessingCapabilities": {
+            "type": "array",
+            "items": {},
+            "description": "A list of codeable concepts, empty when absent; a value that is not a list answers 422, the entries are not validated."
+          },
+          "qualityManagementStandards": {
+            "type": "array",
+            "items": {},
+            "description": "A list of codeable concepts, empty when absent; a value that is not a list answers 422, the entries are not validated."
+          },
+          "infrastructuralCapabilities": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Non-empty codes; stored as [] when omitted."
+          },
+          "organisationalCapabilities": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Non-empty codes; stored as [] when omitted."
+          },
+          "bioprocessingAnalyticalCapabilities": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Non-empty codes; stored as [] when omitted."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "_id"
+        ]
+      },
+      "IdentifierNamespaceRegistryRecord": {
+        "type": "object",
+        "description": "An IdentifierNamespaceRegistry document as the API returns it. A document inserted by POST carries no createdAt; updatedAt appears after the first update.",
+        "properties": {
+          "_id": {
+            "type": "string",
+            "description": "The Mongo ObjectId, as a string."
+          },
+          "identifierNamespaceRegistryId": {
+            "description": "The business key; a UUID is generated when the body sends none. It is not validated."
+          },
+          "namespaceKey": {
+            "type": "string",
+            "description": "Required, a non-empty string. Immutable: an update that names it with a different value answers 422.",
+            "minLength": 1
+          },
+          "systemUri": {
+            "type": "string",
+            "description": "Required, an HTTPS URI under bioadvanced.dev (RULE-036). This route passes no approved external authorities, so any other host is refused. Immutable: an update that names it with a different value answers 422.",
+            "minLength": 1
+          },
+          "authorityDomain": {
+            "type": "string",
+            "description": "Required, a non-empty string.",
+            "minLength": 1
+          },
+          "targetTypes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "description": "Required, a non-empty array; each entry is stored lower-cased."
+          },
+          "semanticVersion": {
+            "type": "string",
+            "pattern": "^\\d+\\.\\d+\\.\\d+(?:[-+][0-9A-Za-z.-]+)?$",
+            "description": "Required, a SemVer string."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active"
+            ],
+            "default": "active",
+            "description": "Lower-cased on store; active is the one value accepted, and it is the default."
+          },
+          "effectivePeriod": {
+            "type": "object",
+            "description": "Required, half-open [start, end). start is required; a set end must be later than start.",
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time",
+                "nullable": true,
+                "description": "Open-ended when null."
+              }
+            }
+          },
+          "configurationReleaseId": {
+            "type": "string",
+            "description": "Required, a non-empty string.",
+            "minLength": 1
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "_id"
+        ]
+      },
+      "InteroperabilityMappingReleaseRecord": {
+        "type": "object",
+        "description": "An InteroperabilityMappingRelease document as the API returns it. A document inserted by POST carries no createdAt; updatedAt appears after the first update.",
+        "properties": {
+          "_id": {
+            "type": "string",
+            "description": "The Mongo ObjectId, as a string."
+          },
+          "interoperabilityMappingReleaseId": {
+            "description": "The business key; a UUID is generated when the body sends none. It is not validated."
+          },
+          "mappingVersion": {
+            "type": "string",
+            "description": "Required, a non-empty string. Immutable: an update that names it with a different value answers 422; a new mapping version is a new row naming the old one in supersedesReleaseId.",
+            "minLength": 1
+          },
+          "standard": {
+            "type": "string",
+            "enum": [
+              "FHIR R4"
+            ],
+            "description": "Required."
+          },
+          "profile": {
+            "type": "string",
+            "nullable": true,
+            "description": "When set, implementationGuideCanonical is required."
+          },
+          "mappingUri": {
+            "type": "string",
+            "description": "Required, a non-empty string.",
+            "minLength": 1
+          },
+          "checksum": {
+            "type": "string",
+            "description": "Required, a SHA-256 digest, bare 64 hex digits or prefixed sha256:."
+          },
+          "authorId": {
+            "type": "string",
+            "description": "Required, a non-empty string.",
+            "minLength": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "candidate",
+              "approved",
+              "active",
+              "superseded",
+              "retired"
+            ],
+            "description": "Required. approved, active and superseded also require approvedAt and effectivePeriod.start (RULE-035)."
+          },
+          "roundTripLossReportUri": {
+            "type": "string",
+            "description": "Required, a non-empty string.",
+            "minLength": 1
+          },
+          "canonicalModelReleaseId": {
+            "type": "string",
+            "description": "Required, a non-empty string; not resolved against the store.",
+            "minLength": 1
+          },
+          "fhirVersion": {
+            "type": "string",
+            "enum": [
+              "4.0.1",
+              "R4"
+            ],
+            "description": "Required."
+          },
+          "implementationGuideCanonical": {
+            "type": "string",
+            "nullable": true,
+            "description": "When set, implementationGuideVersion is required."
+          },
+          "implementationGuideVersion": {
+            "type": "string",
+            "nullable": true
+          },
+          "jurisdiction": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "systemUri": {
+                  "type": "string"
+                },
+                "code": {
+                  "type": "string"
+                },
+                "version": {
+                  "type": "string"
+                },
+                "display": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "systemUri",
+                "code"
+              ]
+            },
+            "description": "Codings; each needs a non-empty systemUri and code. Empty when absent."
+          },
+          "profileRegistryIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Required, a non-empty array of non-empty strings; not resolved against the store."
+          },
+          "resourceTypes": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "enum": [
+                "Patient",
+                "Specimen",
+                "Consent",
+                "Observation",
+                "DiagnosticReport",
+                "Provenance",
+                "AuditEvent",
+                "DocumentReference",
+                "ResearchStudy"
+              ]
+            },
+            "description": "Required, a non-empty array."
+          },
+          "identifierNamespaceRegistryIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Required, a non-empty array; each id must name a stored identifier namespace (the identifierNamespaceRegistryId), else 404."
+          },
+          "terminologyReleaseIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Non-empty references, empty when absent; not resolved against the store."
+          },
+          "mappingDefinitionUri": {
+            "type": "string",
+            "description": "Required, a non-empty string.",
+            "minLength": 1
+          },
+          "mappingDefinitionHash": {
+            "type": "string",
+            "description": "Required, a SHA-256 digest, bare 64 hex digits or prefixed sha256:."
+          },
+          "conformanceTestReportUri": {
+            "type": "string",
+            "description": "Required, a non-empty string.",
+            "minLength": 1
+          },
+          "coverageNumerator": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Required, not above coverageDenominator."
+          },
+          "coverageDenominator": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Required."
+          },
+          "coverageRatio": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Required, equal to coverageNumerator / coverageDenominator (0 when the denominator is 0)."
+          },
+          "roundTripLossesPresent": {
+            "type": "boolean",
+            "description": "Required."
+          },
+          "approvedBy": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Required, a non-empty array of non-empty strings."
+          },
+          "approvedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "Required when status is approved, active or superseded."
+          },
+          "effectivePeriod": {
+            "type": "object",
+            "nullable": true,
+            "description": "A half-open [start, end); a set end must be later than start. start is required when status is approved, active or superseded.",
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time",
+                "nullable": true
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time",
+                "nullable": true
+              }
+            }
+          },
+          "supersedesReleaseId": {
+            "type": "string",
+            "nullable": true,
+            "description": "The interoperabilityMappingReleaseId of the release this one replaces, or null. A value that is neither null nor a non-empty string answers 422; a release that does not exist answers 404; the release's own id is refused by the model."
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "_id"
+        ]
+      },
+      "FhirProfileRegistryRecord": {
+        "type": "object",
+        "description": "A FHIRProfileRegistry document as the API returns it. A document inserted by POST carries no createdAt; updatedAt appears after the first update.",
+        "properties": {
+          "_id": {
+            "type": "string",
+            "description": "The Mongo ObjectId, as a string."
+          },
+          "fhirProfileRegistryId": {
+            "description": "The business key; a UUID is generated when the body sends none. It is not validated."
+          },
+          "canonicalUrl": {
+            "type": "string",
+            "description": "Required, a non-empty string. Immutable: an update that names it with a different value answers 422.",
+            "minLength": 1
+          },
+          "profileVersion": {
+            "type": "string",
+            "description": "Required, a non-empty string. Immutable: an update that names it with a different value answers 422.",
+            "minLength": 1
+          },
+          "fhirVersion": {
+            "type": "string",
+            "enum": [
+              "4.0.1",
+              "R4"
+            ],
+            "description": "Required."
+          },
+          "identifierSystems": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Non-empty URIs; stored as [] when omitted."
+          },
+          "capabilityStatementUri": {
+            "type": "string",
+            "nullable": true
+          },
+          "mappingReleaseId": {
+            "type": "string",
+            "description": "Required, the interoperabilityMappingReleaseId of a stored release, else 404.",
+            "minLength": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "candidate",
+              "approved",
+              "active",
+              "superseded",
+              "retired"
+            ],
+            "description": "Required."
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "_id"
         ]
       }
     },
