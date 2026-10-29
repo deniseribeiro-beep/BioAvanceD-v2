@@ -4,10 +4,10 @@ module.exports = {
   file: 'interface/routes/access.routes.js',
   mount: '/api/access',
   pins: [
-    { method: 'GET', path: '/', permission: 'createUser' },
-    { method: 'GET', path: '/:id', permission: 'createUser' },
-    { method: 'POST', path: '/', permission: 'createUser' },
-    { method: 'PUT', path: '/:id', permission: 'createUser' },
-    { method: 'DELETE', path: '/:id', permission: 'createUser' },
+    { method: 'GET', path: '/', permission: 'manageAccessGrants' },
+    { method: 'GET', path: '/:id', permission: 'manageAccessGrants' },
+    { method: 'POST', path: '/', permission: 'manageAccessGrants' },
+    { method: 'PUT', path: '/:id', permission: 'manageAccessGrants' },
+    { method: 'DELETE', path: '/:id', permission: 'manageAccessGrants' },
   ],
 };

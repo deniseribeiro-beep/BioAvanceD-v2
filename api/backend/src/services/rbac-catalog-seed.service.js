@@ -43,12 +43,12 @@ const LEGACY_ROLES_SEED = {
     {
       accessType: 3,
       roleName: 'Coordenador',
-      permissions: ['createUser', 'createSample', 'editSample', 'createPatient', 'requestConsent', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageTemperaturePolicy', 'manageSensor', 'recordTemperature', 'viewReports', 'createResult', 'editResult', 'deleteResult', 'manageReportTemplates', 'viewEquipment', 'viewStorageTopology', 'manageStorageAllocation', 'manageStorageTopology', 'manageCustody'],
+      permissions: ['createUser', 'createSample', 'editSample', 'createPatient', 'requestConsent', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageTemperaturePolicy', 'manageSensor', 'recordTemperature', 'viewReports', 'createResult', 'editResult', 'deleteResult', 'manageReportTemplates', 'viewEquipment', 'viewStorageTopology', 'manageStorageAllocation', 'manageStorageTopology', 'manageCustody', 'manageAccessGrants'],
     },
     {
       accessType: 4,
       roleName: 'Administrador',
-      permissions: ['createUser', 'assignRole', 'createSample', 'editSample', 'deleteSample', 'createPatient', 'requestConsent', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageTemperaturePolicy', 'manageSensor', 'recordTemperature', 'viewReports', 'manageBackup', 'manageSystem', 'resetMFA', 'forcePasswordReset', 'disableMFA', 'revokeSessions', 'setUserPassword', 'manageOrganizations', 'createResult', 'editResult', 'deleteResult', 'reidentifyParticipant', 'manageAccessRequests', 'manageReportTemplates', 'viewEquipment', 'viewStorageTopology', 'manageStorageAllocation', 'manageStorageTopology', 'manageCustody'],
+      permissions: ['createUser', 'assignRole', 'createSample', 'editSample', 'deleteSample', 'createPatient', 'requestConsent', 'withdrawSample', 'uploadFiles', 'uploadSampleFiles', 'deleteSampleFiles', 'viewTemperature', 'manageTemperature', 'manageTemperaturePolicy', 'manageSensor', 'recordTemperature', 'viewReports', 'manageBackup', 'manageSystem', 'resetMFA', 'forcePasswordReset', 'disableMFA', 'revokeSessions', 'setUserPassword', 'manageOrganizations', 'createResult', 'editResult', 'deleteResult', 'reidentifyParticipant', 'manageAccessRequests', 'manageReportTemplates', 'viewEquipment', 'viewStorageTopology', 'manageStorageAllocation', 'manageStorageTopology', 'manageCustody', 'manageAccessGrants'],
     },
   ],
 };
@@ -185,6 +185,16 @@ const PERMISSION_CATALOG = {
   // assignment is closed by POST .../end), and the read takes
   // viewStorageTopology.
   manageCustody: { resourceType: 'CustodianshipAssignment', allowedActions: ['CREATE'], displayName: 'Gerenciar custódia' },
+  // #1229: access.routes.js borrowed createUser for a different resource,
+  // the report-access grant (dict-02's AccessGrant). Its own code, seeded to
+  // exactly createUser's population (Coordenador + Administrador), so the
+  // move is a no-op for every caller, as #929 did for requestConsent. The
+  // split of createUser itself by verb stays deferred (#1008). The four
+  // actions are what the routes' GET, POST, PUT and DELETE derive through
+  // METHOD_TO_ACTION. upsertPermission inserts the code and upsertRole sets
+  // both roles to the seed's list at the next boot (#1341), so an
+  // already-seeded database needs no migration.
+  manageAccessGrants: { resourceType: 'AccessGrant', allowedActions: ['CREATE', 'READ', 'UPDATE', 'DELETE'], displayName: 'Gerenciar concessões de acesso' },
   // #1087: the three equipment GETs carried no permission at all, so every
   // authenticated principal could list the inventory -- UsuarioExterno
   // included, whose only seeded grant is viewReports. The sibling route

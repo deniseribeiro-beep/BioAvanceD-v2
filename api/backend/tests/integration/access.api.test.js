@@ -120,7 +120,7 @@ describe('POST /api/access', () => {
     expect(res.status).toBe(401);
   });
 
-  it('returns 403 for Técnico (no createUser permission)', async () => {
+  it('returns 403 for Técnico (no manageAccessGrants permission)', async () => {
     app.locals.db = createDbMock({ ...rbacCollections });
     const res = await request(app)
       .post('/api/access')

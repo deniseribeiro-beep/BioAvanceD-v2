@@ -5824,7 +5824,7 @@
           "access"
         ],
         "summary": "List the access grants to reports",
-        "description": "Gates: authenticate, requirePermission('createUser'). A grant leaves under the API names userId and accessID.",
+        "description": "Gates: authenticate, requirePermission('manageAccessGrants'). A grant leaves under the API names userId and accessID.",
         "security": [
           {
             "bearerAuth": []
@@ -5875,7 +5875,7 @@
           "access"
         ],
         "summary": "Create an access grant to a report",
-        "description": "Gates: authenticate, requirePermission('createUser'). grantedBy is the authenticated caller; permissionCodes, if sent, must be exactly [viewReports]. A failed validation answers 422 with details; any other failure answers 400.",
+        "description": "Gates: authenticate, requirePermission('manageAccessGrants'). grantedBy is the authenticated caller; permissionCodes, if sent, must be exactly [viewReports]. A failed validation answers 422 with details; any other failure answers 400.",
         "security": [
           {
             "bearerAuth": []
@@ -6000,7 +6000,7 @@
           "access"
         ],
         "summary": "One access grant",
-        "description": "Gates: authenticate, requirePermission('createUser'). A malformed {id} throws inside the handler and answers 500.",
+        "description": "Gates: authenticate, requirePermission('manageAccessGrants'). A malformed {id} throws inside the handler and answers 500.",
         "security": [
           {
             "bearerAuth": []
@@ -6062,7 +6062,7 @@
           "access"
         ],
         "summary": "Update an access grant",
-        "description": "Gates: authenticate, requirePermission('createUser'). Only reportID, reportType, accessType, grantedAt, expiresAt and the beneficiary (userAccountId or userId) are read; any other body field is ignored. A malformed {id} or any other failure answers 400.",
+        "description": "Gates: authenticate, requirePermission('manageAccessGrants'). Only reportID, reportType, accessType, grantedAt, expiresAt and the beneficiary (userAccountId or userId) are read; any other body field is ignored. A malformed {id} or any other failure answers 400.",
         "security": [
           {
             "bearerAuth": []
@@ -6167,7 +6167,7 @@
           "access"
         ],
         "summary": "Revoke an access grant",
-        "description": "Gates: authenticate, requirePermission('createUser'). A revocation, not a hard delete: the grant stays with grantStatus revoked, revokedAt and revocationReason. Revoking a grant already revoked answers 404; a malformed {id} or any other failure answers 400.",
+        "description": "Gates: authenticate, requirePermission('manageAccessGrants'). A revocation, not a hard delete: the grant stays with grantStatus revoked, revokedAt and revocationReason. Revoking a grant already revoked answers 404; a malformed {id} or any other failure answers 400.",
         "security": [
           {
             "bearerAuth": []

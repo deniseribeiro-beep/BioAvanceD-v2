@@ -6,9 +6,9 @@ const logger = require('../../utils/logger');
 const AccessModel = require('../../models/Access');
 
 // CRUD de Access
-// #1202: the two reads share the writes' permission code, the one GET
-// /api/users also reads under; they were authenticate-only before.
-router.get('/', authenticate, requirePermission('createUser'), async (req, res) => {
+// The two reads share the writes' permission code, manageAccessGrants
+// (#1229); they were authenticate-only before (#1202).
+router.get('/', authenticate, requirePermission('manageAccessGrants'), async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -35,7 +35,7 @@ router.get('/', authenticate, requirePermission('createUser'), async (req, res) 
   }
 });
 
-router.get('/:id', authenticate, requirePermission('createUser'), async (req, res) => {
+router.get('/:id', authenticate, requirePermission('manageAccessGrants'), async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -70,7 +70,7 @@ router.get('/:id', authenticate, requirePermission('createUser'), async (req, re
   }
 });
 
-router.post('/', authenticate, requirePermission('createUser'), async (req, res) => {
+router.post('/', authenticate, requirePermission('manageAccessGrants'), async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -115,7 +115,7 @@ router.post('/', authenticate, requirePermission('createUser'), async (req, res)
   }
 });
 
-router.put('/:id', authenticate, requirePermission('createUser'), async (req, res) => {
+router.put('/:id', authenticate, requirePermission('manageAccessGrants'), async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {
@@ -185,7 +185,7 @@ router.put('/:id', authenticate, requirePermission('createUser'), async (req, re
   }
 });
 
-router.delete('/:id', authenticate, requirePermission('createUser'), async (req, res) => {
+router.delete('/:id', authenticate, requirePermission('manageAccessGrants'), async (req, res) => {
   try {
     const db = req.app.locals.db;
     if (!db) {

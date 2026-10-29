@@ -61,7 +61,7 @@ describe('access.routes authorization gates', () => {
   ];
 
   for (const { label, method, path } of CASES) {
-    it(`pins requirePermission('createUser') for ${label}`, async () => {
+    it(`pins requirePermission('manageAccessGrants') for ${label}`, async () => {
       const requirePermissionImpl = denyingRequirePermission();
       currentRequirePermission = requirePermissionImpl;
 
@@ -69,7 +69,7 @@ describe('access.routes authorization gates', () => {
 
       expect(res.status).toBe(403);
       expect(res.body.gate).toBe('permission');
-      expect(requirePermissionImpl.recordedCalls).toEqual([['createUser']]);
+      expect(requirePermissionImpl.recordedCalls).toEqual([['manageAccessGrants']]);
     });
   }
 });

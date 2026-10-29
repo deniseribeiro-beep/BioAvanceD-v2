@@ -151,6 +151,43 @@ describe('rbac-catalog-seed.service', () => {
     expect(roles.find((r) => r.roleCode === 'coordinator').permissionIds).toContain(idOf('createUser'));
   });
 
+  // #1229: access.routes.js moved off createUser to its own code, seeded to
+  // exactly the roles that held createUser, so no caller gains or loses.
+  it('#1229: seeds manageAccessGrants on exactly the roles that hold createUser', async () => {
+    const db = createFakeDb();
+    const { roles, permissions } = await seedRolesAndPermissions(db);
+    const idOf = (code) => permissions.find((p) => p.permissionCode === code).permissionId;
+    const holdersOf = (code) => roles.filter((r) => r.permissionIds.includes(idOf(code))).map((r) => r.roleCode);
+
+    expect(holdersOf('manageAccessGrants')).toEqual(['coordinator', 'administrator']);
+    expect(holdersOf('manageAccessGrants')).toEqual(holdersOf('createUser'));
+  });
+
+  // #1229, #1341: no migration. A database seeded before the code existed
+  // gains the Permission document and both roles' grant at the next boot.
+  it('#1229: a database seeded before manageAccessGrants gains it on both roles at the next boot', async () => {
+    const db = createFakeDb();
+    await seedRolesAndPermissions(db);
+    const permissionDocs = db.collections.permissions.docs;
+    const oldIndex = permissionDocs.findIndex((p) => p.permissionCode === 'manageAccessGrants');
+    const [oldDoc] = permissionDocs.splice(oldIndex, 1);
+    const roleIdByCode = {};
+    for (const role of db.collections.roles.docs) {
+      role.permissionIds = role.permissionIds.filter((id) => id !== oldDoc.permissionId);
+      roleIdByCode[role.roleCode] = role.roleId;
+    }
+
+    const second = await seedRolesAndPermissions(db);
+
+    expect(permissionDocs.filter((p) => p.permissionCode === 'manageAccessGrants')).toHaveLength(1);
+    const newId = second.permissions.find((p) => p.permissionCode === 'manageAccessGrants').permissionId;
+    const holders = db.collections.roles.docs.filter((r) => r.permissionIds.includes(newId)).map((r) => r.roleCode);
+    expect(holders).toEqual(['coordinator', 'administrator']);
+    for (const role of db.collections.roles.docs) {
+      expect(role.roleId).toBe(roleIdByCode[role.roleCode]);
+    }
+  });
+
   // #1341: role grants are catalog-owned, so upsertRole sets the stored
   // role to the seed's list. A database seeded before #662 still holding
   // the withdrawn grant loses it, and so does a grant added by hand: the
@@ -359,6 +396,8 @@ describe('rbac-catalog-seed.service', () => {
       ['requestConsent', ['CREATE']],
       // #1316: custody's two routes are POSTs.
       ['manageCustody', ['CREATE']],
+      // #1229: access.routes.js's GET, POST, PUT and DELETE.
+      ['manageAccessGrants', ['CREATE', 'READ', 'UPDATE', 'DELETE']],
     ])('%s allows exactly %j', (permissionCode, expectedActions) => {
       expect(PERMISSION_CATALOG[permissionCode].allowedActions).toEqual(expectedActions);
     });

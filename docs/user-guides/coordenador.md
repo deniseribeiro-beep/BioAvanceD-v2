@@ -75,6 +75,7 @@ Exactly the Coordenador row of `LEGACY_ROLES_SEED`, with each code's `displayNam
 - `manageStorageAllocation`: Gerenciar alocação de armazenamento; CREATE, READ, UPDATE, DELETE
 - `manageStorageTopology`: Gerenciar topologia de armazenamento; CREATE, READ, UPDATE, DELETE
 - `manageCustody`: Gerenciar custódia; CREATE
+- `manageAccessGrants`: Gerenciar concessões de acesso; CREATE, READ, UPDATE, DELETE
 
 ## What this role cannot do
 
@@ -91,6 +92,7 @@ Some codes in the seed have no screen that calls the routes they gate, so the Co
 - viewStorageTopology and manageCustody gate the routes of `physical-chain.routes.js`; no frontend file calls `/api/physical-chain`.
 - The Arquivos de Análise screen lists and downloads results but offers no create, edit or delete of a result record, although the seed holds createResult, editResult and deleteResult (`result.routes.js`).
 - recordTemperature gates `POST /api/temperature/reading` (`temperature.routes.js`); no frontend file calls it.
+- manageAccessGrants gates the report-access grant routes of `access.routes.js`; no frontend screen calls `/api/access`.
 
 The result-record codes (createResult, editResult, deleteResult) and manageCustody are API-only by decision, not gaps: see [the role routes and seeded permissions decision](../decisions/2026-10-27-role-routes-and-seeded-permissions.md).
 
