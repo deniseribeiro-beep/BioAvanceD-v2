@@ -17,7 +17,8 @@ ENV NODE_ENV=production
 # in production would silently never be RFC3161-timestamped. Dockerfile.dev:8
 # already installs it; this stage was the only one that did not.
 RUN apk add --no-cache openssl mongodb-tools
-RUN addgroup -S app && adduser -S app -G app
+RUN addgroup -S -g 10001 app && adduser -S -u 10001 -G app app
+# #978: the id above must not drift; the production signing key on the host is written 0400 owned by uid 10001.
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 # #947: the residual ~400K the shared .dockerignore has to keep in the context

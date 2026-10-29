@@ -280,6 +280,8 @@ services:
       - uploads_data:/data/uploads
       - storage_data:/data/storage
       - backups_data:/data/backups
+      # The worker runs daily-merkle.job and the backend serves POST /api/audit/anchor; both readFile the signing key (#989, #978).
+      - ./infra/audit/prod/secrets:/run/secrets:ro
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 15s
@@ -340,6 +342,8 @@ services:
       - uploads_data:/data/uploads
       - storage_data:/data/storage
       - backups_data:/data/backups
+      # The worker runs daily-merkle.job and the backend serves POST /api/audit/anchor; both readFile the signing key (#989, #978).
+      - ./infra/audit/prod/secrets:/run/secrets:ro
 
   neo4j-projection-worker:
     # Drains graph_projection_outbox into Neo4j (#309, follow-up from RF023/#292)
